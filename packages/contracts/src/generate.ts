@@ -6,6 +6,7 @@ import openapiTS, { astToString } from "openapi-typescript";
 import { createLogger } from "@agency_hub_core/shared";
 
 import { buildApiServer, normalizeOpenApiDocument } from "../../../apps/runtime/src/api/server.ts";
+import { renderAuthorizationPolicyMarkdown } from "./authorization-policy.ts";
 
 async function main() {
   const encryptionKey = Buffer.alloc(32, 0);
@@ -67,6 +68,12 @@ async function main() {
       "",
     ].join("\n");
     await writeFile(typesPath, generated, "utf8");
+
+    // Kernel Stage 19: the authorization-policy table, from the same server boot
+    // (route registrations carry the declared auth policies).
+    const policyPath = path.resolve("docs/generated/authorization-policy.md");
+    await mkdir(path.dirname(policyPath), { recursive: true });
+    await writeFile(policyPath, renderAuthorizationPolicyMarkdown(server.routePolicyTable), "utf8");
   } finally {
     await server.close();
   }

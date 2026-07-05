@@ -9,7 +9,9 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import {
   routeSchemas,
+  routeSecurityFromAuth,
   type RevenueDailyTypedItem,
+  type RouteAuthPolicy,
   type UpdateCredentialsBody,
 } from "../../../../packages/contracts/src/routes.ts";
 import {
@@ -134,6 +136,7 @@ import {
   classifyAuthPolicyDivergence,
   computeAuthPolicyVerdict,
   type AuthPolicyVerdict,
+  type RoutePolicyTableRow,
 } from "./auth-policy.ts";
 import {
   findPageSummaryByLabel,
@@ -288,6 +291,10 @@ declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthPrincipal | null;
     authPolicy?: { routeKey: string; verdict: AuthPolicyVerdict };
+  }
+  interface FastifyInstance {
+    /** Route → auth declaration rows, collected at registration (Stage 19). */
+    routePolicyTable: RoutePolicyTableRow[];
   }
 }
 
@@ -500,13 +507,18 @@ export async function buildApiServer(appContext: AppContext) {
       const baseTransform = createJsonSchemaTransform({
         skipList: ["/documentation", "/documentation/static/*"],
       });
-      // The declarative `auth` block (kernel Stage 19) drives the authorization
-      // middleware and the generated policy table, not the wire contract: strip
-      // it so the emitted OpenAPI document stays byte-identical to pre-stage.
+      // The declarative `auth` block (kernel Stage 19) is not itself wire
+      // contract: strip it, and DERIVE the operation's `security` from it so the
+      // published document cannot disagree with what the middleware enforces.
       return (input: Parameters<typeof baseTransform>[0]) => {
         if (input.schema && "auth" in input.schema) {
-          const { auth: _auth, ...schema } = input.schema;
-          return baseTransform({ ...input, schema });
+          const { auth, ...schema } =
+            input.schema as unknown as { auth: RouteAuthPolicy } & Record<string, unknown>;
+          const security = routeSecurityFromAuth(auth);
+          return baseTransform({
+            ...input,
+            schema: (security ? { ...schema, security } : schema) as unknown as typeof input.schema,
+          });
         }
         return baseTransform(input);
       };
@@ -610,6 +622,25 @@ export async function buildApiServer(appContext: AppContext) {
   // is AUTH_POLICY_ENFORCEMENT=log.
   const routePolicyIndex = buildRoutePolicyIndex();
   const isAuthPolicyEnforced = () => appContext.config.authPolicyEnforcement === "enforce";
+
+  // Route → declaration table, collected at registration time. Feeds the
+  // generated authorization-policy document (and Stage 20's SDK generator needs
+  // the same method/path introspection).
+  const routePolicyTable: RoutePolicyTableRow[] = [];
+  server.decorate("routePolicyTable", routePolicyTable);
+  server.addHook("onRoute", (route) => {
+    const entry = routePolicyIndex.get(route.schema);
+    if (!entry) {
+      return;
+    }
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    for (const method of methods) {
+      if (method === "HEAD") {
+        continue; // fastify's auto-added HEAD twin of every GET
+      }
+      routePolicyTable.push({ method, url: route.url, routeKey: entry.key, auth: entry.auth });
+    }
+  });
 
   server.addHook("onRequest", async (request) => {
     const entry = routePolicyIndex.get(request.routeOptions.schema);

@@ -3557,17 +3557,6 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
   mediaPolicy: z.literal("stable_metadata_only_no_signed_urls"),
 });
 
-const cookieOnlySecurity: Array<Record<string, string[]>> = [{ cookieAuth: [] }];
-const bearerOnlySecurity: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
-const cookieOrBearerSecurity: Array<Record<string, string[]>> = [
-  { cookieAuth: [] },
-  { bearerAuth: [] },
-];
-const dashboardOrMonitoringTokenSecurity: Array<Record<string, string[]>> = [
-  { cookieAuth: [] },
-  { monitoringTokenAuth: [] },
-];
-
 // --- Declarative route authorization (kernel Stage 19) ---
 // Every routeSchemas entry carries an `auth` declaration enforced by one API-server
 // middleware (AUTH_POLICY_ENFORCEMENT=log|enforce); a contracts unit test fails any
@@ -3591,6 +3580,30 @@ export const routeAuthPolicySchema = z
   })
   .strict();
 export type RouteAuthPolicy = z.infer<typeof routeAuthPolicySchema>;
+
+// OpenAPI `security` is DERIVED from the auth declaration (the swagger transform
+// injects it), so the published contract can no longer disagree with what the
+// middleware actually enforces. Scheme names match the server's securitySchemes.
+export function routeSecurityFromAuth(
+  auth: RouteAuthPolicy,
+): Array<Record<string, string[]>> | undefined {
+  switch (auth.kind) {
+    case "public":
+    case "hmac":
+      // hmac authenticates by signature over the raw body, which OpenAPI's
+      // security schemes cannot express; the webhook documents it in prose.
+      return undefined;
+    case "monitoring":
+      return [{ cookieAuth: [] }, { monitoringTokenAuth: [] }];
+    case "session":
+    case "owner-session":
+      return [{ cookieAuth: [] }];
+    case "apiKey":
+      return [{ bearerAuth: [] }];
+    case "any":
+      return [{ cookieAuth: [] }, { bearerAuth: [] }];
+  }
+}
 
 // --- Configuration surface (Stage A: read-only) ---
 const configValueScalar = z.union([z.string(), z.number(), z.boolean()]).nullable();
@@ -3799,7 +3812,6 @@ export const routeSchemas = {
     auth: { kind: "monitoring" },
     tags: ["system"],
     summary: "Detailed sync health",
-    security: dashboardOrMonitoringTokenSecurity,
     response: {
       200: syncHealthResponseSchema,
       401: errorResponseSchema,
@@ -3831,7 +3843,6 @@ export const routeSchemas = {
     auth: { kind: "any" },
     tags: ["auth"],
     summary: "Get the current authenticated principal",
-    security: cookieOrBearerSecurity,
     response: {
       200: authStateSchema,
       401: errorResponseSchema,
@@ -3841,7 +3852,6 @@ export const routeSchemas = {
     auth: { kind: "apiKey" },
     tags: ["usage"],
     summary: "Ingest a batch of chatter AI usage events",
-    security: bearerOnlySecurity,
     body: aiUsageBatchBodySchema,
     response: {
       200: aiUsageBatchResponseSchema,
@@ -3854,7 +3864,6 @@ export const routeSchemas = {
     auth: { kind: "apiKey" },
     tags: ["usage"],
     summary: "Ingest a batch of desktop-captured observations (client-capture lane)",
-    security: bearerOnlySecurity,
     body: ingestObservationsBodySchema,
     response: {
       200: ingestObservationsResponseSchema,
@@ -3870,7 +3879,6 @@ export const routeSchemas = {
     description: "Default-off ChatMuse gateway for desktop AI generations. The runtime route "
       + "uses chatter API-key auth, validates the prompt-stream request contract, and must not "
       + "reach provider network while the gateway flag is disabled.",
-    security: bearerOnlySecurity,
     body: aiGatewayStreamBodySchema,
     response: {
       200: z.unknown(),
@@ -3908,7 +3916,6 @@ export const routeSchemas = {
       + "JSON SyncEvent, `id` = journal event id). Chatter API-key auth only; events "
       + "are filtered to the chatter's assigned pages. Supports `Last-Event-ID` "
       + "header (or `lastEventId` query parameter) replay from the ~7-day journal.",
-    security: bearerOnlySecurity,
     querystring: z.object({
       lastEventId: z.coerce.number().int().nonnegative().optional(),
     }),
@@ -3933,7 +3940,6 @@ export const routeSchemas = {
       + "The cursor is captured before state reads; clients apply every page idempotently, "
       + "persist snapshotCursor only after the final page, then resume SSE from that cursor. "
       + "No OFAPI requests or historical DM backfill are performed.",
-    security: bearerOnlySecurity,
     querystring: syncSnapshotQuerySchema,
     response: {
       200: syncSnapshotResponseSchema,
@@ -3947,7 +3953,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Current OFAPI webhook registration and page mappings",
-    security: cookieOnlySecurity,
     response: {
       200: ofapiWebhookStatusResponseSchema,
       401: errorResponseSchema,
@@ -3961,7 +3966,6 @@ export const routeSchemas = {
     description: "Creates/updates the team webhook at onlyfansapi.com with "
       + "account_scope=global and a freshly generated signing secret, stores the "
       + "registration, and maps OFAPI accounts to OnlyFans pages by username.",
-    security: cookieOnlySecurity,
     body: ofapiWebhookRegisterBodySchema,
     response: {
       200: ofapiWebhookRegisterResponseSchema,
@@ -3979,7 +3983,6 @@ export const routeSchemas = {
       + "attributed to the chatter's assigned pages and a webhook credit estimate derived "
       + "from journaled events for those pages. It intentionally omits owner-only global "
       + "balance, refills, external drift, and adjustments.",
-    security: bearerOnlySecurity,
     response: {
       200: ofapiCreditsChatterSummaryResponseSchema,
       401: errorResponseSchema,
@@ -3995,7 +3998,6 @@ export const routeSchemas = {
       + "shapes, but accepts only the documented desktop read allowlist. `/accounts` "
       + "is synthesized from assigned core page mappings and `/whoami` is sanitized. "
       + "No POST, DELETE, send, mark-read, typing, or upload operation is exposed.",
-    security: bearerOnlySecurity,
     params: ofapiReadGatewayParamsSchema,
     response: {
       200: z.unknown(),
@@ -4019,7 +4021,6 @@ export const routeSchemas = {
     description: "Chatter-key-only C6b command intake. The command boundary accepts "
       + "narrow versioned desktop writes and persists them as queued outbox rows. Exact "
       + "client-id replays return the existing row; payload mismatches return 409.",
-    security: bearerOnlySecurity,
     body: createOfapiCommandBodySchema,
     response: {
       200: ofapiCommandResponseSchema,
@@ -4037,7 +4038,6 @@ export const routeSchemas = {
     tags: ["ofapi"],
     summary: "Get one owned desktop OFAPI command",
     description: "Returns command state and audit metadata without echoing message text.",
-    security: bearerOnlySecurity,
     params: ofapiCommandParamsSchema,
     response: {
       200: ofapiCommandResponseSchema,
@@ -4053,7 +4053,6 @@ export const routeSchemas = {
     summary: "Cancel one queued desktop OFAPI command",
     description: "Transitions only queued commands to cancelled. Repeating cancel on an "
       + "already-cancelled command is idempotent; no vendor call is made.",
-    security: bearerOnlySecurity,
     params: ofapiCommandParamsSchema,
     response: {
       200: ofapiCommandResponseSchema,
@@ -4068,7 +4067,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Get the OFAPI credit balance, budgets, forecast, and ops state",
-    security: cookieOnlySecurity,
     response: {
       200: ofapiCreditsSummaryResponseSchema,
       401: errorResponseSchema,
@@ -4079,7 +4077,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Get per-day OFAPI credit spend by source plus balance/refill series",
-    security: cookieOnlySecurity,
     querystring: adminOfapiCreditsDailyQuerySchema,
     response: {
       200: ofapiCreditsDailyResponseSchema,
@@ -4092,7 +4089,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List OFAPI credit ledger rows with filters and pagination",
-    security: cookieOnlySecurity,
     querystring: adminOfapiCreditsLedgerQuerySchema,
     response: {
       200: ofapiCreditsLedgerResponseSchema,
@@ -4105,7 +4101,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Export the filtered OFAPI credit ledger as a CSV accounting extract",
-    security: cookieOnlySecurity,
     querystring: adminOfapiCreditsLedgerCsvQuerySchema,
     response: {
       // The handler sets text/csv + Content-Disposition and writes the body
@@ -4125,7 +4120,6 @@ export const routeSchemas = {
       + "it classifies shadow rows as matched, missing, or mismatched against the current "
       + "core transactions table so production equivalence can be proven before desktop "
       + "spend polling is reduced.",
-    security: cookieOnlySecurity,
     querystring: adminOfapiSpendComparisonQuerySchema,
     response: {
       200: ofapiSpendComparisonResponseSchema,
@@ -4141,7 +4135,6 @@ export const routeSchemas = {
     description: "Read-only C4 gate endpoint. It exposes the forward-only archive flag, "
       + "retention window, lag/count metrics, and the current ACL/audit/purge/export/media "
       + "policy markers. It does not expose raw transcript text.",
-    security: cookieOnlySecurity,
     response: {
       200: ofapiDmColdArchiveStatusResponseSchema,
       401: errorResponseSchema,
@@ -4152,7 +4145,6 @@ export const routeSchemas = {
     auth: { kind: "any" },
     tags: ["pages"],
     summary: "List visible pages",
-    security: cookieOrBearerSecurity,
     response: {
       200: z.array(assignedPageSchema),
       401: errorResponseSchema,
@@ -4162,7 +4154,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["models"],
     summary: "List visible models",
-    security: cookieOnlySecurity,
     response: {
       200: z.array(modelListItemSchema),
       401: errorResponseSchema,
@@ -4173,7 +4164,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["revenue"],
     summary: "Get agency or visible-scope revenue overview",
-    security: cookieOnlySecurity,
     querystring: revenueQuerySchema,
     response: {
       200: overviewRevenueResponseSchema,
@@ -4185,7 +4175,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["dashboard"],
     summary: "Get period-aware follower and subscriber growth",
-    security: cookieOnlySecurity,
     querystring: revenueQuerySchema,
     response: {
       200: overviewGrowthResponseSchema,
@@ -4197,7 +4186,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["revenue"],
     summary: "Get revenue for one model",
-    security: cookieOnlySecurity,
     params: modelParamsSchema,
     querystring: revenueQuerySchema,
     response: {
@@ -4211,7 +4199,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["revenue"],
     summary: "Get revenue for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: revenueQuerySchema,
     response: {
@@ -4225,7 +4212,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["transactions"],
     summary: "List transactions for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: transactionListQuerySchema,
     response: {
@@ -4239,7 +4225,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["subscribers"],
     summary: "List current subscribers for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: subscriberListQuerySchema,
     response: {
@@ -4253,7 +4238,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["subscribers"],
     summary: "List daily subscriber rollups for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: revenueQuerySchema,
     response: {
@@ -4267,7 +4251,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["followers"],
     summary: "List active followers for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: followerListQuerySchema,
     response: {
@@ -4281,7 +4264,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["followers"],
     summary: "List daily follower rollups for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: revenueQuerySchema,
     response: {
@@ -4295,7 +4277,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "List fans for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: fanListQuerySchema,
     response: {
@@ -4309,7 +4290,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "List deleted fans for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: paginationQuerySchema,
     response: {
@@ -4323,7 +4303,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["spenders"],
     summary: "List spender auto-list buckets for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: pageSpenderAutoListsQuerySchema,
     response: {
@@ -4337,7 +4316,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["spenders"],
     summary: "List fans inside one spender auto-list bucket",
-    security: cookieOrBearerSecurity,
     params: pageSpenderAutoListParamsSchema,
     querystring: pageSpenderAutoListQuerySchema,
     response: {
@@ -4352,7 +4330,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "Get one fan within one page",
-    security: cookieOrBearerSecurity,
     params: pageFanParamsSchema,
     response: {
       200: pageFanDetailResponseSchema,
@@ -4365,7 +4342,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "Get the latest intelligence profile for one fan on one page",
-    security: cookieOrBearerSecurity,
     params: pageFanParamsSchema,
     response: {
       200: fanProfileResponseSchema,
@@ -4378,7 +4354,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "Get the latest intelligence profile for the fan mapped to one page conversation",
-    security: cookieOrBearerSecurity,
     params: pageConversationProfileParamsSchema,
     response: {
       200: fanProfileResponseSchema,
@@ -4391,7 +4366,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "Append a new intelligence profile version for one fan on one page",
-    security: bearerOnlySecurity,
     params: pageFanParamsSchema,
     body: upsertFanProfileBodySchema,
     response: {
@@ -4405,7 +4379,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "List intelligence profile versions for one fan on one page",
-    security: cookieOnlySecurity,
     params: pageFanParamsSchema,
     response: {
       200: fanProfileVersionListResponseSchema,
@@ -4418,7 +4391,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "Get one intelligence profile version for one fan on one page",
-    security: cookieOnlySecurity,
     params: fanProfileVersionParamsSchema,
     response: {
       200: fanProfileDocumentSchema,
@@ -4431,7 +4403,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["fans"],
     summary: "Get one fan across visible pages",
-    security: cookieOnlySecurity,
     params: fanLookupParamsSchema,
     response: {
       200: crossPageFanDetailResponseSchema,
@@ -4444,7 +4415,6 @@ export const routeSchemas = {
     auth: { kind: "any" },
     tags: ["spenders"],
     summary: "List ranked spenders for a scoped platform view",
-    security: cookieOrBearerSecurity,
     querystring: spenderListQuerySchema,
     response: {
       200: spenderListResponseSchema,
@@ -4458,7 +4428,6 @@ export const routeSchemas = {
     auth: { kind: "any" },
     tags: ["spenders"],
     summary: "Get one platform-scoped spender",
-    security: cookieOrBearerSecurity,
     params: fanLookupParamsSchema,
     querystring: spenderDetailQuerySchema,
     response: {
@@ -4473,7 +4442,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["spenders"],
     summary: "Get zero-filled spender trend series",
-    security: cookieOnlySecurity,
     params: fanLookupParamsSchema,
     querystring: spenderSeriesQuerySchema,
     response: {
@@ -4488,7 +4456,6 @@ export const routeSchemas = {
     auth: { kind: "any" },
     tags: ["spenders"],
     summary: "Batch-resolve spender metrics for platform-scoped fan identities",
-    security: cookieOrBearerSecurity,
     body: spenderBatchBodySchema,
     response: {
       200: spenderBatchResponseSchema,
@@ -4502,7 +4469,6 @@ export const routeSchemas = {
     auth: { kind: "any" },
     tags: ["fans"],
     summary: "Search visible platform-scoped fan identities",
-    security: cookieOrBearerSecurity,
     querystring: fansSearchQuerySchema,
     response: {
       200: fansSearchResponseSchema,
@@ -4516,7 +4482,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["conversations"],
     summary: "Return locally cached DM preview rows for one conversation",
-    security: cookieOnlySecurity,
     params: pageConversationPreviewParamsSchema,
     querystring: pageConversationPreviewQuerySchema,
     response: {
@@ -4531,7 +4496,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["conversations"],
     summary: "Return cached DM messages for one conversation",
-    security: cookieOnlySecurity,
     params: pageConversationMessagesParamsSchema,
     querystring: pageConversationMessagesQuerySchema,
     response: {
@@ -4547,7 +4511,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Get workboard queue for one Fansly page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     response: {
       200: workboardResponseSchema,
@@ -4561,7 +4524,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Get inferred Fansly presence for one workboard page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     response: {
       200: workboardPresenceResponseSchema,
@@ -4575,7 +4537,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Snooze a fan on the workboard",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     body: workboardSnoozeBodySchema,
     response: {
@@ -4590,7 +4551,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Unsnooze a fan on the workboard",
-    security: cookieOnlySecurity,
     params: workboardUnsnoozeParamsSchema,
     response: {
       200: z.object({ ok: z.literal(true) }),
@@ -4604,7 +4564,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Get a Workboard v2 tab queue (priority engine) for one Fansly page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     querystring: workboardV2QuerySchema,
     response: {
@@ -4619,7 +4578,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Get Workboard v2 spender lists (lifetime gross-spend bands) for one Fansly page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     response: {
       200: workboardV2ListsResponseSchema,
@@ -4633,7 +4591,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Record a chatter touch (Готово) on a Workboard v2 fan",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     body: workboardV2ContactBodySchema,
     response: {
@@ -4648,7 +4605,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Recompute the Workboard v2 queue for one Fansly page (on-demand)",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     response: {
       200: workboardV2RecomputeResponseSchema,
@@ -4662,7 +4618,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Snooze a fan on Workboard v2 (moves to Service; re-evaluates instantly)",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     body: workboardV2SnoozeBodySchema,
     response: {
@@ -4677,7 +4632,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Unsnooze a fan on Workboard v2 (re-evaluates instantly)",
-    security: cookieOnlySecurity,
     params: workboardV2FanParamsSchema,
     response: {
       200: workboardV2OkResponseSchema,
@@ -4691,7 +4645,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
     summary: "Undo the last Готово touch for a fan (re-evaluates instantly)",
-    security: cookieOnlySecurity,
     params: workboardV2FanParamsSchema,
     response: {
       200: workboardV2OkResponseSchema,
@@ -4705,7 +4658,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["workboard"],
     summary: "AI (L2 closing classifier) analytics + settings for a page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     response: {
       200: workboardV2AiReportSchema,
@@ -4719,7 +4671,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["workboard"],
     summary: "Update per-page AI classifier settings (owner only)",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     body: workboardV2AiSettingsBodySchema,
     response: {
@@ -4734,7 +4685,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["workboard"],
     summary: "Run (or re-run) the AI classifier for a page now (owner only)",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     body: workboardV2AiClassifyBodySchema,
     response: {
@@ -4749,7 +4699,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["workboard"],
     summary: "Global AI classifier run log (owner only)",
-    security: cookieOnlySecurity,
     response: {
       200: workboardV2AiRunsResponseSchema,
       401: errorResponseSchema,
@@ -4761,7 +4710,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["dashboard"],
     summary: "Get agency overview dashboard data",
-    security: cookieOnlySecurity,
     response: {
       200: overviewResponseSchema,
       401: errorResponseSchema,
@@ -4772,7 +4720,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["dashboard"],
     summary: "Get aggregated sync monitor data for visible pages",
-    security: cookieOnlySecurity,
     querystring: syncStatusQuerySchema,
     response: {
       200: syncStatusResponseSchema,
@@ -4785,7 +4732,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["dashboard"],
     summary: "Get recent visible sync worker HTTP requests",
-    security: cookieOnlySecurity,
     querystring: syncRequestsQuerySchema,
     response: {
       200: syncRequestsResponseSchema,
@@ -4798,7 +4744,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["dashboard"],
     summary: "Get the 6-block sync overview for visible pages",
-    security: cookieOnlySecurity,
     response: {
       200: syncOverviewResponseSchema,
       401: errorResponseSchema,
@@ -4809,7 +4754,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["dashboard"],
     summary: "Get all sync blocks for one visible page",
-    security: cookieOrBearerSecurity,
     params: pageSyncBlocksParamsSchema,
     response: {
       200: pageSyncBlocksResponseSchema,
@@ -4822,7 +4766,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["dashboard"],
     summary: "Get the combined Messages sync block for one visible page",
-    security: cookieOrBearerSecurity,
     params: pageSyncBlocksParamsSchema,
     response: {
       200: pageMessagesBlockResponseSchema,
@@ -4835,7 +4778,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["dashboard"],
     summary: "Get agency-wide revenue daily series",
-    security: cookieOnlySecurity,
     querystring: revenueDailyQuerySchema,
     response: {
       200: revenueDailyResponseSchema,
@@ -4847,7 +4789,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["dashboard"],
     summary: "Get daily revenue series for one page",
-    security: cookieOrBearerSecurity,
     params: pageParamsSchema,
     querystring: revenueDailyQuerySchema,
     response: {
@@ -4861,7 +4802,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["dashboard"],
     summary: "Get daily revenue series for one model",
-    security: cookieOnlySecurity,
     params: modelParamsSchema,
     querystring: revenueDailyQuerySchema,
     response: {
@@ -4875,7 +4815,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["transactions"],
     summary: "List transactions across all visible pages",
-    security: cookieOnlySecurity,
     querystring: crossPageTransactionListQuerySchema,
     response: {
       200: crossPageTransactionListResponseSchema,
@@ -4887,7 +4826,6 @@ export const routeSchemas = {
     auth: { kind: "session", scope: "page" },
     tags: ["fans"],
     summary: "Get fan transaction history on a specific page",
-    security: cookieOrBearerSecurity,
     params: pageFanParamsSchema,
     querystring: paginationQuerySchema,
     response: {
@@ -4901,7 +4839,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["fans"],
     summary: "Get cross-page fan transaction history",
-    security: cookieOnlySecurity,
     params: fanLookupParamsSchema,
     querystring: paginationQuerySchema,
     response: {
@@ -4915,7 +4852,6 @@ export const routeSchemas = {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],
     summary: "Create a note on a fan for a specific page",
-    security: cookieOrBearerSecurity,
     params: pageFanParamsSchema,
     body: createFanNoteBodySchema,
     response: {
@@ -4929,7 +4865,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["fans"],
     summary: "Set flags on a fan",
-    security: cookieOnlySecurity,
     params: fanLookupParamsSchema,
     body: setFanFlagsBodySchema,
     response: {
@@ -4943,7 +4878,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["system"],
     summary: "Get the OpenAPI specification",
-    security: cookieOnlySecurity,
     response: {
       200: z.any(),
       401: errorResponseSchema,
@@ -4955,7 +4889,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List all users",
-    security: cookieOnlySecurity,
     response: {
       200: z.array(adminUserSchema),
       401: errorResponseSchema,
@@ -4966,7 +4899,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Get aggregated AI usage per chatter",
-    security: cookieOnlySecurity,
     querystring: adminChatterUsageQuerySchema,
     response: {
       200: adminChatterUsageResponseSchema,
@@ -4979,7 +4911,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Create a new user",
-    security: cookieOnlySecurity,
     body: adminCreateUserBodySchema,
     response: {
       200: authUserSchema,
@@ -4992,7 +4923,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Set a user password",
-    security: cookieOnlySecurity,
     params: z.object({ username: z.string().min(1) }),
     body: adminSetPasswordBodySchema,
     response: {
@@ -5007,7 +4937,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Assign a page to a user",
-    security: cookieOnlySecurity,
     params: z.object({ username: z.string().min(1) }),
     body: adminAssignPageBodySchema,
     response: {
@@ -5021,7 +4950,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Unassign a page from a user",
-    security: cookieOnlySecurity,
     params: z.object({ username: z.string().min(1), pageLabel: z.string().min(1) }),
     response: {
       200: z.object({ ok: z.literal(true) }),
@@ -5034,7 +4962,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List API keys for a user",
-    security: cookieOnlySecurity,
     params: z.object({ username: z.string().min(1) }),
     response: {
       200: z.array(apiKeyItemSchema),
@@ -5046,7 +4973,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Issue an API key for a user",
-    security: cookieOnlySecurity,
     params: z.object({ username: z.string().min(1) }),
     body: adminIssueApiKeyBodySchema,
     response: {
@@ -5060,7 +4986,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Revoke all API keys for a user",
-    security: cookieOnlySecurity,
     params: z.object({ username: z.string().min(1) }),
     response: {
       200: z.object({ revokedCount: z.number().int() }),
@@ -5073,7 +4998,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["archive"],
     summary: "List archived messages for one conversation (paged, before-cursor)",
-    security: cookieOnlySecurity,
     params: z.object({ ref: z.string().min(1).max(200) }),
     querystring: z.object({
       before: z.coerce.number().int().positive().optional(),
@@ -5089,7 +5013,6 @@ export const routeSchemas = {
     auth: { kind: "session" },
     tags: ["archive"],
     summary: "Search archived message text (bounded ILIKE)",
-    security: cookieOnlySecurity,
     querystring: z.object({
       q: z.string().min(2).max(200),
       fan: z.string().max(200).optional(),
@@ -5105,7 +5028,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List recent sync runs",
-    security: cookieOnlySecurity,
     querystring: syncRunsQuerySchema,
     response: {
       200: z.array(syncRunItemSchema),
@@ -5117,7 +5039,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Get sync run detail",
-    security: cookieOnlySecurity,
     params: z.object({ runId: z.coerce.number().int().positive() }),
     response: {
       200: syncRunDetailResponseSchema,
@@ -5130,7 +5051,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Trigger sync for a page",
-    security: cookieOnlySecurity,
     body: syncTriggerBodySchema,
     response: {
       202: syncTriggerResponseSchema,
@@ -5143,7 +5063,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Trigger sync for a specific page block",
-    security: cookieOnlySecurity,
     body: adminSyncBlockBodySchema,
     response: {
       200: adminSyncBlockResponseSchema,
@@ -5158,7 +5077,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Pause sync for a specific page block",
-    security: cookieOnlySecurity,
     body: adminSyncBlockBodySchema,
     response: {
       200: adminSyncBlockResponseSchema,
@@ -5172,7 +5090,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Resume sync for a specific page block",
-    security: cookieOnlySecurity,
     body: adminSyncBlockBodySchema,
     response: {
       200: adminSyncBlockResponseSchema,
@@ -5186,7 +5103,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Reset sync state for a specific page block",
-    security: cookieOnlySecurity,
     body: adminSyncBlockBodySchema,
     response: {
       200: adminSyncBlockResponseSchema,
@@ -5201,7 +5117,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Trigger sync for all pages",
-    security: cookieOnlySecurity,
     response: {
       202: syncTriggerAllResponseSchema,
       401: errorResponseSchema,
@@ -5212,7 +5127,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List connection statuses",
-    security: cookieOnlySecurity,
     response: {
       200: z.array(connectionItemSchema),
       401: errorResponseSchema,
@@ -5223,7 +5137,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List all models for admin management",
-    security: cookieOnlySecurity,
     response: {
       200: z.array(adminModelListItemSchema),
       401: errorResponseSchema,
@@ -5234,7 +5147,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Create a model",
-    security: cookieOnlySecurity,
     body: createModelBodySchema,
     response: {
       200: createModelResponseSchema,
@@ -5247,7 +5159,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Update a model",
-    security: cookieOnlySecurity,
     params: modelParamsSchema,
     body: updateModelBodySchema,
     response: {
@@ -5262,7 +5173,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Delete an empty model",
-    security: cookieOnlySecurity,
     params: modelParamsSchema,
     response: {
       200: deletedResponseSchema,
@@ -5276,7 +5186,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List all pages for admin management",
-    security: cookieOnlySecurity,
     response: {
       200: z.array(assignedPageSchema),
       401: errorResponseSchema,
@@ -5287,7 +5196,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Onboard a new page",
-    security: cookieOnlySecurity,
     body: createPageBodySchema,
     response: {
       200: adminCreatePageResponseSchema,
@@ -5301,7 +5209,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Update a page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     body: updatePageBodySchema,
     response: {
@@ -5316,7 +5223,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Delete a page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     response: {
       200: deletedResponseSchema,
@@ -5329,7 +5235,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Verify credentials without persisting",
-    security: cookieOnlySecurity,
     body: verifyCredentialsBodySchema,
     response: {
       200: verifyCredentialsResponseSchema,
@@ -5342,7 +5247,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Test a proxy connection and return the exit IP",
-    security: cookieOnlySecurity,
     body: testProxyBodySchema,
     response: {
       200: testProxyResponseSchema,
@@ -5355,7 +5259,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Verify stored credentials for a page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     response: {
       200: verifyPageResponseSchema,
@@ -5369,7 +5272,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Update credentials for an existing page",
-    security: cookieOnlySecurity,
     params: pageParamsSchema,
     body: updateCredentialsBodySchema,
     response: {
@@ -5384,7 +5286,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List recent sync event logs",
-    security: cookieOnlySecurity,
     querystring: adminLogsQuerySchema,
     response: {
       200: z.array(adminLogItemSchema),
@@ -5396,7 +5297,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List pg-boss jobs",
-    security: cookieOnlySecurity,
     querystring: adminQueueJobsQuerySchema,
     response: {
       200: z.array(adminQueueJobItemSchema),
@@ -5408,7 +5308,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List database table sizes and migrations",
-    security: cookieOnlySecurity,
     response: {
       200: adminDbStatsResponseSchema,
       401: errorResponseSchema,
@@ -5419,7 +5318,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "List sync incidents and seven-day summary counts",
-    security: cookieOnlySecurity,
     querystring: adminIncidentsQuerySchema,
     response: {
       200: adminIncidentsResponseSchema,
@@ -5432,7 +5330,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "Get notification settings and connection status",
-    security: cookieOnlySecurity,
     response: {
       200: notificationsSettingsResponseSchema,
       401: errorResponseSchema,
@@ -5443,7 +5340,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "Update notification settings",
-    security: cookieOnlySecurity,
     body: notificationsSettingsUpdateBodySchema,
     response: {
       200: notificationsSettingsResponseSchema,
@@ -5455,7 +5351,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "Send a test Telegram message",
-    security: cookieOnlySecurity,
     response: {
       200: notificationsTestMessageResponseSchema,
       401: errorResponseSchema,
@@ -5466,7 +5361,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "Discover Telegram chats that have messaged the bot",
-    security: cookieOnlySecurity,
     body: notificationsDiscoverChatsBodySchema,
     response: {
       200: notificationsDiscoverChatsResponseSchema,
@@ -5479,7 +5373,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "List notification incidents with page context",
-    security: cookieOnlySecurity,
     querystring: notificationsIncidentsQuerySchema,
     response: {
       200: notificationsIncidentsResponseSchema,
@@ -5491,7 +5384,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "Manually resolve an incident",
-    security: cookieOnlySecurity,
     params: z.object({ incidentId: z.coerce.number().int().positive() }),
     response: {
       200: notificationsResolveIncidentResponseSchema,
@@ -5504,7 +5396,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "Preview the next daily report without sending",
-    security: cookieOnlySecurity,
     response: {
       200: notificationsReportPreviewResponseSchema,
       401: errorResponseSchema,
@@ -5515,7 +5406,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "Manually send a daily report",
-    security: cookieOnlySecurity,
     response: {
       200: notificationsReportSendResponseSchema,
       401: errorResponseSchema,
@@ -5526,7 +5416,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["notifications"],
     summary: "List daily report delivery history",
-    security: cookieOnlySecurity,
     response: {
       200: notificationsReportHistoryResponseSchema,
       401: errorResponseSchema,
@@ -5538,7 +5427,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Read effective runtime configuration across processes",
-    security: cookieOnlySecurity,
     response: {
       200: configViewResponseSchema,
       401: errorResponseSchema,
@@ -5549,7 +5437,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Set runtime config overrides for live (editable, reload) keys",
-    security: cookieOnlySecurity,
     body: configUpdateBodySchema,
     response: {
       200: configUpdateResponseSchema,
@@ -5563,7 +5450,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Clear a runtime config override (revert to env)",
-    security: cookieOnlySecurity,
     params: configClearParamsSchema,
     querystring: configClearQuerySchema,
     response: {
@@ -5578,7 +5464,6 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Flip staged-rollout (boot-applied) config flags in the prescribed order",
-    security: cookieOnlySecurity,
     body: configStagedBodySchema,
     response: {
       200: configStagedResponseSchema,

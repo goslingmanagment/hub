@@ -3416,9 +3416,6 @@
         "security": [
           {
             "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
           }
         ],
         "responses": {
@@ -3967,9 +3964,6 @@
         "security": [
           {
             "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
           }
         ],
         "responses": {
@@ -8572,6 +8566,9 @@
         ],
         "security": [
           {
+            "cookieAuth": []
+          },
+          {
             "bearerAuth": []
           }
         ],
@@ -8744,6 +8741,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -8917,6 +8917,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -35086,9 +35089,6 @@
         "security": [
           {
             "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
           }
         ],
         "responses": {
@@ -35842,9 +35842,6 @@
         "security": [
           {
             "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
           }
         ],
         "responses": {

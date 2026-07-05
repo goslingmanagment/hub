@@ -23,6 +23,13 @@ export interface RoutePolicyEntry {
   auth: RouteAuthPolicy | null;
 }
 
+export interface RoutePolicyTableRow {
+  method: string;
+  url: string;
+  routeKey: string;
+  auth: RouteAuthPolicy | null;
+}
+
 /**
  * Schema-object-identity index: server.ts registers every route with
  * `schema: routeSchemas.X`, so `request.routeOptions.schema` is the exact object
