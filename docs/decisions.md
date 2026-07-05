@@ -1313,3 +1313,25 @@ page (rows stay pending and re-list), other pages keep applying.
 Remaining for exit: deploy (migrations 0055+0056), then §5 production checks — source
 coverage split, per-page/month revenue totals identical, wrong-writer probe, ingest
 flowing post-deploy.
+
+## Stage 13 Deployed + Verified (2026-07-05 ~03:45 UTC)
+
+**Decision #72:** Stage 13 merged to main (d410573) and deployed (owner-confirmed
+"Deploy now"); migrations 0055+0056 applied; containers healthy, health + sync-health
+green. §5 verification (read-only, same session):
+
+- **Source coverage 100%**: 15,413 rows — fansly:rest 12,560 / ofapi:rest 2,701 /
+  ofapi:webhook 152; zero NULLs; zero 'onlymonster' (consistent with #67).
+- **Revenue totals byte-identical**: per-page/month count+gross+net snapshot diff
+  before vs after migration = empty (106 rows).
+- **Writer seed = running reality**: 5 fansly pages → 'fansly', 2 onlyfans → 'ofapi';
+  zero wrong_transactions_writer incidents — the gate is live and silent.
+- **FK flip exact**: pg_constraint shows 22 RESTRICT / 16 CASCADE FKs on pages —
+  precisely the recorded classification.
+- **Ingest backlog zero**: all 152 projected transactions.new events applied; the
+  overnight max(created_at) (23:00 UTC) reflects quiet hours, not a stall.
+
+The wrong-writer probe requirement is satisfied by the integration suite (no staging
+env exists; tests/transactions-writer-gate.integration.test.ts proves refusal +
+incident + lossless re-apply end-to-end). Exit flips when the next live webhook spend
+lands post-deploy (proving the gated write path in production traffic).
