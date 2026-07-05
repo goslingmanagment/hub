@@ -67,6 +67,9 @@ export interface OfapiRequestContext {
   // Attributes the request's credit spend to a page in the ledger (D2);
   // admin/account-global calls leave it unset.
   pageId?: number | null;
+  // Stage 9: the acting principal for gateway reads; background REST
+  // spenders leave it unset (NULL = system spend in the ledger).
+  actorUserId?: number | null;
 }
 
 // Every OFAPI REST response carries _meta with the remaining credit balance —
@@ -128,6 +131,7 @@ export interface OfapiCreditSpendObservation {
   pageId: number | null;
   attemptNumber: number;
   isCached: boolean | null;
+  actorUserId: number | null;
 }
 
 export type OfapiCreditSpendSink = (
@@ -505,6 +509,7 @@ export function createOfapiClient(input: {
     attemptNumber: number;
     fallbackCredits?: number;
     fallbackEstimated?: boolean;
+    actorUserId?: number | null;
   }) {
     if (!onCreditSpend) {
       return;
@@ -536,6 +541,7 @@ export function createOfapiClient(input: {
         pageId: report.pageId,
         attemptNumber: report.attemptNumber,
         isCached: meta?.isCached ?? null,
+        actorUserId: report.actorUserId ?? null,
       });
     } catch (error) {
       // Spend recording is best-effort at this layer; reconciliation closes gaps.
@@ -779,6 +785,7 @@ export function createOfapiClient(input: {
       attemptNumber: 1,
       fallbackCredits: options.fallbackCredits,
       fallbackEstimated: options.fallbackEstimated,
+      actorUserId: context.actorUserId ?? null,
     });
 
     const headers: Record<string, string> = {};

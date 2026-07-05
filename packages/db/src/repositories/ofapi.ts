@@ -1201,6 +1201,8 @@ export interface InsertOfapiCreditLedgerEntryInput {
   requestId?: string | null;
   accrualDay?: string | null;
   details?: Record<string, unknown> | null;
+  /** Stage 9: the acting principal for gateway reads; NULL = system spend. */
+  actorUserId?: number | null;
 }
 
 export async function insertOfapiCreditLedgerEntry(
@@ -1221,6 +1223,7 @@ export async function insertOfapiCreditLedgerEntry(
       requestId: input.requestId ?? null,
       accrualDay: input.accrualDay ?? null,
       details: input.details ?? null,
+      actorUserId: input.actorUserId ?? null,
     })
     .returning({ id: ofapiCreditLedger.id });
 
@@ -1237,6 +1240,7 @@ export interface RecordOfapiCreditSpendInput {
   balanceAfter?: number | null;
   requestId?: string | null;
   details?: Record<string, unknown> | null;
+  actorUserId?: number | null;
 }
 
 /**
@@ -1261,6 +1265,7 @@ export async function recordOfapiCreditSpend(
       balanceAfter: input.balanceAfter ?? null,
       requestId: input.requestId ?? null,
       details: input.details ?? null,
+      actorUserId: input.actorUserId ?? null,
     });
     await recordOfapiCreditUsage(tx, {
       creditsUsed: input.credits,

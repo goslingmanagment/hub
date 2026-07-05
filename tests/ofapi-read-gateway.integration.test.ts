@@ -22,6 +22,11 @@ import {
   issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
 import { createOfapiCreditSpendSink } from "../apps/runtime/src/services/ofapi-credits.ts";
+import {
+  configureReadGatewayCaptureForTests,
+  drainReadGatewayCaptureQueue,
+  getReadGatewayCaptureDroppedCount,
+} from "../apps/runtime/src/services/ofapi-read-gateway-capture.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
@@ -170,6 +175,7 @@ beforeEach(async (context) => {
   scriptedResponses.length = 0;
   upstreamRequests.length = 0;
   proxyRequests.length = 0;
+  configureReadGatewayCaptureForTests();
 
   appContext = createTestAppContext(testDb, {
     ofapiCreditLedgerEnabled: true,
@@ -425,5 +431,83 @@ describe("OFAPI read gateway integration", () => {
     });
     expect(unauthenticated.statusCode, unauthenticated.body).toBe(401);
     expect(upstreamRequests).toHaveLength(0);
+  });
+
+  it("tees a gateway 200 into the journal with principal and template kind (Stage 9)", async () => {
+    scriptedResponses.push({
+      status: 200,
+      body: {
+        data: [{ id: 42 }],
+        _meta: { _credits: { used: 1, balance: 8999 } },
+      },
+    });
+    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+    expect(response.statusCode, response.body).toBe(200);
+    await drainReadGatewayCaptureQueue();
+
+    const chatterId = (await testDb!.pool.query<{ id: number }>(
+      "select id from users where username = 'chatter'",
+    )).rows[0]!.id;
+
+    const observations = await testDb!.pool.query<{
+      producer: string;
+      kind: string;
+      account_id: string;
+      actor_principal_id: string;
+      payload: unknown;
+    }>(
+      `select producer, kind, account_id::text as account_id,
+              actor_principal_id::text as actor_principal_id, payload
+       from observations where source = 'readthrough'`,
+    );
+    expect(observations.rows).toHaveLength(1);
+    expect(observations.rows[0]).toMatchObject({
+      producer: "read-gateway",
+      kind: "ofapi_gateway_chats",
+      account_id: String(assignedPageId),
+      actor_principal_id: String(chatterId),
+    });
+    // The payload is the response body verbatim.
+    expect(observations.rows[0]!.payload).toMatchObject({ data: [{ id: 42 }] });
+
+    // Attribution: the ledger row carries the acting chatter.
+    const ledger = await testDb!.pool.query<{ actor_user_id: string | null; credits: number }>(
+      "select actor_user_id::text as actor_user_id, credits from ofapi_credit_ledger order by id desc limit 1",
+    );
+    expect(ledger.rows[0]).toMatchObject({ actor_user_id: String(chatterId), credits: 1 });
+    expect(getReadGatewayCaptureDroppedCount()).toBe(0);
+  });
+
+  it("does not capture non-2xx responses (Stage 9)", async () => {
+    scriptedResponses.push({ status: 404, body: { error: "not found" } });
+    const response = await inject(`${ACCOUNT_ONE}/chats`);
+    expect(response.statusCode).toBe(404);
+    await drainReadGatewayCaptureQueue();
+    const observations = await testDb!.pool.query(
+      "select 1 from observations where source = 'readthrough'",
+    );
+    expect(observations.rows).toHaveLength(0);
+  });
+
+  it("fails open when the tee queue is full: serves 200, counts drops, raises the incident (Stage 9)", async () => {
+    configureReadGatewayCaptureForTests({ queueCap: 0, dropIncidentThreshold: 1 });
+    scriptedResponses.push({
+      status: 200,
+      body: { data: [], _meta: { _credits: { used: 1, balance: 8998 } } },
+    });
+    const response = await inject(`${ACCOUNT_ONE}/chats`);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(getReadGatewayCaptureDroppedCount()).toBe(1);
+
+    // The incident write is fire-and-forget; give it a tick.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const incidents = await testDb!.pool.query<{ kind: string }>(
+      "select kind from notification_incidents where kind = 'read_gateway_capture'",
+    );
+    expect(incidents.rows).toHaveLength(1);
+    const observations = await testDb!.pool.query(
+      "select 1 from observations where source = 'readthrough'",
+    );
+    expect(observations.rows).toHaveLength(0);
   });
 });

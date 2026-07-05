@@ -137,6 +137,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "db_disk_usage",
   "observations_partitions",
   "wrong_transactions_writer",
+  "read_gateway_capture",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -2071,6 +2072,9 @@ export const ofapiCreditLedger = pgTable(
     requestId: text("request_id"),
     accrualDay: date("accrual_day"),
     details: jsonb("details").$type<Record<string, unknown>>(),
+    // Stage 9: acting principal for gateway reads; NULL = system spend.
+    actorUserId: bigint("actor_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "set null" }),
   },
   (table) => ({
     occurredAtIdx: index("ofapi_credit_ledger_occurred_at_idx").on(table.occurredAt),

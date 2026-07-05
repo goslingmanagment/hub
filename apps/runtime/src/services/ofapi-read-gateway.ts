@@ -4,6 +4,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { AuthPrincipal } from "./auth.ts";
 import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
+import { enqueueReadGatewayCapture } from "./ofapi-read-gateway-capture.ts";
 import { OfapiApiError } from "./ofapi.ts";
 import {
   BadRequestError,
@@ -416,10 +417,12 @@ export async function executeOfapiReadGatewayRequest(
     ofapiAccountId: request.accountId,
   });
   try {
-    return await app.ofapi.proxyRead({
+    const response = await app.ofapi.proxyRead({
       pageId: page.id,
       dispatcher: egress.dispatcher,
       egressKey: egress.egressKey,
+      // Stage 9: the acting chatter attributes this read's credit spend.
+      actorUserId: principal.user.id,
     }, {
       operation: request.operation,
       pathname: request.pathname,
@@ -427,6 +430,19 @@ export async function executeOfapiReadGatewayRequest(
       fallbackCredits: request.fallbackCredits,
       fallbackEstimated: request.fallbackEstimated,
     });
+    // Stage 9 producer 4: tee every successful proxied body into the journal
+    // — O(1) enqueue off the latency path, fail-open with a visible counter.
+    if (response.status >= 200 && response.status < 300) {
+      enqueueReadGatewayCapture({
+        app,
+        principalUserId: principal.user.id,
+        pageId: page.id,
+        operation: request.operation,
+        status: response.status,
+        body: response.body,
+      });
+    }
+    return response;
   } catch (error) {
     if (error instanceof OfapiApiError && error.status === null) {
       throw new ServiceUnavailableError("OFAPI upstream is unavailable");

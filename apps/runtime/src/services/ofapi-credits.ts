@@ -76,6 +76,7 @@ export function createOfapiCreditSpendSink(
         estimated: observation.estimated,
         balanceAfter: observation.balanceAfter,
         requestId: observation.requestId,
+        actorUserId: observation.actorUserId,
         details: {
           attemptNumber: observation.attemptNumber,
           ...(observation.isCached === null ? {} : { isCached: observation.isCached }),

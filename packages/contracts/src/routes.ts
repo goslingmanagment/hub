@@ -2552,6 +2552,7 @@ const notificationIncidentKindEnum = z.enum([
   "db_disk_usage",
   "observations_partitions",
   "wrong_transactions_writer",
+  "read_gateway_capture",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const deliveryKindEnum = z.enum([
