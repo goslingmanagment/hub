@@ -42,9 +42,7 @@ import {
   listSubscriberDailyForPage,
   listFollowerTotalsForPages,
   listSubscriberTotalsForPages,
-  listArchiveConversationMessages,
   listVisiblePages,
-  searchArchiveMessages,
   ModelHasPagesError,
   setFanFlags,
   updateModelBySlug,
@@ -121,6 +119,7 @@ import {
 import { auditCtx, createRequestAuth, pageScopeFor } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAiRoutes } from "../modules/ai/index.ts";
+import { registerConversationsRoutes } from "../modules/conversations/index.ts";
 import { registerEventsRoutes } from "../modules/events/index.ts";
 import { registerIdentityRoutes } from "../modules/identity/index.ts";
 import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
@@ -169,19 +168,8 @@ import {
   listModelSummaries,
   listPageSummaries,
 } from "../services/reporting.ts";
-import {
-  getPageConversationMessagesReport,
-  getPageConversationPreviewReport,
-} from "../services/conversations.ts";
 import { getPublicSyncHealth, getSystemHealth } from "../services/health.ts";
 import { assertAllowedProxyTarget } from "../services/proxy-validation.ts";
-import {
-  getPageConversationProfile,
-  getPageFanProfile,
-  getPageFanProfileVersion,
-  listPageFanProfileVersions,
-  upsertPageFanProfile,
-} from "../services/fan-profiles.ts";
 import { getSyncMonitorRecentRequests, getSyncMonitorSnapshot } from "../services/sync-monitor.ts";
 import { getSyncStatusSnapshot } from "../services/sync-status.ts";
 import { getSyncStatusSummarySnapshot } from "../services/sync-summary.ts";
@@ -965,81 +953,8 @@ export async function buildApiServer(appContext: AppContext) {
     );
   });
 
-  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile", {
-    schema: routeSchemas.pageFanProfile,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return getPageFanProfile(
-      appContext,
-      principal,
-      request.params.pageLabel,
-      request.params.platformUserId,
-    );
-  });
-
-  server.put("/api/v1/pages/:pageLabel/fans/:platformUserId/profile", {
-    schema: routeSchemas.upsertFanProfile,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return upsertPageFanProfile(
-      appContext,
-      principal,
-      request.params.pageLabel,
-      request.params.platformUserId,
-      request.body.body,
-    );
-  });
-
-  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions", {
-    schema: routeSchemas.pageFanProfileVersions,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return listPageFanProfileVersions(
-      appContext,
-      principal,
-      request.params.pageLabel,
-      request.params.platformUserId,
-    );
-  });
-
-  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version", {
-    schema: routeSchemas.pageFanProfileVersion,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return getPageFanProfileVersion(
-      appContext,
-      principal,
-      request.params.pageLabel,
-      request.params.platformUserId,
-      request.params.version,
-    );
-  });
-
-  server.get("/api/v1/pages/:pageLabel/conversations/:conversationId/profile", {
-    schema: routeSchemas.pageConversationProfile,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return getPageConversationProfile(
-      appContext,
-      principal,
-      request.params.pageLabel,
-      request.params.conversationId,
-    );
-  });
-
-  server.get("/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview", {
-    schema: routeSchemas.pageConversationPreview,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return getPageConversationPreviewReport(appContext, principal, request.params, request.query);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/conversations/:conversationId/messages", {
-    schema: routeSchemas.pageConversationMessages,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return getPageConversationMessagesReport(appContext, principal, request.params, request.query);
-  });
+  // --- Conversations (profiles/threads/archive) --- (module: apps/runtime/src/modules/conversations)
+  registerConversationsRoutes(server, moduleContext);
 
   // --- Workboard --- (module: apps/runtime/src/modules/workboard)
   registerWorkboardRoutes(server, moduleContext);
@@ -1957,52 +1872,6 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     await requireOpenApiDocsOwner(request);
     return normalizeOpenApiDocument(server.swagger() as Record<string, any>);
-  });
-
-  // === Archive reads (Stage 10) — dashboard-grade, owner/team_lead only ===
-  const serializeArchiveMessage = (row: Awaited<ReturnType<typeof listArchiveConversationMessages>>[number]) => ({
-    id: row.id,
-    accountId: row.accountId,
-    platform: row.platform,
-    conversationRef: row.conversationRef,
-    messageRef: row.messageRef,
-    fanNativeId: row.fanNativeId,
-    senderRole: row.senderRole,
-    isSentByMe: row.isSentByMe,
-    occurredAt: row.occurredAt?.toISOString() ?? null,
-    textPlain: row.textPlain,
-    priceMills: row.priceMills,
-    isTip: row.isTip,
-    tipAmountMills: row.tipAmountMills,
-    deletedAt: row.deletedAt?.toISOString() ?? null,
-  });
-
-  server.get("/api/v1/archive/conversations/:ref/messages", {
-    schema: routeSchemas.archiveConversationMessages,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    const rows = await listArchiveConversationMessages(appContext.db, {
-      ...(pageScopeFor(principal) !== undefined ? { accountIds: pageScopeFor(principal) } : {}),
-      conversationRef: request.params.ref,
-      beforeId: request.query.before ?? null,
-      ...(request.query.limit !== undefined ? { limit: request.query.limit } : {}),
-    });
-    return rows.map(serializeArchiveMessage);
-  });
-
-  server.get("/api/v1/archive/search", {
-    schema: routeSchemas.archiveSearch,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    const rows = await searchArchiveMessages(appContext.db, {
-      ...(pageScopeFor(principal) !== undefined ? { accountIds: pageScopeFor(principal) } : {}),
-      query: request.query.q,
-      fanNativeId: request.query.fan ?? null,
-      ...(request.query.limit !== undefined ? { limit: request.query.limit } : {}),
-    });
-    return rows.map(serializeArchiveMessage);
   });
 
   // === Admin routes ===
