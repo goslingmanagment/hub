@@ -1376,12 +1376,21 @@ export const workboardV2OldMassBudgetSchema = z.object({
   resetsAt: isoTimestamp,
 });
 
+export const workboardClaimLeaseSchema = z.object({
+  fanId: intId,
+  claimedByUserId: intId,
+  claimedByUsername: z.string(),
+  expiresAt: isoTimestamp,
+});
+
 export const workboardV2ResponseSchema = z.object({
   tab: workboardV2TabEnum,
   total: z.number().int(),
   limit: z.number().int(),
   offset: z.number().int(),
   items: z.array(workboardV2ItemSchema),
+  // Stage 23: live claim leases — coordination, not access control.
+  claims: z.array(workboardClaimLeaseSchema),
   counts: z.array(workboardV2CountSchema),
   oldMassBudget: workboardV2OldMassBudgetSchema.nullable(),
   aiCoverage: z.object({
@@ -4781,6 +4790,34 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  workboardV2Claim: {
+    auth: { kind: "any-session", scope: "page" },
+    tags: ["workboard"],
+    summary: "Claim a fan (soft coordination lease, TTL'd, non-blocking)",
+    params: pageParamsSchema,
+    body: z.object({
+      fanId: intId,
+      ttlMinutes: z.number().int().min(1).max(240).optional(),
+    }),
+    response: {
+      200: z.object({ ok: z.literal(true), fanId: intId, expiresAt: isoTimestamp }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  workboardV2Unclaim: {
+    auth: { kind: "any-session", scope: "page" },
+    tags: ["workboard"],
+    summary: "Release a fan claim",
+    params: z.object({ pageLabel: z.string().min(1), fanId: z.coerce.number().int().positive() }),
+    response: {
+      200: z.object({ ok: z.literal(true), fanId: intId }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   workboardV2Ai: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["workboard"],
@@ -5898,3 +5935,4 @@ export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
 export type DeviceTokenItem = z.infer<typeof deviceTokenItemSchema>;
 export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponseSchema>;
 export type AccessGrantItem = z.infer<typeof accessGrantItemSchema>;
+export type WorkboardClaimLeaseItem = z.infer<typeof workboardClaimLeaseSchema>;

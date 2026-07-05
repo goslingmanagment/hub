@@ -39,6 +39,11 @@ import {
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
+  runWorkboardFanRecompute,
+  startWorkboardEventRecompute,
+  type WorkboardFanRecomputeJob,
+} from "./services/workboard-event-recompute.ts";
+import {
   ensureOfapiChargebacksQueue,
   ensureOfapiChargebacksSchedule,
   startOfapiChargebacksWorker,
@@ -77,6 +82,7 @@ import {
   TELEGRAM_DAILY_REPORT_QUEUE,
   WORKBOARD_CLASSIFY_QUEUE,
   WORKBOARD_RECOMPUTE_QUEUE,
+  WORKBOARD_FAN_RECOMPUTE_QUEUE,
 } from "./services/sync-queue.ts";
 import { recomputeAllWorkboardPages } from "./modules/workboard/index.ts";
 import { runClosingClassificationAllPages } from "./modules/workboard/index.ts";
@@ -204,8 +210,24 @@ export async function startWorkerServices(
   });
 
   await boss.work(WORKBOARD_RECOMPUTE_QUEUE, { batchSize: 1 }, async () => {
+    // Stage 23: the nightly sweep is the RECONCILER — `changed` is the drift
+    // counter and should be zero while the event-driven path keeps up.
     const result = await recomputeAllWorkboardPages(app.db, { now: new Date() });
-    app.logger.info(result, "Workboard v2 recompute complete");
+    if (result.changed > 0) {
+      app.logger.warn({ ...result, workboard_reconcile_drift: result.changed },
+        "Workboard reconciler found drift — event-driven recompute missed changes");
+    } else {
+      app.logger.info({ ...result, workboard_reconcile_drift: 0 }, "Workboard reconciler clean");
+    }
+  });
+
+  await boss.work(WORKBOARD_FAN_RECOMPUTE_QUEUE, { batchSize: 5 }, async (jobs) => {
+    for (const job of jobs) {
+      const result = await runWorkboardFanRecompute(app, job.data as WorkboardFanRecomputeJob);
+      if ("changed" in result && result.changed) {
+        app.logger.info({ ...job.data as object, ...result }, "Workboard fan recomputed (event-driven)");
+      }
+    }
   });
 
   await boss.work(DB_DISK_USAGE_CHECK_QUEUE, { batchSize: 1 }, async () => {
@@ -251,6 +273,8 @@ export async function startWorkerServices(
   // Stage 21: the v2 conformance instrument — permanent, read-only (one
   // checkpoint row), unconditional like the sweeps.
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
+  // Stage 23: domain events → debounced per-fan board recompute.
+  const workboardEventRecompute = startWorkboardEventRecompute(app, boss);
 
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);
@@ -315,6 +339,9 @@ export async function startWorkerServices(
       abortController.abort();
       await domainEventsSmoke.stop().catch((error) => {
         app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");
+      });
+      await workboardEventRecompute.stop().catch((error) => {
+        app.logger.warn({ err: error }, "workboard event recompute failed during shutdown");
       });
       await executorPromise.catch((error) => {
         app.logger.error({ err: error }, "Sync page executor failed during shutdown");

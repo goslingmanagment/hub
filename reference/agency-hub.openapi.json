@@ -37074,6 +37074,37 @@
                         "additionalProperties": false
                       }
                     },
+                    "claims": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "fanId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "claimedByUserId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "claimedByUsername": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "fanId",
+                          "claimedByUserId",
+                          "claimedByUsername",
+                          "expiresAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "counts": {
                       "type": "array",
                       "items": {
@@ -37199,6 +37230,7 @@
                     "limit",
                     "offset",
                     "items",
+                    "claims",
                     "counts",
                     "oldMassBudget",
                     "aiCoverage"
@@ -38592,6 +38624,327 @@
                     "error",
                     "message",
                     "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{pageLabel}/workboard/v2/claim": {
+      "post": {
+        "summary": "Claim a fan (soft coordination lease, TTL'd, non-blocking)",
+        "tags": [
+          "workboard"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fanId": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "ttlMinutes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 240
+                  }
+                },
+                "required": [
+                  "fanId"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "fanId": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "fanId",
+                    "expiresAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{pageLabel}/workboard/v2/claim/{fanId}": {
+      "delete": {
+        "summary": "Release a fan claim",
+        "tags": [
+          "workboard"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "fanId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "fanId": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "fanId"
                   ],
                   "additionalProperties": false
                 }

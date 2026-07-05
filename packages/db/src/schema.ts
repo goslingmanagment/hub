@@ -1197,6 +1197,33 @@ export const ofapiCommands = pgTable(
   }),
 );
 
+// Kernel Stage 23: soft claim leases — coordination, not access control.
+export const workboardClaimLeases = pgTable(
+  "workboard_claim_leases",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    claimedByUserId: bigint("claimed_by_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+  },
+  (table) => ({
+    pageFanUniq: unique("workboard_claim_leases_platform_account_id_fan_id_key").on(
+      table.platformAccountId,
+      table.fanId,
+    ),
+    expiryIdx: index("workboard_claim_leases_expiry_idx").on(table.expiresAt),
+  }),
+);
+
 export const workboardSnoozes = pgTable(
   "workboard_snoozes",
   {

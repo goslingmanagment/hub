@@ -6,6 +6,8 @@ import {
   listWorkboardRecomputePageIds,
   loadWorkboardSignalRows,
   upsertWorkboardStates,
+  appendDomainEvents,
+  listWorkboardStateTabs,
 } from "@agency_hub_core/db";
 import {
   UTC_TIME_ZONE,
@@ -217,6 +219,8 @@ function toRecord(
 export interface RecomputeResult {
   platformAccountId: number;
   evaluated: number;
+  /** Fans whose tab changed (or vanished) in this pass — the reconciler's drift signal. */
+  changed: number;
 }
 
 /** Recompute and persist workboard_state for every fan on a page. */
@@ -241,23 +245,44 @@ export async function recomputeWorkboardPage(
     return toRecord(input.platformAccountId, Number(row.fan_id), evaluateFan(signals), freeloader);
   });
 
+  const before = await listWorkboardStateTabs(db, { platformAccountId: input.platformAccountId });
+
   for (let i = 0; i < records.length; i += UPSERT_CHUNK) {
     await upsertWorkboardStates(db, records.slice(i, i + UPSERT_CHUNK));
   }
   await deleteIneligibleWorkboardStates(db, { platformAccountId: input.platformAccountId });
 
-  return { platformAccountId: input.platformAccountId, evaluated: records.length };
+  const after = await listWorkboardStateTabs(db, { platformAccountId: input.platformAccountId });
+  let changed = 0;
+  for (const [fanId, tab] of after) {
+    if (before.get(fanId) !== tab) {
+      changed += 1;
+    }
+  }
+  for (const fanId of before.keys()) {
+    if (!after.has(fanId)) {
+      changed += 1;
+    }
+  }
+
+  return { platformAccountId: input.platformAccountId, evaluated: records.length, changed };
 }
 
 /** Re-evaluate and persist a single fan (instant board update after Готово / snooze / purchase). */
 export async function recomputeWorkboardFan(
   db: Database,
   input: { platformAccountId: number; fanId: number; now?: Date },
-): Promise<{ evaluated: number }> {
+): Promise<{ evaluated: number; changed: boolean; fromTab: string | null; toTab: string | null }> {
   const now = input.now ?? new Date();
   const timeZone = UTC_TIME_ZONE;
   const fromDate30 = toBusinessDate(addUtcDays(now, -30), timeZone);
   const fromDate90 = toBusinessDate(addUtcDays(now, -90), timeZone);
+
+  const before = await listWorkboardStateTabs(db, {
+    platformAccountId: input.platformAccountId,
+    fanId: input.fanId,
+  });
+  const fromTab = before.get(input.fanId) ?? null;
 
   const rows = await loadWorkboardSignalRows(db, {
     platformAccountId: input.platformAccountId,
@@ -274,20 +299,53 @@ export async function recomputeWorkboardFan(
     platformAccountId: input.platformAccountId,
     fanId: input.fanId,
   });
-  return { evaluated: records.length };
+
+  const after = await listWorkboardStateTabs(db, {
+    platformAccountId: input.platformAccountId,
+    fanId: input.fanId,
+  });
+  const toTab = after.get(input.fanId) ?? null;
+  const changed = fromTab !== toTab;
+  if (changed) {
+    // Stage 23: the board-event feed for the future workboard app (rides
+    // stream v2). Module-emitted — no source observation exists, so
+    // observation_id carries the 0 sentinel; the dedup key is time-based
+    // because identical transitions can legitimately recur.
+    await appendDomainEvents(db, input.platformAccountId, [{
+      type: "workboard.state_changed",
+      occurredAt: now,
+      data: {
+        pageId: input.platformAccountId,
+        fanId: input.fanId,
+        fromTab,
+        toTab,
+      },
+      schemaVersion: 1,
+      observationId: 0,
+      dedupKey: `wbstate:${input.fanId}:${toTab ?? "none"}:${now.getTime()}`,
+    }]);
+  }
+  return { evaluated: records.length, changed, fromTab, toTab };
 }
 
-/** Recompute every eligible page (the scheduled job entry point). */
+/**
+ * Recompute every eligible page. Since Stage 23 this nightly entry point is
+ * the RECONCILER: the event-driven per-fan path does the real-time work, and
+ * `changed` here is the drift counter (target: 0 — anything above means the
+ * event path missed something).
+ */
 export async function recomputeAllWorkboardPages(
   db: Database,
   input: { now?: Date } = {},
-): Promise<{ pages: number; evaluated: number }> {
+): Promise<{ pages: number; evaluated: number; changed: number }> {
   const now = input.now ?? new Date();
   const pageIds = await listWorkboardRecomputePageIds(db);
   let evaluated = 0;
+  let changed = 0;
   for (const platformAccountId of pageIds) {
     const result = await recomputeWorkboardPage(db, { platformAccountId, now });
     evaluated += result.evaluated;
+    changed += result.changed;
   }
-  return { pages: pageIds.length, evaluated };
+  return { pages: pageIds.length, evaluated, changed };
 }

@@ -9,6 +9,8 @@ export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
 export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 export const WORKBOARD_RECOMPUTE_QUEUE = "workboard.recompute";
 export const WORKBOARD_CLASSIFY_QUEUE = "workboard.classify-closing";
+// Stage 23: debounced per-fan recompute driven by domain events.
+export const WORKBOARD_FAN_RECOMPUTE_QUEUE = "workboard.fan-recompute";
 
 export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages";
 
@@ -127,6 +129,11 @@ export async function ensureWorkboardQueues(
   boss: QueueCreationClient,
   createdQueues?: Set<string>,
 ) {
+  await ensureQueueCreated(boss, WORKBOARD_FAN_RECOMPUTE_QUEUE, {
+    policy: "standard",
+    retryLimit: 3,
+    retryDelay: 30,
+  }, createdQueues);
   await ensureQueueCreated(boss, WORKBOARD_RECOMPUTE_QUEUE, {
     policy: "standard",
     retryLimit: 1,

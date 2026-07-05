@@ -631,15 +631,15 @@ export async function snoozeWorkboardFanV2(
 /**
  * Retract the most recent touch-log entry for a fan (undo of Готово).
  * Stage 2 destruction-door guard: the row is marked retracted, not deleted —
- * the interim form of Stage 23's contact.retracted compensating event.
- * Readers exclude retracted rows.
+ * readers exclude retracted rows. Returns whether a row was actually stamped;
+ * the service layer emits workboard.contact_retracted only on true (Stage 23).
  */
 export async function retractLastWorkboardContact(
   db: Database,
   platformAccountId: number,
   fanId: number,
-): Promise<void> {
-  await db.execute(sql`
+): Promise<boolean> {
+  const result = await db.execute(sql`
     update workboard_contact_log
     set retracted_at = now()
     where id = (
@@ -649,7 +649,9 @@ export async function retractLastWorkboardContact(
       order by acted_at desc
       limit 1
     )
+    returning id
   `);
+  return result.rows.length > 0;
 }
 
 /**
@@ -1265,4 +1267,108 @@ export async function getLlmUsageRange(
     order by business_date asc
   `);
   return result.rows;
+}
+
+// --- Claim leases (kernel Stage 23): soft coordination locks ---
+
+const DEFAULT_CLAIM_TTL_MINUTES = 30;
+
+export interface WorkboardClaimLease {
+  fanId: number;
+  claimedByUserId: number;
+  claimedByUsername: string;
+  claimedAt: Date;
+  expiresAt: Date;
+}
+
+/** Claim (or refresh/steal) the one live lease for a fan. Never blocks. */
+export async function claimWorkboardFan(db: Database, input: {
+  platformAccountId: number;
+  fanId: number;
+  userId: number;
+  ttlMinutes?: number;
+}): Promise<{ expiresAt: Date }> {
+  const ttl = input.ttlMinutes ?? DEFAULT_CLAIM_TTL_MINUTES;
+  const result = await db.execute<{ expires_at: Date }>(sql`
+    insert into workboard_claim_leases (platform_account_id, fan_id, claimed_by_user_id, expires_at)
+    values (${input.platformAccountId}, ${input.fanId}, ${input.userId}, now() + (${ttl} || ' minutes')::interval)
+    on conflict (platform_account_id, fan_id)
+    do update set claimed_by_user_id = excluded.claimed_by_user_id,
+                  claimed_at = now(),
+                  expires_at = excluded.expires_at,
+                  released_at = null
+    returning expires_at
+  `);
+  return { expiresAt: new Date(result.rows[0]!.expires_at) };
+}
+
+/** Release stamps the lease; a later claim reuses the row. */
+export async function releaseWorkboardClaim(db: Database, input: {
+  platformAccountId: number;
+  fanId: number;
+}): Promise<boolean> {
+  const result = await db.execute(sql`
+    update workboard_claim_leases
+    set released_at = now()
+    where platform_account_id = ${input.platformAccountId}
+      and fan_id = ${input.fanId}
+      and released_at is null
+    returning id
+  `);
+  return result.rows.length > 0;
+}
+
+/** Live (unexpired, unreleased) leases for one page, with the claimer's name. */
+export async function listActiveWorkboardClaims(
+  db: Database,
+  platformAccountId: number,
+): Promise<WorkboardClaimLease[]> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select l.fan_id, l.claimed_by_user_id, u.username, l.claimed_at, l.expires_at
+    from workboard_claim_leases l
+    join users u on u.id = l.claimed_by_user_id
+    where l.platform_account_id = ${platformAccountId}
+      and l.released_at is null
+      and l.expires_at > now()
+    order by l.claimed_at asc
+  `);
+  return result.rows.map((row) => ({
+    fanId: Number(row.fan_id),
+    claimedByUserId: Number(row.claimed_by_user_id),
+    claimedByUsername: String(row.username),
+    claimedAt: new Date(row.claimed_at as string | Date),
+    expiresAt: new Date(row.expires_at as string | Date),
+  }));
+}
+
+/** Page platform lookup for the event-driven recompute job. */
+export async function findWorkboardPagePlatform(
+  db: Database,
+  platformAccountId: number,
+): Promise<string | null> {
+  const result = await db.execute<{ platform: string }>(sql`
+    select platform from pages where id = ${platformAccountId}
+  `);
+  return result.rows[0]?.platform ?? null;
+}
+
+/** Current tab per fan (change-detection snapshot for state_changed / drift). */
+export async function listWorkboardStateTabs(db: Database, input: {
+  platformAccountId: number;
+  fanId?: number;
+}): Promise<Map<number, string>> {
+  const rows = input.fanId === undefined
+    ? await db.execute<{ fan_id: string; tab: string }>(sql`
+        select fan_id::text as fan_id, tab::text as tab from workboard_state
+        where platform_account_id = ${input.platformAccountId}
+      `)
+    : await db.execute<{ fan_id: string; tab: string }>(sql`
+        select fan_id::text as fan_id, tab::text as tab from workboard_state
+        where platform_account_id = ${input.platformAccountId} and fan_id = ${input.fanId}
+      `);
+  const map = new Map<number, string>();
+  for (const row of rows.rows) {
+    map.set(Number(row.fan_id), String(row.tab));
+  }
+  return map;
 }

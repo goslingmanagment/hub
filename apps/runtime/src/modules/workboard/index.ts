@@ -1,6 +1,6 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
-import { requireDashboardUser, requireOwner } from "../../services/auth.ts";
+import { requireDashboardUser, requireOwner, requireSessionUser } from "../../services/auth.ts";
 import {
   getWorkboardReport,
   snoozeWorkboardFanReport,
@@ -8,11 +8,13 @@ import {
 } from "../../services/workboard.ts";
 import { getWorkboardPresenceReport } from "../../services/workboard-presence.ts";
 import {
+  claimWorkboardV2Fan,
   getWorkboardV2Lists,
   getWorkboardV2Report,
   recordWorkboardContactV2,
   snoozeWorkboardV2,
   triggerWorkboardV2Recompute,
+  unclaimWorkboardV2Fan,
   undoWorkboardContactV2,
   unsnoozeWorkboardV2,
 } from "./report.ts";
@@ -132,6 +134,24 @@ export function registerWorkboardRoutes(server: ApiServer, ctx: ApiModuleContext
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     return undoWorkboardContactV2(appContext, principal, request.params.pageLabel, request.params.fanId);
+  });
+
+  // Stage 23: claim leases — any-session (chatters claim their own work), not
+  // dashboard-only like the reads above; page access is the real boundary.
+  server.post("/api/v1/pages/:pageLabel/workboard/v2/claim", {
+    schema: routeSchemas.workboardV2Claim,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    return claimWorkboardV2Fan(appContext, principal, request.params.pageLabel, request.body);
+  });
+
+  server.delete("/api/v1/pages/:pageLabel/workboard/v2/claim/:fanId", {
+    schema: routeSchemas.workboardV2Unclaim,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireSessionUser(principal);
+    return unclaimWorkboardV2Fan(appContext, principal, request.params.pageLabel, request.params.fanId);
   });
 
   server.get("/api/v1/pages/:pageLabel/workboard/v2/ai", {

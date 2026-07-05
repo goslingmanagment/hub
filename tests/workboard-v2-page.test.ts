@@ -61,6 +61,7 @@ function buildResponse(input: { total: number; items: WorkboardV2Item[] }): Work
     limit: 100,
     offset: 0,
     items: input.items,
+    claims: [],
     counts: [{ tab: "subscribers", secondaryStatus: "need_reply", count: input.total }],
     oldMassBudget: null,
     aiCoverage: {

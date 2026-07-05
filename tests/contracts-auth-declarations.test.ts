@@ -74,10 +74,12 @@ describe("route auth declarations", () => {
       "workboardV2Ai",
       "workboardV2AiClassify",
       "workboardV2AiSettings",
+      "workboardV2Claim",
       "workboardV2Contact",
       "workboardV2Lists",
       "workboardV2Recompute",
       "workboardV2Snooze",
+      "workboardV2Unclaim",
       "workboardV2UndoContact",
       "workboardV2Unsnooze",
     ]);

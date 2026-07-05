@@ -7,24 +7,29 @@ import type {
 } from "@agency_hub_core/contracts";
 import {
   type WorkboardV2Row,
+  appendDomainEvents,
   appendWorkboardContact,
+  claimWorkboardFan,
   countClosingCache,
   countOldMassContactsToday,
   retractLastWorkboardContact,
   getClosingSettings,
   getLlmUsageDaily,
   getWorkboardV2Counts,
+  listActiveWorkboardClaims,
   listSpenderDiagnosisRows,
   listWorkboardSpenderBands,
   listWorkboardV2,
   markReactivationAttemptedIfDead,
+  releaseWorkboardClaim,
   snoozeWorkboardFanV2,
   unsnoozeWorkboardFan,
 } from "@agency_hub_core/db";
 import { SPENDER_AUTO_LIST_BUCKETS, UTC_TIME_ZONE, millsToNumber, toBusinessDate } from "@agency_hub_core/shared";
 
+import { auditCtx } from "../../api/request-auth.ts";
 import type { AppContext } from "../../bootstrap.ts";
-import type { AuthPrincipal } from "../../services/auth.ts";
+import { type AuthPrincipal, recordAudit } from "../../services/auth.ts";
 import { resolveAccessibleWorkboardPage } from "./page-access.ts";
 import { resolveClosingSettings } from "./ai-settings.ts";
 import { isClosingMessage } from "./closing.ts";
@@ -135,7 +140,7 @@ export async function getWorkboardV2Report(
 ): Promise<WorkboardV2Response> {
   const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
 
-  const [{ total, rows }, counts] = await Promise.all([
+  const [{ total, rows }, counts, claims] = await Promise.all([
     listWorkboardV2(app.db, {
       platformAccountId: page.id,
       tab: query.tab,
@@ -144,6 +149,7 @@ export async function getWorkboardV2Report(
       offset: query.offset,
     }),
     getWorkboardV2Counts(app.db, page.id),
+    listActiveWorkboardClaims(app.db, page.id),
   ]);
 
   const [oldMassBudget, aiCoverage] = await Promise.all([
@@ -157,6 +163,12 @@ export async function getWorkboardV2Report(
     limit: query.limit,
     offset: query.offset,
     items: rows.map(mapItem),
+    claims: claims.map((claim) => ({
+      fanId: claim.fanId,
+      claimedByUserId: claim.claimedByUserId,
+      claimedByUsername: claim.claimedByUsername,
+      expiresAt: claim.expiresAt.toISOString(),
+    })),
     counts: counts.map((c) => ({
       tab: c.tab,
       secondaryStatus: c.secondary_status,
@@ -321,8 +333,73 @@ export async function undoWorkboardContactV2(
   fanId: number,
 ): Promise<{ ok: true; fanId: number }> {
   const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
-  await retractLastWorkboardContact(app.db, page.id, fanId);
+  const retracted = await retractLastWorkboardContact(app.db, page.id, fanId);
+  if (retracted) {
+    // Stage 23 Task 4: the compensating event — the retraction is a fact of its
+    // own, not an erasure of the contact fact (append-only ledger discipline).
+    const now = new Date();
+    await appendDomainEvents(app.db, page.id, [{
+      type: "workboard.contact_retracted",
+      occurredAt: now,
+      data: { pageId: page.id, fanId, retractedByUserId: principal.user.id },
+      schemaVersion: 1,
+      observationId: 0,
+      dedupKey: `wbretract:${fanId}:${now.getTime()}`,
+    }]);
+  }
   await recomputeWorkboardFan(app.db, { platformAccountId: page.id, fanId });
+  return { ok: true, fanId };
+}
+
+const CLAIM_MAX_TTL_MINUTES = 240;
+
+/**
+ * Claim a fan on the board — a soft coordination lease, not access control.
+ * Claiming never blocks anyone: a second chatter's claim steals the lease
+ * (last-writer-wins), and the board renders who holds what so the team can
+ * self-coordinate. TTL'd so abandoned claims evaporate on their own.
+ */
+export async function claimWorkboardV2Fan(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  body: { fanId: number; ttlMinutes?: number },
+): Promise<{ ok: true; fanId: number; expiresAt: string }> {
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
+  const ttlMinutes = body.ttlMinutes === undefined
+    ? undefined
+    : Math.min(Math.max(1, body.ttlMinutes), CLAIM_MAX_TTL_MINUTES);
+  const { expiresAt } = await claimWorkboardFan(app.db, {
+    platformAccountId: page.id,
+    fanId: body.fanId,
+    userId: principal.user.id,
+    ttlMinutes,
+  });
+  await recordAudit(app, {
+    ...auditCtx(principal),
+    eventType: "workboard.fan_claimed",
+    platformAccountId: page.id,
+    metadata: { fanId: body.fanId, ttlMinutes: ttlMinutes ?? null },
+  });
+  return { ok: true, fanId: body.fanId, expiresAt: expiresAt.toISOString() };
+}
+
+export async function unclaimWorkboardV2Fan(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  fanId: number,
+): Promise<{ ok: true; fanId: number }> {
+  const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
+  const released = await releaseWorkboardClaim(app.db, { platformAccountId: page.id, fanId });
+  if (released) {
+    await recordAudit(app, {
+      ...auditCtx(principal),
+      eventType: "workboard.fan_released",
+      platformAccountId: page.id,
+      metadata: { fanId },
+    });
+  }
   return { ok: true, fanId };
 }
 
