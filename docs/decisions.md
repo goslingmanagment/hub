@@ -64,6 +64,7 @@
 | 64 | Pass 3 spec fixup (pre-execution review) | Doc-only amendments: Stage 7/8 key-table insert protocols made implementable (pre-allocated ids + OVERRIDING SYSTEM VALUE); dependency graph tightened (31/32←11, 33←20, soft 26←19, mutual soft 28↔29); Stage 20 method/path recovered by booting buildApiServer; sensitive kinds excluded from the generic lake into lake/restricted |
 | 65 | Kernel destruction-door guards + chatter-read-scope (Pass 3 Stage 2) | One-action data-loss doors closed: raw revenue routes role-gated behind REVENUE_ROUTE_ROLE_ENFORCEMENT (log→enforce); messages_history reset refuses 409 until the Stage 10 archive; fact-bearing page DELETE refuses 409; workboard undo → retraction marker; reclassify → soft-supersede append log (partial active unique, migration 0053) |
 | 66 | Desktop stop-loss (Pass 3 Stage 4) | Desktop stops destroying facts: usage spool never self-deletes (dead-letter tier; drop path removed at the type level); prune horizons ×10 (messages 50k, spend 310 d, guard-audit 3650 d); purge flow warns kernel-holds-no-copy; `x-client-version` on every hub request (Proposal 4.1). Q5 diff verdict: served 0.1.28 = desktop origin/main@145260a byte-exact, but the desktop repo's local/origin mains diverged 5-and-5 — 0.1.29 release blocked until the owner reconciles |
+| 67 | OnlyMonster export is vacuous (Pass 3 Stage 5) | Verify-zero census 2026-07-05: lora-of 685/685 and lora-vip-of 2168/2168 transactions OFAPI-sourced (0 OnlyMonster rows), no OnlyMonster streams in the 7-day sync_runs window, 0 omapi.onlymonster.ai egress. No export to run; no off-box archive created (Q3 declined). Subscription cancellation stays Stage 15; adapter deletion stays Stage 18 |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -1177,3 +1178,23 @@ dbBytes); `usage_events` spool grows unbounded while the hub is unreachable (acc
 disk-bounded, surfaced in diagnostics); the desktop branch divergence is a NEW standing risk
 until reconciled — every desktop session before the merge builds on a main that lacks four
 production fixes.
+
+## OnlyMonster Export Is Vacuous — Pass 3 Stage 5 (2026-07-05)
+
+**Decision #67:** The passport's full historical export has nothing to operate on, verified live
+(00:47 UTC, read-only):
+
+- **V1 provenance census:** every OnlyFans transaction is OFAPI-sourced — `lora-of` 685/685,
+  `lora-vip-of` 2168/2168, **0 rows** with non-`ofapi:` raw_type on either page.
+- **V2 stream census (7 days):** only shared planner streams (light, followers, transactions,
+  top_spenders, subscribers, dm_conversations, dm_messages, followers_reconcile) — no
+  OnlyMonster-specific stream; V1's zero rows proves no OnlyMonster writer ran regardless.
+- **Egress:** 0 calls to `omapi.onlymonster.ai` in api+worker logs (caveat: containers were
+  recreated tonight so log history is short; Q1's 48 h check of 2026-07-04 found the same zero).
+
+No export job is built; no data moves. **Standing risks carried forward:** (1) no off-box backup
+of any kind exists (Q3 declined, owner-accepted) — re-raise no later than Stage 28; (2) the
+OnlyMonster subscription, if still billed, is cancellable at the owner's discretion and is tracked
+in Stage 15; (3) the dead OnlyMonster adapter code stays in-repo until Stage 18's seam. If any
+later census finds an OnlyMonster-sourced row, this entry is superseded per append-only law and
+the full-export spec (preserved in this stage file's history) re-activates.
