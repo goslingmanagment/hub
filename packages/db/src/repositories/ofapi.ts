@@ -442,6 +442,10 @@ export async function listOfapiWebhookEventsForSpendProjection(
       inArray(ofapiWebhookEvents.eventType, [...input.eventTypes]),
       sql`${ofapiWebhookEvents.status} <> 'pending'`,
       isNotNull(ofapiWebhookEvents.platformAccountId),
+      // The literal below must stay equal to OFAPI_TIPS_RECEIVED_BLOCKED_REASON
+      // (runtime's ofapi-spend-projection-contract.ts) — it can't be imported
+      // across the package boundary, and a drift silently stops the legacy
+      // blocked-tips rows from self-healing.
       sql`not exists (
         select 1 from ${ofapiSpendProjectionEvents}
         where ${ofapiSpendProjectionEvents.journalId} = ${ofapiWebhookEvents.id}

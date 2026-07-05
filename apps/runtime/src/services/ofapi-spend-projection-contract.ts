@@ -11,6 +11,8 @@ import {
 // 2026-06-30..07-03 and the captured shape drives mapTipsReceived below. The
 // constant stays exported: legacy blocked rows carry it, and the projection
 // sweep's re-list filter matches on it to self-heal them into projected rows.
+// The db package's listOfapiWebhookEventsForSpendProjection hardcodes this
+// same string (cross-package, can't import) — keep the two in lockstep.
 export const OFAPI_TIPS_RECEIVED_BLOCKED_REASON = "tips_received_live_fixture_required";
 
 export type OfapiSpendProjectionEventType =

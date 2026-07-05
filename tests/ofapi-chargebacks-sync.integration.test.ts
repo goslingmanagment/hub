@@ -195,6 +195,84 @@ describe("OFAPI chargebacks reconcile", () => {
     expect(countRows).toEqual([{ n: "2" }]);
   });
 
+  it("discards a truncated first full-history walk so the 90-day window never locks in early", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("cb-trunc-of", "acct_trunc");
+    // 101 chargebacks = one full API page (100) + a tail page. The walk needs
+    // two requests to complete.
+    const items = Array.from({ length: 101 }, (_, i) =>
+      chargebackItem(`pay-t${i}`, String(600_000 + i)));
+    const calls: Array<{ accountId: string; offset: number; startDate: string | undefined }> = [];
+    const pagedClient = {
+      async listChargebacks(
+        _context: unknown,
+        accountId: string,
+        params: { limit?: number; offset?: number; startDate?: string },
+      ): Promise<OfapiListPage> {
+        const offset = params.offset ?? 0;
+        calls.push({ accountId, offset, startDate: params.startDate });
+        const slice = items.slice(offset, offset + (params.limit ?? 100));
+        return {
+          items: slice,
+          hasNextPage: offset + slice.length < items.length,
+          nextMarker: null,
+          nextPageUrl: null,
+          meta: null,
+        };
+      },
+    } as unknown as OfapiClient;
+
+    // Day budget of 1 credit: the guard admits the first request, then blocks
+    // before the second — truncating the initial full-history walk.
+    appContext = {
+      ...createTestAppContext(testDb, {
+        ofapiChargebacksReconcileEnabled: true,
+        ofapiCreditLedgerEnabled: true,
+        ofapiBackfillDailyCreditBudget: 1,
+      }),
+      ofapi: pagedClient,
+    };
+    const truncated = await runOfapiChargebacksReconcile(appContext);
+    expect(truncated.pages[0]).toMatchObject({
+      status: "blocked",
+      reason: "ofapi_daily_credit_budget",
+      apiPages: 1,
+      rawRows: 100,
+      writtenRows: 0,
+    });
+    // Nothing landed — otherwise pageHasChargebackRows would flip this page
+    // into the trailing window with 1 of 101 rows forever missing history.
+    const { rows: afterTruncation } = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from transactions where platform_account_id = $1",
+      [page.id],
+    );
+    expect(afterTruncation).toEqual([{ n: "0" }]);
+
+    // Next run with budget available: STILL a full-history walk, completes,
+    // writes everything.
+    appContext = {
+      ...createTestAppContext(testDb, {
+        ofapiChargebacksReconcileEnabled: true,
+        ofapiCreditLedgerEnabled: true,
+        ofapiBackfillDailyCreditBudget: 200,
+      }),
+      ofapi: pagedClient,
+    };
+    const completed = await runOfapiChargebacksReconcile(appContext);
+    expect(calls[1]?.startDate).toBeUndefined();
+    expect(calls[2]?.offset).toBe(100);
+    expect(completed.pages[0]).toMatchObject({ status: "written", writtenRows: 101 });
+    const { rows: afterCompletion } = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from transactions where platform_account_id = $1",
+      [page.id],
+    );
+    expect(afterCompletion).toEqual([{ n: "101" }]);
+  });
+
   it("does nothing with the flag off", async (context) => {
     if (!testDb) {
       context.skip();

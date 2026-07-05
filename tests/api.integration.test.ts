@@ -10362,6 +10362,7 @@ describe("api integration", () => {
 
     // Harvest account resolution: payload.ofapiAccountId → pages.ofapi_account_id
     // (harvest events carry no pageLabel — the desktop knows only its OFAPI id).
+    // The uploader's key must be ASSIGNED to the page it attributes to.
     const harvestModel = await createModel(testDb.db, { slug: "hv-model", name: "HV" });
     const harvestPage = await createOnlyFansPage(testDb.db, {
       modelId: harvestModel.id,
@@ -10371,11 +10372,19 @@ describe("api integration", () => {
       pageId: harvestPage.id,
       ofapiAccountId: "acct_hv",
     });
+    await createUserAccount(appContext, {
+      username: "hv-uploader",
+      role: "chatter",
+    }, { source: "cli" });
+    const harvestKey = await issueChatterApiKey(appContext, {
+      username: "hv-uploader",
+      pageLabel: "hv-of",
+    }, { source: "cli" });
     const resolved = await server.inject({
       method: "POST",
       url: "/api/v1/ingest/observations",
       headers: {
-        authorization: `Bearer ${issuedKey.key}`,
+        authorization: `Bearer ${harvestKey.key}`,
         "x-client-version": "harvest-0.1.29",
       },
       payload: {
@@ -10397,5 +10406,64 @@ describe("api integration", () => {
       "select account_id::text from observations where kind = 'harvest.messages'",
     );
     expect(resolvedRows).toEqual([{ account_id: String(harvestPage.id) }]);
+
+    // Page-scope gate: the lana-assigned key referencing acct_hv journals the
+    // fact WITHOUT attribution — a key can never write into pages it is not
+    // assigned to (NULL-account observations never canonicalize).
+    const outOfScope = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers: {
+        authorization: `Bearer ${issuedKey.key}`,
+        "x-client-version": "harvest-0.1.29",
+      },
+      payload: {
+        events: [{
+          clientEventId: "77777777-7777-4777-8777-777777777777",
+          kind: "harvest.messages",
+          observedAt: "2026-05-01T09:06:00.000Z",
+          payload: {
+            table: "messages",
+            machineId: "m-2",
+            ofapiAccountId: "acct_hv",
+            row: { message_id: "2", chat_id: "9", created_at: "2026-05-01T09:06:00+00:00", is_sent_by_me: 0 },
+          },
+        }],
+      },
+    });
+    expect(outOfScope.statusCode).toBe(200);
+    const { rows: scopedRows } = await testDb.pool.query<{ account_id: string | null }>(
+      `select account_id::text from observations
+       where kind = 'harvest.messages' order by idempotency_key`,
+    );
+    expect(scopedRows.map((row) => row.account_id)).toContain(null);
+    expect(scopedRows).toHaveLength(2);
+
+    // Producer gate: a NON-harvest client version cannot journal into the
+    // harvest namespace — the kind falls into the unknown bucket, which the
+    // canonicalizer never turns into platform truth.
+    const forged = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers,
+      payload: {
+        events: [{
+          clientEventId: "88888888-8888-4888-8888-888888888888",
+          kind: "harvest.messages",
+          observedAt: "2026-05-01T09:07:00.000Z",
+          payload: {
+            table: "messages",
+            machineId: "m-3",
+            ofapiAccountId: "acct_hv",
+            row: { message_id: "3", chat_id: "9", created_at: "2026-05-01T09:07:00+00:00", is_sent_by_me: 1 },
+          },
+        }],
+      },
+    });
+    expect(forged.statusCode).toBe(200);
+    const { rows: forgedRows } = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observations where kind = 'desktop.unknown:harvest.messages'",
+    );
+    expect(forgedRows).toEqual([{ n: "1" }]);
   });
 });

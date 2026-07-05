@@ -44,7 +44,9 @@ export const OFAPI_CHARGEBACKS_RECONCILE_QUEUE = "ofapi.chargebacks.reconcile";
 const CHARGEBACKS_PAGE_LIMIT = 100;
 // Trailing reconcile window once a page has chargeback rows: chargebacks
 // surface within weeks of the payment, and the upserts make overlap free. A
-// page with NO chargeback rows yet walks the full history (first enable).
+// page with NO chargeback rows yet walks the full history (first enable);
+// that first walk is all-or-nothing — see the truncation guard in
+// reconcilePage.
 const CHARGEBACKS_LOOKBACK_DAYS = 90;
 // Per-page request cap per run — a safety backstop over the offset walk.
 const CHARGEBACKS_MAX_PAGES_PER_RUN = 20;
@@ -252,6 +254,7 @@ async function reconcilePage(
   let apiPages = 0;
   let rawRows = 0;
   let blockedReason: string | null = null;
+  let walkComplete = false;
 
   try {
     for (let offset = 0; apiPages < CHARGEBACKS_MAX_PAGES_PER_RUN;) {
@@ -277,6 +280,7 @@ async function reconcilePage(
         }
       }
       if (page.items.length < CHARGEBACKS_PAGE_LIMIT) {
+        walkComplete = true;
         break;
       }
       offset += page.items.length;
@@ -290,6 +294,24 @@ async function reconcilePage(
         );
       });
     }
+  }
+
+  // A page's FIRST walk (no rows yet ⇒ no startDate) must cover the whole
+  // history: any row we write flips pageHasChargebackRows and locks every
+  // later run into the 90-day window. A truncated first walk (budget block
+  // or page-cap) therefore writes NOTHING — tomorrow's run redoes the full
+  // walk against a fresh day budget. Trailing-window partials stay written:
+  // the next run re-covers the same 90 days and the upserts make it free.
+  if (startDate === undefined && !walkComplete) {
+    return {
+      pageLabel: input.pageLabel,
+      status: "blocked",
+      reason: blockedReason ?? "full_history_walk_truncated",
+      apiPages,
+      rawRows,
+      writtenRows: 0,
+      skippedReasons,
+    };
   }
 
   let written = 0;

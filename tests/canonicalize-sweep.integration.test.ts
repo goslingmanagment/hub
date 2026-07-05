@@ -181,7 +181,8 @@ describe("canonicalization sweep (Stage 8)", () => {
       "select kind, parse_version from observations where source = 'client_capture' order by kind",
     );
     expect(captureRows.rows).toEqual([
-      { kind: "desktop.ai_acceptance", parse_version: 1 },
+      // v2 since Stage 12 (harvest kinds joined the family).
+      { kind: "desktop.ai_acceptance", parse_version: 2 },
       { kind: "desktop.unknown:mystery_metric", parse_version: 0 },
     ]);
 

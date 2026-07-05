@@ -6,6 +6,7 @@
 // parse_version (the kinds are "seen", not pending), and the version gives
 // Stage 29 its replay hook: bump it and every captured fact re-presents.
 
+import { isHarvestProducer } from "../ingest-observations.ts";
 import {
   asDate,
   asNumber,
@@ -100,7 +101,11 @@ function harvestMessageEvents(
 export function canonicalizeClientCaptureObservation(
   observation: CanonicalizableObservation,
 ): CanonicalEventDraft[] {
-  if (observation.kind === "harvest.messages") {
+  // Producer gate, defense-in-depth behind ingest's own gate: only the
+  // harvest uploader's observations may become message.* events. A
+  // harvest-kind row from any other producer stamps forward with zero
+  // events instead of minting platform truth.
+  if (observation.kind === "harvest.messages" && isHarvestProducer(observation.producer)) {
     return harvestMessageEvents(observation);
   }
   // Everything else: validation is the whole job — a payload that is not an

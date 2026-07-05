@@ -42,18 +42,27 @@ export const HARVEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 const HARVEST_VERSION_PREFIX = "harvest-";
+const HARVEST_PRODUCER_PREFIX = "desktop-harvest@";
 
 export function ingestProducerForClientVersion(clientVersion: string) {
   return clientVersion.startsWith(HARVEST_VERSION_PREFIX)
-    ? `desktop-harvest@${clientVersion.slice(HARVEST_VERSION_PREFIX.length)}`
+    ? `${HARVEST_PRODUCER_PREFIX}${clientVersion.slice(HARVEST_VERSION_PREFIX.length)}`
     : `desktop@${clientVersion}`;
 }
 
-function ingestKindFor(kind: string) {
+export function isHarvestProducer(producer: string) {
+  return producer.startsWith(HARVEST_PRODUCER_PREFIX);
+}
+
+// The harvest namespace is producer-gated: harvest.<table> kinds canonicalize
+// into real domain events, so only the harvest uploader (x-client-version
+// 'harvest-*') may journal them verbatim. Any other client sending a
+// harvest.* kind falls into the unknown bucket — captured, never trusted.
+function ingestKindFor(kind: string, producer: string) {
   if (INGEST_KIND_ALLOWLIST.has(kind)) {
     return `desktop.${kind}`;
   }
-  if (HARVEST_KIND_ALLOWLIST.has(kind)) {
+  if (HARVEST_KIND_ALLOWLIST.has(kind) && isHarvestProducer(producer)) {
     return kind;
   }
   return `desktop.unknown:${kind}`;
@@ -81,6 +90,14 @@ export async function ingestClientObservations(
   app: AppContext,
   input: {
     principalUserId: number;
+    /**
+     * Page ids the authenticated key may attribute observations to; null =
+     * unrestricted (owner). A reference outside this scope resolves like an
+     * unknown label: the fact still journals, but with a NULL account — it
+     * can never canonicalize, so a key can't mint events for pages it isn't
+     * assigned to, and a stale assignment can't wedge the uploader either.
+     */
+    allowedPageIds: readonly number[] | null;
     clientVersion: string;
     events: IngestObservationsBody["events"];
   },
@@ -89,8 +106,15 @@ export async function ingestClientObservations(
   const observedAts = input.events.map((event, index) =>
     parseObservedAt(event.observedAt, index));
 
-  // Resolve page labels once per batch. An unknown label journals with a null
-  // account (capture-first) — the fact is not lost over a label typo.
+  const pageScope = input.allowedPageIds === null ? null : new Set(input.allowedPageIds);
+  const inScope = (pageId: number) => pageScope === null || pageScope.has(pageId);
+
+  const producer = ingestProducerForClientVersion(input.clientVersion);
+  const harvestProducer = isHarvestProducer(producer);
+
+  // Resolve page labels once per batch. An unknown or out-of-scope label
+  // journals with a null account (capture-first) — the fact is not lost over
+  // a label typo, and it is never attributed beyond the key's page scope.
   const labels = Array.from(new Set(
     input.events.flatMap((event) => (event.pageLabel ? [event.pageLabel] : [])),
   ));
@@ -99,36 +123,42 @@ export async function ingestClientObservations(
     const stored = await findPageByLabel(app.db, label);
     pageByLabel.set(
       label,
-      stored ? { id: stored.page.id, platform: stored.page.platform } : null,
+      stored && inScope(stored.page.id)
+        ? { id: stored.page.id, platform: stored.page.platform }
+        : null,
     );
   }
 
   // Stage 12: harvest events carry no pageLabel — the desktop knows its OFAPI
   // account id, not core labels. Resolve payload.ofapiAccountId against
   // pages.ofapi_account_id HERE (the sweep never canonicalizes NULL-account
-  // observations, so ingest is the resolution point). Unmappable accounts
-  // journal with NULL and surface in reconciliation (spec assumption 4).
-  const hasHarvestEvents = input.events.some((event) => HARVEST_KIND_ALLOWLIST.has(event.kind));
+  // observations, so ingest is the resolution point). Unmappable or
+  // out-of-scope accounts journal with NULL and surface in reconciliation
+  // (spec assumption 4). The map only exists for the harvest producer — the
+  // live lane resolves by label alone.
+  const hasHarvestEvents = harvestProducer &&
+    input.events.some((event) => HARVEST_KIND_ALLOWLIST.has(event.kind));
   const pageByOfapiAccount = new Map<string, { id: number; platform: string }>();
   if (hasHarvestEvents) {
     for (const page of await listOfapiMappedPages(app.db)) {
-      pageByOfapiAccount.set(page.ofapiAccountId, { id: page.id, platform: page.platform });
+      if (inScope(page.id)) {
+        pageByOfapiAccount.set(page.ofapiAccountId, { id: page.id, platform: page.platform });
+      }
     }
   }
-
-  const producer = ingestProducerForClientVersion(input.clientVersion);
 
   return app.db.transaction(async (tx) => {
     let accepted = 0;
     let duplicates = 0;
     for (const [index, event] of input.events.entries()) {
-      const harvestAccountRef = HARVEST_KIND_ALLOWLIST.has(event.kind) &&
+      const harvestAccountRef = hasHarvestEvents &&
+          HARVEST_KIND_ALLOWLIST.has(event.kind) &&
           typeof event.payload.ofapiAccountId === "string"
         ? pageByOfapiAccount.get(event.payload.ofapiAccountId) ?? null
         : null;
       const page = harvestAccountRef ??
         (event.pageLabel ? pageByLabel.get(event.pageLabel) ?? null : null);
-      const kind = ingestKindFor(event.kind);
+      const kind = ingestKindFor(event.kind, producer);
       const result = await insertObservation(tx, {
         source: "client_capture",
         producer,

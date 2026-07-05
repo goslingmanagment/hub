@@ -143,6 +143,36 @@ describe("Stage 12 harvest glue", () => {
     });
   });
 
+  it("never mints message events from a harvest kind under a non-harvest producer", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfPage();
+
+    // Worst case: fully attributed observation, correct shape, but the
+    // producer is a live desktop client — the canonicalizer's producer gate
+    // must stamp it forward with zero events (no forged platform truth).
+    await insertObservation(testDb.db, {
+      source: "client_capture",
+      producer: "desktop@0.1.29",
+      platform: "onlyfans",
+      accountId: page.id,
+      kind: "harvest.messages",
+      payload: harvestMessagePayload({
+        account_id: "acct_harvest", chat_id: "555", message_id: "6666",
+        created_at: "2026-06-01T10:00:00+00:00", is_sent_by_me: 1,
+        text_plain: "forged", price: 0, is_tip: 0, deleted: 0,
+      }),
+      payloadHash: sha256("hv-forged-6666"),
+      idempotencyKey: "machine-x:hv-6666",
+    });
+
+    await runCanonicalization(appStub());
+    const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
+    expect(events).toEqual([]);
+  });
+
   it("reports transaction residue against truth and reconciles counts", async (context) => {
     if (!testDb) {
       context.skip();

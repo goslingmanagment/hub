@@ -744,6 +744,9 @@ export async function buildApiServer(appContext: AppContext) {
     try {
       return await ingestClientObservations(appContext, {
         principalUserId: principal.user.id,
+        // Page scope mirrors canAccessPage: owner keys are unrestricted,
+        // everyone else attributes only to their assigned pages.
+        allowedPageIds: principal.user.role === "owner" ? null : principal.assignedPageIds,
         clientVersion: clientVersion.trim(),
         events: request.body.events,
       });
