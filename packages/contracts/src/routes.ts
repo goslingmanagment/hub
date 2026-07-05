@@ -59,7 +59,6 @@ const pageSpenderAutoListBucketKeyEnum = z.enum([
   "350-600",
   "600-plus",
 ]);
-const workboardTouchpointEnum = z.enum(["21d", "14d", "7d", "5d", "3d", "1d"]);
 const queryBooleanSchema = z.preprocess((value) => {
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
@@ -1146,145 +1145,6 @@ export const pageConversationPreviewResponseSchema = z.object({
   conversation: pageConversationStateSchema,
   messageSyncUx: syncUxSummarySchema,
   messages: z.array(pageConversationPreviewMessageSchema),
-});
-
-// --- Workboard schemas ---
-
-const workboardConversationSchema = z.object({
-  platformConversationId: z.string().nullable(),
-  lastFanMessageAt: isoTimestamp.nullable(),
-  lastModelMessageAt: isoTimestamp.nullable(),
-  lastMessagePreview: z.string().nullable(),
-  storedMessageCount: z.number().int(),
-  messageCoverageStatus: messageCoverageStatusSchema,
-  messageBackfillComplete: z.boolean(),
-  messageSyncEligibility: messageSyncEligibilitySchema,
-});
-
-const workboardPresenceItemSchema = z.object({
-  fanId: intId,
-  fan: z.object({
-    platformUserId: z.string(),
-    pageAlias: z.string().nullable(),
-    username: z.string().nullable(),
-    displayName: z.string().nullable(),
-  }),
-  presence: z.object({
-    lastSeenAt: isoTimestamp,
-    observedAt: isoTimestamp,
-    // fansly_followers_last_seen: Fansly follower sync; ofapi_last_seen:
-    // OnlyFans lastSeen via OFAPI (audience sweep, presence webhooks, message
-    // payloads — docs/ofapi-parity-plan.md Phases 3-4).
-    source: z.enum(["fansly_followers_last_seen", "ofapi_last_seen"]),
-  }),
-  ltv: z.object({ creatorNetAmountMills: mills }),
-  isSubscriber: z.boolean(),
-  platformConversationId: z.string().nullable(),
-  lastTransactionAt: isoTimestamp.nullable(),
-});
-
-const workboardPresenceBucketSchema = z.object({
-  total: z.number().int(),
-  items: z.array(workboardPresenceItemSchema),
-});
-
-const workboardSubscriberItemSchema = z.object({
-  fanId: intId,
-  fan: z.object({
-    platformUserId: z.string(),
-    pageAlias: z.string().nullable(),
-    username: z.string().nullable(),
-    displayName: z.string().nullable(),
-  }),
-  ltv: z.object({ creatorNetAmountMills: mills }),
-  touchpoint: z.object({
-    code: workboardTouchpointEnum,
-    label: z.string(),
-    isSoft: z.boolean(),
-    dueAt: isoTimestamp,
-  }),
-  overdueDays: z.number().int(),
-  conversation: workboardConversationSchema,
-  subscription: z.object({
-    expiresAt: isoTimestamp,
-    autoRenew: z.boolean().nullable(),
-    autoRenewOffDetectedAt: isoTimestamp.nullable(),
-    tierName: z.string().nullable(),
-    subscriberSince: isoTimestamp.nullable(),
-  }),
-  lastTransactionAt: isoTimestamp.nullable(),
-});
-
-const workboardSpenderItemSchema = z.object({
-  fanId: intId,
-  fan: z.object({
-    platformUserId: z.string(),
-    pageAlias: z.string().nullable(),
-    username: z.string().nullable(),
-    displayName: z.string().nullable(),
-  }),
-  ltv: z.object({ creatorNetAmountMills: mills }),
-  segment: z.enum(["active", "inactive"]),
-  overdueDays: z.number().int(),
-  silenceDays: z.number().int(),
-  conversation: workboardConversationSchema,
-  subscription: z.object({
-    status: z.enum(["active", "expired", "never"]),
-    expiresAt: isoTimestamp.nullable(),
-  }),
-  lastTransactionAt: isoTimestamp.nullable(),
-});
-
-const workboardSnoozedItemSchema = z.object({
-  fanId: intId,
-  fan: z.object({
-    platformUserId: z.string(),
-    pageAlias: z.string().nullable(),
-    username: z.string().nullable(),
-    displayName: z.string().nullable(),
-  }),
-  ltv: z.object({ creatorNetAmountMills: mills }),
-  snoozedUntil: isoTimestamp,
-});
-
-export const workboardResponseSchema = z.object({
-  subscribers: z.object({
-    total: z.number().int(),
-    items: z.array(workboardSubscriberItemSchema),
-  }),
-  activeSpenders: z.object({
-    total: z.number().int(),
-    items: z.array(workboardSpenderItemSchema),
-  }),
-  inactiveSpenders: z.object({
-    total: z.number().int(),
-    items: z.array(workboardSpenderItemSchema),
-  }),
-  snoozed: z.object({
-    total: z.number().int(),
-    items: z.array(workboardSnoozedItemSchema),
-  }),
-});
-
-export const workboardPresenceResponseSchema = z.object({
-  updatedAt: isoTimestamp,
-  bestEffort: z.literal(true),
-  activeNow: workboardPresenceBucketSchema,
-  recentlyActive: workboardPresenceBucketSchema,
-});
-
-export const workboardSnoozeBodySchema = z.object({
-  fanId: intId,
-  days: z.union([z.literal(7), z.literal(14), z.literal(30)]),
-});
-
-export const workboardSnoozeResponseSchema = z.object({
-  fanId: intId,
-  snoozedUntil: isoTimestamp,
-});
-
-export const workboardUnsnoozeParamsSchema = pageParamsSchema.extend({
-  fanId: z.coerce.number().int().positive(),
 });
 
 // --- Workboard v2 schemas ---
@@ -4643,63 +4503,10 @@ export const routeSchemas = {
     },
   },
   // --- Workboard ---
-  workboard: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Get workboard queue for one Fansly page",
-    params: pageParamsSchema,
-    response: {
-      200: workboardResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardPresence: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Get inferred Fansly presence for one workboard page",
-    params: pageParamsSchema,
-    response: {
-      200: workboardPresenceResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardSnooze: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Snooze a fan on the workboard",
-    params: pageParamsSchema,
-    body: workboardSnoozeBodySchema,
-    response: {
-      200: workboardSnoozeResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  workboardUnsnooze: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["workboard"],
-    summary: "Unsnooze a fan on the workboard",
-    params: workboardUnsnoozeParamsSchema,
-    response: {
-      200: z.object({ ok: z.literal(true) }),
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   workboardV2: {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
-    summary: "Get a Workboard v2 tab queue (priority engine) for one Fansly page",
+    summary: "Get a Workboard v2 tab queue (priority engine) for one page",
     params: pageParamsSchema,
     querystring: workboardV2QuerySchema,
     response: {
@@ -4713,7 +4520,7 @@ export const routeSchemas = {
   workboardV2Lists: {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
-    summary: "Get Workboard v2 spender lists (lifetime gross-spend bands) for one Fansly page",
+    summary: "Get Workboard v2 spender lists (lifetime gross-spend bands) for one page",
     params: pageParamsSchema,
     response: {
       200: workboardV2ListsResponseSchema,
@@ -4740,7 +4547,7 @@ export const routeSchemas = {
   workboardV2Recompute: {
     auth: { kind: "session", scope: "page" },
     tags: ["workboard"],
-    summary: "Recompute the Workboard v2 queue for one Fansly page (on-demand)",
+    summary: "Recompute the Workboard v2 queue for one page (on-demand)",
     params: pageParamsSchema,
     response: {
       200: workboardV2RecomputeResponseSchema,
@@ -5909,11 +5716,6 @@ export type NotificationsReportPreviewResponse = z.infer<typeof notificationsRep
 export type NotificationsReportSendResponse = z.infer<typeof notificationsReportSendResponseSchema>;
 export type NotificationsDeliveryAttemptItem = z.infer<typeof notificationsDeliveryAttemptItemSchema>;
 export type NotificationsReportHistoryResponse = z.infer<typeof notificationsReportHistoryResponseSchema>;
-export type WorkboardResponse = z.infer<typeof workboardResponseSchema>;
-export type WorkboardPresenceResponse = z.infer<typeof workboardPresenceResponseSchema>;
-export type WorkboardSnoozeBody = z.infer<typeof workboardSnoozeBodySchema>;
-export type WorkboardSnoozeResponse = z.infer<typeof workboardSnoozeResponseSchema>;
-export type WorkboardUnsnoozeParams = z.infer<typeof workboardUnsnoozeParamsSchema>;
 export type WorkboardV2Query = z.infer<typeof workboardV2QuerySchema>;
 export type WorkboardV2Item = z.infer<typeof workboardV2ItemSchema>;
 export type WorkboardV2Response = z.infer<typeof workboardV2ResponseSchema>;

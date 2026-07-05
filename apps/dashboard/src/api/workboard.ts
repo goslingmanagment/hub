@@ -8,53 +8,6 @@ import { kernel } from "./sdk.js";
 
 export type WorkboardV2Tab = "subscribers" | "spenders" | "fresh_mass" | "old_mass" | "service";
 
-export function useWorkboard(
-  pageLabel: string,
-  options: { enabled?: boolean } = {},
-) {
-  return useQuery({
-    queryKey: ["workboard", pageLabel],
-    queryFn: () => kernel.workboard({ params: { pageLabel } }),
-    enabled: options.enabled ?? true,
-  });
-}
-
-export function useWorkboardPresence(
-  pageLabel: string,
-  options: { enabled?: boolean } = {},
-) {
-  return useQuery({
-    queryKey: ["workboard", "presence", pageLabel],
-    queryFn: () => kernel.workboardPresence({ params: { pageLabel } }),
-    enabled: options.enabled ?? true,
-  });
-}
-
-export function useWorkboardSnooze(pageLabel: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: { fanId: number; days: number }) =>
-      kernel.workboardSnooze({
-        params: { pageLabel },
-        body: body as Parameters<typeof kernel.workboardSnooze>[0]["body"],
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workboard", pageLabel] });
-    },
-  });
-}
-
-export function useWorkboardUnsnooze(pageLabel: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (fanId: number) =>
-      kernel.workboardUnsnooze({ params: { pageLabel, fanId } }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workboard", pageLabel] });
-    },
-  });
-}
-
 // ── Workboard v2 (priority engine) ──────────────────────────────────────────
 
 export function useWorkboardV2(

@@ -628,6 +628,21 @@ export async function snoozeWorkboardFanV2(
   return row ? { snoozedUntil: new Date(row.snoozed_until) } : null;
 }
 
+/** Clear a fan's snooze (moved verbatim from the retired v1 repository, Stage 23). */
+export async function unsnoozeWorkboardFan(
+  db: Database,
+  input: { platformAccountId: number; fanId: number },
+): Promise<void> {
+  await db.execute(sql`
+    delete from workboard_snoozes ws
+    using page_fans fp
+    where ws.platform_account_id = ${input.platformAccountId}
+      and ws.fan_id = ${input.fanId}
+      and fp.platform_account_id = ws.platform_account_id
+      and fp.fan_id = ws.fan_id
+  `);
+}
+
 /**
  * Retract the most recent touch-log entry for a fan (undo of Готово).
  * Stage 2 destruction-door guard: the row is marked retracted, not deleted —

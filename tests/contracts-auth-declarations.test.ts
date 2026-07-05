@@ -66,10 +66,6 @@ describe("route auth declarations", () => {
       "pageSyncBlocks",
       "pageTransactions",
       "upsertFanProfile",
-      "workboard",
-      "workboardPresence",
-      "workboardSnooze",
-      "workboardUnsnooze",
       "workboardV2",
       "workboardV2Ai",
       "workboardV2AiClassify",
@@ -83,5 +79,14 @@ describe("route auth declarations", () => {
       "workboardV2UndoContact",
       "workboardV2Unsnooze",
     ]);
+  });
+
+  it("the retired workboard v1 routes stay gone (Stage 23 Task 5)", () => {
+    // Registration is contract-driven: no routeSchemas entry, no route — the
+    // v1 paths 404. The dashboard moved to the v2 module routes in the same
+    // deploy (last-consumer-migrates, target §14).
+    for (const retired of ["workboard", "workboardPresence", "workboardSnooze", "workboardUnsnooze"]) {
+      expect(routeSchemas).not.toHaveProperty(retired);
+    }
   });
 });

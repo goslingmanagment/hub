@@ -40,10 +40,6 @@ export function buildWorkboardRoute(pageLabel: string) {
   return buildPageSectionRoute(pageLabel, "workboard");
 }
 
-export function buildWorkboardV2Route(pageLabel: string) {
-  return `${buildWorkboardRoute(pageLabel)}/v2`;
-}
-
 export function buildAiAnalyticsRoute(pageLabel?: string | null) {
   if (!pageLabel) {
     return "/ai-analytics";

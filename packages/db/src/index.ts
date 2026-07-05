@@ -29,5 +29,4 @@ export * from "./repositories/sync-context.ts";
 export * from "./repositories/sync.ts";
 export * from "./repositories/top-spenders.ts";
 export * from "./repositories/transactions.ts";
-export * from "./repositories/workboard.ts";
 export * from "./repositories/workboard-v2.ts";

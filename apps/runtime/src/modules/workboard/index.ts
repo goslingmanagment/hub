@@ -2,12 +2,6 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 
 import { requireDashboardUser, requireOwner, requireSessionUser } from "../../services/auth.ts";
 import {
-  getWorkboardReport,
-  snoozeWorkboardFanReport,
-  unsnoozeWorkboardFanReport,
-} from "../../services/workboard.ts";
-import { getWorkboardPresenceReport } from "../../services/workboard-presence.ts";
-import {
   claimWorkboardV2Fan,
   getWorkboardV2Lists,
   getWorkboardV2Report,
@@ -48,37 +42,8 @@ export function registerWorkboardRoutes(server: ApiServer, ctx: ApiModuleContext
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
 
-  server.get("/api/v1/pages/:pageLabel/workboard", {
-    schema: routeSchemas.workboard,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getWorkboardReport(appContext, principal, request.params.pageLabel);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/workboard/presence", {
-    schema: routeSchemas.workboardPresence,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getWorkboardPresenceReport(appContext, principal, request.params.pageLabel);
-  });
-
-  server.post("/api/v1/pages/:pageLabel/workboard/snooze", {
-    schema: routeSchemas.workboardSnooze,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return snoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.body);
-  });
-
-  server.delete("/api/v1/pages/:pageLabel/workboard/snooze/:fanId", {
-    schema: routeSchemas.workboardUnsnooze,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return unsnoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.params.fanId);
-  });
+  // v1 routes retired here (Stage 23 Task 5): last consumer was the dashboard
+  // tab, which moved to the module routes in the same deploy.
 
   server.get("/api/v1/pages/:pageLabel/workboard/v2", {
     schema: routeSchemas.workboardV2,

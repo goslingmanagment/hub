@@ -8,12 +8,6 @@ const repoMocks = vi.hoisted(() => ({
   getPageConversationMessages: vi.fn(),
   getPageDmSyncCoverage: vi.fn(),
   listFanslyFanPageIdentityBackfillTargets: vi.fn(),
-  listWorkboardPresence: vi.fn(),
-  listWorkboardSubscribers: vi.fn(),
-  listWorkboardActiveSpenders: vi.fn(),
-  listWorkboardAllSpenders: vi.fn(),
-  listWorkboardSnoozed: vi.fn(),
-  upsertFanPageExternalPresences: vi.fn(),
   millsToNumber: (value: bigint) => Number(value),
 }));
 
@@ -82,8 +76,6 @@ vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", () => ({
 
 import { backfillFanslyPageAliases } from "../apps/runtime/src/services/fansly-page-alias-backfill.ts";
 import { getPageConversationPreviewReport } from "../apps/runtime/src/services/conversations.ts";
-import { getWorkboardReport } from "../apps/runtime/src/services/workboard.ts";
-import { getWorkboardPresenceReport } from "../apps/runtime/src/services/workboard-presence.ts";
 
 describe("runtime page services", () => {
   afterEach(() => {
@@ -255,57 +247,6 @@ describe("runtime page services", () => {
     });
   });
 
-  it("passes custom egress keys into Fansly workboard presence refreshes", async () => {
-    const pageContext = {
-      platform: "fansly",
-      page: {
-        id: 7,
-        label: "lana",
-        platformAccountId: "acct-1",
-        metadata: {},
-      },
-      session: { authorization: "token" },
-      proxy: { url: "socks5://proxy.example" },
-      egressKey: "shared-proxy-pool",
-    };
-    let observedContext: Record<string, unknown> | null = null;
-    // Presence resolves the page inline since the OnlyFans branch landed
-    // (parity Phase 4): summary lookup + access check instead of the
-    // Fansly-only resolver.
-    repoMocks.findPageSummaryByLabel.mockResolvedValue({ id: 7, label: "lana", platform: "fansly" });
-    authMocks.canAccessPage.mockReturnValue(true);
-    pageContextMocks.resolvePageContext.mockResolvedValue(pageContext);
-    repoMocks.listWorkboardPresence.mockResolvedValue({ total: 0, items: [] });
-    fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map());
-
-    await getWorkboardPresenceReport(
-      {
-        db: {
-          transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({}),
-        },
-        config: {
-          followerPageDelayMs: 0,
-        },
-        adapter: {
-          async getFollowersPage(context: Record<string, unknown>) {
-            observedContext = context;
-            return {
-              accounts: [],
-              items: [],
-              done: true,
-            };
-          },
-        },
-      } as never,
-      {} as never,
-      "lana",
-    );
-
-    expect(observedContext).toMatchObject({
-      egressKey: "shared-proxy-pool",
-      proxy: { url: "socks5://proxy.example" },
-    });
-  });
 
   it("passes custom egress keys into Fansly page alias backfills", async () => {
     const pageContext = {
@@ -362,36 +303,4 @@ describe("runtime page services", () => {
     });
   });
 
-  it("uses workboard-specific unsupported-page errors", async () => {
-    authMocks.canAccessPage.mockReturnValue(true);
-    // The workboard queue accepts DM-capable pages (Fansly + OnlyFans since
-    // decision #49); the resolver still rejects anything else.
-    fanslyPageMocks.resolveAccessibleDmPage.mockRejectedValue(
-      Object.assign(new Error("Workboard is not supported on this page"), {
-        statusCode: 400,
-      }),
-    );
-    repoMocks.findPageSummaryByLabel.mockResolvedValue({
-      id: 8,
-      label: "lana-of",
-      platform: "onlyfans",
-      username: "lana_of",
-      displayName: "Lana OF",
-      followerCount: 10,
-      subscriberCount: 20,
-      lastLightSyncAt: null,
-      lastFollowerSyncAt: null,
-      modelSlug: "lana",
-      modelName: "Lana",
-    });
-
-    await expect(getWorkboardReport(
-      { db: {} } as never,
-      {} as never,
-      "lana-of",
-    )).rejects.toMatchObject({
-      message: "Workboard is not supported on this page",
-      statusCode: 400,
-    });
-  });
 });

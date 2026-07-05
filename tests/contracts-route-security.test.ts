@@ -13,10 +13,10 @@ describe("route schema security", () => {
     for (const key of [
       "pageConversationPreview",
       "pageConversationMessages",
-      "workboard",
-      "workboardPresence",
-      "workboardSnooze",
-      "workboardUnsnooze",
+      "workboardV2",
+      "workboardV2Contact",
+      "workboardV2Snooze",
+      "workboardV2Unsnooze",
     ] as const) {
       expect(routeSchemas[key].auth.kind, key).toBe("session");
       expect(routeSecurityFromAuth(routeSchemas[key].auth), key).toEqual(cookieOnlySecurity);
