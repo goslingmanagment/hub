@@ -126,6 +126,10 @@ import {
   executeOfapiAudienceChunk,
   isOfapiAudienceSyncEligiblePage,
 } from "./ofapi-audience-sync.ts";
+import {
+  isOfapiFanIdentitiesEligiblePage,
+  syncOfapiFanIdentities,
+} from "./ofapi-fan-identities.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
   dmRetentionDate,
@@ -1543,6 +1547,26 @@ export async function executeFanIdentitiesChunk(
   }
 
   await input.telemetry.recordPhaseStarted("fan_identities");
+
+  // Stage 14: OFAPI-mapped pages route to the tracking/trial-link family via
+  // OFAPI (flag-gated) — the stream keeps its name, the vendor changes.
+  if (isOfapiFanIdentitiesEligiblePage(app.config, {
+    platform: input.pageContext.platform,
+    ofapiAccountId: input.pageContext.page.ofapiAccountId,
+  })) {
+    const ofapiResult = await syncOfapiFanIdentities(app, {
+      pageContext: input.pageContext,
+      budget: input.budget,
+      telemetry: input.telemetry,
+    });
+    return {
+      satisfied: ofapiResult.satisfied,
+      yieldReason: ofapiResult.yieldReason,
+      continuationRetryAt: ofapiResult.continuationRetryAt ?? null,
+      stats: { vendor: "ofapi", ...ofapiResult.stats },
+    } satisfies StreamChunkResult;
+  }
+
   const platformAccountIdValue = input.pageContext.page.platformAccountId;
   if (!platformAccountIdValue) {
     throw new Error("OnlyFans page is missing platform account id");

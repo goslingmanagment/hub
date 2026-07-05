@@ -227,6 +227,31 @@ export interface OfapiClient {
       endDate?: string;
     },
   ): Promise<OfapiListPage>;
+  // Stage 14 tracking/trial-link family (fan_identities OFAPI branch). All are
+  // data.list + limit/offset per the vendored spec.
+  listTrackingLinks?(
+    context: OfapiRequestContext,
+    accountId: string,
+    params: { limit?: number; offset?: number },
+  ): Promise<OfapiListPage>;
+  listTrackingLinkUsers?(
+    context: OfapiRequestContext,
+    accountId: string,
+    trackingLinkId: string,
+    kind: "subscribers" | "spenders",
+    params: { limit?: number; offset?: number },
+  ): Promise<OfapiListPage>;
+  listTrialLinks?(
+    context: OfapiRequestContext,
+    accountId: string,
+    params: { limit?: number; offset?: number },
+  ): Promise<OfapiListPage>;
+  listTrialLinkSubscribers?(
+    context: OfapiRequestContext,
+    accountId: string,
+    trialLinkId: string,
+    params: { limit?: number; offset?: number },
+  ): Promise<OfapiListPage>;
   // One cheap (1-credit) account-scoped request purely to observe the credit
   // balance: GET /accounts carries no _meta per the OFAPI OpenAPI spec, so the
   // ping reads a minimal chats page instead (reconciliation anchor on quiet days).
@@ -1387,6 +1412,74 @@ export function createOfapiClient(input: {
           offset: params.offset ?? 0,
           hasStartDate: params.startDate != null,
         },
+      });
+    },
+    async listTrackingLinks(context, accountId, params) {
+      const limit = Math.min(params.limit ?? 100, 100);
+      return observedListRequest({
+        context,
+        operation: "ofapi_tracking_links",
+        endpointTemplate: "/:accountId/tracking-links",
+        pathname: `/${encodeURIComponent(accountId)}/tracking-links`,
+        query: {
+          limit: String(limit),
+          offset: params.offset != null ? String(params.offset) : undefined,
+        },
+        pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
+        cursorPresent: false,
+        requestMetadata: { limit, offset: params.offset ?? 0 },
+      });
+    },
+    async listTrackingLinkUsers(context, accountId, trackingLinkId, kind, params) {
+      const limit = Math.min(params.limit ?? 100, 100);
+      return observedListRequest({
+        context,
+        operation: `ofapi_tracking_link_${kind}`,
+        endpointTemplate: `/:accountId/tracking-links/:trackingLinkId/${kind}`,
+        pathname: `/${encodeURIComponent(accountId)}/tracking-links/${
+          encodeURIComponent(trackingLinkId)
+        }/${kind}`,
+        query: {
+          limit: String(limit),
+          offset: params.offset != null ? String(params.offset) : undefined,
+        },
+        pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
+        cursorPresent: false,
+        requestMetadata: { limit, offset: params.offset ?? 0, trackingLinkId, kind },
+      });
+    },
+    async listTrialLinks(context, accountId, params) {
+      const limit = Math.min(params.limit ?? 100, 100);
+      return observedListRequest({
+        context,
+        operation: "ofapi_trial_links",
+        endpointTemplate: "/:accountId/trial-links",
+        pathname: `/${encodeURIComponent(accountId)}/trial-links`,
+        query: {
+          limit: String(limit),
+          offset: params.offset != null ? String(params.offset) : undefined,
+        },
+        pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
+        cursorPresent: false,
+        requestMetadata: { limit, offset: params.offset ?? 0 },
+      });
+    },
+    async listTrialLinkSubscribers(context, accountId, trialLinkId, params) {
+      const limit = Math.min(params.limit ?? 100, 100);
+      return observedListRequest({
+        context,
+        operation: "ofapi_trial_link_subscribers",
+        endpointTemplate: "/:accountId/trial-links/:trialLinkId/subscribers",
+        pathname: `/${encodeURIComponent(accountId)}/trial-links/${
+          encodeURIComponent(trialLinkId)
+        }/subscribers`,
+        query: {
+          limit: String(limit),
+          offset: params.offset != null ? String(params.offset) : undefined,
+        },
+        pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
+        cursorPresent: false,
+        requestMetadata: { limit, offset: params.offset ?? 0, trialLinkId },
       });
     },
     async pingBalance(context, accountId) {
