@@ -1663,3 +1663,41 @@ fcc06cf; desktop release branch is `kernel/stage-12-harvest` @ a639876. Runbook
 updated. Also added post-deploy belt-and-braces: spot-check the 5 legacy blocked
 tips rows' domain_key values after the first sweep (they must match the shared
 `tip:<notificationId>` construction for self-heal).
+
+**Decision #85:** Review wave 2 — the four chain slices wave 1 didn't cover (Stages
+8/9/10/16/17, built in earlier sessions and never independently reviewed) got the
+same four-reviewer adversarial treatment. TEN more defects, all fixed + full suite
+green same evening (478eaf8; 182 files / 1472 tests, clean re-run after the final
+edit per the #84 lesson):
+
+- Stage 8 CRITICAL: the minutely sweep had zero fault isolation — one poison row or
+  transient DB error wedged canonicalization for ALL families forever (the failing
+  row retries first every tick). Now per-row + per-family isolation, errored counter.
+- Stage 10 CRITICAL: archive writer read only price (dollars) — every Fansly tip
+  (tipAmountMills, MILLS) and harvest tip (tipAmount, dollars) archived as ZERO,
+  permanent under first-writer-wins. Tip resolution now covers all three producer
+  shapes. Also: out-of-order tombstones were dropped (now tombstone-first stub +
+  content hydration, content_pending column in unreleased 0059, backfills hydrate);
+  non-atomic reset could leave an archive permanently empty behind a stale watermark
+  (now transactional).
+- Stage 16 CRITICAL ×2: purchase-history keyset walk had no lease fencing (only
+  such loop in the file) and no per-fan isolation — one deleted fan's 404 wedged the
+  walk on that fan forever. Both fixed; fan-scoped 400/404/410 skip with anomaly,
+  auth/rate-limit still propagate. stableHash replacer-array bug (nested
+  breakdown[].type silently excluded) fixed NOW while dedup-key changes are free
+  (prod has no domain events until the deploy).
+- Stage 17: idle-path deep-backfill selection ignored the retention-limit knob.
+- Stage 9: capture-drop incident latch could stick shut permanently when the
+  incident open failed (rejection-based reset was unreachable — the open path
+  swallows errors); boolean-return re-arm now.
+
+Clean verdicts worth keeping: Stage 8 append protocol race-safe + gapless under
+concurrency; domain_events partitions self-heal via the daily 03:10 job (3-month
+lead + incident); Stage 9 tee/drainer/attribution clean; Stage 10 cents→mills ×10
+single-point + archive endpoints properly page-scoped; Stages 16/17 flags-off fully
+inert, mills discipline clean, migrations additive.
+
+Chain tip moves again: merge target = kernel/stage-14-ofapi-transactions @ 478eaf8
+(+ this decision commit). Both waves together: 16 defects found by review after
+"test-green" — the pre-merge adversarial pass earns its place in the standard
+stage-execution loop.
