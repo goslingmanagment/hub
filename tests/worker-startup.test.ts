@@ -121,6 +121,11 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   TELEGRAM_DAILY_REPORT_QUEUE: "telegram.daily-report",
   WORKBOARD_RECOMPUTE_QUEUE: "workboard.recompute",
   WORKBOARD_CLASSIFY_QUEUE: "workboard.classify-closing",
+  WORKBOARD_FAN_RECOMPUTE_QUEUE: "workboard.fan-recompute",
+}));
+vi.mock("../apps/runtime/src/services/workboard-event-recompute.ts", () => ({
+  startWorkboardEventRecompute: vi.fn(() => ({ stop: vi.fn(async () => undefined) })),
+  runWorkboardFanRecompute: vi.fn(),
 }));
 
 import { startWorkerServices } from "../apps/runtime/src/worker-services.ts";

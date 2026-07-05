@@ -345,7 +345,7 @@ const MODULE_MATRIX: Array<{
   { module: "conversations", url: "/api/v1/pages/lana/fans/9000001/profile", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
   { module: "finance", url: "/api/v1/pages/lana/revenue?period=7d", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
   { module: "audience", url: "/api/v1/pages/lana/subscribers", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
-  { module: "workboard", url: "/api/v1/pages/lana/workboard", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
+  { module: "workboard", url: "/api/v1/pages/lana/workboard/v2?tab=subscribers", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
   { module: "ai", url: "/api/v1/admin/usage/chatters", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
   { module: "ops", url: "/api/v1/sync/overview", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
   { module: "events", url: "/api/v1/events/snapshot?accountId=1&afterSeq=0", cells: { anon: 401, chatter: "same", lead: 403, owner: 403 } },

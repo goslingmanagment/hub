@@ -302,7 +302,7 @@ describe("Stage 22 identity", () => {
       body: JSON.stringify({ fanId, action: "handled", wasProductive: false }),
     });
     expect(contact.status).toBe(200);
-    const snooze = await fetch(`${legacyUrl}/api/v1/pages/lana/workboard/snooze`, {
+    const snooze = await fetch(`${legacyUrl}/api/v1/pages/lana/workboard/v2/snooze`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: ownerCookie },
       body: JSON.stringify({ fanId, days: 7 }),

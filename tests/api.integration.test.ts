@@ -8658,34 +8658,11 @@ describe("api integration", () => {
     expect(removedPreview.statusCode).toBe(404);
   });
 
-  it("snoozes and unsnoozes workboard fans without hiding the rest of the queue", async (context) => {
+  it("returns 404 for the retired workboard v1 routes (Stage 23)", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
     }
-
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-03-30T12:00:00.000Z"));
-
-    const workboardPage = await createFanslyPage(testDb.db, {
-      modelId: fixture.lanaModel.id,
-      label: "lana-workboard",
-    });
-    await updatePageMetadata(testDb.db, workboardPage.id, {
-      platformAccountIdValue: "acct-lana-workboard",
-      username: "lana_workboard",
-      displayName: "Lana Workboard",
-      followerCount: 0,
-      subscriberCount: 2,
-      earningsBalanceMills: 0n,
-      metadata: {},
-      syncType: "light",
-    });
-
-    const seeded = await seedWorkboardApiFixture({
-      testDb,
-      pageId: workboardPage.id,
-    });
 
     const login = await server.inject({
       method: "POST",
@@ -8694,113 +8671,20 @@ describe("api integration", () => {
     });
     const cookie = sessionCookieFrom(login);
 
-    const beforeSnooze = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-workboard/workboard",
-      headers: { cookie },
-    });
-    expect(beforeSnooze.statusCode).toBe(200);
-    expect(beforeSnooze.json()).toMatchObject({
-      subscribers: { total: 3 },
-      activeSpenders: { total: 2 },
-      inactiveSpenders: { total: 5 },
-      snoozed: { total: 0 },
-    });
-    expect(beforeSnooze.json().inactiveSpenders.items.map((item: { fanId: number }) => item.fanId).sort()).toEqual([
-      seeded.activeSpender.id,
-      seeded.inactiveSpender.id,
-      seeded.microSpender.id,
-      seeded.deletedActiveSpender.id,
-      seeded.deletedInactiveSpender.id,
-    ].sort());
-    const beforeSnoozeSubscriber = beforeSnooze.json().subscribers.items.find(
-      (item: { fanId: number }) => item.fanId === seeded.visibleSubscriber.id,
-    );
-    expect(beforeSnoozeSubscriber?.subscription.subscriberSince).toBe("2026-03-01T12:00:00.000Z");
-
-    const snooze = await server.inject({
-      method: "POST",
-      url: "/api/v1/pages/lana-workboard/workboard/snooze",
-      headers: { cookie },
-      payload: {
-        fanId: seeded.snoozedSubscriber.id,
-        days: 7,
-      },
-    });
-    expect(snooze.statusCode).toBe(200);
-    expect(snooze.json()).toMatchObject({
-      fanId: seeded.snoozedSubscriber.id,
-      snoozedUntil: expect.any(String),
-    });
-
-    const deletedSnooze = await server.inject({
-      method: "POST",
-      url: "/api/v1/pages/lana-workboard/workboard/snooze",
-      headers: { cookie },
-      payload: {
-        fanId: seeded.deletedSubscriber.id,
-        days: 30,
-      },
-    });
-    expect(deletedSnooze.statusCode).toBe(200);
-
-    const afterSnooze = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-workboard/workboard",
-      headers: { cookie },
-    });
-    expect(afterSnooze.statusCode).toBe(200);
-    expect(afterSnooze.json()).toMatchObject({
-      subscribers: {
-        total: 1,
-        items: [expect.objectContaining({ fanId: seeded.visibleSubscriber.id })],
-      },
-      activeSpenders: {
-        total: 2,
-        items: expect.arrayContaining([
-          expect.objectContaining({ fanId: seeded.activeSpender.id }),
-          expect.objectContaining({ fanId: seeded.deletedActiveSpender.id }),
-        ]),
-      },
-      inactiveSpenders: {
-        total: 5,
-        items: expect.arrayContaining([
-          expect.objectContaining({ fanId: seeded.activeSpender.id, segment: "active" }),
-          expect.objectContaining({ fanId: seeded.inactiveSpender.id, segment: "inactive" }),
-          expect.objectContaining({ fanId: seeded.microSpender.id, segment: "active" }),
-          expect.objectContaining({ fanId: seeded.deletedActiveSpender.id, segment: "active" }),
-          expect.objectContaining({ fanId: seeded.deletedInactiveSpender.id, segment: "inactive" }),
-        ]),
-      },
-      snoozed: {
-        total: 2,
-        items: expect.arrayContaining([
-          expect.objectContaining({ fanId: seeded.snoozedSubscriber.id }),
-          expect.objectContaining({ fanId: seeded.deletedSubscriber.id }),
-        ]),
-      },
-    });
-
-    const unsnooze = await server.inject({
-      method: "DELETE",
-      url: `/api/v1/pages/lana-workboard/workboard/snooze/${seeded.snoozedSubscriber.id}`,
-      headers: { cookie },
-    });
-    expect(unsnooze.statusCode).toBe(200);
-    expect(unsnooze.json()).toEqual({ ok: true });
-
-    const afterUnsnooze = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-workboard/workboard",
-      headers: { cookie },
-    });
-    expect(afterUnsnooze.statusCode).toBe(200);
-    expect(afterUnsnooze.json()).toMatchObject({
-      subscribers: { total: 2 },
-      activeSpenders: { total: 2 },
-      inactiveSpenders: { total: 5 },
-      snoozed: { total: 1 },
-    });
+    for (const [method, url] of [
+      ["GET", "/api/v1/pages/lana/workboard"],
+      ["GET", "/api/v1/pages/lana/workboard/presence"],
+      ["POST", "/api/v1/pages/lana/workboard/snooze"],
+      ["DELETE", "/api/v1/pages/lana/workboard/snooze/1"],
+    ] as const) {
+      const response = await server.inject({
+        method,
+        url,
+        headers: { cookie },
+        ...(method === "POST" ? { payload: { fanId: 1, days: 7 } } : {}),
+      });
+      expect(response.statusCode, `${method} ${url}`).toBe(404);
+    }
   });
 
   it("blocks chatter API keys from workboard read and write routes", async (context) => {
@@ -8843,7 +8727,7 @@ describe("api integration", () => {
 
     const workboard = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana-workboard-api-key/workboard",
+      url: "/api/v1/pages/lana-workboard-api-key/workboard/v2?tab=subscribers",
       headers: {
         authorization: `Bearer ${key}`,
       },
@@ -8855,7 +8739,7 @@ describe("api integration", () => {
 
     const snooze = await server.inject({
       method: "POST",
-      url: "/api/v1/pages/lana-workboard-api-key/workboard/snooze",
+      url: "/api/v1/pages/lana-workboard-api-key/workboard/v2/snooze",
       headers: {
         authorization: `Bearer ${key}`,
       },
@@ -8871,7 +8755,7 @@ describe("api integration", () => {
 
     const unsnooze = await server.inject({
       method: "DELETE",
-      url: `/api/v1/pages/lana-workboard-api-key/workboard/snooze/${seeded.snoozedSubscriber.id}`,
+      url: `/api/v1/pages/lana-workboard-api-key/workboard/v2/snooze/${seeded.snoozedSubscriber.id}`,
       headers: {
         authorization: `Bearer ${key}`,
       },
@@ -8880,275 +8764,6 @@ describe("api integration", () => {
     expect(unsnooze.json()).toMatchObject({
       message: "Dashboard routes require a cookie session",
     });
-  });
-
-  it("returns inferred workboard presence for Fansly pages", async (context) => {
-    if (!testDb || !server || !fixture) {
-      context.skip();
-      return;
-    }
-
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-03-30T12:00:00.000Z"));
-
-    const presencePage = await createFanslyPage(testDb.db, {
-      modelId: fixture.lanaModel.id,
-      label: "lana-presence",
-    });
-
-    const appContext = createTestAppContext(testDb);
-    const encryptedSession = JSON.stringify(encryptJson(
-      {
-        platform: "fansly" as const,
-        session: {
-          authorization: "presence-token",
-        },
-      },
-      appContext.config.encryptionKey,
-      appContext.config.encryptionKeyVersion,
-    ));
-    await storeFanslySession(
-      testDb.db,
-      presencePage.id,
-      encryptedSession,
-      appContext.config.encryptionKeyVersion,
-    );
-    await updatePageMetadata(testDb.db, presencePage.id, {
-      platformAccountIdValue: "acct-lana-presence",
-      username: "lana_presence",
-      displayName: "Lana Presence",
-      followerCount: 2,
-      subscriberCount: 1,
-      earningsBalanceMills: 0n,
-      metadata: {},
-      syncType: "light",
-    });
-
-    const [activeFan, recentFan] = await upsertFans(testDb.db, [
-      {
-        platform: "fansly",
-        platformUserId: "presence-fan-active",
-        username: "presence_active",
-        displayName: "Presence Active",
-      },
-      {
-        platform: "fansly",
-        platformUserId: "presence-fan-recent",
-        username: "presence_recent",
-        displayName: "Presence Recent",
-      },
-    ]);
-    await upsertFanPage(testDb.db, {
-      fanId: activeFan.id,
-      platformAccountId: presencePage.id,
-      isSubscriber: true,
-      subscriberSince: new Date("2026-03-01T12:00:00.000Z"),
-      pageAlias: "Presence Active Alias",
-    });
-    await upsertFanPage(testDb.db, {
-      fanId: recentFan.id,
-      platformAccountId: presencePage.id,
-      pageAlias: "Presence Recent Alias",
-    });
-    await upsertTransaction(testDb.db, {
-      platformAccountId: presencePage.id,
-      source: "onlymonster",
-      fanId: activeFan.id,
-      transactionId: "presence-api-tip-active",
-      rawType: 20001,
-      canonicalType: "tip",
-      transactionState: "posted",
-      rawStatus: 2,
-      grossAmountMills: 300000n,
-      sourceDestinationAmountMills: 300000n,
-      creatorNetAmountMills: 300000n,
-      occurredAt: new Date("2026-03-30T11:00:00.000Z"),
-    });
-    await recalculateFanPageSpend(testDb.db, presencePage.id);
-
-    const presenceAdapter: AppContext["adapter"] = {
-      ...createAutoSyncFanslyAdapter({
-        accountId: "acct-lana-presence",
-        username: "lana_presence",
-        displayName: "Lana Presence",
-      }),
-      async getFollowersPage(_context, accountId, params) {
-        expect(accountId).toBe("acct-lana-presence");
-        expect(params.lastSeenAfter).toBe(new Date("2026-03-30T10:00:00.000Z").getTime());
-
-        return {
-          total: 2,
-          offset: params.offset ?? 0,
-          done: true,
-          items: [
-            {
-              id: "follow-presence-active",
-              followerId: "presence-fan-active",
-              lastSeenAt: new Date("2026-03-30T11:50:00.000Z").getTime(),
-            },
-            {
-              id: "follow-presence-recent",
-              followerId: "presence-fan-recent",
-              lastSeenAt: new Date("2026-03-30T10:40:00.000Z").getTime(),
-            },
-          ],
-          accounts: [
-            {
-              id: "presence-fan-active",
-              username: "presence_active",
-              displayName: "Presence Active",
-              createdAt: 1_772_000_000_000,
-              lastSeenAt: new Date("2026-03-30T11:50:00.000Z").getTime(),
-            },
-            {
-              id: "presence-fan-recent",
-              username: "presence_recent",
-              displayName: "Presence Recent",
-              createdAt: 1_772_000_000_000,
-              lastSeenAt: new Date("2026-03-30T10:40:00.000Z").getTime(),
-            },
-          ],
-          raw: {
-            followers: [],
-            aggregationData: {
-              accounts: [],
-            },
-          },
-        };
-      },
-    };
-
-    if (server) {
-      await server.close();
-    }
-    server = await buildApiServer(createTestAppContext(testDb, {
-      adapter: presenceAdapter,
-    }));
-    await server.ready();
-
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "dima", password: "owner-secret" },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    const response = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-presence/workboard/presence",
-      headers: { cookie },
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      bestEffort: true,
-      activeNow: {
-        total: 1,
-        items: [expect.objectContaining({
-          fanId: activeFan.id,
-          isSubscriber: true,
-          presence: expect.objectContaining({
-            source: "fansly_followers_last_seen",
-            lastSeenAt: "2026-03-30T11:50:00.000Z",
-          }),
-        })],
-      },
-      recentlyActive: {
-        total: 1,
-        items: [expect.objectContaining({
-          fanId: recentFan.id,
-          isSubscriber: false,
-          presence: expect.objectContaining({
-            source: "fansly_followers_last_seen",
-            lastSeenAt: "2026-03-30T10:40:00.000Z",
-          }),
-        })],
-      },
-    });
-
-    const workboard = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-presence/workboard",
-      headers: { cookie },
-    });
-    expect(workboard.statusCode).toBe(200);
-  });
-
-  it("keeps the main workboard available when the presence endpoint fails", async (context) => {
-    if (!testDb || !server || !fixture) {
-      context.skip();
-      return;
-    }
-
-    const presencePage = await createFanslyPage(testDb.db, {
-      modelId: fixture.lanaModel.id,
-      label: "lana-presence-failure",
-    });
-
-    const appContext = createTestAppContext(testDb);
-    const encryptedSession = JSON.stringify(encryptJson(
-      {
-        platform: "fansly" as const,
-        session: {
-          authorization: "presence-token",
-        },
-      },
-      appContext.config.encryptionKey,
-      appContext.config.encryptionKeyVersion,
-    ));
-    await storeFanslySession(
-      testDb.db,
-      presencePage.id,
-      encryptedSession,
-      appContext.config.encryptionKeyVersion,
-    );
-    await updatePageMetadata(testDb.db, presencePage.id, {
-      platformAccountIdValue: "acct-lana-presence-failure",
-      username: "lana_presence_failure",
-      displayName: "Lana Presence Failure",
-      followerCount: 0,
-      subscriberCount: 0,
-      earningsBalanceMills: 0n,
-      metadata: {},
-      syncType: "light",
-    });
-
-    if (server) {
-      await server.close();
-    }
-    server = await buildApiServer(createTestAppContext(testDb, {
-      adapter: {
-        ...createAutoSyncFanslyAdapter({
-          accountId: "acct-lana-presence-failure",
-          username: "lana_presence_failure",
-          displayName: "Lana Presence Failure",
-        }),
-        async getFollowersPage() {
-          throw new Error("presence transport failed");
-        },
-      },
-    }));
-    await server.ready();
-
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "dima", password: "owner-secret" },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    const presence = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-presence-failure/workboard/presence",
-      headers: { cookie },
-    });
-    expect(presence.statusCode).toBe(500);
-
-    const workboard = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-presence-failure/workboard",
-      headers: { cookie },
-    });
-    expect(workboard.statusCode).toBe(200);
   });
 
   it("enforces conversation and workboard page access", async (context) => {
@@ -9181,17 +8796,10 @@ describe("api integration", () => {
 
     const forbidden = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lily1/workboard",
+      url: "/api/v1/pages/lily1/workboard/v2?tab=subscribers",
       headers: { cookie: leadCookie },
     });
     expect(forbidden.statusCode).toBe(403);
-
-    const forbiddenPresence = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lily1/workboard/presence",
-      headers: { cookie: leadCookie },
-    });
-    expect(forbiddenPresence.statusCode).toBe(403);
 
     const forbiddenMessages = await server.inject({
       method: "GET",
@@ -9226,26 +8834,14 @@ describe("api integration", () => {
       expect.objectContaining({ flag: "vip" }),
     ]);
 
-    // Decision #49 opened the workboard queue to OnlyFans pages (DM store is
-    // platform-agnostic); pages without DM data simply serve an empty queue.
+    // Stage 23 neutrality: OnlyFans boards serve (pages without DM data
+    // simply return an empty queue).
     const nonFansly = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana-of-workboard/workboard",
+      url: "/api/v1/pages/lana-of-workboard/workboard/v2?tab=subscribers",
       headers: { cookie: ownerCookie },
     });
     expect(nonFansly.statusCode).toBe(200);
-
-    // Presence stays Fansly-only while the page is outside the OFAPI presence
-    // pipeline (OFAPI_PRESENCE_PROJECTION_ENABLED off / unmapped page).
-    const nonFanslyPresence = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana-of-workboard/workboard/presence",
-      headers: { cookie: ownerCookie },
-    });
-    expect(nonFanslyPresence.statusCode).toBe(400);
-    expect(nonFanslyPresence.json()).toMatchObject({
-      message: "Workboard presence is only supported for Fansly pages",
-    });
 
     const nonFanslyMessages = await server.inject({
       method: "GET",
@@ -9277,25 +8873,13 @@ describe("api integration", () => {
 
     const apiKeyWorkboard = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/workboard",
+      url: "/api/v1/pages/lana/workboard/v2?tab=subscribers",
       headers: {
         authorization: `Bearer ${key}`,
       },
     });
     expect(apiKeyWorkboard.statusCode).toBe(403);
     expect(apiKeyWorkboard.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
-    });
-
-    const apiKeyWorkboardPresence = await server.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/workboard/presence",
-      headers: {
-        authorization: `Bearer ${key}`,
-      },
-    });
-    expect(apiKeyWorkboardPresence.statusCode).toBe(403);
-    expect(apiKeyWorkboardPresence.json()).toMatchObject({
       message: "Dashboard routes require a cookie session",
     });
 

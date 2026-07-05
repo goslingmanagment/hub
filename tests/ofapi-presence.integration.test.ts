@@ -225,7 +225,7 @@ describe("OFAPI presence projection", () => {
     }
 
     const page = await seedMappedPage();
-    await seedKnownFan(page.id, "777001");
+    const fan = await seedKnownFan(page.id, "777001");
     await startServer();
 
     const nowIso = new Date().toISOString();
@@ -240,18 +240,24 @@ describe("OFAPI presence projection", () => {
     expect(presence?.external_presence_at).not.toBeNull();
     expect(presence?.external_presence_source).toBe("ofapi_last_seen");
 
-    // The workboard presence panel serves the OnlyFans page read-only (D9).
+    // The v1 presence panel is retired (Stage 23); the projected presence now
+    // rides the v2 board's `online` flag for the OnlyFans page.
+    await testDb.pool.query(
+      `insert into workboard_state (platform_account_id, fan_id, tab, value_score, urgency_score, rank_score, secondary_status)
+       values ($1, $2, 'subscribers'::workboard_tab, 10, 10, 10, 'due_now'::workboard_secondary_status)`,
+      [page.id, fan.id],
+    );
     const cookie = await ownerCookie();
     const response = await server!.inject({
       method: "GET",
-      url: `/api/v1/pages/${page.label}/workboard/presence`,
+      url: `/api/v1/pages/${page.label}/workboard/v2?tab=subscribers`,
       headers: { cookie },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.activeNow.total).toBe(1);
-    expect(body.activeNow.items[0].fan.platformUserId).toBe("777001");
-    expect(body.activeNow.items[0].presence.source).toBe("ofapi_last_seen");
+    expect(body.total).toBe(1);
+    expect(body.items[0].fan.platformUserId).toBe("777001");
+    expect(body.items[0].online).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("skips unknown fans without creating rows (D9: no REST lookups)", async (context) => {
@@ -351,18 +357,13 @@ describe("OFAPI presence projection", () => {
     expect(presence?.external_presence_source).toBe("ofapi_last_seen");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("stays inert with the flag off and keeps the Fansly-only rejection", async (context) => {
+  it("stays inert with the flag off", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
     appContext = createTestAppContext(testDb, { ofapiPresenceProjectionEnabled: false });
-    await createUserAccount(appContext, {
-      username: "dima3",
-      role: "owner",
-      password: "owner-secret",
-    }, { source: "cli" });
     const page = await seedMappedPage();
     await seedKnownFan(page.id, "777004");
     await startServer();
@@ -376,24 +377,6 @@ describe("OFAPI presence projection", () => {
     // Stamped pending regardless of the flag (enables back-projection later).
     expect((await getProjectionStatus(eventId)).projection_status).toBe("pending");
     expect((await getPresence(page.id, "777004"))?.external_presence_at).toBeNull();
-
-    const login = await server!.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "dima3", password: "owner-secret" },
-    });
-    const cookie = String(
-      Array.isArray(login.headers["set-cookie"])
-        ? login.headers["set-cookie"][0]
-        : login.headers["set-cookie"],
-    ).split(";")[0]!;
-    const response = await server!.inject({
-      method: "GET",
-      url: `/api/v1/pages/${page.label}/workboard/presence`,
-      headers: { cookie },
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().message).toContain("only supported for Fansly pages");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
