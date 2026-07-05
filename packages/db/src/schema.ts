@@ -2033,6 +2033,11 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   // in-flight spend, so concurrent streams near the cap could overspend.
   audienceSpendDay: date("audience_spend_day"),
   audienceSpentCredits: integer("audience_spent_credits").default(0).notNull(),
+  // Stage 14: the historical-backfill CLI's own day counter — DP 2's binding
+  // condition that backfills run only under the day-budget reservation
+  // machinery, without competing against the DM/audience ceilings.
+  backfillSpendDay: date("backfill_spend_day"),
+  backfillSpentCredits: integer("backfill_spent_credits").default(0).notNull(),
   lastBalance: integer("last_balance"),
   lastBalanceAt: timestamp("last_balance_at", { withTimezone: true }),
   // Reconciliation cursor (D5): the last balance-observation ledger row that

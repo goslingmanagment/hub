@@ -38,6 +38,7 @@ export function createTestAppContext(
     ofapiAudienceSyncEnabled?: boolean;
     ofapiAudienceMaxRequestsPerRun?: number;
     ofapiAudienceDailyCreditBudget?: number;
+    ofapiBackfillDailyCreditBudget?: number;
     ofapiAudienceSweepIntervalMinutes?: number;
     ofapiPresenceProjectionEnabled?: boolean;
     ofapiSpendProjectionShadowEnabled?: boolean;
@@ -118,6 +119,7 @@ export function createTestAppContext(
       ofapiAudienceSyncEnabled: overrides?.ofapiAudienceSyncEnabled ?? false,
       ofapiAudienceMaxRequestsPerRun: overrides?.ofapiAudienceMaxRequestsPerRun ?? 25,
       ofapiAudienceDailyCreditBudget: overrides?.ofapiAudienceDailyCreditBudget ?? 300,
+      ofapiBackfillDailyCreditBudget: overrides?.ofapiBackfillDailyCreditBudget ?? 200,
       ofapiAudienceSweepIntervalMinutes: overrides?.ofapiAudienceSweepIntervalMinutes ?? 1440,
       ofapiPresenceProjectionEnabled: overrides?.ofapiPresenceProjectionEnabled ?? false,
       ofapiSpendProjectionShadowEnabled: overrides?.ofapiSpendProjectionShadowEnabled ?? false,

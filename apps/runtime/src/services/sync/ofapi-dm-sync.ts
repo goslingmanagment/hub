@@ -182,12 +182,14 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
   );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
-  // The audience's dedicated counter mirrors its ledger-attributed spend, so
-  // it applies only with the ledger on; off, the audience falls back to the
-  // shared global day counter exactly as before (decision #50).
+  // A dedicated counter (audience per decision #50, backfill per Stage 14)
+  // mirrors its ledger-attributed spend, so it applies only with the ledger
+  // on; off, both fall back to the shared global day counter exactly as
+  // before.
   const scope: OfapiDayBudgetScope =
-    options?.budgetScope === "audience" && isOfapiCreditLedgerEnabled(app.config)
-      ? "audience"
+    (options?.budgetScope === "audience" || options?.budgetScope === "backfill") &&
+      isOfapiCreditLedgerEnabled(app.config)
+      ? options.budgetScope
       : "global";
   let requestsUsed = 0;
 
@@ -222,16 +224,16 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       // With the ledger on, the client's onCreditSpend sink already recorded
       // the actuals (ledger row + global day counter + balance, one
       // transaction) before the response reached us — only the reservation
-      // remains to release. The audience counter settles to actuals because
-      // the sink maintains only the global one. Flag off keeps the pre-ledger
-      // accounting (uncached reads cost 1 credit; trust _meta when present),
-      // applied as a settle against the reservation.
+      // remains to release. Dedicated counters (audience, backfill) settle to
+      // actuals because the sink maintains only the global one. Flag off keeps
+      // the pre-ledger accounting (uncached reads cost 1 credit; trust _meta
+      // when present), applied as a settle against the reservation.
       if (isOfapiCreditLedgerEnabled(app.config)) {
         await settleOfapiDayCreditReservation(app.db, {
           scope,
-          creditsDelta: scope === "audience"
-            ? actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE
-            : -OFAPI_REQUEST_CREDIT_ESTIMATE,
+          creditsDelta: scope === "global"
+            ? -OFAPI_REQUEST_CREDIT_ESTIMATE
+            : actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE,
         });
         return;
       }

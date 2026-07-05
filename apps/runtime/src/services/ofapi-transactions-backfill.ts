@@ -21,6 +21,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import type { OfapiRequestContext } from "./ofapi.ts";
+import { createOfapiRestGuard, type OfapiBudgetBlock } from "./sync/ofapi-dm-sync.ts";
 import {
   mapOfapiTransactionStatusForSpendProjection,
   mapTransactionCategory,
@@ -45,12 +46,22 @@ const OVERLAP_CHUNK_SIZE = 500;
 // against a feed that never reports hasNextPage=false, so a backfill can never
 // page — and pay credits — through an unbounded forward history.
 const OFAPI_TRANSACTION_BACKFILL_MAX_PAGES = 1000;
+// Stage 14 (DP 2): backfills run only under the day-budget reservation
+// machinery. Conservative default; the ofapiBackfillDailyCreditBudget knob
+// raises it deliberately.
+const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
 
 type BackfillMode = "dry-run" | "write";
 
 // How the paginated fetch terminated, surfaced per page so a truncated run is
-// never mistaken for full window coverage.
-type BackfillPaginationStopReason = "completed" | "reached_window_end" | "page_cap";
+// never mistaken for full window coverage. budget_exhausted = the day-budget
+// reservation (or credit floor) refused before the walk finished — re-run
+// after the UTC-day rollover; the upserts make re-runs convergent.
+type BackfillPaginationStopReason =
+  | "completed"
+  | "reached_window_end"
+  | "page_cap"
+  | "budget_exhausted";
 
 type WriteBackfillOutcome =
   | { status: "written"; writtenRows: number }
@@ -113,6 +124,9 @@ export interface OfapiTransactionsBackfillPageResult {
   months: OfapiTransactionsBackfillMonthSummary[];
   // null for pages that never fetched (blocked before the API walk).
   paginationStopReason: BackfillPaginationStopReason | null;
+  // Which budget check stopped the walk when paginationStopReason is
+  // budget_exhausted (day budget vs. balance floor); null otherwise.
+  budgetBlock: OfapiBudgetBlock | null;
 }
 
 export interface OfapiTransactionsBackfillResult {
@@ -436,6 +450,7 @@ async function fetchBackfillRows(
     to: Date | null;
     limit: number;
     maxApiPages: number;
+    guard: ReturnType<typeof createOfapiRestGuard>;
   },
 ) {
   if (!app.ofapi?.listTransactions) {
@@ -446,6 +461,7 @@ async function fetchBackfillRows(
   let pageIndex = 0;
   let rawRows = 0;
   let stopReason: BackfillPaginationStopReason = "completed";
+  let budgetBlock: OfapiBudgetBlock | null = null;
   // The after_window early-stop below only holds if the feed is ascending from
   // startDate, and we have no vendor contract proving that order. So we honor the
   // early-stop only after POSITIVELY observing ascending order across a page
@@ -465,6 +481,15 @@ async function fetchBackfillRows(
   const skippedReasons: Record<string, number> = {};
 
   for (;;) {
+    // Reserve-before-request (DP 2): a refused reservation ends the walk with
+    // an explicit stop reason instead of paging on. The walk is convergent on
+    // re-run, so "resume tomorrow" loses nothing.
+    const block = await input.guard.resolveBlock();
+    if (block !== null) {
+      stopReason = "budget_exhausted";
+      budgetBlock = block;
+      break;
+    }
     const page = await app.ofapi.listTransactions(
       input.requestContext,
       input.ofapiAccountId,
@@ -475,6 +500,7 @@ async function fetchBackfillRows(
         pageIndex,
       },
     );
+    await input.guard.recordResponse(page);
     rawRows += page.items.length;
 
     let crossedWindowEnd = false;
@@ -560,6 +586,7 @@ async function fetchBackfillRows(
     statusHistogram,
     skippedReasons,
     stopReason,
+    budgetBlock,
   };
 }
 
@@ -756,6 +783,7 @@ function blockedPageResult(input: {
     overlap: { checked: 0, matched: 0, matchRate: null },
     months: [],
     paginationStopReason: null,
+    budgetBlock: null,
   };
 }
 
@@ -768,6 +796,15 @@ export async function runOfapiTransactionsBackfill(
   const maxApiPages = Math.max(1, input.maxApiPages ?? OFAPI_TRANSACTION_BACKFILL_MAX_PAGES);
   const to = input.to ?? null;
   const results: OfapiTransactionsBackfillPageResult[] = [];
+  // One guard for the whole run (both modes — dry-run pays credits too): the
+  // page caps bound the request count, so the request-cap block is set beyond
+  // them and only the day budget / balance floor can stop the walk.
+  const guard = createOfapiRestGuard(app, {
+    maxRequestsPerRun: maxApiPages * Math.max(1, input.pageLabels.length),
+    dailyCreditBudget:
+      app.config.ofapiBackfillDailyCreditBudget ?? DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET,
+    budgetScope: "backfill",
+  });
 
   // Audit B2: the backfill writes into the same `transactions` truth table as the
   // webhook→projection ingest, so its write mode is gated by the SAME master
@@ -834,6 +871,7 @@ export async function runOfapiTransactionsBackfill(
         to,
         limit,
         maxApiPages,
+        guard,
       });
     } finally {
       if (dispatcher) {
@@ -889,6 +927,7 @@ export async function runOfapiTransactionsBackfill(
       overlap,
       months: summarizeMonths(fetched.normalizedRows),
       paginationStopReason: fetched.stopReason,
+      budgetBlock: fetched.budgetBlock,
     });
   }
 

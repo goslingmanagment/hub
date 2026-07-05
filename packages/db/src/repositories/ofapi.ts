@@ -1046,11 +1046,12 @@ export async function recordOfapiCreditUsage(
   `);
 }
 
-export type OfapiDayBudgetScope = "global" | "audience";
+export type OfapiDayBudgetScope = "global" | "audience" | "backfill";
 
 const OFAPI_DAY_COUNTER_COLUMNS = {
   global: { day: "spend_day", credits: "spent_credits" },
   audience: { day: "audience_spend_day", credits: "audience_spent_credits" },
+  backfill: { day: "backfill_spend_day", credits: "backfill_spent_credits" },
 } as const;
 
 /**

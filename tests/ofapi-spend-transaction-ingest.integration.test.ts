@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createModel,
   createOnlyFansPage,
+  reserveOfapiDayCredits,
   summarizeOfapiSpendProjectionComparison,
   setPageOfapiAccountId,
   storePlatformCredentials,
@@ -72,7 +73,11 @@ function fakeOfapiTransactionsClient(input: {
 // can exercise the multi-page marker walk and assert exactly how many pages were
 // fetched before the bounded walk stopped.
 function pagedOfapiTransactionsClient(input: {
-  pages: Array<{ items: Record<string, unknown>[]; nextMarker: string | null }>;
+  pages: Array<{
+    items: Record<string, unknown>[];
+    nextMarker: string | null;
+    meta?: OfapiListPage["meta"];
+  }>;
   calls: Array<{ marker: string | null }>;
 }): OfapiClient {
   return {
@@ -89,7 +94,7 @@ function pagedOfapiTransactionsClient(input: {
         hasNextPage: page.nextMarker !== null,
         nextMarker: page.nextMarker,
         nextPageUrl: null,
-        meta: null,
+        meta: page.meta ?? null,
       };
     },
   } as unknown as OfapiClient;
@@ -1258,5 +1263,145 @@ describe("OFAPI REST transactions backfill", () => {
       [okPage.id],
     );
     expect(rows).toEqual([{ count: 1 }]);
+  });
+});
+
+// Stage 14 (DP 2): backfills run only under the day-budget reservation
+// machinery — scope 'backfill', reserve-before-request, settle to _meta actuals.
+describe("OFAPI backfill day-budget guard", () => {
+  const inWindowRow = (id: string) => ({
+    id,
+    type: "tip",
+    status: "done",
+    amount: "1.00",
+    net: "1.00",
+    createdAt: "2026-06-05T00:00:00+00:00",
+    user: { id: `fan-${id}` },
+  });
+
+  it("makes zero OFAPI calls when the day budget is already exhausted", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext = createTestAppContext(testDb, {
+      ofapiSpendProjectionShadowEnabled: true,
+      ofapiSpendTransactionIngestEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiBackfillDailyCreditBudget: 2,
+    });
+    const page = await seedOfapiPage("rest-budget-of", "acct_rest_budget");
+    // Fill the backfill day counter to the cap before the run.
+    expect(await reserveOfapiDayCredits(appContext.db, {
+      scope: "backfill",
+      estimate: 2,
+      budget: 2,
+    })).toBe(true);
+
+    const calls: Array<{ marker: string | null }> = [];
+    appContext = {
+      ...appContext,
+      ofapi: pagedOfapiTransactionsClient({
+        calls,
+        pages: [{ items: [inWindowRow("a")], nextMarker: null }],
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      mode: "dry-run",
+    });
+
+    expect(calls).toHaveLength(0);
+    expect(result.pages[0]).toMatchObject({
+      apiPages: 0,
+      rawRows: 0,
+      paginationStopReason: "budget_exhausted",
+      budgetBlock: "ofapi_daily_credit_budget",
+    });
+  });
+
+  it("stops the walk mid-pagination on budget exhaustion and keeps fetched rows", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext = createTestAppContext(testDb, {
+      ofapiSpendProjectionShadowEnabled: true,
+      ofapiSpendTransactionIngestEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiBackfillDailyCreditBudget: 2,
+    });
+    const page = await seedOfapiPage("rest-budget2-of", "acct_rest_budget2");
+
+    const calls: Array<{ marker: string | null }> = [];
+    appContext = {
+      ...appContext,
+      ofapi: pagedOfapiTransactionsClient({
+        calls,
+        pages: [
+          { items: [inWindowRow("a")], nextMarker: "m1" },
+          { items: [inWindowRow("b")], nextMarker: "m2" },
+          { items: [inWindowRow("c")], nextMarker: null },
+        ],
+      }),
+    };
+
+    const result = await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      mode: "dry-run",
+    });
+
+    // Budget 2 admits exactly two reserve-fetch rounds; the third reservation
+    // refuses. The two fetched pages' rows survive in the report.
+    expect(calls).toHaveLength(2);
+    expect(result.pages[0]).toMatchObject({
+      apiPages: 2,
+      normalizedRows: 2,
+      paginationStopReason: "budget_exhausted",
+      budgetBlock: "ofapi_daily_credit_budget",
+    });
+  });
+
+  it("settles the backfill day counter to the _meta-reported actuals", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext = createTestAppContext(testDb, {
+      ofapiSpendProjectionShadowEnabled: true,
+      ofapiSpendTransactionIngestEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiBackfillDailyCreditBudget: 50,
+    });
+    const page = await seedOfapiPage("rest-budget3-of", "acct_rest_budget3");
+
+    const calls: Array<{ marker: string | null }> = [];
+    appContext = {
+      ...appContext,
+      ofapi: pagedOfapiTransactionsClient({
+        calls,
+        pages: [{
+          items: [inWindowRow("a")],
+          nextMarker: null,
+          meta: { creditsUsed: 3, creditBalance: 997, isCached: false, rateRemainingMinute: null },
+        }],
+      }),
+    };
+
+    await runOfapiTransactionsBackfill(appContext, {
+      pageLabels: [page.label],
+      from: new Date("2026-06-01T00:00:00.000Z"),
+      mode: "dry-run",
+    });
+
+    // Reserve 1 (estimate) then settle +2 (actual 3 − estimate 1): the scope's
+    // dedicated counter ends at the server-reported actuals.
+    const { rows } = await testDb.pool.query<{ backfill_spent_credits: number }>(
+      "select backfill_spent_credits from ofapi_credit_state where id = 1",
+    );
+    expect(rows).toEqual([{ backfill_spent_credits: 3 }]);
   });
 });

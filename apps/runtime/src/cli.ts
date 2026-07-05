@@ -564,6 +564,15 @@ function printOfapiTransactionsBackfillResult(result: OfapiTransactionsBackfillR
       );
     }
   }
+
+  if (result.pages.some((page) => page.paginationStopReason === "budget_exhausted")) {
+    console.log("");
+    console.log(
+      "Day credit budget exhausted (ofapiBackfillDailyCreditBudget) — coverage above is"
+        + " partial. Re-run the same window after the UTC-day rollover to resume;"
+        + " re-runs converge (upserts add no duplicate rows).",
+    );
+  }
 }
 
 export function buildProgram() {
