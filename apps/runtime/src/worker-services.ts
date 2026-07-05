@@ -25,6 +25,12 @@ import {
   runObservationsPartitionCheck,
 } from "./services/observations-partitions.ts";
 import {
+  CANONICALIZE_SWEEP_QUEUE,
+  ensureCanonicalizeQueues,
+  ensureCanonicalizeSchedule,
+  runCanonicalization,
+} from "./services/canonicalize-driver.ts";
+import {
   ensureOfapiCreditQueues,
   ensureOfapiCreditSchedules,
   startOfapiCreditWorker,
@@ -150,6 +156,7 @@ export async function startWorkerServices(
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
+  await ensureCanonicalizeQueues(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
@@ -161,6 +168,7 @@ export async function startWorkerServices(
     ensureOfapiDmAnalyticsSchedules(boss),
     ensureDbDiskUsageSchedule(boss),
     ensureObservationsPartitionSchedule(boss),
+    ensureCanonicalizeSchedule(boss),
   ]);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
@@ -193,6 +201,13 @@ export async function startWorkerServices(
   await boss.work(OBSERVATIONS_PARTITIONS_QUEUE, { batchSize: 1 }, async () => {
     const result = await runObservationsPartitionCheck(app);
     app.logger.info(result, "Observations partition check complete");
+  });
+
+  await boss.work(CANONICALIZE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    const result = await runCanonicalization(app);
+    if (result.scanned > 0) {
+      app.logger.info(result, "Canonicalization sweep complete");
+    }
   });
 
   await boss.work(WORKBOARD_CLASSIFY_QUEUE, { batchSize: 1 }, async () => {

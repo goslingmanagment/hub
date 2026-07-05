@@ -33,6 +33,7 @@ import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
+import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -882,6 +883,39 @@ export function buildProgram() {
         }
         console.log("");
         console.log(summarizeReplayProbe(results));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("events:replay")
+    .description(
+      "Stage 8: re-run canonicalizers over retained observations (idempotent via domain_event_keys)",
+    )
+    .option("--kind <k>", "observation kind; may be repeated", collectStringOption, [])
+    .option("--from <iso>", "received_at lower bound (inclusive)")
+    .option("--to <iso>", "received_at upper bound (exclusive)")
+    .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
+    .option("--parse-version <n>", "process observations below this parse version (default: each family's current)", (v) => Number.parseInt(v, 10))
+    .option("--dry-run", "canonicalize and count without appending or stamping")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runCanonicalization(app, {
+          ...(options.kind.length > 0 ? { kinds: options.kind } : {}),
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+          ...(options.from ? { from: new Date(options.from) } : {}),
+          ...(options.to ? { to: new Date(options.to) } : {}),
+          ...(options.parseVersion !== undefined ? { belowParseVersion: options.parseVersion } : {}),
+          dryRun: Boolean(options.dryRun),
+        });
+        console.log(JSON.stringify(result));
+        console.log(
+          `${options.dryRun ? "[dry-run] would append" : "appended"} ${result.appended}, ` +
+            `deduped ${result.deduped}, stamped ${result.stamped}, ` +
+            `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}`,
+        );
       } finally {
         await app.close();
       }
