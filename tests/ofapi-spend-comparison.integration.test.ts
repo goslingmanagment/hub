@@ -108,6 +108,7 @@ async function seedCoreTransaction(input: {
 }) {
   await upsertTransaction(appContext.db, {
     platformAccountId: input.pageId,
+    source: "onlymonster",
     transactionId: input.transactionId,
     rawType: "message",
     canonicalType: "message_purchase",

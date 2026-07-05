@@ -64,13 +64,13 @@ export async function findPageSummaryByLabel(db: Database, label: string) {
   }).from(pages)
     .innerJoin(models, eq(models.id, pages.modelId))
     .leftJoin(pageCredentials, eq(pageCredentials.platformAccountId, pages.id))
-    .where(eq(pages.label, label));
+    .where(and(eq(pages.label, label), eq(pages.status, "active")));
 
   return row ?? null;
 }
 
 export async function listVisiblePages(db: Database, pageIds?: number[]) {
-  const clauses: Array<any> = [];
+  const clauses: Array<any> = [eq(pages.status, "active")];
   const { scoped } = applyPageScope(clauses, pageIds);
   if (scoped && pageIds?.length === 0) {
     return [];
@@ -99,7 +99,7 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
     .innerJoin(models, eq(models.id, pages.modelId))
     .leftJoin(pageCredentials, eq(pageCredentials.platformAccountId, pages.id))
     .leftJoin(egressEndpoints, eq(egressEndpoints.platformAccountId, pages.id))
-    .where(clauses.length > 0 ? and(...clauses) : undefined)
+    .where(and(...clauses))
     .orderBy(models.sortOrder, models.slug, pages.label);
 }
 

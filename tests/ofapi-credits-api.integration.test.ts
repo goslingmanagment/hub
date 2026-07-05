@@ -698,6 +698,7 @@ describe("ofapi credits admin api", () => {
     // the same [from, to) window as that page's credit spend.
     await upsertTransaction(appContext.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "txn_roi_a",
       rawType: "message",
       canonicalType: "message_purchase",
@@ -710,6 +711,7 @@ describe("ofapi credits admin api", () => {
     });
     await upsertTransaction(appContext.db, {
       platformAccountId: pageB.id,
+      source: "onlymonster",
       transactionId: "txn_roi_b",
       rawType: "message",
       canonicalType: "message_purchase",

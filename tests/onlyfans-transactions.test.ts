@@ -5,6 +5,7 @@ const dbMocks = vi.hoisted(() => ({
   countActiveInWindowTransactionsByScanToken: vi.fn(),
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
+  getPageTransactionsWriterInfo: vi.fn(),
   markTransactionsScanToken: vi.fn(),
   mergePageMetadata: vi.fn(),
   rebuildSpenderProjections: vi.fn(),
@@ -222,6 +223,12 @@ describe("syncOnlyFansTransactions", () => {
       staleScanToken: 0,
     });
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
+    // Stage 13 single-writer gate: the page under test is OnlyMonster-written.
+    dbMocks.getPageTransactionsWriterInfo.mockResolvedValue({
+      transactionsWriter: "onlymonster",
+      label: "of-page",
+      platform: "onlyfans",
+    });
     dbMocks.markTransactionsScanToken.mockResolvedValue(undefined);
     dbMocks.mergePageMetadata.mockResolvedValue(null);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);

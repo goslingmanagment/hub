@@ -1811,6 +1811,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "tx-rich-tip",
       rawType: 20001,
@@ -2186,6 +2187,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "tx-1",
       rawType: 15001,
@@ -2199,6 +2201,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: null,
       transactionId: "tx-1",
       rawType: 16013,
@@ -2253,6 +2256,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "ltv-subscription",
       rawType: 15001,
@@ -2266,6 +2270,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "ltv-chargeback",
       rawType: 99901,
@@ -2279,6 +2284,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "ltv-refund",
       rawType: 99902,
@@ -2292,6 +2298,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "ltv-other",
       rawType: 18001,
@@ -2316,6 +2323,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "ltv-payout-reversal",
       rawType: 16013,
@@ -2361,6 +2369,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "rescan-tip",
       correlationAccountId: "fan-1",
@@ -2376,6 +2385,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: null,
       transactionId: "rescan-tip",
       correlationAccountId: null,
@@ -2427,6 +2437,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "keep-me",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2439,6 +2450,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "drop-me",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2451,6 +2463,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "outside-window",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2515,6 +2528,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "drop-1",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2527,6 +2541,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "drop-2",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2539,6 +2554,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "outside-window",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2664,6 +2680,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "historic-of-tip",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2676,6 +2693,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "same-day-early-of-tip",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2688,6 +2706,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "same-day-late-of-tip",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -2751,6 +2770,7 @@ describe("db write safety", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "historic-fansly-tip",
       rawType: 20001,
       canonicalType: "tip",
@@ -2763,6 +2783,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "same-day-early-fansly-tip",
       rawType: 20001,
       canonicalType: "tip",
@@ -2775,6 +2796,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "same-day-late-fansly-tip",
       rawType: 20001,
       canonicalType: "tip",
@@ -2955,6 +2977,7 @@ describe("db write safety", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "stale-tip",
       rawType: 20001,

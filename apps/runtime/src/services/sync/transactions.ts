@@ -23,6 +23,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
+import { assertPageTransactionsWriter } from "../transactions-writer-gate.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
 import {
   buildBackfillProgressMessage,
@@ -408,6 +409,7 @@ async function persistFanslyTransactionsPage(
 
       await upsertTransaction(dbTx, {
         platformAccountId: input.platformAccountId,
+        source: "fansly:rest",
         fanId,
         transactionId: item.transactionId,
         walletId: item.walletId,
@@ -1450,6 +1452,13 @@ export async function syncTransactions(
     activeLease?: ActiveSyncLease;
   },
 ): Promise<FanslyTransactionSyncResult> {
+  // Stage 13 single-writer gate: refuse the whole chunk before any fetch if
+  // this page's registered transactions writer is not the Fansly stream.
+  await assertPageTransactionsWriter(app, {
+    platformAccountId: input.platformAccountId,
+    attemptedWriter: "fansly",
+  });
+
   const checkpoint = await getCheckpoint(app.db, input.platformAccountId, "transactions");
   await input.telemetry.recordCheckpointLoaded("transactions", summarizeCheckpoint(checkpoint));
 

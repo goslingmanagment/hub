@@ -41,6 +41,7 @@ import {
 } from "../onlyfans.ts";
 import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
+import { assertPageTransactionsWriter } from "../transactions-writer-gate.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
 import {
   buildBackfillProgressMessage,
@@ -655,6 +656,7 @@ async function upsertOnlyFansIncrementalTransactionsPage(
 
     await upsertTransaction(db, {
       platformAccountId: input.platformAccountId,
+      source: "onlymonster",
       fanId: fanMap.get(item.fan.id) ?? null,
       transactionId: item.id,
       correlationAccountId: item.fan.id,
@@ -701,6 +703,7 @@ async function upsertOnlyFansIncrementalChargebacksPage(
 
     await upsertTransaction(db, {
       platformAccountId: input.platformAccountId,
+      source: "onlymonster",
       fanId: fanMap.get(item.fan.id) ?? null,
       transactionId: item.id,
       correlationAccountId: item.fan.id,
@@ -1613,6 +1616,7 @@ async function syncOnlyFansTransactionsBackfill(
 
             await upsertTransaction(dbTx, {
               platformAccountId: input.platformAccountId,
+              source: "onlymonster",
               fanId: fanMap.get(item.fan.id) ?? null,
               transactionId: item.id,
               correlationAccountId: item.fan.id,
@@ -1821,6 +1825,7 @@ async function syncOnlyFansTransactionsBackfill(
 
           await upsertTransaction(dbTx, {
             platformAccountId: input.platformAccountId,
+            source: "onlymonster",
             fanId: fanMap.get(item.fan.id) ?? null,
             transactionId: item.id,
             correlationAccountId: item.fan.id,
@@ -2016,6 +2021,14 @@ export async function syncOnlyFansTransactions(
     budget: SyncChunkBudget;
   },
 ): Promise<OnlyFansTransactionSyncResult> {
+  // Stage 13 single-writer gate: refuse the whole chunk before any fetch if
+  // this page's registered transactions writer is not the OnlyMonster stream
+  // (production pages are 'ofapi'-fed — this path only runs where assigned).
+  await assertPageTransactionsWriter(app, {
+    platformAccountId: input.platformAccountId,
+    attemptedWriter: "onlymonster",
+  });
+
   const checkpoint = await getCheckpoint(app.db, input.platformAccountId, "transactions");
   await input.telemetry.recordCheckpointLoaded("transactions", summarizeCheckpoint(checkpoint));
 

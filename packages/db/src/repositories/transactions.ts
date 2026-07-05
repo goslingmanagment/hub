@@ -24,8 +24,19 @@ function transactionTypeListSql(transactionTypes: TransactionType[]) {
   );
 }
 
+/** Stage 13 provenance values — mirrors the transactions_source_check CHECK. */
+export type TransactionSource =
+  | "onlymonster"
+  | "ofapi:webhook"
+  | "ofapi:rest"
+  | "fansly:rest"
+  | "harvest";
+
 export interface UpsertTransactionInput {
   platformAccountId: number;
+  /** Required: every caller declares which system wrote this row (Stage 13). */
+  source: TransactionSource;
+  sourceObservationId?: number | null;
   fanId?: number | null;
   transactionId: string;
   walletId?: string | null;
@@ -51,6 +62,8 @@ export interface UpsertTransactionInput {
 
 export async function upsertTransaction(db: Database, input: UpsertTransactionInput) {
   const insertValues = {
+    source: input.source,
+    sourceObservationId: input.sourceObservationId ?? null,
     fanId: input.fanId ?? null,
     walletId: input.walletId ?? null,
     accountId: input.accountId ?? null,

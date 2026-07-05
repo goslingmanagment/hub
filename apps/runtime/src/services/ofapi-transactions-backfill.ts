@@ -382,6 +382,7 @@ async function loadWriteEligibility(
       platform: pages.platform,
       label: pages.label,
       ofapiAccountId: pages.ofapiAccountId,
+      transactionsWriter: pages.transactionsWriter,
       credentialId: pageCredentials.id,
     })
     .from(pages)
@@ -401,15 +402,20 @@ async function loadWriteEligibility(
 
   const activeNonOfapiTransactions = await countActiveNonOfapiTransactions(db, input);
   const hasCredentials = page.credentialId !== null;
+  // Stage 13: the writer column subsumes and formalizes the
+  // active_non_ofapi_transactions heuristic below; both stay — the heuristic
+  // still catches data written before the writer registry existed.
   const reason = page.platform !== "onlyfans"
     ? "not_onlyfans"
     : !page.ofapiAccountId
       ? "missing_ofapi_account_id"
-      : hasCredentials
-        ? "has_page_credentials"
-        : activeNonOfapiTransactions > 0
-          ? "active_non_ofapi_transactions"
-          : null;
+      : page.transactionsWriter !== "ofapi"
+        ? "wrong_transactions_writer"
+        : hasCredentials
+          ? "has_page_credentials"
+          : activeNonOfapiTransactions > 0
+            ? "active_non_ofapi_transactions"
+            : null;
 
   return {
     eligible: reason === null,
@@ -690,6 +696,7 @@ async function writeBackfillRows(
       // in place when the terminal projection later arrives, and vice versa.
       await upsertTransaction(db, {
         platformAccountId: input.pageId,
+        source: "ofapi:rest",
         fanId: fanIdByPlatformUserId.get(row.fanPlatformUserId) ?? null,
         transactionId: row.transactionId,
         accountId: input.ofapiAccountId,

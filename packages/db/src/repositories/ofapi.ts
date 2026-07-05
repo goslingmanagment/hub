@@ -457,6 +457,8 @@ export interface OfapiSpendProjectionTransactionIngestRow {
   creatorNetAmountMills: bigint;
   eventStatus: "pending" | "settled" | "reversed";
   journalId: number;
+  /** The webhook delivery key — also the Stage 7 observation key (source='webhook'). */
+  sourceIdempotencyKey: string;
 }
 
 /**
@@ -485,6 +487,7 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
       creatorNetAmountMills: ofapiSpendProjectionEvents.creatorNetAmountMills,
       eventStatus: ofapiSpendProjectionEvents.eventStatus,
       journalId: ofapiSpendProjectionEvents.journalId,
+      sourceIdempotencyKey: ofapiSpendProjectionEvents.sourceIdempotencyKey,
     })
     .from(ofapiSpendProjectionEvents)
     .where(and(
@@ -571,6 +574,7 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
       creatorNetAmountMills: row.creatorNetAmountMills!,
       eventStatus: row.eventStatus as OfapiSpendProjectionTransactionIngestRow["eventStatus"],
       journalId: row.journalId,
+      sourceIdempotencyKey: row.sourceIdempotencyKey,
     }));
 }
 
@@ -1909,7 +1913,7 @@ export async function findPageByOfapiAccountId(db: Database, ofapiAccountId: str
       platform: pages.platform,
     })
     .from(pages)
-    .where(eq(pages.ofapiAccountId, ofapiAccountId));
+    .where(and(eq(pages.ofapiAccountId, ofapiAccountId), eq(pages.status, "active")));
 
   return row ?? null;
 }
@@ -1923,7 +1927,7 @@ export async function listOnlyFansPagesForOfapiMapping(db: Database) {
       ofapiAccountId: pages.ofapiAccountId,
     })
     .from(pages)
-    .where(eq(pages.platform, "onlyfans"))
+    .where(and(eq(pages.platform, "onlyfans"), eq(pages.status, "active")))
     .orderBy(asc(pages.label));
 }
 
@@ -1938,6 +1942,13 @@ export async function setPageOfapiAccountId(
     .update(pages)
     .set({
       ofapiAccountId: input.ofapiAccountId,
+      // Stage 13: same invariant as the 0055 writer seed — mapping an OFAPI
+      // account makes OFAPI the page's transactions writer, but only when no
+      // writer was assigned yet (an explicit assignment is never overridden;
+      // unmapping keeps the writer, the ingest can't reach the page anyway).
+      ...(input.ofapiAccountId !== null
+        ? { transactionsWriter: sql`coalesce(${pages.transactionsWriter}, 'ofapi')` }
+        : {}),
       updatedAt: sql`now()`,
     })
     .where(eq(pages.id, input.pageId));
@@ -1998,7 +2009,7 @@ export async function listOfapiMappedPages(db: Database): Promise<OfapiMappedPag
       ofapiAuthChangedAt: pages.ofapiAuthChangedAt,
     })
     .from(pages)
-    .where(isNotNull(pages.ofapiAccountId))
+    .where(and(isNotNull(pages.ofapiAccountId), eq(pages.status, "active")))
     .orderBy(asc(pages.label));
 
   return rows.filter((row): row is OfapiMappedPageRow => row.ofapiAccountId !== null);

@@ -2,6 +2,7 @@ import {
   bigserial,
   bigint,
   boolean,
+  char,
   check,
   customType,
   date,
@@ -135,6 +136,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "ofapi_burn_rate",
   "db_disk_usage",
   "observations_partitions",
+  "wrong_transactions_writer",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -194,10 +196,14 @@ export const pages = pgTable(
     lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
     lastLightSyncAt: timestamp("last_light_sync_at", { withTimezone: true }),
     lastFollowerSyncAt: timestamp("last_follower_sync_at", { withTimezone: true }),
-    // Stage 2 interim tombstone substrate: nothing writes this yet (fact-bearing
-    // pages refuse deletion at the handler); Stage 13's soft-delete standard
-    // reconciles with this column rather than adding a second one.
+    // Stage 13 soft-delete standard (formalizes Stage 2's interim column):
+    // deletePageByLabel writes the tombstone; fact-table FKs are RESTRICT so a
+    // hard DELETE on a fact-bearing page is structurally impossible.
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    status: text("status").default("active").notNull(),
+    // Stage 13 single-writer gate: which system may write transactions for
+    // this page. NULL = no writer assigned yet (Stage 14 assigns per page).
+    transactionsWriter: text("transactions_writer"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -208,6 +214,12 @@ export const pages = pgTable(
       table.platformAccountId,
     ),
     ofapiAccountUniq: unique("pages_ofapi_account_uniq").on(table.ofapiAccountId),
+    statusCheck: check("pages_status_check", sql`
+      ${table.status} in ('active', 'deleted')
+    `),
+    transactionsWriterCheck: check("pages_transactions_writer_check", sql`
+      ${table.transactionsWriter} in ('onlymonster', 'ofapi', 'fansly')
+    `),
   }),
 );
 
@@ -314,7 +326,7 @@ export const syncRuns = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     pageId: bigint("page_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     requestSeq: bigint("request_seq", { mode: "number" }),
     leasedSeq: bigint("leased_seq", { mode: "number" }),
@@ -348,7 +360,7 @@ export const syncHttpAttempts = pgTable("sync_http_attempts",
       .references(() => syncRuns.id, { onDelete: "cascade" })
       .notNull(),
     pageId: bigint("page_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     requestSeq: bigint("request_seq", { mode: "number" }),
     source: syncRequestSourceEnum("source"),
@@ -395,7 +407,7 @@ export const syncRunEvents = pgTable(
       .references(() => syncRuns.id, { onDelete: "cascade" })
       .notNull(),
     pageId: bigint("page_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     requestSeq: bigint("request_seq", { mode: "number" }),
     source: syncRequestSourceEnum("source"),
@@ -530,7 +542,7 @@ export const syncRawPayloads = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     pageId: bigint("page_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     syncRunId: bigint("sync_run_id", { mode: "number" }).references(() => syncRuns.id, {
       onDelete: "set null",
@@ -634,7 +646,7 @@ export const pageFans = pgTable(
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     totalCreatorNetMills: bigint("total_creator_net_mills", { mode: "bigint" })
       .default(sql`0`)
@@ -676,7 +688,7 @@ export const pageFanExternalNotes = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -717,7 +729,7 @@ export const pageFanAliases = pgTable(
   "page_fan_aliases",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -745,7 +757,7 @@ export const pageFollows = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -782,7 +794,7 @@ export const pageSubscriptions = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformSubscriptionId: text("platform_subscription_id").notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -832,7 +844,7 @@ export const pageDmThreads = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" }).references(() => fans.id, {
       onDelete: "set null",
@@ -921,7 +933,7 @@ export const pageDmMessages = pgTable(
       .references(() => pageDmThreads.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     platformMessageId: text("platform_message_id").notNull(),
     senderPlatformUserId: text("sender_platform_user_id"),
@@ -970,7 +982,7 @@ export const dmMessageArchive = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platform: platformEnum("platform").notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     ofapiAccountId: text("ofapi_account_id").notNull(),
     platformConversationId: text("platform_conversation_id"),
@@ -1080,7 +1092,7 @@ export const ofapiCommands = pgTable(
     id: uuid("id").primaryKey(),
     clientCommandId: uuid("client_command_id").notNull(),
     pageId: bigint("page_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     chatterUserId: bigint("chatter_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "restrict" })
@@ -1212,7 +1224,7 @@ export const transactions = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" }).references(() => fans.id, {
       onDelete: "set null",
@@ -1242,6 +1254,13 @@ export const transactions = pgTable(
     isActive: boolean("is_active").default(true).notNull(),
     inactiveReason: transactionInactiveReasonEnum("inactive_reason"),
     inactivatedAt: timestamp("inactivated_at", { withTimezone: true }),
+    // Stage 13 provenance: which system wrote this row. Open set (text +
+    // CHECK, not pgEnum) so later producers extend without enum surgery.
+    source: text("source").notNull(),
+    // Plain bigint, NOT an FK: observations' PK is (id, received_at) because
+    // of partitioning — PG cannot FK the partitioned table on id alone.
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }),
+    currency: char("currency", { length: 3 }).default("USD").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -1249,6 +1268,10 @@ export const transactions = pgTable(
       table.platformAccountId,
       table.transactionId,
     ),
+    sourceIdx: index("transactions_source_idx").on(table.source),
+    sourceCheck: check("transactions_source_check", sql`
+      ${table.source} in ('onlymonster', 'ofapi:webhook', 'ofapi:rest', 'fansly:rest', 'harvest')
+    `),
     pendingBoundaryIdx: index("transactions_pending_boundary_idx").on(
       table.platformAccountId,
       table.transactionState,
@@ -1373,7 +1396,7 @@ export const fanSpendLifetime = pgTable(
 export const pageFanIdentities = pgTable("page_fan_identities",
   {
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     sourceIdentityKey: text("source_identity_key").notNull(),
     correlationAccountId: text("correlation_account_id"),
@@ -1420,7 +1443,7 @@ export const dailyFollowers = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     businessDate: date("business_date").notNull(),
     newFollowers: integer("new_followers").default(0).notNull(),
@@ -1440,7 +1463,7 @@ export const dailySubscribers = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     businessDate: date("business_date").notNull(),
     newSubscribers: integer("new_subscribers").default(0).notNull(),
@@ -1624,7 +1647,7 @@ export const fanNotes = pgTable(
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     authorUserId: bigint("author_user_id", { mode: "number" }).references(() => users.id, {
       onDelete: "set null",
@@ -1645,7 +1668,7 @@ export const fanSummaries = pgTable(
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     authorUserId: bigint("author_user_id", { mode: "number" }).references(() => users.id, {
       onDelete: "set null",
@@ -1666,7 +1689,7 @@ export const fanProfiles = pgTable(
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     version: integer("version").notNull(),
     body: text("body").notNull(),
@@ -1849,7 +1872,7 @@ export const workboardContactLog = pgTable(
       .references(() => models.id, { onDelete: "cascade" })
       .notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
@@ -1935,7 +1958,7 @@ export const wbClassifierRuns = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
-      .references(() => pages.id, { onDelete: "cascade" })
+      .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     trigger: text("trigger").notNull(),
     model: text("model"),

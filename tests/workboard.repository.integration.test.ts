@@ -164,6 +164,7 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
 
   await upsertTransaction(testDb.db, {
     platformAccountId: pageId,
+    source: "onlymonster",
     fanId: activeSpender.id,
     transactionId: "wb-active-tip",
     rawType: 20001,
@@ -177,6 +178,7 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
   });
   await upsertTransaction(testDb.db, {
     platformAccountId: pageId,
+    source: "onlymonster",
     fanId: inactiveSpender.id,
     transactionId: "wb-inactive-tip",
     rawType: 20001,
@@ -190,6 +192,7 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
   });
   await upsertTransaction(testDb.db, {
     platformAccountId: pageId,
+    source: "onlymonster",
     fanId: deletedActiveSpender.id,
     transactionId: "wb-active-tip-deleted",
     rawType: 20001,
@@ -203,6 +206,7 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
   });
   await upsertTransaction(testDb.db, {
     platformAccountId: pageId,
+    source: "onlymonster",
     fanId: deletedInactiveSpender.id,
     transactionId: "wb-inactive-tip-deleted",
     rawType: 20001,
@@ -216,6 +220,7 @@ async function seedWorkboardScenario(testDb: StartedTestDatabase, pageId: number
   });
   await upsertTransaction(testDb.db, {
     platformAccountId: pageId,
+    source: "onlymonster",
     fanId: microSpender.id,
     transactionId: "wb-micro-tip",
     rawType: 20001,
@@ -434,6 +439,7 @@ describe("workboard repository integration", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: activeNowFan.id,
       transactionId: "presence-active-now-tip",
       rawType: 20001,
@@ -447,6 +453,7 @@ describe("workboard repository integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       fanId: recentlyActiveFan.id,
       transactionId: "presence-recently-active-tip",
       rawType: 20001,

@@ -30,7 +30,12 @@ async function seedPage(label = "lora-of") {
     slug: `model-${label}`,
     name: `Model ${label}`,
   });
-  return createOnlyFansPage(appContext.db, { modelId: model.id, label });
+  const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label });
+  // Stage 13: pages holding OFAPI projection events are OFAPI-mapped in
+  // reality; the mapping assigns transactions_writer='ofapi', which the
+  // single-writer gate requires before the ingest may touch the page.
+  await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId: `acct-${label}` });
+  return page;
 }
 
 async function seedOfapiPage(label: string, ofapiAccountId: string) {
@@ -331,6 +336,7 @@ describe("OFAPI spend transaction ingest", () => {
     });
     await upsertTransaction(appContext.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "tx-existing",
       rawType: "message",
       canonicalType: "message_purchase",
@@ -574,6 +580,7 @@ describe("OFAPI REST transactions backfill", () => {
     const occurredAt = new Date("2026-06-26T22:36:00.000Z");
     await upsertTransaction(appContext.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "rest-tx-1",
       rawType: "ofapi:message",
       canonicalType: "message_purchase",
@@ -682,6 +689,7 @@ describe("OFAPI REST transactions backfill", () => {
     // Webhook ingest already promoted this transaction to settled/posted.
     await upsertTransaction(appContext.db, {
       platformAccountId: page.id,
+      source: "onlymonster",
       transactionId: "keep-settled",
       rawType: "ofapi:message",
       canonicalType: "message_purchase",
@@ -909,6 +917,7 @@ describe("OFAPI REST transactions backfill", () => {
     const direct = await seedOfapiPage("rest-direct-of", "acct_rest_direct");
     await upsertTransaction(appContext.db, {
       platformAccountId: direct.id,
+      source: "onlymonster",
       transactionId: "direct-tx-1",
       rawType: "message",
       canonicalType: "message_purchase",
@@ -1193,6 +1202,7 @@ describe("OFAPI REST transactions backfill", () => {
           }
           await upsertTransaction(db, {
             platformAccountId: blockedPage.id,
+            source: "onlymonster",
             transactionId: "manual-toctou",
             rawType: "manual",
             canonicalType: "message_purchase",

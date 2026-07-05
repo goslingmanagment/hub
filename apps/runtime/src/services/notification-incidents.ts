@@ -61,6 +61,8 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 Server disk usage high";
     case "observations_partitions":
       return "🚨 Observations partition lead too short";
+    case "wrong_transactions_writer":
+      return "🚨 Wrong transactions writer refused";
   }
 }
 
@@ -187,6 +189,34 @@ async function openIncidentAndNotify(
       err: error,
     }, "Notification incident open failed; continuing");
   }
+}
+
+/**
+ * Stage 13 single-writer gate: a write path attempted transactions for a page
+ * whose registered writer is someone else (or unassigned). Opens immediately —
+ * no failure-streak threshold; a refused write is a config/ops defect, not a
+ * transient. Deduped by the incident key (kind + page) until recovery.
+ */
+export async function notifyWrongTransactionsWriterIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    platformAccountId: number;
+    pageLabel: string | null;
+    platform: "fansly" | "onlyfans" | null;
+    attemptedWriter: string;
+    assignedWriter: string | null;
+  },
+) {
+  await openIncidentAndNotify(app, {
+    kind: "wrong_transactions_writer",
+    platformAccountId: input.platformAccountId,
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    errorCode: "wrong_transactions_writer",
+    errorSummary: `'${input.attemptedWriter}' attempted to write transactions for a page whose writer is ${
+      input.assignedWriter ? `'${input.assignedWriter}'` : "unassigned"
+    }`,
+  });
 }
 
 async function resolveIncidentAndNotify(

@@ -230,9 +230,10 @@ describe("Fansly DM tip normalization", () => {
           gross_amount_mills,
           source_destination_amount_mills,
           creator_net_amount_mills,
-          occurred_at
+          occurred_at,
+          source
         ) values (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
         )
       `, [
         fanslyPage.id,
@@ -246,6 +247,7 @@ describe("Fansly DM tip normalization", () => {
         20000,
         16000,
         new Date("2026-03-24T05:00:00.000Z"),
+        "fansly:rest",
       ]);
 
       const rows = await testDb.pool.query<{

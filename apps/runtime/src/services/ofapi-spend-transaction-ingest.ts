@@ -1,4 +1,5 @@
 import {
+  findObservationByKey,
   listMissingOfapiSpendProjectionTransactionsForTruthIngest,
   rebuildRevenueRollups,
   rebuildSpenderProjections,
@@ -15,6 +16,10 @@ import {
   mapOfapiSpendStatusToTransactionState,
   normalizeOfapiSpendAmountMills,
 } from "./ofapi-spend-transaction-mapping.ts";
+import {
+  assertPageTransactionsWriter,
+  WrongTransactionsWriterError,
+} from "./transactions-writer-gate.ts";
 
 const OFAPI_SPEND_TRANSACTION_INGEST_LIMIT = 200;
 
@@ -47,6 +52,14 @@ async function applyPageRows(
   }
 
   return withOfapiSpendTransactionPageLock(app.db, pageId, async (db) => {
+    // Stage 13 single-writer gate, evaluated inside the page lock. A refused
+    // page opens an incident and skips ITS rows only (they stay pending and
+    // re-list until the writer assignment is fixed); other pages still apply.
+    await assertPageTransactionsWriter(app, {
+      platformAccountId: pageId,
+      attemptedWriter: "ofapi",
+    });
+
     const fanPlatformUserIds = Array.from(new Set(rows.map((row) => row.fanPlatformUserId)));
     const fanRows = await upsertFans(db, fanPlatformUserIds.map((platformUserId) => ({
       platform: "onlyfans",
@@ -69,8 +82,14 @@ async function applyPageRows(
         row.eventStatus,
         row.creatorNetAmountMills,
       );
+      // Best-effort observation link: the webhook delivery key doubles as the
+      // Stage 7 observation key; deliveries older than the journal deploy
+      // resolve to null (legacy rows carry source only, per the passport).
+      const observation = await findObservationByKey(db, "webhook", row.sourceIdempotencyKey);
       await upsertTransaction(db, {
         platformAccountId: pageId,
+        source: "ofapi:webhook",
+        sourceObservationId: observation?.id ?? null,
         fanId: fanIdByPlatformUserId.get(row.fanPlatformUserId) ?? null,
         transactionId: row.transactionId,
         accountId: row.ofapiAccountId,
@@ -112,7 +131,21 @@ export async function applyOfapiSpendProjectionTransactions(app: AppContext) {
   let applied = 0;
 
   for (const [pageId, pageRows] of groupByPage(rows)) {
-    applied += await applyPageRows(app, pageId, pageRows);
+    try {
+      applied += await applyPageRows(app, pageId, pageRows);
+    } catch (error) {
+      if (error instanceof WrongTransactionsWriterError) {
+        // Incident already opened by the gate; this page's rows stay pending
+        // and re-list next sweep. Other pages must still apply.
+        app.logger.error({
+          pageId,
+          assignedWriter: error.assignedWriter,
+          rows: pageRows.length,
+        }, "OFAPI spend ingest refused: page transactions writer is not 'ofapi'");
+        continue;
+      }
+      throw error;
+    }
   }
 
   return applied;

@@ -5,6 +5,7 @@ import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 const dbMocks = vi.hoisted(() => ({
   getCheckpoint: vi.fn(),
   getOldestPendingTransactionAt: vi.fn(),
+  getPageTransactionsWriterInfo: vi.fn(),
   recordRunningPageSyncProgress: vi.fn(),
   rebuildSpenderProjections: vi.fn(),
   rebuildRevenueRollups: vi.fn(),
@@ -101,6 +102,12 @@ describe("syncTransactions", () => {
     });
     fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map());
     dbMocks.getOldestPendingTransactionAt.mockResolvedValue(null);
+    // Stage 13 single-writer gate: the page under test is Fansly-written.
+    dbMocks.getPageTransactionsWriterInfo.mockResolvedValue({
+      transactionsWriter: "fansly",
+      label: "fansly-page",
+      platform: "fansly",
+    });
     dbMocks.recordRunningPageSyncProgress.mockResolvedValue(true);
     dbMocks.rebuildSpenderProjections.mockResolvedValue(undefined);
     dbMocks.rebuildRevenueRollups.mockResolvedValue(undefined);

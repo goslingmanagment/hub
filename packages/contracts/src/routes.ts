@@ -2551,6 +2551,7 @@ const notificationIncidentKindEnum = z.enum([
   "ofapi_burn_rate",
   "db_disk_usage",
   "observations_partitions",
+  "wrong_transactions_writer",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const deliveryKindEnum = z.enum([

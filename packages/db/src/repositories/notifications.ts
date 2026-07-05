@@ -17,7 +17,8 @@ export type NotificationIncidentKind =
   | "ofapi_webhook_silence"
   | "ofapi_burn_rate"
   | "db_disk_usage"
-  | "observations_partitions";
+  | "observations_partitions"
+  | "wrong_transactions_writer";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";

@@ -152,6 +152,7 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
 
   await upsertTransaction(testDb.db, {
     platformAccountId: lanaPage.id,
+    source: "onlymonster",
     fanId: fan.id,
     transactionId: "tx-subscription",
     rawType: 15001,
@@ -165,6 +166,7 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   });
   await upsertTransaction(testDb.db, {
     platformAccountId: lanaPage.id,
+    source: "onlymonster",
     fanId: fan.id,
     transactionId: "tx-tip",
     rawType: 20001,
@@ -178,6 +180,7 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   });
   await upsertTransaction(testDb.db, {
     platformAccountId: lanaPage.id,
+    source: "onlymonster",
     fanId: fan.id,
     transactionId: "tx-reversal",
     rawType: 16013,
@@ -191,6 +194,7 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   });
   await upsertTransaction(testDb.db, {
     platformAccountId: lilyPage.id,
+    source: "onlymonster",
     fanId: fan.id,
     transactionId: "tx-lily-tip",
     rawType: 20001,
@@ -501,6 +505,7 @@ async function seedConversationApiFixture(input: {
   });
   await upsertTransaction(input.testDb.db, {
     platformAccountId: input.pageId,
+    source: "onlymonster",
     fanId: reactivationFan.id,
     transactionId: "tx-conversation-reactivation",
     rawType: 20001,
@@ -673,6 +678,7 @@ async function seedWorkboardApiFixture(input: {
 
   await upsertTransaction(input.testDb.db, {
     platformAccountId: input.pageId,
+    source: "onlymonster",
     fanId: activeSpender.id,
     transactionId: "wb-api-active-tip",
     rawType: 20001,
@@ -686,6 +692,7 @@ async function seedWorkboardApiFixture(input: {
   });
   await upsertTransaction(input.testDb.db, {
     platformAccountId: input.pageId,
+    source: "onlymonster",
     fanId: inactiveSpender.id,
     transactionId: "wb-api-inactive-tip",
     rawType: 20001,
@@ -699,6 +706,7 @@ async function seedWorkboardApiFixture(input: {
   });
   await upsertTransaction(input.testDb.db, {
     platformAccountId: input.pageId,
+    source: "onlymonster",
     fanId: deletedActiveSpender.id,
     transactionId: "wb-api-active-tip-deleted",
     rawType: 20001,
@@ -712,6 +720,7 @@ async function seedWorkboardApiFixture(input: {
   });
   await upsertTransaction(input.testDb.db, {
     platformAccountId: input.pageId,
+    source: "onlymonster",
     fanId: deletedInactiveSpender.id,
     transactionId: "wb-api-inactive-tip-deleted",
     rawType: 20001,
@@ -725,6 +734,7 @@ async function seedWorkboardApiFixture(input: {
   });
   await upsertTransaction(input.testDb.db, {
     platformAccountId: input.pageId,
+    source: "onlymonster",
     fanId: microSpender.id,
     transactionId: "wb-api-micro-tip",
     rawType: 20001,
@@ -3165,6 +3175,7 @@ describe("api integration", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: null,
       transactionId: "tx-chargeback",
       rawType: 99901,
@@ -3178,6 +3189,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: null,
       transactionId: "tx-other",
       rawType: 18001,
@@ -3270,6 +3282,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "of-tip-1",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -3282,6 +3295,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "of-cb-1",
       rawType: "Tip from",
       canonicalType: "chargeback",
@@ -3459,6 +3473,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "of-daily-tip-1",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -3546,6 +3561,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "of-bounds-tip-1",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -3627,6 +3643,7 @@ describe("api integration", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "before-window",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -3639,6 +3656,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "utc-0010",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -3651,6 +3669,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "utc-2059",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -3663,6 +3682,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "utc-2100",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -3675,6 +3695,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: onlyFansPage.id,
+      source: "onlymonster",
       transactionId: "after-window",
       rawType: "Tip from",
       canonicalType: "tip",
@@ -3778,6 +3799,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lilyPage.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "lily-december-main",
       rawType: 20001,
@@ -3791,6 +3813,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lilyPage.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "lily-boundary-january",
       rawType: 20001,
@@ -3804,6 +3827,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lilyPage.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "lily-boundary-november",
       rawType: 20001,
@@ -3980,6 +4004,7 @@ describe("api integration", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: createdAtPage.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "tx-newer-occurred",
       rawType: 20001,
@@ -3993,6 +4018,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: createdAtPage.id,
+      source: "onlymonster",
       fanId: fan.id,
       transactionId: "tx-older-occurred",
       rawType: 20001,
@@ -4625,6 +4651,7 @@ describe("api integration", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture!.lanaPage.id,
+      source: "onlymonster",
       fanId: null,
       transactionId: "tx-unattributed-v2",
       rawType: 20001,
@@ -4825,6 +4852,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: subCentFan.id,
       transactionId: "tx-sub-cent-tip",
       rawType: 20001,
@@ -4838,6 +4866,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: oneCentFan.id,
       transactionId: "tx-one-cent-tip",
       rawType: 20001,
@@ -4863,6 +4892,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: nonFollowerFan.id,
       transactionId: "tx-non-follower-tip",
       rawType: 20001,
@@ -4876,6 +4906,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: deletedFan.id,
       transactionId: "tx-deleted-tip",
       rawType: 20001,
@@ -5219,6 +5250,7 @@ describe("api integration", () => {
     // Active: bought 2 days ago, low value
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: activeFan.id,
       transactionId: "tx-retention-active",
       rawType: 20001,
@@ -5234,6 +5266,7 @@ describe("api integration", () => {
     // Cooling: bought 30 days ago
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: coolingFan.id,
       transactionId: "tx-retention-cooling",
       rawType: 20001,
@@ -5249,6 +5282,7 @@ describe("api integration", () => {
     // Inactive low-value: bought 90 days ago, < $100 lifetime
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: inactiveFan.id,
       transactionId: "tx-retention-inactive",
       rawType: 20001,
@@ -5264,6 +5298,7 @@ describe("api integration", () => {
     // Needs reactivation: bought 90 days ago, > $100 lifetime
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: reactivationFan.id,
       transactionId: "tx-retention-reactivate",
       rawType: 20001,
@@ -5278,6 +5313,7 @@ describe("api integration", () => {
 
     await upsertTransaction(testDb.db, {
       platformAccountId: fixture.lanaPage.id,
+      source: "onlymonster",
       fanId: deletedFan.id,
       transactionId: "tx-retention-deleted",
       rawType: 20001,
@@ -6286,21 +6322,9 @@ describe("api integration", () => {
       model_slug: "target-model",
     });
 
-    // Stage 2 destruction-door guard: the page still holds fixture
-    // transactions, so deletion refuses before the cascade can reach them.
-    const guardedDelete = await server.inject({
-      method: "DELETE",
-      url: "/api/v1/admin/pages/lana-renamed",
-      headers: { cookie: ownerCookie },
-    });
-    expect(guardedDelete.statusCode).toBe(409);
-    expect(guardedDelete.json()).toMatchObject({ error: "conflict" });
-
-    // With the business facts gone, the delete (and its config cascades) work.
-    await testDb.pool.query(
-      "delete from transactions where platform_account_id = $1",
-      [fixture.lanaPage.id],
-    );
+    // Stage 13 soft-delete standard: DELETE tombstones even a fact-bearing
+    // page — no 409, no cascade, nothing destroyed. The tombstone is a
+    // two-way door: the row, its facts, and its config all remain.
     const deleteResponse = await server.inject({
       method: "DELETE",
       url: "/api/v1/admin/pages/lana-renamed",
@@ -6312,20 +6336,20 @@ describe("api integration", () => {
       deleted: true,
     });
 
-    const [accountRows, credentialRows, proxyRows, assignmentRows] = await Promise.all([
-      testDb.pool.query<{ count: number }>(`
-        select count(*)::int as count
+    const [accountRows, transactionRows, credentialRows, assignmentRows] = await Promise.all([
+      testDb.pool.query<{ count: number; status: string | null }>(`
+        select count(*)::int as count, min(status) as status
         from pages
         where id = $1
       `, [fixture.lanaPage.id]),
       testDb.pool.query<{ count: number }>(`
         select count(*)::int as count
-        from page_credentials
+        from transactions
         where platform_account_id = $1
       `, [fixture.lanaPage.id]),
       testDb.pool.query<{ count: number }>(`
         select count(*)::int as count
-        from egress_endpoints
+        from page_credentials
         where platform_account_id = $1
       `, [fixture.lanaPage.id]),
       testDb.pool.query<{ count: number }>(`
@@ -6335,10 +6359,11 @@ describe("api integration", () => {
       `, [fixture.lanaPage.id]),
     ]);
 
-    expect(accountRows.rows[0]?.count).toBe(0);
-    expect(credentialRows.rows[0]?.count).toBe(0);
-    expect(proxyRows.rows[0]?.count).toBe(0);
-    expect(assignmentRows.rows[0]?.count).toBe(0);
+    expect(accountRows.rows[0]?.count).toBe(1);
+    expect(accountRows.rows[0]?.status).toBe("deleted");
+    expect(transactionRows.rows[0]!.count).toBeGreaterThan(0);
+    expect(credentialRows.rows[0]!.count).toBeGreaterThan(0);
+    expect(assignmentRows.rows[0]!.count).toBeGreaterThan(0);
   });
 
   it("returns typed conflicts and not-found errors for admin page CRUD", async (context) => {
@@ -8924,6 +8949,7 @@ describe("api integration", () => {
     });
     await upsertTransaction(testDb.db, {
       platformAccountId: presencePage.id,
+      source: "onlymonster",
       fanId: activeFan.id,
       transactionId: "presence-api-tip-active",
       rawType: 20001,
@@ -9800,7 +9826,7 @@ describe("api integration", () => {
     });
   }, 15_000);
 
-  it("refuses to delete a page that still holds business facts (Stage 2)", async (context) => {
+  it("soft-deletes pages: tombstone keeps facts, RESTRICT blocks raw DELETE (Stage 13)", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -9813,36 +9839,86 @@ describe("api integration", () => {
     });
     const ownerCookie = sessionCookieFrom(ownerLogin);
 
-    // lana holds transactions from the fixture — deletion must refuse.
-    const factBearing = await server.inject({
+    // A dedicated fact-bearing page (lana must stay live for later tests).
+    const spareModel = await createModel(testDb.db, {
+      slug: "stage13-model",
+      name: "Stage 13 Model",
+    });
+    const factPage = await createFanslyPage(testDb.db, {
+      modelId: spareModel.id,
+      label: "stage13-facts",
+    });
+    await upsertTransaction(testDb.db, {
+      platformAccountId: factPage.id,
+      source: "fansly:rest",
+      transactionId: "stage13-tx-1",
+      rawType: "2110",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "1",
+      grossAmountMills: 10_000n,
+      sourceDestinationAmountMills: 8_000n,
+      creatorNetAmountMills: 8_000n,
+      occurredAt: new Date("2026-06-01T00:00:00Z"),
+    });
+
+    // DELETE route on a fact-bearing page tombstones — no 409, no data loss.
+    const softDelete = await server.inject({
       method: "DELETE",
-      url: "/api/v1/admin/pages/lana",
+      url: "/api/v1/admin/pages/stage13-facts",
       headers: { cookie: ownerCookie },
     });
-    expect(factBearing.statusCode).toBe(409);
-    expect(factBearing.json()).toMatchObject({ error: "conflict" });
+    expect(softDelete.statusCode, softDelete.body).toBe(200);
+    expect(softDelete.json()).toEqual({ deleted: true });
 
-    const lanaStillThere = await testDb.pool.query<{ count: string }>(
-      "select count(*)::text as count from pages where label = 'lana'",
+    const tombstoned = await testDb.pool.query<{ status: string; deleted_at: Date | null }>(
+      "select status, deleted_at from pages where label = 'stage13-facts'",
     );
-    expect(lanaStillThere.rows[0]?.count).toBe("1");
+    expect(tombstoned.rows[0]?.status).toBe("deleted");
+    expect(tombstoned.rows[0]?.deleted_at).not.toBeNull();
+    const factsRemain = await testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from transactions where platform_account_id = $1",
+      [factPage.id],
+    );
+    expect(factsRemain.rows[0]?.count).toBe("1");
 
-    // An empty page (no transactions, no DM history) still deletes.
-    const spareModel = await createModel(testDb.db, {
-      slug: "empty-model",
-      name: "Empty Model",
+    // The 38-FK cascade door is closed: a raw DELETE refuses at the FK level.
+    await expect(
+      testDb.pool.query("delete from pages where label = 'stage13-facts'"),
+    ).rejects.toThrow(/violates foreign key constraint/);
+
+    // A tombstoned page is gone from operational surfaces: repeat delete 404s,
+    // admin list omits it.
+    const repeatDelete = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/pages/stage13-facts",
+      headers: { cookie: ownerCookie },
     });
+    expect(repeatDelete.statusCode).toBe(404);
+    const adminPages = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/pages",
+      headers: { cookie: ownerCookie },
+    });
+    expect(adminPages.statusCode).toBe(200);
+    expect(JSON.stringify(adminPages.json())).not.toContain("stage13-facts");
+
+    // An empty page tombstones the same way (row remains, status flips).
     await createFanslyPage(testDb.db, {
       modelId: spareModel.id,
-      label: "empty-page",
+      label: "stage13-empty",
     });
     const emptyDelete = await server.inject({
       method: "DELETE",
-      url: "/api/v1/admin/pages/empty-page",
+      url: "/api/v1/admin/pages/stage13-empty",
       headers: { cookie: ownerCookie },
     });
     expect(emptyDelete.statusCode, emptyDelete.body).toBe(200);
     expect(emptyDelete.json()).toEqual({ deleted: true });
+    const emptyRow = await testDb.pool.query<{ status: string }>(
+      "select status from pages where label = 'stage13-empty'",
+    );
+    expect(emptyRow.rows[0]?.status).toBe("deleted");
   });
 
   it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering", async (context) => {

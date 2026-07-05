@@ -356,7 +356,7 @@ export async function listVisibleScopePages(
     return [];
   }
 
-  const clauses = [eq(pages.platform, input.platform)];
+  const clauses = [eq(pages.platform, input.platform), eq(pages.status, "active")];
   if (input.pageIds !== undefined) {
     clauses.push(inArray(pages.id, input.pageIds));
   }

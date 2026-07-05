@@ -48,6 +48,7 @@ async function insertRevenue(
   revenueTransactionSeq += 1;
   await upsertTransaction(testDb.db, {
     platformAccountId: input.pageId,
+    source: "onlymonster",
     transactionId: `telegram-report-tx-${revenueTransactionSeq}`,
     rawType: 20001,
     canonicalType: "tip",

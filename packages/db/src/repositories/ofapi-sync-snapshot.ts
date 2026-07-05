@@ -88,6 +88,7 @@ export async function findOfapiSyncSnapshotPage(
     .where(and(
       inArray(pages.id, input.assignedPageIds),
       eq(pages.ofapiAccountId, input.ofapiAccountId),
+      eq(pages.status, "active"),
     ))
     .limit(1);
 

@@ -657,8 +657,9 @@ export async function listWorkboardRecomputePageIds(db: Database): Promise<numbe
   const result = await db.execute<{ id: number }>(sql`
     select id::int as id
     from pages
-    where platform = 'fansly'::platform
-       or (platform = 'onlyfans'::platform and ofapi_account_id is not null)
+    where status = 'active'
+      and (platform = 'fansly'::platform
+       or (platform = 'onlyfans'::platform and ofapi_account_id is not null))
     order by id
   `);
   return result.rows.map((row) => row.id);

@@ -172,6 +172,11 @@ export async function createPlatformPage(
           platform: input.platform,
           commissionRate: defaultCommissionRateForPlatform(input.platform),
           label: input.label,
+          // Stage 13: same invariant as the 0055 writer seed — Fansly pages
+          // are born with the Fansly stream as their transactions writer;
+          // OnlyFans pages stay unassigned until the OFAPI mapping lands
+          // (setPageOfapiAccountId) or Stage 14 assigns one explicitly.
+          transactionsWriter: input.platform === "fansly" ? "fansly" : null,
         })
         .returning();
 
@@ -280,7 +285,7 @@ export async function deleteProxyConfig(
 
 export async function findPageByLabel(db: Database, label: string) {
   const page = await db.query.pages.findFirst({
-    where: eq(pages.label, label),
+    where: and(eq(pages.label, label), eq(pages.status, "active")),
   });
 
   if (!page) {
@@ -299,7 +304,7 @@ export async function findPageByLabel(db: Database, label: string) {
 
 export async function findPageById(db: Database, platformAccountId: number) {
   const page = await db.query.pages.findFirst({
-    where: eq(pages.id, platformAccountId),
+    where: and(eq(pages.id, platformAccountId), eq(pages.status, "active")),
   });
 
   if (!page) {
@@ -316,17 +321,38 @@ export async function findPageById(db: Database, platformAccountId: number) {
   return { page, credentials, proxy };
 }
 
+/** Stage 13 single-writer gate: the page's assigned transactions writer. */
+export async function getPageTransactionsWriterInfo(db: Database, platformAccountId: number) {
+  const [page] = await db
+    .select({
+      transactionsWriter: pages.transactionsWriter,
+      label: pages.label,
+      platform: pages.platform,
+    })
+    .from(pages)
+    .where(eq(pages.id, platformAccountId))
+    .limit(1);
+  return page ?? null;
+}
+
 export async function listFanslyPages(db: Database) {
   return listPagesByPlatform(db, "fansly");
 }
 
+// Stage 13: operational listings/lookups see ACTIVE pages only — a tombstoned
+// page stops syncing, mapping, and appearing in admin/dashboard lists. Fact
+// readers (rollup rebuilds, fact-presence, model page counts) intentionally
+// keep seeing all pages: the facts remain and deleting a model under a
+// tombstoned page must still be refused.
 export async function listPlatformAccounts(db: Database) {
-  return db.query.pages.findMany();
+  return db.query.pages.findMany({
+    where: eq(pages.status, "active"),
+  });
 }
 
 export async function listPagesByPlatform(db: Database, platform: Platform) {
   return db.query.pages.findMany({
-    where: eq(pages.platform, platform),
+    where: and(eq(pages.platform, platform), eq(pages.status, "active")),
   });
 }
 
@@ -437,7 +463,7 @@ export async function listAdminPages(
     pageIds?: number[];
   },
 ) {
-  const clauses: Array<any> = [];
+  const clauses: Array<any> = [eq(pages.status, "active")];
 
   if (input?.pageIds !== undefined) {
     if (input.pageIds.length === 0) {
@@ -473,7 +499,7 @@ export async function updatePageByLabel(
   },
 ) {
   const existing = await db.query.pages.findFirst({
-    where: eq(pages.label, label),
+    where: and(eq(pages.label, label), eq(pages.status, "active")),
   });
   if (!existing) {
     throw new CatalogPageNotFoundError(label);
@@ -546,10 +572,21 @@ export async function getPageBusinessFactPresence(db: Database, label: string) {
   };
 }
 
+/**
+ * Stage 13 soft-delete standard: "delete" is a tombstone UPDATE — the row and
+ * every fact hanging off it remain; operational listings exclude it via
+ * status. A raw DELETE on a fact-bearing page is refused at the FK level
+ * (RESTRICT, migration 0056). Deleting an already-deleted page is a 404.
+ */
 export async function deletePageByLabel(db: Database, label: string) {
   const [deleted] = await db
-    .delete(pages)
-    .where(eq(pages.label, label))
+    .update(pages)
+    .set({
+      status: "deleted",
+      deletedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(pages.label, label), eq(pages.status, "active")))
     .returning({
       id: pages.id,
       label: pages.label,
@@ -577,6 +614,7 @@ export async function listPageSummaries(db: Database) {
     from pages pa
     join models m on m.id = pa.model_id
     left join egress_endpoints pap on pap.platform_account_id = pa.id
+    where pa.status = 'active'
     order by m.slug asc, pa.label asc
   `);
 }

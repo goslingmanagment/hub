@@ -68,6 +68,7 @@ async function seedFanWithSpend(input: {
   for (const transaction of input.transactions) {
     await upsertTransaction(appContext.db, {
       platformAccountId: input.pageId,
+      source: "onlymonster",
       fanId: fan!.id,
       transactionId: transaction.id,
       correlationAccountId: input.platformUserId,
