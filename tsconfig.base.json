@@ -11,6 +11,7 @@
     "paths": {
       "@/*": ["apps/dashboard/src/*.ts", "apps/dashboard/src/*.tsx"],
       "@agency_hub_core/contracts": ["packages/contracts/src/index.ts"],
+      "@kernel/sdk": ["packages/sdk/src/index.ts"],
       "@agency_hub_core/shared": ["packages/shared/src/index.ts"],
       "@agency_hub_core/db": ["packages/db/src/index.ts"],
       "@agency_hub_core/fansly": ["packages/fansly/src/index.ts"],

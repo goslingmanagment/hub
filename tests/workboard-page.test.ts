@@ -2,7 +2,7 @@ import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
-import { ApiError } from "../apps/dashboard/src/api/client.ts";
+import { KernelApiError } from "@agency_hub_core/contracts";
 import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
 import { resolveLegacyWorkboardRedirect } from "../apps/dashboard/src/lib/navigation.ts";
 
@@ -179,7 +179,7 @@ describe("WorkboardPage", () => {
       data: undefined,
       isLoading: false,
       isError: true,
-      error: new ApiError(404, { message: "Missing snapshot" }),
+      error: new KernelApiError("Missing snapshot", "not_found", 404, null, { message: "Missing snapshot" }),
     });
 
     const html = renderPage();

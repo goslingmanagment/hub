@@ -1,24 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AdminSyncBlockBody,
-  AdminSyncBlockResponse,
-  ConnectionItem,
-  PageMessagesBlockResponse,
-  PageSyncBlocksResponse,
-  SyncMonitorResponse,
-  SyncOverviewResponse,
-  SyncRunItem,
   UpdateCredentialsBody,
-  VerifyCredentialsBody,
 } from "@agency_hub_core/contracts";
-import { api } from "./client.js";
-import { qs } from "./utils.js";
-import { pathSegment } from "@/lib/path";
+
+import { kernel } from "./sdk.js";
 
 export function useAdminConnections(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "connections"],
-    queryFn: () => api.get<ConnectionItem[]>("/api/v1/admin/connections"),
+    queryFn: () => kernel.adminConnections(),
     enabled: options.enabled ?? true,
   });
 }
@@ -28,7 +19,7 @@ export function useAdminSyncTrigger() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: { pageLabel: string; scope: "light" | "followers" | "all" | "data" | "messages" }) =>
-      api.post("/api/v1/admin/sync/trigger", body),
+      kernel.adminSyncTrigger({ body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
       void qc.invalidateQueries({ queryKey: ["admin", "syncRuns"] });
@@ -40,14 +31,16 @@ export function useAdminSyncTrigger() {
 
 export function useAdminSyncTriggerAll() {
   return useMutation({
-    mutationFn: () => api.post("/api/v1/admin/sync/trigger-all"),
+    mutationFn: () => kernel.adminSyncTriggerAll(),
   });
 }
 
 export function useAdminSyncRuns(params: { pageLabel?: string; limit?: number; since?: string } = {}) {
   return useQuery({
     queryKey: ["admin", "syncRuns", params],
-    queryFn: () => api.get<SyncRunItem[]>(`/api/v1/admin/sync/runs${qs(params)}`),
+    queryFn: () => kernel.adminSyncRuns({
+      query: params as Parameters<typeof kernel.adminSyncRuns>[0]["query"],
+    }),
     refetchInterval: 10_000,
     placeholderData: (previousData) => previousData,
   });
@@ -56,7 +49,9 @@ export function useAdminSyncRuns(params: { pageLabel?: string; limit?: number; s
 export function useSyncMonitor(params: { pageLabel?: string; windowHours?: number; eventLimit?: number } = {}) {
   return useQuery({
     queryKey: ["syncMonitor", params],
-    queryFn: () => api.get<SyncMonitorResponse>(`/api/v1/sync/status${qs(params)}`),
+    queryFn: () => kernel.syncStatus({
+      query: params as Parameters<typeof kernel.syncStatus>[0]["query"],
+    }),
     refetchInterval: 10_000,
   });
 }
@@ -64,7 +59,7 @@ export function useSyncMonitor(params: { pageLabel?: string; windowHours?: numbe
 export function useSyncOverview() {
   return useQuery({
     queryKey: ["syncBlocks", "overview"],
-    queryFn: () => api.get<SyncOverviewResponse>("/api/v1/sync/overview"),
+    queryFn: () => kernel.syncOverview(),
     refetchInterval: 10_000,
   });
 }
@@ -72,10 +67,7 @@ export function useSyncOverview() {
 export function usePageSyncBlocks(pageLabel: string) {
   return useQuery({
     queryKey: ["syncBlocks", "page", pageLabel],
-    queryFn: () =>
-      api.get<PageSyncBlocksResponse>(
-        `/api/v1/pages/${encodeURIComponent(pageLabel)}/sync/blocks`,
-      ),
+    queryFn: () => kernel.pageSyncBlocks({ params: { pageLabel } }),
     refetchInterval: 10_000,
     enabled: !!pageLabel,
   });
@@ -84,10 +76,7 @@ export function usePageSyncBlocks(pageLabel: string) {
 export function usePageMessagesBlock(pageLabel: string) {
   return useQuery({
     queryKey: ["syncBlocks", "page", pageLabel, "messages"],
-    queryFn: () =>
-      api.get<PageMessagesBlockResponse>(
-        `/api/v1/pages/${encodeURIComponent(pageLabel)}/sync/blocks/messages`,
-      ),
+    queryFn: () => kernel.pageMessagesBlock({ params: { pageLabel } }),
     refetchInterval: 10_000,
     enabled: !!pageLabel,
   });
@@ -98,7 +87,7 @@ export function useAdminSyncBlockTrigger() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
-      api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/trigger", body),
+      kernel.adminSyncBlockTrigger({ body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
       void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
@@ -113,7 +102,7 @@ export function useAdminSyncBlockPause() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
-      api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/pause", body),
+      kernel.adminSyncBlockPause({ body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
       void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
@@ -128,7 +117,7 @@ export function useAdminSyncBlockResume() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
-      api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/resume", body),
+      kernel.adminSyncBlockResume({ body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
       void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
@@ -143,7 +132,7 @@ export function useAdminSyncBlockReset() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
-      api.post<AdminSyncBlockResponse>("/api/v1/admin/sync/blocks/reset", body),
+      kernel.adminSyncBlockReset({ body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
       void qc.invalidateQueries({ queryKey: ["syncMonitor"] });
@@ -158,7 +147,7 @@ export function useAdminUpdateCredentials(pageLabel: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: UpdateCredentialsBody) =>
-      api.patch(`/api/v1/admin/pages/${pathSegment(pageLabel)}/credentials`, body),
+      kernel.adminUpdateCredentials({ params: { pageLabel }, body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
       void qc.invalidateQueries({ queryKey: ["overview"] });

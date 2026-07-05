@@ -12,6 +12,7 @@ export default defineConfig({
       "@": resolve(__dirname, "src"),
       "@agency_hub_core/shared": resolve(__dirname, "../../packages/shared/src/browser.ts"),
       "@agency_hub_core/contracts": resolve(__dirname, "../../packages/contracts/src/index.ts"),
+      "@kernel/sdk": resolve(__dirname, "../../packages/sdk/src/index.ts"),
     },
   },
   server: {

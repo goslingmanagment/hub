@@ -3,18 +3,14 @@ import type {
   AdminAssignPageBody,
   AdminCreateUserBody,
   AdminIssueApiKeyBody,
-  AdminUser,
-  ApiKeyItem,
-  AuthUser,
-  IssuedApiKeyResponse,
 } from "@agency_hub_core/contracts";
-import { api } from "./client.js";
-import { pathSegment } from "@/lib/path";
+
+import { kernel } from "./sdk.js";
 
 export function useAdminUsers() {
   return useQuery({
     queryKey: ["admin", "users"],
-    queryFn: () => api.get<AdminUser[]>("/api/v1/admin/users"),
+    queryFn: () => kernel.adminListUsers(),
   });
 }
 
@@ -23,7 +19,7 @@ export function useAdminCreateUser() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminCreateUserBody) =>
-      api.post<AuthUser>("/api/v1/admin/users", body),
+      kernel.adminCreateUser({ body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 }
@@ -31,7 +27,7 @@ export function useAdminCreateUser() {
 export function useAdminUserApiKeys(username: string, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "users", username, "apiKeys"],
-    queryFn: () => api.get<ApiKeyItem[]>(`/api/v1/admin/users/${pathSegment(username)}/api-keys`),
+    queryFn: () => kernel.adminListApiKeys({ params: { username } }),
     enabled: options.enabled ?? true,
   });
 }
@@ -41,7 +37,7 @@ export function useAdminIssueApiKey(username: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminIssueApiKeyBody) =>
-      api.post<IssuedApiKeyResponse>(`/api/v1/admin/users/${pathSegment(username)}/api-keys`, body),
+      kernel.adminIssueApiKey({ params: { username }, body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       qc.invalidateQueries({ queryKey: ["admin", "users", username, "apiKeys"] });
@@ -54,7 +50,7 @@ export function useAdminRevokeApiKeys(username: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () =>
-      api.del<{ revokedCount: number }>(`/api/v1/admin/users/${pathSegment(username)}/api-keys`),
+      kernel.adminRevokeApiKeys({ params: { username } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       qc.invalidateQueries({ queryKey: ["admin", "users", username, "apiKeys"] });
@@ -67,7 +63,7 @@ export function useAdminAssignPage(username: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminAssignPageBody) =>
-      api.post<AuthUser>(`/api/v1/admin/users/${pathSegment(username)}/pages`, body),
+      kernel.adminAssignPage({ params: { username }, body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 }
@@ -77,7 +73,7 @@ export function useAdminUnassignPage(username: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (pageLabel: string) =>
-      api.del<{ ok: true }>(`/api/v1/admin/users/${pathSegment(username)}/pages/${pathSegment(pageLabel)}`),
+      kernel.adminUnassignPage({ params: { username, pageLabel } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 }

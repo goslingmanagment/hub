@@ -1,16 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import type {
-  OverviewGrowthResponse,
-  OverviewResponse,
-  OverviewRevenueResponse,
-  RevenueDailyResponse,
-} from "@agency_hub_core/contracts";
-import { api } from "./client.js";
+import type { RevenueDailyQuery, RevenueQuery } from "@agency_hub_core/contracts";
+
+import { kernel } from "./sdk.js";
 
 export function useOverview() {
   return useQuery({
     queryKey: ["overview"],
-    queryFn: () => api.get<OverviewResponse>("/api/v1/overview"),
+    queryFn: () => kernel.overview(),
   });
 }
 
@@ -18,7 +14,7 @@ export function useOverviewRevenue(period: string) {
   return useQuery({
     queryKey: ["overviewRevenue", period],
     queryFn: () =>
-      api.get<OverviewRevenueResponse>(`/api/v1/overview/revenue?period=${period}`),
+      kernel.overviewRevenue({ query: { period } as RevenueQuery }),
   });
 }
 
@@ -26,7 +22,7 @@ export function useOverviewGrowth(period: string) {
   return useQuery({
     queryKey: ["overviewGrowth", period],
     queryFn: () =>
-      api.get<OverviewGrowthResponse>(`/api/v1/overview/growth?period=${period}`),
+      kernel.overviewGrowth({ query: { period } as RevenueQuery }),
     placeholderData: (previousData) => previousData,
   });
 }
@@ -35,7 +31,6 @@ export function useOverviewRevenueDaily(period = "30d") {
   return useQuery({
     queryKey: ["overviewRevenueDaily", period],
     queryFn: () =>
-      api.get<RevenueDailyResponse>(`/api/v1/overview/revenue/daily?period=${period}`),
+      kernel.overviewRevenueDaily({ query: { period } as RevenueDailyQuery }),
   });
 }
-

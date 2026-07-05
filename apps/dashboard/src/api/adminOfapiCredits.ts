@@ -1,17 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import type {
-  OfapiCreditsDailyResponse,
-  OfapiCreditsLedgerResponse,
-  OfapiCreditsSummaryResponse,
-  OfapiSpendComparisonResponse,
-} from "@agency_hub_core/contracts";
-import { api } from "./client.js";
-import { qs } from "./utils.js";
+
+import { kernel } from "./sdk.js";
 
 export function useAdminOfapiCreditsSummary() {
   return useQuery({
     queryKey: ["admin", "ofapi-credits", "summary"],
-    queryFn: () => api.get<OfapiCreditsSummaryResponse>("/api/v1/admin/ofapi/credits/summary"),
+    queryFn: () => kernel.adminOfapiCreditsSummary(),
     refetchInterval: 60_000,
   });
 }
@@ -19,16 +13,14 @@ export function useAdminOfapiCreditsSummary() {
 export function useAdminOfapiSpendComparison(params: { days: number; sampleLimit: number }) {
   return useQuery({
     queryKey: ["admin", "ofapi-spend-comparison", params],
-    queryFn: () => api.get<OfapiSpendComparisonResponse>(
-      `/api/v1/admin/ofapi/spend/comparison${qs({ ...params })}`,
-    ),
+    queryFn: () => kernel.adminOfapiSpendComparison({ query: params }),
   });
 }
 
 export function useAdminOfapiCreditsDaily(days: number) {
   return useQuery({
     queryKey: ["admin", "ofapi-credits", "daily", days],
-    queryFn: () => api.get<OfapiCreditsDailyResponse>(`/api/v1/admin/ofapi/credits/daily${qs({ days })}`),
+    queryFn: () => kernel.adminOfapiCreditsDaily({ query: { days } }),
   });
 }
 
@@ -45,7 +37,9 @@ export interface AdminOfapiCreditsLedgerParams {
 export function useAdminOfapiCreditsLedger(params: AdminOfapiCreditsLedgerParams) {
   return useQuery({
     queryKey: ["admin", "ofapi-credits", "ledger", params],
-    queryFn: () => api.get<OfapiCreditsLedgerResponse>(`/api/v1/admin/ofapi/credits/ledger${qs({ ...params })}`),
+    queryFn: () => kernel.adminOfapiCreditsLedger({
+      query: params as Parameters<typeof kernel.adminOfapiCreditsLedger>[0]["query"],
+    }),
   });
 }
 
@@ -57,10 +51,6 @@ export interface OfapiCreditsLedgerCsvParams {
   to?: string;
 }
 
-export function ofapiCreditsLedgerCsvUrl(params: OfapiCreditsLedgerCsvParams) {
-  return `/api/v1/admin/ofapi/credits/ledger.csv${qs({ ...params })}`;
-}
-
 export interface OfapiCreditsLedgerCsvResult {
   rowCount: number;
   // True when the export hit the server's row cap and is therefore incomplete.
@@ -68,16 +58,18 @@ export interface OfapiCreditsLedgerCsvResult {
 }
 
 /**
- * Streams the filtered ledger as a CSV download. The shared `api` client always
- * JSON-parses, so this goes through a raw cookie-authenticated fetch → blob →
- * temporary anchor, which keeps the SPA's session cookie and honours the
+ * Streams the filtered ledger as a CSV download through the SDK's raw()
+ * escape hatch (the CSV export is on the SDK exclusion list — no JSON, no
+ * validation), then hands the blob to a temporary anchor, honouring the
  * server's Content-Disposition filename. Returns the server's row count and
  * truncation flag so the caller can warn when a capped extract is incomplete.
  */
 export async function downloadOfapiCreditsLedgerCsv(
   params: OfapiCreditsLedgerCsvParams,
 ): Promise<OfapiCreditsLedgerCsvResult> {
-  const response = await fetch(ofapiCreditsLedgerCsvUrl(params), { credentials: "include" });
+  const response = await kernel.raw("adminOfapiCreditsLedgerCsv", {
+    query: params as Record<string, unknown>,
+  });
   if (!response.ok) {
     throw new Error(`Export failed (HTTP ${response.status})`);
   }

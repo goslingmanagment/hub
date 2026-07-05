@@ -112,8 +112,12 @@ export interface KernelClientOptions {
   /** Extra headers on every request (tests use this to carry a session cookie). */
   headers?: Record<string, string>;
   fetch?: typeof fetch;
-  /** Called on every 401/403 before the error is thrown (logout hooks). */
-  onAuthError?: (error: KernelApiError) => void;
+  /**
+   * Called on every 401/403 before the error is thrown (logout hooks). The
+   * second argument names the operation (null for raw/stream calls), so a
+   * failed `login` can be told apart from an expired session.
+   */
+  onAuthError?: (error: KernelApiError, operation: KernelOperationKey | null) => void;
 }
 
 function buildPath(template: string, params: Record<string, string | number> | undefined) {
@@ -196,6 +200,7 @@ async function throwForErrorResponse(
   def: KernelOperationDef,
   response: Response,
   options: KernelClientOptions,
+  operation: KernelOperationKey | null,
 ): Promise<never> {
   let body: unknown = null;
   const text = await response.text();
@@ -215,7 +220,7 @@ async function throwForErrorResponse(
     body,
   );
   if (error.category === "auth") {
-    options.onAuthError?.(error);
+    options.onAuthError?.(error, operation);
   }
   throw error;
 }
@@ -234,7 +239,7 @@ export function createKernelClient(
     const def = operations[key];
     const response = await executeKernelRequest({ def, options, ...input });
     if (!response.ok) {
-      await throwForErrorResponse(def, response, options);
+      await throwForErrorResponse(def, response, options, key);
     }
 
     const responseSchemas = (routeSchemas[key] as { response?: Record<number, z.ZodType> }).response;

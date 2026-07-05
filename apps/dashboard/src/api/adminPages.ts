@@ -1,24 +1,14 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
-  AdminCreatePageResponse,
-  AdminModelListItem,
-  AdminUpdatePageResponse,
-  AssignedPage,
   CreateModelBody,
-  CreateModelResponse,
   CreatePageBody,
-  DeletedResponse,
-  ModelListItem,
   TestProxyBody,
-  TestProxyResponse,
   UpdateModelBody,
   UpdatePageBody,
   VerifyCredentialsBody,
-  VerifyCredentialsResponse,
-  VerifyPageResponse,
 } from "@agency_hub_core/contracts";
-import { api } from "./client.js";
-import { pathSegment } from "@/lib/path";
+
+import { kernel } from "./sdk.js";
 
 function invalidateAdminCatalog(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ["admin", "models"] });
@@ -31,7 +21,7 @@ function invalidateAdminCatalog(qc: QueryClient) {
 export function useAdminModels() {
   return useQuery({
     queryKey: ["admin", "models"],
-    queryFn: () => api.get<AdminModelListItem[]>("/api/v1/admin/models"),
+    queryFn: () => kernel.adminModels(),
   });
 }
 
@@ -40,7 +30,7 @@ export function useAdminCreateModel() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: CreateModelBody) =>
-      api.post<CreateModelResponse>("/api/v1/admin/models", body),
+      kernel.adminCreateModel({ body }),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -50,7 +40,7 @@ export function useAdminUpdateModel(modelSlug: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: UpdateModelBody) =>
-      api.patch<CreateModelResponse>(`/api/v1/admin/models/${pathSegment(modelSlug)}`, body),
+      kernel.adminUpdateModel({ params: { modelSlug }, body }),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -62,8 +52,9 @@ export function useAdminReorderModels() {
     mutationFn: (updates: { slug: string; sortOrder: number }[]) =>
       Promise.all(
         updates.map((update) =>
-          api.patch<CreateModelResponse>(`/api/v1/admin/models/${pathSegment(update.slug)}`, {
-            sortOrder: update.sortOrder,
+          kernel.adminUpdateModel({
+            params: { modelSlug: update.slug },
+            body: { sortOrder: update.sortOrder },
           }),
         ),
       ),
@@ -76,7 +67,7 @@ export function useAdminDeleteModel(modelSlug: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () =>
-      api.del<DeletedResponse>(`/api/v1/admin/models/${pathSegment(modelSlug)}`),
+      kernel.adminDeleteModel({ params: { modelSlug } }),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -84,7 +75,7 @@ export function useAdminDeleteModel(modelSlug: string) {
 export function useAdminPages() {
   return useQuery({
     queryKey: ["admin", "pages"],
-    queryFn: () => api.get<AssignedPage[]>("/api/v1/admin/pages"),
+    queryFn: () => kernel.adminPages(),
   });
 }
 
@@ -93,7 +84,7 @@ export function useAdminCreatePage() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: CreatePageBody) =>
-      api.post<AdminCreatePageResponse>("/api/v1/admin/pages", body),
+      kernel.adminCreatePage({ body }),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -103,7 +94,7 @@ export function useAdminUpdatePage(pageLabel: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: UpdatePageBody) =>
-      api.patch<AdminUpdatePageResponse>(`/api/v1/admin/pages/${pathSegment(pageLabel)}`, body),
+      kernel.adminUpdatePage({ params: { pageLabel }, body }),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -113,7 +104,7 @@ export function useAdminDeletePage(pageLabel: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () =>
-      api.del<DeletedResponse>(`/api/v1/admin/pages/${pathSegment(pageLabel)}`),
+      kernel.adminDeletePage({ params: { pageLabel } }),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }
@@ -122,7 +113,7 @@ export function useAdminVerifyCredentials() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: VerifyCredentialsBody) =>
-      api.post<VerifyCredentialsResponse>("/api/v1/admin/credentials/verify", body),
+      kernel.adminVerifyCredentials({ body }),
   });
 }
 
@@ -130,7 +121,7 @@ export function useAdminTestProxy() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: TestProxyBody) =>
-      api.post<TestProxyResponse>("/api/v1/admin/proxy/test", body),
+      kernel.adminTestProxy({ body }),
   });
 }
 
@@ -139,7 +130,7 @@ export function useAdminVerifyPage(pageLabel: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () =>
-      api.post<VerifyPageResponse>(`/api/v1/admin/pages/${pathSegment(pageLabel)}/verify`),
+      kernel.adminVerifyPage({ params: { pageLabel } }),
     onSuccess: () => invalidateAdminCatalog(qc),
   });
 }

@@ -1,19 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  ConfigClearResponse,
-  ConfigStagedBody,
-  ConfigStagedResponse,
-  ConfigUpdateBody,
-  ConfigUpdateResponse,
-  ConfigViewResponse,
-} from "@agency_hub_core/contracts";
-import { api } from "./client.js";
-import { qs } from "./utils.js";
+import type { ConfigStagedBody, ConfigUpdateBody } from "@agency_hub_core/contracts";
+
+import { kernel } from "./sdk.js";
 
 export function useAdminConfig() {
   return useQuery({
     queryKey: ["admin", "config"],
-    queryFn: () => api.get<ConfigViewResponse>("/api/v1/admin/config"),
+    queryFn: () => kernel.adminConfig(),
     refetchInterval: 30_000,
   });
 }
@@ -23,7 +16,7 @@ export function useUpdateConfig() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: ConfigUpdateBody) =>
-      api.patch<ConfigUpdateResponse>("/api/v1/admin/config", body),
+      kernel.adminConfigUpdate({ body }),
     // Refetch after success AND failure: a 409 means the row changed elsewhere, so
     // the view (and overrideVersion) must refresh for the message to be true and the
     // retry to send the right expectedVersion.
@@ -36,7 +29,7 @@ export function useStagedConfig() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: ConfigStagedBody) =>
-      api.patch<ConfigStagedResponse>("/api/v1/admin/config/staged", body),
+      kernel.adminConfigStaged({ body }),
     // Refetch after success AND failure: a 409 means the override row changed elsewhere
     // (refresh overrideVersion for the retry), and a 400 (order/ack) leaves running +
     // desired untouched but a refetch keeps the gate honest against the latest heartbeat.
@@ -57,9 +50,7 @@ export function useClearConfig() {
       expectedVersion?: number;
       note?: string;
     }) =>
-      api.del<ConfigClearResponse>(
-        `/api/v1/admin/config/${encodeURIComponent(key)}${qs({ expectedVersion, note })}`,
-      ),
+      kernel.adminConfigClear({ params: { key }, query: { expectedVersion, note } }),
     // Refetch after success AND failure: a 409 means the row changed elsewhere, so
     // the view (and overrideVersion) must refresh for the message to be true and the
     // retry to send the right expectedVersion.

@@ -7,7 +7,7 @@ import {
   useWorkboardSnooze,
   useWorkboardUnsnooze,
 } from "@/api/queries";
-import { ApiError } from "@/api/client";
+import { KernelApiError } from "@/api/sdk";
 import { PresencePanel } from "@/components/page/workboard/PresencePanel";
 import { WorkboardCard } from "@/components/page/workboard/WorkboardCard";
 import { WorkboardCompactRow } from "@/components/page/workboard/WorkboardCompactRow";
@@ -398,7 +398,7 @@ export function WorkboardPage() {
   }
 
   if (isError && !data) {
-    const isNotFound = error instanceof ApiError && error.status === 404;
+    const isNotFound = error instanceof KernelApiError && error.status === 404;
     return (
       <StatusPanel
         title={isNotFound ? "Workboard недоступен" : "Ошибка загрузки"}

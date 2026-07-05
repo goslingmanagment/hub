@@ -1,17 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
-  WorkboardPresenceResponse,
-  WorkboardResponse,
-  WorkboardSnoozeResponse,
-  WorkboardV2AiClassifyResponse,
-  WorkboardV2AiReport,
   WorkboardV2AiRunsResponse,
   WorkboardV2AiSettingsBody,
-  WorkboardV2ListsResponse,
-  WorkboardV2Response,
 } from "@agency_hub_core/contracts";
-import { api } from "./client.js";
-import { pathSegment } from "@/lib/path";
+
+import { kernel } from "./sdk.js";
 
 export type WorkboardV2Tab = "subscribers" | "spenders" | "fresh_mass" | "old_mass" | "service";
 
@@ -21,7 +14,7 @@ export function useWorkboard(
 ) {
   return useQuery({
     queryKey: ["workboard", pageLabel],
-    queryFn: () => api.get<WorkboardResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard`),
+    queryFn: () => kernel.workboard({ params: { pageLabel } }),
     enabled: options.enabled ?? true,
   });
 }
@@ -32,7 +25,7 @@ export function useWorkboardPresence(
 ) {
   return useQuery({
     queryKey: ["workboard", "presence", pageLabel],
-    queryFn: () => api.get<WorkboardPresenceResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/presence`),
+    queryFn: () => kernel.workboardPresence({ params: { pageLabel } }),
     enabled: options.enabled ?? true,
   });
 }
@@ -41,7 +34,10 @@ export function useWorkboardSnooze(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { fanId: number; days: number }) =>
-      api.post<WorkboardSnoozeResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/snooze`, body),
+      kernel.workboardSnooze({
+        params: { pageLabel },
+        body: body as Parameters<typeof kernel.workboardSnooze>[0]["body"],
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard", pageLabel] });
     },
@@ -52,7 +48,7 @@ export function useWorkboardUnsnooze(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (fanId: number) =>
-      api.del<{ ok: true }>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/snooze/${fanId}`),
+      kernel.workboardUnsnooze({ params: { pageLabel, fanId } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard", pageLabel] });
     },
@@ -66,12 +62,14 @@ export function useWorkboardV2(
   params: { tab: WorkboardV2Tab; status?: string[]; limit?: number; offset?: number },
   options: { enabled?: boolean } = {},
 ) {
-  const query = new URLSearchParams({ tab: params.tab });
-  if (params.status && params.status.length > 0) {
-    query.set("status", params.status.join(","));
-  }
-  if (params.limit != null) query.set("limit", String(params.limit));
-  if (params.offset != null) query.set("offset", String(params.offset));
+  // The wire shape keeps the comma-joined single `status` param the previous
+  // client sent (the schema splits it server-side).
+  const query = {
+    tab: params.tab,
+    status: params.status && params.status.length > 0 ? params.status.join(",") : undefined,
+    limit: params.limit ?? undefined,
+    offset: params.offset ?? undefined,
+  };
 
   return useQuery({
     queryKey: [
@@ -83,9 +81,10 @@ export function useWorkboardV2(
       params.offset ?? 0,
     ],
     queryFn: () =>
-      api.get<WorkboardV2Response>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2?${query.toString()}`,
-      ),
+      kernel.workboardV2({
+        params: { pageLabel },
+        query: query as Parameters<typeof kernel.workboardV2>[0]["query"],
+      }),
     enabled: options.enabled ?? true,
   });
 }
@@ -99,10 +98,7 @@ export function useWorkboardV2Lists(
 ) {
   return useQuery({
     queryKey: ["workboard-v2", pageLabel, "lists"],
-    queryFn: () =>
-      api.get<WorkboardV2ListsResponse>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/lists`,
-      ),
+    queryFn: () => kernel.workboardV2Lists({ params: { pageLabel } }),
     enabled: options.enabled ?? true,
   });
 }
@@ -111,10 +107,7 @@ export function useWorkboardV2Contact(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { fanId: number; action?: "opened" | "handled" | "snoozed"; wasProductive?: boolean }) =>
-      api.post<{ ok: true; fanId: number }>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/contact`,
-        body,
-      ),
+      kernel.workboardV2Contact({ params: { pageLabel }, body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
@@ -125,9 +118,7 @@ export function useWorkboardV2Recompute(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () =>
-      api.post<{ ok: true; evaluated: number }>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/recompute`,
-      ),
+      kernel.workboardV2Recompute({ params: { pageLabel } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
@@ -138,10 +129,10 @@ export function useWorkboardV2Snooze(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { fanId: number; days: number }) =>
-      api.post<{ ok: true; fanId: number; snoozedUntil: string | null }>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/snooze`,
-        body,
-      ),
+      kernel.workboardV2Snooze({
+        params: { pageLabel },
+        body: body as Parameters<typeof kernel.workboardV2Snooze>[0]["body"],
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
@@ -152,7 +143,7 @@ export function useWorkboardV2Unsnooze(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (fanId: number) =>
-      api.del<{ ok: true; fanId: number }>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/snooze/${fanId}`),
+      kernel.workboardV2Unsnooze({ params: { pageLabel, fanId } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
@@ -163,7 +154,7 @@ export function useWorkboardV2UndoContact(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (fanId: number) =>
-      api.del<{ ok: true; fanId: number }>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/contact/${fanId}`),
+      kernel.workboardV2UndoContact({ params: { pageLabel, fanId } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
     },
@@ -178,8 +169,7 @@ export function useWorkboardV2Ai(
 ) {
   return useQuery({
     queryKey: ["workboard-v2-ai", pageLabel],
-    queryFn: () =>
-      api.get<WorkboardV2AiReport>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/ai`),
+    queryFn: () => kernel.workboardV2Ai({ params: { pageLabel } }),
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
   });
@@ -189,7 +179,7 @@ export function useWorkboardV2AiSettings(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: WorkboardV2AiSettingsBody) =>
-      api.put<WorkboardV2AiReport>(`/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/ai/settings`, body),
+      kernel.workboardV2AiSettings({ params: { pageLabel }, body }),
     onSuccess: (data) => {
       qc.setQueryData(["workboard-v2-ai", pageLabel], data);
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
@@ -201,10 +191,7 @@ export function useWorkboardV2AiClassify(pageLabel: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { reclassify?: boolean }) =>
-      api.post<WorkboardV2AiClassifyResponse>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/workboard/v2/ai/classify`,
-        body,
-      ),
+      kernel.workboardV2AiClassify({ params: { pageLabel }, body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workboard-v2-ai", pageLabel] });
       qc.invalidateQueries({ queryKey: ["workboard-v2", pageLabel] });
@@ -223,7 +210,7 @@ export function useWorkboardV2AiRuns(
   const ri = options.refetchInterval;
   return useQuery({
     queryKey: ["workboard-v2-ai-runs"],
-    queryFn: () => api.get<WorkboardV2AiRunsResponse>(`/api/v1/workboard/ai/runs`),
+    queryFn: () => kernel.workboardV2AiRuns(),
     enabled: options.enabled ?? true,
     refetchInterval: typeof ri === "function" ? (query) => ri(query.state.data) : ri,
   });

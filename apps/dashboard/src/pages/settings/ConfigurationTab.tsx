@@ -8,7 +8,7 @@ import {
   useStagedConfig,
   useUpdateConfig,
 } from "@/api/adminConfig";
-import { ApiError } from "@/api/client";
+import { KernelApiError } from "@/api/sdk";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Tooltip } from "@/components/shared/Tooltip";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
@@ -208,7 +208,7 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
   const dirty = input.trim() !== seeded && input.trim() !== "";
   const pending = update.isPending || clear.isPending;
   const error = update.error ?? clear.error;
-  const isConflict = error instanceof ApiError && error.status === 409;
+  const isConflict = error instanceof KernelApiError && error.status === 409;
 
   function save() {
     update.mutate({
@@ -498,7 +498,7 @@ function StagedConfirmModal({
   // The dependents a disable also flips off (everything in the patch except this key).
   const alsoKeys = keys.filter((k) => k.key !== item.key);
   const error = staged.error;
-  const isConflict = error instanceof ApiError && error.status === 409;
+  const isConflict = error instanceof KernelApiError && error.status === 409;
 
   function submit() {
     if (!ack) return;

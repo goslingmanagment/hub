@@ -1,32 +1,13 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
-  CrossPageFanTransactionListResponse,
-  FanNoteResponse,
-  FanProfileDocument,
-  FanProfileResponse,
-  FanProfileVersionListResponse,
-  FanTransactionListResponse,
-  FollowerDailyResponse,
-  FollowerListResponse,
-  PageFanDetailResponse,
-  PageDeletedFansResponse,
-  PageRevenueResponse,
-  PageSpenderAutoListDetailResponse,
-  PageSpenderAutoListsResponse,
-  RevenueDailyResponse,
+  RevenueDailyQuery,
+  RevenueQuery,
   SpenderBatchBody,
   SpenderBatchResponse,
-  SpenderDetailResponse,
-  SpenderListResponse,
-  SpenderSeriesResponse,
-  SubscriberDailyResponse,
-  SubscriberListResponse,
-  TransactionListResponse,
 } from "@agency_hub_core/contracts";
-import { api } from "./client.js";
-import { qs } from "./utils.js";
-import { pathSegment } from "@/lib/path";
+
+import { kernel } from "./sdk.js";
 
 type QueryOptions = { enabled?: boolean };
 
@@ -34,7 +15,7 @@ export function usePageRevenue(pageLabel: string, period: string, options: Query
   return useQuery({
     queryKey: ["pageRevenue", pageLabel, period],
     queryFn: () =>
-      api.get<PageRevenueResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/revenue?period=${period}`),
+      kernel.pageRevenue({ params: { pageLabel }, query: { period } as RevenueQuery }),
     enabled: options.enabled ?? true,
   });
 }
@@ -43,7 +24,7 @@ export function usePageRevenueDaily(pageLabel: string, period = "30d", options: 
   return useQuery({
     queryKey: ["pageRevenueDaily", pageLabel, period],
     queryFn: () =>
-      api.get<RevenueDailyResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/revenue/daily?period=${period}`),
+      kernel.pageRevenueDaily({ params: { pageLabel }, query: { period } as RevenueDailyQuery }),
     enabled: options.enabled ?? true,
   });
 }
@@ -63,7 +44,7 @@ export function usePageSubscribers(
   return useQuery({
     queryKey: ["pageSubscribers", pageLabel, params],
     queryFn: () =>
-      api.get<SubscriberListResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/subscribers${qs(params)}`),
+      kernel.pageSubscribers({ params: { pageLabel }, query: params }),
     enabled: options.enabled ?? true,
   });
 }
@@ -72,7 +53,10 @@ export function usePageSubscribersDaily(pageLabel: string, period = "30d", optio
   return useQuery({
     queryKey: ["pageSubscribersDaily", pageLabel, period],
     queryFn: () =>
-      api.get<SubscriberDailyResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/subscribers/daily?period=${period}`),
+      kernel.pageSubscribersDaily({
+        params: { pageLabel },
+        query: { period } as Parameters<typeof kernel.pageSubscribersDaily>[0]["query"],
+      }),
     enabled: options.enabled ?? true,
   });
 }
@@ -92,7 +76,7 @@ export function usePageFollowers(
   return useQuery({
     queryKey: ["pageFollowers", pageLabel, params],
     queryFn: () =>
-      api.get<FollowerListResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/followers${qs(params)}`),
+      kernel.pageFollowers({ params: { pageLabel }, query: params }),
   });
 }
 
@@ -104,7 +88,10 @@ export function usePageFollowersDaily(
   return useQuery({
     queryKey: ["pageFollowersDaily", pageLabel, period],
     queryFn: () =>
-      api.get<FollowerDailyResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/followers/daily?period=${period}`),
+      kernel.pageFollowersDaily({
+        params: { pageLabel },
+        query: { period } as Parameters<typeof kernel.pageFollowersDaily>[0]["query"],
+      }),
     enabled: options.enabled ?? true,
   });
 }
@@ -117,7 +104,10 @@ export function usePageTransactions(
   return useQuery({
     queryKey: ["pageTransactions", pageLabel, params],
     queryFn: () =>
-      api.get<TransactionListResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/transactions${qs(params)}`),
+      kernel.pageTransactions({
+        params: { pageLabel },
+        query: params as Parameters<typeof kernel.pageTransactions>[0]["query"],
+      }),
     enabled: options.enabled ?? true,
   });
 }
@@ -134,7 +124,10 @@ export function usePageSpenderAutoLists(
   return useQuery({
     queryKey: ["pageSpenderAutoLists", pageLabel, params],
     queryFn: () =>
-      api.get<PageSpenderAutoListsResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/spender-autolists${qs(params)}`),
+      kernel.pageSpenderAutoLists({
+        params: { pageLabel },
+        query: params as Parameters<typeof kernel.pageSpenderAutoLists>[0]["query"],
+      }),
     enabled: options.enabled ?? true,
   });
 }
@@ -156,9 +149,10 @@ export function usePageSpenderAutoList(
   return useQuery({
     queryKey: ["pageSpenderAutoList", pageLabel, bucketKey, params],
     queryFn: () =>
-      api.get<PageSpenderAutoListDetailResponse>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/spender-autolists/${pathSegment(bucketKey)}${qs(params)}`,
-      ),
+      kernel.pageSpenderAutoListDetail({
+        params: { pageLabel, bucketKey } as Parameters<typeof kernel.pageSpenderAutoListDetail>[0]["params"],
+        query: params as Parameters<typeof kernel.pageSpenderAutoListDetail>[0]["query"],
+      }),
     enabled: options.enabled ?? true,
   });
 }
@@ -174,7 +168,7 @@ export function usePageDeletedFans(
   return useQuery({
     queryKey: ["pageDeletedFans", pageLabel, params],
     queryFn: () =>
-      api.get<PageDeletedFansResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/deleted-fans${qs(params)}`),
+      kernel.pageDeletedFans({ params: { pageLabel }, query: params }),
     enabled: options.enabled ?? true,
   });
 }
@@ -187,9 +181,10 @@ export function usePageFanTransactions(
   return useQuery({
     queryKey: ["pageFanTransactions", pageLabel, platformUserId, params],
     queryFn: () =>
-      api.get<FanTransactionListResponse>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/transactions${qs(params)}`,
-      ),
+      kernel.pageFanTransactions({
+        params: { pageLabel, platformUserId },
+        query: params,
+      }),
     enabled: !!platformUserId,
   });
 }
@@ -202,9 +197,10 @@ export function useFanTransactions(
   return useQuery({
     queryKey: ["fanTransactions", platform, platformUserId, params],
     queryFn: () =>
-      api.get<CrossPageFanTransactionListResponse>(
-        `/api/v1/fans/${pathSegment(platform)}/${pathSegment(platformUserId)}/transactions${qs(params)}`,
-      ),
+      kernel.crossPageFanTransactions({
+        params: { platform, platformUserId } as Parameters<typeof kernel.crossPageFanTransactions>[0]["params"],
+        query: params,
+      }),
     enabled: !!platformUserId,
   });
 }
@@ -213,7 +209,7 @@ export function usePageFanDetail(pageLabel: string, platformUserId: string) {
   return useQuery({
     queryKey: ["pageFanDetail", pageLabel, platformUserId],
     queryFn: () =>
-      api.get<PageFanDetailResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}`),
+      kernel.pageFanDetail({ params: { pageLabel, platformUserId } }),
     enabled: !!platformUserId,
   });
 }
@@ -226,7 +222,7 @@ export function usePageFanProfile(
   return useQuery({
     queryKey: ["pageFanProfile", pageLabel, platformUserId],
     queryFn: () =>
-      api.get<FanProfileResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/profile`),
+      kernel.pageFanProfile({ params: { pageLabel, platformUserId } }),
     enabled: !!platformUserId && (options.enabled ?? true),
   });
 }
@@ -239,9 +235,7 @@ export function usePageFanProfileVersions(
   return useQuery({
     queryKey: ["pageFanProfileVersions", pageLabel, platformUserId],
     queryFn: () =>
-      api.get<FanProfileVersionListResponse>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/profile/versions`,
-      ),
+      kernel.pageFanProfileVersions({ params: { pageLabel, platformUserId } }),
     enabled: !!platformUserId && (options.enabled ?? true),
   });
 }
@@ -255,9 +249,9 @@ export function usePageFanProfileVersion(
   return useQuery({
     queryKey: ["pageFanProfileVersion", pageLabel, platformUserId, version],
     queryFn: () =>
-      api.get<FanProfileDocument>(
-        `/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/profile/versions/${version}`,
-      ),
+      kernel.pageFanProfileVersion({
+        params: { pageLabel, platformUserId, version: version! },
+      }),
     enabled: !!platformUserId && version !== null && (options.enabled ?? true),
   });
 }
@@ -267,7 +261,7 @@ export function useCreateFanNote(pageLabel: string, platformUserId: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: { body: string }) =>
-      api.post<FanNoteResponse>(`/api/v1/pages/${pathSegment(pageLabel)}/fans/${pathSegment(platformUserId)}/notes`, body),
+      kernel.createFanNote({ params: { pageLabel, platformUserId }, body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pageFanDetail", pageLabel, platformUserId] });
     },
@@ -288,7 +282,9 @@ export function useSpenders(params: {
 }, options: QueryOptions = {}) {
   return useQuery({
     queryKey: ["spenders", params],
-    queryFn: () => api.get<SpenderListResponse>(`/api/v2/spenders${qs(params)}`),
+    queryFn: () => kernel.spenders({
+      query: params as Parameters<typeof kernel.spenders>[0]["query"],
+    }),
     enabled: options.enabled ?? true,
   });
 }
@@ -301,7 +297,10 @@ export function useSpenderDetail(
   return useQuery({
     queryKey: ["spenderDetail", platform, platformUserId, params],
     queryFn: () =>
-      api.get<SpenderDetailResponse>(`/api/v2/spenders/${pathSegment(platform)}/${pathSegment(platformUserId)}${qs(params)}`),
+      kernel.spenderDetail({
+        params: { platform, platformUserId } as Parameters<typeof kernel.spenderDetail>[0]["params"],
+        query: params as Parameters<typeof kernel.spenderDetail>[0]["query"],
+      }),
     enabled: !!platformUserId,
   });
 }
@@ -315,9 +314,10 @@ export function useSpenderSeries(
   return useQuery({
     queryKey: ["spenderSeries", platform, platformUserId, params],
     queryFn: () =>
-      api.get<SpenderSeriesResponse>(
-        `/api/v2/spenders/${pathSegment(platform)}/${pathSegment(platformUserId)}/series${qs(params)}`,
-      ),
+      kernel.spenderSeries({
+        params: { platform, platformUserId } as Parameters<typeof kernel.spenderSeries>[0]["params"],
+        query: params as Parameters<typeof kernel.spenderSeries>[0]["query"],
+      }),
     enabled: (options.enabled ?? true) && !!platformUserId,
   });
 }
@@ -330,7 +330,7 @@ export function useSpenderBatch(body: SpenderBatchBody | null) {
   const queryKey = ["spenderBatch", requestFingerprint] as const;
   const query = useQuery({
     queryKey,
-    queryFn: () => api.post<SpenderBatchResponse>("/api/v2/spenders:batch", body!),
+    queryFn: () => kernel.spenderBatch({ body: body! }),
     enabled: false,
     retry: false,
   });

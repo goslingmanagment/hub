@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@agency_hub_core/contracts": path.resolve("packages/contracts/src/index.ts"),
+      "@kernel/sdk": path.resolve("packages/sdk/src/index.ts"),
       "@agency_hub_core/shared": path.resolve("packages/shared/src/index.ts"),
       "@agency_hub_core/db": path.resolve("packages/db/src/index.ts"),
       "@agency_hub_core/fansly": path.resolve("packages/fansly/src/index.ts"),

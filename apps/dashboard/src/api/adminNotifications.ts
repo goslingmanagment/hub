@@ -1,22 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  NotificationsDiscoverChatsBody,
-  NotificationsDiscoverChatsResponse,
-  NotificationsIncidentsResponse,
-  NotificationsReportHistoryResponse,
-  NotificationsReportPreviewResponse,
-  NotificationsReportSendResponse,
-  NotificationsSettingsResponse,
-  NotificationsSettingsUpdateBody,
-  NotificationsTestMessageResponse,
-} from "@agency_hub_core/contracts";
-import { api } from "./client.js";
-import { qs } from "./utils.js";
+import type { NotificationsDiscoverChatsBody, NotificationsSettingsUpdateBody } from "@agency_hub_core/contracts";
+
+import { kernel } from "./sdk.js";
 
 export function useNotificationsSettings() {
   return useQuery({
     queryKey: ["notifications", "settings"],
-    queryFn: () => api.get<NotificationsSettingsResponse>("/api/v1/admin/notifications/settings"),
+    queryFn: () => kernel.notificationsSettings(),
   });
 }
 
@@ -25,7 +15,7 @@ export function useUpdateNotificationsSettings() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: NotificationsSettingsUpdateBody) =>
-      api.patch<NotificationsSettingsResponse>("/api/v1/admin/notifications/settings", body),
+      kernel.notificationsSettingsUpdate({ body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications", "settings"] }),
   });
 }
@@ -34,7 +24,7 @@ export function useSendTestMessage() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
-    mutationFn: () => api.post<NotificationsTestMessageResponse>("/api/v1/admin/notifications/test"),
+    mutationFn: () => kernel.notificationsTestMessage(),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications", "settings"] }),
   });
 }
@@ -43,7 +33,7 @@ export function useDiscoverTelegramChats() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: NotificationsDiscoverChatsBody) =>
-      api.post<NotificationsDiscoverChatsResponse>("/api/v1/admin/notifications/discover-chats", body),
+      kernel.notificationsDiscoverChats({ body }),
   });
 }
 
@@ -56,9 +46,9 @@ export function useNotificationIncidents(params: {
 } = {}) {
   return useQuery({
     queryKey: ["notifications", "incidents", params],
-    queryFn: () => api.get<NotificationsIncidentsResponse>(
-      `/api/v1/admin/notifications/incidents${qs(params)}`,
-    ),
+    queryFn: () => kernel.notificationsIncidents({
+      query: params as Parameters<typeof kernel.notificationsIncidents>[0]["query"],
+    }),
     refetchInterval: 30_000,
   });
 }
@@ -68,7 +58,7 @@ export function useResolveIncident() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (incidentId: number) =>
-      api.post(`/api/v1/admin/notifications/incidents/${incidentId}/resolve`),
+      kernel.notificationsResolveIncident({ params: { incidentId } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications", "incidents"] }),
   });
 }
@@ -76,7 +66,7 @@ export function useResolveIncident() {
 export function useReportPreview() {
   return useQuery({
     queryKey: ["notifications", "reportPreview"],
-    queryFn: () => api.get<NotificationsReportPreviewResponse>("/api/v1/admin/notifications/reports/preview"),
+    queryFn: () => kernel.notificationsReportPreview(),
     enabled: false,
   });
 }
@@ -85,7 +75,7 @@ export function useSendReport() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
-    mutationFn: () => api.post<NotificationsReportSendResponse>("/api/v1/admin/notifications/reports/send"),
+    mutationFn: () => kernel.notificationsReportSend(),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications", "reportHistory"] }),
   });
 }
@@ -93,7 +83,6 @@ export function useSendReport() {
 export function useReportHistory() {
   return useQuery({
     queryKey: ["notifications", "reportHistory"],
-    queryFn: () => api.get<NotificationsReportHistoryResponse>("/api/v1/admin/notifications/reports/history"),
+    queryFn: () => kernel.notificationsReportHistory(),
   });
 }
-
