@@ -2127,3 +2127,91 @@ identity-grants attribution, api.integration, ofapi-presence).
 Exit (Task 6 ops): deploy 0066 with the chain → staging latency harness
 (p95 event→board within the 5 s debounce) → two-user lease drill → one
 week of reconciler drift = 0 → prod 404 probe on the four v1 paths.
+
+## Stage 24 Built — Desktop Becomes a Pure Kernel Client (2026-07-06)
+
+**Decision #95:** Stage 24 built (§8 tasks 1–5) across BOTH repos in one
+session. Desktop branch `kernel/stage-24-sdk-stream-v2` (off the stage-12
+harvest tip): 8045339 → 0fbac28 → 05ad6de → 21ccd97 → 4b99d21 → 053ae24 →
+4de27b3. Core (chain branch): ddbae06 → 1f2511e → f0680ee → 5cf9ef5 →
+907315b. Suites after the last code commits: **core 188/1530**, **desktop
+772 (shared) + 1223 (app)**, full `pnpm check` green.
+
+Execution decisions and deviations:
+- **SDK distribution = compiled vendored bundle** (core
+  `scripts/vendor-sdk.mjs` → desktop `packages/kernel-sdk`, js+d.ts, zod the
+  only dependency, contract hash + source commit in kernel-sdk.vendor.json).
+  This implements Stage 20 Task 6's "bundle contracts runtime for external
+  installs": consumers see declarations only (skipLibCheck), so their
+  stricter compiler flags never re-litigate core source. Git-tag installs
+  (DP 10) replace the MECHANISM at the release step — the `@kernel/sdk`
+  import surface is identical. Core-side enablers: sdk-runtime optional
+  props gained `| undefined` (exactOptionalPropertyTypes-clean), the
+  network wrap now preserves abort/timeout in error.code, and the generated
+  index re-exports the runtime surface (routeSchemas, stream helpers,
+  cursor codec) that in-workspace consumers reached via contracts directly.
+- **Task 1 (SDK delegation).** The 971-line hand client became a delegation
+  layer behind the SAME HubClient interface/HubError taxonomy; per-timeout
+  memoized SDK clients over a bridged fetch (no shared timeout slot to
+  race); the HubFetch seam kept so every test fixture survived. Send-engine
+  suites passed UNCHANGED (the done-check). Two leniencies died as drift
+  now fails loudly: absent page fields / missing invalidCount are contract
+  violations; a payload echo on command responses is contract-stripped
+  rather than rejected (the desktop-state invariant holds by construction).
+  The desktop's stricter parseable-completedAt gate was re-added on top of
+  the contract element (core deliberately accepts and burns those as
+  invalidCount; the reporter must pre-wire-reject).
+- **Core-side v2 consumability (the #92 "payloads ride Stage 24" tail).**
+  Serve-time only, ledger rows byte-identical, all additive (OpenAPI doc
+  unchanged): frames carry fanRef/conversationRef/messageRef + accountRef
+  (pages.ofapi_account_id); message.received/sent frames whose source
+  observation is an OFAPI webhook message get `payload` = the SAME
+  normalized message the v1 fanout serves (normalizeOfapiSyncMessage over
+  the source observation; batched per replay page, order-preserving on the
+  live path) — without it every live message would cost a read-gateway
+  round trip (credits + latency = crown-jewel regression). **Typing rides a
+  new `event: ephemeral` lane** forwarded from the v1 fanout hub: never
+  ledgered (append-only is the wrong home for a 5-second hint), no id line,
+  never advances the cursor, live-only.
+- **Task 2 (stream v2).** hub-sync keeps its proven discipline verbatim
+  (parser/watchdog/backoff/auth-stop/handle-then-checkpoint) and swaps
+  protocol: opaque cursor under NEW key hubSync.v2Cursor (v1 lastEventId
+  retained for the fallback window); mapDomainFrame translates canonical
+  types onto the existing SyncEvent union so handleHubEvent is untouched;
+  unknown types checkpoint without emitting (forward-compat rule —
+  deliberate difference from v1's no-checkpoint on unknown). RECORDED
+  MAPPING FACTS: readStateChanged was always local-only (server never sent
+  it); subscriptions.renewed's v1 chat-list nudge has no ledger source —
+  accepted loss, polling cadence covers it. v2 gap recovery = fresh-cursor
+  handshake + per-account list-only head refresh through polling (the v2
+  snapshot carries no projection pages per #92; the spec's "same
+  page-and-apply structure" was written before that deviation).
+  hubSyncProtocol ('v2' default / 'v1' fallback) rides the settings file,
+  no UI, deleted after fleet confirmation.
+- **Task 3 (device tokens).** One-time sign-in in Settings → Hub: main
+  logs in, captures the session cookie off the raw response (no cookie jar
+  in the main process), issues the device token through the SDK client's
+  static-headers seam (label = machine name), stores keychain
+  hubDeviceToken, logs the one-time session out. resolveHubCredential
+  (device token preferred, chatter key fallback) feeds ALL hub consumers;
+  the config fingerprint includes the resolved credential so issuance
+  reconnects everything live.
+- **Task 4 (direct-read removal, DP 8).** ofapiReadTransport collapsed to
+  z.literal('hub') — readField's corrupt-row fallback IS the 'direct'
+  coercion (pinned by test). ofapiKey left SECRET_NAMES and the COMPILER
+  drove the full sweep (deeper than the spec's file list, recorded): Keys
+  UI row, key-test provider, settings patch route, keyMeta entry, dev env
+  seeding. deleteDecommissionedSecrets removes the keychain file on every
+  boot — version rollback cannot restore direct reads (intended). Grep
+  gate: 'direct' survives only in the AI transport enum (Stage 31) and the
+  frozen outbox migration DDL (third legitimate remnant, recorded).
+- **Task 5.** Break-glass + rollout runbook committed kernel-side
+  (docs/runbooks/desktop-hub-outage-break-glass.md): kernel-down ⇒ local
+  cache only; owner-issued temporary key never lands on chatter machines;
+  team-key rotation after fleet confirm; macOS manual-update note;
+  per-machine v1 flip instructions.
+
+Exit (Task 6 ops): staged release one machine → 48 h → fleet; production
+verification per §5 (zero desktop v1 SSE connections feeds Stage 25's
+entry, read-gateway volume per machine unchanged, grep gates, one-week
+chat-freshness watch); then kernel-side team OFAPI key rotation.
