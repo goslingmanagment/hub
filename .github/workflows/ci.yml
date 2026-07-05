@@ -32,6 +32,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Lint (Stage 19 module boundaries)
+        run: pnpm lint
+
       - name: Production build
         run: pnpm build:production
 
