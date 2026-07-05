@@ -1491,3 +1491,61 @@ pre-deploy baseline needs an active probe instead. The live `onlyfans/dm_message
 bug is now evidenced: pages lora-of/lora-vip-of have NEVER succeeded; ~400 attempts/24 h
 on `GET /:accountId/chats/:chatId/messages` (limit=100) all abort on the client-side
 timeout — diagnosis proceeding as non-stage work.
+
+## Stage 14 data-exports lane evaluation — verdict (2026-07-05)
+
+**Decision #80 (part 1, spec task 7):** POST /api/data-exports was priced on paper
+against the marker-walk REST cost using the vendored spec. Facts: creating an export
+costs 0 credits (status `calculating_credits`; scraping types charge after the fact,
+per-export dynamic pricing), and the flow is async (create → start → poll → download).
+The REST marker-walk baseline: the pages' ENTIRE current history is 685 + 2,170 rows
+≈ 29 pages of 100 ≈ ~30 credits for a full re-walk — a rounding error against the
+200/day backfill budget. Verdict: **do not adopt now.** The lane only wins if the
+depth probe (task 2) reveals a large pre-2025-09 tail that needs a bulk pull; the
+"one live probe" (create a transactions-type quote, never start it, delete) rides the
+same owner-gated ops window as the depth probe. Re-evaluate then; otherwise closed.
+
+## Stage 14 Green-Local — Built Same Day Its Dependencies Exited (2026-07-05)
+
+**Decision #80 (part 2):** Stage 14 build complete on `kernel/stage-14-ofapi-transactions`
+(off the Stage 17 tip — the chain stays linear 8→9→10→16→17→14; deploy still rides
+Stage 7's exit). **Suite 179 files / 1458 tests green.** Five slices:
+
+1. **Day-budget guard on the backfill CLI** (DP 2's binding condition): new 'backfill'
+   scope in reserveOfapiDayCredits (own counter pair, migration 0062), knob
+   `ofapiBackfillDailyCreditBudget` (default 200), reserve-before-every-request via the
+   shared createOfapiRestGuard; refusal stops the walk with an explicit
+   `budget_exhausted` stop reason ("resume tomorrow"; re-runs converge).
+2. **Explicit fee/VAT/tax capture** (migration 0063): verified live shape —
+   transactions.new carries fee_amount/vat_amount/tax_amount dollars-float
+   (gross − fee = net; VAT buyer-side). Carried contract → shadow row → truth ingest →
+   REST backfill; fill-only upsert semantics (an omitting writer never erases).
+3. **tips.received UNBLOCKED**: 3 natural webhooks landed 2026-06-30..07-03 — the
+   passport's condition. Two traps the prod probe settled: top-level `user_id` is the
+   CREATOR (constant across tippers per page) — the fan is `payload.user.id`; and tips
+   ALSO arrive as transactions.new (412 truth rows), so tips.received maps as an
+   estimated shadow SIGNAL (never ingest truth — no double-count). Legacy blocked rows
+   self-heal through the regular sweep (re-list filter + shared domain key). New benign
+   comparison status `tips_signal`. Follow-up unlocked, deferred: declaring
+   tips.received in the Stage 8 canonicalizer family (a version bump; ledger loses
+   nothing meanwhile).
+4. **Chargebacks via OFAPI**: daily 03:10 UTC reconcile behind
+   `ofapiChargebacksReconcileEnabled` (boot, default off). Collision trap solved:
+   payment.id is the ORIGINAL transaction's id → chargebacks write under
+   `{payment.id}:chargeback`, never demoting the settled row (CI-proven). Gross/net/
+   fees negated (OnlyMonster shape); writer-gate enforced per page; backfill budget lane.
+   First run walks full history, then a trailing 90-day window.
+5. **fan_identities OFAPI branch**: tracking/trial-link users via 4 new client methods
+   behind `ofapiFanIdentitiesSyncEnabled` (boot, default off), audience budget lane.
+   Recorded simplification: no cross-run cursor — links are few, upserts idempotent,
+   runs converge across cadence under the per-run request cap.
+
+Remaining (ops, not build): depth probe per page + conditional top-up (task 2, live
+credits — owner-gated window), the data-exports live quote (#80 part 1), deploy with
+the chain (migrations 0062+0063 additive-inert), §5 checks over a week.
+
+**Also fixed same session (live prod bug, outside the plan):** lora-of/lora-vip-of
+dm_messages NEVER succeeded — the chat-messages read is scraped server-side and scales
+with chat size, so the two largest conversations always exceeded the 15 s client abort
+(~400 futile attempts/24 h). Fix: 60 s slow-lane timeout for `ofapi_chat_messages` only
+(46216dd). Rides the chain deploy; cherry-pickable onto main if wanted sooner.
