@@ -1549,3 +1549,21 @@ dm_messages NEVER succeeded — the chat-messages read is scraped server-side an
 with chat size, so the two largest conversations always exceeded the 15 s client abort
 (~400 futile attempts/24 h). Fix: 60 s slow-lane timeout for `ofapi_chat_messages` only
 (46216dd). Rides the chain deploy; cherry-pickable onto main if wanted sooner.
+
+## Post-Stage-14 tail: tips canonicalizer v2 + Stage 4 fleet-verify gap (2026-07-05)
+
+**Decision #81:** Two same-day follow-ups on the chain (both ride the Monday deploy):
+
+1. **ofapi-webhook canonicalizer family v1→2** (23f8aed): tips.received declared from
+   the live-verified shape — its own `tip.received` event (dedup `tip:<notificationId>`,
+   fan = payload.user.id), distinct from `transaction.posted` so money is never counted
+   twice. The parse_version-0 tips observations waiting in prod become the sweep's first
+   real replay customers; NB the version bump re-scans the whole webhook corpus once
+   (dedup keys make it append-zero; paced at 20 pages/family/minute).
+2. **Stage 4 exit-gap fix** (9613c9e): the fleet-verify check ("x-client-version: 0.1.29
+   from every active machine in core logs") had NO data source — core never logged the
+   header (fastify doesn't serialize headers; no proxy in compose). New bounded observer
+   logs one "Desktop client version observed" line per (version, remote address); after
+   Monday's deploy the check greps those lines — ~5 days of fleet data before the 07-12
+   deadline. Interim fleet check today was therefore impossible by construction, not by
+   traffic.
