@@ -1733,3 +1733,65 @@ FINAL Monday tips: core kernel/stage-14-ofapi-transactions @ 9d30bb2 (+ this
 decision), desktop kernel/stage-12-harvest @ 3a1087f. Three-wave total: 18 defects
 after "test-green", 2 of them defects in earlier fixes — the verify-the-fix pass
 is not optional.
+
+## Stage 19 Session 1 — Declarative Authorization Landed, Extraction Next (2026-07-05)
+
+**Decision #87:** Stage 19 (API decomposition + declarative authorization) started on
+branch `kernel/stage-19-api-decomposition` off the Stage 14 chain tip (23e827c) —
+a SEPARATE branch, not part of Monday's merge chain. §8 tasks 1, 2, 4, 5 of 6 are
+done at 3cb9598; full suite after the last code commit: **186 files / 1504 tests
+green** (baseline 182/1474). What shipped:
+
+- **Auth vocabulary + verdict middleware (d189b67).** Every one of the 132
+  routeSchemas entries (spec said 129 — stages 10/11 added routes; the 129/128
+  off-by-one reconciled: the webhook registers inside its own plugin scope for the
+  buffer body parser, coverage is exactly 1:1) carries
+  `auth: {kind, roles?, scope?}` transcribed from the verified in-handler guards.
+  The verdict engine (`apps/runtime/src/api/auth-policy.ts`) REUSES the legacy
+  guard functions in try/catch — decision parity by construction, not
+  re-implementation. `AUTH_POLICY_ENFORCEMENT` env (default `log`, registry
+  editability NEVER, mirroring Stage 2's key): log mode records the verdict and
+  logs `would-deny`/`would-allow` divergence onResponse; enforce denies before any
+  handler. Deploying this is INERT.
+- **Contracts CI gate (same commit).** A contracts unit test fails any
+  routeSchemas entry without a valid declaration (zod-strict, self-tested), plus a
+  pinned review of the 37 `scope:"page"` keys. Linter-independent by design.
+- **OpenAPI security derived from auth (4b8af34).** `routeSecurityFromAuth` +
+  swagger-transform injection; the four hand-set security constants and their 128
+  per-entry lines are gone. SEVEN operations changed in
+  `reference/agency-hub.openapi.json`, all justified: the 4 Stage 2 revenue routes
+  stop advertising bearer keys production has refused since the enforce flip
+  (the doc was lying about the tightening), and `upsertFanProfile` + the two
+  profile-versions routes now admit both auth methods their handlers actually
+  accept (the doc was lying about acceptance). `api-types.ts` unchanged. The
+  `auth` block itself is stripped from the wire document.
+- **Policy table + introspection (same commit).** An onRoute collector exposes
+  `server.routePolicyTable` (method/path/routeKey/auth) — the same introspection
+  Stage 20's SDK generator needs; `pnpm contracts:generate` renders
+  `docs/generated/authorization-policy.md` (docs/ is untracked; the table
+  regenerates from any checkout).
+- **ESLint bootstrap (3cb9598).** First linter in core: flat config whose ONLY
+  rules are the `modules/<name>/index.ts` import walls, dormant until extraction
+  populates `modules/`, probe-verified to fire; `pnpm lint` wired into CI.
+
+**Deviation from spec §2 (recorded):** in-handler guard calls are NOT deleted as
+modules migrate. The whole stage deploys as one unit — deleting guards at
+extraction would leave routes unprotected during the log-only window (middleware
+observing, guards gone) and would leave the 48 h divergence diff with nothing to
+compare against. Guard deletion is a separate cleanup slice AFTER the production
+enforce flip; `REVENUE_ROUTE_ROLE_ENFORCEMENT` retires in that same slice, not
+before.
+
+Client-compat facts re-verified before annotating (Explore over both client
+repos): desktop and extension call `pages`, fan-profile GET/PUT, and
+`ai-usage/batch` with BEARER keys — those routes are declared `any`/`apiKey`, not
+`session`; the extension on `bar-tone-menu` no longer calls spenders/fans-search
+at all (drift vs Stage 2's baseline, no action needed — declarations mirror
+handlers, not clients). `ai-usage/batch` is apiKey-only de facto
+(requireApiKeyUser inside the service), declared accordingly.
+
+Remaining: Task 3 — extract the ten modules with handlers VERBATIM (guards
+intact), buildApiServer as composition root, per-module role-matrix tests,
+relative-sibling lint walls (3–4 sessions); then Task 6 ops (inert deploy → 48 h
+log window → enforce flip → cleanup slice). Steps sketched in the stage's
+`## Progress` block.
