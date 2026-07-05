@@ -42,9 +42,16 @@ CREATE TABLE "observation_keys" (
   PRIMARY KEY ("source", "idempotency_key")
 );
 
--- Initial partitions: six months of runway from the deploy month; the daily
--- pre-create job maintains a 3-month lead thereafter and pages the owner if
--- the lead ever drops below 2 months.
+-- Initial partitions: the full deploy year (empty past months cost nothing
+-- and keep clock-frozen test fixtures inside the covered range) plus runway;
+-- the daily pre-create job maintains a 3-month lead thereafter and pages the
+-- owner if the lead ever drops below 2 months.
+CREATE TABLE "observations_2026_01" PARTITION OF "observations" FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+CREATE TABLE "observations_2026_02" PARTITION OF "observations" FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+CREATE TABLE "observations_2026_03" PARTITION OF "observations" FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
+CREATE TABLE "observations_2026_04" PARTITION OF "observations" FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
+CREATE TABLE "observations_2026_05" PARTITION OF "observations" FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+CREATE TABLE "observations_2026_06" PARTITION OF "observations" FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
 CREATE TABLE "observations_2026_07" PARTITION OF "observations" FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
 CREATE TABLE "observations_2026_08" PARTITION OF "observations" FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
 CREATE TABLE "observations_2026_09" PARTITION OF "observations" FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');

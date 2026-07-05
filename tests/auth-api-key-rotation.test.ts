@@ -50,6 +50,7 @@ const repoMocks = vi.hoisted(() => ({
   findUserById: vi.fn(),
   findUserByUsername: vi.fn(),
   insertAuditEvent: vi.fn(),
+  insertObservation: vi.fn(),
   listApiKeys: vi.fn(),
   listUserPageAssignments: vi.fn(),
   listUsers: vi.fn(),

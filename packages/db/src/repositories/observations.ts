@@ -94,15 +94,20 @@ export async function insertObservation(
     // autocommit, the key claim above has already committed — an orphaned
     // claim would make the producer's retry look like a duplicate and lose
     // the fact. Release exactly OUR claim (scoped by observation_id, so a
-    // concurrent duplicate's claim is never touched), then fail loudly.
-    // Inside a caller transaction this is redundant but harmless — the
-    // rollback removes both anyway.
-    await db.execute(sql`
-      delete from observation_keys
-      where source = ${input.source}
-        and idempotency_key = ${input.idempotencyKey}
-        and observation_id = ${observationId}
-    `);
+    // concurrent duplicate's claim is never touched), then fail loudly with
+    // the ORIGINAL error. Inside a caller transaction the delete itself fails
+    // ("transaction is aborted") — swallowed: the caller's rollback removes
+    // the claim there anyway.
+    try {
+      await db.execute(sql`
+        delete from observation_keys
+        where source = ${input.source}
+          and idempotency_key = ${input.idempotencyKey}
+          and observation_id = ${observationId}
+      `);
+    } catch {
+      // Aborted-transaction path; the rollback owns cleanup.
+    }
     throw error;
   }
 
