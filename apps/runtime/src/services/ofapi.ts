@@ -15,6 +15,11 @@ import type { Dispatcher } from "undici";
 import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
 
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
+// Live-bug fix (2026-07-05): chat-message history reads scrape OnlyFans
+// server-side and scale with chat size — two prod conversations consistently
+// exceeded the 15 s abort (400 wasted attempts/24 h, zero successes ever on
+// lora-of/lora-vip-of). Slow-lane timeout for that operation only.
+const OFAPI_SLOW_READ_TIMEOUT_MS = 60_000;
 const OFAPI_PROXY_READ_TIMEOUT_MS = 60_000;
 const OFAPI_DEFAULT_REST_DELAY_MS = 500;
 const OFAPI_OBSERVED_RETRIES = 3;
@@ -609,6 +614,7 @@ export function createOfapiClient(input: {
     cursorPresent: boolean;
     requestMetadata: Record<string, unknown>;
     mapResponse?: (body: unknown) => OfapiListPage;
+    timeoutMs?: number;
   }): Promise<OfapiListPage> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(options.query)) {
@@ -639,7 +645,7 @@ export function createOfapiClient(input: {
             authorization: `Bearer ${input.apiKey}`,
             accept: "application/json",
           },
-          signal: AbortSignal.timeout(OFAPI_REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_REQUEST_TIMEOUT_MS),
         });
         return { response, text: await response.text() };
       },
@@ -1349,6 +1355,9 @@ export function createOfapiClient(input: {
           order: "desc",
           hasFirstId: params.firstId != null,
         },
+        // Chat history reads are scraped server-side and scale with chat size;
+        // the default 15 s abort starved the largest chats forever.
+        timeoutMs: OFAPI_SLOW_READ_TIMEOUT_MS,
       });
     },
     async listActiveFans(context, accountId, params) {
