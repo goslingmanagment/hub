@@ -1198,3 +1198,32 @@ OnlyMonster subscription, if still billed, is cancellable at the owner's discret
 in Stage 15; (3) the dead OnlyMonster adapter code stays in-repo until Stage 18's seam. If any
 later census finds an OnlyMonster-sourced row, this entry is superseded per append-only law and
 the full-export spec (preserved in this stage file's history) re-activates.
+
+## Phase A Close-Out — Stages 1, 2, 3, 5 Exited (2026-07-05 ~01:40 UTC)
+
+**Decision #68:** All four stages prod-verified in one owner-compressed session (windows
+shortened at explicit owner instruction — "i don't want to wait", "do everything now"):
+
+- **Stage 1 exited.** V1: 0 rows match the purge predicate (semantic proof) and the journal
+  grew 80,128→80,705 with the oldest row (2026-06-27 03:59) untouched post-deploy; the first
+  live 02:30 UTC run remains armed as redundant confirmation. V2 (shortened 48 h→~1 h live
+  traffic): 0 of 29,765 baseline conversations decreased; prune structurally disabled. V3: no
+  new redactions (kill-switch off). V4: dm_messages raw captures flowing (1→4 rows). V5: disk
+  drill passed live (incident #25, Telegram sent, threshold restored). 471,389 raw payloads
+  re-stamped far-future.
+- **Stage 2 exited.** Deployed in log mode; 0 `would-deny` in all api logs; flipped to
+  `enforce` (owner go); live probe: 4×403 on the gated routes with a fresh chatter key
+  (revoked after 60 s), 200 on spenders and the bearer surface. Deviations: 48 h log window
+  shortened (~30 min + client-repo grep evidence); the dashboard UX smokes (page-delete
+  click, workboard undo marker) deferred to natural use — code paths integration-tested.
+- **Stage 3 exited.** V1 census: all 15 staged flags running-on on both live instances; V2
+  876 archive rows/24 h; V3 28/28 spend-shadow projected; V4 ledger/balance healthy (47,338
+  credits, zero incidents); V6 budgets enforcing + burn alert armed. V5 (read-gateway 200)
+  recorded on combined evidence — flag running-on, bearer surface proven post-deploy, fleet
+  chatter key in daily use — the direct 200 probe rides the next desktop session (no
+  ofapi/read traffic in the overnight log window). dm_messages stuck-conversation anomaly
+  re-surfaced as an independent ops item.
+- **Stage 5 exited** per decision #67 (verify-zero; nothing to export).
+
+Unblocked: Stages 7 (in flight), 13 (Q1), and the Phase-A-gated chain. Stage 4's exit still
+awaits the desktop branch reconciliation (decision #66).
