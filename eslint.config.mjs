@@ -6,10 +6,13 @@ import tsParser from "@typescript-eslint/parser";
 // be skipped by skipping lint. The full family lint standard arrives in Stage 35
 // — do not grow this config before it.
 //
-// The wall below matches import SPECIFIERS that name a modules/ path (the
-// composition root and services importing "./modules/<m>/<internal>"). Task 3
-// adds the relative-sibling walls (`../<other-module>/…`) once the module
-// layout exists and their depth is known.
+// Two walls, both on import SPECIFIERS:
+// 1. Path-qualified deep imports naming a modules/ internal (the composition
+//    root and services must use "./modules/<m>/index.ts").
+// 2. Relative sibling imports from inside a module: every module is a single
+//    modules/<name>/index.ts, so "../<other>/<file>" is a cross-module reach —
+//    allowed only for "../<other>/index.ts"; "../context.ts" (the shared
+//    module context) is one segment and passes.
 
 export default [
   {
@@ -39,6 +42,39 @@ export default [
               "!**/modules/*/index.ts",
             ],
             message: "Import a module only through its modules/<name>/index.ts.",
+          },
+        ],
+      }],
+    },
+  },
+  {
+    files: ["apps/runtime/src/modules/*/**/*.ts"],
+    languageOptions: {
+      parser: tsParser,
+      ecmaVersion: "latest",
+      sourceType: "module",
+    },
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [
+          {
+            group: [
+              "**/modules/*/*",
+              "**/modules/*/*/**",
+              "!**/modules/*/index.ts",
+            ],
+            message: "Import a module only through its modules/<name>/index.ts.",
+          },
+          {
+            // `*` also matches `..`, so exempt parent traversal explicitly:
+            // "../../services/x" climbs OUT of modules/ and is not a sibling.
+            group: [
+              "../*/*",
+              "../*/*/**",
+              "!../*/index.ts",
+              "!../../**",
+            ],
+            message: "Reach another module only through its ../<name>/index.ts.",
           },
         ],
       }],
