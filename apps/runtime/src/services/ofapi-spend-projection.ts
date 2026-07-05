@@ -24,7 +24,6 @@ import {
 import {
   mapOfapiTransactionStatusForSpendProjection,
   mapOfapiWebhookToSpendProjectionEvent,
-  OFAPI_TIPS_RECEIVED_BLOCKED_REASON,
   ofapiSpendProjectionTransactionDomainKey,
   type CoreSpendProjectionEvent,
   type OfapiSpendProjectionContext,
@@ -69,18 +68,6 @@ export function isOfapiSpendProjectionEventType(
 function parseOccurredAt(value: string): Date {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
-}
-
-function blockedOccurredAt(payload: Record<string, unknown>, fallback: Date): Date {
-  const raw = payload.createdAt ?? payload.created_at;
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    return fallback;
-  }
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw.trim())
-    ? `${raw.trim().replace(" ", "T")}Z`
-    : raw.trim();
-  const parsed = new Date(normalized);
-  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
 }
 
 function domainKeyFor(
@@ -156,35 +143,6 @@ async function writeProjectedEvent(
   });
 }
 
-async function writeBlockedTipsEvent(
-  app: AppContext,
-  context: OfapiSpendProjectionContext,
-  payload: Record<string, unknown>,
-  domainKey: string,
-  receivedAt: Date,
-) {
-  await upsertOfapiSpendProjectionEvent(app.db, {
-    domainKey,
-    projectionStatus: "blocked",
-    blockedReason: OFAPI_TIPS_RECEIVED_BLOCKED_REASON,
-    sourceEventType: "tips.received",
-    sourceIdempotencyKey: context.sourceIdempotencyKey,
-    journalId: context.journalId,
-    fanoutSeq: context.fanoutSeq,
-    ofapiAccountId: context.ofapiAccountId,
-    pageId: context.pageId,
-    fanPlatformUserId: notificationChatId(payload),
-    transactionId: null,
-    messageId: extractMessageIdFromNotification(payload) ?? null,
-    occurredAt: blockedOccurredAt(payload, receivedAt),
-    category: "tip",
-    currency: "USD",
-    grossAmountMills: null,
-    creatorNetAmountMills: null,
-    eventStatus: null,
-  });
-}
-
 async function writeSkippedEvent(
   app: AppContext,
   row: OfapiSpendProjectableRow,
@@ -221,16 +179,9 @@ async function applySpendProjectionResult(
       await writeSkippedEvent(app, row, context, eventType, "missing_domain_key");
       return;
     }
+    // Stage 14: a legacy blocked tips row shares this domain key
+    // (ofapi:{acct}:tip:{id}), so the upsert flips it blocked -> projected.
     await writeProjectedEvent(app, domainKey, result.event);
-    return;
-  }
-
-  if (result.status === "blocked") {
-    if (!domainKey) {
-      await writeSkippedEvent(app, row, context, eventType, result.reason);
-      return;
-    }
-    await writeBlockedTipsEvent(app, context, payload, domainKey, row.receivedAt);
     return;
   }
 

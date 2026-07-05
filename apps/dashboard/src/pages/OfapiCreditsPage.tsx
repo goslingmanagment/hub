@@ -139,6 +139,7 @@ const COMPARISON_STATUS_LABELS: Record<string, string> = {
   skipped: "пропущено",
   ppv_estimated: "PPV оценён",
   tips_blocked: "типсы заблокированы",
+  tips_signal: "типсы (сигнал)",
   blocked: "заблокировано",
 };
 
@@ -568,6 +569,7 @@ const COMPARISON_BENIGN = new Set([
   "skipped",
   "ppv_estimated",
   "tips_blocked",
+  "tips_signal",
   "blocked",
 ]);
 

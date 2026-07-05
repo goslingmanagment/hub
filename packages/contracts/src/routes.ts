@@ -3465,6 +3465,7 @@ const ofapiSpendComparisonStatusEnum = z.enum([
   "state_mismatch",
   "ppv_estimated",
   "tips_blocked",
+  "tips_signal",
   "blocked",
   "skipped",
   "other",

@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   mapOfapiWebhookToSpendProjectionEvent,
-  OFAPI_TIPS_RECEIVED_BLOCKED_REASON,
   ofapiSpendProjectionTransactionDomainKey,
   type OfapiSpendProjectionContext,
 } from "../apps/runtime/src/services/ofapi-spend-projection-contract.ts";
@@ -179,8 +178,8 @@ describe("OFAPI spend projection contract mapper", () => {
     });
   });
 
-  it("blocks tips.received money mapping until a live verified fixture exists", async () => {
-    const fixture = await loadFixture("unverified_tips_received.json");
+  it("maps live tips.received as an estimated tip signal in integer mills", async () => {
+    const fixture = await loadFixture("tips_received.json");
 
     const result = mapOfapiWebhookToSpendProjectionEvent({
       context: projectionContext(fixture.account_id),
@@ -188,33 +187,44 @@ describe("OFAPI spend projection contract mapper", () => {
       payload: fixture.payload,
     });
 
-    expect(fixture._meta?.verified).toBe(false);
-    expect(result).toEqual({
-      status: "blocked",
-      reason: OFAPI_TIPS_RECEIVED_BLOCKED_REASON,
+    expect(fixture._meta?.source).toContain("live capture");
+    expect(result.status).toBe("projectable");
+    if (result.status !== "projectable") {
+      return;
+    }
+
+    expect(result.event).toMatchObject({
+      sourceEventType: "tips.received",
+      // The tipper is payload.user.id — NOT the top-level user_id, which the
+      // prod probe showed is the CREATOR (constant across tippers on a page).
+      fanPlatformUserId: "310112051",
+      transactionId: null,
+      occurredAt: "2026-06-30T14:42:00.000Z",
+      category: "tip",
+      currency: "USD",
+      grossAmountMills: 8_000,
+      creatorNetAmountMills: 6_400,
+      platformFeeMills: null,
+      // Signal, not truth: the money itself arrives via transactions.new
+      // (type "tip") through the ingest — projecting this as truth would
+      // double-count.
+      status: "estimated",
     });
   });
 
-  it("does not parse tip money from documented text or replacePairs examples", async () => {
-    const fixture = await loadFixture("unverified_tips_received.json");
+  it("skips a tip without the tipper object instead of falling back to the creator user_id", async () => {
+    const fixture = await loadFixture("tips_received.json");
+    const { user: _user, ...payload } = fixture.payload;
 
     const result = mapOfapiWebhookToSpendProjectionEvent({
       context: projectionContext(fixture.account_id),
       eventType: fixture.event,
-      payload: {
-        ...fixture.payload,
-        amountGross: 999,
-        amountNet: 888,
-        text: "paid you a tip of $999.00",
-        replacePairs: {
-          "{AMOUNT}": "$999.00",
-        },
-      },
+      payload,
     });
 
     expect(result).toEqual({
-      status: "blocked",
-      reason: OFAPI_TIPS_RECEIVED_BLOCKED_REASON,
+      status: "skipped",
+      reason: "tips_received_missing_fan_id",
     });
   });
 });

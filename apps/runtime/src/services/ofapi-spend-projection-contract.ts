@@ -7,6 +7,10 @@ import {
   notificationChatId,
 } from "./ofapi-payloads.ts";
 
+// Stage 14: tips.received is UNBLOCKED — three natural webhooks landed
+// 2026-06-30..07-03 and the captured shape drives mapTipsReceived below. The
+// constant stays exported: legacy blocked rows carry it, and the projection
+// sweep's re-list filter matches on it to self-heal them into projected rows.
 export const OFAPI_TIPS_RECEIVED_BLOCKED_REASON = "tips_received_live_fixture_required";
 
 export type OfapiSpendProjectionEventType =
@@ -64,7 +68,6 @@ export interface CoreSpendProjectionEvent {
 
 export type OfapiSpendProjectionResult =
   | { status: "projectable"; event: CoreSpendProjectionEvent }
-  | { status: "blocked"; reason: typeof OFAPI_TIPS_RECEIVED_BLOCKED_REASON }
   | { status: "skipped"; reason: string };
 
 function parseDate(value: unknown): string | null {
@@ -300,6 +303,51 @@ function mapPpvUnlocked(
   };
 }
 
+// Verified live shape (3 natural prod webhooks, 2026-06-30..07-03): the tip
+// notification carries REAL dollars-float amountGross/amountNet plus the
+// tipper under `user.id`. Two traps the probe settled: top-level `user_id` is
+// the CREATOR (identical across different tippers on one page) — never the
+// fan; and the money itself ALSO arrives as a transactions.new (type "tip")
+// that the truth ingest consumes, so this event maps as an estimated shadow
+// SIGNAL only (transactionId null) — projecting it as truth would double-count.
+function mapTipsReceived(
+  context: OfapiSpendProjectionContext,
+  payload: Record<string, unknown>,
+): OfapiSpendProjectionResult {
+  const notificationId = idToString(payload.id);
+  const fanPlatformUserId = idToString(asRecord(payload.user)?.id);
+  const occurredAt = parseDate(payload.createdAt);
+
+  if (!notificationId) {
+    return { status: "skipped", reason: "tips_received_missing_notification_id" };
+  }
+  if (!fanPlatformUserId) {
+    return { status: "skipped", reason: "tips_received_missing_fan_id" };
+  }
+  if (!occurredAt) {
+    return { status: "skipped", reason: "tips_received_missing_occurred_at" };
+  }
+
+  return {
+    status: "projectable",
+    event: {
+      ...baseEvent(context, "tips.received"),
+      fanPlatformUserId,
+      transactionId: null,
+      messageId: extractMessageIdFromNotification(payload) ?? null,
+      occurredAt,
+      category: "tip",
+      currency: "USD",
+      grossAmountMills: parseDollarMills(payload.amountGross),
+      creatorNetAmountMills: parseDollarMills(payload.amountNet),
+      platformFeeMills: null,
+      vatAmountMills: null,
+      taxAmountMills: null,
+      status: "estimated",
+    },
+  };
+}
+
 export function mapOfapiWebhookToSpendProjectionEvent(input: {
   context: OfapiSpendProjectionContext;
   eventType: string;
@@ -311,7 +359,7 @@ export function mapOfapiWebhookToSpendProjectionEvent(input: {
     case "messages.ppv.unlocked":
       return mapPpvUnlocked(input.context, input.payload);
     case "tips.received":
-      return { status: "blocked", reason: OFAPI_TIPS_RECEIVED_BLOCKED_REASON };
+      return mapTipsReceived(input.context, input.payload);
     default:
       return { status: "skipped", reason: "unsupported_spend_projection_event_type" };
   }

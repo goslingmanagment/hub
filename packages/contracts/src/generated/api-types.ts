@@ -7912,7 +7912,7 @@ export interface paths {
                             };
                             summary: {
                                 /** @enum {string} */
-                                status: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "blocked" | "skipped" | "other";
+                                status: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "tips_signal" | "blocked" | "skipped" | "other";
                                 count: number;
                                 grossAmountMills: number;
                                 creatorNetAmountMills: number;
@@ -7921,7 +7921,7 @@ export interface paths {
                             }[];
                             byPage: {
                                 /** @enum {string} */
-                                status: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "blocked" | "skipped" | "other";
+                                status: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "tips_signal" | "blocked" | "skipped" | "other";
                                 count: number;
                                 grossAmountMills: number;
                                 creatorNetAmountMills: number;
@@ -7933,7 +7933,7 @@ export interface paths {
                             samples: {
                                 projectionId: number;
                                 /** @enum {string} */
-                                comparisonStatus: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "blocked" | "skipped" | "other";
+                                comparisonStatus: "matched" | "missing_in_core_truth" | "page_mismatch" | "amount_mismatch" | "fan_mismatch" | "state_mismatch" | "ppv_estimated" | "tips_blocked" | "tips_signal" | "blocked" | "skipped" | "other";
                                 sourceEventType: string;
                                 projectionStatus: string;
                                 eventStatus: string | null;

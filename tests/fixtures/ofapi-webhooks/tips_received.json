@@ -1,0 +1,83 @@
+{
+  "_meta": {
+    "capturedAt": "2026-06-30T14:42:32.869Z",
+    "anonymized": true,
+    "source": "live capture, prod webhook journal (Stage 14 tips unblock), 2026-06-30",
+    "signatureHeader": "signature",
+    "idempotencyKeyHeader": "x-ofapi-idempotency-key",
+    "idempotencyKeySample": "evt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "note": "Top-level user_id is the CREATOR account id (constant across tippers on one page); the fan is payload.user.id. amountGross/amountNet are dollars-float."
+  },
+  "event": "tips.received",
+  "account_id": "acct_02000000000000000000000000000000",
+  "payload": {
+    "id": "115273984711",
+    "text": "paid you a tip of $8.00",
+    "type": "tip",
+    "user": {
+      "id": 310112051,
+      "name": "Fan 1",
+      "view": "mn",
+      "avatar": null,
+      "header": null,
+      "canEarn": false,
+      "tipsMax": 200,
+      "tipsMin": 5,
+      "hideChat": false,
+      "lastSeen": null,
+      "username": "u310112051",
+      "canReport": false,
+      "hasStream": false,
+      "isBlocked": false,
+      "hasStories": false,
+      "headerSize": null,
+      "isVerified": false,
+      "displayName": "Fan One",
+      "isPerformer": false,
+      "tipsEnabled": false,
+      "avatarThumbs": null,
+      "canLookStory": false,
+      "headerThumbs": null,
+      "subscribedBy": false,
+      "subscribedOn": false,
+      "canPayInternal": false,
+      "subscribePrice": 0,
+      "canCommentStory": false,
+      "isRealPerformer": false,
+      "tipsMinInternal": 1,
+      "tipsTextEnabled": true,
+      "canAddSubscriber": true,
+      "subscribedByData": null,
+      "subscribedOnData": null,
+      "hasNotViewedStory": false,
+      "hasScheduledStream": false,
+      "canReceiveChatMessage": false
+    },
+    "isRead": false,
+    "fanData": {
+      "spending": {
+        "tips": 98.4,
+        "posts": 70.4,
+        "total": 636,
+        "streams": 0,
+        "messages": 467.2,
+        "subscribes": 0
+      },
+      "available": true,
+      "last_updated_at": "2026-06-30T13:44:24.000000Z",
+      "previous_reply_at": "2026-06-30T14:16:18.000000Z"
+    },
+    "subType": "new_tips",
+    "user_id": "518588958",
+    "amountNet": 6.4,
+    "createdAt": "2026-06-30T14:42:00+00:00",
+    "amountGross": 8,
+    "replacePairs": {
+      "{AMOUNT}": "$8.00",
+      "{POST_DATA}": "",
+      "{POST_BLOCK}": "",
+      "{SUBSCRIBER_LINK}": "<a href='https://onlyfans.com/u310112051'>Fan 1</a>"
+    },
+    "canGoToProfile": true
+  }
+}

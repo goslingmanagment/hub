@@ -445,6 +445,10 @@ export async function listOfapiWebhookEventsForSpendProjection(
       sql`not exists (
         select 1 from ${ofapiSpendProjectionEvents}
         where ${ofapiSpendProjectionEvents.journalId} = ${ofapiWebhookEvents.id}
+          and not (
+            ${ofapiSpendProjectionEvents.projectionStatus} = 'blocked'
+            and ${ofapiSpendProjectionEvents.blockedReason} = 'tips_received_live_fixture_required'
+          )
       )`,
     ))
     .orderBy(asc(ofapiWebhookEvents.id))
@@ -602,6 +606,7 @@ export type OfapiSpendProjectionComparisonStatus =
   | "state_mismatch"
   | "ppv_estimated"
   | "tips_blocked"
+  | "tips_signal"
   | "blocked"
   | "skipped"
   | "other";
@@ -657,6 +662,9 @@ const OFAPI_SPEND_COMPARISON_STATUS_SQL = sql`
     when p.source_event_type = 'messages.ppv.unlocked'
       and p.projection_status = 'projected'
       then 'ppv_estimated'
+    when p.source_event_type = 'tips.received'
+      and p.projection_status = 'projected'
+      then 'tips_signal'
     when p.source_event_type = 'tips.received'
       and p.projection_status = 'blocked'
       then 'tips_blocked'
