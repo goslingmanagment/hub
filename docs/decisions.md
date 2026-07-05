@@ -2055,3 +2055,75 @@ Exit (Task 6): deploy 0065 → prod smokes (chatter login, dual-credential
 round-trip, history query recorded, `grants:parity` = 0) → read-path flip →
 content_manager row check → assignment-table drop ships a release later,
 owner-acknowledged.
+
+## Stage 23 Built — Workboard Becomes a Kernel Module, v1 Retired (2026-07-06)
+
+**Decision #94:** Stage 23 built (§8 tasks 1–5) on the chain branch
+(commits 377b528 → 4a4054a → 69baf3f → 6318372 → 2c9a124 on
+`kernel/stage-21-event-stream-v2` — chain 19→20→21→22→23; standing ordering
+deviation, deps 21+22 green-local). Full suite after the last commit:
+**188 files / 1527 tests green** (the count drops from 193 because six v1
+test files retire with the feature; one stage suite added). Migration
+**0066** (workboard_claim_leases).
+
+What shipped and the execution decisions inside it:
+- **Module move + platform neutrality (Task 1).** The ten engine files
+  git-mv'd byte-for-byte into `apps/runtime/src/modules/workboard/`;
+  `resolveAccessibleWorkboardPage` replaces the Fansly-only accessor — the
+  read-side platform throw is gone, so the OnlyFans boards the engine always
+  scored now serve. The v2 route summaries drop the "Fansly page" wording
+  (OpenAPI text-only).
+- **Event-driven recompute; the sweep is demoted to reconciler (Task 2).**
+  A worker-side domain-event-hub subscriber maps fan-relevant events
+  (message.*/transaction.posted/subscription.*/presence.*/fan.* with a
+  fanIdentityRef) to pg-boss jobs debounced per fan: singletonKey
+  `<accountId>:<fanIdentityRef>`, startAfter 5 s — bursts collapse to one
+  run. The job resolves the platform-native ref via findPlatformFan; an
+  unknown fan is a recorded skip (the reconciler covers it). The nightly
+  recomputeAllWorkboardPages now returns `changed` as the
+  **workboard_reconcile_drift** counter (warn >0 / info =0; target zero).
+- **Claim leases (Task 3).** Soft coordination, NOT access control (DP 4c):
+  one live row per (page, fan); a second chatter's claim STEALS the lease
+  (last-writer-wins, never blocks); release stamps; TTL default 30 min,
+  request-capped at 240; expiry read-filtered. Routes are
+  kind:"any-session" + scope:"page" (chatters claim their own work — page
+  access is the boundary, not the dashboard door). Live claims ride the
+  board response (`claims[]`); both sides audit via recordAudit
+  (fan_claimed / fan_released — released only when a live lease existed).
+- **Module-emitted domain events (Tasks 3+4).** `workboard.state_changed`
+  on REAL tab transitions only (before/after snapshot incl. removals) and
+  `workboard.contact_retracted` on undo — NAMING DEVIATION RECORDED: the
+  spec wrote `contact.retracted`; namespaced to match state_changed. Both
+  carry observationId **0 sentinel** (module-emitted, no source
+  observation) and time-based dedupKeys (identical transitions can
+  legitimately recur). `retractLastWorkboardContact` now returns whether a
+  row was stamped — the compensating event is emitted only on true (undo of
+  nothing is not a fact).
+- **v1 retired (Task 5).** Consumer inventory gate passed: the four v1
+  routes had dashboard-only consumers (desktop repo grep clean — spec §4
+  re-verified). Routes, contracts, schemas, and types removed; absence
+  pinned twice (contract test: no routeSchemas entry = 404; api.integration
+  404 probe mirroring the crm-retirement precedent).
+  `services/workboard.ts`, `services/workboard-presence.ts`,
+  `repositories/workboard.ts` deleted; `unsnoozeWorkboardFan` moved
+  VERBATIM into the v2 repository (the snooze v1/v2 duplication collapses
+  to the module's). Dashboard: `/pages/:label/workboard` renders the v2
+  board; `/workboard/v2` joins `/crm` as a legacy redirect; ONE
+  platform-neutral sidebar entry (OnlyFans boards visible — §5 exit
+  criterion). The v1 page + view-model/theme + four components die.
+- **Presence panel consequence (recorded).** The v1 presence endpoint's
+  on-demand Fansly follower refresh died with the panel; presence still
+  flows through follower sync + OFAPI webhooks into
+  `external_presence_at`, surfacing as the v2 board's `online` flag — the
+  ofapi-presence suite now proves projection→board-online end to end.
+
+Tests: stage suite (lease lifecycle incl. steal/expiry, claim/unclaim
+services + audit + board surfacing, state_changed real-transitions-only,
+contact_retracted once-only, OnlyFans board read, hub→job mapping with
+relevance filtering + ordered-delivery proof, job-side fan resolution);
+five suites moved off v1 (worker mocks, auth-policy matrix,
+identity-grants attribution, api.integration, ofapi-presence).
+
+Exit (Task 6 ops): deploy 0066 with the chain → staging latency harness
+(p95 event→board within the 5 s debounce) → two-user lease drill → one
+week of reconciler drift = 0 → prod 404 probe on the four v1 paths.
