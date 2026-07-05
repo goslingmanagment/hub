@@ -100,11 +100,6 @@ import {
   SESSION_COOKIE_NAME,
   type AuthPrincipal,
 } from "../services/auth.ts";
-import {
-  prepareAiGatewayStream,
-  serializeAiGatewaySseFrame,
-} from "../services/ai-gateway.ts";
-import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../services/ai-usage.ts";
 import { buildConfigView } from "../services/app-config-service.ts";
 import { LIVE_CONFIG_KEYS } from "../services/effective-config.ts";
 import { commitStagedConfigChange } from "../services/staged-config.ts";
@@ -128,6 +123,7 @@ import {
 } from "./auth-policy.ts";
 import { auditCtx, createRequestAuth, pageScopeFor } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
+import { registerAiRoutes } from "../modules/ai/index.ts";
 import { registerIdentityRoutes } from "../modules/identity/index.ts";
 import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
 import {
@@ -724,12 +720,8 @@ export async function buildApiServer(appContext: AppContext) {
   // --- Identity (auth/sessions/users/api-keys) --- (module: apps/runtime/src/modules/identity)
   registerIdentityRoutes(server, moduleContext);
 
-  server.post("/api/v1/ai-usage/batch", {
-    schema: routeSchemas.aiUsageBatch,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return ingestAiUsageBatch(appContext, principal, request.body);
-  });
+  // --- AI (gateway/usage) --- (module: apps/runtime/src/modules/ai)
+  registerAiRoutes(server, moduleContext);
 
   // Stage 11: client-capture lane. Bearer-only, size-capped, rate-limited;
   // backpressure = 429 with retry headers from the limiter — the desktop
@@ -772,110 +764,6 @@ export async function buildApiServer(appContext: AppContext) {
         });
       }
       throw error;
-    }
-  });
-
-  server.post("/api/v1/ai/gateway/stream", {
-    schema: routeSchemas.aiGatewayStream,
-  }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    const stream = await prepareAiGatewayStream(appContext, principal, request.body);
-
-    reply.hijack();
-    const raw = reply.raw;
-    const startedAt = Date.now();
-    let terminalOutcome: "completed" | "failed" | "cancelled" = "completed";
-    let terminalUsage: Parameters<typeof stream.recordTerminal>[0]["usage"] = null;
-    let terminalProviderResponseId: string | null = null;
-    let terminalCacheHit = false;
-    let streamedContent = false;
-    let terminalDoneFrame: Parameters<typeof serializeAiGatewaySseFrame>[0] | null = null;
-    raw.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-      "x-accel-buffering": "no",
-    });
-
-    const abort = new AbortController();
-    function abortProvider() {
-      abort.abort();
-    }
-    function writeFrame(frame: Parameters<typeof serializeAiGatewaySseFrame>[0]) {
-      if (!raw.writableEnded && !raw.destroyed) {
-        raw.write(serializeAiGatewaySseFrame(frame));
-      }
-    }
-
-    raw.on("close", abortProvider);
-    try {
-      writeFrame(stream.meta);
-      for await (const frame of stream.stream(abort.signal)) {
-        if (frame.type === "usage") {
-          terminalUsage = frame.usage;
-          terminalProviderResponseId = frame.providerResponseId;
-          terminalCacheHit = frame.cacheHit;
-        } else if (frame.type === "content_delta" && frame.text.length > 0) {
-          streamedContent = true;
-        } else if (frame.type === "error") {
-          terminalOutcome = "failed";
-        } else if (frame.type === "done") {
-          terminalDoneFrame = frame;
-          continue;
-        }
-        writeFrame(frame);
-      }
-      if (terminalOutcome === "completed" && streamedContent && !terminalUsage) {
-        terminalOutcome = "failed";
-        request.log.warn({
-          requestId: stream.requestId,
-        }, "AI gateway provider stream ended without usage metadata");
-        writeFrame({
-          type: "error",
-          code: "provider_usage_missing",
-          message: "AI gateway provider ended without usage metadata",
-          retryAfterMs: null,
-        });
-      } else if (terminalDoneFrame) {
-        writeFrame(terminalDoneFrame);
-      }
-    } catch (error) {
-      if (abort.signal.aborted) {
-        terminalOutcome = "cancelled";
-      } else {
-        terminalOutcome = "failed";
-        request.log.warn({
-          requestId: stream.requestId,
-          errorName: error instanceof Error ? error.name : "UnknownError",
-        }, "AI gateway provider stream failed");
-        writeFrame({
-          type: "error",
-          code: "provider_stream_failed",
-          message: "AI gateway provider stream failed",
-          retryAfterMs: null,
-        });
-      }
-    } finally {
-      raw.off("close", abortProvider);
-      try {
-        await stream.recordTerminal({
-          outcome: terminalOutcome,
-          usage: terminalUsage,
-          providerResponseId: terminalProviderResponseId,
-          cacheHit: terminalCacheHit,
-          durationMs: Date.now() - startedAt,
-          completedAt: new Date(),
-        });
-      } catch (error) {
-        request.log.error({
-          requestId: stream.requestId,
-          errorName: error instanceof Error ? error.name : "UnknownError",
-        }, "AI gateway terminal ledger write failed");
-      }
-      if (!raw.writableEnded && !raw.destroyed) {
-        raw.end();
-      }
     }
   });
 
@@ -2368,14 +2256,6 @@ export async function buildApiServer(appContext: AppContext) {
   });
 
   // === Admin routes ===
-
-  server.get("/api/v1/admin/usage/chatters", {
-    schema: routeSchemas.adminChatterUsage,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    return getAdminChatterUsageReport(appContext, request.query);
-  });
 
   // Sync management
   server.get("/api/v1/admin/sync/runs", {
