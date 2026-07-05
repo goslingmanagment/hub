@@ -1626,3 +1626,40 @@ Exit (ops, after chain deploy + a desktop release carrying this): fleet inventor
 diagnostics exports → one machine first → manifests reconcile via harvest:reconcile →
 re-run no-op proof → archive coverage predates webhook epoch → residue review. Local
 prune policies stay at Stage 4 caps until manifests reconcile.
+
+**Decision #84:** Pre-merge adversarial review of the ENTIRE unmerged surface (core
+chain 8→9→10→16→17→14→11→12-glue + desktop harvest branch) ran Saturday 2026-07-05,
+before Monday's one-pass merge/deploy — four independent reviewers, one per slice,
+each handed the slice's invariants. Six real defects found, all fixed and re-verified
+same day (core fcc06cf, suite 181 files / 1466 tests; desktop a639876, 762+1209):
+
+- SECURITY, ingest lane (Stage 11): page resolution was global — any bearer key could
+  attribute observations to any page, and harvest.* kinds were trusted from ANY
+  client version, so a live client could journal harvest.messages verbatim and the
+  sweep would mint FORGED message.* domain events for arbitrary pages. Fixed at both
+  layers: resolution now scoped to the principal's assigned pages (owner
+  unrestricted; out-of-scope → NULL account, which never canonicalizes), and the
+  harvest namespace + the client-capture canonicalizer both gate on the
+  desktop-harvest@ producer.
+- Chargebacks (Stage 14): a truncated first full-history walk wrote partials, locking
+  the page into the 90-day window forever (pre-90d chargebacks silently lost). First
+  walk is now all-or-nothing; next-day run redoes it on a fresh budget.
+- Desktop harvest (Stage 12): the 400-quarantine path was dead code (probed .kind;
+  HubError carries .reason) — deterministic 400s would retry forever with no
+  artifact; STARTED_KEY persisted before uploader validation — one Start click with
+  Hub unconfigured armed the purge guard permanently; no byte budget vs the hub's
+  1 MiB bodyLimit — heavy rows could 413-wedge the walk. All three fixed (900 KB
+  chunk splits; oversize single events quarantine-and-skip, surfaced by reconcile's
+  walked>uploaded gap). Plus: live-sync retention prunes now FREEZE while a harvest
+  is incomplete (they raced the walk — rows could die before reaching the kernel),
+  and purge failures surface in the UI instead of silently closing the dialog.
+- Stale test pin: canonicalize-sweep expected parse_version 1 for client_capture —
+  stale since dd006b2's v2 bump; the last full core suite run predated the glue
+  commit. Lesson recorded: re-run the FULL suite after the last commit of a session,
+  not before it.
+
+Chain tips moved: core merge target is now `kernel/stage-14-ofapi-transactions` @
+fcc06cf; desktop release branch is `kernel/stage-12-harvest` @ a639876. Runbook
+updated. Also added post-deploy belt-and-braces: spot-check the 5 legacy blocked
+tips rows' domain_key values after the first sweep (they must match the shared
+`tip:<notificationId>` construction for self-heal).
