@@ -154,6 +154,20 @@ export async function createOnlyFansPage(
   });
 }
 
+/**
+ * Numeric page id → OFAPI account ref for every mapped page (kernel
+ * Stage 24: the v2 event stream stamps frames with the platform-native
+ * account ref so OFAPI-keyed clients filter without id translation).
+ */
+export async function listPageOfapiAccountRefs(db: Database): Promise<Map<number, string>> {
+  const result = await db.execute<{ id: number; ofapi_account_id: string }>(sql`
+    select id::int as id, ofapi_account_id
+    from pages
+    where ofapi_account_id is not null
+  `);
+  return new Map(result.rows.map((row) => [row.id, row.ofapi_account_id]));
+}
+
 export async function createPlatformPage(
   db: Database,
   input: {

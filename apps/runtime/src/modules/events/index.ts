@@ -10,6 +10,7 @@ import {
   listDomainEventHighWaters,
   listEventsSince,
   listOfapiSyncEventsForReplay,
+  listPageOfapiAccountRefs,
   type DomainEventRow,
 } from "@agency_hub_core/db";
 import type { FastifyReply } from "fastify";
@@ -22,6 +23,7 @@ import {
   requireApiKeyUser,
   type AuthPrincipal,
 } from "../../services/auth.ts";
+import { buildMessagePayloadEnrichments } from "../../services/domain-events-enrich.ts";
 import {
   createAccountSeqGuards,
   createDomainEventHub,
@@ -384,6 +386,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     domainEventHub ??= createDomainEventHub(appContext);
     await domainEventHub.ready().catch(() => undefined);
 
+    // Stage 24: OFAPI-keyed clients (the desktop) filter frames by the
+    // platform-native account ref; snapshot the mapping per connection (the
+    // 15-min stream lifetime bounds staleness).
+    const ofapiAccountRefs = await listPageOfapiAccountRefs(appContext.db);
+
     // Everything below bypasses fastify's serializer; errors must not bubble out.
     reply.hijack();
     const raw = reply.raw;
@@ -398,7 +405,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     const guards = createAccountSeqGuards(watermarks);
 
-    function writeV2Frame(event: DomainEventRow) {
+    function writeV2Frame(event: DomainEventRow, payload?: unknown) {
       if (raw.writableEnded || raw.destroyed) {
         return;
       }
@@ -425,13 +432,35 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         type: event.type,
         occurredAt: event.occurredAt.toISOString(),
         data: event.data,
+        // Stage 24 serve-time fields (see domainEventFrameSchema).
+        fanRef: event.fanIdentityRef,
+        conversationRef: event.conversationRef,
+        messageRef: event.messageRef,
+        accountRef: ofapiAccountRefs.get(event.accountId) ?? null,
+        ...(payload !== undefined ? { payload } : {}),
       };
       raw.write(`id: ${encodeDomainEventCursor(guards.watermarks())}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
     }
 
+    /** Live-path frame write: enrich one event, then write. Enrichment
+     * failure degrades to an unenriched frame (the desktop falls back to its
+     * reconciliation path), never a dropped connection. */
+    async function writeV2FrameEnriched(event: DomainEventRow) {
+      let enrichment: unknown;
+      try {
+        enrichment = (await buildMessagePayloadEnrichments(appContext, [event])).get(event.id);
+      } catch (error) {
+        request.log.warn({ err: error, eventId: event.id }, "v2 frame enrichment failed; serving thin frame");
+      }
+      writeV2Frame(event, enrichment);
+    }
+
     // Subscribe before the replay so live frames buffer until replay flushes.
+    // Live enrichment is async — chain deliveries so frames keep per-account
+    // order even when observation fetches interleave.
     let replayDone = false;
     const bufferedLive: DomainEventRow[] = [];
+    let liveChain: Promise<void> = Promise.resolve();
     const unsubscribe = domainEventHub.subscribe({
       accountIds: granted,
       deliver(event) {
@@ -439,7 +468,24 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           bufferedLive.push(event);
           return;
         }
-        writeV2Frame(event);
+        liveChain = liveChain.then(() => writeV2FrameEnriched(event));
+      },
+    });
+
+    // Stage 24 ephemeral lane: typing indicators are deliberately NOT
+    // ledgered (append-only forever is the wrong home for a 5-second UI
+    // hint), so the v2 stream forwards them from the v1 fanout hub as
+    // `event: ephemeral` frames — no id line, never advancing the cursor.
+    // Live-only by design: a missed typing hint has no replay value.
+    syncEventHub ??= createSyncEventHub(appContext);
+    const ephemeralPages: ReadonlySet<number> = granted ?? new Set(ofapiAccountRefs.keys());
+    const unsubscribeEphemeral = syncEventHub.subscribe({
+      pageIds: ephemeralPages,
+      deliver(frame) {
+        if (frame.syncEvent.type !== "typing" || raw.writableEnded || raw.destroyed) {
+          return;
+        }
+        raw.write(`event: ephemeral\ndata: ${JSON.stringify(frame.syncEvent)}\n\n`);
       },
     });
 
@@ -490,6 +536,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       clearInterval(authRevalidate);
       clearTimeout(lifetimeTimer);
       unsubscribe();
+      unsubscribeEphemeral();
       activeSseStreams.delete(raw);
     }
 
@@ -515,8 +562,13 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
             afterSeq,
             limit: SSE_REPLAY_BATCH_SIZE,
           });
+          const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
+            .catch((error) => {
+              request.log.warn({ err: error }, "v2 replay enrichment failed; serving thin frames");
+              return new Map<number, unknown>();
+            });
           for (const row of rows) {
-            writeV2Frame(row);
+            writeV2Frame(row, enrichments.get(row.id));
           }
           const lastRow = rows.at(-1);
           if (lastRow) {
@@ -535,10 +587,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     }
 
     replayDone = true;
-    for (const event of bufferedLive) {
-      writeV2Frame(event);
-    }
+    const buffered = [...bufferedLive];
     bufferedLive.length = 0;
+    for (const event of buffered) {
+      liveChain = liveChain.then(() => writeV2FrameEnriched(event));
+    }
   });
 
   server.get("/api/v1/events/v2/snapshot", {

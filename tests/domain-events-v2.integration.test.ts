@@ -2,11 +2,16 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createHash } from "node:crypto";
+
 import {
   appendDomainEvents,
   createFanslyPage,
   createModel,
+  createOnlyFansPage,
+  insertObservation,
   insertOfapiWebhookEvent,
+  setPageOfapiAccountId,
   settleOfapiWebhookEvent,
 } from "@agency_hub_core/db";
 import {
@@ -19,6 +24,7 @@ import {
 } from "@agency_hub_core/contracts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import {
+  assignPageToUser,
   createUserAccount,
   issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
@@ -350,5 +356,201 @@ describe("event stream v2", () => {
     await okHandle.done;
     expect(seqs[0]).toBe(101);
     expect(seqs.at(-1)).toBe(522);
+  });
+});
+
+// ── Stage 24: serve-time frame consumability for OFAPI-keyed clients ────────
+
+describe("event stream v2 — Stage 24 serve-time enrichment", () => {
+  const OFAPI_ACCOUNT = "acct_stage24test";
+  let ofPageId = 0;
+
+  async function seedOfPage() {
+    if (ofPageId !== 0) {
+      return ofPageId;
+    }
+    const seedContext = createTestAppContext(testDb!);
+    const model = await createModel(testDb!.db, { slug: "kate-of-model", name: "Kate OF" });
+    const page = await createOnlyFansPage(testDb!.db, { modelId: model.id, label: "kate-of-24" });
+    await setPageOfapiAccountId(testDb!.db, { pageId: page.id, ofapiAccountId: OFAPI_ACCOUNT });
+    await assignPageToUser(seedContext, { username: "anton", pageLabel: "kate-of-24" }, { source: "cli" });
+    ofPageId = page.id;
+    return ofPageId;
+  }
+
+  it("message frames carry refs, the OFAPI account ref, and the normalized payload from the source observation", async (context) => {
+    if (!requireSetup(context)) return;
+    const pageId = await seedOfPage();
+
+    // The source observation: an OFAPI webhook messages.received envelope,
+    // exactly as the Stage 7 producer journals it.
+    const wireMessage = {
+      id: "9001001",
+      text: "hey there",
+      createdAt: "2026-07-06T10:00:00.000Z",
+      price: 0,
+      isFree: true,
+      isTip: false,
+      mediaCount: 0,
+      fromUser: { id: "777100" },
+    };
+    const envelope = {
+      event: "messages.received",
+      account_id: OFAPI_ACCOUNT,
+      payload: wireMessage,
+    };
+    const inserted = await insertObservation(testDb!.db, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      kind: "messages.received",
+      accountId: pageId,
+      payload: envelope,
+      payloadHash: createHash("sha256").update(JSON.stringify(envelope)).digest(),
+      idempotencyKey: "stage24:enrich:9001001",
+    });
+    expect(inserted.inserted).toBe(true);
+    const observationId = inserted.observationId;
+
+    await appendDomainEvents(testDb!.db, pageId, [{
+      type: "message.received",
+      occurredAt: new Date("2026-07-06T10:00:00.000Z"),
+      fanIdentityRef: "777100",
+      conversationRef: "777100",
+      messageRef: "9001001",
+      data: { text: "hey there", price: 0, isTip: false, isFree: true, mediaCount: 0 },
+      schemaVersion: 1,
+      observationId,
+      dedupKey: "stage24:msg:9001001",
+    }]);
+
+    const frames: DomainEventFrame[] = [];
+    const handle = subscribeDomainEvents(bearerOptions(), {
+      cursor: encodeDomainEventCursor(new Map([[pageId, 0]])),
+      onFrame: (frame) => frames.push(frame.event),
+    });
+    await sleep(800);
+    handle.close();
+    await handle.done;
+
+    expect(frames).toHaveLength(1);
+    const frame = frames[0]! as DomainEventFrame & {
+      accountRef?: string | null;
+      conversationRef?: string | null;
+      messageRef?: string | null;
+      fanRef?: string | null;
+      payload?: { id: string; text: string; isSentByMe: boolean; createdAt: string };
+    };
+    expect(frame.type).toBe("message.received");
+    expect(frame.accountRef).toBe(OFAPI_ACCOUNT);
+    expect(frame.conversationRef).toBe("777100");
+    expect(frame.messageRef).toBe("9001001");
+    expect(frame.fanRef).toBe("777100");
+    // The payload is the SAME normalized shape the v1 fanout serves.
+    expect(frame.payload).toMatchObject({
+      id: "9001001",
+      text: "hey there",
+      isSentByMe: false,
+      createdAt: "2026-07-06T10:00:00.000Z",
+    });
+  });
+
+  it("module-emitted and non-webhook events serve thin frames (no payload), Fansly pages carry accountRef null", async (context) => {
+    if (!requireSetup(context)) return;
+    const pageId = await seedOfPage();
+
+    const wb = await appendDomainEvents(testDb!.db, pageId, [{
+      type: "workboard.state_changed",
+      occurredAt: new Date("2026-07-06T11:00:00.000Z"),
+      data: { fromTab: null, toTab: "fresh_mass" },
+      schemaVersion: 1,
+      observationId: 0,
+      dedupKey: "stage24:wb:1",
+    }]);
+    const fansly = await appendDomainEvents(testDb!.db, lanaId, [event("message.received", { text: "fansly side" })]);
+
+    const cookie = await ownerCookie();
+    const frames: Array<DomainEventFrame & { accountRef?: string | null; payload?: unknown }> = [];
+    const handle = subscribeDomainEvents({ baseUrl, headers: { cookie } }, {
+      // Resume exactly one event behind each account's head (the appends above).
+      cursor: encodeDomainEventCursor(new Map([
+        [pageId, wb.highWater - 1],
+        [lanaId, fansly.highWater - 1],
+      ])),
+      onFrame: (frame) => frames.push(frame.event as typeof frames[number]),
+    });
+    await sleep(800);
+    handle.close();
+    await handle.done;
+
+    const workboardFrame = frames.find((frame) => frame.type === "workboard.state_changed");
+    expect(workboardFrame).toBeDefined();
+    expect(workboardFrame!.accountRef).toBe(OFAPI_ACCOUNT);
+    expect(workboardFrame!.payload).toBeUndefined();
+
+    const fanslyFrame = frames.find((frame) => frame.accountId === lanaId);
+    expect(fanslyFrame).toBeDefined();
+    expect(fanslyFrame!.accountRef).toBeNull();
+    expect(fanslyFrame!.payload).toBeUndefined();
+  });
+
+  it("forwards typing as an ephemeral frame that never advances the cursor", async (context) => {
+    if (!requireSetup(context)) return;
+    const pageId = await seedOfPage();
+
+    // Connect raw (the ephemeral lane is not part of the SDK helper's
+    // domain-frame surface) and watch the wire directly.
+    const abort = new AbortController();
+    const response = await fetch(`${baseUrl}/api/v1/events/v2/stream`, {
+      headers: { authorization: `Bearer ${chatterKey}`, accept: "text/event-stream" },
+      signal: abort.signal,
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let wire = "";
+    const consumed = (async () => {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        wire += decoder.decode(value, { stream: true });
+      }
+    })().catch(() => undefined);
+
+    // Give the subscription a beat, then push a typing event through the v1
+    // fanout: journal row -> settle with the mapped sync event -> NOTIFY (in
+    // prod the worker settles+notifies; the repo settle deliberately does not).
+    await sleep(600);
+    const created = await insertOfapiWebhookEvent(testDb!.db, {
+      idempotencyKey: "stage24-typing-1",
+      eventType: "users.typing",
+      ofapiAccountId: OFAPI_ACCOUNT,
+      payload: { event: "users.typing", payload: { id: "777100" } },
+    });
+    await settleOfapiWebhookEvent(testDb!.db, {
+      id: created.id,
+      status: "processed",
+      platformAccountId: pageId,
+      syncEvent: { type: "typing", accountId: OFAPI_ACCOUNT, chatId: "777100" },
+      processedAt: new Date(),
+    });
+    await testDb!.pool.query("select pg_notify('ofapi_sync_events', '')");
+    await sleep(1_500);
+    abort.abort();
+    await consumed;
+
+    // Other tests' typing rows may drain on the same connection — find OURS.
+    const ephemeralBlocks = wire
+      .split("\n\n")
+      .filter((block) => block.includes("event: ephemeral"));
+    expect(ephemeralBlocks.length).toBeGreaterThan(0);
+    const mine = ephemeralBlocks.find((block) => block.includes(OFAPI_ACCOUNT));
+    expect(mine).toBeDefined();
+    expect(mine).not.toContain("id:"); // never checkpointable
+    const dataLine = mine!.split("\n").find((line) => line.startsWith("data: "))!;
+    expect(JSON.parse(dataLine.slice("data: ".length))).toEqual({
+      type: "typing",
+      accountId: OFAPI_ACCOUNT,
+      chatId: "777100",
+    });
   });
 });

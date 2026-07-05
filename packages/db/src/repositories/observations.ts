@@ -234,6 +234,32 @@ export async function findObservationByKey(
   };
 }
 
+/**
+ * Envelope fetch for serve-time frame enrichment (kernel Stage 24): the v2
+ * event stream attaches the source observation's verbatim payload to
+ * message frames so projection-grade clients (the desktop) can ingest
+ * without a read-gateway round trip. Partition-spanning id lookup — fine at
+ * stream-batch sizes (each partition satisfies it from the PK index).
+ */
+export async function findObservationEnvelopesByIds(
+  db: Database,
+  ids: readonly number[],
+): Promise<Map<number, { kind: string; source: string; payload: unknown }>> {
+  if (ids.length === 0) {
+    return new Map();
+  }
+  const result = await db.execute<{ id: string; kind: string; source: string; payload: unknown }>(sql`
+    select id::text as id, kind, source, payload
+    from observations
+    where id = any(${sql.raw(`array[${ids.map((id) => Number(id)).join(",")}]::bigint[]`)})
+  `);
+  const map = new Map<number, { kind: string; source: string; payload: unknown }>();
+  for (const row of result.rows) {
+    map.set(Number(row.id), { kind: row.kind, source: row.source, payload: row.payload });
+  }
+  return map;
+}
+
 function partitionName(year: number, month: number) {
   return `observations_${year}_${String(month).padStart(2, "0")}`;
 }
