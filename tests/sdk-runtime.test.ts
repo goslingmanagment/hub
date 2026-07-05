@@ -156,3 +156,97 @@ describe("kernel SDK runtime", () => {
     expect(Object.keys(kernelOperations).sort()).toEqual(Object.keys(routeSchemas).sort());
   });
 });
+
+import { streamAiGateway, subscribeSyncEvents } from "@agency_hub_core/contracts";
+
+function sseFetch(chunks: string[], init?: { status?: number }) {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+  const impl = (async () => new Response(stream, {
+    status: init?.status ?? 200,
+    headers: { "content-type": "text/event-stream" },
+  })) as unknown as typeof fetch;
+  return impl;
+}
+
+describe("AI gateway stream helper (protocol conformance on a fake stream)", () => {
+  it("parses and validates event:ai frames, tolerating split chunks and heartbeats", async () => {
+    const frames: unknown[] = [];
+    const handle = streamAiGateway(
+      {
+        baseUrl: "http://hub",
+        fetch: sseFetch([
+          "event: ai\ndata: {\"type\":\"content_delta\",",
+          "\"text\":\"hel\"}\n\n: keep-alive\n\n",
+          "event: ai\ndata: {\"type\":\"content_delta\",\"text\":\"lo\"}\n\n",
+          "event: ai\ndata: {\"type\":\"error\",\"code\":\"provider_stream_failed\",\"message\":\"boom\",\"retryAfterMs\":null}\n\n",
+        ]),
+      },
+      {
+        body: {} as never, // wire shape irrelevant against the fake fetch
+        onFrame: (frame) => frames.push(frame),
+      },
+    );
+    await handle.done;
+    expect(frames).toEqual([
+      { type: "content_delta", text: "hel" },
+      { type: "content_delta", text: "lo" },
+      { type: "error", code: "provider_stream_failed", message: "boom", retryAfterMs: null },
+    ]);
+  });
+
+  it("rejects frames that fail the contract", async () => {
+    const handle = streamAiGateway(
+      { baseUrl: "http://hub", fetch: sseFetch(['event: ai\ndata: {"type":"content_delta"}\n\n']) },
+      { body: {} as never, onFrame: () => undefined },
+    );
+    await expect(handle.done).rejects.toMatchObject({
+      category: "contract",
+      code: "frame_validation_failed",
+    });
+  });
+
+  it("maps non-2xx openings onto the error taxonomy", async () => {
+    const impl = (async () => new Response(
+      JSON.stringify({ error: "gateway_disabled", message: "off", statusCode: 503 }),
+      { status: 503 },
+    )) as unknown as typeof fetch;
+    const handle = streamAiGateway(
+      { baseUrl: "http://hub", fetch: impl },
+      { body: {} as never, onFrame: () => undefined },
+    );
+    await expect(handle.done).rejects.toMatchObject({
+      category: "server",
+      status: 503,
+      code: "gateway_disabled",
+    });
+  });
+});
+
+describe("sync events helper (protocol conformance on a fake stream)", () => {
+  it("delivers only event:sync frames with numeric ids, skipping retry/heartbeat noise", async () => {
+    const frames: Array<{ id: number; event: unknown }> = [];
+    const handle = subscribeSyncEvents(
+      {
+        baseUrl: "http://hub",
+        fetch: sseFetch([
+          "retry: 3000\n\n",
+          'id: 7\nevent: sync\ndata: {"type":"typing","accountId":"acct-1","chatId":"9"}\n\n',
+          ": keep-alive\n\n",
+          'id: 8\nevent: sync\ndata: {"type":"typing","accountId":"acct-1","chatId":"9"}\n\n',
+        ]),
+      },
+      { onFrame: (frame) => frames.push(frame) },
+    );
+    await handle.done;
+    expect(frames.map((frame) => frame.id)).toEqual([7, 8]);
+    expect(frames[0].event).toEqual({ type: "typing", accountId: "acct-1", chatId: "9" });
+  });
+});

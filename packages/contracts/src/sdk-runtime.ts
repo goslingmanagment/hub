@@ -286,3 +286,262 @@ export function createKernelClient(
 
   return client as unknown as KernelClient;
 }
+
+// --- Stream helpers (Stage 20 Task 2) ---
+
+import {
+  aiGatewayStreamFrameSchema,
+  syncEventSchema,
+  syncSnapshotRequiredResponseSchema,
+  type AiGatewayStreamFrame,
+  type SyncEvent,
+} from "./routes.ts";
+import type { z as zod } from "zod";
+
+interface RawSseFrame {
+  id: string | null;
+  event: string | null;
+  data: string;
+}
+
+async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<RawSseFrame> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        const raw = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const frame: RawSseFrame = { id: null, event: null, data: "" };
+        for (const line of raw.split("\n")) {
+          if (line.startsWith(":") || line.startsWith("retry:")) {
+            continue; // heartbeat comments and reconnect hints
+          }
+          if (line.startsWith("id: ")) {
+            frame.id = line.slice(4);
+          } else if (line.startsWith("event: ")) {
+            frame.event = line.slice(7);
+          } else if (line.startsWith("data: ")) {
+            frame.data += (frame.data ? "\n" : "") + line.slice(6);
+          }
+        }
+        if (frame.id !== null || frame.event !== null || frame.data !== "") {
+          yield frame;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export interface KernelStreamHandle {
+  /** Resolves when the stream ends (server bound, snapshot-required, or close()). */
+  done: Promise<void>;
+  close: () => void;
+}
+
+export type SyncSnapshotRequired = zod.infer<typeof syncSnapshotRequiredResponseSchema>;
+
+async function openSseResponse(input: {
+  options: KernelClientOptions;
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  signal: AbortSignal;
+}): Promise<Response> {
+  const { options } = input;
+  const fetchImpl = options.fetch ?? fetch;
+  const headers: Record<string, string> = {
+    accept: "text/event-stream",
+    ...options.headers,
+    ...input.headers,
+  };
+  if (options.auth?.mode === "bearer") {
+    headers.authorization = `Bearer ${await options.auth.token()}`;
+  }
+  const init: RequestInit = {
+    method: input.method,
+    headers,
+    signal: input.signal,
+    ...(options.auth?.mode === "cookie" ? { credentials: "include" as const } : {}),
+  };
+  if (input.body !== undefined) {
+    headers["content-type"] = "application/json";
+    init.body = JSON.stringify(input.body);
+  }
+  try {
+    return await fetchImpl(`${options.baseUrl}${input.path}`, init);
+  } catch (error) {
+    throw new KernelApiError(
+      `Network error opening ${input.path}: ${error instanceof Error ? error.message : "unknown"}`,
+      "network",
+      null,
+      "network_error",
+      null,
+    );
+  }
+}
+
+/**
+ * Subscribe to the v1 sync-event stream (`GET /api/v1/events/stream`).
+ * Single connection, no auto-reconnect: the server bounds stream lifetime
+ * (~15 min) and v1 clients own their reconnect loop, resuming via
+ * `lastEventId`. A 409 becomes `onSnapshotRequired` and ends the stream.
+ */
+export function subscribeSyncEvents(options: KernelClientOptions, input: {
+  lastEventId?: number | null;
+  onFrame: (frame: { id: number; event: SyncEvent }) => void;
+  onSnapshotRequired?: (details: SyncSnapshotRequired) => void;
+  signal?: AbortSignal;
+}): KernelStreamHandle {
+  const abort = new AbortController();
+  input.signal?.addEventListener("abort", () => abort.abort(), { once: true });
+
+  const done = (async () => {
+    const response = await openSseResponse({
+      options,
+      method: "GET",
+      path: "/api/v1/events/stream",
+      headers: input.lastEventId != null ? { "last-event-id": String(input.lastEventId) } : undefined,
+      signal: abort.signal,
+    });
+    if (response.status === 409) {
+      const body: unknown = await response.json();
+      const parsed = syncSnapshotRequiredResponseSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new KernelApiError(
+          "events/stream 409 body failed contract validation",
+          "contract",
+          409,
+          "response_validation_failed",
+          body,
+        );
+      }
+      input.onSnapshotRequired?.(parsed.data);
+      return;
+    }
+    if (!response.ok || !response.body) {
+      throw new KernelApiError(
+        `events/stream failed with ${response.status}`,
+        response.status === 401 || response.status === 403 ? "auth" : "server",
+        response.status,
+        null,
+        await response.text().catch(() => null),
+      );
+    }
+    for await (const frame of parseSseStream(response.body)) {
+      if (frame.event !== "sync" || frame.data === "") {
+        continue; // retry hints / heartbeats
+      }
+      const parsed = syncEventSchema.safeParse(JSON.parse(frame.data));
+      if (!parsed.success) {
+        throw new KernelApiError(
+          `sync frame failed contract validation: ${parsed.error.message}`,
+          "contract",
+          200,
+          "frame_validation_failed",
+          frame.data,
+        );
+      }
+      input.onFrame({ id: Number(frame.id), event: parsed.data });
+    }
+  })().catch((error: unknown) => {
+    if (abort.signal.aborted) {
+      return; // close() is not an error
+    }
+    throw error;
+  });
+
+  return { done, close: () => abort.abort() };
+}
+
+/**
+ * Stream one AI generation through the gateway
+ * (`POST /api/v1/ai/gateway/stream`, `event: ai` frames).
+ */
+export function streamAiGateway(options: KernelClientOptions, input: {
+  body: zod.input<(typeof routeSchemas)["aiGatewayStream"]["body"]>;
+  onFrame: (frame: AiGatewayStreamFrame) => void;
+  signal?: AbortSignal;
+}): KernelStreamHandle {
+  const abort = new AbortController();
+  input.signal?.addEventListener("abort", () => abort.abort(), { once: true });
+
+  const done = (async () => {
+    const response = await openSseResponse({
+      options,
+      method: "POST",
+      path: "/api/v1/ai/gateway/stream",
+      body: input.body,
+      signal: abort.signal,
+    });
+    if (!response.ok || !response.body) {
+      let body: unknown = null;
+      const text = await response.text().catch(() => "");
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+        body = text;
+      }
+      const envelope = (body ?? {}) as { error?: unknown; message?: unknown };
+      throw new KernelApiError(
+        typeof envelope.message === "string" ? envelope.message : `ai/gateway/stream failed with ${response.status}`,
+        response.status === 401 || response.status === 403 ? "auth" : response.status >= 500 ? "server" : "validation",
+        response.status,
+        typeof envelope.error === "string" ? envelope.error : null,
+        body,
+      );
+    }
+    for await (const frame of parseSseStream(response.body)) {
+      if (frame.event !== "ai" || frame.data === "") {
+        continue;
+      }
+      const parsed = aiGatewayStreamFrameSchema.safeParse(JSON.parse(frame.data));
+      if (!parsed.success) {
+        throw new KernelApiError(
+          `ai frame failed contract validation: ${parsed.error.message}`,
+          "contract",
+          200,
+          "frame_validation_failed",
+          frame.data,
+        );
+      }
+      input.onFrame(parsed.data);
+    }
+  })().catch((error: unknown) => {
+    if (abort.signal.aborted) {
+      return;
+    }
+    throw error;
+  });
+
+  return { done, close: () => abort.abort() };
+}
+
+/**
+ * Thin passthrough for the wildcard read gateway (`GET /api/v1/ofapi/read/*`):
+ * upstream shapes are proxied verbatim, so no validation — the caller gets the
+ * raw Response.
+ */
+export async function ofapiRead(options: KernelClientOptions, input: {
+  path: string;
+  query?: Record<string, unknown>;
+  headers?: Record<string, string>;
+}): Promise<Response> {
+  const cleanPath = input.path.replace(/^\/+/, "");
+  return executeKernelRequest({
+    def: { method: "GET", path: `/api/v1/ofapi/read/${cleanPath}` },
+    options,
+    query: input.query,
+    headers: input.headers,
+  });
+}

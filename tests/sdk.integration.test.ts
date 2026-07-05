@@ -3,8 +3,19 @@ import { readFileSync } from "node:fs";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel } from "@agency_hub_core/db";
-import { KernelApiError, createKernelClient, routeSchemas } from "@agency_hub_core/contracts";
+import {
+  createFanslyPage,
+  createModel,
+  insertOfapiWebhookEvent,
+  settleOfapiWebhookEvent,
+} from "@agency_hub_core/db";
+import {
+  KernelApiError,
+  createKernelClient,
+  routeSchemas,
+  subscribeSyncEvents,
+  type SyncSnapshotRequired,
+} from "@agency_hub_core/contracts";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { buildSdkFiles } from "../packages/contracts/src/generate-sdk.ts";
@@ -25,6 +36,7 @@ let testDb: StartedTestDatabase | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let baseUrl = "";
 let chatterKey = "";
+let lanaPageId = 0;
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -43,7 +55,8 @@ beforeAll(async () => {
     role: "chatter",
   }, { source: "cli" });
   const model = await createModel(testDb.db, { slug: "lana-model", name: "Lana Model" });
-  await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
+  const lana = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
+  lanaPageId = lana.id;
   const issued = await issueChatterApiKey(seedContext, {
     username: "anton",
     pageLabel: "lana",
@@ -169,6 +182,67 @@ describe("kernel SDK against a live server", () => {
       expect(row, key).toBeDefined();
       expect({ method: row!.method, path: row!.url }, key).toEqual(def);
     }
+  });
+});
+
+describe("sync-events helper against the live stream", () => {
+  it("replays journal frames after Last-Event-ID and validates each one", async (context) => {
+    if (!requireSetup(context)) return;
+
+    for (let i = 1; i <= 2; i++) {
+      const created = await insertOfapiWebhookEvent(testDb!.db, {
+        idempotencyKey: `sdk_sse_${i}`,
+        eventType: "users.typing",
+        ofapiAccountId: "acct-sdk",
+        payload: { event: "users.typing" },
+      });
+      await settleOfapiWebhookEvent(testDb!.db, {
+        id: created!.id,
+        status: "processed",
+        platformAccountId: lanaPageId,
+        syncEvent: { type: "typing", accountId: "acct-sdk", chatId: String(i) },
+        processedAt: new Date(),
+      });
+    }
+
+    const frames: Array<{ id: number; event: { type: string } }> = [];
+    let resolveGotTwo: () => void;
+    const gotTwo = new Promise<void>((resolve) => { resolveGotTwo = resolve; });
+    const handle = subscribeSyncEvents(
+      { baseUrl, auth: { mode: "bearer", token: () => chatterKey } },
+      {
+        lastEventId: 0,
+        onFrame: (frame) => {
+          frames.push(frame);
+          if (frames.length === 2) resolveGotTwo();
+        },
+      },
+    );
+    await gotTwo;
+    handle.close();
+    await handle.done;
+
+    expect(frames).toHaveLength(2);
+    expect(frames[0].event.type).toBe("typing");
+    expect(frames[1].id).toBeGreaterThan(frames[0].id);
+  });
+
+  it("surfaces a cursor ahead of the journal as onSnapshotRequired", async (context) => {
+    if (!requireSetup(context)) return;
+
+    let snapshot: SyncSnapshotRequired | null = null;
+    const handle = subscribeSyncEvents(
+      { baseUrl, auth: { mode: "bearer", token: () => chatterKey } },
+      {
+        lastEventId: 999_999,
+        onFrame: () => undefined,
+        onSnapshotRequired: (details) => { snapshot = details; },
+      },
+    );
+    await handle.done;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.error).toBe("sync_snapshot_required");
+    expect(snapshot!.snapshotPath).toBe("/api/v1/events/snapshot");
   });
 });
 
