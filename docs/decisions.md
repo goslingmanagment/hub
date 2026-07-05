@@ -1950,3 +1950,50 @@ Stage 20 remaining: Task 5 (drift gates in desktop/extension CI + weekly
 bump-PR + the prove-the-gate drill — cross-repo, owner-visible PRs) and
 Task 6 (release step: sdk-vX.Y.Z tags; bundle the contracts runtime into the
 tag artifact for external installs — decide there).
+
+## Stage 21 Built Whole — Event Stream v2 Beside Untouched v1 (2026-07-06)
+
+**Decision #92:** Stage 21 (event stream v2) built completely in one session on
+`kernel/stage-21-event-stream-v2` @ 0d28077 (chain 19→20→21; ordering
+deviation in the standing #73–#75 pattern — the substrate is green-local
+Stage 8, deploy follows the chain). §8 tasks 1–5 all done in four commits;
+full suite after the last commit: **192 files / 1542 tests green**, with the
+v1 SSE suite byte-untouched — the compatibility invariant's proof.
+
+What shipped:
+- **Frame + cursor (a29a420).** Frame `{accountId, accountSeq, type,
+  occurredAt, data}` with `type` contractually open (unknown-type tolerance is
+  explicit, tested). The resume cursor is OPAQUE base64url
+  `{v:2, w:{<account>: <highSeq>}}` — strict decoder (unknown version,
+  malformed JSON, non-canonical base64 all rejected), deterministic encoder.
+  v2 routes declared `kind:"any"` (execution decision the spec delegated —
+  the dashboard consumes v2 in Stage 33). SDK gained `subscribeDomainEvents`.
+- **Fan-out (56e0f82).** One `pg_notify` per (account, batch) inside the
+  append transaction — commit-fired, payload advisory. `createDomainEventHub`
+  carries the v1 hub's exact discipline (notify = wake-up only, serialized
+  drain, watermark advances only after broadcast) generalized to per-account
+  watermarks with a dirty-account set and reconnect rebaselining.
+- **Endpoints (a39288b).** v2 stream/snapshot beside byte-identical v1:
+  grant-scoped account universe (owner = all), per-account replay + buffered
+  live tail, re-auth for BOTH credential kinds, and the per-account 409 —
+  ahead-of-head AND below-retained-floor, with the floor COMPUTED from
+  retained rows (min account_seq), so Stage 28's tiering needs no code change
+  here; the conformance test prunes synthetically and also proves the exact
+  floor edge resumes cleanly.
+- **Smoke instrument (0d28077).** Permanent worker-side consumer over the same
+  hub+replay code path, durable checkpoint (migration 0064: cursor +
+  frames/gap/duplicate counters), restart-resume proven without recount, a
+  synthetic seq gap counted as the bug signal. Runs unconditionally like the
+  Stage 7/8 sweeps (read-only besides its row).
+
+Recorded deviations: (1) v2 snapshot is the grant-checked fresh-cursor
+handshake; the spec's "current projection state per account" payloads ride the
+consumer stages (24/33) additively — Stage 21's only consumer needs exactly
+the cursor reset. (2) The smoke consumer tails the hub in-process rather than
+HTTP-self-connecting (auth/URL wiring to self adds ops surface; the wire
+framing is covered by the CI conformance suite).
+
+Exit (Task 6, ops): deploy migration 0064 + dist → 24 h smoke window with
+zero gaps/duplicates (`select * from domain_events_smoke_checkpoint`) →
+dual-stream load measurement → the first-ever Fansly frame observed on v2 →
+v1 desktop connections unaffected.
