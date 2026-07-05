@@ -1335,3 +1335,30 @@ The wrong-writer probe requirement is satisfied by the integration suite (no sta
 env exists; tests/transactions-writer-gate.integration.test.ts proves refusal +
 incident + lossless re-apply end-to-end). Exit flips when the next live webhook spend
 lands post-deploy (proving the gated write path in production traffic).
+
+## Stage 8 Green-Local — Domain Events, Canonicalization, Replay (2026-07-05)
+
+**Decision #73:** Stage 8 built green-local in one session on `kernel/stage-08-domain-events`
+(4 slices, tip 422fc81; suite 174 files / 1439 tests). **Ordering deviation, owner-instructed
+("do not wait"):** built while Stage 7 is deployed+live but not yet exited — the same
+compression as Stage 7-on-Stage-1 (#68). The DEPLOY waits for Stage 7's 48 h exit (~07.07);
+nothing ships until then.
+
+Delivered: migration 0057 (domain_events partitioned monthly by occurred_at, 2024-01→2026-12
+plus a MINVALUE catch-all; gapless-seq and dedup companions per the same partitioned-unique
+limitation as 0054); the append protocol proven gapless under 8-way concurrency; webhook /
+sync-pull / command-result canonicalizer families with the binding dedup-key table; the
+CROSS-PRODUCER DEDUP HEADLINE PROVEN in CI (one DM as webhook delivery + REST page → two
+observations, ONE message.received event, replay appends zero); minutely sweep as the replay
+executor; events:replay CLI.
+
+Scope decisions recorded in the stage `## Progress`: tips.received undeclared (unverified
+fixture — first replay customer); fansly DM pages undeclared (direction needs the page's own
+account id — not decidable by a pure function; a later canonicalizer version threads a
+context table); onlymonster pages undeclared (vendor retiring, zero prod rows);
+subscriber/follower/audience pages next version. One trap for posterity: ORDER BY with a bare
+column name resolves to the SELECT's ::text alias → lexicographic sort that looks exactly
+like sequence gaps; qualify the column.
+
+Remaining for exit: deploy after Stage 7 exits, days-long type-coverage watch, staging
+replay drill, canonicalization-lag p95 baseline.
