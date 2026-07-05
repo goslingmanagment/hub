@@ -321,6 +321,24 @@ export async function findPageById(db: Database, platformAccountId: number) {
   return { page, credentials, proxy };
 }
 
+/** Stage 17: page -> platform-native account ref (canonicalizer context). */
+export async function listPageNativeAccountRefs(
+  db: Database,
+): Promise<Array<{ id: number; platform: string; nativeAccountRef: string | null }>> {
+  const rows = await db
+    .select({
+      id: pages.id,
+      platform: pages.platform,
+      nativeAccountRef: pages.platformAccountId,
+    })
+    .from(pages);
+  return rows.map((row) => ({
+    id: row.id,
+    platform: row.platform,
+    nativeAccountRef: row.nativeAccountRef ?? null,
+  }));
+}
+
 /** Stage 13 single-writer gate: the page's assigned transactions writer. */
 export async function getPageTransactionsWriterInfo(db: Database, platformAccountId: number) {
   const [page] = await db

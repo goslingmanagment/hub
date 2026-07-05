@@ -28,7 +28,16 @@ export interface CanonicalEventDraft {
   dedupKey: string;
 }
 
-export type Canonicalizer = (observation: CanonicalizableObservation) => CanonicalEventDraft[];
+/** Optional per-run context (page -> native account ref map etc.); families
+ *  that don't need it simply ignore the argument. */
+export interface CanonicalizeRunContext {
+  nativeAccountRefByAccountId: ReadonlyMap<number, string | null>;
+}
+
+export type Canonicalizer = (
+  observation: CanonicalizableObservation,
+  context?: CanonicalizeRunContext,
+) => CanonicalEventDraft[];
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

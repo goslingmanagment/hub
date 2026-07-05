@@ -3757,8 +3757,12 @@ export async function executeDmMessagesChunk(
           getDmMessagesLiveRequestsSinceDeepBackfill(state) >= deepBackfillLiveRequestsPerDeep;
 
         if (shouldTryQuotaDeepBackfill) {
+          const deepBackfillEffective = await loadEffectiveConfig(app.db, app.config);
           const deepBackfillCandidate = await selectNextPageDmMessageDeepBackfillCandidate(app.db, {
             platformAccountId: input.pageContext.page.id,
+            // Stage 17: the exhaustion crawl lifts the per-conversation depth
+            // cap; archive coverage (not hot-table size) is the goal.
+            ignoreRetentionLimit: deepBackfillEffective.fanslyDeepBackfillIgnoreRetentionLimit === true,
           });
           if (deepBackfillCandidate) {
             conversation = await getPageDmConversationById(app.db, deepBackfillCandidate.id);

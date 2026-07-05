@@ -113,12 +113,54 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
     });
   });
 
-  it("declares nothing for fansly dm pages, OM pages, or unknown kinds", () => {
+  it("canonicalizes fansly dm pages against the page's own account ref (v2)", () => {
+    const context = { nativeAccountRefByAccountId: new Map([[3, "fansly-own-1"]]) };
+    const events = canonicalizeSyncPullObservation(observation({
+      platform: "fansly",
+      kind: "dm_messages",
+      payload: {
+        messages: [
+          {
+            id: "fm-10",
+            groupId: "grp-1",
+            senderId: "fansly-fan-7",
+            content: "hi!",
+            createdAt: Date.parse("2026-06-21T09:00:00Z"),
+            totalTipAmount: 5000, // MILLS
+          },
+          {
+            id: "fm-11",
+            groupId: "grp-1",
+            senderId: "fansly-own-1",
+            content: "hello back",
+            createdAt: Date.parse("2026-06-21T09:01:00Z"),
+          },
+        ],
+      },
+    }), context);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      type: "message.received",
+      fanIdentityRef: "fansly-fan-7",
+      conversationRef: "grp-1",
+      dedupKey: "msg:received:fm-10",
+    });
+    expect(events[0]!.data).toMatchObject({ tipAmountMills: 5000, isTip: true });
+    expect(events[1]).toMatchObject({
+      type: "message.sent",
+      fanIdentityRef: null,
+      dedupKey: "msg:sent:fm-11",
+    });
+
+    // Without the page's own ref the observation stays undecidable → zero events.
     expect(canonicalizeSyncPullObservation(observation({
       platform: "fansly",
       kind: "dm_messages",
-      payload: { messages: [{ id: "m1" }] },
+      payload: { messages: [{ id: "fm-12" }] },
     }))).toEqual([]);
+  });
+
+  it("declares nothing for OM pages or unknown kinds", () => {
     expect(canonicalizeSyncPullObservation(observation({
       kind: "onlymonster_transactions",
       payload: { data: [] },

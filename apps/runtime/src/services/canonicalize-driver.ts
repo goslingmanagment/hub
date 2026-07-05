@@ -9,6 +9,7 @@
 import {
   appendDomainEvents,
   listObservationsForReplay,
+  listPageNativeAccountRefs,
   markObservationParsed,
   type ReplayObservationRow,
 } from "@agency_hub_core/db";
@@ -69,6 +70,7 @@ async function runFamily(
   family: CanonicalizerFamily,
   options: CanonicalizationRunOptions,
   totals: CanonicalizationRunResult,
+  runContext: { nativeAccountRefByAccountId: ReadonlyMap<number, string | null> },
 ) {
   const kinds = options.kinds !== undefined
     ? (family.kinds === null
@@ -104,7 +106,7 @@ async function runFamily(
         totals.maxLagSeconds,
         Math.round((now.getTime() - row.receivedAt.getTime()) / 1000),
       );
-      const drafts = family.canonicalize(row);
+      const drafts = family.canonicalize(row, runContext);
 
       if (options.dryRun) {
         totals.appended += drafts.length;
@@ -153,8 +155,16 @@ export async function runCanonicalization(
     skippedUnmapped: 0,
     maxLagSeconds: 0,
   };
+  // Per-run context: Fansly DM direction resolves against the page's own
+  // native account ref (Stage 17); built once, shared by all families.
+  const pages = await listPageNativeAccountRefs(app.db);
+  const runContext = {
+    nativeAccountRefByAccountId: new Map(
+      pages.map((page) => [page.id, page.nativeAccountRef] as const),
+    ),
+  };
   for (const family of CANONICALIZER_FAMILIES) {
-    await runFamily(app, family, options, totals);
+    await runFamily(app, family, options, totals, runContext);
   }
   return totals;
 }

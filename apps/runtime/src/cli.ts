@@ -34,6 +34,7 @@ import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboardi
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
+import { listFanslyBackscrollManifest } from "@agency_hub_core/db";
 import {
   rebuildMessageArchiveProjection,
   runMessageArchiveBackfills,
@@ -921,6 +922,24 @@ export function buildProgram() {
             `deduped ${result.deduped}, stamped ${result.stamped}, ` +
             `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}`,
         );
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("fansly:backscroll-report")
+    .description("Stage 17 manifest: per-conversation hot vs archive coverage + cursor state")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const rows = await listFanslyBackscrollManifest(app.db);
+        for (const row of rows) {
+          console.log(JSON.stringify(row));
+        }
+        const complete = rows.filter((row) => row.archiveCount >= row.hotCount).length;
+        console.log("");
+        console.log(`conversations: ${rows.length}; archive>=hot: ${complete}; gaps: ${rows.length - complete}`);
       } finally {
         await app.close();
       }

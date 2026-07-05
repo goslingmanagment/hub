@@ -336,3 +336,54 @@ export async function searchArchiveMessages(
   `);
   return result.rows.map(mapArchiveRow);
 }
+
+export interface BackscrollManifestRow {
+  accountId: number;
+  pageLabel: string;
+  conversationRef: string;
+  hotCount: number;
+  archiveCount: number;
+  earliestArchivedAt: Date | null;
+  cursorState: unknown;
+}
+
+/**
+ * Stage 17 manifest: per Fansly conversation — hot-table count vs archive
+ * count, earliest archived timestamp, and the deep-backfill cursor state.
+ * Completeness = every conversation exhausted AND archive >= hot.
+ */
+export async function listFanslyBackscrollManifest(
+  db: Database,
+): Promise<BackscrollManifestRow[]> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select t.platform_account_id as account_id,
+           p.label as page_label,
+           t.platform_conversation_id as conversation_ref,
+           (select count(*) from page_dm_messages m
+             where m.conversation_id = t.id and m.deleted_at is null) as hot_count,
+           (select count(*) from message_archive ma
+             where ma.account_id = t.platform_account_id
+               and ma.conversation_ref = t.platform_conversation_id) as archive_count,
+           (select min(ma.occurred_at) from message_archive ma
+             where ma.account_id = t.platform_account_id
+               and ma.conversation_ref = t.platform_conversation_id) as earliest_archived_at,
+           (select c.state from page_sync_cursors c
+             where c.page_id = t.platform_account_id and c.stream = 'dm_messages'
+             limit 1) as cursor_state
+    from page_dm_threads t
+    join pages p on p.id = t.platform_account_id
+    where p.platform = 'fansly' and p.status = 'active'
+    order by p.label, t.platform_conversation_id
+  `);
+  return result.rows.map((row) => ({
+    accountId: Number(row.account_id),
+    pageLabel: String(row.page_label),
+    conversationRef: String(row.conversation_ref),
+    hotCount: Number(row.hot_count),
+    archiveCount: Number(row.archive_count),
+    earliestArchivedAt: row.earliest_archived_at == null
+      ? null
+      : new Date(row.earliest_archived_at as string | Date),
+    cursorState: row.cursor_state ?? null,
+  }));
+}

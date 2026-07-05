@@ -665,9 +665,18 @@ describe("sync integration", () => {
         pollMs: 100,
       });
 
-      const stateRows = await listPageSyncStates(app.db, {
-        pageId: page.id,
-      });
+      // The manual all-scope request expands via domains (8 streams — bulk
+      // streams are deliberately outside domain lists); fan_earnings /
+      // purchase_history settle via the recovery scheduler — poll briefly
+      // until every state row has applied.
+      let stateRows = await listPageSyncStates(app.db, { pageId: page.id });
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (stateRows.length >= 10 && stateRows.every((row) => row.requestSeq === row.appliedSeq)) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        stateRows = await listPageSyncStates(app.db, { pageId: page.id });
+      }
       expect(stateRows.map((row) => row.stream)).toEqual([
         "light",
         "transactions",

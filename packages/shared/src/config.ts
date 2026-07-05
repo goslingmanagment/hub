@@ -127,6 +127,7 @@ const envSchema = z.object({
   FANSLY_FAN_EARNINGS_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_PURCHASE_HISTORY_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_NEW_STREAM_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT: booleanSchema.default(false),
   OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
@@ -236,6 +237,7 @@ export interface AppConfig {
   fanslyFanEarningsSyncEnabled?: boolean;
   fanslyPurchaseHistorySyncEnabled?: boolean;
   fanslyNewStreamPageAllowlist?: string;
+  fanslyDeepBackfillIgnoreRetentionLimit?: boolean;
   ofapiDmColdArchiveRetentionDays?: number;
   ofapiRestDelayMs?: number;
   ofapiDmBootstrapMaxRequestsPerRun?: number;
@@ -426,6 +428,7 @@ export function loadConfig(
     fanslyFanEarningsSyncEnabled: parsed.FANSLY_FAN_EARNINGS_SYNC_ENABLED,
     fanslyPurchaseHistorySyncEnabled: parsed.FANSLY_PURCHASE_HISTORY_SYNC_ENABLED,
     fanslyNewStreamPageAllowlist: parsed.FANSLY_NEW_STREAM_PAGE_ALLOWLIST,
+    fanslyDeepBackfillIgnoreRetentionLimit: parsed.FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT,
     ofapiDmColdArchiveRetentionDays: parsed.OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
     ofapiDmBootstrapMaxRequestsPerRun: parsed.OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN,

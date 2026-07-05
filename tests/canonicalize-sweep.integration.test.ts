@@ -137,13 +137,15 @@ describe("canonicalization sweep (Stage 8)", () => {
     expect(second).toMatchObject({ appended: 0, stamped: 0, skippedUnmapped: 1 });
 
     // Version bump (replay): rescans consumed rows, appends nothing new.
-    const replay = await runCanonicalization(appStub(), { belowParseVersion: 2 });
+    // (floor 3 > every family's current version, so ALL stamped rows rescan —
+    // sync-pull is already at v2 since Stage 17's fansly-DM declaration.)
+    const replay = await runCanonicalization(appStub(), { belowParseVersion: 3 });
     expect(replay.appended).toBe(0);
     expect(replay.deduped).toBe(3);
     expect(await listEventsSince(testDb.db, { accountId: 4, afterSeq: 0 })).toHaveLength(2);
 
-    // Dry-run never writes: everything is already at version 2 except the
-    // unmapped row; narrow to its kind and confirm counts only.
+    // Dry-run never writes: only the unmapped row remains below the current
+    // family versions; narrow to its kind and confirm counts only.
     const dry = await runCanonicalization(appStub(), { kinds: ["messages.received"], dryRun: true });
     expect(dry.stamped).toBe(0);
     expect(dry.appended).toBeGreaterThan(0); // the unmapped row's draft, counted not written

@@ -1024,6 +1024,8 @@ export async function selectNextPageDmMessageDeepBackfillCandidate(
   input: {
     platformAccountId: number;
     now?: Date;
+    /** Stage 17: lift the depth cap so the crawl walks to platform exhaustion. */
+    ignoreRetentionLimit?: boolean;
   },
 ) {
   const result = await db.execute<{
@@ -1094,7 +1096,7 @@ export async function selectNextPageDmMessageDeepBackfillCandidate(
            retention_limit as "retentionLimit",
            (creator_net_amount_mills > 0)::boolean as "isSpender"
     from candidates
-    where stored_message_count < retention_limit
+    where (${input.ignoreRetentionLimit === true} or stored_message_count < retention_limit)
     order by
       case when creator_net_amount_mills > 0 then 0 else 1 end asc,
       creator_net_amount_mills desc,
