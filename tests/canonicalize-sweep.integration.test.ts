@@ -103,6 +103,29 @@ async function seedCorpus() {
     payloadHash: sha256("tip-1"),
     idempotencyKey: "evt-sweep-tip-1",
   });
+  // 4c. Client-capture (Stage 11): registration-only family — the sweep
+  // stamps parse_version with ZERO events (desktop facts wait for Stage 29).
+  await insertObservation(db, {
+    source: "client_capture",
+    producer: "desktop@0.1.29",
+    platform: null,
+    accountId: 4,
+    kind: "desktop.ai_acceptance",
+    payload: { suggestionId: "s1", outcome: "inserted" },
+    payloadHash: sha256("cc-1"),
+    idempotencyKey: "cc-sweep-1",
+  });
+  // 4d. desktop.unknown:* stays OUTSIDE the family — pending at 0.
+  await insertObservation(db, {
+    source: "client_capture",
+    producer: "desktop@0.1.29",
+    platform: null,
+    accountId: 4,
+    kind: "desktop.unknown:mystery_metric",
+    payload: { n: 1 },
+    payloadHash: sha256("cc-2"),
+    idempotencyKey: "cc-sweep-2",
+  });
   // 5. Unmapped account (NULL) with a canonicalizable kind — retried, never lost.
   await insertObservation(db, {
     source: "webhook",
@@ -132,7 +155,7 @@ describe("canonicalization sweep (Stage 8)", () => {
     expect(first).toMatchObject({
       appended: 4,       // message + transaction + command.settled + tip.received
       deduped: 0,
-      stamped: 4,
+      stamped: 5,        // + the client-capture row (zero events by design)
       skippedUnmapped: 1,
     });
 
@@ -151,6 +174,16 @@ describe("canonicalization sweep (Stage 8)", () => {
       "select parse_version from observations where kind = 'users.typing'",
     );
     expect(typingRow.rows[0]?.parse_version).toBe(0);
+
+    // Stage 11 family: declared desktop kind stamped (zero events), unknown
+    // desktop kind pending.
+    const captureRows = await testDb.pool.query<{ kind: string; parse_version: number }>(
+      "select kind, parse_version from observations where source = 'client_capture' order by kind",
+    );
+    expect(captureRows.rows).toEqual([
+      { kind: "desktop.ai_acceptance", parse_version: 1 },
+      { kind: "desktop.unknown:mystery_metric", parse_version: 0 },
+    ]);
 
     // Second sweep: stamped rows are gone from the listing; only the unmapped
     // row is rescanned (and skipped again).

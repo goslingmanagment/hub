@@ -10207,4 +10207,131 @@ describe("api integration", () => {
     });
     expect(body.at(-1)?.timestamp).toBe(new Date(now.getTime() - 499).toISOString());
   }, 30_000);
+
+  it("ingests desktop client-capture batches idempotently on the Stage 11 lane", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const appContext = createTestAppContext(testDb);
+    const issuedKey = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+    const headers = {
+      authorization: `Bearer ${issuedKey.key}`,
+      "x-client-version": "0.1.29",
+    };
+    const batch = {
+      events: [
+        {
+          clientEventId: "11111111-1111-4111-8111-111111111111",
+          kind: "ai_acceptance",
+          observedAt: "2026-07-05T12:00:00.000Z",
+          payload: { suggestionId: "s1", outcome: "inserted" },
+          pageLabel: "lana",
+        },
+        {
+          // Unknown kind: journaled, never dropped (capture-first).
+          clientEventId: "22222222-2222-4222-8222-222222222222",
+          kind: "mystery_metric",
+          observedAt: "2026-07-05T12:00:01.000Z",
+          payload: { n: 1 },
+        },
+      ],
+    };
+
+    const first = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers,
+      payload: batch,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toEqual({ accepted: 2, duplicates: 0 });
+
+    const { rows } = await testDb.pool.query<{
+      kind: string;
+      producer: string;
+      source: string;
+      account_id: string | null;
+      actor_principal_id: string;
+      idempotency_key: string;
+    }>(`
+      select kind, producer, source, account_id::text, actor_principal_id::text,
+             idempotency_key
+      from observations where source = 'client_capture' order by kind
+    `);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      kind: "desktop.ai_acceptance",
+      producer: "desktop@0.1.29",
+      source: "client_capture",
+    });
+    expect(rows[0]!.account_id).not.toBeNull();
+    expect(rows[0]!.idempotency_key).toMatch(/^\d+:11111111-1111-4111-8111-111111111111$/);
+    expect(rows[1]).toMatchObject({ kind: "desktop.unknown:mystery_metric", account_id: null });
+
+    // Resend the drained batch verbatim: all duplicates, zero new rows.
+    const second = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers,
+      payload: batch,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual({ accepted: 0, duplicates: 2 });
+    const { rows: countRows } = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observations where source = 'client_capture'",
+    );
+    expect(countRows).toEqual([{ n: "2" }]);
+
+    // Schema-invalid batch is all-or-nothing: 400, no partial writes.
+    const invalid = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers,
+      payload: {
+        events: [
+          {
+            clientEventId: "33333333-3333-4333-8333-333333333333",
+            kind: "send_audit",
+            observedAt: "2026-07-05T12:00:02.000Z",
+            payload: { ok: true },
+          },
+          {
+            clientEventId: "44444444-4444-4444-8444-444444444444",
+            kind: "send_audit",
+            observedAt: "not-a-date",
+            payload: { ok: false },
+          },
+        ],
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: "invalid_ingest_event" });
+    const { rows: afterInvalid } = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observations where source = 'client_capture'",
+    );
+    expect(afterInvalid).toEqual([{ n: "2" }]);
+
+    // The version header is required; bearer keys are the only credential.
+    const noVersion = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers: { authorization: `Bearer ${issuedKey.key}` },
+      payload: batch,
+    });
+    expect(noVersion.statusCode).toBe(400);
+    expect(noVersion.json()).toMatchObject({ error: "missing_client_version" });
+
+    const unauthenticated = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers: { "x-client-version": "0.1.29" },
+      payload: batch,
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+  });
 });

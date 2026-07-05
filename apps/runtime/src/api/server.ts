@@ -246,6 +246,10 @@ import {
   getOfapiCreditsSummary,
 } from "../services/ofapi-credit-report.ts";
 import { recordClientVersionObservation } from "../services/client-versions.ts";
+import {
+  ingestClientObservations,
+  InvalidIngestEventError,
+} from "../services/ingest-observations.ts";
 import { executeOfapiReadGatewayRequest } from "../services/ofapi-read-gateway.ts";
 import {
   cancelOfapiCommand,
@@ -712,6 +716,47 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     return ingestAiUsageBatch(appContext, principal, request.body);
+  });
+
+  // Stage 11: client-capture lane. Bearer-only, size-capped, rate-limited;
+  // backpressure = 429 with retry headers from the limiter — the desktop
+  // spool absorbs and resends the whole batch until 2xx.
+  server.post("/api/v1/ingest/observations", {
+    schema: routeSchemas.ingestObservations,
+    bodyLimit: 1_048_576,
+    config: {
+      rateLimit: {
+        max: 120,
+        timeWindow: "1 minute",
+      },
+    },
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const clientVersion = request.headers["x-client-version"];
+    if (typeof clientVersion !== "string" || clientVersion.trim().length === 0) {
+      return reply.code(400).send({
+        error: "missing_client_version",
+        message: "The x-client-version header is required on the capture lane",
+        statusCode: 400,
+      });
+    }
+    try {
+      return await ingestClientObservations(appContext, {
+        principalUserId: principal.user.id,
+        clientVersion: clientVersion.trim(),
+        events: request.body.events,
+      });
+    } catch (error) {
+      if (error instanceof InvalidIngestEventError) {
+        return reply.code(400).send({
+          error: "invalid_ingest_event",
+          message: error.message,
+          statusCode: 400,
+        });
+      }
+      throw error;
+    }
   });
 
   server.post("/api/v1/ai/gateway/stream", {

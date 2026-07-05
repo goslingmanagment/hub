@@ -1777,6 +1777,28 @@ export const aiUsageBatchResponseSchema = z.object({
   dedupedCount: z.number().int().nonnegative(),
 });
 
+// Stage 11: client-capture lane. The desktop uploads spool-backed batches of
+// device-held facts; each event becomes one observation (source
+// 'client_capture', dedup on <principal>:<clientEventId> via the Stage 7 key
+// protocol). Unknown kinds are journaled, never dropped (capture-first).
+export const ingestObservationEventSchema = z.object({
+  clientEventId: z.string().uuid(),
+  kind: z.string().min(1).max(120),
+  observedAt: isoTimestamp,
+  payload: z.record(z.string(), z.unknown()),
+  pageLabel: z.string().min(1).max(120).optional(),
+});
+
+export const ingestObservationsBodySchema = z.object({
+  events: z.array(ingestObservationEventSchema).min(1).max(100),
+});
+
+export const ingestObservationsResponseSchema = z.object({
+  accepted: z.number().int().nonnegative(),
+  // Already-journaled clientEventIds; the client may prune its spool on either.
+  duplicates: z.number().int().nonnegative(),
+});
+
 export const aiGatewayPromptCacheTtlSchema = z.enum(["1h", "5m", "none"]);
 export const aiGatewayReasoningEffortSchema = z.enum(["off", "low", "medium", "high", "max"]);
 
@@ -3798,6 +3820,18 @@ export const routeSchemas = {
       403: errorResponseSchema,
     },
   },
+  ingestObservations: {
+    tags: ["usage"],
+    summary: "Ingest a batch of desktop-captured observations (client-capture lane)",
+    security: bearerOnlySecurity,
+    body: ingestObservationsBodySchema,
+    response: {
+      200: ingestObservationsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   aiGatewayStream: {
     tags: ["usage"],
     summary: "Stream a chatter AI generation through the core gateway",
@@ -5409,6 +5443,8 @@ export type SyncUxSummary = z.infer<typeof syncUxSummarySchema>;
 export type AiUsageEventInput = z.infer<typeof aiUsageEventInputSchema>;
 export type AiUsageBatchBody = z.infer<typeof aiUsageBatchBodySchema>;
 export type AiUsageBatchResponse = z.infer<typeof aiUsageBatchResponseSchema>;
+export type IngestObservationsBody = z.infer<typeof ingestObservationsBodySchema>;
+export type IngestObservationsResponse = z.infer<typeof ingestObservationsResponseSchema>;
 export type AiGatewayPromptCacheTtl = z.infer<typeof aiGatewayPromptCacheTtlSchema>;
 export type AiGatewayReasoningEffort = z.infer<typeof aiGatewayReasoningEffortSchema>;
 export type AiGatewayPromptBlock = z.infer<typeof aiGatewayPromptBlockSchema>;

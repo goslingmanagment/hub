@@ -7,6 +7,11 @@
 
 import type { Canonicalizer } from "./types.ts";
 import {
+  canonicalizeClientCaptureObservation,
+  CLIENT_CAPTURE_CANONICALIZED_KINDS,
+  CLIENT_CAPTURE_CANONICALIZER_VERSION,
+} from "./client-capture.ts";
+import {
   canonicalizeOfapiWebhookObservation,
   OFAPI_WEBHOOK_CANONICALIZED_KINDS,
   OFAPI_WEBHOOK_CANONICALIZER_VERSION,
@@ -22,7 +27,7 @@ import {
 } from "./command-result.ts";
 
 export interface CanonicalizerFamily {
-  source: "webhook" | "pull" | "command_result";
+  source: "webhook" | "pull" | "command_result" | "client_capture";
   /** null = all kinds of the source (the function is total over them). */
   kinds: readonly string[] | null;
   version: number;
@@ -47,6 +52,14 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     kinds: null,
     version: COMMAND_RESULT_CANONICALIZER_VERSION,
     canonicalize: canonicalizeCommandResultObservation,
+  },
+  // Stage 11: registration + validation only — zero domain events by design
+  // (desktop facts are not account-scoped platform truth until Stage 29).
+  {
+    source: "client_capture",
+    kinds: [...CLIENT_CAPTURE_CANONICALIZED_KINDS],
+    version: CLIENT_CAPTURE_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeClientCaptureObservation,
   },
 ];
 

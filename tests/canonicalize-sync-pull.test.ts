@@ -201,10 +201,16 @@ describe("command-result canonicalizer (Stage 8)", () => {
 describe("canonicalizer registry dispatch", () => {
   it("routes each source to its family and leaves undeclared kinds unowned", () => {
     expect(familyForObservation({ source: "webhook", kind: "messages.received" })?.source).toBe("webhook");
-    expect(familyForObservation({ source: "webhook", kind: "tips.received" })).toBeNull();
+    // tips.received graduated to declared in webhook family v2 (decision #81).
+    expect(familyForObservation({ source: "webhook", kind: "tips.received" })?.source).toBe("webhook");
+    expect(familyForObservation({ source: "webhook", kind: "users.typing" })).toBeNull();
     expect(familyForObservation({ source: "pull", kind: "earnings_transactions" })?.source).toBe("pull");
     expect(familyForObservation({ source: "pull", kind: "subscribers" })).toBeNull();
     expect(familyForObservation({ source: "command_result", kind: "command.failed" })?.source).toBe("command_result");
+    // Stage 11: declared desktop kinds route to client_capture; unknown wait.
+    expect(familyForObservation({ source: "client_capture", kind: "desktop.ai_acceptance" })?.source)
+      .toBe("client_capture");
+    expect(familyForObservation({ source: "client_capture", kind: "desktop.unknown:mystery" })).toBeNull();
     expect(familyForObservation({ source: "operator", kind: "admin.sync_trigger" })).toBeNull();
   });
 });
