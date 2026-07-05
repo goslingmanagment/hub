@@ -1701,3 +1701,35 @@ Chain tip moves again: merge target = kernel/stage-14-ofapi-transactions @ 478ea
 (+ this decision commit). Both waves together: 16 defects found by review after
 "test-green" — the pre-merge adversarial pass earns its place in the standard
 stage-execution loop.
+
+**Decision #86:** Review wave 3 — trust-but-verify over the fix commits themselves
+(three skeptical verifiers, one per fix commit fcc06cf/478eaf8/a639876). The fixes
+held on 12 of 14 pointed probes; two real gaps IN THE FIXES found and closed
+(core 9d30bb2, desktop 3a1087f; suites 182/1474 and 762+1211, both green):
+
+- CRITICAL (self-suspected, verifier-confirmed at 90): purchase-history per-fan
+  isolation conflated systemic failures with fan-scoped ones. A Fansly
+  param-contract drift (HTTP 400 + app code 99 — probe-proven systemic) would skip
+  EVERY fan, dedupe hundreds of skips into ONE warn anomaly, stamp the completion
+  checkpoint, and repeat the zero-capture "success" every cadence, alert-free.
+  Now: code 99 propagates; skips advance the cursor locally only (failed walks
+  resume); mass-skip circuit breaker fails the run loudly when no fan succeeded.
+- Chargebacks first-walk starvation: the all-or-nothing guard (#84) + the 20-page
+  per-run cap = a >2000-row history could NEVER complete, discarding daily forever
+  with info-only logging. First walks now cap at 200 pages (20k rows), blocked
+  pages log at warn.
+- Desktop sub-bar flags taken: garbage local timestamps degrade to epoch
+  client-side (one unparseable observedAt would 400-wedge a whole table's harvest
+  permanently — whole-batch atomicity); quarantine-write failure no longer masks
+  the original 400; prune-freeze got its missing regression test.
+
+Verified-clean worth recording: tombstone-stub protocol correct under replay and
+rebuild (false ON CONFLICT WHERE = no-op, no overwrite); incident latch re-arm
+cannot spam Telegram (incidentKey idempotence); stableHash single call site;
+ingest scoping safe for empty assignments; no import cycles; desktop byte
+accounting UTF-8-correct; prune-freeze binding window provably zero-length.
+
+FINAL Monday tips: core kernel/stage-14-ofapi-transactions @ 9d30bb2 (+ this
+decision), desktop kernel/stage-12-harvest @ 3a1087f. Three-wave total: 18 defects
+after "test-green", 2 of them defects in earlier fixes — the verify-the-fix pass
+is not optional.
