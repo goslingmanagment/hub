@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import type {
   OfapiWebhookAckResponse,
@@ -9,6 +9,7 @@ import {
   getLatestOfapiEventTimesForPages,
   getOfapiCreditState,
   getOfapiWebhookConfig,
+  insertObservation,
   insertOfapiWebhookEvent,
   listOfapiMappedPages,
   listOnlyFansPagesForOfapiMapping,
@@ -155,21 +156,45 @@ export async function receiveOfapiWebhook(
     throw new BadRequestError("Webhook body is not an OFAPI event envelope");
   }
 
-  const created = await insertOfapiWebhookEvent(app.db, {
-    idempotencyKey,
-    eventType: envelope.data.event,
-    ofapiAccountId: envelope.data.account_id ?? null,
-    // Journal the full envelope so processing/replay never depends on parse-time choices.
-    payload: parsedBody as Record<string, unknown>,
-    // DM, subscription, and presence events are stamped as projection
-    // candidates regardless of their flags, so turning the respective flag on
-    // later lets the sweep project the journal rows still inside the retention
-    // window.
-    projectionStatus: isOfapiDmProjectionEventType(envelope.data.event) ||
-        isOfapiSubscriptionProjectionEventType(envelope.data.event) ||
-        isOfapiPresenceProjectionEventType(envelope.data.event)
-      ? "pending"
-      : "none",
+  // One transaction for the journal row AND its observation (Stage 7,
+  // producer 1): a missing observation partition rolls back both -> 5xx ->
+  // OFAPI retries — never an acked-but-unobserved delivery. Journaling is
+  // unconditional (no capture flags, by construction); mapping is not
+  // consulted, so unmapped-account deliveries are captured too.
+  const created = await app.db.transaction(async (tx) => {
+    const dbTx = tx as typeof app.db;
+    const inserted = await insertOfapiWebhookEvent(dbTx, {
+      idempotencyKey,
+      eventType: envelope.data.event,
+      ofapiAccountId: envelope.data.account_id ?? null,
+      // Journal the full envelope so processing/replay never depends on parse-time choices.
+      payload: parsedBody as Record<string, unknown>,
+      // DM, subscription, and presence events are stamped as projection
+      // candidates regardless of their flags, so turning the respective flag on
+      // later lets the sweep project the journal rows still inside the retention
+      // window.
+      projectionStatus: isOfapiDmProjectionEventType(envelope.data.event) ||
+          isOfapiSubscriptionProjectionEventType(envelope.data.event) ||
+          isOfapiPresenceProjectionEventType(envelope.data.event)
+        ? "pending"
+        : "none",
+    });
+    if (!inserted) {
+      // Same idempotent delivery, same fact — one observation per delivery
+      // attempt is NOT kept.
+      return null;
+    }
+    await insertObservation(dbTx, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      nativeAccountRef: envelope.data.account_id ?? null,
+      kind: envelope.data.event,
+      payload: parsedBody,
+      payloadHash: createHash("sha256").update(input.rawBody).digest(),
+      idempotencyKey,
+    });
+    return inserted;
   });
 
   if (!created) {

@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -185,6 +185,84 @@ describe("OFAPI webhook receiver", () => {
       limit: 10,
     });
     expect(pending).toEqual([row.id]);
+  });
+
+  it("journals an observation atomically with every delivery (Stage 7 producer 1)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await seedWebhookConfig();
+    const body = await fixtureBody("messages_received.json");
+    const idempotencyKey = nextIdempotencyKey();
+
+    const first = await postWebhook({ body, idempotencyKey });
+    expect(first.statusCode).toBe(200);
+
+    const observations = await testDb.pool.query<{
+      source: string;
+      producer: string;
+      platform: string;
+      native_account_ref: string;
+      kind: string;
+      idempotency_key: string;
+      payload_hash: Buffer;
+    }>(
+      `select source, producer, platform, native_account_ref, kind, idempotency_key, payload_hash
+       from observations where source = 'webhook'`,
+    );
+    expect(observations.rows).toHaveLength(1);
+    expect(observations.rows[0]).toMatchObject({
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      native_account_ref: "acct_01000000000000000000000000000000",
+      kind: "messages.received",
+      idempotency_key: idempotencyKey,
+    });
+    const expectedHash = createHash("sha256").update(Buffer.from(body)).digest();
+    expect(Buffer.compare(observations.rows[0]!.payload_hash, expectedHash)).toBe(0);
+
+    // Re-delivery of the same idempotent delivery = the same fact: duplicate
+    // ack, no second observation.
+    const duplicate = await postWebhook({ body, idempotencyKey });
+    expect(duplicate.json()).toEqual({ received: true, duplicate: true });
+    const recount = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observations where source = 'webhook'",
+    );
+    expect(recount.rows[0]!.n).toBe("1");
+  });
+
+  it("captures unmapped-account deliveries as retained observations (Stage 7 headline)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    await seedWebhookConfig();
+    const envelope = JSON.parse(await fixtureBody("messages_received.json")) as Record<string, unknown>;
+    envelope["account_id"] = "acct_unmapped_stage7";
+    const body = JSON.stringify(envelope);
+
+    const response = await postWebhook({ body, signature: sign(body) });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ received: true, duplicate: false });
+
+    // Processing settles the journal row as skipped (no mapped page) — the
+    // observation is retained regardless: capture is unconditional.
+    const rows = await appContext.db.select().from(ofapiWebhookEvents);
+    expect(rows).toHaveLength(1);
+    await processOfapiWebhookEvent(appContext, rows[0]!.id);
+
+    const observation = await testDb.pool.query<{ native_account_ref: string; kind: string }>(
+      "select native_account_ref, kind from observations where source = 'webhook'",
+    );
+    expect(observation.rows).toHaveLength(1);
+    expect(observation.rows[0]).toEqual({
+      native_account_ref: "acct_unmapped_stage7",
+      kind: "messages.received",
+    });
   });
 
   it("rejects tampered bodies, bad signatures, missing headers, and malformed payloads", async (context) => {
