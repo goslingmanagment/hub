@@ -254,6 +254,15 @@ importers:
         specifier: ^7.27.2
         version: 7.27.2
 
+  packages/sdk:
+    dependencies:
+      '@agency_hub_core/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: ^4.1.5
+        version: 4.3.6
+
   packages/shared:
     dependencies:
       dotenv:

@@ -1,0 +1,13 @@
+{
+  "name": "@kernel/sdk",
+  "version": "0.1.0",
+  "description": "Generated kernel API client. Do not edit by hand — regenerate with `pnpm contracts:generate`.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agency_hub_core/contracts": "workspace:*",
+    "zod": "^4.1.5"
+  }
+}

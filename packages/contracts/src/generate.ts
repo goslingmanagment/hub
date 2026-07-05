@@ -7,6 +7,7 @@ import { createLogger } from "@agency_hub_core/shared";
 
 import { buildApiServer, normalizeOpenApiDocument } from "../../../apps/runtime/src/api/server.ts";
 import { renderAuthorizationPolicyMarkdown } from "./authorization-policy.ts";
+import { buildSdkFiles } from "./generate-sdk.ts";
 
 async function main() {
   const encryptionKey = Buffer.alloc(32, 0);
@@ -74,6 +75,19 @@ async function main() {
     const policyPath = path.resolve("docs/generated/authorization-policy.md");
     await mkdir(path.dirname(policyPath), { recursive: true });
     await writeFile(policyPath, renderAuthorizationPolicyMarkdown(server.routePolicyTable), "utf8");
+
+    // Kernel Stage 20: the generated-only @kernel/sdk package (operations
+    // manifest + contract hash + re-exports; runtime lives in this package).
+    const sdkFiles = buildSdkFiles({
+      routePolicyTable: server.routePolicyTable,
+      openApiDocumentJson: `${JSON.stringify(spec, null, 2)}\n`,
+      sdkVersion: "0.1.0",
+    });
+    for (const [relativePath, content] of sdkFiles) {
+      const target = path.resolve("packages/sdk", relativePath);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, content, "utf8");
+    }
   } finally {
     await server.close();
   }
