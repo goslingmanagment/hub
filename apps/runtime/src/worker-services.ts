@@ -37,6 +37,7 @@ import {
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
+import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
   ensureOfapiChargebacksQueue,
   ensureOfapiChargebacksSchedule,
@@ -247,6 +248,10 @@ export async function startWorkerServices(
     app.logger.info(result, "Workboard v2 closing classification complete");
   });
 
+  // Stage 21: the v2 conformance instrument — permanent, read-only (one
+  // checkpoint row), unconditional like the sweeps.
+  const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
+
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);
   await startOfapiChargebacksWorker(app, boss);
@@ -308,6 +313,9 @@ export async function startWorkerServices(
         });
       }
       abortController.abort();
+      await domainEventsSmoke.stop().catch((error) => {
+        app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");
+      });
       await executorPromise.catch((error) => {
         app.logger.error({ err: error }, "Sync page executor failed during shutdown");
       });
