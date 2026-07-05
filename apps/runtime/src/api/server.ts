@@ -90,26 +90,14 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import {
-  assignPageToUser,
   authenticateApiKeyToken,
-  authenticateSessionToken,
   canAccessPage,
-  createUserAccount,
   enforceRevenueRouteRoleScope,
-  getAuthenticatedUserByUsername,
-  issueChatterApiKey,
-  listApiKeysForUsers,
-  listUsersDetailed,
-  loginWithPassword,
-  logoutSessionToken,
   recordAudit,
   requireApiKeyUser,
   requireDashboardUser,
   requireOwner,
-  revokeUserApiKeys,
   SESSION_COOKIE_NAME,
-  setUserPassword,
-  unassignPageFromUser,
   type AuthPrincipal,
 } from "../services/auth.ts";
 import {
@@ -138,8 +126,9 @@ import {
   type AuthPolicyVerdict,
   type RoutePolicyTableRow,
 } from "./auth-policy.ts";
-import { createRequestAuth, pageScopeFor } from "./request-auth.ts";
+import { auditCtx, createRequestAuth, pageScopeFor } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
+import { registerIdentityRoutes } from "../modules/identity/index.ts";
 import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
 import {
   findPageSummaryByLabel,
@@ -280,26 +269,6 @@ declare module "fastify" {
   }
 }
 
-function applyCookie(reply: {
-  setCookie: FastifyReply["setCookie"];
-}, token: string, appContext: AppContext) {
-  reply.setCookie(SESSION_COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: appContext.config.isProduction ? true : "auto",
-    path: "/",
-    expires: new Date(Date.now() + appContext.config.sessionTtlDays * 24 * 60 * 60 * 1000),
-  });
-}
-
-function clearCookie(reply: {
-  clearCookie: FastifyReply["clearCookie"];
-}) {
-  reply.clearCookie(SESSION_COOKIE_NAME, {
-    path: "/",
-  });
-}
-
 function serializeTimestamp(value: Date | string) {
   return new Date(value).toISOString();
 }
@@ -410,6 +379,18 @@ function rethrowAdminCatalogError(error: unknown): never {
 }
 
 export function normalizeOpenApiDocument<T extends Record<string, any>>(spec: T): T {
+  // Deterministic path order: swagger emits paths in ROUTE REGISTRATION order,
+  // which the Stage 19 module extraction shuffles as handlers relocate. Sorting
+  // decouples the published document (and the api-types diff gate) from where a
+  // route happens to register.
+  if (spec.paths && typeof spec.paths === "object") {
+    (spec as Record<string, any>).paths = Object.fromEntries(
+      Object.entries(spec.paths as Record<string, unknown>).sort(([left], [right]) =>
+        left < right ? -1 : left > right ? 1 : 0,
+      ),
+    );
+  }
+
   const csvResponse = spec.paths?.["/api/v1/admin/ofapi/credits/ledger.csv"]
     ?.get?.responses?.["200"];
   const jsonContent = csvResponse?.content?.["application/json"];
@@ -740,49 +721,8 @@ export async function buildApiServer(appContext: AppContext) {
     return health.body;
   });
 
-  server.post("/api/v1/auth/login", {
-    schema: routeSchemas.login,
-    config: {
-      // Pure per-IP bound against cross-account spraying (audit B7). The
-      // plugin runs at onRequest, before the body is parsed, so an IP key is
-      // the only honest key here; per-account brute force is handled by the
-      // escalating backoff inside loginWithPassword. request.ip is only
-      // meaningful behind a proxy when TRUST_PROXY narrows trust to the
-      // actual hops — see .env.production.example.
-      rateLimit: {
-        max: 20,
-        timeWindow: 60_000,
-      },
-    },
-  }, async (request, reply) => {
-    const result = await loginWithPassword(appContext, request.body);
-    applyCookie(reply, result.sessionToken, appContext);
-    return {
-      authMethod: result.authMethod,
-      user: result.user,
-    };
-  });
-
-  server.post("/api/v1/auth/logout", {
-    schema: routeSchemas.logout,
-  }, async (request, reply) => {
-    const sessionToken = request.cookies[SESSION_COOKIE_NAME];
-    if (sessionToken) {
-      await logoutSessionToken(appContext, sessionToken);
-    }
-    clearCookie(reply);
-    return { ok: true as const };
-  });
-
-  server.get("/api/v1/auth/me", {
-    schema: routeSchemas.me,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return {
-      authMethod: principal.authMethod,
-      user: principal.user,
-    };
-  });
+  // --- Identity (auth/sessions/users/api-keys) --- (module: apps/runtime/src/modules/identity)
+  registerIdentityRoutes(server, moduleContext);
 
   server.post("/api/v1/ai-usage/batch", {
     schema: routeSchemas.aiUsageBatch,
@@ -2428,19 +2368,6 @@ export async function buildApiServer(appContext: AppContext) {
   });
 
   // === Admin routes ===
-  const auditCtx = (principal: AuthPrincipal) => ({
-    source: "api" as const,
-    actorUserId: principal.user.id,
-  });
-
-  // User management
-  server.get("/api/v1/admin/users", {
-    schema: routeSchemas.adminListUsers,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    return listUsersDetailed(appContext);
-  });
 
   server.get("/api/v1/admin/usage/chatters", {
     schema: routeSchemas.adminChatterUsage,
@@ -2448,96 +2375,6 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return getAdminChatterUsageReport(appContext, request.query);
-  });
-
-  server.post("/api/v1/admin/users", {
-    schema: routeSchemas.adminCreateUser,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    const user = await createUserAccount(appContext, request.body, auditCtx(principal));
-    return user!;
-  });
-
-  server.patch("/api/v1/admin/users/:username/password", {
-    schema: routeSchemas.adminSetPassword,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    await setUserPassword(appContext, {
-      username: request.params.username,
-      password: request.body.password,
-    }, auditCtx(principal));
-    return { ok: true as const };
-  });
-
-  server.post("/api/v1/admin/users/:username/pages", {
-    schema: routeSchemas.adminAssignPage,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    await assignPageToUser(appContext, {
-      username: request.params.username,
-      pageLabel: request.body.pageLabel,
-    }, auditCtx(principal));
-    const user = await getAuthenticatedUserByUsername(appContext, request.params.username);
-    if (!user) {
-      throw new NotFoundError(`User "${request.params.username}" not found`);
-    }
-    return user;
-  });
-
-  server.delete("/api/v1/admin/users/:username/pages/:pageLabel", {
-    schema: routeSchemas.adminUnassignPage,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    await unassignPageFromUser(appContext, {
-      username: request.params.username,
-      pageLabel: request.params.pageLabel,
-    }, auditCtx(principal));
-    return { ok: true as const };
-  });
-
-  // API key management
-  server.get("/api/v1/admin/users/:username/api-keys", {
-    schema: routeSchemas.adminListApiKeys,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    const keys = await listApiKeysForUsers(appContext, [request.params.username]);
-    return keys.map((k) => ({
-      id: k.id,
-      keyPrefix: k.keyPrefix,
-      userId: k.userId,
-      isActive: k.revokedAt === null,
-      revokedAt: k.revokedAt?.toISOString() ?? null,
-      revokedReason: k.revokedReason ?? null,
-      createdAt: k.createdAt.toISOString(),
-      lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
-    }));
-  });
-
-  server.post("/api/v1/admin/users/:username/api-keys", {
-    schema: routeSchemas.adminIssueApiKey,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    return issueChatterApiKey(appContext, {
-      username: request.params.username,
-      pageLabel: request.body.pageLabel,
-    }, auditCtx(principal));
-  });
-
-  server.delete("/api/v1/admin/users/:username/api-keys", {
-    schema: routeSchemas.adminRevokeApiKeys,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    const revoked = await revokeUserApiKeys(appContext, {
-      username: request.params.username,
-    }, auditCtx(principal));
-    return { revokedCount: revoked.length };
   });
 
   // Sync management

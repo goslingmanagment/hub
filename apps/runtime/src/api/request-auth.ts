@@ -24,6 +24,12 @@ export function pageScopeFor(principal: AuthPrincipal) {
   return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
 }
 
+/** Audit attribution for admin mutations issued through the API. */
+export const auditCtx = (principal: AuthPrincipal) => ({
+  source: "api" as const,
+  actorUserId: principal.user.id,
+});
+
 function safeStringEquals(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
