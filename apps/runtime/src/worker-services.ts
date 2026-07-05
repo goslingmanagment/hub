@@ -36,6 +36,7 @@ import {
   ensureMessageArchiveSchedule,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
+import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
 import {
   ensureOfapiCreditQueues,
   ensureOfapiCreditSchedules,
@@ -222,6 +223,10 @@ export async function startWorkerServices(
     const result = await runMessageArchiveProjection(app);
     if (result.eventsSeen > 0) {
       app.logger.info(result, "Message-archive projection sweep complete");
+    }
+    const earnings = await runFanEarningsProjection(app);
+    if (earnings.upserted > 0) {
+      app.logger.info(earnings, "Fan-earnings projection sweep complete");
     }
   });
 

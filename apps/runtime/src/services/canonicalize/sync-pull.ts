@@ -25,7 +25,7 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-export const SYNC_PULL_CANONICALIZER_VERSION = 2;
+export const SYNC_PULL_CANONICALIZER_VERSION = 3;
 
 /** Per-run context: page -> own platform-native account id. Direction of a
  *  Fansly DM (sent vs received) is decidable only against the page's OWN
@@ -38,6 +38,13 @@ export interface SyncPullCanonicalizeContext {
 export const SYNC_PULL_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "earnings_transactions",
   "dm_messages",
+  // v3 (Stage 16 parse side): shapes derived from the extension's
+  // production-proven parsers (chatgoose shared/types.ts) — the ramp
+  // VERIFIES rather than discovers; units confirmed mills by core's own
+  // treatment of the same endpoint family (executor-handlers totalGross).
+  "fan_earnings_stats",
+  "fan_earnings_monthly",
+  "purchase_history",
 ]);
 
 function fanslyEarningsTransactions(
@@ -186,7 +193,143 @@ export function canonicalizeSyncPullObservation(
         return ofapiRestMessages(observation);
       }
       return observation.platform === "fansly" ? fanslyDmMessages(observation, context) : [];
+    case "fan_earnings_stats":
+      return observation.platform === "fansly" ? fanslyEarningsObserved(observation, false) : [];
+    case "fan_earnings_monthly":
+      return observation.platform === "fansly" ? fanslyEarningsObserved(observation, true) : [];
+    case "purchase_history":
+      return observation.platform === "fansly" ? fanslyPurchaseHistory(observation) : [];
     default:
       return [];
   }
+}
+
+interface EarningsAggregate {
+  grossMills: number;
+  netMills: number;
+  breakdown: Array<{ type: number | null; grossMills: number; netMills: number }>;
+}
+
+function stableHash(value: unknown): string {
+  // Order-independent content hash so an unchanged snapshot re-fetch
+  // produces the same dedup key (spec: no new event on identical stats).
+  const canonical = JSON.stringify(value, Object.keys(value as Record<string, unknown>).sort());
+  let hash = 0;
+  for (let index = 0; index < canonical.length; index += 1) {
+    hash = (hash * 31 + canonical.charCodeAt(index)) | 0;
+  }
+  return (hash >>> 0).toString(16);
+}
+
+/** Both earnings kinds: rows aggregate per (fan, window); window = 'lifetime'
+ *  for the stats snapshot, 'YYYY-MM' for monthly rows. Amounts are MILLS. */
+function fanslyEarningsObserved(
+  observation: CanonicalizableObservation,
+  monthly: boolean,
+): CanonicalEventDraft[] {
+  const rows = Array.isArray(observation.payload) ? observation.payload : null;
+  if (!rows) {
+    return [];
+  }
+
+  const perKey = new Map<string, { fan: string; window: string; aggregate: EarningsAggregate }>();
+  for (const row of rows) {
+    if (!isRecord(row)) {
+      continue;
+    }
+    const fan = asString(row.correlationAccountId);
+    if (!fan) {
+      continue;
+    }
+    let window = "lifetime";
+    if (monthly) {
+      const year = asNumber(row.year);
+      const month = asNumber(row.month);
+      if (year === null || month === null) {
+        continue;
+      }
+      window = `${year}-${String(month).padStart(2, "0")}`;
+    }
+    const key = `${fan}:${window}`;
+    const entry = perKey.get(key) ?? {
+      fan,
+      window,
+      aggregate: { grossMills: 0, netMills: 0, breakdown: [] },
+    };
+    const gross = asNumber(row.totalGross) ?? 0;
+    const net = asNumber(row.totalNet) ?? 0;
+    entry.aggregate.grossMills += gross;
+    entry.aggregate.netMills += net;
+    entry.aggregate.breakdown.push({
+      type: asNumber(row.type),
+      grossMills: gross,
+      netMills: net,
+    });
+    perKey.set(key, entry);
+  }
+
+  const events: CanonicalEventDraft[] = [];
+  for (const { fan, window, aggregate } of perKey.values()) {
+    events.push({
+      type: "fan.earnings_observed",
+      occurredAt: observation.observedAt ?? observation.receivedAt,
+      fanIdentityRef: fan,
+      data: {
+        window,
+        grossMills: Math.trunc(aggregate.grossMills),
+        netMills: Math.trunc(aggregate.netMills),
+        breakdown: aggregate.breakdown,
+      },
+      schemaVersion: 1,
+      // Content-hashed: an unchanged snapshot re-fetch dedupes to nothing.
+      dedupKey: `fan_earnings:${fan}:${window}:${stableHash(aggregate)}`,
+    });
+  }
+  return events;
+}
+
+/** PPV order-history rows carry NO order id (extension-proven shape) — the
+ *  dedup key is the composite (fan, media/bundle, createdAt); recorded
+ *  deviation from the spec's `ppv:<order_id>` ideal. */
+function fanslyPurchaseHistory(observation: CanonicalizableObservation): CanonicalEventDraft[] {
+  if (!isRecord(observation.payload)) {
+    return [];
+  }
+  const aggregation = isRecord(observation.payload.aggregationData)
+    ? observation.payload.aggregationData
+    : {};
+  const rows = Array.isArray(observation.payload.accountMediaOrderHistory)
+    ? observation.payload.accountMediaOrderHistory
+    : Array.isArray(aggregation.accountMediaOrders)
+      ? aggregation.accountMediaOrders
+      : null;
+  if (!rows) {
+    return [];
+  }
+
+  const events: CanonicalEventDraft[] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) {
+      continue;
+    }
+    const fan = asString(row.accountId);
+    const mediaRef = asString(row.accountMediaId) ?? asString(row.accountMediaBundleId);
+    if (!fan || !mediaRef) {
+      continue;
+    }
+    const occurredAt = asDate(row.createdAt, observation.receivedAt);
+    events.push({
+      type: "message.ppv_unlocked",
+      occurredAt,
+      fanIdentityRef: fan,
+      data: {
+        accountMediaId: asString(row.accountMediaId),
+        accountMediaBundleId: asString(row.accountMediaBundleId),
+        orderType: asNumber(row.type),
+      },
+      schemaVersion: 1,
+      dedupKey: `ppv:${fan}:${mediaRef}:${occurredAt.toISOString()}`,
+    });
+  }
+  return events;
 }

@@ -40,6 +40,7 @@ import {
   runMessageArchiveBackfills,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
+import { rebuildFanEarningsProjection } from "./services/projections/fan-earnings.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -951,14 +952,15 @@ export function buildProgram() {
     .argument("<projection>", "projection name (message_archive)")
     .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
     .action(async (projection, options) => {
-      if (projection !== "message_archive") {
+      if (projection !== "message_archive" && projection !== "fan_earnings_stats") {
         throw new Error(`Unknown projection: ${projection}`);
       }
       const app = await createAppContext();
       try {
-        const result = await rebuildMessageArchiveProjection(app, {
-          ...(options.account !== undefined ? { accountId: options.account } : {}),
-        });
+        const scope = options.account !== undefined ? { accountId: options.account } : {};
+        const result = projection === "message_archive"
+          ? await rebuildMessageArchiveProjection(app, scope)
+          : await rebuildFanEarningsProjection(app, scope);
         console.log(JSON.stringify(result));
       } finally {
         await app.close();

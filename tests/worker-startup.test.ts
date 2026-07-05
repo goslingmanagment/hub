@@ -100,6 +100,9 @@ vi.mock("../apps/runtime/src/services/db-disk-alert.ts", () => dbDiskAlertMocks)
 vi.mock("../apps/runtime/src/services/observations-partitions.ts", () => observationsPartitionMocks);
 vi.mock("../apps/runtime/src/services/canonicalize-driver.ts", () => canonicalizeDriverMocks);
 vi.mock("../apps/runtime/src/services/projections/message-archive.ts", () => messageArchiveMocks);
+vi.mock("../apps/runtime/src/services/projections/fan-earnings.ts", () => ({
+  runFanEarningsProjection: vi.fn(),
+}));
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,

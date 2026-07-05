@@ -137,9 +137,9 @@ describe("canonicalization sweep (Stage 8)", () => {
     expect(second).toMatchObject({ appended: 0, stamped: 0, skippedUnmapped: 1 });
 
     // Version bump (replay): rescans consumed rows, appends nothing new.
-    // (floor 3 > every family's current version, so ALL stamped rows rescan —
-    // sync-pull is already at v2 since Stage 17's fansly-DM declaration.)
-    const replay = await runCanonicalization(appStub(), { belowParseVersion: 3 });
+    // Floor must exceed EVERY family's current version (sync-pull is v3
+    // since Stage 16's parse slice) so all stamped rows rescan.
+    const replay = await runCanonicalization(appStub(), { belowParseVersion: 99 });
     expect(replay.appended).toBe(0);
     expect(replay.deduped).toBe(3);
     expect(await listEventsSince(testDb.db, { accountId: 4, afterSeq: 0 })).toHaveLength(2);

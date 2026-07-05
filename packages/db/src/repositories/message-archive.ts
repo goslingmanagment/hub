@@ -387,3 +387,33 @@ export async function listFanslyBackscrollManifest(
     cursorState: row.cursor_state ?? null,
   }));
 }
+
+/** Stage 16 v3: upsert one per-fan earnings window row (amounts in mills). */
+export async function upsertFanEarningsStat(
+  db: Database,
+  input: {
+    accountId: number;
+    fanId: number;
+    window: string;
+    grossMills: number;
+    netMills: number | null;
+    observedAt: Date;
+    sourceEventId: number;
+  },
+): Promise<void> {
+  await db.execute(sql`
+    insert into fan_earnings_stats (
+      account_id, fan_id, "window", gross_mills, net_mills, observed_at, source_event_id
+    ) values (
+      ${input.accountId}, ${input.fanId}, ${input.window}, ${input.grossMills},
+      ${input.netMills}, ${input.observedAt}, ${input.sourceEventId}
+    )
+    on conflict (account_id, fan_id, "window") do update set
+      gross_mills = excluded.gross_mills,
+      net_mills = excluded.net_mills,
+      observed_at = excluded.observed_at,
+      source_event_id = excluded.source_event_id,
+      updated_at = now()
+    where excluded.observed_at >= fan_earnings_stats.observed_at
+  `);
+}
