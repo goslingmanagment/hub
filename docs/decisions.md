@@ -1880,3 +1880,46 @@ guard-deletion cleanup slice (in-handler requireX calls the middleware
 subsumes; REVENUE_ROUTE_ROLE_ENFORCEMENT retires with
 enforceRevenueRouteRoleScope) → stage exits. This branch is NOT part of
 Monday's merge chain; it merges independently after the chain lands.
+
+## Stage 20 Session 1 — @kernel/sdk Built, Streams Helpers Live, api-types Dead (2026-07-05)
+
+**Decision #90:** Stage 20 started on `kernel/stage-20-generated-sdk` off the
+Stage 19 tip (ordering deviation in the #73–#75 pattern — owner: "continue it
+and next stages, don't worry about time checking"; Stage 19 is green-local,
+not deployed). §8 tasks 1, 2, 4 of 6 are done at e268f53; full suite
+**188 files / 1525 tests green**.
+
+- **@kernel/sdk (e18aa4e).** Design decision worth recording: the generated
+  package is deliberately TINY — an operations manifest (method/path per
+  registry key, recovered from Stage 19's `server.routePolicyTable` with a
+  total-join assertion), the contract hash, and re-exports; there is no mass
+  codegen. Every moving part lives in `packages/contracts/src/sdk-runtime.ts`,
+  where per-operation methods and request/response types are MAPPED
+  generically off `typeof routeSchemas` (z.input in, z.output out) and
+  responses are runtime-validated with the same schemas the server enforces.
+  Cookie/bearer auth with a 401/403 hook; KernelApiError taxonomy; `raw()`
+  escape hatch; exclusions = webhook, both SSE streams, the wildcard read
+  gateway, the CSV export. **The contract hash is sha256 of the normalized
+  OpenAPI document, not the manifest** — a renamed response field must move
+  it (the cross-repo drift drill's property), pinned by test. Core has no
+  package version, so the SDK base is "0.1.0" and the hash is the real
+  identity; release tags own versioning (Task 6). DP 10 git-tag pinning is
+  documented in the generated README.
+- **Stream helpers (3149f2f).** `subscribeSyncEvents` wraps the v1 protocol
+  (Last-Event-ID resume, per-frame validation, 409 → onSnapshotRequired,
+  deliberately no auto-reconnect — the server bounds stream lifetime and v1
+  clients own the loop); `streamAiGateway` parses `event: ai` frames;
+  `ofapiRead` is the thin wildcard passthrough. Conformance proven on fake
+  streams (split chunks, heartbeat noise, invalid frames) and against the
+  LIVE server — seeded journal events replayed through the helper, an
+  ahead-of-journal cursor produced the parsed snapshot-required payload.
+- **api-types.ts deleted (e268f53, Task 4 done early).** 14,753 dead lines +
+  the openapi-typescript dependency; verified consumer-free first. Types now
+  flow from the SDK's mapped inference; the OpenAPI document remains the
+  published artifact.
+
+Remaining: Task 3 (dashboard adoption ×16 modules, delete client.ts, lint
+ban), Task 5 (drift gates in desktop/extension + the prove-the-gate drill),
+Task 6 (release ops — note: external git-tag installs need the runtime
+bundled from contracts at publish time; decide there). Resume map in the
+stage's `## Progress`.
