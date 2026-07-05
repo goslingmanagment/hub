@@ -1227,3 +1227,31 @@ shortened at explicit owner instruction — "i don't want to wait", "do everythi
 
 Unblocked: Stages 7 (in flight), 13 (Q1), and the Phase-A-gated chain. Stage 4's exit still
 awaits the desktop branch reconciliation (decision #66).
+
+## Desktop Mains Reconciled — Stage 4 Unblocked (2026-07-05)
+
+**Decision #69:** The desktop repo's diverged mains (5-and-5, found by the Stage 4 Q5
+artifact diff, decision #66) were reconciled *in-session* — the owner delegated the
+remaining human items ("you could do human items"). Merge commit `e8e7b93` on local main;
+safety pointer `backup/main-pre-reconcile-20260705`.
+
+The divergence turned out to be two sessions independently fixing the same two bugs a day
+apart, so the merge was semantic, not mechanical:
+
+- **Hub confirmed-send projection:** origin's `send/engine.ts` fix (62d00fb, Jul 1)
+  auto-composed with local's deeper insert-if-absent DB projection (b1dd980, Jul 2) — both
+  test sets pass together.
+- **OFAPI read runtime:** local's validate-before-swap design (77d5014 — candidate
+  bootstrap, rollback on activation failure, `onOfapiRuntimeConfigChanged` routing) was
+  kept over origin's fingerprint-based live switch (5ebf171) — two complete alternative
+  implementations; mixing them piecemeal was rejected. Origin's dep name
+  `onOfapiReadConfigChanged` and its plumbing are gone.
+- **Ported, not lost:** origin's one non-overlapping renderer fix (e8016da, Online snapshot
+  staleness) — `['online', accountId]` invalidation on chats/messages/fans db:changed —
+  re-implemented inside local's extracted `dbInvalidation.ts` helper with test-table rows.
+
+Verification: full `pnpm check` green on merged main (1,958 tests) and again on the rebased
+stage branch `kernel/stage-04-desktop-stop-loss` @ `69a72bf` (1,965 tests) — the arbiter
+was that BOTH sides' tests must pass in one tree. Remaining for Stage 4 exit (owner-only):
+merge stage branch, bump 0.1.29, tag, **push** (both repos' local mains are now ahead of
+origin — core by 21+ commits), feed verify per stage §5.
