@@ -1,9 +1,10 @@
 // OFAPI webhook family canonicalizer (Stage 8). Reads the JOURNALED envelope
 // ({event, account_id, payload} — exactly what the receiver persisted), never
-// the live wire. Dedup keys follow the stage spec's binding table. NB
-// tips.received is deliberately NOT declared: its only fixture is unverified
-// (spec assumption 5) — those observations wait at parse_version 0 as the
-// first replay customer once a verified fixture lands.
+// the live wire. Dedup keys follow the stage spec's binding table.
+// tips.received was undeclared through v1 (unverified fixture, spec
+// assumption 5); v2 declares it from the live-verified shape (Stage 14,
+// decision #80) — the waiting parse_version-0 observations are exactly the
+// replay customers the capture-now-parse-later design promised.
 
 import {
   asDate,
@@ -14,13 +15,14 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-export const OFAPI_WEBHOOK_CANONICALIZER_VERSION = 1;
+export const OFAPI_WEBHOOK_CANONICALIZER_VERSION = 2;
 
 export const OFAPI_WEBHOOK_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "messages.received",
   "messages.sent",
   "messages.deleted",
   "messages.ppv.unlocked",
+  "tips.received",
   "transactions.new",
   "subscriptions.new",
   "users.online",
@@ -124,6 +126,39 @@ export function canonicalizeOfapiWebhookObservation(
         // The notification id is the stable unique ref on this kind; the
         // message id inside the link is best-effort display data.
         dedupKey: `ppv:${notificationId}`,
+      }];
+    }
+
+    case "tips.received": {
+      // Live-verified shape (Stage 14): the tipper is payload.user.id — the
+      // top-level user_id is the CREATOR (constant across tippers on a page).
+      // The money itself also arrives as transactions.new (type "tip") →
+      // transaction.posted; this event is the tip NOTIFICATION with its own
+      // type, so projections that count money from transaction.posted never
+      // double-count.
+      const payload = envelopePayload(observation);
+      if (!payload) {
+        return [];
+      }
+      const notificationId = asString(payload.id);
+      if (!notificationId) {
+        return [];
+      }
+      const tipper = isRecord(payload.user) ? payload.user : {};
+      const fanId = asString(tipper.id);
+      return [{
+        type: "tip.received",
+        occurredAt: asDate(payload.createdAt, observation.receivedAt),
+        fanIdentityRef: fanId,
+        conversationRef: fanId,
+        data: {
+          amountGross: asNumber(payload.amountGross),
+          amountNet: asNumber(payload.amountNet),
+          subType: asString(payload.subType),
+          text: asString(payload.text),
+        },
+        schemaVersion: 1,
+        dedupKey: `tip:${notificationId}`,
       }];
     }
 

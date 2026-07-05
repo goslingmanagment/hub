@@ -128,11 +128,26 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
     });
   });
 
-  it("declares no canonicalizer for unverified or unmapped kinds", () => {
-    // tips.received: fixture exists but is UNVERIFIED — the observation waits
-    // at its current parse_version as the first replay customer (spec §7.5).
-    expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has("tips.received")).toBe(false);
-    expect(canonicalizeOfapiWebhookObservation(observation("unverified_tips_received"))).toEqual([]);
+  it("canonicalizes tips.received (v2) keyed to the tipper, not the creator user_id", () => {
+    const events = canonicalizeOfapiWebhookObservation(observation("tips_received"));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "tip.received",
+      occurredAt: new Date("2026-06-30T14:42:00+00:00"),
+      // payload.user.id — the top-level user_id (518588958) is the CREATOR.
+      fanIdentityRef: "310112051",
+      conversationRef: "310112051",
+      schemaVersion: 1,
+      dedupKey: "tip:115273984711",
+    });
+    expect(events[0]!.data).toMatchObject({
+      amountGross: 8,
+      amountNet: 6.4,
+      subType: "new_tips",
+    });
+  });
+
+  it("declares no canonicalizer for unmapped kinds", () => {
     // users.typing: ephemeral, unmapped by design.
     expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has("users.typing")).toBe(false);
     expect(canonicalizeOfapiWebhookObservation(observation("users_typing"))).toEqual([]);

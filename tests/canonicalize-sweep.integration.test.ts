@@ -77,13 +77,29 @@ async function seedCorpus() {
     idempotencyKey: "cmd:cmd-1:confirmed",
   });
   // 4. Undeclared kind — must remain untouched at parse_version 0.
+  // (tips.received graduated to declared in family v2 — Stage 14; users.typing
+  // is the remaining unmapped-by-design representative.)
+  await insertObservation(db, {
+    source: "webhook",
+    producer: "ofapi:webhook",
+    platform: "onlyfans",
+    accountId: 4,
+    kind: "users.typing",
+    payload: { event: "users.typing", payload: { user: { id: 778 } } },
+    payloadHash: sha256("typing-1"),
+    idempotencyKey: "evt-sweep-typing-1",
+  });
+  // 4b. tips.received — declared as of v2, parses from the verified shape.
   await insertObservation(db, {
     source: "webhook",
     producer: "ofapi:webhook",
     platform: "onlyfans",
     accountId: 4,
     kind: "tips.received",
-    payload: { event: "tips.received", payload: { id: "n1" } },
+    payload: {
+      event: "tips.received",
+      payload: { id: "n1", user: { id: 310112051 }, amountGross: 8, amountNet: 6.4, createdAt: "2026-06-30T14:42:00+00:00" },
+    },
     payloadHash: sha256("tip-1"),
     idempotencyKey: "evt-sweep-tip-1",
   });
@@ -114,22 +130,27 @@ describe("canonicalization sweep (Stage 8)", () => {
 
     const first = await runCanonicalization(appStub());
     expect(first).toMatchObject({
-      appended: 3,       // message + transaction + command.settled
+      appended: 4,       // message + transaction + command.settled + tip.received
       deduped: 0,
-      stamped: 3,
+      stamped: 4,
       skippedUnmapped: 1,
     });
 
     const account4 = await listEventsSince(testDb.db, { accountId: 4, afterSeq: 0 });
-    expect(account4.map((event) => event.type).sort()).toEqual(["command.settled", "message.received"]);
+    expect(account4.map((event) => event.type).sort())
+      .toEqual(["command.settled", "message.received", "tip.received"]);
+    expect(account4.find((event) => event.type === "tip.received")).toMatchObject({
+      dedupKey: "tip:n1",
+      fanIdentityRef: "310112051",
+    });
     const account3 = await listEventsSince(testDb.db, { accountId: 3, afterSeq: 0 });
     expect(account3[0]).toMatchObject({ type: "transaction.posted", dedupKey: "txn:ftx-9" });
 
-    // The undeclared tip stays at parse_version 0 (capture now, parse later).
-    const tipRow = await testDb.pool.query<{ parse_version: number }>(
-      "select parse_version from observations where kind = 'tips.received'",
+    // The undeclared kind stays at parse_version 0 (capture now, parse later).
+    const typingRow = await testDb.pool.query<{ parse_version: number }>(
+      "select parse_version from observations where kind = 'users.typing'",
     );
-    expect(tipRow.rows[0]?.parse_version).toBe(0);
+    expect(typingRow.rows[0]?.parse_version).toBe(0);
 
     // Second sweep: stamped rows are gone from the listing; only the unmapped
     // row is rescanned (and skipped again).
@@ -141,8 +162,8 @@ describe("canonicalization sweep (Stage 8)", () => {
     // since Stage 16's parse slice) so all stamped rows rescan.
     const replay = await runCanonicalization(appStub(), { belowParseVersion: 99 });
     expect(replay.appended).toBe(0);
-    expect(replay.deduped).toBe(3);
-    expect(await listEventsSince(testDb.db, { accountId: 4, afterSeq: 0 })).toHaveLength(2);
+    expect(replay.deduped).toBe(4);
+    expect(await listEventsSince(testDb.db, { accountId: 4, afterSeq: 0 })).toHaveLength(3);
 
     // Dry-run never writes: only the unmapped row remains below the current
     // family versions; narrow to its kind and confirm counts only.
