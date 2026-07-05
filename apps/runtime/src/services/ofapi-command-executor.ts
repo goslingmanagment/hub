@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
+
 import {
   claimQueuedOfapiCommand,
   finalizeOfapiCommand,
   getOfapiCommandById,
+  insertObservation,
   listOfapiCommandVerificationCandidates,
   listQueuedOfapiCommandIds,
   markStaleInFlightOfapiCommandsIndeterminate,
@@ -97,6 +100,50 @@ export function isOfapiCommandPayloadRedactionEnabled(
   config?: Pick<AppContext["config"], "ofapiCommandPayloadRedactionEnabled">,
 ) {
   return config?.ofapiCommandPayloadRedactionEnabled === true;
+}
+
+/**
+ * Stage 7 producer 5: every command settle emits a command_result
+ * observation. Best-effort AFTER the finalize commit — the outcome already
+ * lives permanently in ofapi_commands (Stage 1 stopped its redaction), so a
+ * capture hiccup must not unsettle a settled command or risk a re-send; it is
+ * logged at error level instead. The `cmd:<id>:<state>` key dedupes the
+ * direct-confirm/webhook-confirm race into one fact.
+ */
+async function recordCommandResultObservation(
+  app: Pick<AppContext, "db" | "logger">,
+  input: {
+    command: Pick<OfapiCommandRow, "id" | "kind" | "pageId" | "conversationId" | "chatterUserId">;
+    state: string;
+    outcome: Record<string, unknown>;
+  },
+) {
+  const payload = {
+    commandId: input.command.id,
+    commandKind: input.command.kind,
+    pageId: input.command.pageId,
+    conversationId: input.command.conversationId,
+    state: input.state,
+    ...input.outcome,
+  };
+  try {
+    await insertObservation(app.db, {
+      source: "command_result",
+      producer: "ofapi:command-executor",
+      platform: "onlyfans",
+      accountId: input.command.pageId,
+      kind: `command.${input.state}`,
+      payload,
+      payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+      idempotencyKey: `cmd:${input.command.id}:${input.state}`,
+      actorPrincipalId: input.command.chatterUserId,
+    });
+  } catch (error) {
+    app.logger.error(
+      { err: error, commandId: input.command.id, state: input.state },
+      "command_result observation capture failed — outcome remains in ofapi_commands",
+    );
+  }
 }
 
 export async function ensureOfapiCommandQueues(
@@ -297,6 +344,11 @@ export async function executeOfapiCommand(
       platformMessageId,
       verifierResult,
     });
+    await recordCommandResultObservation(app, {
+      command,
+      state: "confirmed",
+      outcome: { platformMessageId: platformMessageId ?? null, verifierResult },
+    });
     app.logger.info(
       { commandId: command.id, pageId: command.pageId, commandKind: command.kind, platformMessageId },
       "OFAPI command confirmed by vendor response",
@@ -316,6 +368,15 @@ export async function executeOfapiCommand(
         source: "ofapi_response",
         httpStatus: failure.httpStatus,
         observedAt: finishedAt.toISOString(),
+      },
+    });
+    await recordCommandResultObservation(app, {
+      command,
+      state: failure.state,
+      outcome: {
+        errorCode: failure.errorCode,
+        errorClass: failure.errorClass,
+        httpStatus: failure.httpStatus ?? null,
       },
     });
     app.logger.warn(
@@ -493,6 +554,14 @@ export async function verifyOfapiCommandFromSentWebhook(
   if (!confirmed) {
     return { status: "raced" as const };
   }
+  await recordCommandResultObservation(app, {
+    command: matched,
+    state: "confirmed",
+    outcome: {
+      platformMessageId,
+      verifierResult: { source: "messages.sent", eventId: row.id },
+    },
+  });
   app.logger.info(
     { commandId: matched.id, eventId: row.id, platformMessageId },
     "OFAPI command confirmed by messages.sent webhook",

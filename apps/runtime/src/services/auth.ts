@@ -1,3 +1,5 @@
+import { createHash, randomUUID } from "node:crypto";
+
 import argon2 from "argon2";
 
 import {
@@ -12,6 +14,7 @@ import {
   findUserById,
   findUserByUsername,
   insertAuditEvent,
+  insertObservation,
   listApiKeys,
   listUserPageAssignments,
   listUsers,
@@ -170,6 +173,30 @@ async function recordAudit(app: Pick<AppContext, "db">, input: AuditContext & {
     source: input.source,
     eventType: input.eventType,
     metadata: input.metadata,
+  });
+
+  // Stage 7 producer 6: the audit choke point dual-writes an observation.
+  // Operator actions carry no natural idempotency key — each call is a
+  // distinct fact, so the key is a UUID. Callers that run inside a
+  // transaction get both writes atomically; a failed capture fails the
+  // mutation loudly (admin actions are retryable).
+  const payload = {
+    source: input.source,
+    eventType: input.eventType,
+    actorUserId: input.actorUserId ?? null,
+    targetUserId: input.targetUserId ?? null,
+    platformAccountId: input.platformAccountId ?? null,
+    metadata: input.metadata ?? null,
+  };
+  await insertObservation(app.db, {
+    source: "operator",
+    producer: "api:admin",
+    accountId: input.platformAccountId ?? null,
+    kind: input.eventType,
+    payload,
+    payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+    idempotencyKey: `op:${randomUUID()}`,
+    actorPrincipalId: input.actorUserId ?? null,
   });
 }
 

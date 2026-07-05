@@ -649,6 +649,24 @@ describe("OFAPI command outbox intake", () => {
       verifierResult: { source: "ofapi_response" },
     });
     expect(fetched.body).not.toContain("c6b intake validation only");
+
+    // Stage 7 producer 5: the settle emitted exactly one command_result
+    // observation (the second executeOfapiCommand call above is a no-op on
+    // an already-terminal command).
+    const observations = await testDb!.pool.query<{
+      kind: string;
+      idempotency_key: string;
+      actor_principal_id: string | null;
+    }>(
+      `select kind, idempotency_key, actor_principal_id::text as actor_principal_id
+       from observations where source = 'command_result'`,
+    );
+    expect(observations.rows).toHaveLength(1);
+    expect(observations.rows[0]).toMatchObject({
+      kind: "command.confirmed",
+      idempotency_key: `cmd:${commandId}:confirmed`,
+    });
+    expect(observations.rows[0]!.actor_principal_id).not.toBeNull();
   });
 
   it("executes one media vendor attempt and confirms from the response id", async () => {

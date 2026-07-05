@@ -2391,6 +2391,32 @@ describe("api integration", () => {
     ]);
   });
 
+  it("dual-writes operator observations at the audit choke point (Stage 7 producer 6)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    // The suite's beforeEach already created users and assigned a page —
+    // every audited admin action must have produced an operator observation.
+    const observations = await testDb.pool.query<{ kind: string; producer: string }>(
+      "select kind, producer from observations where source = 'operator' order by id",
+    );
+    expect(observations.rows.length).toBeGreaterThanOrEqual(4);
+    expect(observations.rows.every((row) => row.producer === "api:admin")).toBe(true);
+    const kinds = new Set(observations.rows.map((row) => row.kind));
+    expect(kinds).toContain("user.created");
+    expect(kinds).toContain("user.page_assigned");
+
+    // A fresh audited action adds a distinct observation with the actor.
+    const appContext = createTestAppContext(testDb);
+    await issueChatterApiKey(appContext, { username: "anton", pageLabel: "lana" }, { source: "cli" });
+    const issued = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observations where source = 'operator' and kind = 'api_key.issued'",
+    );
+    expect(Number(issued.rows[0]!.n)).toBeGreaterThanOrEqual(1);
+  });
+
   it("gates raw revenue routes to dashboard session roles (Stage 2 chatter-read-scope)", async (context) => {
     if (!testDb || !server) {
       context.skip();
