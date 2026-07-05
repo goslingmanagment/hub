@@ -164,6 +164,12 @@ const envSchema = z.object({
   // dashboard session role. "log" serves bearer-key hits but logs would-deny
   // (the 48 h observation mode); "enforce" refuses them with 403.
   REVENUE_ROUTE_ROLE_ENFORCEMENT: z.enum(["log", "enforce"]).default("log"),
+  // Stage 19 declarative route authorization: "log" computes the middleware
+  // verdict per request and logs divergence from the legacy in-handler guards
+  // (the 48 h observation mode); "enforce" makes the declared policy deny
+  // before any handler runs. Legacy guards stay in place either way until the
+  // post-flip cleanup.
+  AUTH_POLICY_ENFORCEMENT: z.enum(["log", "enforce"]).default("log"),
   CHATMUSE_AI_GATEWAY_ENABLED: booleanSchema.default(false),
   CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(200),
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
@@ -271,6 +277,7 @@ export interface AppConfig {
   pageDmPruneEnabled?: boolean;
   diskUsageAlertPercent?: number;
   revenueRouteRoleEnforcement?: "log" | "enforce";
+  authPolicyEnforcement?: "log" | "enforce";
   chatMuseAiGatewayEnabled?: boolean;
   chatMuseAiGatewayDailyRequestLimit?: number;
   chatMuseAiGatewayDailyMicroUsdLimit?: number;
@@ -465,6 +472,7 @@ export function loadConfig(
     pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     revenueRouteRoleEnforcement: parsed.REVENUE_ROUTE_ROLE_ENFORCEMENT,
+    authPolicyEnforcement: parsed.AUTH_POLICY_ENFORCEMENT,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
     chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,

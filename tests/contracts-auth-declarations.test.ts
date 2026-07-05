@@ -1,0 +1,85 @@
+import { describe, expect, it } from "vitest";
+
+import { routeAuthPolicySchema, routeSchemas } from "@agency_hub_core/contracts";
+
+// Kernel Stage 19 CI gate: every route contract must carry a declarative `auth`
+// block. This is the linter-independent guard — a new routeSchemas entry without
+// one fails here, so "who can call this" can never silently regress to unknown.
+
+function collectUndeclaredRoutes(entries: Record<string, unknown>): string[] {
+  const undeclared: string[] = [];
+  for (const [key, schema] of Object.entries(entries)) {
+    const auth = (schema as { auth?: unknown }).auth;
+    if (!auth || !routeAuthPolicySchema.safeParse(auth).success) {
+      undeclared.push(key);
+    }
+  }
+  return undeclared;
+}
+
+describe("route auth declarations", () => {
+  it("every routeSchemas entry declares a valid auth policy", () => {
+    expect(collectUndeclaredRoutes(routeSchemas)).toEqual([]);
+  });
+
+  it("the gate itself rejects an entry without auth (self-test)", () => {
+    expect(collectUndeclaredRoutes({
+      sneakyNewRoute: { tags: ["system"], summary: "No auth block" },
+    })).toEqual(["sneakyNewRoute"]);
+    expect(collectUndeclaredRoutes({
+      typoedKind: { auth: { kind: "sessionn" } },
+    })).toEqual(["typoedKind"]);
+    expect(collectUndeclaredRoutes({
+      extraProp: { auth: { kind: "session", pages: "all" } },
+    })).toEqual(["extraProp"]);
+  });
+
+  it("page scope is declared only where a :pageLabel path param can carry it", () => {
+    // The middleware resolves scope:"page" from params.pageLabel; declaring it on
+    // a route without that param would silently skip the check. The path lives in
+    // server.ts, not the schema, so pin the reviewed set here instead.
+    const pageScoped = Object.entries(routeSchemas)
+      .filter(([, schema]) => (schema as { auth?: { scope?: string } }).auth?.scope === "page")
+      .map(([key]) => key)
+      .sort();
+    expect(pageScoped).toEqual([
+      "createFanNote",
+      "pageConversationMessages",
+      "pageConversationPreview",
+      "pageConversationProfile",
+      "pageDeletedFans",
+      "pageFanDetail",
+      "pageFanProfile",
+      "pageFanProfileVersion",
+      "pageFanProfileVersions",
+      "pageFanTransactions",
+      "pageFans",
+      "pageFollowers",
+      "pageFollowersDaily",
+      "pageMessagesBlock",
+      "pageRevenue",
+      "pageRevenueDaily",
+      "pageSpenderAutoListDetail",
+      "pageSpenderAutoLists",
+      "pageSubscribers",
+      "pageSubscribersDaily",
+      "pageSyncBlocks",
+      "pageTransactions",
+      "upsertFanProfile",
+      "workboard",
+      "workboardPresence",
+      "workboardSnooze",
+      "workboardUnsnooze",
+      "workboardV2",
+      "workboardV2Ai",
+      "workboardV2AiClassify",
+      "workboardV2AiSettings",
+      "workboardV2Contact",
+      "workboardV2Lists",
+      "workboardV2Recompute",
+      "workboardV2Snooze",
+      "workboardV2UndoContact",
+      "workboardV2Unsnooze",
+    ]);
+  });
+});

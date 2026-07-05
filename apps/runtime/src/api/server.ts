@@ -130,6 +130,13 @@ import {
 } from "../services/errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "../services/notification-incidents.ts";
 import {
+  buildRoutePolicyIndex,
+  classifyAuthPolicyDivergence,
+  computeAuthPolicyVerdict,
+  type AuthPolicyVerdict,
+} from "./auth-policy.ts";
+import {
+  findPageSummaryByLabel,
   getLatestRealDeliveryAttempt,
   getNotificationIncidentByKey,
   getTelegramSettings,
@@ -280,6 +287,7 @@ import { onboardFanslyPage, onboardOnlyFansPage } from "../services/page-onboard
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthPrincipal | null;
+    authPolicy?: { routeKey: string; verdict: AuthPolicyVerdict };
   }
 }
 
@@ -438,6 +446,7 @@ export async function buildApiServer(appContext: AppContext) {
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
   server.decorateRequest("auth");
+  server.decorateRequest("authPolicy");
 
   // Stage 4 fleet-verify: the desktop stamps x-client-version on every call;
   // one "Desktop client version observed" log line per (version, address)
@@ -487,9 +496,21 @@ export async function buildApiServer(appContext: AppContext) {
         },
       },
     },
-    transform: createJsonSchemaTransform({
-      skipList: ["/documentation", "/documentation/static/*"],
-    }),
+    transform: (() => {
+      const baseTransform = createJsonSchemaTransform({
+        skipList: ["/documentation", "/documentation/static/*"],
+      });
+      // The declarative `auth` block (kernel Stage 19) drives the authorization
+      // middleware and the generated policy table, not the wire contract: strip
+      // it so the emitted OpenAPI document stays byte-identical to pre-stage.
+      return (input: Parameters<typeof baseTransform>[0]) => {
+        if (input.schema && "auth" in input.schema) {
+          const { auth: _auth, ...schema } = input.schema;
+          return baseTransform({ ...input, schema });
+        }
+        return baseTransform(input);
+      };
+    })(),
     transformObject: jsonSchemaTransformObject,
   });
   async function resolvePrincipal(request: {
@@ -578,6 +599,82 @@ export async function buildApiServer(appContext: AppContext) {
     uiHooks: {
       onRequest: requireOpenApiDocsOwner,
     },
+  });
+
+  // --- Declarative route authorization (kernel Stage 19) ---
+  // One middleware, one verdict per request, computed from the route schema's
+  // `auth` declaration before any handler runs. In "log" mode the verdict is
+  // recorded and compared onResponse with what the legacy in-handler guards
+  // actually answered; in "enforce" mode a denying verdict refuses the request
+  // here. Legacy guards stay in place until the post-flip cleanup, so rollback
+  // is AUTH_POLICY_ENFORCEMENT=log.
+  const routePolicyIndex = buildRoutePolicyIndex();
+  const isAuthPolicyEnforced = () => appContext.config.authPolicyEnforcement === "enforce";
+
+  server.addHook("onRequest", async (request) => {
+    const entry = routePolicyIndex.get(request.routeOptions.schema);
+    if (!entry) {
+      return; // outside the contract surface (documentation UI, 404s)
+    }
+    if (!entry.auth) {
+      // The contracts CI gate makes this unreachable; fail closed if it drifts.
+      request.log.error({ routeKey: entry.key }, "auth-policy: route has no auth declaration");
+      if (isAuthPolicyEnforced()) {
+        throw new ForbiddenError("Route has no authorization declaration");
+      }
+      return;
+    }
+    const params = request.params as Record<string, unknown> | null;
+    const pageLabelParam = typeof params?.pageLabel === "string" ? params.pageLabel : undefined;
+    const verdict = await computeAuthPolicyVerdict({
+      auth: entry.auth,
+      resolvePrincipal: () => resolvePrincipal(request),
+      hasMonitoringToken: () => hasValidSyncHealthMonitoringToken(request),
+      resolvePageAccess: async (pageLabel) => {
+        const page = await findPageSummaryByLabel(appContext.db, pageLabel);
+        if (!page) {
+          return "not-found";
+        }
+        const principal = await resolvePrincipal(request);
+        return principal && canAccessPage(principal, page.id) ? "ok" : "denied";
+      },
+      pageLabelParam,
+    });
+    request.authPolicy = { routeKey: entry.key, verdict };
+    if (!verdict.allow && isAuthPolicyEnforced()) {
+      switch (verdict.statusCode) {
+        case 401:
+          throw new UnauthorizedError();
+        case 404:
+          throw new NotFoundError(`Page "${pageLabelParam}" was not found`);
+        default:
+          throw new ForbiddenError(`Authorization policy denied this request (${verdict.reason})`);
+      }
+    }
+  });
+
+  server.addHook("onResponse", async (request, reply) => {
+    if (isAuthPolicyEnforced()) {
+      return;
+    }
+    const decided = request.authPolicy;
+    if (!decided) {
+      return;
+    }
+    const divergence = classifyAuthPolicyDivergence(decided.verdict, reply.statusCode);
+    if (!divergence) {
+      return;
+    }
+    request.log.warn({
+      routeKey: decided.routeKey,
+      method: request.method,
+      path: request.routeOptions.url,
+      statusCode: reply.statusCode,
+      verdict: decided.verdict,
+      userId: request.auth?.user.id,
+      role: request.auth?.user.role,
+      authMethod: request.auth?.authMethod,
+    }, `auth-policy ${divergence}: middleware verdict diverges from the legacy guards`);
   });
 
   function isAdminPageVerifyBadRequest(error: unknown) {
