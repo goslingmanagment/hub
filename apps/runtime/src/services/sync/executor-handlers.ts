@@ -22,6 +22,7 @@ import {
   selectNextPageDmMessageSyncCandidate,
   updatePageSyncTimestampCache,
   upsertPageTopSpenders,
+  listPageFanNativeIds,
   upsertCheckpoint,
   upsertCheckpointProgress,
   upsertPageDmConversation,
@@ -4252,6 +4253,169 @@ export async function resolveExecutorPageContext(
   return resolvePageContextById(app, platformAccountId);
 }
 
+/** Stage 16 ramp gate: flags gate platform egress, never capture. */
+function fanslyNewStreamAllowed(
+  allowlistCsv: string | undefined,
+  pageLabel: string,
+) {
+  const entries = (allowlistCsv ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return entries.length === 0 || entries.includes(pageLabel);
+}
+
+function fanslyNewStreamSkip(reason: string): StreamChunkResult {
+  return {
+    satisfied: true,
+    yieldReason: null,
+    stats: { skipped: reason },
+  };
+}
+
+export async function executeFanEarningsChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & { syncRunId: number },
+): Promise<StreamChunkResult> {
+  if (input.pageContext.platform !== "fansly") {
+    return fanslyNewStreamSkip("not_fansly");
+  }
+  await input.telemetry.recordPhaseStarted("fan_earnings");
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  if (effective.fanslyFanEarningsSyncEnabled !== true) {
+    return fanslyNewStreamSkip("flag_off");
+  }
+  if (!fanslyNewStreamAllowed(effective.fanslyNewStreamPageAllowlist, input.pageContext.page.label)) {
+    return fanslyNewStreamSkip("not_allowlisted");
+  }
+
+  const requestContext = {
+    session: input.pageContext.session,
+    proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
+    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+  };
+
+  // Snapshot-shaped: one lifetime page + one monthly page per run. Probe-grade
+  // unknown payloads are journaled VERBATIM; typing happens at canonicalization
+  // once the ramp captures a live corpus (recorded deviation).
+  const stats = await app.adapter.getEarningsStatsAccountsPage(requestContext, {});
+  await persistRawPayload(app.db, {
+    platformAccountId: input.pageContext.page.id,
+    syncRunId: input.syncRunId,
+    endpoint: "fan_earnings_stats",
+    requestParams: {},
+    responsePayload: stats.raw,
+    mapperVersion: FANSLY_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+  }, { action: "inserting fan_earnings_stats raw payload", platform: "fansly" });
+
+  const monthly = await app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, {});
+  await persistRawPayload(app.db, {
+    platformAccountId: input.pageContext.page.id,
+    syncRunId: input.syncRunId,
+    endpoint: "fan_earnings_monthly",
+    requestParams: {},
+    responsePayload: monthly.raw,
+    mapperVersion: FANSLY_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+  }, { action: "inserting fan_earnings_monthly raw payload", platform: "fansly" });
+
+  await upsertCheckpoint(app.db, {
+    platformAccountId: input.pageContext.page.id,
+    stream: "fan_earnings",
+    cursorTimestamp: new Date(),
+    state: { pageLabel: input.pageContext.page.label },
+    lastSuccessfulRunId: input.syncRunId,
+  });
+
+  return { satisfied: true, yieldReason: null, stats: { pagesFetched: 2 } };
+}
+
+export async function executePurchaseHistoryChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & { syncRunId: number },
+): Promise<StreamChunkResult> {
+  if (input.pageContext.platform !== "fansly") {
+    return fanslyNewStreamSkip("not_fansly");
+  }
+  await input.telemetry.recordPhaseStarted("purchase_history");
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  if (effective.fanslyPurchaseHistorySyncEnabled !== true) {
+    return fanslyNewStreamSkip("flag_off");
+  }
+  if (!fanslyNewStreamAllowed(effective.fanslyNewStreamPageAllowlist, input.pageContext.page.label)) {
+    return fanslyNewStreamSkip("not_allowlisted");
+  }
+
+  const requestContext = {
+    session: input.pageContext.session,
+    proxy: input.pageContext.proxy,
+    egressKey: input.pageContext.egressKey,
+    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
+    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+  };
+
+  // The order-history endpoint is per-fan and cursorless — the "back-scroll"
+  // is a checkpointed keyset walk over the page's fans; a completed walk
+  // resets the cursor so the next cadence refreshes incrementally.
+  const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "purchase_history");
+  const state = checkpoint?.state as { cursorFanId?: number } | null;
+  let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
+  let fansFetched = 0;
+
+  while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+    const fans = await listPageFanNativeIds(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      afterFanId: cursorFanId,
+      limit: 1,
+    });
+    const fan = fans[0];
+    if (!fan) {
+      await upsertCheckpoint(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        stream: "purchase_history",
+        cursorTimestamp: new Date(),
+        state: { cursorFanId: 0, completedAt: new Date().toISOString() },
+        lastSuccessfulRunId: input.syncRunId,
+      });
+      return { satisfied: true, yieldReason: null, stats: { fansFetched, walkCompleted: true } };
+    }
+
+    const page = await app.adapter.getMediaOrderHistoryPage(requestContext, {
+      accountIds: fan.platformUserId,
+      limit: 100,
+    });
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint: "purchase_history",
+      requestParams: { accountIds: fan.platformUserId, limit: 100 },
+      responsePayload: page.raw,
+      mapperVersion: FANSLY_MAPPER_VERSION,
+      payloadKind: "mapping_critical",
+      retainUntil: retentionDate(),
+    }, { action: "inserting purchase_history raw payload", platform: "fansly" });
+
+    cursorFanId = fan.fanId;
+    fansFetched += 1;
+    await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "purchase_history",
+      state: { cursorFanId },
+    });
+  }
+
+  return {
+    satisfied: false,
+    yieldReason: input.budget.resolveYieldReason(),
+    stats: { fansFetched, cursorFanId },
+  };
+}
+
 export async function executeStreamChunk(
   app: AppContext,
   input: {
@@ -4298,6 +4462,10 @@ export async function executeStreamChunk(
       return executeFollowersChunk(app, input);
     case "followers_reconcile":
       return executeFollowersReconcileChunk(app, input);
+    case "fan_earnings":
+      return executeFanEarningsChunk(app, input);
+    case "purchase_history":
+      return executePurchaseHistoryChunk(app, input);
     default:
       throw new Error(`Unsupported executor stream "${input.streamState.stream}"`);
   }

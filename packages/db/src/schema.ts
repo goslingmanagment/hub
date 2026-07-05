@@ -59,6 +59,8 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "dm_conversations",
   "dm_messages",
   "followers_reconcile",
+  "fan_earnings",
+  "purchase_history",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",

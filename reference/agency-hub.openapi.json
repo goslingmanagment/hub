@@ -26597,7 +26597,9 @@
                                     "subscribers",
                                     "dm_conversations",
                                     "dm_messages",
-                                    "followers_reconcile"
+                                    "followers_reconcile",
+                                    "fan_earnings",
+                                    "purchase_history"
                                   ]
                                 },
                                 "status": {
@@ -27279,7 +27281,9 @@
                               "subscribers",
                               "dm_conversations",
                               "dm_messages",
-                              "followers_reconcile"
+                              "followers_reconcile",
+                              "fan_earnings",
+                              "purchase_history"
                             ]
                           },
                           "eventType": {
@@ -27492,7 +27496,9 @@
                           "subscribers",
                           "dm_conversations",
                           "dm_messages",
-                          "followers_reconcile"
+                          "followers_reconcile",
+                          "fan_earnings",
+                          "purchase_history"
                         ]
                       },
                       "operation": {
@@ -28188,7 +28194,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -28242,7 +28250,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "role": {
@@ -28742,7 +28752,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -28796,7 +28808,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "role": {
@@ -29296,7 +29310,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -29350,7 +29366,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "role": {
@@ -29850,7 +29868,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -29904,7 +29924,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "role": {
@@ -30404,7 +30426,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -30458,7 +30482,9 @@
                                             "subscribers",
                                             "dm_conversations",
                                             "dm_messages",
-                                            "followers_reconcile"
+                                            "followers_reconcile",
+                                            "fan_earnings",
+                                            "purchase_history"
                                           ]
                                         },
                                         "role": {
@@ -31194,7 +31220,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -31248,7 +31276,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "role": {
@@ -31748,7 +31778,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -31802,7 +31834,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "role": {
@@ -32302,7 +32336,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -32356,7 +32392,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "role": {
@@ -32856,7 +32894,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -32910,7 +32950,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "role": {
@@ -33410,7 +33452,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -33464,7 +33508,9 @@
                                           "subscribers",
                                           "dm_conversations",
                                           "dm_messages",
-                                          "followers_reconcile"
+                                          "followers_reconcile",
+                                          "fan_earnings",
+                                          "purchase_history"
                                         ]
                                       },
                                       "role": {
@@ -34237,7 +34283,9 @@
                                   "subscribers",
                                   "dm_conversations",
                                   "dm_messages",
-                                  "followers_reconcile"
+                                  "followers_reconcile",
+                                  "fan_earnings",
+                                  "purchase_history"
                                 ]
                               },
                               "cadenceSeconds": {
@@ -34291,7 +34339,9 @@
                                   "subscribers",
                                   "dm_conversations",
                                   "dm_messages",
-                                  "followers_reconcile"
+                                  "followers_reconcile",
+                                  "fan_earnings",
+                                  "purchase_history"
                                 ]
                               },
                               "role": {
@@ -39885,7 +39935,9 @@
                               "subscribers",
                               "dm_conversations",
                               "dm_messages",
-                              "followers_reconcile"
+                              "followers_reconcile",
+                              "fan_earnings",
+                              "purchase_history"
                             ]
                           },
                           "requestedSeq": {
@@ -40154,7 +40206,9 @@
                               "subscribers",
                               "dm_conversations",
                               "dm_messages",
-                              "followers_reconcile"
+                              "followers_reconcile",
+                              "fan_earnings",
+                              "purchase_history"
                             ]
                           },
                           "requestedSeq": {
@@ -40394,7 +40448,9 @@
                               "subscribers",
                               "dm_conversations",
                               "dm_messages",
-                              "followers_reconcile"
+                              "followers_reconcile",
+                              "fan_earnings",
+                              "purchase_history"
                             ]
                           },
                           "requestedSeq": {
@@ -40634,7 +40690,9 @@
                               "subscribers",
                               "dm_conversations",
                               "dm_messages",
-                              "followers_reconcile"
+                              "followers_reconcile",
+                              "fan_earnings",
+                              "purchase_history"
                             ]
                           },
                           "requestedSeq": {

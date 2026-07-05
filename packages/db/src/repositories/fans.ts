@@ -1034,3 +1034,27 @@ export async function getFollowersForPage(db: Database, platformAccountId: numbe
     order by pf.followed_at desc, pf.id desc
   `);
 }
+
+/**
+ * Stage 16: the purchase_history walk iterates a page's fans by native id —
+ * the order-history endpoint is per-fan (accountIds), cursorless. Keyset by
+ * fans.id for a stable checkpointed walk.
+ */
+export async function listPageFanNativeIds(
+  db: Database,
+  input: { platformAccountId: number; afterFanId?: number | null; limit?: number },
+): Promise<Array<{ fanId: number; platformUserId: string }>> {
+  const result = await db.execute<{ fan_id: string; platform_user_id: string }>(sql`
+    select f.id::text as fan_id, f.platform_user_id
+    from page_fans pf
+    join fans f on f.id = pf.fan_id
+    where pf.platform_account_id = ${input.platformAccountId}
+      and f.id > ${input.afterFanId ?? 0}
+    order by f.id asc
+    limit ${input.limit ?? 25}
+  `);
+  return result.rows.map((row) => ({
+    fanId: Number(row.fan_id),
+    platformUserId: row.platform_user_id,
+  }));
+}

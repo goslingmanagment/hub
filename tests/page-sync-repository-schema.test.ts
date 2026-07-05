@@ -149,6 +149,8 @@ describe("page-sync repository schema alignment", () => {
       "followers_reconcile",
       "dm_conversations",
       "dm_messages",
+      "fan_earnings",
+      "purchase_history",
     ].map((stream) => buildPageSyncStateRow(pageId, stream as SyncStream, now));
     const lockedStatements: string[] = [];
     const updatedStreams: unknown[] = [];

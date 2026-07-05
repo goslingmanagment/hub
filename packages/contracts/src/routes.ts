@@ -2117,6 +2117,8 @@ const extendedSyncStreamEnum = z.enum([
   "dm_conversations",
   "dm_messages",
   "followers_reconcile",
+  "fan_earnings",
+  "purchase_history",
 ]);
 
 export const syncMonitorStreamItemSchema = z.object({

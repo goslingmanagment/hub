@@ -677,6 +677,8 @@ describe("sync integration", () => {
         "followers_reconcile",
         "dm_conversations",
         "dm_messages",
+        "fan_earnings",
+        "purchase_history",
       ]);
       expect(stateRows.every((row) => row.requestSeq === row.appliedSeq)).toBe(true);
 
@@ -690,7 +692,7 @@ describe("sync integration", () => {
         status: syncRuns.outcome,
         startedAt: syncRuns.startedAt,
       }).from(syncRuns).orderBy(syncRuns.startedAt);
-      expect(runRows).toHaveLength(8);
+      expect(runRows).toHaveLength(10);
       expect(runRows.every((row) => row.status === "succeeded")).toBe(true);
       expect(runRows.map((row) => row.stream)).toEqual([
         "light",
@@ -701,6 +703,8 @@ describe("sync integration", () => {
         "followers_reconcile",
         "dm_conversations",
         "dm_messages",
+        "fan_earnings",
+        "purchase_history",
       ]);
     } finally {
       abortController.abort();

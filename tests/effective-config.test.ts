@@ -111,7 +111,7 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
   });
 
-  it("covers exactly the eight wired keys", () => {
-    expect(LIVE_CONFIG_KEYS.size).toBe(8);
+  it("covers exactly the eleven wired keys", () => {
+    expect(LIVE_CONFIG_KEYS.size).toBe(11);
   });
 });

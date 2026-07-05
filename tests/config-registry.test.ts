@@ -81,6 +81,10 @@ describe("config registry", () => {
     "transactionLookbackDays",
     "transactionRescanCapDays",
     "ofapiDmReconcileIntervalMinutes",
+    // Stage 16 ramp gates (live so ramp flips need no restart).
+    "fanslyFanEarningsSyncEnabled",
+    "fanslyPurchaseHistorySyncEnabled",
+    "fanslyNewStreamPageAllowlist",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",
@@ -100,7 +104,7 @@ describe("config registry", () => {
     "onlyFansTopSpendersEnabled",
   ];
 
-  it("wires exactly the eight live keys, the fifteen boot keys, and nothing else", () => {
+  it("wires exactly the eleven live keys, the fifteen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

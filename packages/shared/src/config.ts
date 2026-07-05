@@ -124,6 +124,9 @@ const envSchema = z.object({
   OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
   OFAPI_DM_SYNC_ENABLED: booleanSchema.default(false),
   OFAPI_DM_COLD_ARCHIVE_ENABLED: booleanSchema.default(false),
+  FANSLY_FAN_EARNINGS_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_PURCHASE_HISTORY_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_NEW_STREAM_PAGE_ALLOWLIST: z.string().default(""),
   OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
@@ -230,6 +233,9 @@ export interface AppConfig {
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
   ofapiDmColdArchiveEnabled?: boolean;
+  fanslyFanEarningsSyncEnabled?: boolean;
+  fanslyPurchaseHistorySyncEnabled?: boolean;
+  fanslyNewStreamPageAllowlist?: string;
   ofapiDmColdArchiveRetentionDays?: number;
   ofapiRestDelayMs?: number;
   ofapiDmBootstrapMaxRequestsPerRun?: number;
@@ -417,6 +423,9 @@ export function loadConfig(
     ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,
     ofapiDmSyncEnabled: parsed.OFAPI_DM_SYNC_ENABLED,
     ofapiDmColdArchiveEnabled: parsed.OFAPI_DM_COLD_ARCHIVE_ENABLED,
+    fanslyFanEarningsSyncEnabled: parsed.FANSLY_FAN_EARNINGS_SYNC_ENABLED,
+    fanslyPurchaseHistorySyncEnabled: parsed.FANSLY_PURCHASE_HISTORY_SYNC_ENABLED,
+    fanslyNewStreamPageAllowlist: parsed.FANSLY_NEW_STREAM_PAGE_ALLOWLIST,
     ofapiDmColdArchiveRetentionDays: parsed.OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
     ofapiDmBootstrapMaxRequestsPerRun: parsed.OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN,

@@ -23,6 +23,8 @@ export const SYNC_STREAMS = [
   "followers_reconcile",
   "dm_conversations",
   "dm_messages",
+  "fan_earnings",
+  "purchase_history",
 ] as const;
 
 export type SyncStream = typeof SYNC_STREAMS[number];
@@ -175,6 +177,32 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 15 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // Stage 16: Fansly-only bulk streams — lowest priority, never ahead of
+  // transactions/DMs, and deliberately ABSENT from SYNC_DOMAIN_POLICY
+  // supporting lists: a flag-gated bulk stream must not degrade the page's
+  // block-health UX to "catching up" while its ramp gate is off.
+  fan_earnings: {
+    stream: "fan_earnings",
+    domain: "financials",
+    cadenceSeconds: 86400,
+    basePriority: 20,
+    streamIndex: 10,
+    defaultWorkClass: "maintenance",
+    queueDelayThresholdMs: 90 * 60_000,
+    progressStallThresholdMs: 15 * 60_000,
+    freshnessSlaSeconds: null,
+  },
+  purchase_history: {
+    stream: "purchase_history",
+    domain: "messages_history",
+    cadenceSeconds: 4 * 3600,
+    basePriority: 15,
+    streamIndex: 11,
+    defaultWorkClass: "history",
+    queueDelayThresholdMs: 90 * 60_000,
+    progressStallThresholdMs: 15 * 60_000,
+    freshnessSlaSeconds: null,
+  },
 };
 
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
@@ -212,6 +240,7 @@ export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
 
 export const SYNC_STREAM_DEPENDENCIES: Partial<Record<SyncStream, SyncStream[]>> = {
   top_spenders: ["transactions"],
+  purchase_history: ["light"],
   followers_reconcile: ["followers"],
   dm_conversations: ["light", "top_spenders", "transactions", "subscribers", "followers"],
   dm_messages: [
@@ -235,6 +264,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     followers_reconcile: 34,
     dm_conversations: 30,
     dm_messages: 25,
+    fan_earnings: 20,
+    purchase_history: 19,
   },
   recovery: {
     light: 70,
@@ -246,6 +277,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     followers_reconcile: 44,
     dm_conversations: 40,
     dm_messages: 35,
+    fan_earnings: 30,
+    purchase_history: 29,
   },
   anomaly: {
     light: 70,
@@ -257,6 +290,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     followers_reconcile: 44,
     dm_conversations: 40,
     dm_messages: 35,
+    fan_earnings: 30,
+    purchase_history: 29,
   },
   manual: {
     light: 100,
@@ -268,6 +303,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     followers_reconcile: 74,
     dm_conversations: 70,
     dm_messages: 65,
+    fan_earnings: 60,
+    purchase_history: 59,
   },
   onboarding: {
     light: 100,
@@ -279,6 +316,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     followers_reconcile: 74,
     dm_conversations: 70,
     dm_messages: 65,
+    fan_earnings: 60,
+    purchase_history: 59,
   },
   reset: {
     light: 100,
@@ -290,6 +329,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     followers_reconcile: 74,
     dm_conversations: 70,
     dm_messages: 65,
+    fan_earnings: 60,
+    purchase_history: 59,
   },
 };
 
@@ -432,6 +473,8 @@ function streamOrderSql(columnName: string) {
       when 'followers_reconcile' then ${SYNC_STREAM_POLICY.followers_reconcile.streamIndex}
       when 'dm_conversations' then ${SYNC_STREAM_POLICY.dm_conversations.streamIndex}
       when 'dm_messages' then ${SYNC_STREAM_POLICY.dm_messages.streamIndex}
+      when 'fan_earnings' then ${SYNC_STREAM_POLICY.fan_earnings.streamIndex}
+      when 'purchase_history' then ${SYNC_STREAM_POLICY.purchase_history.streamIndex}
       else 999
     end
   `);
@@ -449,6 +492,8 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'followers_reconcile' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].followers_reconcile}
       when 'dm_conversations' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].dm_conversations}
       when 'dm_messages' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].dm_messages}
+      when 'fan_earnings' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].fan_earnings}
+      when 'purchase_history' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].purchase_history}
       else 0
     end
   `;

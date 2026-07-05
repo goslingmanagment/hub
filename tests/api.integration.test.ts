@@ -6598,6 +6598,8 @@ describe("api integration", () => {
         "followers_reconcile",
         "dm_conversations",
         "dm_messages",
+        "fan_earnings",
+        "purchase_history",
         "top_spenders",
       ] as const;
 
