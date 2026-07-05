@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
+  ensureDomainEventPartitions: vi.fn(),
   ensureObservationPartitions: vi.fn(),
+  getDomainEventPartitionLeadMonths: vi.fn(),
   getObservationPartitionLeadMonths: vi.fn(),
 }));
 
@@ -29,6 +31,12 @@ function appStub() {
 beforeEach(() => {
   dbMocks.ensureObservationPartitions.mockReset();
   dbMocks.getObservationPartitionLeadMonths.mockReset();
+  dbMocks.ensureDomainEventPartitions.mockReset();
+  dbMocks.getDomainEventPartitionLeadMonths.mockReset();
+  // Stage 8: the same job maintains the events ledger; healthy by default so
+  // existing cases keep exercising the observations-side branches.
+  dbMocks.ensureDomainEventPartitions.mockResolvedValue([]);
+  dbMocks.getDomainEventPartitionLeadMonths.mockResolvedValue(12);
   incidentMocks.notifyOfapiGlobalIncident.mockReset();
   incidentMocks.resolveOfapiGlobalIncident.mockReset();
 });

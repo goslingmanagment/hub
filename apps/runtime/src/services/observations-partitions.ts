@@ -6,7 +6,9 @@
 // below the floor.
 
 import {
+  ensureDomainEventPartitions,
   ensureObservationPartitions,
+  getDomainEventPartitionLeadMonths,
   getObservationPartitionLeadMonths,
 } from "@agency_hub_core/db";
 
@@ -51,6 +53,11 @@ export async function runObservationsPartitionCheck(
       monthsAhead: OBSERVATION_PARTITION_LEAD_TARGET_MONTHS,
       now,
     });
+    // Stage 8: the same job maintains the domain_events ledger's lead.
+    ensured = ensured.concat(await ensureDomainEventPartitions(app.db, {
+      monthsAhead: OBSERVATION_PARTITION_LEAD_TARGET_MONTHS,
+      now,
+    }));
   } catch (error) {
     failure = error;
     app.logger.warn({ err: error }, "Observations partition pre-creation failed");
@@ -58,7 +65,10 @@ export async function runObservationsPartitionCheck(
 
   let leadMonths = 0;
   try {
-    leadMonths = await getObservationPartitionLeadMonths(app.db, now);
+    leadMonths = Math.min(
+      await getObservationPartitionLeadMonths(app.db, now),
+      await getDomainEventPartitionLeadMonths(app.db, now),
+    );
   } catch (error) {
     failure = failure ?? error;
     app.logger.warn({ err: error }, "Observations partition lead check failed");

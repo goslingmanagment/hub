@@ -2364,3 +2364,56 @@ export const observationKeys = pgTable(
     pk: primaryKey({ columns: [table.source, table.idempotencyKey] }),
   }),
 );
+
+// Stage 8: canonical domain events derived from observations. Partitioned
+// monthly by occurred_at (historical range — backfills reach 2024); the
+// gapless per-account sequence and cross-producer dedup live in the
+// unpartitioned companions (same PG limitation as observations).
+export const domainEvents = pgTable(
+  "domain_events",
+  {
+    // GENERATED ALWAYS AS IDENTITY in the migration; inserts go through the
+    // append protocol's pre-allocated-id path (OVERRIDING SYSTEM VALUE).
+    id: bigint("id", { mode: "number" }).notNull(),
+    accountId: bigint("account_id", { mode: "number" }).notNull(),
+    accountSeq: bigint("account_seq", { mode: "number" }).notNull(),
+    type: text("type").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    // Platform-native fan id; platform_identities FK arrives with Stage 18+.
+    fanIdentityRef: text("fan_identity_ref"),
+    conversationRef: text("conversation_ref"),
+    messageRef: text("message_ref"),
+    transactionRef: text("transaction_ref"),
+    data: jsonb("data").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    dedupKey: text("dedup_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.id, table.occurredAt] }),
+    accountSeqIdx: index("domain_events_account_seq_idx").on(table.accountId, table.accountSeq),
+    typeOccurredIdx: index("domain_events_type_occurred_idx").on(table.type, table.occurredAt),
+  }),
+);
+
+export const domainEventKeys = pgTable(
+  "domain_event_keys",
+  {
+    accountId: bigint("account_id", { mode: "number" }).notNull(),
+    dedupKey: text("dedup_key").notNull(),
+    eventId: bigint("event_id", { mode: "number" }).notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.accountId, table.dedupKey] }),
+  }),
+);
+
+export const domainEventSeq = pgTable(
+  "domain_event_seq",
+  {
+    accountId: bigint("account_id", { mode: "number" }).primaryKey(),
+    nextSeq: bigint("next_seq", { mode: "number" }).default(1).notNull(),
+  },
+);
