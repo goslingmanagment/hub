@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto";
 
-import { findPageByLabel, insertObservation } from "@agency_hub_core/db";
+import { findPageByLabel, insertObservation, listOfapiMappedPages } from "@agency_hub_core/db";
 
 import type {
   IngestObservationsBody,
@@ -16,8 +16,8 @@ import type {
 } from "../../../../packages/contracts/src/routes.ts";
 import type { AppContext } from "../bootstrap.ts";
 
-// Canonicalizer-backed desktop kinds (spec §2). Everything else journals as
-// desktop.unknown:<kind>.
+// Canonicalizer-backed desktop kinds (Stage 11 §2). Everything else journals
+// as desktop.unknown:<kind>.
 export const INGEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
   "ai_acceptance",
   "guard_audit",
@@ -26,6 +26,38 @@ export const INGEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
   "credit_spend",
   "data_purge_notice",
 ]);
+
+// Stage 12: the one-time local-DB harvest reuses this lane with
+// kind='harvest.<table>' journaled VERBATIM (the reconciliation script keys
+// on these exact kinds) and x-client-version='harvest-<app version>' →
+// producer='desktop-harvest@<version>' (stage-11 §3 fixed this stamp).
+export const HARVEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
+  "harvest.messages",
+  "harvest.fan_transactions",
+  "harvest.outbox",
+  "harvest.message_guard_events",
+  "harvest.usage_events",
+  "harvest.ai_spend_log",
+  "harvest.credit_log",
+]);
+
+const HARVEST_VERSION_PREFIX = "harvest-";
+
+export function ingestProducerForClientVersion(clientVersion: string) {
+  return clientVersion.startsWith(HARVEST_VERSION_PREFIX)
+    ? `desktop-harvest@${clientVersion.slice(HARVEST_VERSION_PREFIX.length)}`
+    : `desktop@${clientVersion}`;
+}
+
+function ingestKindFor(kind: string) {
+  if (INGEST_KIND_ALLOWLIST.has(kind)) {
+    return `desktop.${kind}`;
+  }
+  if (HARVEST_KIND_ALLOWLIST.has(kind)) {
+    return kind;
+  }
+  return `desktop.unknown:${kind}`;
+}
 
 export class InvalidIngestEventError extends Error {
   constructor(
@@ -71,16 +103,32 @@ export async function ingestClientObservations(
     );
   }
 
-  const producer = `desktop@${input.clientVersion}`;
+  // Stage 12: harvest events carry no pageLabel — the desktop knows its OFAPI
+  // account id, not core labels. Resolve payload.ofapiAccountId against
+  // pages.ofapi_account_id HERE (the sweep never canonicalizes NULL-account
+  // observations, so ingest is the resolution point). Unmappable accounts
+  // journal with NULL and surface in reconciliation (spec assumption 4).
+  const hasHarvestEvents = input.events.some((event) => HARVEST_KIND_ALLOWLIST.has(event.kind));
+  const pageByOfapiAccount = new Map<string, { id: number; platform: string }>();
+  if (hasHarvestEvents) {
+    for (const page of await listOfapiMappedPages(app.db)) {
+      pageByOfapiAccount.set(page.ofapiAccountId, { id: page.id, platform: page.platform });
+    }
+  }
+
+  const producer = ingestProducerForClientVersion(input.clientVersion);
 
   return app.db.transaction(async (tx) => {
     let accepted = 0;
     let duplicates = 0;
     for (const [index, event] of input.events.entries()) {
-      const page = event.pageLabel ? pageByLabel.get(event.pageLabel) ?? null : null;
-      const kind = INGEST_KIND_ALLOWLIST.has(event.kind)
-        ? `desktop.${event.kind}`
-        : `desktop.unknown:${event.kind}`;
+      const harvestAccountRef = HARVEST_KIND_ALLOWLIST.has(event.kind) &&
+          typeof event.payload.ofapiAccountId === "string"
+        ? pageByOfapiAccount.get(event.payload.ofapiAccountId) ?? null
+        : null;
+      const page = harvestAccountRef ??
+        (event.pageLabel ? pageByLabel.get(event.pageLabel) ?? null : null);
+      const kind = ingestKindFor(event.kind);
       const result = await insertObservation(tx, {
         source: "client_capture",
         producer,

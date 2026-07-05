@@ -8,6 +8,7 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
+  setPageOfapiAccountId,
   findUserByUsername,
   finalizePageDmConversationMessageSync,
   finishSyncRequestAttempt,
@@ -10333,5 +10334,68 @@ describe("api integration", () => {
       payload: batch,
     });
     expect(unauthenticated.statusCode).toBe(401);
+
+    // Stage 12: harvest kinds journal VERBATIM under the desktop-harvest
+    // producer (x-client-version 'harvest-<app version>').
+    const harvest = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers: {
+        authorization: `Bearer ${issuedKey.key}`,
+        "x-client-version": "harvest-0.1.29",
+      },
+      payload: {
+        events: [{
+          clientEventId: "55555555-5555-4555-8555-555555555555",
+          kind: "harvest.outbox",
+          observedAt: "2026-05-01T09:00:00.000Z",
+          payload: { table: "outbox", machineId: "m-1", row: { id: 7 } },
+        }],
+      },
+    });
+    expect(harvest.statusCode).toBe(200);
+    expect(harvest.json()).toEqual({ accepted: 1, duplicates: 0 });
+    const { rows: harvestRows } = await testDb.pool.query<{ kind: string; producer: string }>(
+      "select kind, producer from observations where kind like 'harvest.%'",
+    );
+    expect(harvestRows).toEqual([{ kind: "harvest.outbox", producer: "desktop-harvest@0.1.29" }]);
+
+    // Harvest account resolution: payload.ofapiAccountId → pages.ofapi_account_id
+    // (harvest events carry no pageLabel — the desktop knows only its OFAPI id).
+    const harvestModel = await createModel(testDb.db, { slug: "hv-model", name: "HV" });
+    const harvestPage = await createOnlyFansPage(testDb.db, {
+      modelId: harvestModel.id,
+      label: "hv-of",
+    });
+    await setPageOfapiAccountId(testDb.db, {
+      pageId: harvestPage.id,
+      ofapiAccountId: "acct_hv",
+    });
+    const resolved = await server.inject({
+      method: "POST",
+      url: "/api/v1/ingest/observations",
+      headers: {
+        authorization: `Bearer ${issuedKey.key}`,
+        "x-client-version": "harvest-0.1.29",
+      },
+      payload: {
+        events: [{
+          clientEventId: "66666666-6666-4666-8666-666666666666",
+          kind: "harvest.messages",
+          observedAt: "2026-05-01T09:05:00.000Z",
+          payload: {
+            table: "messages",
+            machineId: "m-1",
+            ofapiAccountId: "acct_hv",
+            row: { message_id: "1", chat_id: "9", created_at: "2026-05-01T09:05:00+00:00", is_sent_by_me: 0 },
+          },
+        }],
+      },
+    });
+    expect(resolved.statusCode).toBe(200);
+    const { rows: resolvedRows } = await testDb.pool.query<{ account_id: string | null }>(
+      "select account_id::text from observations where kind = 'harvest.messages'",
+    );
+    expect(resolvedRows).toEqual([{ account_id: String(harvestPage.id) }]);
   });
 });

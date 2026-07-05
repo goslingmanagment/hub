@@ -126,6 +126,84 @@ export async function insertObservations(
   return results;
 }
 
+/**
+ * Stage 12 reconciliation: kernel-side count for one machine + harvest kind.
+ * The harvest payload carries machineId top-level (spec §2), and the lane
+ * stamps producer='desktop-harvest@<version>'.
+ */
+export async function countHarvestObservations(
+  db: Database,
+  input: { machineId: string; kind: string },
+): Promise<number> {
+  const result = await db.execute<{ n: string }>(sql`
+    select count(*)::text as n
+    from observations
+    where producer like 'desktop-harvest@%'
+      and kind = ${input.kind}
+      and payload->>'machineId' = ${input.machineId}
+  `);
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+export interface HarvestTransactionResidueRow {
+  observationId: number;
+  accountId: number | null;
+  txId: string | null;
+  amount: string | null;
+  createdAt: string | null;
+}
+
+/**
+ * Stage 12 residue: harvested fan_transactions with NO counterpart in the
+ * transactions TRUTH table (matched on the shared OFAPI id space). Report-only
+ * by design — nothing here is ever ingested into money truth. NULL-account
+ * rows (unmappable OFAPI account) always count as residue.
+ */
+export async function listHarvestTransactionResidue(
+  db: Database,
+  input: { machineId: string; limit: number },
+): Promise<{ total: number; sample: HarvestTransactionResidueRow[] }> {
+  const residueWhere = sql`
+    o.kind = 'harvest.fan_transactions'
+      and o.producer like 'desktop-harvest@%'
+      and o.payload->>'machineId' = ${input.machineId}
+      and not exists (
+        select 1 from transactions t
+        where t.platform_account_id = o.account_id
+          and t.transaction_id = o.payload->'row'->>'tx_id'
+      )
+  `;
+  const counted = await db.execute<{ n: string }>(sql`
+    select count(*)::text as n from observations o where ${residueWhere}
+  `);
+  const sample = await db.execute<{
+    id: string;
+    account_id: string | null;
+    tx_id: string | null;
+    amount: string | null;
+    created_at: string | null;
+  }>(sql`
+    select o.id::text as id, o.account_id::text as account_id,
+           o.payload->'row'->>'tx_id' as tx_id,
+           o.payload->'row'->>'amount' as amount,
+           o.payload->'row'->>'created_at' as created_at
+    from observations o
+    where ${residueWhere}
+    order by o.id
+    limit ${Math.max(1, input.limit)}
+  `);
+  return {
+    total: Number(counted.rows[0]?.n ?? 0),
+    sample: sample.rows.map((row) => ({
+      observationId: Number(row.id),
+      accountId: row.account_id === null ? null : Number(row.account_id),
+      txId: row.tx_id,
+      amount: row.amount,
+      createdAt: row.created_at,
+    })),
+  };
+}
+
 export async function findObservationByKey(
   db: Database,
   source: ObservationSource,
