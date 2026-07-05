@@ -1362,3 +1362,25 @@ like sequence gaps; qualify the column.
 
 Remaining for exit: deploy after Stage 7 exits, days-long type-coverage watch, staging
 replay drill, canonicalization-lag p95 baseline.
+
+## Stage 9 Green-Local — Read-Gateway Capture + Attribution (2026-07-05)
+
+**Decision #74:** Stage 9 built green-local on `kernel/stage-09-read-gateway-capture`
+(15a0509, branched off the Stage 8 tip for a linear 8→9 merge chain; suite 174 files /
+1442 tests). Same ordering deviation as #73 (owner "do not wait"): deploy waits for
+Stage 7's exit, chained behind Stage 8.
+
+Delivered: producer 4 — every gateway 2xx response teed into the journal post-respond
+(bounded queue, joinable drainer, verbatim body, path-template kind, chatter principal);
+fail-open bounded to this producer only, with a drop counter and the new
+read_gateway_capture incident kind at threshold. Attribution: migration 0058 adds
+ofapi_credit_ledger.actor_user_id; the principal threads gateway → proxyRead → spend
+sink → ledger; background REST spenders stay NULL (system). The review's
+gateway-attribution gap (§4.4) is closed at both halves.
+
+Deviations recorded in the stage `## Progress`: the <1 ms enqueue micro-benchmark is
+skipped as CI-flaky (the guard is structural — a bounded array push); the gateway p95
+baseline moves to the deploy step (measured immediately before, same method as after).
+
+Remaining for exit: deploy after Stage 7 (behind Stage 8), 24 h observation-count vs
+gateway-request reconciliation, p95 comparison.
