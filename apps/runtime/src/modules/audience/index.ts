@@ -1,0 +1,222 @@
+import { routeSchemas } from "@agency_hub_core/contracts";
+import {
+  createFanNote,
+  findPlatformFan,
+  listFanPageContexts,
+  setFanFlags,
+} from "@agency_hub_core/db";
+
+import { pageScopeFor } from "../../api/request-auth.ts";
+import {
+  canAccessPage,
+  requireDashboardUser,
+  requireOwner,
+} from "../../services/auth.ts";
+import { ForbiddenError, NotFoundError } from "../../services/errors.ts";
+import {
+  getCrossPageFanDetailReport,
+  getOverviewGrowthReport,
+  getPageDeletedFansReport,
+  getPageFanDetailReport,
+  getPageFansReport,
+  getPageFollowersDailyReport,
+  getPageFollowersReport,
+  getPageSubscribersDailyReport,
+  getPageSubscribersReport,
+  getPageSummary,
+} from "../../services/reporting.ts";
+import { searchVisibleFans } from "../../services/spenders.ts";
+import type { ApiModuleContext, ApiServer } from "../context.ts";
+
+// Audience module (target §6.1): fans, subscriptions, follows, growth, fan
+// enrichment (notes/flags). Handlers relocated verbatim from server.ts
+// (Stage 19 Task 3).
+
+export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext) {
+  const { appContext } = ctx;
+  const { requirePrincipal } = ctx.auth;
+
+  server.get("/api/v1/overview/growth", {
+    schema: routeSchemas.overviewGrowth,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const query = request.query;
+    return getOverviewGrowthReport(appContext, {
+      period: query.period,
+      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
+      pageIds: pageScopeFor(principal),
+    });
+  });
+
+  server.get("/api/v1/pages/:pageLabel/subscribers", {
+    schema: routeSchemas.pageSubscribers,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageSubscribersReport(appContext, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/subscribers/daily", {
+    schema: routeSchemas.pageSubscribersDaily,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const query = request.query;
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageSubscribersDailyReport(appContext, request.params.pageLabel, {
+      period: query.period,
+      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
+    });
+  });
+
+  server.get("/api/v1/pages/:pageLabel/followers", {
+    schema: routeSchemas.pageFollowers,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageFollowersReport(appContext, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/followers/daily", {
+    schema: routeSchemas.pageFollowersDaily,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const query = request.query;
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageFollowersDailyReport(appContext, request.params.pageLabel, {
+      period: query.period,
+      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
+    });
+  });
+
+  server.get("/api/v1/pages/:pageLabel/fans", {
+    schema: routeSchemas.pageFans,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const query = request.query;
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageFansReport(appContext, request.params.pageLabel, query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/deleted-fans", {
+    schema: routeSchemas.pageDeletedFans,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageDeletedFansReport(appContext, request.params.pageLabel, request.query);
+  });
+
+  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId", {
+    schema: routeSchemas.pageFanDetail,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return getPageFanDetailReport(
+      appContext,
+      request.params.pageLabel,
+      request.params.platformUserId,
+      pageScopeFor(principal),
+    );
+  });
+
+  server.get("/api/v1/fans/:platform/:platformUserId", {
+    schema: routeSchemas.crossPageFanDetail,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    return getCrossPageFanDetailReport(appContext, {
+      platform: request.params.platform,
+      platformUserId: request.params.platformUserId,
+      pageIds: pageScopeFor(principal),
+    });
+  });
+
+  server.get("/api/v2/fans/search", {
+    schema: routeSchemas.fansSearch,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return searchVisibleFans(appContext, principal, request.query);
+  });
+
+  // Create fan note
+  server.post("/api/v1/pages/:pageLabel/fans/:platformUserId/notes", {
+    schema: routeSchemas.createFanNote,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    const fan = await findPlatformFan(appContext.db, page.platform, request.params.platformUserId);
+    if (!fan) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const fanPageContexts = await listFanPageContexts(appContext.db, fan.id, [page.id]);
+    if (fanPageContexts.length === 0) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found on page "${request.params.pageLabel}"`);
+    }
+    const note = await createFanNote(appContext.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      authorUserId: principal.user.id,
+      body: request.body.body,
+    });
+    return {
+      id: note.id,
+      fanId: note.fanId,
+      platformAccountId: note.platformAccountId,
+      authorUserId: note.authorUserId!,
+      body: note.body,
+      createdAt: new Date(note.createdAt).toISOString(),
+    };
+  });
+
+  // Set fan flags
+  server.patch("/api/v1/fans/:platform/:platformUserId/flags", {
+    schema: routeSchemas.setFanFlags,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const fan = await findPlatformFan(appContext.db, request.params.platform, request.params.platformUserId);
+    if (!fan) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const fanPages = await listFanPageContexts(appContext.db, fan.id, pageScopeFor(principal));
+    if (fanPages.length === 0) {
+      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
+    }
+    const flagRows = await setFanFlags(appContext.db, {
+      fanId: fan.id,
+      flags: request.body.flags,
+      createdByUserId: principal.user.id,
+    });
+    return {
+      flags: flagRows.map((row) => ({
+        flag: row.flag,
+        createdAt: new Date(row.createdAt).toISOString(),
+        createdByUserId: row.createdByUserId,
+      })),
+    };
+  });
+}
