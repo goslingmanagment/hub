@@ -12,6 +12,9 @@ export function createTestAppContext(
     fanslyDefaultDelayMs?: number;
     fanslyDmConversationsDelayMs?: number;
     fanslyDmMessagesDelayMs?: number;
+    fanslyFanEarningsSyncEnabled?: boolean;
+    fanslyPurchaseHistorySyncEnabled?: boolean;
+    fanslyNewStreamPageAllowlist?: string;
     followerPageDelayMs?: number;
     logger?: StartedTestDatabase["logger"];
     onlyFansDefaultDelayMs?: number;
@@ -85,6 +88,9 @@ export function createTestAppContext(
       fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
       fanslyDmConversationsDelayMs: overrides?.fanslyDmConversationsDelayMs ?? 5000,
       fanslyDmMessagesDelayMs: overrides?.fanslyDmMessagesDelayMs ?? 5000,
+      fanslyFanEarningsSyncEnabled: overrides?.fanslyFanEarningsSyncEnabled ?? false,
+      fanslyPurchaseHistorySyncEnabled: overrides?.fanslyPurchaseHistorySyncEnabled ?? false,
+      fanslyNewStreamPageAllowlist: overrides?.fanslyNewStreamPageAllowlist ?? "",
       followerPageDelayMs: overrides?.followerPageDelayMs ?? 0,
       onlyFansDefaultDelayMs: overrides?.onlyFansDefaultDelayMs ?? 1000,
       transactionLookbackDays: 7,

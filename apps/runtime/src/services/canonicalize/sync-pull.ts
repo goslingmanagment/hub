@@ -210,10 +210,26 @@ interface EarningsAggregate {
   breakdown: Array<{ type: number | null; grossMills: number; netMills: number }>;
 }
 
+// Deep key-sorted copy: a replacer-array JSON.stringify would WHITELIST keys
+// recursively and silently drop nested fields (breakdown[].type) from the
+// hash — a snapshot differing only there would wrongly dedupe to nothing.
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJson);
+  }
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record).sort().map((key) => [key, canonicalJson(record[key])]),
+    );
+  }
+  return value;
+}
+
 function stableHash(value: unknown): string {
   // Order-independent content hash so an unchanged snapshot re-fetch
   // produces the same dedup key (spec: no new event on identical stats).
-  const canonical = JSON.stringify(value, Object.keys(value as Record<string, unknown>).sort());
+  const canonical = JSON.stringify(canonicalJson(value));
   let hash = 0;
   for (let index = 0; index < canonical.length; index += 1) {
     hash = (hash * 31 + canonical.charCodeAt(index)) | 0;

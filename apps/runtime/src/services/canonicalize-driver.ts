@@ -49,6 +49,13 @@ export interface CanonicalizationRunResult {
   stamped: number;
   /** Observations with events but no mapped account — retried next sweep. */
   skippedUnmapped: number;
+  /**
+   * Rows whose canonicalize/append/stamp threw — logged, left UNSTAMPED
+   * (retried next sweep), never allowed to wedge the run. Parsers are total
+   * by design, so anything here is a transient DB error or a genuine bug
+   * worth the error-log line it produces every sweep.
+   */
+  errored: number;
   /** Seconds from received_at to processing for the oldest row this run. */
   maxLagSeconds: number;
 }
@@ -63,6 +70,8 @@ export interface CanonicalizationRunOptions {
   belowParseVersion?: number;
   dryRun?: boolean;
   now?: Date;
+  /** Family registry override (fault-isolation tests); default = all. */
+  families?: readonly CanonicalizerFamily[];
 }
 
 async function runFamily(
@@ -106,35 +115,47 @@ async function runFamily(
         totals.maxLagSeconds,
         Math.round((now.getTime() - row.receivedAt.getTime()) / 1000),
       );
-      const drafts = family.canonicalize(row, runContext);
+      // Fault isolation: one poison row (or a transient DB error mid-row)
+      // must cost exactly that row's stamp, not the sweep. It stays below
+      // the version floor and is retried next run; everything after it in
+      // this run still processes (afterId already advanced past the page).
+      try {
+        const drafts = family.canonicalize(row, runContext);
 
-      if (options.dryRun) {
-        totals.appended += drafts.length;
-        continue;
-      }
+        if (options.dryRun) {
+          totals.appended += drafts.length;
+          continue;
+        }
 
-      if (drafts.length > 0 && row.accountId == null) {
-        // Events require an account; an unmapped observation stays below the
-        // version floor and self-heals once the account mapping lands.
-        totals.skippedUnmapped += 1;
-        continue;
-      }
+        if (drafts.length > 0 && row.accountId == null) {
+          // Events require an account; an unmapped observation stays below the
+          // version floor and self-heals once the account mapping lands.
+          totals.skippedUnmapped += 1;
+          continue;
+        }
 
-      if (drafts.length > 0) {
-        const result = await appendDomainEvents(
-          app.db,
-          row.accountId!,
-          drafts.map((draft) => ({ ...draft, observationId: row.id })),
+        if (drafts.length > 0) {
+          const result = await appendDomainEvents(
+            app.db,
+            row.accountId!,
+            drafts.map((draft) => ({ ...draft, observationId: row.id })),
+          );
+          totals.appended += result.appended;
+          totals.deduped += result.deduped;
+        }
+        await markObservationParsed(app.db, {
+          observationId: row.id,
+          receivedAt: row.receivedAt,
+          parseVersion: belowParseVersion,
+        });
+        totals.stamped += 1;
+      } catch (error) {
+        totals.errored += 1;
+        app.logger.error(
+          { error, observationId: row.id, source: family.source, kind: row.kind },
+          "Canonicalization failed for observation; left pending for the next sweep",
         );
-        totals.appended += result.appended;
-        totals.deduped += result.deduped;
       }
-      await markObservationParsed(app.db, {
-        observationId: row.id,
-        receivedAt: row.receivedAt,
-        parseVersion: belowParseVersion,
-      });
-      totals.stamped += 1;
     }
 
     if (rows.length < SWEEP_PAGE_SIZE) {
@@ -153,6 +174,7 @@ export async function runCanonicalization(
     deduped: 0,
     stamped: 0,
     skippedUnmapped: 0,
+    errored: 0,
     maxLagSeconds: 0,
   };
   // Per-run context: Fansly DM direction resolves against the page's own
@@ -163,8 +185,18 @@ export async function runCanonicalization(
       pages.map((page) => [page.id, page.nativeAccountRef] as const),
     ),
   };
-  for (const family of CANONICALIZER_FAMILIES) {
-    await runFamily(app, family, options, totals, runContext);
+  for (const family of options.families ?? CANONICALIZER_FAMILIES) {
+    // Family isolation: a structural failure in one family (e.g. its list
+    // query dying on a transient error) must not stall the other sources.
+    try {
+      await runFamily(app, family, options, totals, runContext);
+    } catch (error) {
+      totals.errored += 1;
+      app.logger.error(
+        { error, source: family.source },
+        "Canonicalizer family run failed; other families continue",
+      );
+    }
   }
   return totals;
 }

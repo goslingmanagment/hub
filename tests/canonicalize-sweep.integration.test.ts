@@ -205,4 +205,67 @@ describe("canonicalization sweep (Stage 8)", () => {
     expect(dry.stamped).toBe(0);
     expect(dry.appended).toBeGreaterThan(0); // the unmapped row's draft, counted not written
   });
+
+  it("isolates a poison row: one throwing observation never wedges the sweep", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const db = testDb.db;
+    await insertObservation(db, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      accountId: 4,
+      kind: "poison.test",
+      payload: { poison: true },
+      payloadHash: sha256("poison-1"),
+      idempotencyKey: "iso-poison-1",
+    });
+    await insertObservation(db, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      accountId: 4,
+      kind: "poison.test",
+      payload: { poison: false },
+      payloadHash: sha256("healthy-1"),
+      idempotencyKey: "iso-healthy-1",
+    });
+
+    const throwingFamily = {
+      source: "webhook" as const,
+      kinds: ["poison.test"],
+      version: 1,
+      canonicalize: (observation: { payload: unknown }) => {
+        if ((observation.payload as { poison?: boolean }).poison === true) {
+          throw new Error("boom");
+        }
+        return [{
+          type: "message.received",
+          occurredAt: new Date("2026-06-01T00:00:00.000Z"),
+          fanIdentityRef: "555",
+          messageRef: "iso-1",
+          data: {},
+          schemaVersion: 1,
+          dedupKey: "msg:received:iso-1",
+        }];
+      },
+    };
+
+    // The healthy row lands and stamps; the poison row errors, stays
+    // unstamped, and the run STILL RETURNS (no wedge).
+    const first = await runCanonicalization(appStub(), { families: [throwingFamily] });
+    expect(first).toMatchObject({ errored: 1, stamped: 1, appended: 1 });
+
+    const pending = await testDb.pool.query<{ parse_version: number }>(
+      "select parse_version from observations where idempotency_key = 'iso-poison-1'",
+    );
+    expect(pending.rows[0]?.parse_version).toBe(0);
+
+    // Next sweep retries ONLY the poison row and errors again — bounded,
+    // never spreading to already-stamped work.
+    const second = await runCanonicalization(appStub(), { families: [throwingFamily] });
+    expect(second).toMatchObject({ scanned: 1, errored: 1, stamped: 0, appended: 0 });
+  });
 });

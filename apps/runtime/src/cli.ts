@@ -934,7 +934,8 @@ export function buildProgram() {
         console.log(
           `${options.dryRun ? "[dry-run] would append" : "appended"} ${result.appended}, ` +
             `deduped ${result.deduped}, stamped ${result.stamped}, ` +
-            `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}`,
+            `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}, ` +
+            `errored ${result.errored}`,
         );
       } finally {
         await app.close();

@@ -36,6 +36,25 @@ function dollarsFieldToMills(value: unknown): bigint | null {
   return BigInt(Math.round(value * 1000));
 }
 
+/** Mills-verbatim event fields (Fansly events carry mills, not dollars). */
+function millsFieldToBigInt(value: unknown): bigint | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return BigInt(Math.round(value));
+}
+
+/**
+ * Tip mills across the three producers' event shapes: Fansly sync-pull
+ * carries tipAmountMills (MILLS, verbatim); desktop harvest carries
+ * tipAmount (dollars); OFAPI webhook/pull tips carry only price (dollars).
+ */
+function tipMillsFromEventData(data: unknown, priceMills: bigint | null): bigint | null {
+  return millsFieldToBigInt(dataField(data, "tipAmountMills"))
+    ?? dollarsFieldToMills(dataField(data, "tipAmount"))
+    ?? priceMills;
+}
+
 /**
  * Applies one account's message.* events (ordered by account_seq) onto the
  * archive. received/sent insert (first writer wins — cross-producer dedup
@@ -61,7 +80,12 @@ export async function applyMessageEventsToArchive(
       }
       const price = dollarsFieldToMills(dataField(event.data, "price"));
       const isTip = dataField(event.data, "isTip") === true;
+      const tipMills = isTip ? tipMillsFromEventData(event.data, price) ?? 0n : 0n;
       const text = dataField(event.data, "text");
+      // First REAL writer wins: the conflict-update only hydrates
+      // tombstone-first stubs (content_pending), never a content row. The
+      // stub's deleted_at is deliberately NOT in the SET list — hydration
+      // keeps the tombstone.
       const result = await db.execute(sql`
         insert into message_archive (
           account_id, platform, conversation_ref, message_ref, fan_native_id,
@@ -79,10 +103,23 @@ export async function applyMessageEventsToArchive(
           ${typeof text === "string" ? text : ""},
           ${price},
           ${isTip},
-          ${isTip ? (price ?? 0n) : 0n},
+          ${tipMills},
           ${event.id}
         )
-        on conflict (account_id, platform, message_ref) do nothing
+        on conflict (account_id, platform, message_ref) do update set
+          conversation_ref = excluded.conversation_ref,
+          fan_native_id = excluded.fan_native_id,
+          sender_role = excluded.sender_role,
+          is_sent_by_me = excluded.is_sent_by_me,
+          occurred_at = excluded.occurred_at,
+          text_plain = excluded.text_plain,
+          price_mills = excluded.price_mills,
+          is_tip = excluded.is_tip,
+          tip_amount_mills = excluded.tip_amount_mills,
+          source_event_id = excluded.source_event_id,
+          content_pending = false,
+          updated_at = now()
+        where message_archive.content_pending
         returning id
       `);
       inserted += result.rows.length;
@@ -90,12 +127,26 @@ export async function applyMessageEventsToArchive(
       if (!event.messageRef) {
         continue;
       }
+      // Tombstone-first, one atomic statement: no row yet → insert a
+      // content_pending stub carrying the tombstone (the later content
+      // event hydrates it); live row → set deleted_at; already tombstoned →
+      // no-op (idempotent replay).
       const result = await db.execute(sql`
-        update message_archive set deleted_at = ${event.occurredAt}, updated_at = now()
-        where account_id = ${input.accountId}
-          and platform = ${input.platform}
-          and message_ref = ${event.messageRef}
-          and deleted_at is null
+        insert into message_archive (
+          account_id, platform, message_ref, occurred_at, content_pending,
+          deleted_at, source_event_id
+        ) values (
+          ${input.accountId},
+          ${input.platform},
+          ${event.messageRef},
+          ${event.occurredAt},
+          true,
+          ${event.occurredAt},
+          ${event.id}
+        )
+        on conflict (account_id, platform, message_ref) do update
+          set deleted_at = excluded.deleted_at, updated_at = now()
+          where message_archive.deleted_at is null
         returning id
       `);
       tombstoned += result.rows.length;
@@ -145,18 +196,23 @@ export async function resetMessageArchiveProjection(
   db: Database,
   accountId?: number | null,
 ): Promise<void> {
-  if (accountId != null) {
-    await db.execute(sql`delete from message_archive where account_id = ${accountId}`);
-    await db.execute(sql`
-      delete from projection_seq_watermarks
-      where projection = ${MESSAGE_ARCHIVE_PROJECTION} and account_id = ${accountId}
+  // One transaction: a crash between the two deletes would otherwise leave
+  // an empty archive behind a stale high watermark — permanently and
+  // silently empty, since the next run sees no events past it.
+  await db.transaction(async (tx) => {
+    if (accountId != null) {
+      await tx.execute(sql`delete from message_archive where account_id = ${accountId}`);
+      await tx.execute(sql`
+        delete from projection_seq_watermarks
+        where projection = ${MESSAGE_ARCHIVE_PROJECTION} and account_id = ${accountId}
+      `);
+      return;
+    }
+    await tx.execute(sql`delete from message_archive`);
+    await tx.execute(sql`
+      delete from projection_seq_watermarks where projection = ${MESSAGE_ARCHIVE_PROJECTION}
     `);
-    return;
-  }
-  await db.execute(sql`delete from message_archive`);
-  await db.execute(sql`
-    delete from projection_seq_watermarks where projection = ${MESSAGE_ARCHIVE_PROJECTION}
-  `);
+  });
 }
 
 /**
@@ -189,7 +245,24 @@ export async function backfillArchiveFromDmMessageArchive(
              price_mills, is_tip, tip_amount_mills, in_reply_to_message_id,
              media_metadata, deleted_at, 'dm_message_archive'
       from batch
-      on conflict (account_id, platform, message_ref) do nothing
+      on conflict (account_id, platform, message_ref) do update set
+        native_account_ref = excluded.native_account_ref,
+        conversation_ref = excluded.conversation_ref,
+        fan_native_id = excluded.fan_native_id,
+        sender_role = excluded.sender_role,
+        is_sent_by_me = excluded.is_sent_by_me,
+        occurred_at = excluded.occurred_at,
+        text_plain = excluded.text_plain,
+        price_mills = excluded.price_mills,
+        is_tip = excluded.is_tip,
+        tip_amount_mills = excluded.tip_amount_mills,
+        in_reply_to_ref = excluded.in_reply_to_ref,
+        media_metadata = excluded.media_metadata,
+        deleted_at = coalesce(message_archive.deleted_at, excluded.deleted_at),
+        backfill_source = excluded.backfill_source,
+        content_pending = false,
+        updated_at = now()
+      where message_archive.content_pending
       returning 1
     )
     select max(batch.id)::text as id from batch
@@ -232,7 +305,21 @@ export async function backfillArchiveFromHotTable(
              (total_tip_amount_cents > 0), in_reply_to_message_id, deleted_at,
              'hot_table'
       from batch
-      on conflict (account_id, platform, message_ref) do nothing
+      on conflict (account_id, platform, message_ref) do update set
+        conversation_ref = excluded.conversation_ref,
+        fan_native_id = excluded.fan_native_id,
+        sender_role = excluded.sender_role,
+        is_sent_by_me = excluded.is_sent_by_me,
+        occurred_at = excluded.occurred_at,
+        text_plain = excluded.text_plain,
+        tip_amount_mills = excluded.tip_amount_mills,
+        is_tip = excluded.is_tip,
+        in_reply_to_ref = excluded.in_reply_to_ref,
+        deleted_at = coalesce(message_archive.deleted_at, excluded.deleted_at),
+        backfill_source = excluded.backfill_source,
+        content_pending = false,
+        updated_at = now()
+      where message_archive.content_pending
       returning 1
     )
     select max(batch.id)::text as id from batch

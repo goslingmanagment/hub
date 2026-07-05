@@ -228,6 +228,113 @@ describe("message archive projection (Stage 10)", () => {
     });
   });
 
+  it("archives tip mills from every producer shape — fansly mills, harvest dollars", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { ofPage, fanslyPage } = await seedPages();
+
+    // Fansly sync-pull events carry tipAmountMills (MILLS verbatim, no price).
+    await appendDomainEvents(testDb.db, fanslyPage.id, [{
+      type: "message.received",
+      occurredAt: new Date("2026-06-25T12:00:00Z"),
+      fanIdentityRef: "f-55",
+      conversationRef: "conv-55",
+      messageRef: "ftip-1",
+      data: { text: "fansly tip", tipAmountMills: 6400, isTip: true },
+      schemaVersion: 1,
+      observationId: 10,
+      dedupKey: "msg:received:ftip-1",
+    }]);
+    // Desktop harvest events carry tipAmount in DOLLARS (price 0 for tips).
+    await appendDomainEvents(testDb.db, ofPage.id, [{
+      type: "message.received",
+      occurredAt: new Date("2026-06-25T12:01:00Z"),
+      fanIdentityRef: "h-77",
+      conversationRef: "h-77",
+      messageRef: "htip-1",
+      data: { text: "harvest tip", price: 0, isTip: true, tipAmount: 5 },
+      schemaVersion: 1,
+      observationId: 11,
+      dedupKey: "msg:received:htip-1",
+    }]);
+
+    await runMessageArchiveProjection(appStub());
+    const rows = await testDb.pool.query<{
+      message_ref: string;
+      tip_amount_mills: string;
+      is_tip: boolean;
+    }>(
+      `select message_ref, tip_amount_mills::text as tip_amount_mills, is_tip
+       from message_archive order by message_ref`,
+    );
+    expect(rows.rows).toEqual([
+      { message_ref: "ftip-1", tip_amount_mills: "6400", is_tip: true },
+      { message_ref: "htip-1", tip_amount_mills: "5000", is_tip: true },
+    ]);
+  });
+
+  it("keeps an out-of-order tombstone: deleted-before-received stubs, then hydrates", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { ofPage } = await seedPages();
+
+    // The deleted event lands FIRST (webhook redelivery reordering).
+    await appendDomainEvents(testDb.db, ofPage.id, [{
+      type: "message.deleted",
+      occurredAt: new Date("2026-06-26T00:00:00Z"),
+      messageRef: "ooo-1",
+      data: {},
+      schemaVersion: 1,
+      observationId: 20,
+      dedupKey: "msg:deleted:ooo-1",
+    }]);
+    const first = await runMessageArchiveProjection(appStub());
+    expect(first).toMatchObject({ tombstoned: 1 });
+    const stub = await testDb.pool.query<{ content_pending: boolean }>(
+      `select content_pending from message_archive
+       where message_ref = 'ooo-1' and deleted_at is not null`,
+    );
+    expect(stub.rows).toEqual([{ content_pending: true }]);
+
+    // The content event arrives later: hydrates the stub, KEEPS the tombstone.
+    await appendDomainEvents(testDb.db, ofPage.id, [
+      messageEvent({ ref: "ooo-1", fan: "888", text: "was deleted", price: 0 }),
+    ]);
+    const second = await runMessageArchiveProjection(appStub());
+    expect(second).toMatchObject({ inserted: 1 });
+    const hydrated = await testDb.pool.query<{
+      text_plain: string;
+      content_pending: boolean;
+      deleted: boolean;
+    }>(
+      `select text_plain, content_pending, (deleted_at is not null) as deleted
+       from message_archive where message_ref = 'ooo-1'`,
+    );
+    expect(hydrated.rows).toEqual([
+      { text_plain: "was deleted", content_pending: false, deleted: true },
+    ]);
+
+    // A replayed content event never overwrites the hydrated row (first REAL
+    // writer wins), and rebuild converges to the same terminal state.
+    const rebuilt = await rebuildMessageArchiveProjection(appStub(), { accountId: ofPage.id });
+    expect(rebuilt.tombstoned).toBe(1);
+    const afterRebuild = await testDb.pool.query<{
+      text_plain: string;
+      content_pending: boolean;
+      deleted: boolean;
+    }>(
+      `select text_plain, content_pending, (deleted_at is not null) as deleted
+       from message_archive where message_ref = 'ooo-1'`,
+    );
+    expect(afterRebuild.rows).toEqual([
+      { text_plain: "was deleted", content_pending: false, deleted: true },
+    ]);
+  });
+
   it("skips accounts with events but no resolvable page and parks their watermark", async (context) => {
     if (!testDb) {
       context.skip();

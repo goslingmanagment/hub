@@ -27,6 +27,11 @@ CREATE TABLE "message_archive" (
   "tip_amount_mills"   bigint NOT NULL DEFAULT 0,
   "in_reply_to_ref"    text,
   "media_metadata"     jsonb NOT NULL DEFAULT '[]',
+  -- True while the row is a tombstone-first stub (message.deleted applied
+  -- before its message.received/sent): content is placeholder until the
+  -- content event arrives and hydrates it. Content writers only overwrite
+  -- rows still flagged here — first REAL writer wins.
+  "content_pending"    boolean NOT NULL DEFAULT false,
   "deleted_at"         timestamp with time zone,
   "source_event_id"    bigint,
   "backfill_source"    text,

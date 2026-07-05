@@ -143,7 +143,11 @@ async function openIncidentAndNotify(
     errorSummary?: string | null;
     occurredAt?: Date;
   },
-) {
+): Promise<boolean> {
+  // Returns whether an incident row exists for this condition (opened now or
+  // already open). False = the open itself failed — callers with their own
+  // once-only latches (read-gateway capture) re-arm on false; this function
+  // never throws, so a rejected promise can't carry that signal.
   try {
     const occurredAt = input.occurredAt ?? new Date();
     const result = await openNotificationIncidentWithRecoveryGuard(app.db, {
@@ -162,14 +166,14 @@ async function openIncidentAndNotify(
     });
 
     if (result.transition === "existing" || result.transition === "suppressed" || !result.incident) {
-      return;
+      return true;
     }
 
     const settings = await getTelegramSettings(app.db, {
       defaultReportHourUtc: app.config.telegramReportHourUtc,
     });
     if (!settings.enabled || !settings.syncFailureAlertsEnabled) {
-      return;
+      return true;
     }
 
     const delivery = await sendTelegramMessage(app, {
@@ -184,12 +188,14 @@ async function openIncidentAndNotify(
       notificationIncidentId: result.incident.id,
       ...deliveryAttemptFields(delivery),
     });
+    return true;
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,
       incidentKind: input.kind,
       err: error,
     }, "Notification incident open failed; continuing");
+    return false;
   }
 }
 
@@ -425,8 +431,8 @@ export async function notifyOfapiGlobalIncident(
     errorSummary: string;
     occurredAt?: Date;
   },
-) {
-  await openIncidentAndNotify(app, {
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
     kind: input.kind,
     platformAccountId: null,
     pageLabel: null,

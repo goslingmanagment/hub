@@ -55,13 +55,17 @@ function recordDrop(app: TeeApp) {
   droppedCaptures += 1;
   if (droppedCaptures >= dropIncidentThreshold && !incidentRaised) {
     incidentRaised = true;
+    // The open path swallows its own errors and reports success as a
+    // boolean (it never rejects) — a failed open re-arms the latch so a
+    // later drop retries instead of leaving the gap silent forever.
     void notifyOfapiGlobalIncident(app, {
       kind: "read_gateway_capture",
       errorSummary:
         `Read-gateway capture tee dropped ${droppedCaptures} responses (queue cap ${queueCap})`,
-    }).catch(() => {
-      // Incident delivery is itself best-effort; the counter remains.
-      incidentRaised = false;
+    }).then((opened) => {
+      if (!opened) {
+        incidentRaised = false;
+      }
     });
   }
 }

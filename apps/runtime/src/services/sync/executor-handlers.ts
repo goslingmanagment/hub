@@ -3821,8 +3821,13 @@ export async function executeDmMessagesChunk(
                   ? "backfill"
                   : "incremental";
           } else if (deepBackfillRequests < deepBackfillMaxRequests) {
+            const idleDeepBackfillEffective = await loadEffectiveConfig(app.db, app.config);
             const deepBackfillCandidate = await selectNextPageDmMessageDeepBackfillCandidate(app.db, {
               platformAccountId: input.pageContext.page.id,
+              // Stage 17: same exhaustion-crawl semantics as the quota path —
+              // both selection paths must honor the lifted depth cap.
+              ignoreRetentionLimit:
+                idleDeepBackfillEffective.fanslyDeepBackfillIgnoreRetentionLimit === true,
             });
             if (!deepBackfillCandidate) {
               exhaustedEligibleConversations = true;
@@ -4328,6 +4333,7 @@ export async function executeFanEarningsChunk(
   // Snapshot-shaped: one lifetime page + one monthly page per run. Probe-grade
   // unknown payloads are journaled VERBATIM; typing happens at canonicalization
   // once the ramp captures a live corpus (recorded deviation).
+  await assertOwnedPageSyncLease(app.db);
   const stats = await app.adapter.getEarningsStatsAccountsPage(requestContext, {});
   await persistRawPayload(app.db, {
     platformAccountId: input.pageContext.page.id,
@@ -4340,6 +4346,7 @@ export async function executeFanEarningsChunk(
     retainUntil: retentionDate(),
   }, { action: "inserting fan_earnings_stats raw payload", platform: "fansly" });
 
+  await assertOwnedPageSyncLease(app.db);
   const monthly = await app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, {});
   await persistRawPayload(app.db, {
     platformAccountId: input.pageContext.page.id,
@@ -4396,6 +4403,7 @@ export async function executePurchaseHistoryChunk(
   let fansFetched = 0;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+    await assertOwnedPageSyncLease(app.db);
     const fans = await listPageFanNativeIds(app.db, {
       platformAccountId: input.pageContext.page.id,
       afterFanId: cursorFanId,
@@ -4413,10 +4421,38 @@ export async function executePurchaseHistoryChunk(
       return { satisfied: true, yieldReason: null, stats: { fansFetched, walkCompleted: true } };
     }
 
-    const page = await app.adapter.getMediaOrderHistoryPage(requestContext, {
-      accountIds: fan.platformUserId,
-      limit: 100,
-    });
+    let page;
+    try {
+      page = await app.adapter.getMediaOrderHistoryPage(requestContext, {
+        accountIds: fan.platformUserId,
+        limit: 100,
+      });
+    } catch (error) {
+      // Per-fan isolation: a fan-scoped client rejection (deleted/suspended
+      // account) skips THAT fan and keeps walking — without this, the retry
+      // path restarts at the same failing fan forever and the walk never
+      // passes it. Auth (401/403) and rate-limit (429) responses still
+      // propagate: those are page-scoped, not fan-scoped.
+      const fanScoped = error instanceof FanslyApiError &&
+        typeof error.status === "number" &&
+        [400, 404, 410].includes(error.status);
+      if (!fanScoped) {
+        throw error;
+      }
+      await input.telemetry.addAnomaly({
+        code: "purchase_history_fan_rejected",
+        severity: "warn",
+        message: `Skipped purchase-history fan after HTTP ${error.status}`,
+        details: { fanId: fan.fanId, platformUserId: fan.platformUserId },
+      });
+      cursorFanId = fan.fanId;
+      await upsertCheckpointProgress(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        stream: "purchase_history",
+        state: { cursorFanId },
+      });
+      continue;
+    }
     await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
