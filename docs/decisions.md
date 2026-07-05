@@ -1428,3 +1428,25 @@ not degrade the page's block-health UX to "catching up".
 Remaining for exit: deploy with the chain (flags off = inert), single-page ramp 48 h
 (lilly-1/lilly-2 — sessions probe-proven), canonicalizer v2 + projection from the captured
 corpus, fleet enable, 2-week incident watch.
+
+## Stage 17 Green-Local — Fansly Backscroll Backfill (2026-07-05)
+
+**Decision #77:** Stage 17 built green-local on `kernel/stage-17-backscroll` (29e49d4,
+chain 8→9→10→16→17; suite 176 files / 1448 tests). Same deviation family (#73–#76).
+
+Delivered: (1) the Fansly DM canonicalizer Stage 8 had deliberately deferred — sync-pull v2
+resolves message direction against a per-run page→native-account-ref context map, keeping
+canonicalizers pure (the context is an argument, not a lookup inside); tips stay in mills;
+missing own-ref rows are recoverable via events:replay (recorded edge). (2) The semantics
+audit CONFIRMED the spec's suspicion: the deep-backfill walk was depth-capped by
+stored_message_count < retention_limit, not walk-to-exhaustion (value ordering was already
+spender-first, pre-satisfying the spec). Extension per extend-don't-replace: live-editable
+fanslyDeepBackfillIgnoreRetentionLimit (12th live key) lifts the cap for the exhaustion
+crawl. (3) fansly:backscroll-report manifest CLI — the exit criterion reads from it.
+
+Design note recorded: manual "sync all" expands via domain lists, which deliberately
+exclude the bulk streams — scope requests never hammer them; they ride the recovery/planner
+cadence.
+
+Remaining for exit (ops, after the chain deploys): flip the cap knob, weeks-long crawl,
+weekly manifest watch, §5 prod checks at 100% exhausted.
