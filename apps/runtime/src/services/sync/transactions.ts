@@ -742,6 +742,7 @@ async function syncTransactionsIncremental(
         retainUntil: retentionDate(),
       }, {
         action: "inserting earnings_transactions raw payload",
+        platform: "fansly",
       });
 
       const pageOldestSeenAt = page.items.reduce<Date | null>(
@@ -1256,6 +1257,7 @@ async function syncTransactionsBackfill(
         retainUntil: retentionDate(),
       }, {
         action: "inserting earnings_transactions raw payload",
+        platform: "fansly",
       });
 
       const pageOldestSeenAt = page.items.reduce<Date | null>(

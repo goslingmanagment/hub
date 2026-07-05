@@ -901,6 +901,7 @@ async function syncOnlyFansTransactionsIncremental(
         retainUntil: retentionDate(),
       }, {
         action: "inserting onlymonster_transactions raw payload",
+        platform: "onlyfans",
       });
 
       const pageOldestSeenAt = page.parsed.items.reduce<Date | null>(
@@ -1017,6 +1018,7 @@ async function syncOnlyFansTransactionsIncremental(
         retainUntil: retentionDate(),
       }, {
         action: "inserting onlymonster_chargebacks raw payload",
+        platform: "onlyfans",
       });
 
       const pageOldestSeenAt = page.parsed.items.reduce<Date | null>(
@@ -1508,6 +1510,7 @@ async function syncOnlyFansTransactionsBackfill(
           retainUntil: retentionDate(),
         }, {
           action: "inserting onlymonster_transactions raw payload",
+          platform: "onlyfans",
         });
 
         const pageOldestSeenAt = page.parsed.items.reduce<Date | null>(
@@ -1737,6 +1740,7 @@ async function syncOnlyFansTransactionsBackfill(
         retainUntil: retentionDate(),
       }, {
         action: "inserting onlymonster_chargebacks raw payload",
+        platform: "onlyfans",
       });
 
       const pageOldestSeenAt = page.parsed.items.reduce<Date | null>(
