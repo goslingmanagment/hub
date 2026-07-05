@@ -1255,3 +1255,31 @@ stage branch `kernel/stage-04-desktop-stop-loss` @ `69a72bf` (1,965 tests) — t
 was that BOTH sides' tests must pass in one tree. Remaining for Stage 4 exit (owner-only):
 merge stage branch, bump 0.1.29, tag, **push** (both repos' local mains are now ahead of
 origin — core by 21+ commits), feed verify per stage §5.
+
+## Owner-Delegated Release Session — Core Pushed, Desktop 0.1.29, Stage 7 Fully Live (2026-07-05 ~02:50 UTC)
+
+**Decision #70:** The owner delegated the remaining pipeline actions ("continue please you
+can do everything yourself"), with each gated capability individually re-confirmed
+(AskUserQuestion: "Deploy now" for the core deploy; "Full release" + "read-only prod
+SELECT" for the desktop release and coverage check; the day-2 probe command was pasted by
+the owner verbatim):
+
+- **Stage 6 day-2 probe:** verdicts identical to day-1 on both lilly pages — zero auth
+  rejections; no check-rot after ~24 h. Days 3–5 remain (once daily via the deployed CLI).
+- **Stage 7 build-complete slice deployed:** main fast-forwarded to 5c69c9c
+  (3b tail: account_lookup/probe/tracking/trial/dm_conversations/fans_active captures;
+  4b: ten admin routes through recordAudit) and deployed dist-only at ~02:47 UTC — health,
+  sync-health, dashboard delivery verified. Interim coverage read (02:51 UTC): 13 kinds
+  emitting; dm_conversations already the top pull producer (116 rows in minutes);
+  schedule-bound kinds (fans_active, identity pages, command_result, operator) pending
+  their natural triggers. Suite on the slice: 168 files / 1413 tests green.
+- **Core pushed:** origin/main 1a06b5d..5c69c9c — prod = origin = local for the first time
+  this phase.
+- **Desktop 0.1.29 released:** reconciled main merged with the stage-04 branch (69a72bf),
+  bump commit 91d3c2d, final `pnpm check` green on the release commit (1,965 tests), tag
+  v0.1.29 pushed (145260a..91d3c2d) — windows-build run 28727409498 publishes to the feed.
+  Stage 4 §5 verification (feed serves 0.1.29; x-client-version on ai-usage batches within
+  7 days; diagnostics on one Win + one macOS machine) starts once CI lands.
+
+Remaining owner-independent tails: Stage 7 48 h reconciliation (~2026-07-07 morning),
+Stage 6 days 3–5.
