@@ -191,10 +191,20 @@ export async function executeKernelRequest(input: {
       `Network error calling ${def.method} ${def.path}: ${error instanceof Error ? error.message : "unknown"}`,
       "network",
       null,
-      "network_error",
+      networkErrorCode(error),
       null,
     );
   }
+}
+
+/** Preserve the abort/timeout distinction through the network wrap — clients
+ * with retry discipline (the desktop) must not blind-retry what a caller
+ * deliberately aborted, and must classify timeouts as such. */
+function networkErrorCode(error: unknown): string {
+  const name = error instanceof Error ? error.name : typeof error === "object" && error !== null && "name" in error ? String((error as { name: unknown }).name) : null;
+  if (name === "TimeoutError") return "timeout";
+  if (name === "AbortError") return "aborted";
+  return "network_error";
 }
 
 async function throwForErrorResponse(
