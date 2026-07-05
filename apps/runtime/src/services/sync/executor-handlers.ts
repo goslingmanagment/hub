@@ -1059,6 +1059,23 @@ export async function executeTopSpendersChunk(
         after: windowStartedAt,
         before: windowEndedAt,
       });
+      await persistRawPayload(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        syncRunId: input.syncRunId,
+        endpoint: "earnings_accounts",
+        requestParams: {
+          after: currentWindow.startedAt,
+          before: currentWindow.endedAt,
+          windowKind: currentWindow.kind,
+        },
+        responsePayload: response.raw,
+        mapperVersion: FANSLY_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, {
+        action: "inserting earnings_accounts raw payload",
+        platform: "fansly",
+      });
 
       const finerWindows = response.done ? null : splitTopSpendersWindow(currentWindow);
       if (finerWindows) {
@@ -1224,6 +1241,23 @@ export async function executeTopSpendersChunk(
   const response = await app.adapter.getEarningsAccountsPage(requestContext, {
     after: steadyStateWindowStartedAt,
     before: steadyStateWindowEndedAt,
+  });
+  await persistRawPayload(app.db, {
+    platformAccountId: input.pageContext.page.id,
+    syncRunId: input.syncRunId,
+    endpoint: "earnings_accounts",
+    requestParams: {
+      after: steadyStateWindow.startedAt,
+      before: steadyStateWindow.endedAt,
+      windowKind: steadyStateWindow.kind,
+    },
+    responsePayload: response.raw,
+    mapperVersion: FANSLY_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+  }, {
+    action: "inserting earnings_accounts raw payload",
+    platform: "fansly",
   });
   if (response.done) {
     upsertedRankings = await upsertTopSpendersWindow(app, {
@@ -2446,6 +2480,19 @@ async function executeOnlyFansDmConversationsChunk(
         limit: 10000,
       }),
     ]);
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint: "recent_chat_fan_ids",
+      requestParams: { limit: 10000 },
+      responsePayload: fanIdsResponse.raw,
+      mapperVersion: ONLYMONSTER_MAPPER_VERSION,
+      payloadKind: "dm_metadata",
+      retainUntil: dmRetentionDate(),
+    }, {
+      action: "inserting recent_chat_fan_ids raw payload",
+      platform: "onlyfans",
+    });
     fanIds = Array.from(new Set(
       [
         ...knownFanIds,
@@ -2515,6 +2562,19 @@ async function executeOnlyFansDmConversationsChunk(
       });
       continue;
     }
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint: "dm_conversation_heads",
+      requestParams: { chatId: fanPlatformUserId, limit: 1, order: "desc", pageIndex: 0 },
+      responsePayload: page.raw,
+      mapperVersion: ONLYMONSTER_MAPPER_VERSION,
+      payloadKind: "dm_metadata",
+      retainUntil: dmRetentionDate(),
+    }, {
+      action: "inserting dm_conversation_heads raw payload",
+      platform: "onlyfans",
+    });
     const head = page.parsed.items[0] ?? null;
     if (!head) {
       continue;
@@ -2863,6 +2923,19 @@ export async function executeDmConversationsChunk(
         input.budget.hasRequestCapacity() &&
         input.budget.hasWallClockCapacity()) {
         detail = await app.adapter.getGroupDetail(requestContext, conversation.groupId);
+        await persistRawPayload(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          syncRunId: input.syncRunId,
+          endpoint: "group_detail",
+          requestParams: { groupId: conversation.groupId },
+          responsePayload: detail.raw,
+          mapperVersion: FANSLY_MAPPER_VERSION,
+          payloadKind: "dm_metadata",
+          retainUntil: dmRetentionDate(),
+        }, {
+          action: "inserting group_detail raw payload",
+          platform: "fansly",
+        });
         const detailPartnerIds = Array.from(new Set(
           (detail.parsed.users ?? [])
             .map((user) => user.userId)
@@ -2923,6 +2996,19 @@ export async function executeDmConversationsChunk(
         const headRepair = await app.adapter.getMessagesPage(requestContext, {
           groupId: conversation.groupId,
           limit: 1,
+        });
+        await persistRawPayload(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          syncRunId: input.syncRunId,
+          endpoint: "dm_messages",
+          requestParams: { groupId: conversation.groupId, limit: 1, headRepair: true },
+          responsePayload: headRepair.raw,
+          mapperVersion: FANSLY_MAPPER_VERSION,
+          payloadKind: "dm_messages",
+          retainUntil: dmRetentionDate(),
+        }, {
+          action: "inserting dm_messages head-repair raw payload",
+          platform: "fansly",
         });
         const repairedHead = headRepair.items[0] ?? null;
         if (repairedHead) {

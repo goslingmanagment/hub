@@ -346,6 +346,18 @@ export async function refreshPageMetadata(
       requestObserver: telemetry?.getRequestObserver() ?? null,
       rateLimitWaiter,
     });
+    await persistRawPayload(app.db, {
+      platformAccountId: pageContext.page.id,
+      endpoint: "account_me",
+      requestParams: {},
+      responsePayload: accountMe.raw,
+      mapperVersion: FANSLY_MAPPER_VERSION,
+      payloadKind: "mapping_critical",
+      retainUntil: retentionDate(),
+    }, {
+      action: "inserting account_me raw payload",
+      platform: "fansly",
+    });
 
     await updatePageMetadata(app.db, pageContext.page.id, {
       platformAccountIdValue: accountMe.parsed.account.id,
@@ -371,6 +383,18 @@ export async function refreshPageMetadata(
     },
     getOnlyMonsterAccountId(pageContext.page.metadata),
   );
+  await persistRawPayload(app.db, {
+    platformAccountId: pageContext.page.id,
+    endpoint: "onlymonster_account",
+    requestParams: {},
+    responsePayload: account.raw,
+    mapperVersion: ONLYMONSTER_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+  }, {
+    action: "inserting onlymonster_account raw payload",
+    platform: "onlyfans",
+  });
 
   await updatePageMetadata(app.db, pageContext.page.id, {
     platformAccountIdValue: account.parsed.account.platform_account_id,
@@ -412,6 +436,24 @@ export async function persistFailedSyncPayload(
       payloadKind: "failed",
       errorMessage: input.failure.summary,
       retainUntil: retentionDate(),
+    });
+    // Stage 7 producer 2: failed fetches are pull facts too. Best-effort like
+    // the raw insert above — this path already runs inside error handling.
+    const failedPayload = { error: input.failure.error, summary: input.failure.summary };
+    await insertObservation(app.db, {
+      source: "pull",
+      producer: `sync:${input.platform}:${getPageSyncExecutionContext()?.stream ?? input.endpoint}`,
+      platform: input.platform,
+      accountId: input.platformAccountId,
+      kind: `${input.endpoint}:failed`,
+      payload: failedPayload,
+      payloadHash: createHash("sha256").update(JSON.stringify(failedPayload)).digest(),
+      idempotencyKey: [
+        input.platformAccountId,
+        `${input.endpoint}:failed`,
+        input.syncRunId,
+        getPageSyncExecutionContext()?.requestSeq ?? randomUUID(),
+      ].join(":"),
     });
   } catch (error) {
     app.logger.warn(
