@@ -1592,3 +1592,37 @@ in the desktop repo: `docs/project-kernel/pass3-stage-11-wire-contract.md` (untr
 Exit (ops): deploy with the chain → desktop uploader release (3c) → §5: ≥1 production
 desktop end-to-end, duplicates=all on re-send, offline-drain drill, a week of spool
 telemetry (which also gates Stage 12's harvest).
+
+## Stage 12 Built — Both Halves, Same Day (2026-07-05)
+
+**Decision #83:** Stage 12 (desktop local-DB harvest) built across both repos in one
+session, grounded in a full desktop-schema exploration. Ordering deviation as before
+(deps 11/8/10 green-local-not-exited; the fleet run is ops after the chain deploys).
+
+**Core glue** (dd006b2, on the chain): lane accepts `harvest.<table>` kinds verbatim
+under `producer='desktop-harvest@<version>'`; account resolution moved to INGEST
+(payload.ofapiAccountId → pages.ofapi_account_id — harvest events carry no pageLabel
+and NULL-account observations never canonicalize). client-capture family v2:
+harvest.messages parses with Stage 8 dedup-key parity — CI-proven cross-producer
+collapse (webhook + harvest → 2 observations, 1 event) while pre-epoch history appends
+with tombstones. RECORDED DEVIATION: harvest.fan_transactions is validation-only, not
+"candidate events" — the ledger's transaction events start at the webhook epoch, so
+historical harvest events would ALL append as noise; the meaningful dedup surface is
+the transactions TRUTH table (the desktop's own sweep calls OFAPI
+GET /{account}/transactions — same id space), which is what `harvest:reconcile`'s
+residue query joins (report-only; NULL-account rows always residue).
+
+**Desktop half** (ac5fbb9 on `kernel/stage-12-harvest` off 0.1.29): harvest module with
+rowid walkers, DETERMINISTIC UUIDv5 ids keyed on natural PKs (not rowids — VACUUM),
+cursors persisted only after the covering 2xx, 400-quarantine + capped-backoff retry,
+per-machine manifest for reconciliation, Danger-Zone start/pause UI with polled
+progress, and the purge guard: purge REFUSES while a started harvest is incomplete
+(the spec's one binding ordering rule, encoded). New hub client method
+postIngestObservations; harvest client sends x-client-version 'harvest-<app version>'.
+`pnpm check` green (typecheck, lint, 762+1206 tests). The Stage 11 wire-contract memo
+is committed in the desktop repo alongside.
+
+Exit (ops, after chain deploy + a desktop release carrying this): fleet inventory via
+diagnostics exports → one machine first → manifests reconcile via harvest:reconcile →
+re-run no-op proof → archive coverage predates webhook epoch → residue review. Local
+prune policies stay at Stage 4 caps until manifests reconcile.
