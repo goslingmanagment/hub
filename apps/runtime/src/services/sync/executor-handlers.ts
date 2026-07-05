@@ -136,7 +136,7 @@ import {
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
 } from "./shared.ts";
-import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
+import { lookupHydratedFans, upsertHydratedFansForPage, type HydrationCaptureContext } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
 
 type ExecutorRequestContext = {
@@ -388,21 +388,41 @@ async function probeFanslyAccountResolution(
   app: AppContext,
   requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0],
   partnerPlatformUserId: string,
+  capture: { platformAccountId: number; syncRunId: number },
 ): Promise<FanslyAccountResolution> {
+  let response: Awaited<ReturnType<AppContext["adapter"]["getAccountsByIdsPage"]>>;
   try {
-    const response = await app.adapter.getAccountsByIdsPage(requestContext, [partnerPlatformUserId]);
-    if (!Array.isArray(response?.parsed)) {
-      return "unknown";
-    }
-    if (response.parsed.length === 0) {
-      return "unresolved";
-    }
-    return response.parsed.some((account) => account.id === partnerPlatformUserId)
-      ? "resolved"
-      : "unknown";
+    response = await app.adapter.getAccountsByIdsPage(requestContext, [partnerPlatformUserId]);
   } catch {
+    // Only the probe fetch itself is best-effort ("unknown" verdict); the
+    // journal write below stays outside this catch so a failed capture still
+    // fails the chunk (Stage 7: never a silent drop).
     return "unknown";
   }
+
+  await persistRawPayload(app.db, {
+    platformAccountId: capture.platformAccountId,
+    syncRunId: capture.syncRunId,
+    endpoint: "account_lookup",
+    requestParams: { ids: [partnerPlatformUserId], probe: true },
+    responsePayload: response.raw,
+    mapperVersion: FANSLY_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+  }, {
+    action: "inserting account_lookup probe raw payload",
+    platform: "fansly",
+  });
+
+  if (!Array.isArray(response?.parsed)) {
+    return "unknown";
+  }
+  if (response.parsed.length === 0) {
+    return "unresolved";
+  }
+  return response.parsed.some((account) => account.id === partnerPlatformUserId)
+    ? "resolved"
+    : "unknown";
 }
 
 function buildOnlyFansRequestContext(app: AppContext, input: ExecutorRequestContext) {
@@ -450,6 +470,7 @@ async function hydrateFanslyFollowerRows(
     telemetry: SyncRunTelemetry;
     stream: FollowerMappingStream;
     offset: number;
+    capture: HydrationCaptureContext;
   },
 ) {
   const sourceFollowerIds = uniqueFollowerIds(input.followers);
@@ -467,6 +488,7 @@ async function hydrateFanslyFollowerRows(
       requestContext: input.requestContext,
       platformUserIds: missingAggregationIds,
       telemetry: input.telemetry,
+      capture: input.capture,
     })
     : {
       accounts: [] satisfies FanslyAccount[],
@@ -1720,6 +1742,7 @@ export async function executeSubscribersChunk(
       requestContext,
       platformUserIds: page.items.map((item) => item.subscriberId),
       telemetry: input.telemetry,
+      capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
     });
     const nextState = page.done
       ? state
@@ -1967,6 +1990,7 @@ export async function executeFollowersChunk(
       telemetry: input.telemetry,
       stream: "followers",
       offset: state.offset,
+      capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
     });
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       const fanMap = await upsertHydratedFansForPage(dbTx, {
@@ -2268,6 +2292,7 @@ export async function executeFollowersReconcileChunk(
       telemetry: input.telemetry,
       stream: "followers_reconcile",
       offset: state.offset,
+      capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
     });
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       const fanMap = await upsertHydratedFansForPage(dbTx, {
@@ -3055,6 +3080,7 @@ export async function executeDmConversationsChunk(
             app,
             requestContext,
             partnerPlatformUserId,
+            { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
           );
           shouldClearUnresolvableExclusion = resolution === "resolved";
         }
@@ -3867,6 +3893,7 @@ export async function executeDmMessagesChunk(
             app,
             requestContext,
             currentConversation.partnerPlatformUserId,
+            { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
           );
           if (resolution !== "unresolved") {
             throw error;

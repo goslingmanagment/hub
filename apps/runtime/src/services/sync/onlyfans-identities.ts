@@ -9,7 +9,7 @@ import {
   upsertOnlyFansPublicProfileResolution,
   withOwnedPageSyncTransaction,
 } from "@agency_hub_core/db";
-import type { OnlyMonsterLinkUser } from "@agency_hub_core/onlyfans";
+import { ONLYMONSTER_MAPPER_VERSION, type OnlyMonsterLinkUser } from "@agency_hub_core/onlyfans";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
@@ -20,6 +20,7 @@ import {
 } from "../onlyfans-public-profiles.ts";
 import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
+import { persistRawPayload, retentionDate } from "./shared.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ONLYFANS_IDENTITY_PAGE_LIMIT = 750;
@@ -563,6 +564,24 @@ export async function syncOnlyFansIdentities(
     await assertOwnedPageSyncLease(app.db);
     const currentPhase = state.phase;
     const page = await fetchOnlyFansIdentityPage(app, input, state);
+    await persistRawPayload(app.db, {
+      platformAccountId: input.platformAccountId,
+      syncRunId: input.syncRunId,
+      endpoint: currentPhase,
+      requestParams: {
+        collectedFrom: state.collectedFrom,
+        collectedTo: state.collectedTo,
+        cursor: state.cursor,
+        limit: ONLYFANS_IDENTITY_PAGE_LIMIT,
+      },
+      responsePayload: page.raw,
+      mapperVersion: ONLYMONSTER_MAPPER_VERSION,
+      payloadKind: "mapping_critical",
+      retainUntil: retentionDate(),
+    }, {
+      action: `inserting ${currentPhase} raw payload`,
+      platform: "onlyfans",
+    });
     const completed = currentPhase === "trial_link_users" && !page.parsed.cursor;
     const pageNewestCollectedAt = newestCollectedAt(page.parsed.items);
     let upsertedFansCount = 0;

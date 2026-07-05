@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   getCheckpoint: vi.fn(),
+  insertObservation: vi.fn(),
+  insertRawPayload: vi.fn(),
   listOnlyFansPublicProfileResolutionCandidates: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
@@ -256,6 +258,17 @@ describe("syncOnlyFansIdentities", () => {
       cursorTimestamp: new Date("2026-05-27T12:00:00.000Z"),
       lastSuccessfulRunId: 123,
     }));
+    // Stage 7 producer 2: each fetched identity page is captured raw + journaled.
+    expect(dbMocks.insertRawPayload).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 1,
+      syncRunId: 123,
+      endpoint: "tracking_link_users",
+      payloadKind: "mapping_critical",
+    }));
+    expect(dbMocks.insertRawPayload).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      endpoint: "trial_link_users",
+    }));
+    expect(dbMocks.insertObservation).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
       satisfied: true,
       processed: 2,

@@ -52,7 +52,9 @@ import {
   type OfapiStreamChunkResult,
 } from "./ofapi-dm-sync.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
+import { persistRawPayload, retentionDate } from "./shared.ts";
 
+const OFAPI_AUDIENCE_MAPPER_VERSION = "ofapi-audience-rest-v1";
 // fans/active hard-caps limit at 20 per the OFAPI OpenAPI validation text.
 const OFAPI_FANS_PAGE_LIMIT = 20;
 const DEFAULT_MAX_REQUESTS_PER_RUN = 25;
@@ -431,6 +433,22 @@ export async function executeOfapiAudienceChunk(
       pageIndex: state.pageCount,
     });
     await guard.recordResponse(page);
+    // Stage 7 producer 2: audience pages are captured like DM pages. The OFAPI
+    // client exposes no raw response envelope, so the unfiltered item records
+    // are persisted instead.
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint: "fans_active",
+      requestParams: { limit: OFAPI_FANS_PAGE_LIMIT, offset: state.offset },
+      responsePayload: { items: page.items },
+      mapperVersion: OFAPI_AUDIENCE_MAPPER_VERSION,
+      payloadKind: "mapping_critical",
+      retainUntil: retentionDate(),
+    }, {
+      action: "inserting fans_active raw payload",
+      platform: "onlyfans",
+    });
     pagesFetched += 1;
 
     if (state.offset === 0 && page.items.length === 0) {

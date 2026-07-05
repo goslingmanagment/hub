@@ -5,14 +5,22 @@ import {
   type Database,
   type UpsertFanInput,
 } from "@agency_hub_core/db";
-import type { FanslyAccount, FanslyAccountNote } from "@agency_hub_core/fansly";
+import { FANSLY_MAPPER_VERSION, type FanslyAccount, type FanslyAccountNote } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
+import { persistRawPayload, retentionDate } from "./shared.ts";
 
 type HydratedLookupResult = {
   accounts: FanslyAccount[];
   fallbackIds: string[];
+};
+
+/** Stage 7 producer 2: callers with a page + run in hand pass this so every
+ *  hydration lookup page is persisted + journaled like any other fetch. */
+export type HydrationCaptureContext = {
+  platformAccountId: number;
+  syncRunId: number | null;
 };
 
 function normalizeHydratedFan(account: FanslyAccount): UpsertFanInput {
@@ -45,6 +53,7 @@ export async function lookupHydratedFans(
     requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
     platformUserIds: string[];
     telemetry?: SyncRunTelemetry;
+    capture?: HydrationCaptureContext;
   },
 ) {
   if (input.platformUserIds.length === 0) {
@@ -60,6 +69,21 @@ export async function lookupHydratedFans(
   for (let index = 0; index < uniqueIds.length; index += 100) {
     const chunk = uniqueIds.slice(index, index + 100);
     const response = await app.adapter.getAccountsByIdsPage(input.requestContext, chunk);
+    if (input.capture) {
+      await persistRawPayload(app.db, {
+        platformAccountId: input.capture.platformAccountId,
+        syncRunId: input.capture.syncRunId,
+        endpoint: "account_lookup",
+        requestParams: { ids: chunk },
+        responsePayload: response.raw,
+        mapperVersion: FANSLY_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, {
+        action: "inserting account_lookup raw payload",
+        platform: "fansly",
+      });
+    }
     accounts.push(...response.parsed);
   }
 

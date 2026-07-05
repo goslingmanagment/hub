@@ -362,6 +362,7 @@ async function persistFanslyTransactionsPage(
     platformAccountId: number;
     commissionRate: number;
     requestContext: Parameters<AppContext["adapter"]["getTransactionsPage"]>[0];
+    syncRunId: number;
     telemetry: SyncRunTelemetry;
     activeLease?: ActiveSyncLease;
   },
@@ -380,6 +381,7 @@ async function persistFanslyTransactionsPage(
       .map((item) => item.correlationAccountId)
       .filter((value): value is string => Boolean(value)),
     telemetry: input.telemetry,
+    capture: { platformAccountId: input.platformAccountId, syncRunId: input.syncRunId },
   });
 
   await withOwnedPageSyncTransaction(app.db, async (dbTx) => {

@@ -555,6 +555,22 @@ export async function executeOfapiDmConversationsChunk(
       pageIndex,
     });
     await guard.recordResponse(page);
+    // Stage 7 producer 2: chats-list pages are captured like message pages
+    // below. The OFAPI client exposes no raw response envelope, so the
+    // unfiltered item records are persisted instead.
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint: "dm_conversations",
+      requestParams: { limit: OFAPI_CHATS_PAGE_LIMIT, offset, order: "recent" },
+      responsePayload: { items: page.items },
+      mapperVersion: OFAPI_DM_MAPPER_VERSION,
+      payloadKind: "dm_metadata",
+      retainUntil: dmRetentionDate(),
+    }, {
+      action: "inserting dm_conversations raw payload",
+      platform: "onlyfans",
+    });
     pagesFetched += 1;
 
     const summaries: OfapiChatSummary[] = [];

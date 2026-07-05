@@ -99,6 +99,7 @@ import {
   listUsersDetailed,
   loginWithPassword,
   logoutSessionToken,
+  recordAudit,
   requireApiKeyUser,
   requireDashboardUser,
   requireOwner,
@@ -2561,6 +2562,11 @@ export async function buildApiServer(appContext: AppContext) {
       scope,
       reason: "manual",
     });
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.sync_trigger",
+      metadata: { pageLabel, scope },
+    });
     reply.code(202);
     return { accepted: true as const, pageLabel, scope };
   });
@@ -2575,6 +2581,11 @@ export async function buildApiServer(appContext: AppContext) {
       scope: "all",
       reason: "manual",
     });
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.sync_trigger_all",
+      metadata: { scope: "all", pagesQueued: results.length },
+    });
     reply.code(202);
     return { accepted: true as const, pagesQueued: results.length };
   });
@@ -2587,7 +2598,13 @@ export async function buildApiServer(appContext: AppContext) {
     if (!boss) {
       throw new ServiceUnavailableError("Job queue not available");
     }
-    return triggerSyncBlock(appContext, boss, request.body);
+    const result = await triggerSyncBlock(appContext, boss, request.body);
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.sync_block_trigger",
+      metadata: { ...request.body },
+    });
+    return result;
   });
 
   server.post("/api/v1/admin/sync/blocks/pause", {
@@ -2595,7 +2612,13 @@ export async function buildApiServer(appContext: AppContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return pauseSyncBlock(appContext, request.body);
+    const result = await pauseSyncBlock(appContext, request.body);
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.sync_block_pause",
+      metadata: { ...request.body },
+    });
+    return result;
   });
 
   server.post("/api/v1/admin/sync/blocks/resume", {
@@ -2606,7 +2629,13 @@ export async function buildApiServer(appContext: AppContext) {
     if (!boss) {
       throw new ServiceUnavailableError("Job queue not available");
     }
-    return resumeSyncBlock(appContext, boss, request.body);
+    const result = await resumeSyncBlock(appContext, boss, request.body);
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.sync_block_resume",
+      metadata: { ...request.body },
+    });
+    return result;
   });
 
   server.post("/api/v1/admin/sync/blocks/reset", {
@@ -2617,7 +2646,13 @@ export async function buildApiServer(appContext: AppContext) {
     if (!boss) {
       throw new ServiceUnavailableError("Job queue not available");
     }
-    return resetSyncBlock(appContext, boss, request.body);
+    const result = await resetSyncBlock(appContext, boss, request.body);
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.sync_block_reset",
+      metadata: { ...request.body },
+    });
+    return result;
   });
 
   // Connection management
@@ -2906,7 +2941,14 @@ export async function buildApiServer(appContext: AppContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const body: UpdateCredentialsBody = request.body;
-    return updatePageCredentials(appContext, request.params.pageLabel, body);
+    const result = await updatePageCredentials(appContext, request.params.pageLabel, body);
+    // Field names only — credential VALUES must never reach the audit/observation row.
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.page_credentials_update",
+      metadata: { pageLabel: request.params.pageLabel, fields: Object.keys(body) },
+    });
+    return result;
   });
 
   // ---------------------------------------------------------------------------
@@ -3246,6 +3288,14 @@ export async function buildApiServer(appContext: AppContext) {
         note: auditNote,
         groupId: randomUUID(),
       });
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.config_update",
+        metadata: {
+          keys: results.map((result) => ({ key: result.key, version: result.version })),
+          note: auditNote ?? null,
+        },
+      });
       // The live PATCH only ever sends upserts (never a clear), so every result carries a
       // non-null value/version — narrow the atomic writer's (now nullable) shape back.
       return {
@@ -3283,6 +3333,11 @@ export async function buildApiServer(appContext: AppContext) {
       throw error;
     }
 
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.config_clear",
+      metadata: { key, note: request.query.note ?? null },
+    });
     return { ok: true as const, key };
   });
 
@@ -3356,6 +3411,14 @@ export async function buildApiServer(appContext: AppContext) {
         userId: principal.user.id,
         note: auditNote,
         groupId: randomUUID(),
+      });
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.config_staged_update",
+        metadata: {
+          keys: patches.map((patch) => ({ key: patch.key, desired: patch.desired })),
+          note: auditNote,
+        },
       });
       // The atomic writer returns ConfigOverrideValue (boolean for an upsert; null for a
       // cleared key, which reverts to env).

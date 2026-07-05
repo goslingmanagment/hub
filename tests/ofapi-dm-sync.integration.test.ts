@@ -629,7 +629,7 @@ describe("OFAPI DM messages sync", () => {
       idempotency_key: string;
     }>(
       `select producer, kind, account_id::text as account_id, idempotency_key
-       from observations where source = 'pull' order by id`,
+       from observations where source = 'pull' and kind = 'dm_messages' order by id`,
     );
     expect(observations.rows).toHaveLength(2);
     for (const row of observations.rows) {
@@ -641,6 +641,13 @@ describe("OFAPI DM messages sync", () => {
       expect(row.idempotency_key).toMatch(new RegExp(`^${page.id}:dm_messages:\\d+:[\\w-]+$`));
     }
     expect(observations.rows[0]!.idempotency_key).not.toBe(observations.rows[1]!.idempotency_key);
+
+    // Stage 7 3b tail: the bootstrap chats walk journals its list pages too.
+    const chatListObservations = await testDb.pool.query<{ producer: string }>(
+      `select producer from observations where source = 'pull' and kind = 'dm_conversations'`,
+    );
+    expect(chatListObservations.rows.length).toBeGreaterThan(0);
+    expect(chatListObservations.rows[0]!.producer).toBe("sync:onlyfans:dm_conversations");
   });
 
   it("tops up a diverged head incrementally and stops on overlap with stored messages", async (context) => {

@@ -160,7 +160,7 @@ async function getAdminUserById(app: AppContext, userId: number) {
   } satisfies AdminUserDetailed;
 }
 
-async function recordAudit(app: Pick<AppContext, "db">, input: AuditContext & {
+export async function recordAudit(app: Pick<AppContext, "db">, input: AuditContext & {
   eventType: string;
   targetUserId?: number | null;
   platformAccountId?: number | null;
