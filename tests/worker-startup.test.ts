@@ -62,6 +62,13 @@ const dbDiskAlertMocks = vi.hoisted(() => ({
   runDbDiskUsageCheck: vi.fn(),
 }));
 
+const observationsPartitionMocks = vi.hoisted(() => ({
+  OBSERVATIONS_PARTITIONS_QUEUE: "observations.partitions.ensure",
+  ensureObservationsPartitionQueue: vi.fn(),
+  ensureObservationsPartitionSchedule: vi.fn(),
+  runObservationsPartitionCheck: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -76,6 +83,7 @@ vi.mock("../apps/runtime/src/services/ofapi-credits.ts", () => ofapiCreditMocks)
 vi.mock("../apps/runtime/src/services/ofapi-command-executor.ts", () => ofapiCommandMocks);
 vi.mock("../apps/runtime/src/services/ofapi-dm-analytics.ts", () => ofapiDmAnalyticsMocks);
 vi.mock("../apps/runtime/src/services/db-disk-alert.ts", () => dbDiskAlertMocks);
+vi.mock("../apps/runtime/src/services/observations-partitions.ts", () => observationsPartitionMocks);
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,
@@ -136,6 +144,12 @@ describe("worker startup", () => {
     dbDiskAlertMocks.ensureDbDiskUsageSchedule.mockResolvedValue(undefined);
     dbDiskAlertMocks.runDbDiskUsageCheck.mockReset();
     dbDiskAlertMocks.runDbDiskUsageCheck.mockResolvedValue(null);
+    observationsPartitionMocks.ensureObservationsPartitionQueue.mockReset();
+    observationsPartitionMocks.ensureObservationsPartitionQueue.mockResolvedValue(undefined);
+    observationsPartitionMocks.ensureObservationsPartitionSchedule.mockReset();
+    observationsPartitionMocks.ensureObservationsPartitionSchedule.mockResolvedValue(undefined);
+    observationsPartitionMocks.runObservationsPartitionCheck.mockReset();
+    observationsPartitionMocks.runObservationsPartitionCheck.mockResolvedValue({ ensured: [], leadMonths: 3, failed: false });
     plannerMocks.runSyncPlannerCycle.mockReset();
 
     dbMocks.closeOrphanedSyncRuns.mockResolvedValue({

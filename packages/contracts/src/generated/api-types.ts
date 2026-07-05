@@ -14379,7 +14379,7 @@ export interface paths {
             parameters: {
                 query?: {
                     status?: "open" | "resolved";
-                    kind?: "auth_blocked" | "proxy_failed" | "stream_failed_threshold" | "ofapi_auth" | "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage";
+                    kind?: "auth_blocked" | "proxy_failed" | "stream_failed_threshold" | "ofapi_auth" | "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions";
                     pageLabel?: string;
                     limit?: number;
                     offset?: number;
@@ -14401,7 +14401,7 @@ export interface paths {
                                 id: number;
                                 incidentKey: string;
                                 /** @enum {string} */
-                                kind: "auth_blocked" | "proxy_failed" | "stream_failed_threshold" | "ofapi_auth" | "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage";
+                                kind: "auth_blocked" | "proxy_failed" | "stream_failed_threshold" | "ofapi_auth" | "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions";
                                 pageLabel: string;
                                 /** @enum {string} */
                                 platform: "fansly" | "onlyfans";

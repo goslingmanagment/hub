@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   date,
   foreignKey,
   index,
@@ -133,6 +134,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "ofapi_webhook_silence",
   "ofapi_burn_rate",
   "db_disk_usage",
+  "observations_partitions",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -2267,5 +2269,75 @@ export const configAuditLog = pgTable(
   (table) => ({
     changedAtIdx: index("config_audit_log_changed_at_idx").on(table.changedAt),
     groupIdx: index("config_audit_log_group_idx").on(table.groupId),
+  }),
+);
+
+// ── Observations journal (kernel Stage 7) ────────────────────────────────────
+// The universal append-only capture spine: every server-side producer writes
+// here unconditionally (no capture flags, by construction). Partitioned
+// monthly by received_at; PG requires unique constraints on partitioned
+// tables to include the partition key, so dedup lives in the unpartitioned
+// companion observation_keys. account_id has NO FK by design — unmapped
+// accounts are captured too; integrity is the insert protocol's job
+// (repositories/observations.ts). Nothing consumes this until Stage 8.
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
+
+export const OBSERVATION_SOURCES = [
+  "webhook",
+  "pull",
+  "client_capture",
+  "readthrough",
+  "command_result",
+  "operator",
+] as const;
+export type ObservationSource = (typeof OBSERVATION_SOURCES)[number];
+
+export const observations = pgTable(
+  "observations",
+  {
+    // GENERATED ALWAYS AS IDENTITY in the migration; inserts go through the
+    // repository's pre-allocated-id protocol (OVERRIDING SYSTEM VALUE).
+    id: bigint("id", { mode: "number" }).notNull(),
+    source: text("source").notNull(),
+    producer: text("producer").notNull(),
+    // FK -> platforms.key arrives with Stage 18; plain text until then.
+    platform: text("platform"),
+    accountId: bigint("account_id", { mode: "number" }),
+    nativeAccountRef: text("native_account_ref"),
+    kind: text("kind").notNull(),
+    payload: jsonb("payload").notNull(),
+    payloadHash: bytea("payload_hash").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }),
+    receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+    actorPrincipalId: bigint("actor_principal_id", { mode: "number" }),
+    parseVersion: integer("parse_version").default(0).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.id, table.receivedAt] }),
+    accountReceivedIdx: index("observations_account_received_idx").on(table.accountId, table.receivedAt),
+    kindReceivedIdx: index("observations_kind_received_idx").on(table.kind, table.receivedAt),
+    parseIdx: index("observations_parse_idx").on(table.parseVersion, table.receivedAt),
+    sourceCheck: check("observations_source_check", sql`
+      ${table.source} in ('webhook','pull','client_capture','readthrough','command_result','operator')
+    `),
+  }),
+);
+
+export const observationKeys = pgTable(
+  "observation_keys",
+  {
+    source: text("source").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.source, table.idempotencyKey] }),
   }),
 );

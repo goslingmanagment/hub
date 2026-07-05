@@ -59,6 +59,8 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 OFAPI credit burn rate high";
     case "db_disk_usage":
       return "🚨 Server disk usage high";
+    case "observations_partitions":
+      return "🚨 Observations partition lead too short";
   }
 }
 
@@ -101,7 +103,9 @@ function resolveMessageForIncident(
               ? "OFAPI credit burn rate back to normal"
               : input.kind === "db_disk_usage"
                 ? "Server disk usage back under the threshold"
-                : "OFAPI webhooks delivering again";
+                : input.kind === "observations_partitions"
+                  ? "Observations partition lead restored"
+                  : "OFAPI webhooks delivering again";
 
   return [
     "✅ Resolved",
@@ -381,11 +385,11 @@ export async function resolveOfapiAuthIncident(
   });
 }
 
-/** Process-global conditions (low credit balance, webhook silence, burn rate, disk usage). */
+/** Process-global conditions (low credit balance, webhook silence, burn rate, disk usage, partition lead). */
 export async function notifyOfapiGlobalIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
-    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage";
+    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions";
     errorSummary: string;
     occurredAt?: Date;
   },
@@ -403,7 +407,7 @@ export async function notifyOfapiGlobalIncident(
 export async function resolveOfapiGlobalIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
-    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage";
+    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions";
     recoveredAt?: Date;
   },
 ) {

@@ -19,6 +19,12 @@ import {
   runDbDiskUsageCheck,
 } from "./services/db-disk-alert.ts";
 import {
+  OBSERVATIONS_PARTITIONS_QUEUE,
+  ensureObservationsPartitionQueue,
+  ensureObservationsPartitionSchedule,
+  runObservationsPartitionCheck,
+} from "./services/observations-partitions.ts";
+import {
   ensureOfapiCreditQueues,
   ensureOfapiCreditSchedules,
   startOfapiCreditWorker,
@@ -143,6 +149,7 @@ export async function startWorkerServices(
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
+  await ensureObservationsPartitionQueue(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
@@ -153,6 +160,7 @@ export async function startWorkerServices(
     ensureOfapiCommandSchedules(boss),
     ensureOfapiDmAnalyticsSchedules(boss),
     ensureDbDiskUsageSchedule(boss),
+    ensureObservationsPartitionSchedule(boss),
   ]);
 
   await boss.work(SYNC_PLANNER_QUEUE, {
@@ -180,6 +188,11 @@ export async function startWorkerServices(
     if (result) {
       app.logger.info(result, "Disk usage check complete");
     }
+  });
+
+  await boss.work(OBSERVATIONS_PARTITIONS_QUEUE, { batchSize: 1 }, async () => {
+    const result = await runObservationsPartitionCheck(app);
+    app.logger.info(result, "Observations partition check complete");
   });
 
   await boss.work(WORKBOARD_CLASSIFY_QUEUE, { batchSize: 1 }, async () => {
