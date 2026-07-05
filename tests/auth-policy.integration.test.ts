@@ -4,6 +4,7 @@ import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import {
+  assignPageToUser,
   createUserAccount,
   issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
@@ -79,6 +80,12 @@ beforeAll(async () => {
     pageLabel: "lana",
   }, { source: "cli" });
   chatterKey = issued.key;
+
+  // The module role-matrix wants a team_lead with a page in scope.
+  await assignPageToUser(seedContext, {
+    username: "lead",
+    pageLabel: "lana",
+  }, { source: "cli" });
 
   // Both servers pin Stage 2's revenue gate to "enforce" — that is production
   // reality (flipped 2026-07-05), and the declarations must reproduce exactly it.
@@ -318,5 +325,64 @@ describe("log mode: legacy guards keep answering, statuses identical to enforce"
     const viaEnforce = await servers.enforce.inject(inject);
     expect(viaEnforce.statusCode).toBe(viaLog.statusCode);
     expect(viaEnforce.statusCode).toBeGreaterThanOrEqual(400);
+  });
+});
+
+// One representative route per bounded-context module (target §6.1). Cells:
+// a number = exact status in BOTH modes; "allowed" = the auth layer admitted
+// the principal (not 401/403, not 5xx — the handler may 200/400/404 on seeded
+// data); "same" = assert only that log and enforce modes agree.
+type MatrixCell = number | "allowed" | "same";
+
+const MODULE_MATRIX: Array<{
+  module: string;
+  url: string;
+  cells: Record<"anon" | "chatter" | "lead" | "owner", MatrixCell>;
+}> = [
+  { module: "identity", url: "/api/v1/auth/me", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
+  { module: "catalog", url: "/api/v1/models", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
+  { module: "ingest", url: "/api/v1/ofapi/commands/00000000-0000-4000-8000-000000000001", cells: { anon: 401, chatter: "allowed", lead: 403, owner: 403 } },
+  { module: "conversations", url: "/api/v1/pages/lana/fans/9000001/profile", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
+  { module: "finance", url: "/api/v1/pages/lana/revenue?period=7d", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
+  { module: "audience", url: "/api/v1/pages/lana/subscribers", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
+  { module: "workboard", url: "/api/v1/pages/lana/workboard", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
+  { module: "ai", url: "/api/v1/admin/usage/chatters", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
+  { module: "ops", url: "/api/v1/sync/overview", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
+  { module: "events", url: "/api/v1/events/snapshot?accountId=1&afterSeq=0", cells: { anon: 401, chatter: "same", lead: 403, owner: 403 } },
+];
+
+describe("per-module role matrix (Stage 19)", () => {
+  it("holds for a representative route of every module, identically in both modes", async (context) => {
+    const servers = requireServers(context);
+    if (!servers) return;
+
+    const ownerCookie = await loginCookie(servers.enforce, "dima", "owner-secret");
+    const leadCookie = await loginCookie(servers.enforce, "lead", "lead-secret");
+    const principals: Record<string, Record<string, string>> = {
+      anon: {},
+      chatter: { authorization: `Bearer ${chatterKey}` },
+      lead: { cookie: leadCookie },
+      owner: { cookie: ownerCookie },
+    };
+
+    for (const row of MODULE_MATRIX) {
+      for (const [who, headers] of Object.entries(principals)) {
+        const expected = row.cells[who as keyof typeof row.cells];
+        const viaEnforce = await servers.enforce.inject({ method: "GET", url: row.url, headers });
+        const viaLog = await servers.log.inject({ method: "GET", url: row.url, headers });
+        const label = `${row.module} ${row.url} as ${who}`;
+
+        expect(viaLog.statusCode, `${label} — log/enforce parity`).toBe(viaEnforce.statusCode);
+        if (typeof expected === "number") {
+          expect(viaEnforce.statusCode, label).toBe(expected);
+        } else if (expected === "allowed") {
+          expect(viaEnforce.statusCode, label).not.toBe(401);
+          expect(viaEnforce.statusCode, label).not.toBe(403);
+          // 503 is a legitimate flags-off answer (e.g. the command outbox);
+          // only a crash counts as failure here.
+          expect(viaEnforce.statusCode, label).not.toBe(500);
+        }
+      }
+    }
   });
 });

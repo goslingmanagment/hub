@@ -138,6 +138,9 @@ import {
   type AuthPolicyVerdict,
   type RoutePolicyTableRow,
 } from "./auth-policy.ts";
+import { createRequestAuth, pageScopeFor } from "./request-auth.ts";
+import type { ApiModuleContext } from "../modules/context.ts";
+import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
 import {
   findPageSummaryByLabel,
   getLatestRealDeliveryAttempt,
@@ -188,27 +191,6 @@ import {
   getPageConversationPreviewReport,
 } from "../services/conversations.ts";
 import { getPublicSyncHealth, getSystemHealth } from "../services/health.ts";
-import {
-  getWorkboardReport,
-  snoozeWorkboardFanReport,
-  unsnoozeWorkboardFanReport,
-} from "../services/workboard.ts";
-import { getWorkboardPresenceReport } from "../services/workboard-presence.ts";
-import {
-  getWorkboardV2Lists,
-  getWorkboardV2Report,
-  recordWorkboardContactV2,
-  snoozeWorkboardV2,
-  triggerWorkboardV2Recompute,
-  undoWorkboardContactV2,
-  unsnoozeWorkboardV2,
-} from "../services/workboard-v2/report.ts";
-import {
-  getWorkboardV2AiReport,
-  listWorkboardV2AiRuns,
-  runWorkboardV2AiClassify,
-  updateWorkboardV2AiSettings,
-} from "../services/workboard-v2/ai-analytics.ts";
 import { assertAllowedProxyTarget } from "../services/proxy-validation.ts";
 import {
   getPageConversationProfile,
@@ -296,10 +278,6 @@ declare module "fastify" {
     /** Route → auth declaration rows, collected at registration (Stage 19). */
     routePolicyTable: RoutePolicyTableRow[];
   }
-}
-
-function pageScopeFor(principal: AuthPrincipal) {
-  return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
 }
 
 function applyCookie(reply: {
@@ -525,77 +503,15 @@ export async function buildApiServer(appContext: AppContext) {
     })(),
     transformObject: jsonSchemaTransformObject,
   });
-  async function resolvePrincipal(request: {
-    auth?: AuthPrincipal | null;
-    headers: Record<string, string | string[] | undefined>;
-    cookies: Record<string, string | undefined>;
-  }) {
-    if (request.auth !== undefined) {
-      return request.auth;
-    }
-
-    const authorization = request.headers.authorization;
-    const bearerMatch = typeof authorization === "string"
-      ? /^bearer\s+(.+)$/i.exec(authorization)
-      : null;
-    if (bearerMatch) {
-      const token = bearerMatch[1]?.trim() ?? "";
-      request.auth = token ? await authenticateApiKeyToken(appContext, token) : null;
-      return request.auth;
-    }
-
-    const sessionToken = request.cookies[SESSION_COOKIE_NAME];
-    request.auth = sessionToken
-      ? await authenticateSessionToken(appContext, sessionToken)
-      : null;
-    return request.auth;
-  }
-
-  async function requirePrincipal(request: {
-    auth?: AuthPrincipal | null;
-    headers: Record<string, string | string[] | undefined>;
-    cookies: Record<string, string | undefined>;
-  }) {
-    const principal = await resolvePrincipal(request);
-    if (!principal) {
-      throw new UnauthorizedError();
-    }
-    return principal;
-  }
-
-  function safeStringEquals(left: string, right: string) {
-    const leftBuffer = Buffer.from(left);
-    const rightBuffer = Buffer.from(right);
-    return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-  }
-
-  function hasValidSyncHealthMonitoringToken(request: {
-    headers: Record<string, string | string[] | undefined>;
-  }) {
-    const configuredToken = appContext.config.healthSyncMonitoringToken;
-    if (!configuredToken) {
-      return false;
-    }
-
-    const token = request.headers["x-monitoring-token"];
-    return typeof token === "string" && safeStringEquals(token, configuredToken);
-  }
-
-  async function requireSyncHealthAccess(request: {
-    auth?: AuthPrincipal | null;
-    headers: Record<string, string | string[] | undefined>;
-    cookies: Record<string, string | undefined>;
-  }) {
-    if (hasValidSyncHealthMonitoringToken(request)) {
-      return {};
-    }
-
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return {
-      pageIds: pageScopeFor(principal),
-    };
-  }
+  // Request-level principal helpers, shared with the extracted modules
+  // (Stage 19): same bodies, factored into one factory.
+  const requestAuth = createRequestAuth(appContext);
+  const {
+    resolvePrincipal,
+    requirePrincipal,
+    hasValidSyncHealthMonitoringToken,
+    requireSyncHealthAccess,
+  } = requestAuth;
 
   async function requireOpenApiDocsOwner(request: {
     auth?: AuthPrincipal | null;
@@ -707,6 +623,35 @@ export async function buildApiServer(appContext: AppContext) {
       authMethod: request.auth?.authMethod,
     }, `auth-policy ${divergence}: middleware verdict diverges from the legacy guards`);
   });
+
+  // pg-boss for enqueuing sync trigger jobs (skip when no DB, e.g. contract
+  // generation). Created before any route registers so the module context below
+  // can carry it.
+  let boss: PgBoss | null = null;
+  const createdQueues = new Set<string>();
+  if (appContext.config.databaseUrl) {
+    boss = new PgBoss({ connectionString: appContext.config.databaseUrl });
+    // Without a listener an EventEmitter 'error' throws and takes the API
+    // down on a transient Postgres blip (audit B8). Log only: this instance
+    // merely enqueues jobs, and /health covers API liveness.
+    boss.on("error", (error) => {
+      appContext.logger.error({ err: error }, "pg-boss api error");
+    });
+    await boss.start();
+    await ensureSyncQueues(boss, createdQueues);
+    await ensureOfapiQueues(boss, createdQueues);
+    await ensureOfapiCommandQueues(boss, createdQueues);
+    server.addHook("onClose", async () => {
+      await boss!.stop();
+    });
+  }
+
+  // What every extracted bounded-context module receives (Stage 19 Task 3).
+  const moduleContext: ApiModuleContext = {
+    appContext,
+    auth: requestAuth,
+    boss,
+  };
 
   function isAdminPageVerifyBadRequest(error: unknown) {
     if (error instanceof BadRequestError) {
@@ -1277,127 +1222,8 @@ export async function buildApiServer(appContext: AppContext) {
     return getPageConversationMessagesReport(appContext, principal, request.params, request.query);
   });
 
-  // --- Workboard ---
-
-  server.get("/api/v1/pages/:pageLabel/workboard", {
-    schema: routeSchemas.workboard,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getWorkboardReport(appContext, principal, request.params.pageLabel);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/workboard/presence", {
-    schema: routeSchemas.workboardPresence,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getWorkboardPresenceReport(appContext, principal, request.params.pageLabel);
-  });
-
-  server.post("/api/v1/pages/:pageLabel/workboard/snooze", {
-    schema: routeSchemas.workboardSnooze,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return snoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.body);
-  });
-
-  server.delete("/api/v1/pages/:pageLabel/workboard/snooze/:fanId", {
-    schema: routeSchemas.workboardUnsnooze,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return unsnoozeWorkboardFanReport(appContext, principal, request.params.pageLabel, request.params.fanId);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/workboard/v2", {
-    schema: routeSchemas.workboardV2,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getWorkboardV2Report(appContext, principal, request.params.pageLabel, request.query);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/workboard/v2/lists", {
-    schema: routeSchemas.workboardV2Lists,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return getWorkboardV2Lists(appContext, principal, request.params.pageLabel);
-  });
-
-  server.post("/api/v1/pages/:pageLabel/workboard/v2/contact", {
-    schema: routeSchemas.workboardV2Contact,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return recordWorkboardContactV2(appContext, principal, request.params.pageLabel, request.body);
-  });
-
-  server.post("/api/v1/pages/:pageLabel/workboard/v2/recompute", {
-    schema: routeSchemas.workboardV2Recompute,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return triggerWorkboardV2Recompute(appContext, principal, request.params.pageLabel);
-  });
-
-  server.post("/api/v1/pages/:pageLabel/workboard/v2/snooze", {
-    schema: routeSchemas.workboardV2Snooze,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return snoozeWorkboardV2(appContext, principal, request.params.pageLabel, request.body);
-  });
-
-  server.delete("/api/v1/pages/:pageLabel/workboard/v2/snooze/:fanId", {
-    schema: routeSchemas.workboardV2Unsnooze,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return unsnoozeWorkboardV2(appContext, principal, request.params.pageLabel, request.params.fanId);
-  });
-
-  server.delete("/api/v1/pages/:pageLabel/workboard/v2/contact/:fanId", {
-    schema: routeSchemas.workboardV2UndoContact,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
-    return undoWorkboardContactV2(appContext, principal, request.params.pageLabel, request.params.fanId);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/workboard/v2/ai", {
-    schema: routeSchemas.workboardV2Ai,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal); // settings/cost/verdicts are owner-only; the board's coverage banner uses a separate read
-    return getWorkboardV2AiReport(appContext, principal, request.params.pageLabel);
-  });
-
-  server.put("/api/v1/pages/:pageLabel/workboard/v2/ai/settings", {
-    schema: routeSchemas.workboardV2AiSettings,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    return updateWorkboardV2AiSettings(appContext, principal, request.params.pageLabel, request.body);
-  });
-
-  server.post("/api/v1/pages/:pageLabel/workboard/v2/ai/classify", {
-    schema: routeSchemas.workboardV2AiClassify,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    return runWorkboardV2AiClassify(appContext, principal, request.params.pageLabel, request.body);
-  });
-
-  server.get("/api/v1/workboard/ai/runs", {
-    schema: routeSchemas.workboardV2AiRuns,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-    return listWorkboardV2AiRuns(appContext);
-  });
+  // --- Workboard --- (module: apps/runtime/src/modules/workboard)
+  registerWorkboardRoutes(server, moduleContext);
 
   server.get("/api/v1/fans/:platform/:platformUserId", {
     schema: routeSchemas.crossPageFanDetail,
@@ -1448,26 +1274,6 @@ export async function buildApiServer(appContext: AppContext) {
   });
 
   // --- Phase 4: Dashboard + Admin routes ---
-
-  // pg-boss for enqueuing sync trigger jobs (skip when no DB, e.g. contract generation)
-  let boss: PgBoss | null = null;
-  const createdQueues = new Set<string>();
-  if (appContext.config.databaseUrl) {
-    boss = new PgBoss({ connectionString: appContext.config.databaseUrl });
-    // Without a listener an EventEmitter 'error' throws and takes the API
-    // down on a transient Postgres blip (audit B8). Log only: this instance
-    // merely enqueues jobs, and /health covers API liveness.
-    boss.on("error", (error) => {
-      appContext.logger.error({ err: error }, "pg-boss api error");
-    });
-    await boss.start();
-    await ensureSyncQueues(boss, createdQueues);
-    await ensureOfapiQueues(boss, createdQueues);
-    await ensureOfapiCommandQueues(boss, createdQueues);
-    server.addHook("onClose", async () => {
-      await boss!.stop();
-    });
-  }
 
   // --- OFAPI webhook receiver + SSE sync-event fanout (ChatMuse real-time) ---
 
