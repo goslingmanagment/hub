@@ -1450,3 +1450,21 @@ cadence.
 
 Remaining for exit (ops, after the chain deploys): flip the cap knob, weeks-long crawl,
 weekly manifest watch, §5 prod checks at 100% exhausted.
+
+## Stage 16 Parse Side Landed — Extension-Proven Shapes (2026-07-05)
+
+**Decision #78:** The owner asked for the canonicalizer without waiting for the ramp
+("can we do canonicalizer somehow now"). Resolution: the deferral's premise was "no
+trusted shape source until live capture" — but a trusted source EXISTS: the extension
+parses these exact responses in production daily. Shapes derived from its parsers
+(chatgoose `shared/types.ts`), units confirmed mills by core's own treatment of the same
+endpoint family. The ramp's role flips from discovery to verification.
+
+Landed on the Stage 17 branch (600284b; suite 177 files / 1449 tests): sync-pull v3 —
+`fan.earnings_observed` per fan per window with content-hashed dedup (unchanged snapshot
+re-fetch appends zero, CI-proven) and `message.ppv_unlocked` with a composite key
+(deviation: order-history rows carry NO order id — `ppv:<fan>:<media|bundle>:<createdAt>`);
+the `fan_earnings_stats` projection writer (watermark pattern, on-demand fan upserts,
+forward-only observed_at) in the projection sweep + `projection:rebuild`. Stage 16's
+remaining deferral shrinks to: adapter typed schemas (cosmetic post-ramp) + the owner-grade
+read endpoint (Stage 33 or a later slice).
