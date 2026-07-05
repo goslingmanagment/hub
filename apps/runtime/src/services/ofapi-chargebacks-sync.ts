@@ -50,6 +50,11 @@ const CHARGEBACKS_PAGE_LIMIT = 100;
 const CHARGEBACKS_LOOKBACK_DAYS = 90;
 // Per-page request cap per run — a safety backstop over the offset walk.
 const CHARGEBACKS_MAX_PAGES_PER_RUN = 20;
+// The FIRST walk is all-or-nothing (see the truncation guard), so its cap
+// must sit far beyond any real history: 200 pages = 20k chargebacks. A page
+// that truly exceeds this can never complete its first walk (no cross-run
+// cursor) — that state logs at warn as full_history_walk_truncated.
+const CHARGEBACKS_FIRST_WALK_MAX_PAGES = 200;
 // Backfill-lane default; the ofapiBackfillDailyCreditBudget knob governs both
 // the backfill CLI and this reconcile (one historical/reconcile spend lane).
 const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
@@ -255,9 +260,14 @@ async function reconcilePage(
   let rawRows = 0;
   let blockedReason: string | null = null;
   let walkComplete = false;
+  // First walk (no startDate) must be able to COMPLETE in one run or its
+  // all-or-nothing guard discards it; trailing runs keep the tight backstop.
+  const maxPages = startDate === undefined
+    ? CHARGEBACKS_FIRST_WALK_MAX_PAGES
+    : CHARGEBACKS_MAX_PAGES_PER_RUN;
 
   try {
-    for (let offset = 0; apiPages < CHARGEBACKS_MAX_PAGES_PER_RUN;) {
+    for (let offset = 0; apiPages < maxPages;) {
       const block = await input.guard.resolveBlock();
       if (block !== null) {
         blockedReason = block;
@@ -384,7 +394,9 @@ export async function runOfapiChargebacksReconcile(app: AppContext) {
   const mapped = (await listOfapiMappedPages(app.db))
     .filter((page) => page.platform === "onlyfans");
   const guard = createOfapiRestGuard(app, {
-    maxRequestsPerRun: CHARGEBACKS_MAX_PAGES_PER_RUN * Math.max(1, mapped.length),
+    // Backstop sized for first walks (the day-credit budget governs real
+    // spend); trailing-mode pages barely touch it.
+    maxRequestsPerRun: CHARGEBACKS_FIRST_WALK_MAX_PAGES * Math.max(1, mapped.length),
     dailyCreditBudget:
       app.config.ofapiBackfillDailyCreditBudget ?? DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET,
     budgetScope: "backfill",
@@ -400,6 +412,14 @@ export async function runOfapiChargebacksReconcile(app: AppContext) {
     }));
   }
 
+  const blocked = pages.filter((page) => page.status === "blocked");
+  if (blocked.length > 0) {
+    // Warn-level so a page stuck in perpetual first-walk retry (budget
+    // starvation or the cap) is greppably distinct from healthy runs.
+    app.logger.warn({
+      blocked: blocked.map((page) => ({ label: page.pageLabel, reason: page.reason })),
+    }, "OFAPI chargebacks reconcile blocked for some pages");
+  }
   app.logger.info({
     pages: pages.map((page) => ({
       label: page.pageLabel,

@@ -4401,6 +4401,7 @@ export async function executePurchaseHistoryChunk(
   const state = checkpoint?.state as { cursorFanId?: number } | null;
   let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
   let fansFetched = 0;
+  let fansSkipped = 0;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
@@ -4411,6 +4412,16 @@ export async function executePurchaseHistoryChunk(
     });
     const fan = fans[0];
     if (!fan) {
+      // Mass-skip circuit breaker: a walk that skipped EVERY fan it touched
+      // is a systemic failure (param-contract drift), not a string of dead
+      // accounts — refuse to stamp completion (which would repeat the
+      // zero-capture "success" every cadence, invisibly) and fail loudly so
+      // the executor's retry/incident machinery engages.
+      if (fansFetched === 0 && fansSkipped > 0) {
+        throw new Error(
+          `purchase_history walk skipped all ${fansSkipped} fans without one success`,
+        );
+      }
       await upsertCheckpoint(app.db, {
         platformAccountId: input.pageContext.page.id,
         stream: "purchase_history",
@@ -4418,7 +4429,11 @@ export async function executePurchaseHistoryChunk(
         state: { cursorFanId: 0, completedAt: new Date().toISOString() },
         lastSuccessfulRunId: input.syncRunId,
       });
-      return { satisfied: true, yieldReason: null, stats: { fansFetched, walkCompleted: true } };
+      return {
+        satisfied: true,
+        yieldReason: null,
+        stats: { fansFetched, fansSkipped, walkCompleted: true },
+      };
     }
 
     let page;
@@ -4431,11 +4446,13 @@ export async function executePurchaseHistoryChunk(
       // Per-fan isolation: a fan-scoped client rejection (deleted/suspended
       // account) skips THAT fan and keeps walking — without this, the retry
       // path restarts at the same failing fan forever and the walk never
-      // passes it. Auth (401/403) and rate-limit (429) responses still
-      // propagate: those are page-scoped, not fan-scoped.
+      // passes it. Page-scoped responses still propagate: auth (401/403),
+      // rate-limit (429), and Fansly application code 99 (invalid params —
+      // a CONTRACT failure, probe-proven, never a property of one fan).
       const fanScoped = error instanceof FanslyApiError &&
         typeof error.status === "number" &&
-        [400, 404, 410].includes(error.status);
+        [400, 404, 410].includes(error.status) &&
+        error.code !== 99;
       if (!fanScoped) {
         throw error;
       }
@@ -4443,14 +4460,18 @@ export async function executePurchaseHistoryChunk(
         code: "purchase_history_fan_rejected",
         severity: "warn",
         message: `Skipped purchase-history fan after HTTP ${error.status}`,
-        details: { fanId: fan.fanId, platformUserId: fan.platformUserId },
+        details: {
+          fanId: fan.fanId,
+          platformUserId: fan.platformUserId,
+          status: error.status,
+          fanslyCode: error.code ?? null,
+        },
       });
+      fansSkipped += 1;
+      // LOCAL advance only: the walk moves past the fan this run, but the
+      // persisted cursor stays behind so a failed run resumes (and the
+      // circuit breaker above can refire) instead of sealing the skips in.
       cursorFanId = fan.fanId;
-      await upsertCheckpointProgress(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "purchase_history",
-        state: { cursorFanId },
-      });
       continue;
     }
     await persistRawPayload(app.db, {

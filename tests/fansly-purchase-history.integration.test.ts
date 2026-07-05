@@ -133,7 +133,7 @@ describe("Stage 16 purchase-history walk", () => {
     expect(requested).toEqual(["ph-1", "ph-2", "ph-3"]);
     expect(result).toMatchObject({
       satisfied: true,
-      stats: { fansFetched: 2, walkCompleted: true },
+      stats: { fansFetched: 2, fansSkipped: 1, walkCompleted: true },
     });
     expect(telemetry.addAnomaly).toHaveBeenCalledTimes(1);
     expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
@@ -191,5 +191,52 @@ describe("Stage 16 purchase-history walk", () => {
       executePurchaseHistoryChunk(appContext, await buildChunkInput(page, telemetry)),
     ).rejects.toThrow("session dead");
     expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+  });
+
+  it("treats Fansly code 99 (invalid params) as systemic, never a fan skip", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPageWithFans(["ph-1", "ph-2"]);
+    appContext = {
+      ...appContext,
+      adapter: {
+        async getMediaOrderHistoryPage() {
+          throw new FanslyApiError("invalid params", 400, 99);
+        },
+      } as never,
+    };
+
+    const telemetry = fakeTelemetry();
+    await expect(
+      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, telemetry)),
+    ).rejects.toThrow("invalid params");
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+  });
+
+  it("refuses to stamp completion when EVERY fan was skipped (mass-skip breaker)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPageWithFans(["ph-1", "ph-2", "ph-3"]);
+    appContext = {
+      ...appContext,
+      adapter: {
+        async getMediaOrderHistoryPage() {
+          throw new FanslyApiError("account gone", 404);
+        },
+      } as never,
+    };
+
+    const telemetry = fakeTelemetry();
+    await expect(
+      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, telemetry)),
+    ).rejects.toThrow("skipped all 3 fans");
+    // No false-success checkpoint: the walk stays resumable and visibly
+    // failing instead of repeating a zero-capture "success" every cadence.
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
+    expect(checkpoint?.state ?? null).toBeNull();
   });
 });
