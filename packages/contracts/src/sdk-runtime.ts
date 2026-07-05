@@ -162,9 +162,9 @@ export async function executeKernelRequest(input: {
   def: KernelOperationDef;
   options: KernelClientOptions;
   params?: Record<string, string | number>;
-  query?: Record<string, unknown>;
+  query?: Record<string, unknown> | undefined;
   body?: unknown;
-  headers?: Record<string, string>;
+  headers?: Record<string, string> | undefined;
 }): Promise<Response> {
   const { def, options } = input;
   const fetchImpl = options.fetch ?? fetch;
@@ -364,7 +364,7 @@ async function openSseResponse(input: {
   options: KernelClientOptions;
   method: string;
   path: string;
-  headers?: Record<string, string>;
+  headers?: Record<string, string> | undefined;
   body?: unknown;
   signal: AbortSignal;
 }): Promise<Response> {
@@ -544,8 +544,8 @@ export function streamAiGateway(options: KernelClientOptions, input: {
  */
 export async function ofapiRead(options: KernelClientOptions, input: {
   path: string;
-  query?: Record<string, unknown>;
-  headers?: Record<string, string>;
+  query?: Record<string, unknown> | undefined;
+  headers?: Record<string, string> | undefined;
 }): Promise<Response> {
   const cleanPath = input.path.replace(/^\/+/, "");
   return executeKernelRequest({
