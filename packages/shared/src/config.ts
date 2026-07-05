@@ -145,6 +145,7 @@ const envSchema = z.object({
   OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
   OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(300),
   OFAPI_BACKFILL_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(200),
+  OFAPI_CHARGEBACKS_RECONCILE_ENABLED: booleanSchema.default(false),
   OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
   OFAPI_PRESENCE_PROJECTION_ENABLED: booleanSchema.default(false),
   OFAPI_SPEND_PROJECTION_SHADOW_ENABLED: booleanSchema.default(false),
@@ -256,6 +257,7 @@ export interface AppConfig {
   ofapiAudienceMaxRequestsPerRun?: number;
   ofapiAudienceDailyCreditBudget?: number;
   ofapiBackfillDailyCreditBudget?: number;
+  ofapiChargebacksReconcileEnabled?: boolean;
   ofapiAudienceSweepIntervalMinutes?: number;
   ofapiPresenceProjectionEnabled?: boolean;
   ofapiSpendProjectionShadowEnabled?: boolean;
@@ -448,6 +450,7 @@ export function loadConfig(
     ofapiAudienceMaxRequestsPerRun: parsed.OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN,
     ofapiAudienceDailyCreditBudget: parsed.OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET,
     ofapiBackfillDailyCreditBudget: parsed.OFAPI_BACKFILL_DAILY_CREDIT_BUDGET,
+    ofapiChargebacksReconcileEnabled: parsed.OFAPI_CHARGEBACKS_RECONCILE_ENABLED,
     ofapiAudienceSweepIntervalMinutes: parsed.OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES,
     ofapiPresenceProjectionEnabled: parsed.OFAPI_PRESENCE_PROJECTION_ENABLED,
     ofapiSpendProjectionShadowEnabled: parsed.OFAPI_SPEND_PROJECTION_SHADOW_ENABLED,

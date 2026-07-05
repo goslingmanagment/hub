@@ -103,9 +103,11 @@ describe("config registry", () => {
     "ofapiDesktopCommandExecutionEnabled",
     "chatMuseAiGatewayEnabled",
     "onlyFansTopSpendersEnabled",
+    // Stage 14: chargebacks reconcile job flag (boot-apply per rollback plan).
+    "ofapiChargebacksReconcileEnabled",
   ];
 
-  it("wires exactly the twelve live keys, the fifteen boot keys, and nothing else", () => {
+  it("wires exactly the twelve live keys, the sixteen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

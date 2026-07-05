@@ -38,6 +38,11 @@ import {
 } from "./services/projections/message-archive.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
 import {
+  ensureOfapiChargebacksQueue,
+  ensureOfapiChargebacksSchedule,
+  startOfapiChargebacksWorker,
+} from "./services/ofapi-chargebacks-sync.ts";
+import {
   ensureOfapiCreditQueues,
   ensureOfapiCreditSchedules,
   startOfapiCreditWorker,
@@ -159,6 +164,7 @@ export async function startWorkerServices(
   await ensureWorkboardQueues(boss, createdQueues);
   await ensureOfapiQueues(boss, createdQueues);
   await ensureOfapiCreditQueues(boss, createdQueues);
+  await ensureOfapiChargebacksQueue(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
@@ -172,6 +178,7 @@ export async function startWorkerServices(
     ensureWorkboardRecomputeSchedule(boss),
     ensureOfapiSchedules(boss),
     ensureOfapiCreditSchedules(boss),
+    ensureOfapiChargebacksSchedule(boss),
     ensureOfapiCommandSchedules(boss),
     ensureOfapiDmAnalyticsSchedules(boss),
     ensureDbDiskUsageSchedule(boss),
@@ -242,6 +249,7 @@ export async function startWorkerServices(
 
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);
+  await startOfapiChargebacksWorker(app, boss);
   await startOfapiCommandWorker(app, boss);
   await startOfapiDmAnalyticsWorker(app, boss);
 

@@ -103,6 +103,13 @@ vi.mock("../apps/runtime/src/services/projections/message-archive.ts", () => mes
 vi.mock("../apps/runtime/src/services/projections/fan-earnings.ts", () => ({
   runFanEarningsProjection: vi.fn(),
 }));
+vi.mock("../apps/runtime/src/services/ofapi-chargebacks-sync.ts", () => ({
+  OFAPI_CHARGEBACKS_RECONCILE_QUEUE: "ofapi.chargebacks.reconcile",
+  ensureOfapiChargebacksQueue: vi.fn(),
+  ensureOfapiChargebacksSchedule: vi.fn(),
+  startOfapiChargebacksWorker: vi.fn(),
+  runOfapiChargebacksReconcile: vi.fn(),
+}));
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,

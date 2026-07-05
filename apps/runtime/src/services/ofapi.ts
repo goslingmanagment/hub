@@ -215,6 +215,18 @@ export interface OfapiClient {
       pageIndex?: number;
     },
   ): Promise<OfapiListPage>;
+  // GET /api/{account}/chargebacks (Stage 14) — vendored-spec shape: data.list
+  // of { id, createdAt, paymentType, payment{...} }, limit/offset pagination.
+  listChargebacks?(
+    context: OfapiRequestContext,
+    accountId: string,
+    params: {
+      limit?: number;
+      offset?: number;
+      startDate?: string;
+      endDate?: string;
+    },
+  ): Promise<OfapiListPage>;
   // One cheap (1-credit) account-scoped request purely to observe the credit
   // balance: GET /accounts carries no _meta per the OFAPI OpenAPI spec, so the
   // ping reads a minimal chats page instead (reconciliation anchor on quiet days).
@@ -1352,6 +1364,28 @@ export function createOfapiClient(input: {
           limit,
           hasStartDate: params.startDate != null,
           hasMarker: params.marker != null,
+        },
+      });
+    },
+    async listChargebacks(context, accountId, params) {
+      const limit = Math.min(params.limit ?? 100, 100);
+      return observedListRequest({
+        context,
+        operation: "ofapi_chargebacks",
+        endpointTemplate: "/:accountId/chargebacks",
+        pathname: `/${encodeURIComponent(accountId)}/chargebacks`,
+        query: {
+          limit: String(limit),
+          offset: params.offset != null ? String(params.offset) : undefined,
+          start_date: params.startDate,
+          end_date: params.endDate,
+        },
+        pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
+        cursorPresent: false,
+        requestMetadata: {
+          limit,
+          offset: params.offset ?? 0,
+          hasStartDate: params.startDate != null,
         },
       });
     },
