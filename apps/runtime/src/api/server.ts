@@ -245,6 +245,7 @@ import {
   getOfapiCreditsLedgerCsv,
   getOfapiCreditsSummary,
 } from "../services/ofapi-credit-report.ts";
+import { recordClientVersionObservation } from "../services/client-versions.ts";
 import { executeOfapiReadGatewayRequest } from "../services/ofapi-read-gateway.ts";
 import {
   cancelOfapiCommand,
@@ -433,6 +434,17 @@ export async function buildApiServer(appContext: AppContext) {
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
   server.decorateRequest("auth");
+
+  // Stage 4 fleet-verify: the desktop stamps x-client-version on every call;
+  // one "Desktop client version observed" log line per (version, address)
+  // gives the exit check its data source.
+  server.addHook("onRequest", async (request) => {
+    recordClientVersionObservation({
+      version: request.headers["x-client-version"],
+      remoteAddress: request.ip,
+      logger: request.log,
+    });
+  });
 
   await server.register(cookie);
   await server.register(rateLimit, {
