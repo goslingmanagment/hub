@@ -1406,3 +1406,25 @@ team_lead page-scoped).
 
 Remaining for exit: deploy (after the 7→8/9 chain), prod backfills, 48 h per-conversation
 coverage (hot ≤ archive, both platforms present), desktop-visible spot-check.
+
+## Stage 16 Green-Local — Fansly Earnings & PPV Streams, Capture Side (2026-07-05)
+
+**Decision #76:** Stage 16 built green-local on `kernel/stage-16-fansly-earnings` (adefc1a,
+chain 8→9→10→16; suite 176 files / 1447 tests). Central deviation, capture-first: the parse
+side (adapter typing, `fan.earnings_observed`/PPV canonicalizers, the fan_earnings_stats
+projection writer, the read endpoint) is DEFERRED to a canonicalizer-v2 slice AFTER the
+single-page ramp captures a live payload corpus — the shapes are probe-grade unknown and
+guessing schemas pre-ramp is precisely what capture-now-parse-later exists to avoid. The
+projection TABLE ships now (0061) so v2 is code-only. Observations lose nothing; replay
+fills events retroactively.
+
+Design findings: the order-history endpoint is per-fan and CURSORLESS — the "back-scroll"
+is a checkpointed keyset walk over page_fans (new listPageFanNativeIds), cursor resets on
+exhaustion = incremental refresh. Ramp gates are live-editable rather than boot-staged
+(ramp flips must not need restarts — staged-by-process, live by mechanism). Bulk streams
+are deliberately absent from SYNC_DOMAIN_POLICY supporting lists: a flag-off stream must
+not degrade the page's block-health UX to "catching up".
+
+Remaining for exit: deploy with the chain (flags off = inert), single-page ramp 48 h
+(lilly-1/lilly-2 — sessions probe-proven), canonicalizer v2 + projection from the captured
+corpus, fleet enable, 2-week incident watch.
