@@ -1567,3 +1567,28 @@ with chat size, so the two largest conversations always exceeded the 15 s client
    Monday's deploy the check greps those lines — ~5 days of fleet data before the 07-12
    deadline. Interim fleet check today was therefore impossible by construction, not by
    traffic.
+
+## Stage 11 Core Side Green-Local — Chain Now Seven Stages Deep (2026-07-05)
+
+**Decision #82:** Stage 11's core side built same session (ceb6cc4; suite 180 files /
+1462 tests green after fixing one stale registry-dispatch pin the tips-v2 bump
+invalidated). Ordering deviation, same recorded pattern as #73–#75: Stage 4 is
+released-not-exited (0.1.29 on the feed, fleet verify pending 07-12 with the data
+source #81 just created) and Stage 7 deployed-not-exited. The chain is now
+**8→9→10→16→17→14→11**, tip `kernel/stage-14-ofapi-transactions` @ ceb6cc4 — all of
+it additive and flag-inert, still one Monday deploy.
+
+Substance: `POST /api/v1/ingest/observations` per spec §2 exactly (bearer-only,
+version header required, 1..100 / 1 MB / 120-min caps, whole-batch atomic,
+`{accepted, duplicates}` via the Stage 7 key protocol — duplicate re-send CI-proven
+free); unknown kinds journal as `desktop.unknown:<kind>`; canonicalizer family
+`client_capture` is registration+validation only BY DESIGN — zero domain events until
+Stage 29 (the family version is Stage 29's replay hook; flagged in review per spec).
+No schema change. The 3c handoff memo (wire contract verbatim + client obligations:
+quarantine-on-400, purge-notice-before-wipe, whole-batch resend) landed as a NEW file
+in the desktop repo: `docs/project-kernel/pass3-stage-11-wire-contract.md` (untracked
+— the 3c/Stage 12 executor commits it with its work).
+
+Exit (ops): deploy with the chain → desktop uploader release (3c) → §5: ≥1 production
+desktop end-to-end, duplicates=all on re-send, offline-drain drill, a week of spool
+telemetry (which also gates Stage 12's harvest).
