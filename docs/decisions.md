@@ -1997,3 +1997,61 @@ Exit (Task 6, ops): deploy migration 0064 + dist → 24 h smoke window with
 zero gaps/duplicates (`select * from domain_events_smoke_checkpoint`) →
 dual-stream load measurement → the first-ever Fansly frame observed on v2 →
 v1 desktop connections unaffected.
+
+## Stage 22 Built — Identity: Sessions, Device Tokens, Grants, Attribution (2026-07-06)
+
+**Decision #93:** Stage 22 built (§8 tasks 1–5) on the chain branch
+(commits c4dbcc6 + 89dc253 + a fixture fix, after Stage 21 on
+`kernel/stage-21-event-stream-v2` — chain 19→20→21→22; standing ordering
+deviation). Full suite after the last commit: **193 files / 1547 tests
+green**. Migration **0065**.
+
+What shipped and the execution decisions inside it:
+- **All-roles sessions with the dashboard door unmoved.** `roleCanUseSession`
+  (login capability) opens to chatters; a NEW `roleCanUseDashboard` keeps
+  `requireDashboardUser` at owner/team_lead — the spec's "chatter dashboard
+  login remains BLOCKED" is a role split, not a route change. New vocabulary
+  kind **"any-session"** (any live cookie session) covers the self-serve auth
+  surface; verdict via new `requireSessionUser`.
+- **must_change_password** rides admin set-password (invite flow v1); the
+  gate is enforced UNCONDITIONALLY in the policy hook (allowlist =
+  me/logout/change-password) — deliberately outside the Stage 19 log/enforce
+  comparison since it is new behavior with no legacy guard to diverge from.
+  `changeOwnPassword` verifies the current password, clears the flag, and
+  revokes every session (re-login required — recorded semantic).
+- **Device tokens**: `agency_hub_device_` prefix, digest-stored, sliding 90 d
+  expiry (bump throttled to ≥1 d gains) hard-capped at 365 d from creation;
+  `authenticateBearerToken` prefix dispatch in resolvePrincipal and BOTH SSE
+  re-auth branches; `requireApiKeyUser` widened to accept device tokens —
+  execution decision: keep the kind name "apiKey", zero route re-annotation.
+  Nothing is ever attributed to a bare device (the principal is the owning
+  human). Self-issue on any-session + the owner admin trio.
+- **Grants**: append-only `access_grants` (revoke = stamp; org scope reserved
+  per DP 9-A single-tenant, recorded as the invariant); the projection
+  reproduces `listUserPageAssignments`' exact row shape with model grants
+  expanding to present AND FUTURE pages at read time. EXECUTION
+  INTERPRETATION RECORDED: the spec's "assignments become read-only
+  immediately" would break continuous parity, so assign/unassign and the
+  api-key page-bind DUAL-WRITE (grant + legacy row) until
+  ACCESS_GRANTS_READ_ENABLED flips reads AND freezes legacy writes;
+  `grants:parity` CLI (exit 1 on any diff) is the flip gate.
+- **Attribution**: workboard contacts (`acted_by_user_id`) and snoozes
+  (`created_by_user_id`) threaded from the acting principal; manual sync
+  triggers VERIFIED already attributed by Stage 7 4b's recordAudit.
+- **Deferred to Task 6 ops, with reasons**: content_manager TS removal (a
+  surviving prod row with the TS value removed would 500 response
+  serialization — prod row check first), and the model-grant dashboard list
+  UI (routes + history endpoint exist; Stage 33 owns admin UI expansion —
+  minimal-surface rule).
+
+The §5 grid runs live: chatter password login + the must-change flow end to
+end, dual-credential parallel acceptance + expiry + revoke independence,
+model grants reaching a page created AFTER the grant (grants read path) while
+the legacy path correctly ignores them until the flip, stamped revokes
+answering the access-history query, both read paths agreeing after
+unassign, attribution rows populated.
+
+Exit (Task 6): deploy 0065 → prod smokes (chatter login, dual-credential
+round-trip, history query recorded, `grants:parity` = 0) → read-path flip →
+content_manager row check → assignment-table drop ships a release later,
+owner-acknowledged.
