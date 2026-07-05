@@ -17,6 +17,22 @@ export {
   type KernelOperationResponse,
   type KernelSdkMethodKey,
 } from "@agency_hub_core/contracts";
+// Runtime surface for out-of-workspace consumers (Stage 24: client repos
+// cannot reach @agency_hub_core/contracts the way the dashboard does).
+export {
+  decodeDomainEventCursor,
+  ofapiRead,
+  routeSchemas,
+  streamAiGateway,
+  subscribeDomainEvents,
+  subscribeSyncEvents,
+  type AiGatewayStreamFrame,
+  type DomainEventFrame,
+  type DomainEventsSnapshotRequired,
+  type KernelStreamHandle,
+  type SyncEvent,
+  type SyncSnapshotRequired,
+} from "@agency_hub_core/contracts";
 export { kernelOperations } from "./operations.ts";
 export { KERNEL_CONTRACT_HASH, KERNEL_SDK_VERSION } from "./meta.ts";
 
