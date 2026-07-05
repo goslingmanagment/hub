@@ -1384,3 +1384,25 @@ baseline moves to the deploy step (measured immediately before, same method as a
 
 Remaining for exit: deploy after Stage 7 (behind Stage 8), 24 h observation-count vs
 gateway-request reconciliation, p95 comparison.
+
+## Stage 10 Green-Local — Platform-Neutral Message Archive (2026-07-05)
+
+**Decision #75:** Stage 10 built green-local on `kernel/stage-10-message-archive` (94bf6ca,
+off the Stage 9 tip — linear 8→9→10 merge chain; suite 175 files / 1446 tests). This is the
+FIRST stage built on an UNDEPLOYED substrate (green-local Stage 8's domain_events); the risk
+was flagged to the owner beforehand and the owner instructed to continue ("please do
+everything you need and continue now"). Deploys strictly after 8+9 deploy and their
+canonicalizers verify live.
+
+Delivered: migration 0059 (message_archive with the Stage 13 RESTRICT fact policy +
+projection_seq_watermarks — the spec's watermark table name was taken by the spender
+rebuild timestamps, recorded deviation); event-fed writer behind per-account seq watermarks
+(received/sent insert, deleted tombstone; ppv_unlocked a recorded v1 no-op); minutely
+sweep; one-command rebuild proven to reproduce identical counts from the ledger (the §5.2
+template proof, first of its kind); idempotent backfills from dm_message_archive and the
+hot table (the single cents→mills conversion, explicit); replay-driven source 3 = Stage 8's
+events:replay by construction; owner/team_lead-gated read/search endpoints (chatter 403,
+team_lead page-scoped).
+
+Remaining for exit: deploy (after the 7→8/9 chain), prod backfills, 48 h per-conversation
+coverage (hot ≤ archive, both platforms present), desktop-visible spot-check.
