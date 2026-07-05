@@ -122,6 +122,7 @@ import { registerAiRoutes } from "../modules/ai/index.ts";
 import { registerConversationsRoutes } from "../modules/conversations/index.ts";
 import { registerEventsRoutes } from "../modules/events/index.ts";
 import { registerIdentityRoutes } from "../modules/identity/index.ts";
+import { registerIngestRoutes } from "../modules/ingest/index.ts";
 import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
 import {
   findPageSummaryByLabel,
@@ -202,29 +203,10 @@ import {
   getOfapiCreditsSummary,
 } from "../services/ofapi-credit-report.ts";
 import { recordClientVersionObservation } from "../services/client-versions.ts";
-import {
-  ingestClientObservations,
-  InvalidIngestEventError,
-} from "../services/ingest-observations.ts";
-import { executeOfapiReadGatewayRequest } from "../services/ofapi-read-gateway.ts";
-import {
-  cancelOfapiCommand,
-  createOfapiCommand,
-  getOfapiCommand,
-} from "../services/ofapi-command-outbox.ts";
-import {
-  ensureOfapiCommandQueues,
-  isOfapiCommandExecutionEnabled,
-  sendOfapiCommandExecuteJob,
-} from "../services/ofapi-command-executor.ts";
+import { ensureOfapiCommandQueues } from "../services/ofapi-command-executor.ts";
 import { getOfapiDmColdArchiveStatus } from "../services/ofapi-dm-archive.ts";
 import { getOfapiSpendComparison } from "../services/ofapi-spend-comparison.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
-import {
-  getOfapiWebhookStatus,
-  receiveOfapiWebhook,
-  registerOfapiWebhook,
-} from "../services/ofapi-webhooks.ts";
 import { sql } from "drizzle-orm";
 import { listStatus, getStatusDetail } from "../services/sync.ts";
 import { requestAllPagesSync, requestPageSync } from "../services/sync-control.ts";
@@ -702,49 +684,8 @@ export async function buildApiServer(appContext: AppContext) {
   // --- AI (gateway/usage) --- (module: apps/runtime/src/modules/ai)
   registerAiRoutes(server, moduleContext);
 
-  // Stage 11: client-capture lane. Bearer-only, size-capped, rate-limited;
-  // backpressure = 429 with retry headers from the limiter — the desktop
-  // spool absorbs and resends the whole batch until 2xx.
-  server.post("/api/v1/ingest/observations", {
-    schema: routeSchemas.ingestObservations,
-    bodyLimit: 1_048_576,
-    config: {
-      rateLimit: {
-        max: 120,
-        timeWindow: "1 minute",
-      },
-    },
-  }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    const clientVersion = request.headers["x-client-version"];
-    if (typeof clientVersion !== "string" || clientVersion.trim().length === 0) {
-      return reply.code(400).send({
-        error: "missing_client_version",
-        message: "The x-client-version header is required on the capture lane",
-        statusCode: 400,
-      });
-    }
-    try {
-      return await ingestClientObservations(appContext, {
-        principalUserId: principal.user.id,
-        // Page scope mirrors canAccessPage: owner keys are unrestricted,
-        // everyone else attributes only to their assigned pages.
-        allowedPageIds: principal.user.role === "owner" ? null : principal.assignedPageIds,
-        clientVersion: clientVersion.trim(),
-        events: request.body.events,
-      });
-    } catch (error) {
-      if (error instanceof InvalidIngestEventError) {
-        return reply.code(400).send({
-          error: "invalid_ingest_event",
-          message: error.message,
-          statusCode: 400,
-        });
-      }
-      throw error;
-    }
-  });
+  // --- Ingest (webhook/capture/custody lanes) --- (module: apps/runtime/src/modules/ingest)
+  await registerIngestRoutes(server, moduleContext);
 
   server.get("/api/v1/pages", {
     schema: routeSchemas.pages,
@@ -1011,59 +952,8 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- OFAPI webhook receiver + SSE sync-event fanout (ChatMuse real-time) ---
 
-  // The receiver authenticates by HMAC over the raw request bytes, so this route
-  // lives in its own plugin scope with the repo's only buffer-mode body parser.
-  await server.register(async (instance) => {
-    instance.addContentTypeParser(
-      "application/json",
-      { parseAs: "buffer" },
-      (_request, body, done) => {
-        done(null, body);
-      },
-    );
-
-    instance.post("/api/v1/ofapi/webhook", {
-      schema: routeSchemas.ofapiWebhookReceive,
-      config: {
-        rateLimit: {
-          max: appContext.config.ofapiWebhookRateLimitMax ?? 1000,
-          timeWindow: (appContext.config.ofapiWebhookRateLimitWindowSeconds ?? 60) * 1000,
-          errorResponseBuilder: () => ({
-            error: "rate_limit_exceeded",
-            message: "Too many OFAPI webhook deliveries",
-            statusCode: 429,
-          }),
-        },
-      },
-    }, async (request) => {
-      return receiveOfapiWebhook(appContext, boss, {
-        rawBody: Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0),
-        signatureHeader: request.headers.signature,
-        idempotencyKeyHeader: request.headers["x-ofapi-idempotency-key"],
-      });
-    });
-  });
-
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);
-
-  server.get("/api/v1/admin/ofapi/webhook", {
-    schema: routeSchemas.adminOfapiWebhookStatus,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
-    return getOfapiWebhookStatus(appContext);
-  });
-
-  server.post("/api/v1/admin/ofapi/webhook", {
-    schema: routeSchemas.adminOfapiWebhookRegister,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
-    return registerOfapiWebhook(appContext, { endpointUrl: request.body.endpointUrl });
-  });
 
   server.get("/api/v1/ofapi/credits/summary", {
     schema: routeSchemas.ofapiCreditsChatterSummary,
@@ -1074,69 +964,6 @@ export async function buildApiServer(appContext: AppContext) {
     return getChatterOfapiCreditsSummary(appContext, {
       pageIds: principal.assignedPageIds,
     });
-  });
-
-  server.get("/api/v1/ofapi/read/*", {
-    schema: routeSchemas.ofapiReadGateway,
-    config: {
-      rateLimit: {
-        max: 120,
-        timeWindow: "1 minute",
-      },
-    },
-  }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-
-    const response = await executeOfapiReadGatewayRequest(appContext, principal, {
-      rawPath: request.params["*"],
-      rawQuery: request.query as Record<string, unknown>,
-    });
-    for (const [name, value] of Object.entries(response.headers)) {
-      reply.header(name, value);
-    }
-    return reply.code(response.status as 200).send(response.body);
-  });
-
-  server.post("/api/v1/ofapi/commands", {
-    schema: routeSchemas.createOfapiCommand,
-    config: {
-      rateLimit: {
-        max: 60,
-        timeWindow: "1 minute",
-      },
-    },
-  }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    const result = await createOfapiCommand(appContext, principal, request.body);
-    if (result.status === 202 && boss && isOfapiCommandExecutionEnabled(appContext.config)) {
-      try {
-        await sendOfapiCommandExecuteJob(boss, result.command.commandId);
-      } catch (error) {
-        request.log.warn(
-          { err: error, commandId: result.command.commandId },
-          "Failed to enqueue OFAPI command; sweep will retry",
-        );
-      }
-    }
-    return reply.code(result.status).send(result.command);
-  });
-
-  server.get("/api/v1/ofapi/commands/:commandId", {
-    schema: routeSchemas.getOfapiCommand,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    return getOfapiCommand(appContext, principal, request.params.commandId);
-  });
-
-  server.post("/api/v1/ofapi/commands/:commandId/cancel", {
-    schema: routeSchemas.cancelOfapiCommand,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    return cancelOfapiCommand(appContext, principal, request.params.commandId);
   });
 
   server.get("/api/v1/admin/ofapi/credits/summary", {
