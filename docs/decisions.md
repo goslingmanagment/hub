@@ -2435,3 +2435,89 @@ semantics in 24dee3e), and the first post-migration run caught
 resetIntegrationDatabase truncating the platforms seed rows. File/test
 counts dropped vs #98 (193/1555 → 186/1512) because OnlyMonster's own
 test files went down with the package — deletions, not regressions.
+
+## Stage 26 Build Half — Egress Seam, Class Pacing, Auth-Dead Pause (2026-07-06)
+
+**Decision #100:** Stage 26's build side on the chain branch (d7ea175
+"26.1 resolver+pacer+ratchet" → ed99b16 "26.2 auth-dead pause"). Ordering
+deviation as #98/#99: built on green-local Stage 18 (dep). Tasks 1/2/4/5
+complete; Task 3 PARTIAL (recorded below); Task 6 = ops.
+
+**26.1 — the egress seam (Tasks 1+2+5):**
+- packages/platform-core/egress.ts owns the SHAPE (EgressScope page|vendor,
+  EgressContext, three priority classes); services/egress/resolver.ts is
+  THE resolver with the recorded address policies: page scope = the page's
+  proxy identity; vendor "ofapi" = vendor-direct (today's behavior, now
+  written down instead of being an accident of bare fetch); vendor
+  "fansly" = REFUSED (Fansly egress is direct-to-platform and must be
+  page-scoped by construction). No default path — unknown scopes throw.
+- **Pacing design decision (the naive version FAILED its own property
+  test):** the existing reserve primitive pushes every locked row to
+  scheduledAt+spacing, so a single-pass [vendor, class] reservation drags
+  the vendor horizon out to bulk's backlog — interactive gained nothing.
+  The mechanism that works is TWO-PHASE BULK: bulk waits out its own class
+  row first, then claims the vendor row only when the send is imminent.
+  Bulk's entire backlog lives in class:bulk; the vendor row only ever
+  holds imminent sends; interactive pays in-flight sends, never the queue.
+  Aging floor = claim-at-reservation (later arrivals can't push scheduled
+  work). Vendor caps preserve today's effective rates (ofapi 500 ms;
+  fansly 0 — there IS no cross-proxy Fansly cap today and seeding one
+  would newly serialize proxies; the row exists as a knob).
+- Migration 0069: sync_rate_limits.priority_class (additive, default
+  'bulk').
+- OFAPI client lanes: reads=interactive, commands=commands, list
+  sync=bulk; admin request() stays unpaced (today's behavior). Rollout
+  knob EGRESS_PACER_MODE off|shadow|enforce (default off — deploy inert;
+  registry row added). Shadow computes the class-aware decision
+  fire-and-forget — zero latency added, failures swallowed, diff logged as
+  component=egress_pacer_shadow.
+- Enforcement: undici value-import lint wall (egress modules +
+  shared/http-client + pre-seam fansly adapter exempt; flat-config gotcha:
+  the wall lives INSIDE the existing no-restricted-syntax rule because a
+  second block would silently replace the toMills ban for overlapping
+  files) + scripts/check-raw-fetch.mjs ratchet, day-one budget 13
+  (ofapi 7 + fansly adapter 1 = Task 3 targets; telegram 4 + anthropic 1 =
+  recorded non-platform exceptions). ofapi-fan-identities' local `fetch`
+  closure renamed fetchPage (ratchet false positive).
+
+**26.2 — auth-dead pause (Task 4, re-scoped per the spec's status header:
+detection was already typed, the SEMANTICS were the gap):**
+- pausePageSyncForAuth: whole page → FSM paused + blocker_kind='auth'
+  stamped. The stamp is the reversibility contract:
+  clearPageSyncAuthBlock (already in the re-verify recovery path) matches
+  exactly the auth pause and never touches deliberately-paused streams
+  (top-spenders/dm-polling feature gates).
+- Direct-sync 401/403: executor parks the FULL stream set after the fenced
+  per-stream block (before: one stream blocked, the rest kept burning
+  against dead auth). Via getSyncStreamsForPlatform, NOT the registry —
+  executor→registry would deepen the registry⇄executor-handlers value
+  cycle (and broke sync-executor.test.ts's closed module mock; caught
+  in-session).
+- OFAPI accounts.*: action-required statuses pause; connected/reconnected
+  release (vendor-signaled re-verify); session_expired stays alert-only.
+- Commands fail fast: auth-dead page settles failed_terminal
+  (ofapi_auth_action_required) BEFORE any HTTP — one-attempt discipline
+  untouched, the attempt is never spent. Gated on
+  OFAPI_ACCOUNT_HEALTH_ENABLED (stale ofapi_auth_status must not fail
+  sends when the projection isn't running).
+- Pinned: planner drops the paused page within one cycle
+  (listRunnablePageSync), both resume paths, no-HTTP fail-fast.
+
+**RECORDED — Task 3 partial:** the three behaviors' ADDRESS policies are
+now explicit in the resolver and their PACING lanes ride the pacer hook
+(shadow/enforce). The remaining physical adoption (createOfapiClient
+requiring an EgressContext input; the Fansly adapter receiving transports
+from the resolver instead of building dispatchers from the same factories)
+is deferred to the mechanical relocation session shared with Stage 18's
+deferral (#99) — the same modules move; identical factories mean identical
+addresses today, and the ratchet (13→0 trajectory) keeps the debt visible.
+
+**Task 6 ops (owner-gated):** deploy inert (0069 additive, mode=off) →
+flip shadow → 48 h diff review (egress_pacer_shadow logs) → per-vendor
+enforce cutover → staging saturation proof (interactive p95 flat under
+bulk) → auth-dead drill (staged credential kill or next natural death).
+
+**Full suite after the last code commit: 189 files / 1528 tests green**
+(chain tip 4e2dcdd). The ratchets guarded their own stage: the first full
+run caught the resolver's platform ternary raising the Stage 18 branch
+count 48→49 — replaced with a vocabulary map (followup 4e2dcdd).
