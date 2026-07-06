@@ -99,6 +99,7 @@ export const kernelOperations = {
   overview: { method: "GET", path: "/api/v1/overview" },
   overviewGrowth: { method: "GET", path: "/api/v1/overview/growth" },
   overviewRevenue: { method: "GET", path: "/api/v1/overview/revenue" },
+  overviewRevenueByModel: { method: "GET", path: "/api/v1/overview/revenue/by-model" },
   overviewRevenueDaily: { method: "GET", path: "/api/v1/overview/revenue/daily" },
   pageConversationMessages: { method: "GET", path: "/api/v1/pages/:pageLabel/conversations/:conversationId/messages" },
   pageConversationPreview: { method: "GET", path: "/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview" },

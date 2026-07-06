@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Link, useNavigate } from "react-router";
-import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth, useOverviewRevenueDaily } from "@/api/queries";
+import { useAuthMe, useOverview, useOverviewRevenue, useOverviewGrowth, useOverviewRevenueDaily, useOverviewRevenueByModel } from "@/api/queries";
+import { TrendSparkline } from "@/components/shared/TrendSparkline";
 import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { getSyncUxTone } from "@/components/shared/SyncUxBadge";
@@ -144,6 +145,7 @@ export function OverviewPage() {
     isLoading: isRevenueDailyLoading,
     isError: isRevenueDailyError,
   } = useOverviewRevenueDaily(selectedPeriod);
+  const { data: revenueByModelData } = useOverviewRevenueByModel(selectedPeriod);
   const {
     data: growthData,
     isLoading: isGrowthLoading,
@@ -313,6 +315,35 @@ export function OverviewPage() {
           </div>
         )}
       </Suspense>
+
+      {(revenueByModelData?.models ?? []).length > 0 && (
+        <div className="mt-5 rounded-xl border border-border bg-card">
+          <div className="border-b border-border px-4 py-3 text-[12px] font-semibold uppercase tracking-wider text-text-muted">
+            Earnings by model · {periodLabel}
+          </div>
+          <div>
+            {(revenueByModelData?.models ?? []).map((model) => (
+              <div
+                key={model.modelSlug}
+                className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{model.modelName}</div>
+                  <div className="text-xs text-text-muted">
+                    {model.pageCount} {model.pageCount === 1 ? "page" : "pages"} · {model.transactionCount} txns
+                  </div>
+                </div>
+                <TrendSparkline
+                  values={model.series.map((point) => point.netAmountMills)}
+                />
+                <div className="w-[110px] text-right text-sm font-semibold tabular-nums">
+                  {formatUsdFromMills(model.totalNetAmountMills)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

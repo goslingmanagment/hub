@@ -3536,6 +3536,37 @@ describe("api integration", () => {
         transactionCount: 3,
       },
     ]);
+
+    // Per-model comparison: same data, one entry per model, totals = the
+    // summed series, models sorted by total desc.
+    const byModel = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview/revenue/by-model?period=30d",
+      headers: { cookie },
+    });
+    expect(byModel.statusCode).toBe(200);
+    const lana = byModel.json().models.find(
+      (model: { modelSlug: string }) => model.modelSlug === fixture!.lanaModel.slug,
+    );
+    expect(lana).toMatchObject({
+      modelName: fixture!.lanaModel.name,
+      totalNetAmountMills: 11000,
+      transactionCount: 3,
+    });
+    expect(lana.pageCount).toBeGreaterThanOrEqual(2);
+    expect(lana.series).toEqual([
+      { businessDate: "2026-03-05", netAmountMills: 5000, transactionCount: 1 },
+      { businessDate: "2026-03-06", netAmountMills: 6000, transactionCount: 2 },
+    ]);
+    // The per-model split partitions the agency series exactly.
+    const allModels = byModel.json().models as Array<{
+      totalNetAmountMills: number;
+      transactionCount: number;
+    }>;
+    expect(allModels.reduce((sum, model) => sum + model.totalNetAmountMills, 0)).toBe(14000);
+    expect(allModels.reduce((sum, model) => sum + model.transactionCount, 0)).toBe(4);
+    const totals = allModels.map((model) => model.totalNetAmountMills);
+    expect([...totals].sort((a, b) => b - a)).toEqual(totals);
   });
 
   it("returns merged mixed-platform bounds in model reports", async (context) => {

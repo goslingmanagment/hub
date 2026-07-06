@@ -34,3 +34,12 @@ export function useOverviewRevenueDaily(period = "30d") {
       kernel.overviewRevenueDaily({ query: { period } as RevenueDailyQuery }),
   });
 }
+
+export function useOverviewRevenueByModel(period = "30d") {
+  return useQuery({
+    queryKey: ["overviewRevenueByModel", period],
+    queryFn: () =>
+      kernel.overviewRevenueByModel({ query: { period } as RevenueDailyQuery }),
+    placeholderData: (previousData) => previousData,
+  });
+}

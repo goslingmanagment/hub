@@ -506,6 +506,54 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     return getRevenueDailySeries([page.id], [page], request.query);
   });
 
+  server.get("/api/v1/overview/revenue/by-model", {
+    schema: routeSchemas.overviewRevenueByModel,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireDashboardUser(principal);
+    const pages = await listVisiblePages(appContext.db, pageScopeFor(principal));
+
+    const byModel = new Map<string, { modelName: string; pages: typeof pages }>();
+    for (const page of pages) {
+      const group = byModel.get(page.modelSlug);
+      if (group) {
+        group.pages.push(page);
+      } else {
+        byModel.set(page.modelSlug, { modelName: page.modelName, pages: [page] });
+      }
+    }
+
+    const models = [];
+    for (const [modelSlug, group] of byModel) {
+      const { series } = await getRevenueDailySeries(
+        group.pages.map((p) => p.id),
+        group.pages,
+        { ...request.query, groupByType: false },
+      );
+      let totalNetAmountMills = 0n;
+      let transactionCount = 0;
+      for (const item of series) {
+        totalNetAmountMills += BigInt(item.netAmountMills);
+        transactionCount += item.transactionCount;
+      }
+      models.push({
+        modelSlug,
+        modelName: group.modelName,
+        pageCount: group.pages.length,
+        // Summed as bigint, emitted as wire mills (number — same as the
+        // sibling revenue endpoints' items).
+        totalNetAmountMills: Number(totalNetAmountMills),
+        transactionCount,
+        series,
+      });
+    }
+    models.sort((left, right) =>
+      right.totalNetAmountMills - left.totalNetAmountMills
+      || left.modelSlug.localeCompare(right.modelSlug),
+    );
+    return { models };
+  });
+
   server.get("/api/v1/models/:modelSlug/revenue/daily", {
     schema: routeSchemas.modelRevenueDaily,
   }, async (request) => {

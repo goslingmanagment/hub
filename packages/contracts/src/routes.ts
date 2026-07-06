@@ -1577,6 +1577,27 @@ export const revenueDailyResponseSchema = z.object({
   })),
 });
 
+// Per-model earnings + trends: every visible model's period total and daily
+// series in one call (the dashboard's "By model" comparison view).
+export const revenueByModelQuerySchema = z.object({
+  period: periodEnum.default("30d"),
+  from: businessDate.optional(),
+  to: businessDate.optional(),
+});
+
+export const revenueByModelItemSchema = z.object({
+  modelSlug: z.string(),
+  modelName: z.string(),
+  pageCount: z.number().int(),
+  totalNetAmountMills: mills,
+  transactionCount: z.number().int(),
+  series: z.array(revenueDailyItemSchema),
+});
+
+export const revenueByModelResponseSchema = z.object({
+  models: z.array(revenueByModelItemSchema),
+});
+
 export const crossPageTransactionItemSchema = z.object({
   transactionId: z.string(),
   rawType: z.union([z.number().int(), z.string()]),
@@ -4793,6 +4814,17 @@ export const routeSchemas = {
     querystring: revenueDailyQuerySchema,
     response: {
       200: revenueDailyResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  overviewRevenueByModel: {
+    auth: { kind: "session" },
+    tags: ["dashboard"],
+    summary: "Get per-model revenue totals and daily series",
+    querystring: revenueByModelQuerySchema,
+    response: {
+      200: revenueByModelResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
