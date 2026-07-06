@@ -2305,3 +2305,50 @@ Execution decisions:
 Exit (Task 4 ops): deploy with the chain → §1 report-totals snapshot
 re-run, diff = 0 (dashboard revenue endpoints + Telegram digest, fixed
 window) → grep-zero + gates green in CI.
+
+## Stage 18 Started — Platform Seam Live in the Dispatch Path (2026-07-06)
+
+**Decision #98:** Stage 18 tasks 1 + 6 complete, task 2/3's handler SPLIT
+done (relocation pending), on the chain branch (e24fa9c → 8a7b08d).
+Ordering deviation recorded: dep Stage 15 = the owner's OnlyMonster
+subscription cancel (commercial action); its verify-zero half EXITED with
+Stage 5 (#67, zero rows/streams/egress), so code-side work is safe. Full
+suite after the last commit: **193 files / 1555 tests green**.
+
+- **packages/platform-core** (target §4.1): PlatformAdapter /
+  PlatformCapabilities / SessionCustodyDescriptor + createPlatformRegistry
+  + a two-way conformance check (declared streams ↔ pull handlers).
+  RECORDED DECISIONS: capabilities.streams speaks TODAY'S sync-stream
+  vocabulary (the DB sync_stream enum owns those names; the target's
+  canonical renames are a separate later migration — mapping in the
+  package README); the pull-handler type is the adapter's generic
+  parameter so platform-core stays app-agnostic (executor types live in
+  apps/runtime, where the two adapters are assembled —
+  apps/runtime/src/platforms/registry.ts).
+- **The registry is live in the dispatch path**: executeStreamChunk's
+  stream switch became registry dispatch — an undeclared stream for a
+  platform now fails loudly instead of running the wrong platform's
+  handler (the old switch ignored the platform entirely). Capabilities are
+  parity-pinned against getSyncStreamsForPlatform + resolveStreamsForScope
+  (drift fails the suite before Task 4 swaps the planner over).
+- **All six mixed handlers split per platform** (light, top_spenders,
+  transactions, subscribers, dm_conversations, dm_messages) — branch
+  bodies verbatim, narrowing kept via assertion guards (`!==` — invisible
+  to the ratchet by design: assertions, not branches), the transactions
+  windowing prelude duplicated into both halves. Per-platform pull maps
+  route straight to the halves; the old execute*Chunk names remain as
+  compat shells for the three platform-agnostic test suites.
+- **Ratchet**: scripts/check-platform-branches.mjs vs
+  platform-branch-budget.json — day-one strict `platform ===` count
+  recorded: **64** (self-excluding the ratchet's own test); wrapped into
+  the registry suite.
+
+REMAINING (next sessions): test re-point + shell deletion (ratchet drops);
+exclusive-handler relocation into platforms/ modules; Task 3 —
+onlyfans-ofapi adapter assembly (webhook/commands halves) + OnlyMonster
+deletion (packages/onlyfans + bootstrap adapter/onlyFansAdapter fields +
+AdapterLike); Task 4 — planner capability wiring (NOTE:
+getSyncStreamsForPlatform's page-sync.ts:902 use is db-package-internal —
+app callers move to capabilities, the db-internal list stays pinned);
+Task 5 — platforms reference table + 7-column enum→text migration
+(staging rehearsal + reverse REQUIRED before prod); Task 7 ops.
