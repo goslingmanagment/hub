@@ -232,8 +232,25 @@ repo; core support in main @ 109096f):**
   Desktop fully green: 772 + 1230 tests (7 new contract tests: refs-only
   shape, draft gate, cancel, unwired lane, gate-message mapping,
   page-label resolution).
-- [ ] Task 2: acceptance lifecycle (shown/copied/inserted/sent+edited on
-  the capture lane with generation refs).
+- [x] **Task 2 (86b90b2): acceptance lifecycle closed.** 'shown' at first
+  token from the coordinator; copied/inserted ride cmd:ai.feedback into the
+  capture spool; 'sent' + edited from a send-path observer (sent text vs
+  the tracked inserted suggestion, one-shot per conversation). Correlation
+  pair on every event: operationId (= clientRequestId) + requestId (the
+  meta-frame generation ref, surfaced through the hub client's new onMeta —
+  both kernel lanes forward it). Coordinator keeps a bounded completed-ops
+  registry (getOperationContext) so post-settle feedback correlates.
+  SPOOL = settings-KV (SCHEMA_VERSION 16 pinned — no new table): bounded
+  FIFO 500, deterministic v5 clientEventIds (kernel dedup), 400 drops
+  loudly, transient retry w/ attempts cap, waits while hub unconfigured.
+  Send observer is observe-only BY CONSTRUCTION (no engine in reach;
+  frozen-args proof test). Core support (344d749): migration 0074 adds
+  'copied' to the lifecycle CHECK; the projection maps sent+edited onto a
+  companion 'edited' row and tolerates the 'action' field name; AND a
+  recorded-trap regression fixed — listObservationsByKindAfterId's bare
+  `order by id` resolved to the ::text alias (lexicographic sort stranding
+  high ids behind the watermark; the Stage 8 trap, re-caught by the
+  idempotency test). Desktop green 772 + 1237.
 - [ ] Task 3: deletions + settings collapse ('feature' becomes the only
   lane) + persona picker from kernel ai_personas (needs kernel persona
   list/CRUD routes + custom-persona sync).
