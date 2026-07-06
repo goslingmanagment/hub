@@ -369,6 +369,69 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("client-context path (Stage 32)", () => {
+  it("uses client-loaded values verbatim and runs the gates on client counts", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation(); // archive has only 3 messages
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const call = (feature: string, clientContext: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+      apiServer!.inject({
+        method: "POST",
+        url: `/api/v1/ai/features/${feature}`,
+        headers: { authorization: `Bearer ${chatterKey}` },
+        payload: {
+          clientRequestId: randomUUID(),
+          pageLabel: "svc-of",
+          platform: "onlyfans",
+          conversationRef: FAN,
+          clientContext,
+          ...extra,
+        },
+      });
+
+    const baseContext = {
+      transcript: "[10:00] Fan: fresh client-side message about the beach",
+      messageCount: 35,
+      fanDisplayName: "Charles",
+      fanSpendingData: "Total: $42.00",
+      fanSubscriptionData: "Subscribed: yes",
+    };
+
+    // fan-summary needs ≥30 messages — the CLIENT count satisfies it even
+    // though the kernel archive only has 3 (the freshness rationale).
+    const summary = await call("fan-summary", baseContext);
+    expect(summary.statusCode, summary.body).toBe(200);
+    const summaryText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
+    expect(summaryText).toContain("fresh client-side message about the beach");
+    expect(summaryText).toContain("Total: $42.00");
+
+    // hi-greeting locks on the client count (35 > 10)…
+    const hiLocked = await call("hi-greeting", baseContext);
+    expect(hiLocked.statusCode, hiLocked.body).toBe(400);
+    expect(hiLocked.json().message).toContain("at most 10");
+    // …and passes with a short client conversation, ignoring earnings data.
+    const hi = await call("hi-greeting", { ...baseContext, messageCount: 2, fanBio: "loves cats" });
+    expect(hi.statusCode, hi.body).toBe(200);
+    const hiText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
+    expect(hiText).not.toContain("<fan_spending_data>");
+
+    // ping demands the client-computed segment, honors the active block, and
+    // proceeds on a quiet segment.
+    const pingNoSegment = await call("ping", baseContext);
+    expect(pingNoSegment.statusCode, pingNoSegment.body).toBe(400);
+    expect(pingNoSegment.json().message).toContain("pingSegment");
+    const pingActive = await call("ping", { ...baseContext, pingSegment: "active" });
+    expect(pingActive.statusCode, pingActive.body).toBe(400);
+    expect(pingActive.json().message).toContain("active");
+    const ping = await call("ping", { ...baseContext, pingSegment: "segment-a" });
+    expect(ping.statusCode, ping.body).toBe(200);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("prompt migration manifest (Stage 30)", () => {
   const root = join(__dirname, "..", "apps", "runtime", "src", "modules", "ai", "prompts");
   const manifest = JSON.parse(readFileSync(join(root, "prompt-manifest.json"), "utf8")) as {

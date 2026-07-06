@@ -146,7 +146,6 @@ describe("fan_earnings_stats board reads", () => {
     const page = await createFanslyPage(testDb.db, {
       modelId: model.id,
       label: "reads-1",
-      status: "active",
     });
 
     const fans = await upsertFans(testDb.db, [

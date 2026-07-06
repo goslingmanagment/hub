@@ -14145,6 +14145,53 @@
                   },
                   "isRegeneration": {
                     "type": "boolean"
+                  },
+                  "clientContext": {
+                    "type": "object",
+                    "properties": {
+                      "transcript": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300000
+                      },
+                      "messageCount": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 5000
+                      },
+                      "fanDisplayName": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "fanSpendingData": {
+                        "default": "",
+                        "type": "string",
+                        "maxLength": 20000
+                      },
+                      "fanSubscriptionData": {
+                        "default": "",
+                        "type": "string",
+                        "maxLength": 20000
+                      },
+                      "fanBio": {
+                        "type": "string",
+                        "maxLength": 5000
+                      },
+                      "pingSegment": {
+                        "type": "string",
+                        "enum": [
+                          "segment-a",
+                          "segment-b",
+                          "active"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "transcript",
+                      "messageCount",
+                      "fanDisplayName"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [

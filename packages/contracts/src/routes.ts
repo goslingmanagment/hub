@@ -1855,6 +1855,22 @@ export const aiFeatureStreamBodySchema = z.object({
   messageCount: z.number().int().min(5).max(3000).optional(),
   draftText: z.string().min(1).max(20_000).optional(),
   isRegeneration: z.boolean().optional(),
+  // Stage 32: client-loaded context for platforms whose kernel archive is
+  // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
+  // webhook lane), where the client reads the conversation live at
+  // generation time. Prompt ASSEMBLY stays kernel-side (templates, personas,
+  // policies, platform wording); only the context VALUES ride in. The values
+  // land verbatim in the assembled prompt and are captured under the
+  // Stage 29 restricted class exactly like archive-loaded context.
+  clientContext: z.object({
+    transcript: z.string().min(1).max(300_000),
+    messageCount: z.number().int().min(0).max(5000),
+    fanDisplayName: z.string().max(200),
+    fanSpendingData: z.string().max(20_000).default(""),
+    fanSubscriptionData: z.string().max(20_000).default(""),
+    fanBio: z.string().max(5_000).optional(),
+    pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
+  }).strict().optional(),
 }).strict();
 
 export const aiRestrictedGenerationSchema = z.object({
