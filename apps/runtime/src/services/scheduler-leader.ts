@@ -72,7 +72,20 @@ export async function acquireSchedulerLeadership(
     const lost = new Promise<void>((resolve) => {
       resolveLost = resolve;
     });
-    const onDeath = (): void => resolveLost();
+    let released = false;
+    const onDeath = (): void => {
+      // Return the dead client to the pool for destruction — a checked-out
+      // corpse would otherwise hang pool.end() (and leak) forever.
+      if (!released) {
+        released = true;
+        try {
+          client.release(true);
+        } catch {
+          // already released by the pool's own error handling
+        }
+      }
+      resolveLost();
+    };
     client.on("error", onDeath);
     // 'end' fires when the underlying connection closes for any reason.
     (client as unknown as { connection?: { on(event: string, fn: () => void): void } })
@@ -91,7 +104,10 @@ export async function acquireSchedulerLeadership(
           // The session dying releases the lock anyway.
         }
         // Destroy rather than return to the pool — the session carried lock state.
-        client.release(true);
+        if (!released) {
+          released = true;
+          client.release(true);
+        }
         resolveLost();
       },
     };
