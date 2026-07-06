@@ -15071,6 +15071,7 @@
                             "type": "string",
                             "enum": [
                               "shown",
+                              "copied",
                               "inserted",
                               "edited",
                               "sent"

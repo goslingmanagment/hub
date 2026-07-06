@@ -336,11 +336,14 @@ export async function listObservationsByKindAfterId(
   db: Database,
   input: { kind: string; afterId: number; limit?: number },
 ): Promise<ObservationByKindRow[]> {
+  // o.id QUALIFIED on purpose: a bare `order by id` resolves to the ::text
+  // output alias and sorts lexicographically ('10' < '5') — the recorded
+  // Stage 8 trap, re-caught here by the Stage 31 idempotency test.
   const result = await db.execute<Record<string, unknown>>(sql`
-    select id::text as id, payload, actor_principal_id, observed_at, received_at
-    from observations
-    where kind = ${input.kind} and id > ${input.afterId}
-    order by id asc
+    select o.id::text as id, o.payload, o.actor_principal_id, o.observed_at, o.received_at
+    from observations o
+    where o.kind = ${input.kind} and o.id > ${input.afterId}
+    order by o.id asc
     limit ${input.limit ?? 500}
   `);
   return result.rows.map((row) => ({

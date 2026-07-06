@@ -273,12 +273,16 @@ describe("restricted capture class (Stage 29)", () => {
     };
     await seed({ generationRef, lifecycle: "inserted" }, "acc-1");
     await seed({ generationRef, lifecycle: "sent" }, "acc-2");
-    // No ref / unknown lifecycle rows are skipped, not fatal.
+    // No ref / unknown lifecycle rows are skipped, not fatal; 'copied' is a
+    // first-class lifecycle since Stage 31 (0074), and a 'sent' with
+    // edited=true also books the schema's own 'edited' companion row.
     await seed({ lifecycle: "inserted" }, "acc-3");
     await seed({ generationRef, lifecycle: "copied" }, "acc-4");
+    await seed({ generationRef, lifecycle: "sent", edited: true }, "acc-5");
+    await seed({ generationRef, lifecycle: "definitely-not-a-lifecycle" }, "acc-6");
 
     const run = await runAiAcceptanceProjection(appContext);
-    expect(run).toMatchObject({ scanned: 4, projected: 2, skippedNoRef: 2 });
+    expect(run).toMatchObject({ scanned: 6, projected: 5, skippedNoRef: 2 });
 
     const rerun = await runAiAcceptanceProjection(appContext);
     expect(rerun).toMatchObject({ scanned: 0, projected: 0 });
@@ -288,7 +292,7 @@ describe("restricted capture class (Stage 29)", () => {
        where generation_ref = $1 order by lifecycle`,
       [generationRef],
     );
-    expect(rows.map((row) => row.lifecycle)).toEqual(["inserted", "sent"]);
+    expect(rows.map((row) => row.lifecycle)).toEqual(["copied", "edited", "inserted", "sent", "sent"]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("runs the closing classifier through the gateway's internal lane", async (context) => {

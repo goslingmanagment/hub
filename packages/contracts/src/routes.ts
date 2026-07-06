@@ -1860,7 +1860,7 @@ export const aiRestrictedGenerationsResponseSchema = z.object({
 });
 
 export const aiRestrictedAcceptanceEventSchema = z.object({
-  lifecycle: z.enum(["shown", "inserted", "edited", "sent"]),
+  lifecycle: z.enum(["shown", "copied", "inserted", "edited", "sent"]),
   userId: z.number().nullable(),
   occurredAt: z.string(),
 });

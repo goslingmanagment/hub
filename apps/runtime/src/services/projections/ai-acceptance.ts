@@ -22,7 +22,7 @@ export const AI_ACCEPTANCE_PROJECTION = "ai_acceptance_events";
 export const AI_ACCEPTANCE_KIND = "desktop.ai_acceptance";
 const PAGE_SIZE = 500;
 
-const LIFECYCLES = new Set(["shown", "inserted", "edited", "sent"]);
+const LIFECYCLES = new Set(["shown", "copied", "inserted", "edited", "sent"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -61,9 +61,10 @@ export async function runAiAcceptanceProjection(
         ?? asString(payload.generation_ref)
         ?? asString(payload.requestId)
         ?? asString(payload.request_id);
-      const lifecycleRaw = asString(payload.lifecycle) ?? asString(payload.status);
+      const lifecycleRaw = asString(payload.lifecycle) ?? asString(payload.status)
+        ?? asString(payload.action);
       const lifecycle = lifecycleRaw !== null && LIFECYCLES.has(lifecycleRaw)
-        ? lifecycleRaw as "shown" | "inserted" | "edited" | "sent"
+        ? lifecycleRaw as "shown" | "copied" | "inserted" | "edited" | "sent"
         : null;
       if (!generationRef || !lifecycle) {
         totals.skippedNoRef += 1;
@@ -78,6 +79,20 @@ export async function runAiAcceptanceProjection(
       });
       if (created) {
         totals.projected += 1;
+      }
+      // Stage 31: the desktop reports 'sent' with an edited flag — the flag
+      // maps onto the schema's own 'edited' lifecycle as a companion row.
+      if (lifecycle === "sent" && payload.edited === true) {
+        const editedRow = await insertAiAcceptanceEvent(app.db, {
+          generationRef,
+          lifecycle: "edited",
+          userId: row.actorPrincipalId,
+          occurredAt: row.observedAt ?? row.receivedAt,
+          sourceObservationId: row.id,
+        });
+        if (editedRow) {
+          totals.projected += 1;
+        }
       }
     }
     watermark = rows[rows.length - 1]!.id;

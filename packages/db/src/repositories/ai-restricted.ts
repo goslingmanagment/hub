@@ -33,7 +33,7 @@ export async function insertAiGenerationContent(
 
 export interface InsertAiAcceptanceEventInput {
   generationRef: string;
-  lifecycle: "shown" | "inserted" | "edited" | "sent";
+  lifecycle: "shown" | "copied" | "inserted" | "edited" | "sent";
   userId: number | null;
   occurredAt: Date;
   sourceObservationId: number | null;

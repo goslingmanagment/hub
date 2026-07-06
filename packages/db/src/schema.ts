@@ -2676,7 +2676,7 @@ export const aiAcceptanceEvents = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     generationRef: text("generation_ref").notNull(),
-    lifecycle: text("lifecycle").$type<"shown" | "inserted" | "edited" | "sent">().notNull(),
+    lifecycle: text("lifecycle").$type<"shown" | "copied" | "inserted" | "edited" | "sent">().notNull(),
     userId: bigint("user_id", { mode: "number" }).references(() => users.id, {
       onDelete: "set null",
     }),
