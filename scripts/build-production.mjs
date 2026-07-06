@@ -18,6 +18,8 @@ const workspaceAliases = {
 };
 
 const runtimeExternal = [
+  // Native bindings resolve from node_modules at run time (Stage 28).
+  "@duckdb/node-api",
   "@fastify/cookie",
   "@fastify/rate-limit",
   "@fastify/static",
