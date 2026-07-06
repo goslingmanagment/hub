@@ -11,16 +11,7 @@ import {
   routeSecurityFromAuth,
   type RouteAuthPolicy,
 } from "../../../../packages/contracts/src/routes.ts";
-import {
-  getLatestSyncRunPerPage,
-  listFanFlags,
-  listSubscriberDailyForPage,
-} from "@agency_hub_core/db";
-import {
-  createLogger,
-  type Platform,
-} from "@agency_hub_core/shared";
-import type { FastifyReply } from "fastify";
+import { createLogger } from "@agency_hub_core/shared";
 import Fastify from "fastify";
 import { PgBoss } from "pg-boss";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -65,11 +56,7 @@ import { registerIdentityRoutes } from "../modules/identity/index.ts";
 import { registerIngestRoutes } from "../modules/ingest/index.ts";
 import { registerOpsRoutes } from "../modules/ops/index.ts";
 import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
-import {
-  findPageSummaryByLabel,
-  getNotificationIncidentByKey,
-} from "@agency_hub_core/db";
-import { getSyncStatusSnapshot } from "../services/sync-status.ts";
+import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
   ensureSyncQueues,
 } from "../services/sync-queue.ts";
@@ -126,20 +113,27 @@ export function resolveDashboardDistPath(options: DashboardDistResolverOptions =
   return null;
 }
 
-export function normalizeOpenApiDocument<T extends Record<string, any>>(spec: T): T {
+export function normalizeOpenApiDocument<T extends Record<string, unknown>>(spec: T): T {
   // Deterministic path order: swagger emits paths in ROUTE REGISTRATION order,
   // which the Stage 19 module extraction shuffles as handlers relocate. Sorting
   // decouples the published document (and the api-types diff gate) from where a
   // route happens to register.
   if (spec.paths && typeof spec.paths === "object") {
-    (spec as Record<string, any>).paths = Object.fromEntries(
+    (spec as Record<string, unknown>).paths = Object.fromEntries(
       Object.entries(spec.paths as Record<string, unknown>).sort(([left], [right]) =>
         left < right ? -1 : left > right ? 1 : 0,
       ),
     );
   }
 
-  const csvResponse = spec.paths?.["/api/v1/admin/ofapi/credits/ledger.csv"]
+  const paths = spec.paths as
+    | Record<
+        string,
+        | { get?: { responses?: Record<string, { content?: Record<string, unknown> } | undefined> } }
+        | undefined
+      >
+    | undefined;
+  const csvResponse = paths?.["/api/v1/admin/ofapi/credits/ledger.csv"]
     ?.get?.responses?.["200"];
   const jsonContent = csvResponse?.content?.["application/json"];
   if (csvResponse && jsonContent) {
@@ -495,7 +489,7 @@ export async function buildApiServer(appContext: AppContext) {
     schema: routeSchemas.openApiJson,
   }, async (request) => {
     await requireOpenApiDocsOwner(request);
-    return normalizeOpenApiDocument(server.swagger() as Record<string, any>);
+    return normalizeOpenApiDocument(server.swagger() as unknown as Record<string, unknown>);
   });
 
   // === Admin routes ===

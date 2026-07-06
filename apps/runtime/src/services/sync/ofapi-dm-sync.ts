@@ -48,7 +48,6 @@ import {
   emptyOfapiDmConversationCursorState,
   parseDmMessagesCursorState,
   parseOfapiDmConversationCursorState,
-  type DmMessagesCursorState,
 } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
@@ -793,7 +792,6 @@ export async function executeOfapiDmConversationsChunk(
           lastSuccessfulRunId: input.syncRunId,
         });
       });
-      state = nextState;
       await input.telemetry.recordCheckpointAdvanced("dm_conversations", summarizeCheckpoint(written));
       result = {
         satisfied: true,
@@ -1031,7 +1029,6 @@ export async function executeOfapiDmMessagesChunk(
           });
           return { finalizedConversation, progressCheckpoint };
         });
-        conversation = finalized.finalizedConversation.conversation;
         completedConversations += 1;
         state = emptyDmMessagesCursorState();
         await input.telemetry.recordCheckpointAdvanced(

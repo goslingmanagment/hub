@@ -1,12 +1,19 @@
+import js from "@eslint/js";
+import tseslint from "typescript-eslint";
 import tsParser from "@typescript-eslint/parser";
 
-// Kernel Stage 19 ESLint bootstrap. Deliberately minimal: the ONLY rules are the
-// module-boundary walls (the desktop's no-restricted-imports pattern). The
-// auth-declaration gate is a contracts unit test, not a lint rule, so it cannot
-// be skipped by skipping lint. The full family lint standard arrives in Stage 35
-// — do not grow this config before it.
+// The family lint standard (Stage 35), grown from the Stage 19 bootstrap.
+// Two layers:
+// - Base hygiene seeded from the desktop's config: js/ts recommended,
+//   no-unused-vars with the `_` escape hatch, consistent-type-imports,
+//   no-explicit-any (assertions across trust boundaries get reviewed).
+// - The architecture walls earlier stages introduced (these are the ones a
+//   reviewer must never see waived without a decisions.md entry). The
+//   auth-declaration gate is a contracts unit test, not a lint rule, so it
+//   cannot be skipped by skipping lint. The `platform ===` and raw-fetch
+//   ratchets are counted scripts inside the test suite, not lint rules.
 //
-// Two walls, both on import SPECIFIERS:
+// Module-boundary walls, both on import SPECIFIERS:
 // 1. Path-qualified deep imports naming a modules/ internal (the composition
 //    root and services must use "./modules/<m>/index.ts").
 // 2. Relative sibling imports from inside a module: every module is a single
@@ -14,7 +21,7 @@ import tsParser from "@typescript-eslint/parser";
 //    allowed only for "../<other>/index.ts"; "../context.ts" (the shared
 //    module context) is one segment and passes.
 
-export default [
+export default tseslint.config(
   {
     ignores: [
       "**/dist/**",
@@ -24,6 +31,40 @@ export default [
       "docs/**",
       "packages/contracts/src/generated/**",
     ],
+  },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  {
+    files: ["**/scripts/**/*.mjs", "**/*.config.*", "**/*.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        console: "readonly",
+        Buffer: "readonly",
+        fetch: "readonly",
+        performance: "readonly",
+        URL: "readonly",
+        URLSearchParams: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        AbortController: "readonly",
+        crypto: "readonly",
+      },
+    },
+  },
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "@typescript-eslint/consistent-type-imports": "error",
+      "@typescript-eslint/no-explicit-any": "error",
+      "no-console": "off",
+    },
+  },
+  {
+    files: ["**/*.d.ts"],
+    rules: {
+      "@typescript-eslint/consistent-type-imports": "off",
+    },
   },
   {
     files: ["apps/runtime/src/**/*.ts", "packages/*/src/**/*.ts", "tests/**/*.ts"],
@@ -147,4 +188,4 @@ export default [
       }],
     },
   },
-];
+);

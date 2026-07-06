@@ -22,7 +22,7 @@ describe("money float-site ratchet", () => {
     let count = 0;
     const offenders: string[] = [];
     for (const scope of SCOPES) {
-      let output = "";
+      let output: string;
       try {
         output = execFileSync(
           "grep",
@@ -49,7 +49,7 @@ describe("money float-site ratchet", () => {
 
   it("toMills never comes back", () => {
     for (const scope of SCOPES) {
-      let output = "";
+      let output: string;
       try {
         output = execFileSync(
           "grep",

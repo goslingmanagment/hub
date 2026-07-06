@@ -13,7 +13,7 @@ const SANCTIONED_SDK_IMPORTERS = [
 describe("vendor AI SDK import ban (Stage 29)", () => {
   it("only the gateway provider imports @anthropic-ai/sdk", () => {
     const root = join(__dirname, "..");
-    let output = "";
+    let output: string;
     try {
       output = execFileSync(
         "grep",

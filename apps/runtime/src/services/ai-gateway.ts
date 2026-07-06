@@ -258,7 +258,7 @@ export async function prepareAiGatewayStream(
     app.config.chatMuseAiGatewayRequestMicroUsdLimit,
     DEFAULT_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT,
   );
-  let estimatedRequestCostMicroUsd = 0;
+  let estimatedRequestCostMicroUsd: number;
   try {
     estimatedRequestCostMicroUsd = provider.provider === "openrouter"
       ? estimateOpenrouterGatewayRequestCost(input).costMicroUsd

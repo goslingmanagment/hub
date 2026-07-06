@@ -1,6 +1,6 @@
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql, type SQL } from "drizzle-orm";
 
-import { buildProxyEgressKey, type Platform, type ProxyConfig } from "@agency_hub_core/shared";
+import { buildProxyEgressKey, type Platform } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {
@@ -505,7 +505,7 @@ export async function listAdminPages(
     pageIds?: number[];
   },
 ) {
-  const clauses: Array<any> = [eq(pages.status, "active")];
+  const clauses: Array<SQL> = [eq(pages.status, "active")];
 
   if (input?.pageIds !== undefined) {
     if (input.pageIds.length === 0) {

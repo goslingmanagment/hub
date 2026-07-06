@@ -148,14 +148,6 @@ function normalizeNumber(value: NumericValue, field: string) {
   throw new Error(`Expected ${field} to be numeric`);
 }
 
-function normalizeNullableNumber(value: NumericValue, field: string) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  return normalizeNumber(value, field);
-}
-
 function rowValue(row: Record<string, unknown>, field: string) {
   return row[field] ?? row[field.toLowerCase()];
 }
@@ -540,15 +532,15 @@ export async function listChatterUsageSummary(
   `);
 
   const summaries = totalsResult.rows.map((row) => {
-    const inputTokens = normalizeNumber((row as any).inputTokens, "inputTokens");
-    const outputTokens = normalizeNumber((row as any).outputTokens, "outputTokens");
-    const cacheWriteTokens = normalizeNumber((row as any).cacheWriteTokens, "cacheWriteTokens");
-    const cacheReadTokens = normalizeNumber((row as any).cacheReadTokens, "cacheReadTokens");
+    const inputTokens = normalizeNumber(row.inputTokens as NumericValue, "inputTokens");
+    const outputTokens = normalizeNumber(row.outputTokens as NumericValue, "outputTokens");
+    const cacheWriteTokens = normalizeNumber(row.cacheWriteTokens as NumericValue, "cacheWriteTokens");
+    const cacheReadTokens = normalizeNumber(row.cacheReadTokens as NumericValue, "cacheReadTokens");
 
     return {
-      userId: normalizeNumber((row as any).userId, "userId"),
-      username: String((row as any).username ?? ""),
-      totalGenerations: normalizeNumber((row as any).totalGenerations, "totalGenerations"),
+      userId: normalizeNumber(row.userId as NumericValue, "userId"),
+      username: String(row.username ?? ""),
+      totalGenerations: normalizeNumber(row.totalGenerations as NumericValue, "totalGenerations"),
       tokenCounts: {
         input: inputTokens,
         output: outputTokens,
@@ -569,8 +561,8 @@ export async function listChatterUsageSummary(
         openReservationCount: normalizeRowNumber(row as Record<string, unknown>, "gatewayOpenReservationCount"),
         providerBreakdown: [],
       },
-      regenerateRatePct: normalizeNumber((row as any).regenerateRatePct, "regenerateRatePct"),
-      warning: Boolean((row as any).warning),
+      regenerateRatePct: normalizeNumber(row.regenerateRatePct as NumericValue, "regenerateRatePct"),
+      warning: Boolean(row.warning),
     };
   });
 
@@ -583,18 +575,18 @@ export async function listChatterUsageSummary(
   >();
 
   for (const row of featureBreakdownResult.rows) {
-    const userId = normalizeNumber((row as any).userId, "userId");
-    const requestCount = normalizeNumber((row as any).requestCount, "requestCount");
-    const inputTokens = normalizeNumber((row as any).inputTokens, "inputTokens");
-    const outputTokens = normalizeNumber((row as any).outputTokens, "outputTokens");
-    const cacheWriteTokens = normalizeNumber((row as any).cacheWriteTokens, "cacheWriteTokens");
-    const cacheReadTokens = normalizeNumber((row as any).cacheReadTokens, "cacheReadTokens");
-    const regenerationCount = normalizeNumber((row as any).regenerationCount, "regenerationCount");
+    const userId = normalizeNumber(row.userId as NumericValue, "userId");
+    const requestCount = normalizeNumber(row.requestCount as NumericValue, "requestCount");
+    const inputTokens = normalizeNumber(row.inputTokens as NumericValue, "inputTokens");
+    const outputTokens = normalizeNumber(row.outputTokens as NumericValue, "outputTokens");
+    const cacheWriteTokens = normalizeNumber(row.cacheWriteTokens as NumericValue, "cacheWriteTokens");
+    const cacheReadTokens = normalizeNumber(row.cacheReadTokens as NumericValue, "cacheReadTokens");
+    const regenerationCount = normalizeNumber(row.regenerationCount as NumericValue, "regenerationCount");
     const totalGenerations = totalGenerationsByUser.get(userId) ?? 0;
     const breakdown = featureBreakdownByUser.get(userId) ?? [];
 
     breakdown.push({
-      feature: normalizeFeature((row as any).feature, "feature"),
+      feature: normalizeFeature(row.feature, "feature"),
       requestCount,
       sharePct: roundPercentage(requestCount, totalGenerations),
       tokenCounts: {
@@ -614,8 +606,8 @@ export async function listChatterUsageSummary(
 
   const providerBreakdownByUser = new Map<number, ChatterUsageSummaryRow["gateway"]["providerBreakdown"]>();
   for (const row of providerBreakdownResult.rows) {
-    const userId = normalizeNumber((row as any).userId, "userId");
-    const provider = (row as any).provider;
+    const userId = normalizeNumber(row.userId as NumericValue, "userId");
+    const provider = row.provider;
     if (provider !== "anthropic" && provider !== "openrouter") {
       continue;
     }

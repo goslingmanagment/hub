@@ -285,12 +285,12 @@ describe("OFAPI spend transaction ingest", () => {
     expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(1);
     expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
 
-    let count = await testDb.pool.query<{ count: number }>(
+    const count = await testDb.pool.query<{ count: number }>(
       "select count(*)::int as count from transactions where platform_account_id = $1",
       [page.id],
     );
     expect(count.rows).toEqual([{ count: 1 }]);
-    let pending = await testDb.pool.query<{
+    const pending = await testDb.pool.query<{
       transaction_state: string;
       raw_status: string;
       gross_amount_mills: string;

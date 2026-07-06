@@ -82,7 +82,7 @@ describe("compose config", () => {
   it("deploy-production.sh defaults to full builds without dist-only fallback", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const buildCandidate = getShellFunction(text, "build_candidate_image");
-    const fullBranch = buildCandidate?.match(/full\)([\s\S]*?);;\n    dist-only\)/)?.[1] ?? "";
+    const fullBranch = buildCandidate?.match(/full\)([\s\S]*?);;\n {4}dist-only\)/)?.[1] ?? "";
 
     expect(text).toContain('BUILD_MODE="${DEPLOY_BUILD_MODE:-full}"');
     expect(text).toContain("--mode <mode>          Build mode: full, dist-only, or auto. Default: full");

@@ -64,23 +64,6 @@ function serializePage(page: {
   };
 }
 
-function serializeCoverage(freshness: Awaited<ReturnType<typeof getPageDmSyncCoverage>>) {
-  return {
-    freshness: {
-      lastConversationChunkSucceededAt: serializeTimestamp(freshness.lastConversationChunkSucceededAt),
-      lastConversationFullSweepAt: serializeTimestamp(freshness.lastConversationFullSweepAt),
-      lastMessageChunkSucceededAt: serializeTimestamp(freshness.lastMessageChunkSucceededAt),
-    },
-    coverage: {
-      pendingMessageBackfillCount: freshness.pendingMessageBackfillCount,
-      partialWindowConversationCount: freshness.partialWindowConversationCount,
-      excludedConversationCount: freshness.excludedConversationCount,
-      unresolvedConversationCount: freshness.unresolvedConversationCount,
-      previewReadyConversationCount: freshness.previewReadyConversationCount,
-    },
-  };
-}
-
 async function resolveConversationHistorySyncUx(
   app: AppContext,
   pageId: number,

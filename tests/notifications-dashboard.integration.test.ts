@@ -9,7 +9,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
-import { createUserAccount, SESSION_COOKIE_NAME } from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

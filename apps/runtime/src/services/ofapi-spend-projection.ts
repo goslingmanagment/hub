@@ -12,7 +12,6 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import {
   asRecord,
-  extractMessageIdFromNotification,
   idToString,
   notificationChatId,
   ofapiWebhookEnvelopeSchema,

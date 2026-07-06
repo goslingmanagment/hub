@@ -2,7 +2,7 @@
   "name": "agency_hub_core",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.30.3",
+  "packageManager": "pnpm@10.33.1",
   "pnpm": {
     "overrides": {
       "fast-uri": "3.1.2",
@@ -28,15 +28,19 @@
     "test:prerequisites": "pnpm test:sync-critical",
     "test:sync-critical": "pnpm test:sync-critical:db && pnpm test:sync-critical:api",
     "test:sync-critical:db": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/*.integration.test.ts tests/schema-guard.test.ts tests/http-client.test.ts tests/network.test.ts --exclude tests/api.integration.test.ts",
-    "test:sync-critical:api": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/api.integration.test.ts --testNamePattern \"auto-queues|initial sync|retry path|latest light sync|detailed sync health|stored proxy|sync runs|page credentials|admin verify|inline proxy|sync monitor|sync block|manual block controls|recent sync requests|sync request limits|system health\"",
-    "typecheck": "tsc --noEmit",
+    "test:sync-critical:api": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/api.integration.test.ts --testNamePattern \"\\\\[sync-critical\\\\]\"",
+    "typecheck": "node scripts/check-strictness-ratchet.mjs",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck:ratchet-update": "node scripts/check-strictness-ratchet.mjs --update",
     "lint": "eslint .",
+    "check": "pnpm typecheck && pnpm lint && pnpm test:unit && pnpm --dir apps/dashboard build",
     "test:watch": "vitest",
     "dev": "bash scripts/dev-local.sh",
     "dev:db": "docker compose up -d postgres",
     "dev:dashboard": "cd apps/dashboard && npx vite"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.6",
     "@types/react": "^19.1.6",
@@ -49,8 +53,9 @@
     "react-dom": "^19.1.0",
     "testcontainers": "^11.7.2",
     "tsx": "^4.20.0",
-    "typescript": "^5.8.2",
-    "vitest": "^3.2.4"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@agency_hub_core/platform-core": "workspace:*",

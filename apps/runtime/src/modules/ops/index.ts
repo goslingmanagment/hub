@@ -21,6 +21,7 @@ import {
   validateConfigOverride,
   validateStagedOverride,
   type ConfigOverrideValue,
+  type Platform,
 } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
@@ -103,6 +104,52 @@ function serializeNullableTimestamp(value: Date | string | null | undefined) {
 function toNumber(value: number | string | bigint) {
   return typeof value === "number" ? value : Number(value);
 }
+
+// Raw-SQL row shapes (what the pg driver hands back for these queries).
+type SyncRunEventRow = {
+  id: number | string;
+  syncRunId: number | string;
+  provider: Platform;
+  stream: string;
+  eventType: string;
+  severity: string;
+  message: string;
+  details: Record<string, unknown>;
+  emittedAt: Date | string;
+  pageLabel: string;
+};
+
+type QueueJobRow = {
+  id: string;
+  name: string;
+  state: string;
+  data: unknown;
+  createdOn: Date | string;
+  startedOn: Date | string | null;
+  completedOn: Date | string | null;
+  output: unknown;
+  retryLimit: number | string;
+  retryCount: number | string;
+};
+
+type DbTableStatRow = {
+  schema: string;
+  table: string;
+  rowEstimate: number | string;
+  totalBytes: number | string | bigint;
+  indexBytes: number | string | bigint;
+};
+
+type DbMigrationRow = {
+  name: string;
+  appliedAt: Date | string;
+};
+
+type IncidentSummaryRow = {
+  code: string | null;
+  severity: string;
+  count: number | string;
+};
 
 export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext, boss } = ctx;
@@ -511,7 +558,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           LIMIT ${limit}
         `)).rows;
 
-    return rows.map((r: any) => ({
+    return (rows as SyncRunEventRow[]).map((r) => ({
       id: toNumber(r.id),
       syncRunId: toNumber(r.syncRunId),
       provider: r.provider,
@@ -546,7 +593,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       LIMIT ${limit}
     `)).rows;
 
-    return rows.map((r: any) => ({
+    return (rows as QueueJobRow[]).map((r) => ({
       id: r.id,
       name: r.name,
       state: r.state,
@@ -576,7 +623,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       ORDER BY pg_total_relation_size(schemaname || '.' || relname) DESC
     `)).rows;
 
-    const tables = tableRows.map((r: any) => ({
+    const tables = (tableRows as DbTableStatRow[]).map((r) => ({
       schema: r.schema,
       table: r.table,
       rowEstimate: toNumber(r.rowEstimate),
@@ -584,14 +631,14 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       indexBytes: toNumber(r.indexBytes),
     }));
 
-    let migrations: any[] = [];
+    let migrations: Array<{ name: string; appliedAt: string }> = [];
     try {
       const migrationRows = (await appContext.db.execute(sql`
         SELECT id as "name", applied_at as "appliedAt"
         FROM schema_migrations
         ORDER BY applied_at ASC, id ASC
       `)).rows;
-      migrations = migrationRows.map((r: any) => ({
+      migrations = (migrationRows as DbMigrationRow[]).map((r) => ({
         name: r.name,
         appliedAt: serializeTimestamp(r.appliedAt),
       }));
@@ -620,7 +667,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     if (severity) condition = sql`${condition} AND ${normalizedSeverity} = ${severity}`;
     if (code) condition = sql`${condition} AND e.details->>'code' = ${code}`;
 
-    const items = (await appContext.db.execute(sql`
+    const items = ((await appContext.db.execute(sql`
       SELECT e.id, e.sync_run_id as "syncRunId",
              e.provider, e.stream, e.event_type as "eventType",
              ${normalizedSeverity} as "severity", e.message, e.details,
@@ -632,7 +679,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       WHERE ${condition}
       ORDER BY e.emitted_at DESC
       LIMIT ${limit}
-    `)).rows.map((r: any) => ({
+    `)).rows as SyncRunEventRow[]).map((r) => ({
       id: toNumber(r.id),
       syncRunId: toNumber(r.syncRunId),
       provider: r.provider,
@@ -645,7 +692,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       pageLabel: r.pageLabel,
     }));
 
-    const summary = (await appContext.db.execute(sql`
+    const summary = ((await appContext.db.execute(sql`
       SELECT e.details->>'code' as "code", ${normalizedSeverity} as "severity", count(*)::int as "count"
       FROM sync_run_events e
       WHERE (e.severity IN ('warn', 'error') OR e.event_type = 'anomaly')
@@ -653,7 +700,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       GROUP BY e.details->>'code', ${normalizedSeverity}
       ORDER BY count DESC
       LIMIT 20
-    `)).rows.map((r: any) => ({
+    `)).rows as IncidentSummaryRow[]).map((r) => ({
       code: r.code,
       severity: r.severity,
       count: toNumber(r.count),
@@ -1074,7 +1121,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       throw new NotFoundError(`Incident ${incidentId} not found`);
     }
 
-    const incidentKey = (rows[0] as any).incident_key as string;
+    const incidentKey = (rows[0] as { incident_key: string }).incident_key;
     const resolvedAt = new Date();
     await recordNotificationIncidentRecovery(appContext.db, {
       incidentKey,

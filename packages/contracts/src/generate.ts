@@ -52,7 +52,7 @@ async function main() {
 
   try {
     await server.ready();
-    const spec = normalizeOpenApiDocument(server.swagger() as unknown as Record<string, any>);
+    const spec = normalizeOpenApiDocument(server.swagger() as unknown as Record<string, unknown>);
     const openapiPath = path.resolve("reference/agency-hub.openapi.json");
     await writeFile(openapiPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
 

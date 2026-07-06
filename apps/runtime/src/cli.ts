@@ -66,7 +66,6 @@ import {
   loadFanslySessionBundleFromFile,
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
-  type ResolvedPageContext,
 } from "./services/page-context.ts";
 import { requestPageSync, waitForRequestedSyncRequests } from "./services/sync-control.ts";
 import { refreshPageMetadata } from "./services/sync/shared.ts";
@@ -459,6 +458,7 @@ async function queueInitialFullSyncAfterPageCreate(
   } catch (error) {
     throw new Error(
       `Page "${pageLabel}" was created, but the automatic sync could not be queued: ${describeError(error)}`,
+      { cause: error },
     );
   } finally {
     await boss.stop().catch(() => undefined);

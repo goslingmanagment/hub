@@ -886,7 +886,7 @@ export async function getSpenderDetail(
 
   let windowMetrics: SpenderDetailResponse["metrics"]["window"] = null;
   let comparison: SpenderDetailResponse["metrics"]["comparison"] = null;
-  let typeBreakdown: SpenderDetailResponse["typeBreakdown"] = [];
+  let typeBreakdown: SpenderDetailResponse["typeBreakdown"];
 
   if (period !== "lifetime") {
     const currentRange = resolveSpenderBusinessDateRangeForPlatform(

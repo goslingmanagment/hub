@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as DbModule from "@agency_hub_core/db";
+
 const timerMocks = vi.hoisted(() => ({
   delay: vi.fn(async () => undefined),
 }));
@@ -14,7 +16,7 @@ vi.mock("node:timers/promises", () => ({
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
-  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
   return {
     ...actual,
     ensureSyncProviderRateLimitProfile: dbMocks.ensureSyncProviderRateLimitProfile,

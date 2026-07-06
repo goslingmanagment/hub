@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as TelegramReportImageModule from "../apps/runtime/src/services/telegram-report-image.ts";
+
 import {
   createFanslyPage,
   createModel,
@@ -30,7 +32,7 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 // The report is delivered as a rendered image; stub the rasteriser so the send
 // tests exercise the sendPhoto path deterministically without launching chromium.
 vi.mock("../apps/runtime/src/services/telegram-report-image.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../apps/runtime/src/services/telegram-report-image.ts")>()),
+  ...(await importOriginal<typeof TelegramReportImageModule>()),
   renderDailyRevenueReportImage: vi.fn(async () => Buffer.from([0x89, 0x50, 0x4e, 0x47])),
 }));
 

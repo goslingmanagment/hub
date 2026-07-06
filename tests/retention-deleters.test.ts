@@ -49,7 +49,7 @@ const SANCTIONED_DELETER_FILES = [
 describe("retention deleter enumeration (Stage 28)", () => {
   it("no file outside the pinned allowlist issues a SQL delete", () => {
     const root = join(__dirname, "..");
-    let output = "";
+    let output: string;
     try {
       output = execFileSync(
         "grep",

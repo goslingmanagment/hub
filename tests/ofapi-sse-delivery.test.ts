@@ -180,8 +180,7 @@ describe("sync event hub delivery contract (audit B3)", () => {
   // watermark to its own seq, so the next catch-up batch read past the gap and
   // frames 601..700 were skipped hub-wide.
   it("does not skip journal rows when a live wake-up arrives mid-catch-up", async () => {
-    let h: Harness;
-    h = makeHarness({
+    const h: Harness = makeHarness({
       baselineSeq: 100,
       journal: range(101, 700),
       onDeliver: (row) => {

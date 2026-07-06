@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as DbModule from "@agency_hub_core/db";
+import type * as SyncQueueModule from "../apps/runtime/src/services/sync-queue.ts";
+
 const dbMocks = vi.hoisted(() => ({
   closeInactiveSyncRuns: vi.fn(),
   ensurePageSyncStates: vi.fn(),
@@ -13,14 +16,14 @@ const queueMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
-  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
   return {
     ...actual,
     ...dbMocks,
   };
 });
 vi.mock("../apps/runtime/src/services/sync-queue.ts", async () => {
-  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync-queue.ts")>(
+  const actual = await vi.importActual<typeof SyncQueueModule>(
     "../apps/runtime/src/services/sync-queue.ts",
   );
 

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type * as DbModule from "@agency_hub_core/db";
+
 const dbMocks = vi.hoisted(() => ({
   ensurePageSyncStates: vi.fn(),
   listPageSyncStates: vi.fn(),
@@ -8,7 +10,7 @@ const dbMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
-  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
   return {
     ...actual,
     ensurePageSyncStates: dbMocks.ensurePageSyncStates,

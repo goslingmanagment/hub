@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -6,7 +5,6 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
-  insertObservation,
   setPageOfapiAccountId,
   upsertFans,
   upsertPageDmMessages,

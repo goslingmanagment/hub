@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lte } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { telegramSettings, telegramDeliveryAttempts } from "../schema.ts";

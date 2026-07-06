@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type * as DbModule from "@agency_hub_core/db";
+import type * as SharedModule from "@agency_hub_core/shared";
+
 const sharedMocks = vi.hoisted(() => ({
   createProxyRequestDispatcher: vi.fn(),
   resolveRetryDelayMs: vi.fn(() => 0),
@@ -10,7 +13,7 @@ const dbMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
-  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
   return {
     ...actual,
     findPageByLabel: dbMocks.findPageByLabel,
@@ -18,7 +21,7 @@ vi.mock("@agency_hub_core/db", async () => {
 });
 
 vi.mock("@agency_hub_core/shared", async () => {
-  const actual = await vi.importActual<typeof import("@agency_hub_core/shared")>("@agency_hub_core/shared");
+  const actual = await vi.importActual<typeof SharedModule>("@agency_hub_core/shared");
   return {
     ...actual,
     createProxyRequestDispatcher: sharedMocks.createProxyRequestDispatcher,

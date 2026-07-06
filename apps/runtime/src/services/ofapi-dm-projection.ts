@@ -9,7 +9,6 @@
 
 import {
   findPageByOfapiAccountId,
-  findPageDmMessageByPlatformMessageId,
   deletePageDmMessageByPlatformMessageId,
   getExistingPageDmMessageIds,
   listOfapiWebhookEventsForDmProjection,
@@ -37,7 +36,6 @@ import {
   asRecord,
   extractMessageIdFromNotification,
   idToString,
-  notificationChatId,
   ofapiWebhookEnvelopeSchema,
 } from "./ofapi-payloads.ts";
 

@@ -239,7 +239,7 @@ interface LakeManifestFile {
 
 async function listLakeManifests(app: Db): Promise<LakeManifestFile[]> {
   const lakeDir = app.config.lakeDir;
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = (await readdir(lakeDir, { recursive: true })) as string[];
   } catch {
@@ -422,7 +422,7 @@ async function execCount(tx: Db["db"], query: SQL): Promise<number> {
  * new table joined the fan graph without an erasure decision — fail loudly. */
 const FAN_FK_CURATED = new Set(["transactions", "page_dm_threads", "page_fan_identities", "fan_earnings_stats"]);
 
-async function fanHotTargets(app: Db, scope: ResolvedScope, lineage: LedgerLineage): Promise<WorkTarget[]> {
+async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
   const ref = scope.fanRef!;
   const fanId = scope.fanId ?? -1;
   const targets: WorkTarget[] = [];

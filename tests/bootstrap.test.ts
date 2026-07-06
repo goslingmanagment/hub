@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type * as DbModule from "@agency_hub_core/db";
+import type * as SharedModule from "@agency_hub_core/shared";
+import type * as FanslyModule from "@agency_hub_core/fansly";
+
 const bootstrapMocks = vi.hoisted(() => {
   const pool = {
     end: vi.fn(async () => {}),
@@ -26,7 +30,7 @@ const bootstrapMocks = vi.hoisted(() => {
     createLogger: vi.fn(() => logger),
     createPool: vi.fn(() => pool),
     db,
-    FanslyAdapter: vi.fn(() => adapter),
+    FanslyAdapter: vi.fn(function () { return adapter; }),
     logger,
     loadConfig: vi.fn(() => ({
       databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
@@ -70,7 +74,7 @@ const bootstrapMocks = vi.hoisted(() => {
 });
 
 vi.mock("@agency_hub_core/db", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@agency_hub_core/db")>();
+  const actual = await importOriginal<typeof DbModule>();
   return {
     ...actual,
     assertRuntimeSchemaReady: bootstrapMocks.assertRuntimeSchemaReady,
@@ -81,7 +85,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
 });
 
 vi.mock("@agency_hub_core/shared", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@agency_hub_core/shared")>();
+  const actual = await importOriginal<typeof SharedModule>();
   return {
     ...actual,
     createLogger: bootstrapMocks.createLogger,
@@ -90,7 +94,7 @@ vi.mock("@agency_hub_core/shared", async (importOriginal) => {
 });
 
 vi.mock("@agency_hub_core/fansly", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@agency_hub_core/fansly")>();
+  const actual = await importOriginal<typeof FanslyModule>();
   return {
     ...actual,
     FanslyAdapter: bootstrapMocks.FanslyAdapter,

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 
 import {
   getTransactionClassification,
@@ -70,7 +70,7 @@ export async function findPageSummaryByLabel(db: Database, label: string) {
 }
 
 export async function listVisiblePages(db: Database, pageIds?: number[]) {
-  const clauses: Array<any> = [eq(pages.status, "active")];
+  const clauses: Array<SQL> = [eq(pages.status, "active")];
   const { scoped } = applyPageScope(clauses, pageIds);
   if (scoped && pageIds?.length === 0) {
     return [];
@@ -108,7 +108,7 @@ export async function listVisibleModels(db: Database, pageIds?: number[]) {
     return [];
   }
 
-  const clauses: Array<any> = [];
+  const clauses: Array<SQL> = [];
   if (pageIds !== undefined) {
     clauses.push(inArray(pages.id, pageIds));
   }

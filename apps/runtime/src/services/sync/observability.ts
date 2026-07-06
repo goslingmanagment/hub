@@ -791,7 +791,7 @@ export class SyncRunTelemetry {
     );
   }
 
-  private applyAutomaticAnomalies(status: "success" | "partial" | "failed" | "skipped") {
+  private applyAutomaticAnomalies(_status: "success" | "partial" | "failed" | "skipped") {
     if (this.requestSummaryCollector.getRequestTotalsSnapshot().retryAttempts > 3 && !this.anomalies.has("high_retry_volume")) {
       this.anomalies.set("high_retry_volume", {
         code: "high_retry_volume",

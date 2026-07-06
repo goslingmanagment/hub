@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type * as DbModule from "@agency_hub_core/db";
+import type * as FanHydrationModule from "../apps/runtime/src/services/sync/fan-hydration.ts";
 import { PAGE_DM_MESSAGE_HISTORY_LIMIT } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import {
@@ -71,7 +74,7 @@ const transactionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
-  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
   return {
     ...actual,
     ...dbMocks,
@@ -79,7 +82,7 @@ vi.mock("@agency_hub_core/db", async () => {
 });
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
 vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
-  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync/fan-hydration.ts")>(
+  const actual = await vi.importActual<typeof FanHydrationModule>(
     "../apps/runtime/src/services/sync/fan-hydration.ts",
   );
   return {

@@ -41,7 +41,7 @@ describe("Fansly DM fixtures", () => {
       baseUrl: "https://fansly.example",
       globalDelayMs: 0,
     });
-    vi.spyOn(adapter as never, "request").mockResolvedValue({
+    vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
       parsed: fixture.response,
       raw: fixture.response,
     });
@@ -95,7 +95,7 @@ describe("Fansly DM fixtures", () => {
       baseUrl: "https://fansly.example",
       globalDelayMs: 0,
     });
-    vi.spyOn(adapter as never, "request").mockResolvedValue({
+    vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
       parsed: payload.response,
       raw: payload.response,
     });
@@ -122,7 +122,7 @@ describe("Fansly DM fixtures", () => {
       baseUrl: "https://fansly.example",
       globalDelayMs: 0,
     });
-    vi.spyOn(adapter as never, "request").mockResolvedValue({
+    vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
       parsed: fixture.response,
       raw: fixture.response,
     });
@@ -155,7 +155,7 @@ describe("Fansly DM fixtures", () => {
       baseUrl: "https://fansly.example",
       globalDelayMs: 0,
     });
-    vi.spyOn(adapter as never, "request").mockResolvedValue({
+    vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
       parsed: fixture.response,
       raw: fixture.response,
     });

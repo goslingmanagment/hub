@@ -213,7 +213,7 @@ async function throwForErrorResponse(
   options: KernelClientOptions,
   operation: KernelOperationKey | null,
 ): Promise<never> {
-  let body: unknown = null;
+  let body: unknown;
   const text = await response.text();
   try {
     body = text ? JSON.parse(text) : null;
@@ -508,7 +508,7 @@ export function streamAiFeature(options: KernelClientOptions, input: {
       signal: abort.signal,
     });
     if (!response.ok || !response.body) {
-      let body: unknown = null;
+      let body: unknown;
       const text = await response.text().catch(() => "");
       try {
         body = text ? JSON.parse(text) : null;
@@ -570,7 +570,7 @@ export function streamAiGateway(options: KernelClientOptions, input: {
       signal: abort.signal,
     });
     if (!response.ok || !response.body) {
-      let body: unknown = null;
+      let body: unknown;
       const text = await response.text().catch(() => "");
       try {
         body = text ? JSON.parse(text) : null;

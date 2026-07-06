@@ -4,7 +4,6 @@ import type { Database } from "../client.ts";
 import {
   egressEndpoints,
   pageFollows,
-  pageSyncCursors,
   pageSyncStates,
   pages,
 } from "../schema.ts";

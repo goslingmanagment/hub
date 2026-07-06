@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type * as AuthServiceModule from "../apps/runtime/src/services/auth.ts";
+
 import { createLogger } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -18,7 +20,7 @@ const routeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../apps/runtime/src/services/auth.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../apps/runtime/src/services/auth.ts")>();
+  const actual = await importOriginal<typeof AuthServiceModule>();
   return {
     ...actual,
     authenticateApiKeyToken: routeMocks.authenticateApiKeyToken,

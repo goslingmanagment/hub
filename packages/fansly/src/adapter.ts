@@ -774,8 +774,7 @@ export class FanslyAdapter {
   }
 
   private retireDispatcher(dispatcher: Dispatcher) {
-    let closePromise!: Promise<void>;
-    closePromise = dispatcher
+    const closePromise: Promise<void> = dispatcher
       .close()
       .catch(() => undefined)
       .then(() => undefined)

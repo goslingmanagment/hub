@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as DbModule from "@agency_hub_core/db";
+import type * as SyncSharedModule from "../apps/runtime/src/services/sync/shared.ts";
+
 import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
@@ -37,7 +40,7 @@ const telemetryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
-  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
   return {
     ...actual,
     ...dbMocks,
@@ -45,7 +48,7 @@ vi.mock("@agency_hub_core/db", async () => {
 });
 vi.mock("../apps/runtime/src/services/sync/executor-handlers.ts", () => handlerMocks);
 vi.mock("../apps/runtime/src/services/sync/shared.ts", async () => {
-  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync/shared.ts")>(
+  const actual = await vi.importActual<typeof SyncSharedModule>(
     "../apps/runtime/src/services/sync/shared.ts",
   );
 

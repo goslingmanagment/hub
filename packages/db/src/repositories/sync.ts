@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, lt, sql , ne } from "drizzle-orm";
+import { and, eq, inArray, lt, sql , ne } from "drizzle-orm";
 
-import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
+import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type Platform } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import {
@@ -23,8 +23,6 @@ import {
   transactions,
 } from "../schema.ts";
 import {
-  SYNC_DOMAIN_POLICY,
-  SYNC_STREAM_DEPENDENCIES,
   SYNC_STREAM_POLICY,
   getSyncStreamsForPlatform,
   resolvePageSyncPriority,
@@ -138,7 +136,7 @@ function requireTimestamp(value: Date | string | null | undefined, field: string
   return parsed;
 }
 
-function normalizePlatformValue(value: unknown, field: string) {
+function normalizePlatformValue(value: unknown, field: string): Platform {
   if (value === "fansly" || value === "onlyfans") {
     return value;
   }
@@ -178,14 +176,6 @@ function asSyncStream(value: string): SyncStream {
   throw new Error(`Unsupported sync stream "${value}"`);
 }
 
-function normalizeOutcomeStatus(outcome: "running" | "succeeded" | "partial" | "failed" | "skipped") {
-  if (outcome === "succeeded") {
-    return "success" as const;
-  }
-
-  return outcome;
-}
-
 function normalizeStatusOutcome(status: "success" | "partial" | "failed" | "skipped") {
   if (status === "success") {
     return "succeeded" as const;
@@ -210,10 +200,6 @@ function normalizeTriggerToSource(trigger: string | null | undefined): SyncReque
     default:
       return null;
   }
-}
-
-function renderSourceAsTrigger(source: SyncRequestSource | null | undefined) {
-  return source ?? "scheduled";
 }
 
 function computeNextDueAt(state: {
@@ -813,7 +799,7 @@ function normalizeRunningSyncRunRow<T extends SyncRunRow & { lastActivityAt: Tim
   };
 }
 
-function normalizeSyncRunEventRow<T extends {
+type SyncRunEventRow = {
   id: NumericValue;
   runId: NumericValue;
   platformAccountId: NumericValue;
@@ -825,7 +811,9 @@ function normalizeSyncRunEventRow<T extends {
   message: string;
   details: Record<string, unknown>;
   emittedAt: Date | string;
-}>(row: T) {
+};
+
+function normalizeSyncRunEventRow<T extends SyncRunEventRow>(row: T) {
   return {
     ...row,
     id: normalizeNumber(row.id, "id"),
@@ -837,7 +825,7 @@ function normalizeSyncRunEventRow<T extends {
   };
 }
 
-function normalizeSyncRequestAttemptRow<T extends {
+type SyncRequestAttemptRow = {
   attemptId: NumericValue;
   runId: NumericValue;
   platformAccountId: NumericValue;
@@ -857,7 +845,9 @@ function normalizeSyncRequestAttemptRow<T extends {
   errorMessage: string | null;
   startedAt: Date | string;
   finishedAt: TimestampValue;
-}>(row: T) {
+};
+
+function normalizeSyncRequestAttemptRow<T extends SyncRequestAttemptRow>(row: T) {
   return {
     ...row,
     attemptId: normalizeNumber(row.attemptId, "attemptId"),
@@ -865,8 +855,10 @@ function normalizeSyncRequestAttemptRow<T extends {
     platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
     provider: normalizePlatformValue(row.provider, "provider"),
     stream: asSyncStream(row.stream),
-    requestShape: normalizeNullableJsonRecord(row.requestShape, "requestShape"),
-    responseShape: normalizeNullableJsonRecord(row.responseShape, "responseShape"),
+    // request_shape / response_shape are jsonb NOT NULL DEFAULT '{}' — the null
+    // branch of the normalizer is defensive only, so non-null is accurate here.
+    requestShape: normalizeNullableJsonRecord(row.requestShape, "requestShape") as Record<string, unknown>,
+    responseShape: normalizeNullableJsonRecord(row.responseShape, "responseShape") as Record<string, unknown>,
     startedAt: requireTimestamp(row.startedAt, "startedAt"),
     finishedAt: parseTimestamp(row.finishedAt, "finishedAt"),
   };
@@ -962,7 +954,7 @@ export async function listSyncRunEvents(
     clauses.push(sql`e.page_id = ${input.platformAccountId}`);
   }
 
-  const result = await db.execute(sql`
+  const result = await db.execute<SyncRunEventRow>(sql`
     select e.id as "id",
            e.sync_run_id as "runId",
            e.page_id as "platformAccountId",
@@ -981,7 +973,7 @@ export async function listSyncRunEvents(
     limit ${input.limit ?? 200}
   `);
 
-  return result.rows.map((row) => normalizeSyncRunEventRow(row as any));
+  return result.rows.map((row) => normalizeSyncRunEventRow(row));
 }
 
 export async function listSyncRequestAttempts(
@@ -1004,7 +996,7 @@ export async function listSyncRequestAttempts(
     clauses.push(sql`a.finished_at is null`);
   }
 
-  const result = await db.execute(sql`
+  const result = await db.execute<SyncRequestAttemptRow>(sql`
     select a.id as "attemptId",
            a.sync_run_id as "runId",
            a.page_id as "platformAccountId",
@@ -1031,7 +1023,7 @@ export async function listSyncRequestAttempts(
     limit ${input.limit ?? 1000}
   `);
 
-  return result.rows.map((row) => normalizeSyncRequestAttemptRow(row as any));
+  return result.rows.map((row) => normalizeSyncRequestAttemptRow(row));
 }
 
 export async function countRecentTerminalDmMessageConversationFailureStreak(
@@ -1390,7 +1382,12 @@ export async function listSyncMonitorRecentRequests(
     requestClauses.push(sql`a.started_at >= ${input.since}`);
   }
 
-  const result = await db.execute(sql`
+  const result = await db.execute<SyncRequestAttemptRow & {
+    pageId: NumericValue;
+    partnerUsername: string | null;
+    returnedItems: NumericValue;
+    syncDone: boolean | null;
+  }>(sql`
     with visible_pages as (
       select ${pages.id} as "pageId",
              ${pages.label} as "pageLabel"
@@ -1437,13 +1434,13 @@ export async function listSyncMonitorRecentRequests(
   `);
 
   return result.rows.map((row) => {
-    const normalized = normalizeSyncRequestAttemptRow(row as any);
+    const normalized = normalizeSyncRequestAttemptRow(row);
     return {
       ...normalized,
-      pageId: normalizeNumber((row as any).pageId, "pageId"),
-      partnerUsername: typeof (row as any).partnerUsername === "string" ? (row as any).partnerUsername : null,
-      returnedItems: normalizeNullableNumber((row as any).returnedItems, "returnedItems"),
-      syncDone: (row as any).syncDone ?? null,
+      pageId: normalizeNumber(row.pageId, "pageId"),
+      partnerUsername: typeof row.partnerUsername === "string" ? row.partnerUsername : null,
+      returnedItems: normalizeNullableNumber(row.returnedItems, "returnedItems"),
+      syncDone: row.syncDone ?? null,
     };
   });
 }
@@ -1952,7 +1949,16 @@ export async function getLatestSyncRunPerPage(
     clauses.push(eq(syncRuns.stream, input.stream));
   }
 
-  const result = await db.execute(sql`
+  const result = await db.execute<{
+    platformAccountId: NumericValue;
+    runId: NumericValue;
+    stream: string | null;
+    status: string | null;
+    trigger: string | null;
+    startedAt: Date | string;
+    finishedAt: TimestampValue;
+    errorSummary: string | null;
+  }>(sql`
     select distinct on (${syncRuns.pageId})
            ${syncRuns.pageId} as "platformAccountId",
            ${syncRuns.id} as "runId",
@@ -1972,14 +1978,14 @@ export async function getLatestSyncRunPerPage(
 
   return result.rows.map((row) => ({
     ...row,
-    platformAccountId: normalizeNumber((row as any).platformAccountId, "platformAccountId"),
-    runId: normalizeNumber((row as any).runId, "runId"),
-    stream: asSyncStream(String((row as any).stream ?? "")),
-    status: String((row as any).status ?? ""),
-    trigger: typeof (row as any).trigger === "string" ? (row as any).trigger : null,
-    startedAt: requireTimestamp((row as any).startedAt, "startedAt"),
-    finishedAt: parseTimestamp((row as any).finishedAt, "finishedAt"),
-    errorSummary: typeof (row as any).errorSummary === "string" ? (row as any).errorSummary : null,
+    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
+    runId: normalizeNumber(row.runId, "runId"),
+    stream: asSyncStream(String(row.stream ?? "")),
+    status: String(row.status ?? ""),
+    trigger: typeof row.trigger === "string" ? row.trigger : null,
+    startedAt: requireTimestamp(row.startedAt, "startedAt"),
+    finishedAt: parseTimestamp(row.finishedAt, "finishedAt"),
+    errorSummary: typeof row.errorSummary === "string" ? row.errorSummary : null,
   }));
 }
 

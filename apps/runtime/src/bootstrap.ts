@@ -102,13 +102,13 @@ export interface AppContext {
    *  built from the current DB overrides over the raw env — never the stale boot-applied
    *  `config`. Optional so existing AppContext literals (tests, codegen) need not provide
    *  it; createAppContext always populates it. */
-  rawConfig?: ReturnType<typeof loadConfig>;
+  rawConfig?: ReturnType<typeof loadConfig> | undefined;
   /** Boot-apply overrides that were rejected at start (invalid value / not a boot key /
    *  merged-invariant violation). The heartbeat publishes these in its snapshot so the
    *  dashboard can surface an ignored override per instance. Empty for a clean boot.
    *  Optional so existing AppContext literals (tests, codegen) need not provide it;
    *  createAppContext always populates it, so production behavior is exact. */
-  bootSkipped?: SkippedOverride[];
+  bootSkipped?: SkippedOverride[] | undefined;
   logger: ReturnType<typeof createLogger>;
   pool: ReturnType<typeof createPool>;
   db: Database;
@@ -116,14 +116,14 @@ export interface AppContext {
   // onlyfansapi.com management client; absent when OFAPI_API_KEY is not set
   // (admin webhook registration then 503s). Optional so existing AppContext
   // literals (tests, codegen) need not provide it.
-  ofapi?: OfapiClient;
+  ofapi?: OfapiClient | undefined;
   // Provider execution is deliberately absent until the C6c provider slice wires
   // a real implementation. Tests may inject a fake provider to exercise SSE
   // plumbing without external network calls.
-  aiGatewayProvider?: AiGatewayProvider;
+  aiGatewayProvider?: AiGatewayProvider | undefined;
   // Stage 29: second provider ("openrouter:*" models route here); absent
   // when OPENROUTER_API_KEY is unset — implemented-but-unkeyed ships fine.
-  aiGatewayOpenrouterProvider?: AiGatewayProvider;
+  aiGatewayOpenrouterProvider?: AiGatewayProvider | undefined;
   close(): Promise<void>;
 }
 

@@ -12,6 +12,16 @@ afterEach(() => {
   cleanupAdapterHarness();
 });
 
+// waitForRateLimit is private on FanslyAdapter; these tests probe it directly
+// through a structural view instead of `any`.
+type RateLimitedAdapter = {
+  waitForRateLimit(
+    context: Record<string, unknown>,
+    category: string,
+    minDelayMs: number,
+  ): Promise<number>;
+};
+
 describe("adapter hardening", () => {
   it("serializes Fansly requests from different categories behind the global delay", async () => {
     vi.useFakeTimers();
@@ -76,7 +86,7 @@ describe("adapter hardening", () => {
       baseUrl: "https://fansly.example",
       globalDelayMs: 5,
     });
-    const waitMs = await (adapter as any).waitForRateLimit({
+    const waitMs = await (adapter as unknown as RateLimitedAdapter).waitForRateLimit({
       proxy: null,
       rateLimitWaiter: waiter,
     }, "transactions", 0);
@@ -104,12 +114,12 @@ describe("adapter hardening", () => {
         authorization: "token",
       };
 
-      await (adapter as any).waitForRateLimit({
+      await (adapter as unknown as RateLimitedAdapter).waitForRateLimit({
         session,
         proxy: { url: "http://proxy-a.example:8080" },
         egressKey: "shared-proxy-pool",
       }, "account", 0);
-      const delayed = (adapter as any).waitForRateLimit({
+      const delayed = (adapter as unknown as RateLimitedAdapter).waitForRateLimit({
         session,
         proxy: { url: "http://proxy-b.example:8080" },
         egressKey: "shared-proxy-pool",
@@ -190,10 +200,10 @@ describe("adapter hardening", () => {
       globalDelayMs: 5,
     });
 
-    await (adapter as any).waitForRateLimit({
+    await (adapter as unknown as RateLimitedAdapter).waitForRateLimit({
       proxy: null,
     }, "account", 0);
-    const waitMs = await (adapter as any).waitForRateLimit({
+    const waitMs = await (adapter as unknown as RateLimitedAdapter).waitForRateLimit({
       proxy: {
         url: "socks5://proxy-b.example",
       },

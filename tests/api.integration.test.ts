@@ -6556,7 +6556,7 @@ describe("api integration", () => {
     });
   });
 
-  it("auto-queues and processes an initial full sync after page creation", async (context) => {
+  it("auto-queues and processes an initial full sync after page creation [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -6676,7 +6676,7 @@ describe("api integration", () => {
     }
   }, 20_000);
 
-  it("returns page creation success with a retry path when the initial sync cannot be queued", async (context) => {
+  it("returns page creation success with a retry path when the initial sync cannot be queued [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -6780,7 +6780,7 @@ describe("api integration", () => {
     expect(pageRowsAfterRetry.rows[0]?.count).toBe("1");
   });
 
-  it("uses the latest light sync run for connection health", async (context) => {
+  it("uses the latest light sync run for connection health [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -6840,7 +6840,7 @@ describe("api integration", () => {
     ]));
   });
 
-  it("serves public system health without auth and degrades when the database probe fails", async (context) => {
+  it("serves public system health without auth and degrades when the database probe fails [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -6895,7 +6895,7 @@ describe("api integration", () => {
     expect(typeof degraded.json().checks.database.latencyMs).toBe("number");
   });
 
-  it("requires dashboard auth or a monitoring token for detailed sync health", async (context) => {
+  it("requires dashboard auth or a monitoring token for detailed sync health [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -7003,7 +7003,7 @@ describe("api integration", () => {
     ]));
   });
 
-  it("reports whether a stored proxy is configured without exposing proxy secrets", async (context) => {
+  it("reports whether a stored proxy is configured without exposing proxy secrets [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -7357,7 +7357,7 @@ describe("api integration", () => {
     ]);
   });
 
-  it("returns sync runs as a bare array for admin clients", async (context) => {
+  it("returns sync runs as a bare array for admin clients [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -7573,7 +7573,7 @@ describe("api integration", () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it("updates stored page credentials via PATCH for owners", async (context) => {
+  it("updates stored page credentials via PATCH for owners [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -7684,7 +7684,7 @@ describe("api integration", () => {
     }));
   });
 
-  it("clears auth_blocked state and resolves incidents when owners admin verify a page", async (context) => {
+  it("clears auth_blocked state and resolves incidents when owners admin verify a page [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -7790,7 +7790,7 @@ describe("api integration", () => {
     }));
   });
 
-  it("returns 404 when owners admin verify a missing page", async (context) => {
+  it("returns 404 when owners admin verify a missing page [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -7820,7 +7820,7 @@ describe("api integration", () => {
     });
   });
 
-  it("returns 500 when owners admin verify hits an unexpected runtime failure", async (context) => {
+  it("returns 500 when owners admin verify hits an unexpected runtime failure [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -7879,7 +7879,7 @@ describe("api integration", () => {
     });
   });
 
-  it("normalizes inline proxy credentials when updating page credentials via PATCH", async (context) => {
+  it("normalizes inline proxy credentials when updating page credentials via PATCH [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -7938,7 +7938,7 @@ describe("api integration", () => {
     });
   });
 
-  it("removes a stored proxy when owners explicitly clear it via PATCH", async (context) => {
+  it("removes a stored proxy when owners explicitly clear it via PATCH [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -8347,11 +8347,11 @@ describe("api integration", () => {
       });
     }
 
-    const lanaOverview = body.pages.find((p: any) => p.label === "lana");
+    const lanaOverview = body.pages.find((p: { label: string }) => p.label === "lana");
     expect(lanaOverview).toBeDefined();
     expect(lanaOverview.newFollowersToday).toBeGreaterThanOrEqual(0);
 
-    const ofOverview = body.pages.find((p: any) => p.label === "lana-of-followers");
+    const ofOverview = body.pages.find((p: { label: string }) => p.label === "lana-of-followers");
     expect(ofOverview).toBeDefined();
     expect(ofOverview.newFollowersToday).toBe(0);
   });
@@ -8483,7 +8483,7 @@ describe("api integration", () => {
     const todayBody = todayRes.json();
     expect(todayBody.pages).toBeInstanceOf(Array);
     // lana page: follower data on 2026-03-02, today is much later → 0
-    const lanaToday = todayBody.pages.find((p: any) => p.pageId === fixture!.lanaPage.id);
+    const lanaToday = todayBody.pages.find((p: { pageId: number }) => p.pageId === fixture!.lanaPage.id);
     expect(lanaToday).toBeDefined();
     expect(lanaToday.newFollowers).toBe(0);
     expect(lanaToday.newSubscribers).toBe(0);
@@ -8496,18 +8496,18 @@ describe("api integration", () => {
     });
     expect(thirtyDayRes.statusCode).toBe(200);
     const thirtyDayBody = thirtyDayRes.json();
-    const lana30d = thirtyDayBody.pages.find((p: any) => p.pageId === fixture!.lanaPage.id);
+    const lana30d = thirtyDayBody.pages.find((p: { pageId: number }) => p.pageId === fixture!.lanaPage.id);
     expect(lana30d).toBeDefined();
     expect(lana30d.newFollowers).toBeGreaterThanOrEqual(1);
     expect(lana30d.newSubscribers).toBeGreaterThanOrEqual(1);
 
-    const extra30d = thirtyDayBody.pages.find((p: any) => p.pageId === extraPage.id);
+    const extra30d = thirtyDayBody.pages.find((p: { pageId: number }) => p.pageId === extraPage.id);
     expect(extra30d).toBeDefined();
     expect(extra30d.newFollowers).toBeGreaterThanOrEqual(1);
     expect(extra30d.newSubscribers).toBeGreaterThanOrEqual(1);
 
     // Pages with no data in range return zeros (lily page has no follows/subs)
-    const lily30d = thirtyDayBody.pages.find((p: any) => p.pageId === fixture!.lilyPage.id);
+    const lily30d = thirtyDayBody.pages.find((p: { pageId: number }) => p.pageId === fixture!.lilyPage.id);
     expect(lily30d).toBeDefined();
     expect(lily30d.newFollowers).toBe(0);
     expect(lily30d.newSubscribers).toBe(0);
@@ -8553,7 +8553,7 @@ describe("api integration", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    const ofGrowth = body.pages.find((p: any) => p.pageId === ofPage.id);
+    const ofGrowth = body.pages.find((p: { pageId: number }) => p.pageId === ofPage.id);
     expect(ofGrowth).toBeDefined();
     expect(ofGrowth.newFollowers).toBe(0);
   });
@@ -8927,7 +8927,7 @@ describe("api integration", () => {
     });
   });
 
-  it("returns scoped sync monitor snapshots with derived statuses, progress, and recent aggregates", async (context) => {
+  it("returns scoped sync monitor snapshots with derived statuses, progress, and recent aggregates [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -9160,7 +9160,7 @@ describe("api integration", () => {
     expect(leadBody.overall.streams).toBe(7);
   }, 15_000);
 
-  it("enforces sync monitor page scoping and missing-page handling", async (context) => {
+  it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -9205,7 +9205,7 @@ describe("api integration", () => {
     expect(filtered.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
   }, 15_000);
 
-  it("returns sync block overview rows and exposes supported OnlyFans message blocks", async (context) => {
+  it("returns sync block overview rows and exposes supported OnlyFans message blocks [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -9318,7 +9318,7 @@ describe("api integration", () => {
     });
   }, 15_000);
 
-  it("supports owner-only manual block controls for trigger, pause, resume, and reset", async (context) => {
+  it("supports owner-only manual block controls for trigger, pause, resume, and reset [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -9599,7 +9599,7 @@ describe("api integration", () => {
     expect(emptyRow.rows[0]?.status).toBe("deleted");
   });
 
-  it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering", async (context) => {
+  it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -9770,7 +9770,7 @@ describe("api integration", () => {
     expect(noScopeResponse.json()).toEqual([]);
   }, 15_000);
 
-  it("clamps sync request limits to 500 rows", async (context) => {
+  it("clamps sync request limits to 500 rows [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;

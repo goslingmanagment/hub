@@ -33,7 +33,6 @@ import { createGatewayClosingClassifier } from "./closing-classifier.ts";
 import { recomputeWorkboardPage } from "./recompute.ts";
 import { summarizeSpenderDiagnostics } from "./spender-diagnostics.ts";
 
-const FEATURE_LABEL = "Workboard v2 AI";
 const USAGE_DAYS = 30;
 const RECENT_LIMIT = 25;
 

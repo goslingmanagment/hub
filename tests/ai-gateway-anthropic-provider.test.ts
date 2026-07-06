@@ -170,6 +170,7 @@ describe("Anthropic AI gateway provider", () => {
       messages: {
         async *create() {
           createCalls += 1;
+          yield* [];
         },
       },
     };
@@ -202,7 +203,9 @@ describe("Anthropic AI gateway provider", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     try {
-      const proxiedFetch = createAnthropicGatewayProxyFetch(dispatcher as any);
+      const proxiedFetch = createAnthropicGatewayProxyFetch(
+        dispatcher as unknown as Parameters<typeof createAnthropicGatewayProxyFetch>[0],
+      );
       await proxiedFetch("https://api.anthropic.test/v1/messages", { method: "POST" });
 
       expect(fetchMock).toHaveBeenCalledWith(

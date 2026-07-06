@@ -49,7 +49,7 @@ export async function acquireSchedulerLeadership(
       await sleep(retryMs);
       continue;
     }
-    let acquired = false;
+    let acquired: boolean;
     try {
       const result = await client.query<{ locked: boolean }>(
         "select pg_try_advisory_lock($1, $2) as locked",

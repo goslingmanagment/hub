@@ -577,7 +577,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const pageScope = pageScopeFor(principal);
     const allPages = await listVisiblePages(appContext.db, pageScope);
     const pageIds = pageScope ?? allPages.map((p) => p.id);
-    const platformByLabel = new Map(allPages.map((p) => [p.label, p.platform]));
 
     const result = await listTransactionsForScope(appContext.db, {
       pageIds,

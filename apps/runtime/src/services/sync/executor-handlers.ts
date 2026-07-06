@@ -6,7 +6,6 @@ import {
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
   finalizePageDmConversationMessageSync,
-  findPageById,
   getEarliestSpenderTransactionAt,
   getExistingPageDmMessageIds,
   getPageDmConversationById,
@@ -51,7 +50,6 @@ import {
   type FanslyAccount,
   type FanslyFollower,
 } from "@agency_hub_core/fansly";
-import { sql } from "drizzle-orm";
 import {
   buildFanslyDmConversationMetadata,
   fanslyFollowIdToDate,
@@ -75,8 +73,6 @@ import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,
-  resolveStoredProxyConfig,
-  resolveStoredProxyEgressKey,
   type ResolvedPageContext,
 } from "../page-context.ts";
 import {
@@ -146,7 +142,6 @@ export type ExecutorRequestContext = {
 };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
-const ONLYMONSTER_DM_MESSAGE_SYNC_EXCLUDED_REASON_CHAT_NOT_FOUND = "onlymonster_chat_not_found";
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
@@ -357,10 +352,6 @@ function asRecord(value: unknown) {
 
 function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function asNullableNumber(value: unknown) {
-  return value === null ? null : asNumber(value);
 }
 
 function asNullableString(value: unknown) {
@@ -618,37 +609,6 @@ function resolveDmSenderRole(
     return "fan" as const;
   }
   return "unknown" as const;
-}
-
-async function listOnlyFansKnownDmConversationCandidateIds(
-  db: AppContext["db"],
-  platformAccountId: number,
-  limit = 1000,
-) {
-  const result = await db.execute<{ platformUserId: string }>(sql`
-    select f.platform_user_id as "platformUserId"
-    from page_fans fp
-    join fans f on f.id = fp.fan_id
-    left join fan_spend_lifetime slp
-      on slp.platform_account_id = fp.platform_account_id
-     and slp.fan_id = fp.fan_id
-    where fp.platform_account_id = ${platformAccountId}
-      and f.platform_user_id is not null
-      and f.platform_user_id <> ''
-      and greatest(
-            coalesce(fp.total_creator_net_mills, 0),
-            coalesce(slp.creator_net_amount_mills, 0)
-          ) > 0
-    order by greatest(
-               coalesce(fp.total_creator_net_mills, 0),
-               coalesce(slp.creator_net_amount_mills, 0)
-             ) desc,
-             slp.last_transaction_at desc nulls last,
-             f.id asc
-    limit ${limit}
-  `);
-
-  return result.rows.map((row) => row.platformUserId);
 }
 
 function buildUtcMonthKey(date: Date) {
@@ -1921,7 +1881,6 @@ export async function executeFollowersChunk(
       platform: "fansly",
     });
 
-    let reachedBoundary = false;
     const newestFollowId = state.newestFollowId ?? state.knownFollowId;
     const nextState = page.done
       ? state
@@ -2629,7 +2588,7 @@ export async function fanslyDmConversationsChunk(
         }
       }
 
-      let headMessage = group?.lastMessage ?? detail?.parsed.lastMessage ?? null;
+      const headMessage = group?.lastMessage ?? detail?.parsed.lastMessage ?? null;
       let lastMessageAt = headMessage
         ? await normalizeDmTimestampWithAnomaly(input.telemetry, {
           context: "dm_conversations:lastMessage",
@@ -2671,7 +2630,6 @@ export async function fanslyDmConversationsChunk(
         const repairedHead = headRepair.items[0] ?? null;
         if (repairedHead) {
           repairedHeads += 1;
-          headMessage = repairedHead;
           lastMessageAt = await normalizeDmTimestampWithAnomaly(input.telemetry, {
             context: "dm_conversations:headRepair",
             value: repairedHead.createdAt,

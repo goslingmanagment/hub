@@ -12,7 +12,6 @@ import {
   fanUsernameAliases,
   pageFollows,
   pageSubscriptions,
-  spenderLifetimePage,
 } from "../schema.ts";
 import { rebuildSpenderProjections } from "./spenders.ts";
 

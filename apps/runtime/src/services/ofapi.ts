@@ -598,7 +598,7 @@ export function createOfapiClient(input: {
         isCached: meta?.isCached ?? null,
         actorUserId: report.actorUserId ?? null,
       });
-    } catch (error) {
+    } catch {
       // Spend recording is best-effort at this layer; reconciliation closes gaps.
     }
   }

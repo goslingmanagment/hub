@@ -1277,7 +1277,7 @@ describe("db write safety", () => {
       label: "proxy-only-credentials-page",
     });
 
-    let verifiedAuthorization: string | null = null;
+    let verifiedAuthorization: string | null;
     const app = createTestAppContext(testDb, {
       adapter: {
         async verifySession(contextInput: { session: { authorization: string } }) {

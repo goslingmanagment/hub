@@ -116,7 +116,10 @@ function createSdkClient(apiKey: string, fetchImpl?: typeof fetch): AnthropicGat
   return {
     messages: {
       async create(body, options) {
-        return client.messages.create(body as any, options) as unknown as Promise<AsyncIterable<unknown>>;
+        return client.messages.create(
+          body as unknown as Anthropic.MessageCreateParamsStreaming,
+          options,
+        ) as unknown as Promise<AsyncIterable<unknown>>;
       },
     },
   };

@@ -194,6 +194,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
     appContext.aiGatewayProvider = {
       provider: "anthropic",
       async *stream() {
+        yield* [];
         throw new Error("provider should not be called");
       },
     };
@@ -443,6 +444,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
     appContext.aiGatewayProvider = {
       provider: "anthropic",
       async *stream() {
+        yield* [];
         throw new Error("raw provider body with prompt: conversation context");
       },
     };

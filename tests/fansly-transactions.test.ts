@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as DbModule from "@agency_hub_core/db";
+import type * as FanHydrationModule from "../apps/runtime/src/services/sync/fan-hydration.ts";
+
 import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 
 const dbMocks = vi.hoisted(() => ({
@@ -28,7 +31,7 @@ const fanHydrationMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
-  const actual = await vi.importActual<typeof import("@agency_hub_core/db")>("@agency_hub_core/db");
+  const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
   return {
     ...actual,
     ...dbMocks,
@@ -36,7 +39,7 @@ vi.mock("@agency_hub_core/db", async () => {
 });
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
 vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
-  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync/fan-hydration.ts")>(
+  const actual = await vi.importActual<typeof FanHydrationModule>(
     "../apps/runtime/src/services/sync/fan-hydration.ts",
   );
   return {

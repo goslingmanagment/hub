@@ -811,7 +811,9 @@ describe("ofapi credits admin api", () => {
     expect(all.headers["content-disposition"]).toContain("attachment");
     expect(all.headers["content-disposition"]).toContain("ofapi-credit-ledger.csv");
 
-    const spec = normalizeOpenApiDocument(server.swagger() as any);
+    const spec = normalizeOpenApiDocument(server.swagger() as unknown as Record<string, unknown>) as {
+      paths: Record<string, { get: { responses: Record<string, { content: Record<string, unknown> }> } }>;
+    };
     const csvContent = spec.paths["/api/v1/admin/ofapi/credits/ledger.csv"].get.responses["200"].content;
     expect(csvContent).toHaveProperty("text/csv");
     expect(csvContent).not.toHaveProperty("application/json");

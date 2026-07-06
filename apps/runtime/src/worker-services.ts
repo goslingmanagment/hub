@@ -9,7 +9,7 @@ import {
   getTelegramSettings,
 } from "@agency_hub_core/db";
 import { toBusinessDate, UTC_TIME_ZONE, addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
-import { PgBoss } from "pg-boss";
+import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "./bootstrap.ts";
 import {

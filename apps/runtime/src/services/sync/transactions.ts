@@ -634,7 +634,6 @@ async function syncTransactionsIncremental(
   const snapshotEnd = new Date(state.snapshotEnd);
   const lookbackStart = state.lookbackStart ? new Date(state.lookbackStart) : null;
   const oldestPendingAt = state.oldestPendingAt ? new Date(state.oldestPendingAt) : null;
-  const rescanCapStart = new Date(state.rescanCapStart);
   let newestSeenAt: Date | null = state.newestSeenAt
     ? new Date(state.newestSeenAt)
     : (checkpoint?.cursorTimestamp ?? null);

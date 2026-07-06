@@ -18,7 +18,6 @@ import type { Database } from "../client.ts";
 import {
   dailyRevenue,
   fanPages,
-  fanUsernameAliases,
   fans,
   models,
   pageDmConversations,

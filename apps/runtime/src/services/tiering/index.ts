@@ -329,7 +329,7 @@ export async function tierPartition(
 
   // Idempotency: an existing manifest that still verifies means the export
   // is done; only the detach step may remain.
-  let manifest: TieringManifest | null = null;
+  let manifest: TieringManifest | null;
   try {
     manifest = JSON.parse(await readFile(paths.manifest, "utf8")) as TieringManifest;
   } catch {

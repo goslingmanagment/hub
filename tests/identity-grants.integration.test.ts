@@ -12,7 +12,6 @@ import {
   authenticateDeviceToken,
   createUserAccount,
   issueChatterApiKey,
-  setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";

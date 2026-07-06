@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type * as DbModule from "@agency_hub_core/db";
+import type * as SyncServiceModule from "../apps/runtime/src/services/sync.ts";
 import type { ConstructorOptions, Queue, SendOptions, StopOptions } from "pg-boss";
 
 const cliMocks = vi.hoisted(() => {
@@ -62,7 +65,7 @@ vi.mock("pg-boss", () => ({
 }));
 
 vi.mock("@agency_hub_core/db", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@agency_hub_core/db")>();
+  const actual = await importOriginal<typeof DbModule>();
 
   return {
     ...actual,
@@ -111,7 +114,7 @@ vi.mock("../apps/runtime/src/services/telegram-report.ts", () => ({
 }));
 
 vi.mock("../apps/runtime/src/services/sync.ts", async () => {
-  const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync.ts")>(
+  const actual = await vi.importActual<typeof SyncServiceModule>(
     "../apps/runtime/src/services/sync.ts",
   );
 

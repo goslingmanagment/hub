@@ -70,8 +70,6 @@ function closingVerdict(row: WorkboardV2Row): ClosingVerdict {
   return { layer: "unverified", needsReply: true, state: null, reason: null };
 }
 
-const FEATURE_LABEL = "Workboard v2";
-
 function serializeTimestamp(value: Date | string | null): string | null {
   if (!value) {
     return null;

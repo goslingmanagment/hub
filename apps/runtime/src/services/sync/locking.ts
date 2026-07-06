@@ -45,7 +45,16 @@ export async function withPageSyncLock<T>(
 ) {
   const client = await app.pool.connect();
   let releaseError: PageSyncLockReleaseError | null = null;
-  let runError: unknown = null;
+
+  const releaseAdvisoryLock = async () => {
+    const unlockResult = await client.query<{ unlocked: boolean }>(
+      "select pg_advisory_unlock($1, $2) as unlocked",
+      [PAGE_SYNC_LOCK_NAMESPACE, input.pageId],
+    );
+    if (!unlockResult.rows[0]?.unlocked) {
+      throw new Error(`Session did not release advisory lock for page "${input.pageLabel}"`);
+    }
+  };
 
   try {
     const result = await client.query<{ locked: boolean }>(
@@ -57,20 +66,12 @@ export async function withPageSyncLock<T>(
       throw new PageSyncLockedError(input.pageLabel);
     }
 
+    let runResult: T;
     try {
-      return await run();
-    } catch (error) {
-      runError = error;
-      throw error;
-    } finally {
+      runResult = await run();
+    } catch (runError) {
       try {
-        const unlockResult = await client.query<{ unlocked: boolean }>(
-          "select pg_advisory_unlock($1, $2) as unlocked",
-          [PAGE_SYNC_LOCK_NAMESPACE, input.pageId],
-        );
-        if (!unlockResult.rows[0]?.unlocked) {
-          throw new Error(`Session did not release advisory lock for page "${input.pageLabel}"`);
-        }
+        await releaseAdvisoryLock();
       } catch (error) {
         releaseError = new PageSyncLockReleaseError(input.pageLabel, error);
         if (runError !== null) {
@@ -78,7 +79,17 @@ export async function withPageSyncLock<T>(
         }
         throw releaseError;
       }
+      throw runError;
     }
+
+    try {
+      await releaseAdvisoryLock();
+    } catch (error) {
+      releaseError = new PageSyncLockReleaseError(input.pageLabel, error);
+      throw releaseError;
+    }
+
+    return runResult;
   } finally {
     client.release(releaseError ?? undefined);
   }

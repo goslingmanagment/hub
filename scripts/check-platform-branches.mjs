@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 export function countPlatformBranches() {
-  let output = "";
+  let output;
   try {
     output = execFileSync(
       "grep",

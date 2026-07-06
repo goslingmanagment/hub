@@ -272,7 +272,7 @@ describe("workboard stage 23 (integration)", () => {
 
   it("serves OnlyFans boards (platform neutrality — the read-side throw is gone)", async () => {
     const model = await createModel(harness.db, { slug: "kate", name: "Kate" });
-    const page = await createOnlyFansPage(harness.db, { modelId: model.id, label: "kate-of" });
+    await createOnlyFansPage(harness.db, { modelId: model.id, label: "kate-of" });
     const ownerId = await seedUser("dima", "owner");
     const owner = sessionPrincipal(ownerId, "dima", "owner");
 
