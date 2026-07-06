@@ -2625,3 +2625,36 @@ same window (7c4f81e + closed-mock followup 7ee5494).
 scheduler container runs exports); nothing is tierable until ~2027-01
 (6-month hot window over data that starts 2026-07) — the tiering job lands
 drill-tested on synthetic partitions ahead of need.
+
+## Stage 28 Build Push — Tiering + Restore Drill + Metrics Models (2026-07-06)
+
+**Decision #103:** same-day continuation of #102 — Stage 28 Tasks 1, 2, and
+3's first slice built and drill-proven (d63b7ae → 82bbc63 → a066b48 +
+build fix 5c505a3); deployed with the retention slice.
+
+- **Tiering (Task 1):** export→verify→detach in that absolute order;
+  detached partitions PARK in tiered_pending_drop — no DROP exists in code
+  (owner-gated behind the drill, §6's one irreversible step). Exporter =
+  NDJSON → DuckDB COPY TO PARQUET with explicit per-table schemas.
+  postgres_scanner REJECTED (recorded): extension install needs network at
+  run time; json+parquet ship inside @duckdb/node-api and work offline in
+  prod and Testcontainers alike. Restricted kinds (desktop.guard_audit)
+  export to lake/restricted under the same manifest/verify discipline.
+  GOTCHAS BANKED: @duckdb/node-api must be a RUNTIME dependency (the
+  scheduler-fired worker job runs exports) AND an esbuild external (native
+  bindings can't bundle — the deploy's full image build caught it);
+  ATTACH PARTITION demands LIKE … INCLUDING ALL (CHECK constraints);
+  identity columns need OVERRIDING SYSTEM VALUE on restore.
+- **Restore drill (Task 2):** from Parquet alone — staging rebuild, counts
+  vs manifest AND the parked table, re-attach. The DROP gate is automated;
+  the parked originals stay untouched until the owner rules.
+- **Metrics models (Task 3 slice):** net_revenue_daily reconciles EXACTLY
+  with revenue_daily (pinned — this is Stage 33's serving-swap gate);
+  fan_ltv; response_sla. Models read hot Postgres only until lake data
+  exists (~2027-01) — recorded, the lake UNION is additive then.
+- Nothing is tierable in prod until ~2027-01 (hot window 6 months over
+  data starting 2026-07): the daily 04:40 UTC cycle no-ops until the first
+  partition ages out, with the whole path already drill-tested.
+
+**Remains in Stage 28:** Task 4 (erasure CLI + erasure_log migration) and
+Task 6 ops (first prod cycle, plateau watch, §5 exit criteria).

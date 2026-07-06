@@ -208,15 +208,28 @@ load).
   sweep arm + repository fn DELETED (payloads are kept business facts, permanently);
   deleter-enumeration test pins every SQL-deleting file (tests/retention-deleters.test.ts).
   Prod env pins neither flag → prune gate live with the coverage query deciding.
-- [ ] **Task 1 (next session's opener)** — tiering job (export/verify/detach + manifests +
-  incidents). DESIGN NOTE recorded: DuckDB must be a RUNTIME dependency of apps/runtime
-  (the scheduler container runs the export — a dev-dependency binary would not ship in the
-  image); lockfile change ⇒ that deploy is a full image build. NOTHING IS TIERABLE until
-  ~2027-01 (data starts 2026-07, hot window 6 months) — the job ships drill-tested on
-  synthetic partitions, prod cycle fires when the first partition ages out.
-- [ ] Task 2 restore drill; Task 3 DuckDB head + metrics models (reconciliation = Stage 33's
-  gate); Task 4 erasure CLI (+ erasure_log migration — deliberately NOT in 0070, rides the
-  erasure commit); Task 6 ops (first prod cycle + plateau watch + the §5 exit criteria).
+- [x] **Task 1** (d63b7ae + build fix 5c505a3) — services/tiering: aged partitions
+  export→verify→detach into tiered_pending_drop (DROP does not exist in code — owner-gated
+  behind the drill). RECORDED: NDJSON → DuckDB COPY TO PARQUET with explicit per-table
+  column schemas (postgres_scanner rejected — extension install needs network at run time;
+  json+parquet are bundled and offline-capable); restricted kinds (desktop.guard_audit) →
+  lake/restricted under the same manifest/verify discipline; @duckdb/node-api = RUNTIME dep
+  AND esbuild external (native bindings can't bundle — first full-build deploy caught it);
+  daily 04:40 UTC schedule + worker handler + tiering:run CLI (dry-run default). Integration
+  drill on real migration-created partitions: poisoned manifest → abort, partition stays
+  hot; clean cycle → parquet + restricted split verified, partition parked; re-run no-op.
+- [x] **Task 2** (82bbc63) — runRestoreDrill: rebuild from Parquet ALONE (general +
+  restricted merged), LIKE…INCLUDING ALL staging (ATTACH demands the CHECK constraints),
+  OVERRIDING SYSTEM VALUE (original ledger ids kept), counts must match manifest AND the
+  parked pre-detach table, then re-attach to the hot parent. tiering:restore-drill CLI.
+  Drill phase 4 proves the lake alone suffices — the DROP gate is now automated.
+- [x] **Task 3 first slice** (a066b48) — analytics/models/*.sql + pnpm analytics:run
+  (atomic drop+create, analytics_ tables): net_revenue_daily reconciles EXACTLY with the
+  revenue_daily rollups (pinned — Stage 33's serving-swap gate), fan_ltv (reversal-netted),
+  response_sla (median/p95 from message_archive). RECORDED: models read Postgres only until
+  lake data exists (~2027); AI acceptance model lands with Stage 29.
+- [ ] Task 4 erasure CLI (+ erasure_log migration — deliberately NOT in 0070, rides the
+  erasure commit); Task 6 ops (first prod cycle ~2027-01 + plateau watch + §5 exit criteria).
 
 Standing facts: Q3 declined → on-box lake (S3 mirror stays a copy job if the owner ever
 reverses); the no-backup risk re-accepted 2026-07-04 — BUT this session's #101 deploy
