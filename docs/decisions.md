@@ -2942,3 +2942,43 @@ reports (contents survive in the memory of the working sessions and in
 this log's entries #48–#53); the Workboard v3 PRD and brief were deleted
 2026-06-10 by owner decision and are unrecoverable (reflog expired) —
 lesson recorded in the owner's project notes.
+
+**Decision #113 (2026-07-07, Stage 35 Task 3):** The family CI floor and
+toolchain are harmonized. (1) Core ESLint grew from the Stage 19 bootstrap
+to the family standard — js/ts recommended + the desktop's hygiene rules
+(no-unused-vars with `_` escapes, consistent-type-imports, no-explicit-any
+as ERROR) layered under the architecture walls (module boundaries #19,
+money-constructor ban #27, undici-outside-egress ban #26, vendor-AI-SDK
+ban #29); the 162-violation backlog was burned to zero (no eslint-disable
+waivers; the locking.ts unsafe-finally rewrite preserves all five
+outcome matrices byte-identically). (2) Core gains `pnpm check`
+(typecheck + lint + test:unit + dashboard build) — the same command
+clients run. (3) One toolchain family-wide: pnpm pinned via
+`packageManager` = 10.33.1 in all three repos (workflows read the pin —
+no duplicated versions in CI), engines.node >= 22, TypeScript ^6 and
+vitest ^4 everywhere (core 5.8→6 dropped the deprecated `baseUrl` for
+relative `paths`; vitest 4 required a constructible class mock in
+bootstrap.test.ts and honest spyOn casts in fansly-dm-fixtures).
+(4) STRICTNESS RATCHET: `exactOptionalPropertyTypes` +
+`noUncheckedIndexedAccess` are ON in tsconfig.base.json; the surfaced
+debt (2058 errors, 136 files — 84% is `possibly undefined` from indexed
+access, mostly tests; the deprecated dashboard's share dies with the
+rebuild) is snapshotted per-file in `scripts/strictness-ratchet.json`
+and enforced by `scripts/check-strictness-ratchet.mjs`, which IS
+`pnpm typecheck`: a file over its budget fails, a new file with errors
+fails, and a shrink demands the snapshot be shrunk in the same change
+(both directions drill-verified). The count only goes down; zero debt
+makes typecheck plain tsc again. (5) CI: core PRs additionally run the
+sync-critical subset now selected by a `[sync-critical]` title tag
+(the drift-prone 16-fragment `--testNamePattern` allowlist is retired;
+the tag selects the same 19 tests — verified by `vitest list`); a new
+nightly workflow runs the FULL Testcontainers suite including the
+projection rebuild-from-fixtures proofs. (6) Desktop gets its first PR
+CI (`ci.yml` running `pnpm check`, green locally before commit) — the
+zero-PR-CI era is over; the extension already had lint-in-check from
+Stage 32 and moved to TS 6 — where the first check run FAILED on the
+deprecated `baseUrl` (TS5101) and the failure was initially masked by a
+piped exit code; the vestigial `baseUrl` was removed and the full check
+re-verified green with an unmasked exit. Lesson, family-wide: never read
+a suite's result through a pipe — `cmd | tail` reports the pipe's exit,
+not the suite's.
