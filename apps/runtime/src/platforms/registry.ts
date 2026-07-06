@@ -10,17 +10,23 @@ import type { PageSyncLease } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
-  executeDmConversationsChunk,
-  executeDmMessagesChunk,
   executeFanEarningsChunk,
   executeFanIdentitiesChunk,
   executeFollowersChunk,
   executeFollowersReconcileChunk,
-  executeLightChunk,
   executePurchaseHistoryChunk,
-  executeSubscribersChunk,
-  executeTopSpendersChunk,
-  executeTransactionsChunk,
+  fanslyDmConversationsChunk,
+  fanslyDmMessagesChunk,
+  fanslyLightChunk,
+  fanslySubscribersChunk,
+  fanslyTopSpendersChunk,
+  fanslyTransactionsChunk,
+  onlyfansDmConversationsChunk,
+  onlyfansDmMessagesChunk,
+  onlyfansLightChunk,
+  onlyfansSubscribersChunk,
+  onlyfansTopSpendersChunk,
+  onlyfansTransactionsChunk,
   type ExecutorRequestContext,
   type StreamChunkResult,
 } from "../services/sync/executor-handlers.ts";
@@ -76,22 +82,30 @@ const ONLYFANS_STREAMS: CanonicalStream[] = [
   "dm_messages",
 ];
 
-function pullHandlers(streams: CanonicalStream[]): Partial<Record<CanonicalStream, ExecutorPullHandler>> {
-  const byStream: Record<CanonicalStream, ExecutorPullHandler> = {
-    light: executeLightChunk,
-    fan_identities: executeFanIdentitiesChunk,
-    transactions: executeTransactionsChunk,
-    top_spenders: executeTopSpendersChunk,
-    subscribers: executeSubscribersChunk,
-    followers: executeFollowersChunk,
-    followers_reconcile: executeFollowersReconcileChunk,
-    dm_conversations: executeDmConversationsChunk,
-    dm_messages: executeDmMessagesChunk,
-    fan_earnings: executeFanEarningsChunk,
-    purchase_history: executePurchaseHistoryChunk,
-  };
-  return Object.fromEntries(streams.map((stream) => [stream, byStream[stream]]));
-}
+// The per-platform pull maps route straight to the split handler halves —
+// no platform branch survives on the dispatched path (Stage 18 Tasks 2–3).
+const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
+  light: fanslyLightChunk,
+  transactions: fanslyTransactionsChunk,
+  top_spenders: fanslyTopSpendersChunk,
+  subscribers: fanslySubscribersChunk,
+  followers: executeFollowersChunk,
+  followers_reconcile: executeFollowersReconcileChunk,
+  dm_conversations: fanslyDmConversationsChunk,
+  dm_messages: fanslyDmMessagesChunk,
+  fan_earnings: executeFanEarningsChunk,
+  purchase_history: executePurchaseHistoryChunk,
+};
+
+const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
+  light: onlyfansLightChunk,
+  transactions: onlyfansTransactionsChunk,
+  fan_identities: executeFanIdentitiesChunk,
+  top_spenders: onlyfansTopSpendersChunk,
+  subscribers: onlyfansSubscribersChunk,
+  dm_conversations: onlyfansDmConversationsChunk,
+  dm_messages: onlyfansDmMessagesChunk,
+};
 
 export const fanslyPlatformAdapter: AppPlatformAdapter = {
   key: "fansly",
@@ -103,7 +117,7 @@ export const fanslyPlatformAdapter: AppPlatformAdapter = {
     presenceSource: "poll",
     billing: "session",
   },
-  pull: pullHandlers(FANSLY_STREAMS),
+  pull: FANSLY_PULL,
   session: {
     kind: "browser_session",
     lifecycle: "Pasted session material; verified on paste (resolvePageContext/verifySession); "
@@ -128,7 +142,7 @@ export const onlyfansPlatformAdapter: AppPlatformAdapter = {
     presenceSource: "webhook",
     billing: "credit_metered",
   },
-  pull: pullHandlers(ONLYFANS_STREAMS),
+  pull: ONLYFANS_PULL,
   session: {
     kind: "api_key",
     lifecycle: "Vendor-held sessions behind the OFAPI gateway (onlyfansapi.com); the kernel "

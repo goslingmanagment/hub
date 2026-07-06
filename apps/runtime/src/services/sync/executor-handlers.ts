@@ -978,30 +978,40 @@ async function upsertTopSpendersWindow(
   return validItems.length;
 }
 
-export async function executeLightChunk(
+export async function fanslyLightChunk(
   app: AppContext,
   input: ExecutorRequestContext,
 ) {
-  await input.telemetry.recordPhaseStarted("page_metadata");
-  if (input.pageContext.platform === "fansly") {
-    const account = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
-    await withOwnedPageSyncTransaction(app.db, async (db) => {
-      await updatePageSyncTimestampCache(db, {
-        pageId: input.pageContext.page.id,
-        syncType: "light",
-      });
-    });
-
-    return {
-      satisfied: true,
-      yieldReason: null,
-      stats: {
-        followerCount: account.parsed.account.followCount,
-        subscriberCount: account.parsed.account.subscriberCount,
-      },
-    } satisfies StreamChunkResult;
+  if (input.pageContext.platform !== "fansly") {
+    throw new Error("fanslyLightChunk received a non-fansly page");
   }
+  await input.telemetry.recordPhaseStarted("page_metadata");
+  const account = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
+  await withOwnedPageSyncTransaction(app.db, async (db) => {
+    await updatePageSyncTimestampCache(db, {
+      pageId: input.pageContext.page.id,
+      syncType: "light",
+    });
+  });
 
+  return {
+    satisfied: true,
+    yieldReason: null,
+    stats: {
+      followerCount: account.parsed.account.followCount,
+      subscriberCount: account.parsed.account.subscriberCount,
+    },
+  } satisfies StreamChunkResult;
+}
+
+export async function onlyfansLightChunk(
+  app: AppContext,
+  input: ExecutorRequestContext,
+) {
+  if (input.pageContext.platform !== "onlyfans") {
+    throw new Error("onlyfansLightChunk received a non-onlyfans page");
+  }
+  await input.telemetry.recordPhaseStarted("page_metadata");
   const account = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
   await withOwnedPageSyncTransaction(app.db, async (db) => {
     await updatePageSyncTimestampCache(db, {
@@ -1019,25 +1029,42 @@ export async function executeLightChunk(
   } satisfies StreamChunkResult;
 }
 
-export async function executeTopSpendersChunk(
+/** Compat shell (tests dispatch platform-agnostically); the registry routes
+ * straight to the per-platform halves. Dies with the Stage 18 test re-point. */
+export async function executeLightChunk(
+  app: AppContext,
+  input: ExecutorRequestContext,
+) {
+  return input.pageContext.platform === "fansly"
+    ? fanslyLightChunk(app, input)
+    : onlyfansLightChunk(app, input);
+}
+
+export async function onlyfansTopSpendersChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
     syncRunId: number;
   },
 ) {
-  if (input.pageContext.platform === "onlyfans") {
-    if (isOnlyFansTopSpendersEnabled(app.config)) {
-      return executeOnlyFansTopSpendersChunk(app, input);
-    }
-    // The planner force-pauses the stream while the flag is off, but a manual
-    // block resume can race one run in before the next planner cycle re-pauses
-    // it — skip gracefully instead of recording a failure (DM-polling pattern).
-    return {
-      satisfied: true,
-      yieldReason: null,
-      stats: { skipped: "onlyfans_top_spenders_disabled" },
-    } satisfies StreamChunkResult;
+  if (isOnlyFansTopSpendersEnabled(app.config)) {
+    return executeOnlyFansTopSpendersChunk(app, input);
   }
+  // The planner force-pauses the stream while the flag is off, but a manual
+  // block resume can race one run in before the next planner cycle re-pauses
+  // it — skip gracefully instead of recording a failure (DM-polling pattern).
+  return {
+    satisfied: true,
+    yieldReason: null,
+    stats: { skipped: "onlyfans_top_spenders_disabled" },
+  } satisfies StreamChunkResult;
+}
+
+export async function fanslyTopSpendersChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    syncRunId: number;
+  },
+) {
   if (input.pageContext.platform !== "fansly") {
     throw new Error("Top spenders sync is only supported for Fansly pages");
   }
@@ -1539,6 +1566,18 @@ async function executeOnlyFansTopSpendersChunk(
   } satisfies StreamChunkResult;
 }
 
+/** Compat shell — see executeLightChunk note. */
+export async function executeTopSpendersChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    syncRunId: number;
+  },
+) {
+  return input.pageContext.platform === "onlyfans"
+    ? onlyfansTopSpendersChunk(app, input)
+    : fanslyTopSpendersChunk(app, input);
+}
+
 export async function executeFanIdentitiesChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -1592,13 +1631,16 @@ export async function executeFanIdentitiesChunk(
   } satisfies StreamChunkResult;
 }
 
-export async function executeTransactionsChunk(
+export async function fanslyTransactionsChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
     streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
+  if (input.pageContext.platform !== "fansly") {
+    throw new Error("fanslyTransactionsChunk received a non-fansly page");
+  }
   await input.telemetry.recordPhaseStarted("transactions");
 
   // Resolve the live transaction windowing config ONCE per chunk and thread both
@@ -1608,7 +1650,7 @@ export async function executeTransactionsChunk(
   const transactionLookbackDays = effective.transactionLookbackDays;
   const transactionRescanCapDays = effective.transactionRescanCapDays;
 
-  if (input.pageContext.platform === "fansly") {
+  {
     const result = await syncTransactions(app, {
       pageLabel: input.pageContext.page.label,
       platformAccountId: input.pageContext.page.id,
@@ -1639,6 +1681,26 @@ export async function executeTransactionsChunk(
       stats: result as Record<string, unknown>,
     } satisfies StreamChunkResult;
   }
+}
+
+export async function onlyfansTransactionsChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
+    syncRunId: number;
+  },
+) {
+  if (input.pageContext.platform !== "onlyfans") {
+    throw new Error("onlyfansTransactionsChunk received a non-onlyfans page");
+  }
+  await input.telemetry.recordPhaseStarted("transactions");
+
+  // Resolve the live transaction windowing config ONCE per chunk and thread both
+  // scalars into the sync entry points, so every read-site in this chunk
+  // (transactions.ts + onlyfans-transactions.ts) sees one consistent window.
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const transactionLookbackDays = effective.transactionLookbackDays;
+  const transactionRescanCapDays = effective.transactionRescanCapDays;
 
   const payload = input.streamState.requestPayload;
   const requestedRevision = asNumber(payload?.revision);
@@ -1669,26 +1731,46 @@ export async function executeTransactionsChunk(
   } satisfies StreamChunkResult;
 }
 
-export async function executeSubscribersChunk(
+/** Compat shell — see executeLightChunk note. */
+export async function executeTransactionsChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
     streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
-  if (input.pageContext.platform === "onlyfans") {
-    if (isOfapiAudienceSyncEligiblePage(app.config, input.pageContext.page)) {
-      return executeOfapiAudienceChunk(app, input);
-    }
-    // The planner force-pauses the stream for non-eligible pages, but a manual
-    // block resume can race one run in before the next planner cycle re-pauses
-    // it — skip gracefully instead of recording a failure (DM-polling pattern).
-    return {
-      satisfied: true,
-      yieldReason: null,
-      stats: { skipped: "onlyfans_audience_not_eligible" },
-    } satisfies StreamChunkResult;
+  return input.pageContext.platform === "fansly"
+    ? fanslyTransactionsChunk(app, input)
+    : onlyfansTransactionsChunk(app, input);
+}
+
+export async function onlyfansSubscribersChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
+    syncRunId: number;
+  },
+) {
+  if (isOfapiAudienceSyncEligiblePage(app.config, input.pageContext.page)) {
+    return executeOfapiAudienceChunk(app, input);
   }
+  // The planner force-pauses the stream for non-eligible pages, but a manual
+  // block resume can race one run in before the next planner cycle re-pauses
+  // it — skip gracefully instead of recording a failure (DM-polling pattern).
+  return {
+    satisfied: true,
+    yieldReason: null,
+    stats: { skipped: "onlyfans_audience_not_eligible" },
+  } satisfies StreamChunkResult;
+}
+
+export async function fanslySubscribersChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
+    syncRunId: number;
+  },
+) {
   if (input.pageContext.platform !== "fansly") {
     throw new Error("Subscriber sync is only supported for Fansly pages");
   }
@@ -1924,6 +2006,19 @@ export async function executeSubscribersChunk(
       processedThisChunk,
     },
   } satisfies StreamChunkResult;
+}
+
+/** Compat shell — see executeLightChunk note. */
+export async function executeSubscribersChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
+    syncRunId: number;
+  },
+) {
+  return input.pageContext.platform === "onlyfans"
+    ? onlyfansSubscribersChunk(app, input)
+    : fanslySubscribersChunk(app, input);
 }
 
 export async function executeFollowersChunk(
@@ -2810,22 +2905,28 @@ async function executeOnlyFansDmConversationsChunk(
   } satisfies StreamChunkResult;
 }
 
-export async function executeDmConversationsChunk(
+export async function onlyfansDmConversationsChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
     streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
-  if (input.pageContext.platform === "onlyfans") {
-    // OFAPI-mapped pages sync DMs via OFAPI REST (decision #49); everything
-    // else stays on the parked OnlyMonster polling path behind its own flag.
-    if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
-      return executeOfapiDmConversationsChunk(app, input);
-    }
-    return executeOnlyFansDmConversationsChunk(app, input);
+  // OFAPI-mapped pages sync DMs via OFAPI REST (decision #49); everything
+  // else stays on the parked OnlyMonster polling path behind its own flag.
+  if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
+    return executeOfapiDmConversationsChunk(app, input);
   }
+  return executeOnlyFansDmConversationsChunk(app, input);
+}
 
+export async function fanslyDmConversationsChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
+    syncRunId: number;
+  },
+) {
   if (input.pageContext.platform !== "fansly") {
     throw new Error("DM conversation sync is only supported for Fansly pages");
   }
@@ -3679,20 +3780,39 @@ async function executeOnlyFansDmMessagesChunk(
   }
 }
 
-export async function executeDmMessagesChunk(
+/** Compat shell — see executeLightChunk note. */
+export async function executeDmConversationsChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
+    syncRunId: number;
+  },
+) {
+  return input.pageContext.platform === "onlyfans"
+    ? onlyfansDmConversationsChunk(app, input)
+    : fanslyDmConversationsChunk(app, input);
+}
+
+export async function onlyfansDmMessagesChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
     streamState: PageSyncLease;
     syncRunId: number;
   },
 ): Promise<StreamChunkResult> {
-  if (input.pageContext.platform === "onlyfans") {
-    if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
-      return executeOfapiDmMessagesChunk(app, input);
-    }
-    return executeOnlyFansDmMessagesChunk(app, input);
+  if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
+    return executeOfapiDmMessagesChunk(app, input);
   }
+  return executeOnlyFansDmMessagesChunk(app, input);
+}
 
+export async function fanslyDmMessagesChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
+    syncRunId: number;
+  },
+): Promise<StreamChunkResult> {
   if (input.pageContext.platform !== "fansly") {
     throw new Error("DM message sync is only supported for Fansly pages");
   }
@@ -4307,6 +4427,19 @@ function fanslyNewStreamSkip(reason: string): StreamChunkResult {
     yieldReason: null,
     stats: { skipped: reason },
   };
+}
+
+/** Compat shell — see executeLightChunk note. */
+export async function executeDmMessagesChunk(
+  app: AppContext,
+  input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
+    syncRunId: number;
+  },
+): Promise<StreamChunkResult> {
+  return input.pageContext.platform === "onlyfans"
+    ? onlyfansDmMessagesChunk(app, input)
+    : fanslyDmMessagesChunk(app, input);
 }
 
 export async function executeFanEarningsChunk(

@@ -32,8 +32,14 @@ describe("platform registry (Stage 18)", () => {
   it("capabilities cover resolveStreamsForScope outputs for every scope", () => {
     for (const platform of ["fansly", "onlyfans"] as const) {
       const capabilities = new Set(appPlatformRegistry.get(platform).capabilities.streams);
-      for (const scope of ["light", "full"] as const) {
-        for (const stream of resolveStreamsForScope(platform, scope)) {
+      for (const scope of ["light", "followers", "all", "data", "messages"] as const) {
+        let streams: ReturnType<typeof resolveStreamsForScope>;
+        try {
+          streams = resolveStreamsForScope(platform, scope);
+        } catch {
+          continue; // followers scope is fansly-only by design
+        }
+        for (const stream of streams) {
           expect(capabilities.has(stream), `${platform}/${scope}/${stream}`).toBe(true);
         }
       }
