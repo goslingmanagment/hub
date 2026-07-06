@@ -3557,48 +3557,141 @@ export async function executeFanEarningsChunk(
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
 
-  // Snapshot-shaped: one lifetime page + one monthly page per run. Probe-grade
-  // unknown payloads are journaled VERBATIM; typing happens at canonicalization
-  // once the ramp captures a live corpus (recorded deviation).
-  // The window params are REQUIRED: Fansly answers [] without after/before —
-  // the ramp caught exactly this (empty captures on lilly-1, 2026-07-06); the
-  // Stage 6 probe's proven shape is the all-time window.
+  // The earnings endpoints answer PER FAN: a windowed call without
+  // correlationAccountId returns [] (ramp-caught 2026-07-06; probe-confirmed
+  // with a fan id → 21 rows). So the capture is a checkpointed keyset walk —
+  // SPENDER-scoped (fans with page_fans net > 0; zero-spend fans have no
+  // earnings rows), two calls per fan (lifetime stats + monthly), one
+  // concatenated journal payload per chunk (the canonicalizer keys rows by
+  // correlationAccountId, so concatenation is shape-neutral).
   const window = { after: new Date(0), before: new Date() };
-  await assertOwnedPageSyncLease(app.db);
-  const stats = await app.adapter.getEarningsStatsAccountsPage(requestContext, window);
-  await persistRawPayload(app.db, {
-    platformAccountId: input.pageContext.page.id,
-    syncRunId: input.syncRunId,
-    endpoint: "fan_earnings_stats",
-    requestParams: { after: window.after.toISOString(), before: window.before.toISOString() },
-    responsePayload: stats.raw,
-    mapperVersion: FANSLY_MAPPER_VERSION,
-    payloadKind: "mapping_critical",
-    retainUntil: retentionDate(),
-  }, { action: "inserting fan_earnings_stats raw payload", platform: "fansly" });
+  const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "fan_earnings");
+  const state = checkpoint?.state as { cursorFanId?: number } | null;
+  let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
+  let fansFetched = 0;
+  let fansSkipped = 0;
+  let walkCompleted = false;
+  const statsRows: unknown[] = [];
+  const monthlyRows: unknown[] = [];
 
-  await assertOwnedPageSyncLease(app.db);
-  const monthly = await app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, window);
-  await persistRawPayload(app.db, {
-    platformAccountId: input.pageContext.page.id,
-    syncRunId: input.syncRunId,
-    endpoint: "fan_earnings_monthly",
-    requestParams: { after: window.after.toISOString(), before: window.before.toISOString() },
-    responsePayload: monthly.raw,
-    mapperVersion: FANSLY_MAPPER_VERSION,
-    payloadKind: "mapping_critical",
-    retainUntil: retentionDate(),
-  }, { action: "inserting fan_earnings_monthly raw payload", platform: "fansly" });
+  while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+    await assertOwnedPageSyncLease(app.db);
+    const fans = await listPageFanNativeIds(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      afterFanId: cursorFanId,
+      limit: 1,
+      spendersOnly: true,
+    });
+    const fan = fans[0];
+    if (!fan) {
+      if (fansFetched === 0 && fansSkipped > 0) {
+        // Mass-skip circuit breaker (the purchase_history discipline): a walk
+        // that skipped every fan is a contract failure, not dead accounts.
+        throw new Error(
+          `fan_earnings walk skipped all ${fansSkipped} fans without one success`,
+        );
+      }
+      walkCompleted = true;
+      break;
+    }
+
+    try {
+      const stats = await app.adapter.getEarningsStatsAccountsPage(requestContext, {
+        correlationAccountId: fan.platformUserId,
+        ...window,
+      });
+      if (Array.isArray(stats.items)) {
+        statsRows.push(...stats.items);
+      }
+      await assertOwnedPageSyncLease(app.db);
+      const monthly = await app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, {
+        correlationAccountId: fan.platformUserId,
+        ...window,
+      });
+      if (Array.isArray(monthly.items)) {
+        monthlyRows.push(...monthly.items);
+      }
+    } catch (error) {
+      // Per-fan isolation: fan-scoped rejections skip THAT fan and keep
+      // walking; page-scoped responses (auth, rate-limit) still propagate.
+      const fanScoped = error instanceof FanslyApiError &&
+        typeof error.status === "number" &&
+        [400, 404, 410].includes(error.status);
+      if (!fanScoped) {
+        throw error;
+      }
+      await input.telemetry.addAnomaly({
+        code: "fan_earnings_fan_rejected",
+        severity: "warn",
+        message: `Skipped fan-earnings fan after HTTP ${error.status}`,
+        details: {
+          fanId: fan.fanId,
+          platformUserId: fan.platformUserId,
+          status: error.status,
+          fanslyCode: error.code ?? null,
+        },
+      });
+      fansSkipped += 1;
+      cursorFanId = fan.fanId;
+      continue;
+    }
+
+    cursorFanId = fan.fanId;
+    fansFetched += 1;
+  }
+
+  if (fansFetched > 0) {
+    const journalParams = {
+      after: window.after.toISOString(),
+      before: window.before.toISOString(),
+      fansFetched,
+      spendersOnly: true,
+    };
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint: "fan_earnings_stats",
+      requestParams: journalParams,
+      responsePayload: statsRows,
+      mapperVersion: FANSLY_MAPPER_VERSION,
+      payloadKind: "mapping_critical",
+      retainUntil: retentionDate(),
+    }, { action: "inserting fan_earnings_stats raw payload", platform: "fansly" });
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint: "fan_earnings_monthly",
+      requestParams: journalParams,
+      responsePayload: monthlyRows,
+      mapperVersion: FANSLY_MAPPER_VERSION,
+      payloadKind: "mapping_critical",
+      retainUntil: retentionDate(),
+    }, { action: "inserting fan_earnings_monthly raw payload", platform: "fansly" });
+  }
 
   await upsertCheckpoint(app.db, {
     platformAccountId: input.pageContext.page.id,
     stream: "fan_earnings",
     cursorTimestamp: new Date(),
-    state: { pageLabel: input.pageContext.page.label },
+    // A completed walk resets the cursor so the next cadence refreshes.
+    state: walkCompleted
+      ? { cursorFanId: 0, completedAt: new Date().toISOString() }
+      : { cursorFanId },
     lastSuccessfulRunId: input.syncRunId,
   });
 
-  return { satisfied: true, yieldReason: null, stats: { pagesFetched: 2 } };
+  if (walkCompleted) {
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: { fansFetched, fansSkipped, walkCompleted: true },
+    };
+  }
+  return {
+    satisfied: false,
+    yieldReason: input.budget.resolveYieldReason(),
+    stats: { fansFetched, fansSkipped, cursorFanId },
+  };
 }
 
 export async function executePurchaseHistoryChunk(

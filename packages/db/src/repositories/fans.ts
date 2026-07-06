@@ -1042,14 +1042,26 @@ export async function getFollowersForPage(db: Database, platformAccountId: numbe
  */
 export async function listPageFanNativeIds(
   db: Database,
-  input: { platformAccountId: number; afterFanId?: number | null; limit?: number },
+  input: {
+    platformAccountId: number;
+    afterFanId?: number | null;
+    limit?: number;
+    /** Only fans with recorded spend (page_fans net > 0) — the Stage 32
+     * fan-earnings walk is spender-scoped: 92–994 spenders per page vs
+     * 3.6k–20k fans, and zero-spend fans have no earnings rows to fetch. */
+    spendersOnly?: boolean;
+  },
 ): Promise<Array<{ fanId: number; platformUserId: string }>> {
+  const spenderClause = input.spendersOnly
+    ? sql`and pf.total_creator_net_mills > 0`
+    : sql``;
   const result = await db.execute<{ fan_id: string; platform_user_id: string }>(sql`
     select f.id::text as fan_id, f.platform_user_id
     from page_fans pf
     join fans f on f.id = pf.fan_id
     where pf.platform_account_id = ${input.platformAccountId}
       and f.id > ${input.afterFanId ?? 0}
+      ${spenderClause}
     order by f.id asc
     limit ${input.limit ?? 25}
   `);
