@@ -1,4 +1,10 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
+
+// Stage 30: the migrated prompt unit's public surface (tests and feature
+// services reach it through this module index — boundary rule).
+export * from "./prompts/index.ts";
+export * from "./context/index.ts";
+export * from "./features/index.ts";
 import {
   getAiGenerationContentByRef,
   listAiGenerationContent,
@@ -8,6 +14,7 @@ import {
   prepareAiGatewayStream,
   serializeAiGatewaySseFrame,
 } from "../../services/ai-gateway.ts";
+import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { requireApiKeyUser, requireOwner } from "../../services/auth.ts";
 import { NotFoundError } from "../../services/errors.ts";
@@ -33,7 +40,34 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
     const stream = await prepareAiGatewayStream(appContext, principal, request.body);
+    await pipeAiGatewaySse(request, reply, stream);
+  });
 
+  // Stage 30: kernel-side prompt assembly — same auth, same SSE pump, same
+  // gateway internals; only the prompt is built here instead of the client.
+  server.post("/api/v1/ai/features/:feature", {
+    schema: routeSchemas.aiFeatureStream,
+  }, async (request, reply) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const stream = await prepareAiFeatureStream(
+      appContext,
+      principal,
+      request.params.feature,
+      request.body,
+    );
+    await pipeAiGatewaySse(request, reply, stream);
+  });
+}
+
+/** The gateway SSE pump — shared by the raw stream route and Stage 30's
+ * feature-service route (identical framing, terminal record, hijack). */
+export async function pipeAiGatewaySse(
+  request: { log: { warn: (obj: unknown, msg: string) => void; error: (obj: unknown, msg: string) => void } },
+  reply: { hijack(): void; raw: NodeJS.WritableStream & { writableEnded: boolean; destroyed: boolean; writeHead(status: number, headers: Record<string, string>): void; on(event: string, cb: () => void): void; off(event: string, cb: () => void): void; end(): void } },
+  stream: Awaited<ReturnType<typeof prepareAiGatewayStream>>,
+) {
+  {
     reply.hijack();
     const raw = reply.raw;
     const startedAt = Date.now();
@@ -135,7 +169,12 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
         raw.end();
       }
     }
-  });
+  }
+}
+
+export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) {
+  const { appContext } = ctx;
+  const { requirePrincipal } = ctx.auth;
 
   server.get("/api/v1/admin/usage/chatters", {
     schema: routeSchemas.adminChatterUsage,

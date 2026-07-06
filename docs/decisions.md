@@ -2755,3 +2755,19 @@ capture class. Migration 0072. Key rulings:
 invoice reconciliation week). NOTE: Stage 28.4 (#104) is committed and
 pushed but NOT yet deployed — the deploy gate needs an owner confirm; 0071
 and 0072 ride the next deploy window together.
+
+**Decision #106 (2026-07-06, same session):** Stage 30 **Tasks 1–3 core
+built green-local** (full suite 1675/1675) — the prompt unit migrated
+byte-for-byte from the desktop (@ 1db76a4ae13d) with its 123 regression
+tests green kernel-side unchanged; manifest with per-file source hashes;
+0073 ai_personas; the feature-service route with the fast-reply pilot
+proven end-to-end over Stage 29's gateway internals. Context loaders
+reconstruct the vendor message shape from archive rows and run the MIGRATED
+normalizer/formatters — parity by construction, with three NAMED gaps (PPV
+purchased-state, ledger-derived spending sums, media labels) as Task 5
+checkpoints. PRE-FREEZE DEVIATION recorded: the owner has not yet declared
+the prompt-freeze window; the snapshot is re-verifiable against the
+recorded commit, and Task 5's parity sign-off is the gate before any
+client cutover. Remaining: Task 4 (other features + persona seeds), Task 5
+(parity + sign-off, owner-gated), Task 6 (ops; 0071+0072+0073 deploy
+together at the next owner-confirmed window).

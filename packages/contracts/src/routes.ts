@@ -1814,6 +1814,26 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
 ]);
 
 // Stage 29 restricted capture class (DP 6-A): owner-only reads.
+// Stage 30 feature services: kernel-side prompt assembly over the gateway.
+export const aiFeatureStreamParamsSchema = z.object({
+  feature: z.string().min(1).max(40),
+});
+
+export const aiFeatureStreamBodySchema = z.object({
+  clientRequestId: z.string().uuid(),
+  pageLabel: z.string().min(1).max(120),
+  platform: platformEnum,
+  conversationRef: z.string().min(1).max(255),
+  fanRef: z.string().min(1).max(255).nullable().optional(),
+  personaKey: z.string().min(1).max(120).nullable().optional(),
+  model: z.string().min(1).max(100).optional(),
+  reasoningEffort: aiGatewayReasoningEffortSchema.optional(),
+  replyTone: z.enum(["none", "casual", "flirty", "upsell", "spicy"]).optional(),
+  replyMode: z.enum(["default", "preferSplit"]).optional(),
+  messageCount: z.number().int().min(5).max(500).optional(),
+  isRegeneration: z.boolean().optional(),
+}).strict();
+
 export const aiRestrictedGenerationSchema = z.object({
   generationRef: z.string(),
   feature: z.string(),
@@ -4982,6 +5002,25 @@ export const routeSchemas = {
       200: z.array(adminUserSchema),
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  aiFeatureStream: {
+    auth: { kind: "apiKey" },
+    tags: ["usage"],
+    summary: "Stream a kernel-assembled AI feature generation",
+    description: "Stage 30 feature services: context loads kernel-side, the migrated prompt "
+      + "builder assembles the request, and the stream rides the gateway (budgets, ledger, "
+      + "restricted capture).",
+    params: aiFeatureStreamParamsSchema,
+    body: aiFeatureStreamBodySchema,
+    response: {
+      200: z.unknown(),
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
     },
   },
   aiRestrictedGenerations: {

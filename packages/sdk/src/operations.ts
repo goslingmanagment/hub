@@ -55,6 +55,7 @@ export const kernelOperations = {
   adminUpdatePage: { method: "PATCH", path: "/api/v1/admin/pages/:pageLabel" },
   adminVerifyCredentials: { method: "POST", path: "/api/v1/admin/credentials/verify" },
   adminVerifyPage: { method: "POST", path: "/api/v1/admin/pages/:pageLabel/verify" },
+  aiFeatureStream: { method: "POST", path: "/api/v1/ai/features/:feature" },
   aiGatewayStream: { method: "POST", path: "/api/v1/ai/gateway/stream" },
   aiRestrictedGenerationDetail: { method: "GET", path: "/api/v1/ai/restricted/generations/:generationRef" },
   aiRestrictedGenerations: { method: "GET", path: "/api/v1/ai/restricted/generations" },

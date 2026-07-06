@@ -57,7 +57,7 @@ import { createRequestAuth } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
 import { registerCatalogRoutes } from "../modules/catalog/index.ts";
-import { registerAiRoutes } from "../modules/ai/index.ts";
+import { registerAiAdminRoutes, registerAiRoutes } from "../modules/ai/index.ts";
 import { registerConversationsRoutes } from "../modules/conversations/index.ts";
 import { registerEventsRoutes } from "../modules/events/index.ts";
 import { registerFinanceRoutes } from "../modules/finance/index.ts";
@@ -463,6 +463,7 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- AI (gateway/usage) --- (module: apps/runtime/src/modules/ai)
   registerAiRoutes(server, moduleContext);
+  registerAiAdminRoutes(server, moduleContext);
 
   // --- Ingest (webhook/capture/custody lanes) --- (module: apps/runtime/src/modules/ingest)
   await registerIngestRoutes(server, moduleContext);

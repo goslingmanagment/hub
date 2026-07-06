@@ -2617,6 +2617,24 @@ export const projectionSeqWatermarks = pgTable(
   }),
 );
 
+// Stage 30: personas as kernel config (DP 9-A: single-tenant, global).
+export const aiPersonas = pgTable(
+  "ai_personas",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    key: text("key").notNull().unique(),
+    displayName: text("display_name").notNull(),
+    systemBlock: text("system_block").notNull(),
+    featureOverrides: jsonb("feature_overrides")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+  },
+);
+
 // Stage 29: the DP 6-A restricted capture class — every gateway generation's
 // prompt blocks VERBATIM + completion + params, keyed by the gateway-issued
 // generation ref. Owner-only reads; excluded from lake exports; inside the
