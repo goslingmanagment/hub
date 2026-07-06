@@ -299,8 +299,40 @@ Branch `kernel/stage-32-extension-cutover` (pushed).
   fast-reply feature lane once per card (v1: one card = one call); one
   model, per-feature budget, full capture per generation hold. Revisit as
   a Stage 30 registry addendum when the owner wants kernel-held variants.
-- [ ] Task 3: AI panel → feature services + persona swap + vendor deletion
-  + manifest permission shrink (the named substitution is live kernel-side).
+- **DEVIATION (Task 3 context model) + core enabler (core cedb00a):**
+  refs-only feature calls assume a fresh kernel archive — TRUE for OnlyFans
+  (webhooks), FALSE for Fansly by design: `dm_conversations` cadence =
+  30 min, `dm_messages` = 24 h history stream (page-sync stream config).
+  A kernel-assembled transcript would miss up to half an hour of live
+  conversation → functionally broken for chatting. The extension already
+  reads the conversation LIVE from the Fansly API at generation time, so
+  the feature body gains optional `clientContext` (transcript string,
+  messageCount, fanDisplayName, spending/subscription blocks, fanBio,
+  pingSegment) — context VALUES from the client, prompt ASSEMBLY
+  kernel-side (templates/personas/wording/budgets/capture/ledger
+  unchanged; values are captured under the Stage 29 restricted class
+  exactly like archive context). Product gates run on the client counts;
+  ping requires the client-computed segment (CG-FLOW-05 holds).
+  Integration-tested (client transcript verbatim in the captured prompt;
+  min-30 satisfied by client count against a 3-row archive; hi-greeting
+  lock; ping segment required/active-blocked/proceeds).
+- [~] **Task 3 in progress — the transport seam landed (432544e).**
+  `kernel-feature-gateway.ts`: SDK aiFeatureStream with refs+clientContext,
+  frame fan-out (onText/onMeta/onUsage/onReasoningDelta/onStopReason),
+  kernel gate wordings → extension error keys (not_enough_history /
+  hi_too_many_messages / ping_blocked), quota→rate_limited,
+  5xx→service_unavailable, auth→hub_invalid_api_key, aborts→AbortError,
+  fail-closed on a truncated stream; gateway-priced usage (costMicroUsd).
+  `AgencyHubClient.resolvePageLabelForUsername` exposed for page
+  resolution. SDK re-vendored @ core cedb00a. 834 tests green.
+  REMAINS (fresh context): operations.ts tail rewrite onto the gateway
+  (replace llmClient.streamMessage + local model/key/cost machinery;
+  retry policy moves to kernel-error-driven), compare/Multi → fast-reply
+  per card, persona picker → kernel CRUD + one-time custom sync, the
+  DELETIONS sweep (llm-client/anthropic/openrouter/llm-stream-utils/
+  llm-cost/model-registry/prompts.ts+prompts/*.md/prompt-injection/
+  usage-reporter), vendor keys out of settings+options+storage v9,
+  manifest host-permission shrink, grep gate, test triage.
 - **Core enabler (core be5facb): the board read endpoint.**
   `GET /api/v1/pages/:pageLabel/top-spenders` (auth any + page scope;
   page-scoped per-fan spend for an ASSIGNED page — not the Stage 2-gated
