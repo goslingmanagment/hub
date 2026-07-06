@@ -89,11 +89,14 @@ export async function startIntegrationTestDatabase(input?: {
 export async function resetIntegrationDatabase(pool: ReturnType<typeof createPool>) {
   await pool.query("drop schema if exists pgboss cascade");
 
+  // platforms is reference data seeded by migration 0068 (Stage 18) — pages
+  // rows FK into it, so a reset must keep the vocabulary rows.
   const tableRows = await pool.query<{ quoted_name: string }>(`
     select quote_ident(tablename) as quoted_name
     from pg_tables
     where schemaname = 'public'
       and tablename <> 'schema_migrations'
+      and tablename <> 'platforms'
     order by tablename asc
   `);
 

@@ -41,7 +41,21 @@ export type OfapiCommandPayload =
   | { messageId: string }
   | Record<string, never>;
 
-export const platformEnum = pgEnum("platform", ["fansly", "onlyfans"]);
+// Kernel Stage 18: the platform vocabulary is a reference table (migration
+// 0068), not a pg enum — adding platform #3 is an INSERT plus an adapter
+// package, never an ALTER TYPE. The columns stay text with a FK to
+// platforms.key; the TS union below keeps compile-time narrowing.
+export const platforms = pgTable("platforms", {
+  key: text("key").primaryKey(),
+  displayName: text("display_name").notNull(),
+  adapterVersion: text("adapter_version").notNull().default("1"),
+});
+
+const PLATFORM_KEYS = ["fansly", "onlyfans"] as const;
+
+function platformColumn(name: string) {
+  return text(name, { enum: PLATFORM_KEYS });
+}
 export const syncRunOutcomeEnum = pgEnum("sync_run_outcome", [
   "running",
   "succeeded",
@@ -172,7 +186,7 @@ export const pages = pgTable(
     modelId: bigint("model_id", { mode: "number" })
       .references(() => models.id, { onDelete: "cascade" })
       .notNull(),
-    platform: platformEnum("platform").notNull(),
+    platform: platformColumn("platform").notNull(),
     commissionRate: numeric("commission_rate", {
       precision: 5,
       scale: 4,
@@ -369,7 +383,7 @@ export const syncHttpAttempts = pgTable("sync_http_attempts",
       .notNull(),
     requestSeq: bigint("request_seq", { mode: "number" }),
     source: syncRequestSourceEnum("source"),
-    provider: platformEnum("provider").notNull(),
+    provider: platformColumn("provider").notNull(),
     stream: syncStreamEnum("stream").notNull(),
     operation: text("operation").notNull(),
     logicalRequestId: text("logical_request_id").notNull(),
@@ -417,7 +431,7 @@ export const syncRunEvents = pgTable(
     requestSeq: bigint("request_seq", { mode: "number" }),
     source: syncRequestSourceEnum("source"),
     leaseToken: text("lease_token"),
-    provider: platformEnum("provider").notNull(),
+    provider: platformColumn("provider").notNull(),
     stream: syncStreamEnum("stream").notNull(),
     eventType: text("event_type").notNull(),
     severity: syncEventSeverityEnum("severity").notNull(),
@@ -527,7 +541,7 @@ export const pageSyncCursors = pgTable(
 export const syncRateLimits = pgTable(
   "sync_rate_limits",
   {
-    provider: platformEnum("provider").notNull(),
+    provider: platformColumn("provider").notNull(),
     scope: text("scope").notNull(),
     egressKey: text("egress_key").notNull(),
     minSpacingMs: integer("min_spacing_ms").notNull(),
@@ -574,7 +588,7 @@ export const fans = pgTable(
   "fans",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    platform: platformEnum("platform").notNull(),
+    platform: platformColumn("platform").notNull(),
     platformUserId: text("platform_user_id").notNull(),
     username: text("username"),
     displayName: text("display_name"),
@@ -698,7 +712,7 @@ export const pageFanExternalNotes = pgTable(
     fanId: bigint("fan_id", { mode: "number" })
       .references(() => fans.id, { onDelete: "cascade" })
       .notNull(),
-    provider: platformEnum("provider").notNull(),
+    provider: platformColumn("provider").notNull(),
     externalNoteId: text("external_note_id").notNull(),
     contentType: integer("content_type"),
     title: text("title"),
@@ -985,7 +999,7 @@ export const dmMessageArchive = pgTable(
   "dm_message_archive",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    platform: platformEnum("platform").notNull(),
+    platform: platformColumn("platform").notNull(),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
