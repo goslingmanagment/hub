@@ -2215,3 +2215,50 @@ Exit (Task 6 ops): staged release one machine → 48 h → fleet; production
 verification per §5 (zero desktop v1 SSE connections feeds Stage 25's
 entry, read-gateway volume per machine unchanged, grep gates, one-week
 chat-freshness watch); then kernel-side team OFAPI key rotation.
+
+## Stage 25 Build Half — Scheduler Role, Ordering Proof, Golden Signals (2026-07-06)
+
+**Decision #96:** Stage 25 tasks 1–3 built on the chain branch (077aa08 →
+60110cd → 98d4819 → e76c866). Tasks 4–5 stay gated as specced: the
+consumer-zero sweep + singleton-assertion removal + 2-worker rollout need
+the Stage 24 fleet off v1 (prod verification), and the fanout_seq/v1
+retirement migration is the owner-gated LAST step. Full suite after the
+last code commit: **191 files / 1538 tests green**. Migration **0067**.
+
+- **Scheduler role (Task 1).** resolveRole gains 'scheduler'; cron
+  registration collapses into services/schedules.ts (the ONE place),
+  invoked only by the leader-elected scheduler runtime (session advisory
+  lock ns 58212, stateless standby retrying every 10 s). pg-boss v12 fires
+  cron from any instance with `schedule: true` (the default — verified in
+  the pinned version's source), so workers AND the api now construct with
+  `schedule: false`; the scheduler is the one timekeeper. A leader whose
+  lock session dies exits immediately (a successor may already be firing).
+  The scheduler also creates queues (idempotent) so a fresh environment
+  has no boot-order race. Compose gains the scheduler service; worker-2
+  scale-out mechanics documented in place for the Task 4 rollout.
+  FIX FOUND BY THE FULL SUITE: a terminated lock session left its pool
+  client checked out — pool.end() hung; onDeath now destroys the corpse.
+- **Ordering property harness (Task 2).** Three racing sweep runners over
+  a live growing corpus across three accounts re-prove Stage 8's
+  invariants under multi-runner churn (per-account seq gapless 1..K, dedup
+  collapse to one event), including a runner dying mid-load. The
+  real-process staging chaos drill (kill -9) is Task 4's ops step.
+- **Golden signals (Task 3).** ops_metric_samples (p50/p95, minutely,
+  rolling 14-day prune until Stage 28) + golden_signal_lag incident kind
+  (pg enum + contracts). Five lags over a trailing 10-minute window:
+  capture (webhook receipt→settle), canonicalization (observation→event),
+  projection (backlog age above each watermark), command settle
+  (enqueue→finalize), SSE delivery — EXECUTION INTERPRETATION RECORDED:
+  the smoke checkpoint keeps no per-frame receipt stamps, so SSE delivery
+  = checkpoint staleness (bounds the same failure mode: a wedged
+  consumer). p95 thresholds flip the existing incident latch (one alert
+  per state change); GET /api/v1/ops/metrics (monitoring gate) serves the
+  series + thresholds + smoke counters. Cron rides the scheduler; the
+  sample job runs on workers.
+
+Exit (Tasks 4–5, ops/owner-gated): golden-signal baselines recorded on
+the singleton topology BEFORE the rollout; staging two-worker soak +
+chaos drill; consumer-zero sweep over v1/fanout_seq/sync_event; singleton
+assertion deleted; 2 workers + scheduler live in prod; then the
+retirement migration (fanout_seq + sync_event columns dropped) under
+explicit owner go.
