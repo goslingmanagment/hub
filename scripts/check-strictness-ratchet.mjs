@@ -12,7 +12,7 @@
 // means this is exactly `tsc --noEmit`.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -73,11 +73,19 @@ if (overBudget.length > 0) {
   process.exit(1);
 }
 
-if (total < snapshotTotal) {
+// The shrink demand only applies when the FULL workspace is visible — the
+// production Docker build context excludes tests/ (and the snapshot's files
+// with them), which makes the total drop without any debt being paid. Files
+// that exist are still held to their per-file budgets above.
+const fullWorkspace = Object.keys(snapshot).every((file) => existsSync(join(root, file)));
+if (fullWorkspace && total < snapshotTotal) {
   console.error(
     `strictness-ratchet: debt shrank (${snapshotTotal} → ${total}) — lock it in: pnpm typecheck:ratchet-update, commit the snapshot.`,
   );
   process.exit(1);
+}
+if (!fullWorkspace) {
+  console.log("strictness-ratchet: partial workspace (some snapshot files absent) — per-file budgets enforced, shrink check skipped.");
 }
 
 console.log(`strictness-ratchet: OK — ${total} known error(s) within budget (${Object.keys(counts).length} file(s) with debt).`);
