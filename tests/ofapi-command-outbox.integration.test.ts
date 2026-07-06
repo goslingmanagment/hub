@@ -962,103 +962,7 @@ describe("OFAPI command outbox intake", () => {
     });
   });
 
-  it("redacts old terminal payload text without changing status export or recovery rows", async () => {
-    const oldTerminalText = "old terminal payload should purge";
-    const oldTerminal = await createCommand(commandBody({ payload: { text: oldTerminalText } }));
-    const oldTerminalId = (oldTerminal.json() as { commandId: string; payloadHash: string }).commandId;
-    const oldTerminalHash = (oldTerminal.json() as { payloadHash: string }).payloadHash;
-    await testDb!.pool.query(
-      `update ofapi_commands
-       set state = 'confirmed',
-           updated_at = $2,
-           platform_message_id = 'platform-old'
-       where id = $1`,
-      [oldTerminalId, new Date("2026-06-01T20:00:00.000Z")],
-    );
-
-    const recentText = "recent terminal payload should stay temporarily";
-    const recentTerminal = await createCommand(commandBody({ payload: { text: recentText } }));
-    const recentTerminalId = (recentTerminal.json() as { commandId: string }).commandId;
-    await testDb!.pool.query(
-      `update ofapi_commands
-       set state = 'failed_terminal',
-           updated_at = $2,
-           last_error_code = 'ofapi_http_422',
-           last_error_class = 'terminal'
-       where id = $1`,
-      [recentTerminalId, new Date("2026-06-18T20:00:00.000Z")],
-    );
-
-    const recoveryText = "indeterminate payload must remain for manual recovery";
-    const recoveryCommand = await createCommand(commandBody({ payload: { text: recoveryText } }));
-    const recoveryCommandId = (recoveryCommand.json() as { commandId: string }).commandId;
-    await testDb!.pool.query(
-      `update ofapi_commands
-       set state = 'indeterminate',
-           attempt_count = 1,
-           attempt_started_at = $2,
-           attempt_finished_at = $2,
-           updated_at = $2,
-           last_error_code = 'ofapi_transport_unknown',
-           last_error_class = 'indeterminate'
-       where id = $1`,
-      [recoveryCommandId, new Date("2026-06-01T20:00:00.000Z")],
-    );
-
-    // Stage 1 stand-down defaults redaction OFF; this test covers the
-    // mechanics behind the explicit kill-switch.
-    appContext.config.ofapiCommandPayloadRedactionEnabled = true;
-    await expect(sweepOfapiCommands(
-      appContext,
-      { send: vi.fn() } as never,
-      new Date("2026-06-19T20:00:00.000Z"),
-    )).resolves.toEqual({ stale: 0, purged: 1, enqueued: 0 });
-    appContext.config.ofapiCommandPayloadRedactionEnabled = false;
-
-    const payloads = await testDb!.pool.query<{
-      id: string;
-      payload_text: string;
-      payload_redacted_at: Date | null;
-      payload_hash: string;
-    }>(
-      `select id,
-              payload->>'text' as payload_text,
-              payload_redacted_at,
-              payload_hash
-       from ofapi_commands
-       where id = any($1::uuid[])
-       order by id`,
-      [[oldTerminalId, recentTerminalId, recoveryCommandId]],
-    );
-    const byId = new Map(payloads.rows.map((row) => [row.id, row]));
-    expect(byId.get(oldTerminalId)).toMatchObject({
-      payload_text: "",
-      payload_hash: oldTerminalHash,
-    });
-    expect(byId.get(oldTerminalId)?.payload_redacted_at?.toISOString()).toBe(
-      "2026-06-19T20:00:00.000Z",
-    );
-    expect(byId.get(recentTerminalId)).toMatchObject({
-      payload_text: recentText,
-      payload_redacted_at: null,
-    });
-    expect(byId.get(recoveryCommandId)).toMatchObject({
-      payload_text: recoveryText,
-      payload_redacted_at: null,
-    });
-
-    const fetched = await getCommand(oldTerminalId);
-    expect(fetched.statusCode, fetched.body).toBe(200);
-    expect(fetched.json()).toMatchObject({
-      commandId: oldTerminalId,
-      state: "confirmed",
-      payloadHash: oldTerminalHash,
-      platformMessageId: "platform-old",
-    });
-    expectResponseOmits(fetched, oldTerminalText);
-  });
-
-  it("leaves old terminal payloads intact while redaction is disabled (Stage 1 stand-down)", async () => {
+  it("leaves old terminal payloads intact permanently (Stage 28: redaction switch retired)", async () => {
     const oldTerminalText = "old terminal payload survives the stand-down";
     const oldTerminal = await createCommand(commandBody({ payload: { text: oldTerminalText } }));
     const oldTerminalId = (oldTerminal.json() as { commandId: string }).commandId;
@@ -1071,7 +975,6 @@ describe("OFAPI command outbox intake", () => {
       [oldTerminalId, new Date("2026-06-01T20:00:00.000Z")],
     );
 
-    appContext.config.ofapiCommandPayloadRedactionEnabled = false;
     await expect(sweepOfapiCommands(
       appContext,
       { send: vi.fn() } as never,

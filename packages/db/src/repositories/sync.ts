@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql , ne } from "drizzle-orm";
 
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
@@ -761,8 +761,16 @@ export async function deleteExpiredSyncObservability(db: Database, cutoff: Date)
     db.delete(syncHttpAttempts).where(lt(sql`coalesce(${syncHttpAttempts.finishedAt}, ${syncHttpAttempts.startedAt})`, cutoff)),
     db.delete(syncRunEvents).where(lt(syncRunEvents.emittedAt, cutoff)),
   ]);
+  // Stage 28: sync_runs joins the bounded sweep (it grew unbounded before).
+  // Children cascade (attempts/events — already swept above); raw payloads
+  // keep their rows and SET NULL their run link. Still-running rows are
+  // never deleted, however stale — a wedged run is diagnostic evidence.
+  const deletedRuns = await db.delete(syncRuns).where(and(
+    lt(sql`coalesce(${syncRuns.finishedAt}, ${syncRuns.startedAt})`, cutoff),
+    ne(syncRuns.outcome, "running"),
+  ));
 
-  return { deletedAttempts, deletedEvents };
+  return { deletedAttempts, deletedEvents, deletedRuns };
 }
 
 type SyncRunRow = {

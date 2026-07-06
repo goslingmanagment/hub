@@ -71,7 +71,7 @@ import type { CanonicalStream } from "@agency_hub_core/platform-core";
 
 import { appPlatformRegistry } from "../../platforms/registry.ts";
 import type { AppContext } from "../../bootstrap.ts";
-import { isPageDmPruneEnabled } from "../page-dm-retention.ts";
+import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,
@@ -3341,7 +3341,7 @@ export async function fanslyDmMessagesChunk(
             const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
               conversationId: currentConversation.id,
               messageCoverageStatus,
-              enforceRetention: isPageDmPruneEnabled(app.config),
+              enforceRetention: await isPageDmPruneAllowed(app),
             });
             const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
               emptyDmMessagesCursorState(),

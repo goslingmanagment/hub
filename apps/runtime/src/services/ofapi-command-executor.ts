@@ -10,7 +10,6 @@ import {
   listQueuedOfapiCommandIds,
   markStaleInFlightOfapiCommandsIndeterminate,
   type OfapiCommandRow,
-  redactTerminalOfapiCommandPayloads,
 } from "@agency_hub_core/db";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
@@ -32,8 +31,6 @@ export const OFAPI_COMMAND_EXECUTE_QUEUE = "ofapi.commands.execute";
 export const OFAPI_COMMAND_SWEEP_QUEUE = "ofapi.commands.sweep";
 
 const COMMAND_SWEEP_LIMIT = 100;
-const COMMAND_PAYLOAD_REDACTION_LIMIT = 500;
-const COMMAND_PAYLOAD_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const STALE_IN_FLIGHT_MS = 2 * 60 * 1000;
 const WEBHOOK_CORRELATION_WINDOW_MS = 10 * 60 * 1000;
 const WEBHOOK_CLOCK_SKEW_MS = 5 * 1000;
@@ -97,14 +94,6 @@ export function isOfapiCommandExecutionEnabled(
   config?: Pick<AppContext["config"], "ofapiDesktopCommandExecutionEnabled">,
 ) {
   return config?.ofapiDesktopCommandExecutionEnabled === true;
-}
-
-// Stage 1 retention stand-down: terminal command payloads are business facts;
-// self-redaction is disabled unless this env kill-switch is explicitly set.
-export function isOfapiCommandPayloadRedactionEnabled(
-  config?: Pick<AppContext["config"], "ofapiCommandPayloadRedactionEnabled">,
-) {
-  return config?.ofapiCommandPayloadRedactionEnabled === true;
 }
 
 /**
@@ -453,34 +442,18 @@ export async function sweepOfapiCommands(
     );
   }
 
-  // The redaction sweep runs before the execution-enabled check below, so it
-  // fires even with command execution disabled — which is why the Stage 1
-  // kill-switch sits here at the redaction call, not at the executor gate.
-  let redactedCount = 0;
-  if (isOfapiCommandPayloadRedactionEnabled(app.config)) {
-    const redacted = await redactTerminalOfapiCommandPayloads(app.db, {
-      terminalUpdatedBefore: new Date(now.getTime() - COMMAND_PAYLOAD_RECOVERY_WINDOW_MS),
-      redactedAt: now,
-      limit: COMMAND_PAYLOAD_REDACTION_LIMIT,
-    });
-    redactedCount = redacted.length;
-    if (redacted.length > 0) {
-      app.logger.info(
-        { count: redacted.length, recoveryWindowDays: 7 },
-        "OFAPI command terminal payloads redacted",
-      );
-    }
-  }
-
+  // Stage 28: the Stage 1 redaction kill-switch RETIRED — terminal command
+  // payloads are kept business facts, permanently. The sweep no longer has a
+  // redaction arm (repository fn deleted with it).
   if (!isOfapiCommandExecutionEnabled(app.config) || !app.ofapi) {
-    return { stale: stale.length, purged: redactedCount, enqueued: 0 };
+    return { stale: stale.length, purged: 0, enqueued: 0 };
   }
 
   const queued = await listQueuedOfapiCommandIds(app.db, { limit: COMMAND_SWEEP_LIMIT });
   for (const command of queued) {
     await sendOfapiCommandExecuteJob(boss, command.id);
   }
-  return { stale: stale.length, purged: redactedCount, enqueued: queued.length };
+  return { stale: stale.length, purged: 0, enqueued: queued.length };
 }
 
 type SentWebhookRow = {

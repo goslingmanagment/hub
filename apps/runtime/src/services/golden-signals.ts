@@ -29,7 +29,8 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const OPS_METRICS_SAMPLE_QUEUE = "ops.metrics.sample";
 const SAMPLE_WINDOW_MINUTES = 10;
-const RETENTION_DAYS = 14;
+// Stage 28: ops telemetry retention — 90 days (was a 14-day stopgap).
+const RETENTION_DAYS = 90;
 
 /** p95 alert thresholds (ms). Above = open incident; below = resolve. */
 export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {

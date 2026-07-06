@@ -364,6 +364,29 @@ function mapArchiveRow(row: Record<string, unknown>): ArchiveMessageRow {
   };
 }
 
+/**
+ * Kernel Stage 28 prune gate: the hot page_dm_messages prune may only run
+ * while the archive provably holds every hot message (archive >= hot, per
+ * conversation). Returns the number of conversations with uncovered
+ * messages — 0 means pruning is safe.
+ */
+export async function countArchiveCoverageGaps(db: Database): Promise<number> {
+  const result = await db.execute<{ gaps: string }>(sql`
+    select count(*)::text as gaps from (
+      select m.conversation_id
+      from page_dm_messages m
+      join pages p on p.id = m.platform_account_id
+      left join message_archive a
+        on a.account_id = m.platform_account_id
+        and a.platform = p.platform::text
+        and a.message_ref = m.platform_message_id
+      group by m.conversation_id
+      having count(*) filter (where a.account_id is null) > 0
+    ) uncovered
+  `);
+  return Number(result.rows[0]?.gaps ?? 0);
+}
+
 export async function listArchiveConversationMessages(
   db: Database,
   input: {

@@ -159,8 +159,9 @@ const envSchema = z.object({
   OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED: booleanSchema.default(false),
   // Stage 1 retention stand-down kill-switches (default OFF = no destruction).
-  OFAPI_COMMAND_PAYLOAD_REDACTION_ENABLED: booleanSchema.default(false),
-  PAGE_DM_PRUNE_ENABLED: booleanSchema.default(false),
+  // Stage 28: prune returned as a cache policy — default ON, still gated at
+  // runtime on the archive coverage query (kill-switch kept one release).
+  PAGE_DM_PRUNE_ENABLED: booleanSchema.default(true),
   // Stage 1 containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
@@ -281,7 +282,6 @@ export interface AppConfig {
   ofapiDesktopReadGatewayEnabled?: boolean;
   ofapiDesktopCommandOutboxEnabled?: boolean;
   ofapiDesktopCommandExecutionEnabled?: boolean;
-  ofapiCommandPayloadRedactionEnabled?: boolean;
   pageDmPruneEnabled?: boolean;
   diskUsageAlertPercent?: number;
   revenueRouteRoleEnforcement?: "log" | "enforce";
@@ -477,7 +477,6 @@ export function loadConfig(
     ofapiDesktopReadGatewayEnabled: parsed.OFAPI_DESKTOP_READ_GATEWAY_ENABLED,
     ofapiDesktopCommandOutboxEnabled: parsed.OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED,
     ofapiDesktopCommandExecutionEnabled: parsed.OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED,
-    ofapiCommandPayloadRedactionEnabled: parsed.OFAPI_COMMAND_PAYLOAD_REDACTION_ENABLED,
     pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     revenueRouteRoleEnforcement: parsed.REVENUE_ROUTE_ROLE_ENFORCEMENT,

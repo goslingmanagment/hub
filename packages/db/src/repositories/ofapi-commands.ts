@@ -233,39 +233,6 @@ export async function markStaleInFlightOfapiCommandsIndeterminate(
     ))
     .returning({ id: ofapiCommands.id });
 }
-
-export async function redactTerminalOfapiCommandPayloads(
-  db: Database,
-  input: { terminalUpdatedBefore: Date; redactedAt: Date; limit: number },
-) {
-  const result = await db.execute(sql<{ id: string }>`
-    with candidates as (
-      select ${ofapiCommands.id} as id
-      from ${ofapiCommands}
-      where ${ofapiCommands.payloadRedactedAt} is null
-        and ${ofapiCommands.updatedAt} < ${input.terminalUpdatedBefore}
-        and ${ofapiCommands.state} in (
-          'confirmed',
-          'failed_retryable',
-          'failed_terminal',
-          'cancelled'
-        )
-      order by ${ofapiCommands.updatedAt} asc
-      limit ${input.limit}
-    )
-    update ${ofapiCommands} c
-    set payload = case
-          when c.kind = 'send_text_message_v1' then jsonb_build_object('text', '')
-          else '{}'::jsonb
-        end,
-        payload_redacted_at = ${input.redactedAt}
-    from candidates
-    where c.id = candidates.id
-    returning c.id as id
-  `);
-  return result.rows;
-}
-
 export async function listOfapiCommandVerificationCandidates(
   db: Database,
   input: {
