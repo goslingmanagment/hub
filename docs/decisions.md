@@ -3027,3 +3027,9 @@ AI gate, stale copy, pre-build tag assert; extension E10: Bearer-"set"
 poisoning, key-gated token flow, null-safe bearer). Desktop finding
 "vendor-key-only installs stranded" judged vacuous: 0.1.30 reads are
 hub-only, a working install necessarily has hub credentials.
+
+**#115 persona-auth RESOLVED (2026-07-07, owner):** ACCEPTED AS IS — persona
+upsert/archive stay `apiKey`-auth. Rationale: single-tenant (DP 9-A), the
+bearer set is the agency's own trusted team, and the desktop's persona
+sync/editor legitimately runs under chatter credentials. Revisit only if the
+team grows beyond trusted operators or a per-user persona design lands.
