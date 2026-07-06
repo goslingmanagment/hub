@@ -246,6 +246,41 @@ describe("AI feature service pilot (Stage 30)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("kernel personas (Stage 31 Task 3)", () => {
+  it("lists and upserts personas over the apiKey lane", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await upsertAiPersona(appContext.db, {
+      key: "builtin:lora",
+      displayName: "Lora",
+      systemBlock: "## Who you are",
+    });
+
+    const put = await apiServer!.inject({
+      method: "PUT",
+      url: "/api/v1/ai/personas/custom-milly",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: { displayName: "Milly", systemBlock: "## Who you are\nMilly." },
+    });
+    expect(put.statusCode, put.body).toBe(200);
+    expect(put.json()).toMatchObject({ key: "custom-milly", displayName: "Milly" });
+
+    const list = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/personas",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(list.statusCode, list.body).toBe(200);
+    expect(list.json().personas.map((persona: { key: string }) => persona.key).sort())
+      .toEqual(["builtin:lora", "custom-milly"]);
+
+    const anonymous = await apiServer!.inject({ method: "GET", url: "/api/v1/ai/personas" });
+    expect(anonymous.statusCode).toBe(401);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("AI feature registry gates (Stage 30 Task 4)", () => {
   it("enforces the desktop product gates across the seven features", async (context) => {
     if (!testDb) {

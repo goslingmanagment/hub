@@ -8,6 +8,8 @@ export * from "./features/index.ts";
 import {
   getAiGenerationContentByRef,
   listAiGenerationContent,
+  listAiPersonas,
+  upsertAiPersona,
 } from "@agency_hub_core/db";
 
 import {
@@ -43,7 +45,43 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     await pipeAiGatewaySse(request, reply, stream);
   });
 
-  // Stage 30: kernel-side prompt assembly — same auth, same SSE pump, same
+  // Stage 31: personas as kernel config — the desktop picker lists here and
+  // the editor upserts; account→persona mappings stay client-local.
+  server.get("/api/v1/ai/personas", {
+    schema: routeSchemas.aiPersonasList,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const personas = await listAiPersonas(appContext.db);
+    return {
+      personas: personas.map((persona) => ({
+        key: persona.key,
+        displayName: persona.displayName,
+        systemBlock: persona.systemBlock,
+        updatedAt: persona.updatedAt.toISOString(),
+      })),
+    };
+  });
+
+  server.put("/api/v1/ai/personas/:key", {
+    schema: routeSchemas.aiPersonaUpsert,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const persona = await upsertAiPersona(appContext.db, {
+      key: request.params.key,
+      displayName: request.body.displayName,
+      systemBlock: request.body.systemBlock,
+    });
+    return {
+      key: persona.key,
+      displayName: persona.displayName,
+      systemBlock: persona.systemBlock,
+      updatedAt: persona.updatedAt.toISOString(),
+    };
+  });
+
+    // Stage 30: kernel-side prompt assembly — same auth, same SSE pump, same
   // gateway internals; only the prompt is built here instead of the client.
   server.post("/api/v1/ai/features/:feature", {
     schema: routeSchemas.aiFeatureStream,

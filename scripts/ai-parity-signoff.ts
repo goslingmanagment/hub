@@ -15,7 +15,11 @@ import {
 
 async function main() {
   if (!desktopRepoPresent()) {
-    console.error(`FAIL: desktop repo not found at ${DESKTOP_ROOT}`);
+    console.error(
+      `FAIL: desktop prompt sources not found under ${DESKTOP_ROOT} — either the ` +
+      'sibling checkout is absent, or Stage 31 Task 3 deleted the desktop prompt ' +
+      'library post-cutover (the manifest remains the historical sign-off record).',
+    );
     process.exit(1);
   }
 
