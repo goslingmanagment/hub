@@ -4,13 +4,13 @@ import {
   insertDeliveryAttempt,
   listVisiblePages,
 } from "@agency_hub_core/db";
-import {
+import { millsToRoundedDollars,
   addUtcDays,
   formatUsdFromMills,
   MOSCOW_TIME_ZONE,
   startOfBusinessDay,
   toBusinessDate,
-  toMills,
+  millsFromInteger,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -140,7 +140,7 @@ async function loadPageTotalsForBounds(
   });
 
   for (const row of rows) {
-    totals.set(row.pageId, toMills(row.netEarningsMills));
+    totals.set(row.pageId, millsFromInteger(row.netEarningsMills));
   }
 
   return totals;
@@ -196,7 +196,7 @@ function modelDot(deltaPct: number | null): string {
 
 /** Whole-dollar amount (no cents) for the large trailing-window figures. */
 export function formatUsdCompact(mills: bigint): string {
-  const dollars = Math.round(Number(mills) / 1000);
+  const dollars = millsToRoundedDollars(mills);
   const sign = dollars < 0 ? "-" : "";
   return `${sign}$${Math.abs(dollars).toLocaleString("en-US")}`;
 }

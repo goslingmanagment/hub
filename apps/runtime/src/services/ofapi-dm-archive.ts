@@ -9,7 +9,7 @@ import {
   upsertDmMessageArchive,
   type DmMessageArchiveMediaItem,
 } from "@agency_hub_core/db";
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
@@ -98,7 +98,7 @@ function nonNegativeInteger(value: unknown): number | null {
 
 function usdToMills(value: unknown): bigint | null {
   const amount = nonNegativeNumber(value);
-  return amount === null ? null : BigInt(Math.round(amount * 1000));
+  return amount === null ? null : millsFromDollars(amount);
 }
 
 function mediaDimension(item: Record<string, unknown>, key: "width" | "height") {

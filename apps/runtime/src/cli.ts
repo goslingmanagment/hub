@@ -17,7 +17,7 @@ import {
   formatUsdFromMills,
   parsePeriod,
   redactSensitiveText,
-  toMills,
+  millsFromInteger,
   type ProxyConfig,
   type TransactionType,
 } from "@agency_hub_core/shared";
@@ -500,10 +500,10 @@ function printRevenueTotals(
   period: string,
 ) {
   console.log(`${period} revenue summary:`);
-  console.log(`  Revenue: ${formatUsdFromMills(toMills(summary.revenueMills))}`);
-  console.log(`  Adjustments: ${formatUsdFromMills(toMills(summary.adjustmentMills))}`);
-  console.log(`  Unclassified: ${formatUsdFromMills(toMills(summary.unclassifiedMills))}`);
-  console.log(`  Net earnings: ${formatUsdFromMills(toMills(summary.netEarningsMills))}`);
+  console.log(`  Revenue: ${formatUsdFromMills(millsFromInteger(summary.revenueMills))}`);
+  console.log(`  Adjustments: ${formatUsdFromMills(millsFromInteger(summary.adjustmentMills))}`);
+  console.log(`  Unclassified: ${formatUsdFromMills(millsFromInteger(summary.unclassifiedMills))}`);
+  console.log(`  Net earnings: ${formatUsdFromMills(millsFromInteger(summary.netEarningsMills))}`);
   for (const [type, label] of Object.entries(revenueLabels) as Array<[TransactionType, string]>) {
     const total = totals.get(type) ?? 0n;
     if (total === 0n) {
@@ -636,7 +636,7 @@ export function buildProgram() {
           custom,
         });
         const totals = new Map(
-          revenue.breakdown.map((row) => [row.canonicalType, toMills(row.netAmountMills)]),
+          revenue.breakdown.map((row) => [row.canonicalType, millsFromInteger(row.netAmountMills)]),
         );
 
         console.log(`Model: ${revenue.model.name} (${revenue.model.slug})`);
@@ -648,7 +648,7 @@ export function buildProgram() {
         }, period);
         for (const page of revenue.pages) {
           console.log(
-            `  ${page.pageLabel}: ${formatUsdFromMills(toMills(page.netEarningsMills))}`,
+            `  ${page.pageLabel}: ${formatUsdFromMills(millsFromInteger(page.netEarningsMills))}`,
           );
         }
       } finally {
@@ -1465,7 +1465,7 @@ export function buildProgram() {
         });
 
         const totals = new Map(
-          breakdown.breakdown.map((row) => [row.canonicalType, toMills(row.netAmountMills)]),
+          breakdown.breakdown.map((row) => [row.canonicalType, millsFromInteger(row.netAmountMills)]),
         );
 
         console.log(`Page: ${options.page}`);

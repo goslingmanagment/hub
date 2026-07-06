@@ -17,7 +17,7 @@ import {
   mapFanslyTransactionState,
   mapFanslyTransactionType,
 } from "@agency_hub_core/fansly";
-import { calculateGrossMillsFromNet, toMills } from "@agency_hub_core/shared";
+import { calculateGrossMillsFromNet, millsFromInteger } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
@@ -396,8 +396,8 @@ async function persistFanslyTransactionsPage(
       const fanId = item.correlationAccountId
         ? (fanMap.get(item.correlationAccountId) ?? null)
         : null;
-      const sourceAmountMills = toMills(item.amount);
-      const destinationAmountMills = toMills(item.destinationAmount);
+      const sourceAmountMills = millsFromInteger(item.amount);
+      const destinationAmountMills = millsFromInteger(item.destinationAmount);
       const creatorNetAmountMills = destinationAmountMills;
       const commissionRate = resolveFanslyCommissionRate(
         item.destinationTax,
@@ -426,7 +426,7 @@ async function persistFanslyTransactionsPage(
         creatorNetAmountMills,
         rawDestinationTax: item.destinationTax,
         newBalanceMills: item.newBalance64 !== null && item.newBalance64 !== undefined
-          ? toMills(item.newBalance64)
+          ? millsFromInteger(item.newBalance64)
           : null,
         senderId: item.senderId,
         receiverId: item.receiverId,

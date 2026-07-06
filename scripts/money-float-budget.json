@@ -1,0 +1,4 @@
+{
+  "comment": "Kernel Stage 27 ratchet: Math.round(...) over money-ish operands outside the codec. Count may only decrease; decreases update this file. Known real-money site to burn down first: ofapi-dm-sync.ts dollars→cents write.",
+  "budget": 9
+}

@@ -160,3 +160,87 @@ describe("money helpers", () => {
     );
   });
 });
+
+// ─── Kernel Stage 27: the codec (source-named constructors, brands) ─────────
+
+import {
+  millsFromCents,
+  millsFromDollars,
+  millsFromInteger,
+  millsToDollarsNumber,
+  millsToMicroUsd,
+  millsToRoundedDollars,
+  microUsdFromDbInt,
+  microUsdFromDollars,
+  microUsdToMills,
+  type MicroUsd,
+  type Mills,
+} from "@agency_hub_core/shared";
+
+describe("money codec (Stage 27)", () => {
+  it("millsFromInteger keeps the deleted toMills semantics byte-for-byte", () => {
+    expect(millsFromInteger(1234n)).toBe(1234n);
+    expect(millsFromInteger(1234)).toBe(1234n);
+    expect(millsFromInteger(1234.9)).toBe(1234n); // trunc, not round
+    expect(millsFromInteger(-1234.9)).toBe(-1234n);
+    expect(millsFromInteger("1234")).toBe(1234n);
+  });
+
+  it("millsFromDollars inherits dollarsToMills parsing (fixed 3-place fraction)", () => {
+    expect(millsFromDollars(4.99)).toBe(4990n);
+    expect(millsFromDollars("12.3456")).toBe(12345n); // truncated past mills
+    expect(millsFromDollars("-0.001")).toBe(-1n);
+    expect(millsFromDollars(0)).toBe(0n);
+    expect(() => millsFromDollars("not-money")).toThrow(/Invalid dollar amount/);
+  });
+
+  it("millsFromCents bridges the _cents column exactly (×10)", () => {
+    expect(millsFromCents(499)).toBe(4990n);
+    expect(millsFromCents(0)).toBe(0n);
+    expect(millsFromCents(-25)).toBe(-250n);
+    expect(millsFromCents(120n)).toBe(1200n);
+  });
+
+  it("micro-USD constructors and the explicit converters round-trip honestly", () => {
+    expect(microUsdFromDollars(4.99)).toBe(4_990_000);
+    expect(microUsdFromDbInt(1234.7)).toBe(1234);
+    expect(millsToMicroUsd(millsFromDollars(4.99))).toBe(4_990_000);
+    // Lossy direction is explicit: sub-mill precision truncates toward zero.
+    expect(microUsdToMills(4_990_999 as MicroUsd)).toBe(4990n);
+    expect(microUsdToMills(microUsdFromDollars(1))).toBe(1000n);
+  });
+
+  it("the brands refuse cross-unit mixing at compile time", () => {
+    const mills: Mills = millsFromDollars(1);
+    const micro: MicroUsd = microUsdFromDollars(1);
+    // @ts-expect-error mills is a bigint brand; micro-USD is a number brand
+    const bad: Mills = micro;
+    // @ts-expect-error converters are the only sanctioned mixing points
+    const alsoBad: MicroUsd = mills;
+    void bad;
+    void alsoBad;
+    expect(typeof mills).toBe("bigint");
+    expect(typeof micro).toBe("number");
+  });
+
+  // Value preservation for the four rewritten float sites (old expression vs
+  // codec call), swept over wire-realistic money values.
+  it("preserves the ofapi-dm-archive usdToMills values (2-decimal wire dollars)", () => {
+    for (let cents = 0; cents <= 20_000; cents += 7) {
+      const amount = cents / 100; // OFAPI sends 2-decimal dollar amounts
+      expect(millsFromDollars(amount)).toBe(BigInt(Math.round(amount * 1000)));
+    }
+  });
+
+  it("preserves the telegram whole-dollar rounding", () => {
+    for (const mills of [0n, 499n, 500n, 999n, 1000n, 1499n, 1500n, 123_456n, 9_999_499n]) {
+      expect(millsToRoundedDollars(mills)).toBe(Math.round(Number(mills) / 1000));
+    }
+  });
+
+  it("preserves the snapshot/workboard dollars-number conversion", () => {
+    for (const mills of [0n, 1n, 999n, 1000n, 4990n, 123_456n, -2500n]) {
+      expect(millsToDollarsNumber(mills)).toBe(Number(mills) / 1000);
+    }
+  });
+});

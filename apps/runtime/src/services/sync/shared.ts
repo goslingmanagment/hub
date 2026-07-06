@@ -9,7 +9,7 @@ import {
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
 import { ONLYMONSTER_MAPPER_VERSION } from "@agency_hub_core/onlyfans";
-import { toMills } from "@agency_hub_core/shared";
+import { millsFromInteger } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
@@ -368,7 +368,7 @@ export async function refreshPageMetadata(
       displayName: accountMe.parsed.account.displayName,
       followerCount: accountMe.parsed.account.followCount,
       subscriberCount: accountMe.parsed.account.subscriberCount,
-      earningsBalanceMills: toMills(accountMe.parsed.account.earningsWallet?.balance ?? 0),
+      earningsBalanceMills: millsFromInteger(accountMe.parsed.account.earningsWallet?.balance ?? 0),
       metadata: buildFanslyMetadata(accountMe.parsed.account, pageContext.page.metadata),
       ...(syncType ? { syncType } : {}),
     });

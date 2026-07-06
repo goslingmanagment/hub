@@ -1,4 +1,4 @@
-import {
+import { millsToDollarsNumber,
   UTC_TIME_ZONE,
   getTransactionClassification,
   startOfBusinessDay,
@@ -133,7 +133,7 @@ function round(value: number, places: number): number {
   return Math.round(value * f) / f;
 }
 function millsToDollars(mills: bigint): number {
-  return Number(mills) / 1000;
+  return millsToDollarsNumber(mills);
 }
 function tz(signals: FanSignals): string {
   return signals.timeZone ?? UTC_TIME_ZONE;

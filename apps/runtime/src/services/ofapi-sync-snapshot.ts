@@ -1,3 +1,4 @@
+import { millsToDollarsNumber } from "@agency_hub_core/shared";
 import {
   findOfapiSyncSnapshotPage,
   getOfapiFanoutReplayWindow,
@@ -189,10 +190,10 @@ export async function getOfapiSyncSnapshot(
         text: archived.textPlain,
         createdAt: serializeTimestamp(archived.messageCreatedAt),
         isSentByMe: archived.isSentByMe,
-        price: Number(archived.priceMills ?? 0n) / 1000,
+        price: millsToDollarsNumber(archived.priceMills ?? 0n),
         isOpened: archived.isOpened,
         isTip: archived.isTip,
-        tipAmountUsd: Number(archived.tipAmountMills) / 1000,
+        tipAmountUsd: millsToDollarsNumber(archived.tipAmountMills),
         media: normalizeArchiveMedia(archived.mediaMetadata),
       };
     byChat(archived.platformConversationId).set(archived.platformMessageId, {

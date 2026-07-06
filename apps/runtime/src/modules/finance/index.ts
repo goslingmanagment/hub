@@ -22,7 +22,7 @@ import {
   resolveRevenueBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
-  toMills,
+  millsFromInteger,
   type Period,
   type Platform,
 } from "@agency_hub_core/shared";
@@ -239,24 +239,24 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
         compBounds30d ? getRevenueBreakdownForScope(appContext.db, { platform, pageIds: ids, period: compBounds30d }) : Promise.resolve([]),
       ]);
       for (const r of rows7d) {
-        const m = toMills(r.netAmountMills);
+        const m = millsFromInteger(r.netAmountMills);
         if (r.bucket === "revenue") rev7d.revenueMills += m;
         else if (r.bucket === "adjustment") rev7d.adjustmentMills += m;
         else if (r.bucket === "unclassified") rev7d.unclassifiedMills += m;
       }
       rev7d.netEarningsMills = rev7d.revenueMills + rev7d.adjustmentMills + rev7d.unclassifiedMills;
       for (const r of rows30d) {
-        const m = toMills(r.netAmountMills);
+        const m = millsFromInteger(r.netAmountMills);
         if (r.bucket === "revenue") rev30d.revenueMills += m;
         else if (r.bucket === "adjustment") rev30d.adjustmentMills += m;
         else if (r.bucket === "unclassified") rev30d.unclassifiedMills += m;
       }
       rev30d.netEarningsMills = rev30d.revenueMills + rev30d.adjustmentMills + rev30d.unclassifiedMills;
       for (const r of compRows7d) {
-        prevRev7d.netEarningsMills += toMills(r.netAmountMills);
+        prevRev7d.netEarningsMills += millsFromInteger(r.netAmountMills);
       }
       for (const r of compRows30d) {
-        prevRev30d.netEarningsMills += toMills(r.netAmountMills);
+        prevRev30d.netEarningsMills += millsFromInteger(r.netAmountMills);
       }
     }
 
@@ -287,9 +287,9 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
           period: resolveRevenuePeriodBoundsForPlatform(platform, "30d", now),
         }),
       ]);
-      for (const r of ptToday) pageTotalsToday.set(r.pageId, toMills(r.netEarningsMills));
-      for (const r of pt7d) pageTotals7d.set(r.pageId, toMills(r.netEarningsMills));
-      for (const r of pt30d) pageTotals30d.set(r.pageId, toMills(r.netEarningsMills));
+      for (const r of ptToday) pageTotalsToday.set(r.pageId, millsFromInteger(r.netEarningsMills));
+      for (const r of pt7d) pageTotals7d.set(r.pageId, millsFromInteger(r.netEarningsMills));
+      for (const r of pt30d) pageTotals30d.set(r.pageId, millsFromInteger(r.netEarningsMills));
     }
 
     // Per-page new subscribers today

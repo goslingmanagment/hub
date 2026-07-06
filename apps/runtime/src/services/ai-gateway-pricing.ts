@@ -1,3 +1,4 @@
+import { microUsdFromDbInt, type MicroUsd } from "@agency_hub_core/shared";
 export interface AiGatewayCostUsage {
   inputTokens: number;
   outputTokens: number;
@@ -10,7 +11,7 @@ export interface AiGatewayCostUsage {
 export interface AiGatewayCostEstimate {
   provider: "anthropic";
   providerModelId: string;
-  costMicroUsd: number;
+  costMicroUsd: MicroUsd;
   costApproximate: boolean;
 }
 
@@ -127,7 +128,7 @@ export function estimateAiGatewayUsageCost(
   return {
     provider: "anthropic",
     providerModelId: pricing.providerModelId,
-    costMicroUsd: Math.round(rawCostMicroUsd),
+    costMicroUsd: microUsdFromDbInt(Math.round(rawCostMicroUsd)),
     costApproximate,
   };
 }

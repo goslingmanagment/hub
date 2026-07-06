@@ -33,6 +33,12 @@ export default [
       sourceType: "module",
     },
     rules: {
+      // Kernel Stage 27: toMills is dead — money enters through the codec's
+      // source-named constructors (packages/shared/src/money.ts) only.
+      "no-restricted-syntax": ["error", {
+        selector: "CallExpression > Identifier[name='toMills']",
+        message: "toMills was deleted (Stage 27): use millsFromInteger / millsFromDollars / millsFromCents.",
+      }],
       "no-restricted-imports": ["error", {
         patterns: [
           {

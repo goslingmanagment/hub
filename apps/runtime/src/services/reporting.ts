@@ -51,7 +51,7 @@ import {
   resolveBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
-  toMills,
+  millsFromInteger,
   type PeriodBounds,
   type Period,
   type Platform,
@@ -103,7 +103,7 @@ function millsToRoundedCents(value: bigint | number | string | null | undefined)
     return 0;
   }
 
-  const mills = toMills(value);
+  const mills = millsFromInteger(value);
   return Number((mills + (mills >= 0n ? 5n : -5n)) / 10n);
 }
 
@@ -177,7 +177,7 @@ function summarizeRevenueRows(rows: RevenueBreakdownRow[]): RevenueSummaryMills 
   };
 
   for (const row of rows) {
-    const netAmountMills = toMills(row.netAmountMills);
+    const netAmountMills = millsFromInteger(row.netAmountMills);
 
     if (row.bucket === "revenue") {
       summary.revenueMills += netAmountMills;
@@ -313,7 +313,7 @@ function mergeRevenueBreakdownRows(rows: RevenueBreakdownRow[][]): RevenueBreakd
 
       totals.set(row.canonicalType, {
         ...existing,
-        netAmountMills: toMills(existing.netAmountMills) + toMills(row.netAmountMills),
+        netAmountMills: millsFromInteger(existing.netAmountMills) + millsFromInteger(row.netAmountMills),
       });
     }
   }
@@ -335,7 +335,7 @@ function mergePageRevenueTotals(rows: Awaited<ReturnType<typeof getRevenuePageTo
 
       totals.set(row.pageId, {
         ...row,
-        netEarningsMills: toMills(existing.netEarningsMills) + toMills(row.netEarningsMills),
+        netEarningsMills: millsFromInteger(existing.netEarningsMills) + millsFromInteger(row.netEarningsMills),
       });
     }
   }

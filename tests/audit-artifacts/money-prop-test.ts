@@ -2,7 +2,7 @@
 // Imports the actual source (zero-dependency module) by repo-relative path via tsx.
 // Run from repo root: node --import tsx/esm tests/audit-artifacts/money-prop-test.ts
 import {
-  toMills,
+  millsFromInteger,
   millsToDecimalString,
   formatUsdFromMills,
   dollarsToMills,
@@ -14,7 +14,7 @@ import {
 // Replica of the PRIVATE reporting.ts:100 millsToRoundedCents (half-up round),
 // to contrast against the truncating formatUsdFromMills (money.ts:28).
 function millsToRoundedCents(value: bigint | number | string): number {
-  const mills = toMills(value);
+  const mills = millsFromInteger(value);
   return Number((mills + (mills >= 0n ? 5n : -5n)) / 10n);
 }
 const centsToUsd = (c: number) =>

@@ -13,7 +13,7 @@ import {
   encryptJson,
   normalizeProxyConfig,
   redactSensitiveText,
-  toMills,
+  millsFromInteger,
   type FanslySessionBundle,
   type OnlyMonsterTokenBundle,
   type ProxyConfig,
@@ -142,7 +142,7 @@ export async function onboardFanslyPage(
         displayName: verified.account.displayName,
         followerCount: verified.account.followCount,
         subscriberCount: verified.account.subscriberCount,
-        earningsBalanceMills: toMills(verified.account.earningsWallet?.balance ?? 0),
+        earningsBalanceMills: millsFromInteger(verified.account.earningsWallet?.balance ?? 0),
         metadata: buildFanslyMetadata(verified.account),
         syncType: "light",
       });
