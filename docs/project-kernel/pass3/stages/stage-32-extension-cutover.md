@@ -364,9 +364,32 @@ Branch `kernel/stage-32-extension-cutover` (pushed).
   the prompt manifest, retention-deleter scan filters `server.delete(`
   registrations (a LATENT Stage 31 trip) and its allowlist tightened by
   four noise-only modules. Core suite 205/1689 green.
-- [ ] Task 4 (extension side): board → kernel query via the new endpoint —
-  re-vendor the SDK first (pageTopSpenders op) + Stage 16 prod
-  freshness/parity gate check + hidden one-release fallback + quota
-  instrumentation.
-- [ ] Task 5: acceptance events + spool + x-client-version.
-- [ ] Task 6 (ops): ≥1.6.0 release + §5 verification.
+- [x] **Task 4 (7b5d25a): board → kernel query.** ONE pageTopSpenders call
+  replaces the ~150-call per-fan earnings sweep; one bounded conversations
+  enumeration remains (the fan→groupId map for opening chats — DP 1-B
+  reader). Kernel spenders without a visible conversation are filtered.
+  builtAt = the projection's freshest observed_at (honest staleness).
+  Legacy rebuild behind hidden `spendersLegacyRebuild` (storage v10, no
+  UI) for one release. NOTE: the Stage 16 prod freshness/parity gate is
+  OWNER-RUN pre-release (needs prod SSH): fan_earnings_stats fresh within
+  cadence for the Fansly pages + a sampled rank/total comparison vs the
+  legacy board for ≥2 creators, recorded here.
+- [x] **Task 5 (b257cbd + 84f0625): producer identity + acceptance.**
+  x-client-version (chatgoose-extension/<version>) on all three SDK
+  client sites. Acceptance lifecycle shown/copied/inserted on the capture
+  lane (ai_acceptance; correlation pair operationId + meta-frame
+  requestId kept in a bounded per-operation map; copied/inserted travel
+  over a new operation:acceptance port message from both surfaces).
+  SPOOL: storage.local drop-oldest (300) with a persisted dropped counter
+  (spec §7.5 — recoverable signal, unlike the desktop's never-drop
+  spool); enqueue-assigned clientEventId (kernel dedup); 400 drops
+  loudly; transients retry capped; writes serialized (the first test run
+  caught a real lost-update race between rapid enqueues).
+- [ ] **Task 6 (ops, owner-gated): ≥1.6.0 release + §5 verification.**
+  ORDER: (1) deploy core main (substitution + top-spenders + clientContext
+  — prod is behind); (2) run the Stage 16 gate above; (3) bump version,
+  sign, publish updates.json; (4) §5: fleet on the version header, zero
+  vendor calls (structural — permissions gone), network panel shows
+  kernel calls, measured quota drop, chatter walkthrough, acceptance
+  events visible as observations (producer='chatgoose-extension@…').
+  Next release: delete the board fallback + legacy key path.
