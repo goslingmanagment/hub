@@ -8,6 +8,7 @@ export * from "./features/index.ts";
 import {
   getAiGenerationContentByRef,
   listAiGenerationContent,
+  archiveAiPersona,
   listAiPersonas,
   upsertAiPersona,
 } from "@agency_hub_core/db";
@@ -79,6 +80,18 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
       systemBlock: persona.systemBlock,
       updatedAt: persona.updatedAt.toISOString(),
     };
+  });
+
+    server.delete("/api/v1/ai/personas/:key", {
+    schema: routeSchemas.aiPersonaArchive,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const archived = await archiveAiPersona(appContext.db, request.params.key);
+    if (!archived) {
+      throw new NotFoundError("Persona not found");
+    }
+    return { archived: true };
   });
 
     // Stage 30: kernel-side prompt assembly — same auth, same SSE pump, same

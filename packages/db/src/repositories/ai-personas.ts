@@ -43,3 +43,11 @@ export async function listAiPersonas(db: Database) {
     .where(isNull(aiPersonas.archivedAt))
     .orderBy(aiPersonas.key);
 }
+
+export async function archiveAiPersona(db: Database, key: string): Promise<boolean> {
+  const updated = await db.update(aiPersonas)
+    .set({ archivedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(aiPersonas.key, key), isNull(aiPersonas.archivedAt)))
+    .returning({ key: aiPersonas.key });
+  return updated.length === 1;
+}
