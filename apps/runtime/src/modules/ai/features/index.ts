@@ -146,6 +146,7 @@ export async function prepareAiFeatureStream(
   const prompt = buildPrompt({
     feature,
     personality: persona,
+    platform: body.platform,
     transcript: transcript.transcript,
     fanSpendingData: spending?.block ?? "",
     fanSubscriptionData: subscription?.block ?? "",

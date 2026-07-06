@@ -39,9 +39,23 @@ export interface PromptBlock {
   cache: PromptCacheTtl;
 }
 
+/** Stage 32 named substitution (Proposal 32.1 companion): the prompt unit is
+ * stored in its OnlyFans wording (the Stage 30 freeze bytes); a Fansly page
+ * swaps the platform word in the STATIC sources only — template text, safety
+ * preambles, persona content. Runtime data (transcript, bio, draft, spending)
+ * is never rewritten: a fan message mentioning OnlyFans must survive verbatim,
+ * exactly as it would through the extension's local assembly. */
+export type PromptPlatform = "onlyfans" | "fansly";
+
+export function applyPlatformWording(text: string, platform: PromptPlatform): string {
+  return platform === "fansly" ? text.replaceAll("OnlyFans", "Fansly") : text;
+}
+
 export interface PromptBuildInput {
   feature: PromptFeature;
   personality: Personality;
+  /** Defaults to 'onlyfans' — the stored wording (and the Stage 30 parity fixtures). */
+  platform?: PromptPlatform | undefined;
   transcript: string;
   fanSpendingData: string;
   fanSubscriptionData: string;
@@ -275,14 +289,18 @@ function templateValues(input: PromptBuildInput): TemplateValues {
   };
 }
 
-function buildSystemBlocks(feature: PromptFeature, personality: Personality): PromptBlock[] {
+function buildSystemBlocks(
+  feature: PromptFeature,
+  personality: Personality,
+  platform: PromptPlatform,
+): PromptBlock[] {
   const preamble =
     PROMPT_POLICIES[feature].promptMode === 'reply'
       ? REPLY_SAFETY_PREAMBLE
       : ANALYSIS_SAFETY_PREAMBLE;
   return [
-    { text: `${preamble}${SYSTEM_PERSONALITY_ANCHOR}`, cache: 'none' },
-    { text: personality.content, cache: '1h' },
+    { text: applyPlatformWording(`${preamble}${SYSTEM_PERSONALITY_ANCHOR}`, platform), cache: 'none' },
+    { text: applyPlatformWording(personality.content, platform), cache: '1h' },
   ];
 }
 
@@ -324,8 +342,12 @@ export function buildPrompt(
   input: PromptBuildInput,
   templateOverrides?: Partial<Record<PromptFeature, string>>,
 ): PromptPayload {
-  const template = templateOverrides?.[input.feature] ?? DEFAULT_TEMPLATES[input.feature];
-  const systemBlocks = buildSystemBlocks(input.feature, input.personality);
+  const platform = input.platform ?? "onlyfans";
+  const template = applyPlatformWording(
+    templateOverrides?.[input.feature] ?? DEFAULT_TEMPLATES[input.feature],
+    platform,
+  );
+  const systemBlocks = buildSystemBlocks(input.feature, input.personality, platform);
   const userBlocks = buildUserBlocks(input.feature, template, templateValues(input));
   return {
     system: flattenPromptBlocks(systemBlocks),
