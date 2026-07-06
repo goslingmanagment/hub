@@ -17,7 +17,7 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import { executeTopSpendersChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
+import { onlyfansTopSpendersChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import {
   filterOnlyFansTopSpendersStreams,
   pauseDisabledOnlyFansTopSpendersForPage,
@@ -179,7 +179,7 @@ describe("OnlyFans top spenders (computed from transactions)", () => {
     const earliest = await getEarliestSpenderTransactionAt(appContext.db, page.id);
     expect(earliest?.getTime()).toBe(lastMonth.getTime());
 
-    const result = await executeTopSpendersChunk(appContext, await buildChunkInput(page));
+    const result = await onlyfansTopSpendersChunk(appContext, await buildChunkInput(page));
     expect(result.satisfied).toBe(true);
     expect(result.stats).toMatchObject({ mode: "bootstrap" });
 
@@ -230,7 +230,7 @@ describe("OnlyFans top spenders (computed from transactions)", () => {
       ],
     });
 
-    const first = await executeTopSpendersChunk(appContext, await buildChunkInput(page));
+    const first = await onlyfansTopSpendersChunk(appContext, await buildChunkInput(page));
     expect(first.satisfied).toBe(true);
     expect(first.stats).toMatchObject({ mode: "bootstrap" });
 
@@ -243,7 +243,7 @@ describe("OnlyFans top spenders (computed from transactions)", () => {
       ],
     });
 
-    const second = await executeTopSpendersChunk(appContext, await buildChunkInput(page));
+    const second = await onlyfansTopSpendersChunk(appContext, await buildChunkInput(page));
     expect(second.satisfied).toBe(true);
     expect(second.stats).toMatchObject({ mode: "steady_state", windowsProcessed: 1 });
 
@@ -259,7 +259,7 @@ describe("OnlyFans top spenders (computed from transactions)", () => {
     }
 
     const page = await seedPage();
-    const result = await executeTopSpendersChunk(appContext, await buildChunkInput(page));
+    const result = await onlyfansTopSpendersChunk(appContext, await buildChunkInput(page));
     expect(result.satisfied).toBe(true);
     expect(result.stats).toMatchObject({ mode: "empty" });
     expect(await listRankings(page.id)).toHaveLength(0);
@@ -299,7 +299,7 @@ describe("OnlyFans top spenders (computed from transactions)", () => {
 
     // A manual resume can race one run in before the planner re-pauses; the
     // executor skips gracefully instead of recording a failure.
-    const skipped = await executeTopSpendersChunk(disabledContext, await buildChunkInput(page));
+    const skipped = await onlyfansTopSpendersChunk(disabledContext, await buildChunkInput(page));
     expect(skipped.satisfied).toBe(true);
     expect(skipped.stats).toMatchObject({ skipped: "onlyfans_top_spenders_disabled" });
   }, INTEGRATION_TEST_TIMEOUT_MS);

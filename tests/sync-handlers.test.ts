@@ -96,14 +96,15 @@ vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
 vi.mock("../apps/runtime/src/services/sync/transactions.ts", () => transactionMocks);
 
 import {
-  executeDmConversationsChunk,
-  executeDmMessagesChunk,
-  executeStreamChunk,
   executeFollowersChunk,
   executeFollowersReconcileChunk,
-  executeSubscribersChunk,
-  executeTopSpendersChunk,
-  executeTransactionsChunk,
+  executeStreamChunk,
+  fanslyDmConversationsChunk,
+  fanslyDmMessagesChunk,
+  fanslySubscribersChunk,
+  fanslyTopSpendersChunk,
+  fanslyTransactionsChunk,
+  onlyfansTransactionsChunk,
 } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 
@@ -409,7 +410,7 @@ describe("sync executor handlers", () => {
       platformUserId: "fan-1",
     }]);
 
-    const result = await executeTopSpendersChunk(app, {
+    const result = await fanslyTopSpendersChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -509,7 +510,7 @@ describe("sync executor handlers", () => {
       },
     });
 
-    const result = await executeTopSpendersChunk(app, {
+    const result = await fanslyTopSpendersChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -603,7 +604,7 @@ describe("sync executor handlers", () => {
       platformUserId: "fan-1",
     }]);
 
-    const result = await executeTopSpendersChunk(app, {
+    const result = await fanslyTopSpendersChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -669,7 +670,7 @@ describe("sync executor handlers", () => {
 
     dbMocks.getCheckpoint.mockResolvedValue(null);
 
-    const result = await executeTopSpendersChunk(app, {
+    const result = await fanslyTopSpendersChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -753,7 +754,7 @@ describe("sync executor handlers", () => {
       },
     });
 
-    const result = await executeTopSpendersChunk(app, {
+    const result = await fanslyTopSpendersChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -834,7 +835,7 @@ describe("sync executor handlers", () => {
     });
     fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
 
-    await expect(executeSubscribersChunk(app, {
+    await expect(fanslySubscribersChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -897,7 +898,7 @@ describe("sync executor handlers", () => {
     dbMocks.getCheckpoint.mockResolvedValue(null);
     dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
 
-    await expect(executeSubscribersChunk(app, {
+    await expect(fanslySubscribersChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -1556,7 +1557,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     });
     dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
 
-    const result = await executeSubscribersChunk(app, {
+    const result = await fanslySubscribersChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -1608,7 +1609,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
     });
 
-    const result = await executeTransactionsChunk(app, {
+    const result = await onlyfansTransactionsChunk(app, {
       pageContext: {
         platform: "onlyfans",
         page: {
@@ -1654,7 +1655,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
     });
 
-    const result = await executeTransactionsChunk(app, {
+    const result = await fanslyTransactionsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -1700,7 +1701,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
     });
 
-    const result = await executeTransactionsChunk(app, {
+    const result = await fanslyTransactionsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -1746,7 +1747,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
     });
 
-    const result = await executeTransactionsChunk(app, {
+    const result = await onlyfansTransactionsChunk(app, {
       pageContext: {
         platform: "onlyfans",
         page: {
@@ -1818,7 +1819,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       },
     });
 
-    const result = await executeDmConversationsChunk(app, {
+    const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -1954,7 +1955,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       metadata: input.metadata ?? {},
     }));
 
-    const result = await executeDmConversationsChunk(app, {
+    const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -2077,7 +2078,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       },
     });
 
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -2220,7 +2221,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     dbMocks.getCheckpoint.mockResolvedValue(null);
     dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-1" }]);
 
-    const result = await executeDmConversationsChunk(app, {
+    const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -2354,7 +2355,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       updatedAt: new Date("2026-03-10T00:00:00.000Z"),
     }]);
 
-    const result = await executeDmConversationsChunk(app, {
+    const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -2498,7 +2499,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     }]);
     dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-live" }]);
 
-    const result = await executeDmConversationsChunk(app, {
+    const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -2617,7 +2618,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     })]);
     dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-recheck" }]);
 
-    const result = await executeDmConversationsChunk(app, {
+    const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -2730,7 +2731,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     })]);
     dbMocks.upsertFans.mockResolvedValue([{ id: 101, platformUserId: "fan-stale-aggregation" }]);
 
-    const result = await executeDmConversationsChunk(app, {
+    const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -2850,7 +2851,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       updatedAt: new Date("2026-03-10T00:00:00.000Z"),
     });
 
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -2970,7 +2971,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       },
     });
 
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -3103,7 +3104,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       },
     });
 
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -3234,7 +3235,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       },
     });
 
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -3343,7 +3344,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     });
 
     const startedAt = Date.now();
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -3511,7 +3512,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       },
     });
 
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -3656,7 +3657,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
       },
     });
 
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -3750,7 +3751,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     }));
     dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValueOnce(3);
 
-    await expect(executeDmMessagesChunk(app, {
+    await expect(fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {
@@ -3834,7 +3835,7 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     });
     dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValue(null);
 
-    const result = await executeDmMessagesChunk(app, {
+    const result = await fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
         page: {

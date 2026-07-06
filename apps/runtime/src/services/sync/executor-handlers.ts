@@ -1029,17 +1029,6 @@ export async function onlyfansLightChunk(
   } satisfies StreamChunkResult;
 }
 
-/** Compat shell (tests dispatch platform-agnostically); the registry routes
- * straight to the per-platform halves. Dies with the Stage 18 test re-point. */
-export async function executeLightChunk(
-  app: AppContext,
-  input: ExecutorRequestContext,
-) {
-  return input.pageContext.platform === "fansly"
-    ? fanslyLightChunk(app, input)
-    : onlyfansLightChunk(app, input);
-}
-
 export async function onlyfansTopSpendersChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -1566,18 +1555,6 @@ async function executeOnlyFansTopSpendersChunk(
   } satisfies StreamChunkResult;
 }
 
-/** Compat shell — see executeLightChunk note. */
-export async function executeTopSpendersChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & {
-    syncRunId: number;
-  },
-) {
-  return input.pageContext.platform === "onlyfans"
-    ? onlyfansTopSpendersChunk(app, input)
-    : fanslyTopSpendersChunk(app, input);
-}
-
 export async function executeFanIdentitiesChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -1729,19 +1706,6 @@ export async function onlyfansTransactionsChunk(
     yieldReason: result.yieldReason,
     stats: result as Record<string, unknown>,
   } satisfies StreamChunkResult;
-}
-
-/** Compat shell — see executeLightChunk note. */
-export async function executeTransactionsChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & {
-    streamState: PageSyncLease;
-    syncRunId: number;
-  },
-) {
-  return input.pageContext.platform === "fansly"
-    ? fanslyTransactionsChunk(app, input)
-    : onlyfansTransactionsChunk(app, input);
 }
 
 export async function onlyfansSubscribersChunk(
@@ -2006,19 +1970,6 @@ export async function fanslySubscribersChunk(
       processedThisChunk,
     },
   } satisfies StreamChunkResult;
-}
-
-/** Compat shell — see executeLightChunk note. */
-export async function executeSubscribersChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & {
-    streamState: PageSyncLease;
-    syncRunId: number;
-  },
-) {
-  return input.pageContext.platform === "onlyfans"
-    ? onlyfansSubscribersChunk(app, input)
-    : fanslySubscribersChunk(app, input);
 }
 
 export async function executeFollowersChunk(
@@ -3780,19 +3731,6 @@ async function executeOnlyFansDmMessagesChunk(
   }
 }
 
-/** Compat shell — see executeLightChunk note. */
-export async function executeDmConversationsChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & {
-    streamState: PageSyncLease;
-    syncRunId: number;
-  },
-) {
-  return input.pageContext.platform === "onlyfans"
-    ? onlyfansDmConversationsChunk(app, input)
-    : fanslyDmConversationsChunk(app, input);
-}
-
 export async function onlyfansDmMessagesChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -4427,19 +4365,6 @@ function fanslyNewStreamSkip(reason: string): StreamChunkResult {
     yieldReason: null,
     stats: { skipped: reason },
   };
-}
-
-/** Compat shell — see executeLightChunk note. */
-export async function executeDmMessagesChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & {
-    streamState: PageSyncLease;
-    syncRunId: number;
-  },
-): Promise<StreamChunkResult> {
-  return input.pageContext.platform === "onlyfans"
-    ? onlyfansDmMessagesChunk(app, input)
-    : fanslyDmMessagesChunk(app, input);
 }
 
 export async function executeFanEarningsChunk(
