@@ -683,6 +683,27 @@ export function buildProgram() {
     });
 
   program
+    .command("ai:personas-seed")
+    .description("Stage 30: upsert the bundled personas into ai_personas (idempotent)")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const { createBundledPersonalities } = await import("./modules/ai/index.ts");
+        const { upsertAiPersona } = await import("@agency_hub_core/db");
+        for (const persona of createBundledPersonalities()) {
+          const row = await upsertAiPersona(app.db, {
+            key: persona.id,
+            displayName: persona.name,
+            systemBlock: persona.content,
+          });
+          console.log(`seeded ${row.key} (${row.displayName})`);
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("erasure:run")
     .description("Stage 28: audited break-glass erasure across hot DB, ledger partitions, and lake (dry-run default)")
     .requiredOption("--scope <scope>", "fan | page | model")

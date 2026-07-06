@@ -2783,3 +2783,30 @@ hi-greeting ≤10 lock, ping segment analysis) have ONE source of truth.
 Remaining in Stage 30: Task 5 parity harness + freeze capture + sign-off
 (OWNER GATE: declare the prompt freeze), persona seeding + extension
 inventory (rides the freeze), Task 6 deploy/smoke/latency.
+
+**Decision #108 (2026-07-06, owner-confirmed):** Stage 30 **prompt freeze
+DECLARED and parity SIGNED OFF.** The owner confirmed both gates in one
+structured confirm: (a) production deploy of the built backlog (0071
+erasure_log + 0072 AI restricted class + 0073 ai_personas + Stages
+28.4/29/30 code), (b) the prompt freeze — no tuning in either client repo
+until parity sign-off.
+
+**Parity sign-off (passport rule: assembled prompts, not outputs):**
+- Freeze guard: desktop HEAD == frozen snapshot 1db76a4ae13d; all 24
+  migrated files' SOURCES re-hash exactly to the manifest's recorded
+  sha256 values.
+- Assembly parity: 9 fixtures across all seven features (tone/mode
+  branches, draft, ping segments, fan bio) — kernel `buildPrompt` output
+  is BYTE-IDENTICAL to the live desktop `buildPrompt` imported from the
+  sibling checkout. Zero differences.
+- Harness: tests/ai-feature-parity.test.ts (skips where the sibling repo
+  is absent) + the authoritative runnable
+  `node --import tsx/esm scripts/ai-parity-signoff.ts` (exit-coded).
+- CAVEAT recorded: this proves ASSEMBLY parity. Context-VALUE parity for
+  the three named loader gaps (PPV purchased-state, ledger-derived sums,
+  media labels) is a Stage 31 cutover checkpoint against live traffic —
+  the harness level is what the passport requires for this stage's exit.
+- `ai:personas-seed` CLI upserts the bundled personas into ai_personas
+  (idempotent; run post-deploy).
+
+Client cutover stages (31/32) are now unblocked on the parity side.

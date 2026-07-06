@@ -207,7 +207,15 @@ exited (entry criterion "29 exited" — deploy pending owner window).
   practice). Gate test exercises all seven through the route. Persona
   seeding + extension panel-feature inventory ride Task 5's freeze window
   (the extension's personas are the seeds' source of truth).
-- [ ] Task 5: parity harness + freeze-window capture + sign-off (OWNER GATE:
-  declare the freeze first).
-- [ ] Task 6: deploy (0071+0072+0073 ride together) + smoke CLI + latency
-  numbers.
+- [x] **Task 5: parity SIGNED OFF (#108)** — freeze declared by the owner
+  2026-07-06 (structured confirm); harness = tests/ai-feature-parity.test.ts
+  + `node --import tsx/esm scripts/ai-parity-signoff.ts`. Freeze guard: all
+  24 migrated sources re-hash to the manifest values; desktop HEAD == the
+  snapshot commit. Assembly parity: 9 fixtures across all seven features —
+  kernel buildPrompt BYTE-IDENTICAL to the live desktop buildPrompt
+  (cross-repo import). CAVEAT: assembly-level parity per the passport;
+  context-VALUE parity for the three named loader gaps is a Stage 31
+  cutover checkpoint. `ai:personas-seed` CLI added (run post-deploy).
+- [ ] Task 6: deploy running (0071+0072+0073 one window) + smoke CLI +
+  latency numbers; extension panel-feature/persona inventory (reference
+  read) lands here too.
