@@ -251,8 +251,17 @@ repo; core support in main @ 109096f):**
   `order by id` resolved to the ::text alias (lexicographic sort stranding
   high ids behind the watermark; the Stage 8 trap, re-caught by the
   idempotency test). Desktop green 772 + 1237.
-- [ ] Task 3: deletions + settings collapse ('feature' becomes the only
-  lane) + persona picker from kernel ai_personas (needs kernel persona
-  list/CRUD routes + custom-persona sync).
+- [~] **Task 3 in progress.** DONE: kernel persona routes (core 5711d34 —
+  GET/PUT /api/v1/ai/personas, apiKey lane, tested; account→persona
+  mappings stay client-local per DP 9-A); hub client
+  listAiPersonas/upsertAiPersona; ONE-TIME custom-persona sync on hub
+  reconfigure (fire-and-forget, idempotent upserts keyed by local persona
+  id; builtin skipped — kernel-seeded); parity sign-off CLI names the
+  post-cutover state (source deletion ≠ repo missing). Desktop 017e86a.
+  REMAINS: persona picker/editor UI swap (PersonalitySettings.tsx →
+  kernel CRUD; resolvePersonality collapses to key mapping), the DELETIONS
+  sweep (prompts/, llm/, providers/, both gateway adapters, transport
+  setting collapse to 'feature'-only + HubSettings toggle removal, model
+  selector removal) + the test-suite triage that follows, and grep gates.
 - [ ] Task 4: vendor-key decommission + usage-lane drain mode.
 - [ ] Task 5 (ops): pilot workday → staged fleet rollout → §5 verification.
