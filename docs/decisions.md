@@ -2878,3 +2878,19 @@ Suites 538 + 1100 green; 3 grep gates pin the cutover. NOT RELEASED —
 Task 5 (pilot workday → staged fleet 0.1.31 → §5 verification → owner
 comms + upstream vendor-key revocation) is owner-gated and additionally
 gated on 0.1.30 fleet adoption.
+
+**Decision #112 (2026-07-07):** Dashboard REBUILD instead of modernization —
+owner decision superseding Stage 33's incremental approach ("visual behavior
+preserved, response shapes unchanged"). The owner wants a FULL NEW dashboard,
+designed and built in its own Claude session with its own PRD; the current
+`apps/dashboard` is DEPRECATED — it keeps serving until the new one reaches
+parity sign-off, then is deleted. Stage 33's substantive requirements carry
+over as PRD inputs, not as constraints on shape: reports served from the
+Stage 28 metrics models, grants + device-token admin UI, erasure UI
+(owner-only, dry-run-first), golden-signals page, live updates over stream
+v2 instead of the 18 polling timers. Launch prompt:
+`docs/project-kernel/prompts/prompt-dashboard-rebuild.md`. The Stage 33
+in-flight branch (kernel/stage-33-dashboard, unpushed: the useKernelEvents
+bridge + polling-site sweep) was ABANDONED; its verified ground truth
+(polling inventory, the v2 event-lane facts) is preserved in the launch
+prompt instead.
