@@ -22,7 +22,7 @@ the migration's historical archive — living docs are `docs/` + `docs/generated
 | Doc | What it answers |
 |---|---|
 | `docs/decisions.md` | Every technical decision, numbered, append-only — including the family law (anti-deletion, updated-in-change) and cross-repo rulings clients reference |
-| `docs/generated/` | Machine-generated reference (config/flag policy table, egress inventory, code maps) — regenerate, never hand-edit; each file's banner says how |
+| `docs/generated/` | Machine-generated reference (auth policy table + 24 code maps) — start at `00-overview.md`, it indexes which map covers what; regenerate, never hand-edit; each file's banner says how |
 | `docs/project-kernel/pass3/stages/` | The 35 stage specs of the migration — the WHY behind most of today's architecture; superseded ones carry banners |
 | `docs/project-kernel/pass3/execution-log.md` | Per-stage status board of the migration |
 | `docs/runbooks/` | Operational rituals — incl. the break-glass direct-read runbook (DP 8) and go-live checklists |
