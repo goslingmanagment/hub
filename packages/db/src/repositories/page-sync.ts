@@ -1885,6 +1885,54 @@ export async function pausePageSync(
   });
 }
 
+/**
+ * Kernel Stage 26: typed auth death parks the WHOLE page — every stream goes
+ * to FSM `paused` with blocker_kind='auth' stamped, so quota stops burning on
+ * a dead session and the planner skips the page within one cycle. The stamp
+ * is what makes the pause reversible precisely: clearPageSyncAuthBlock (the
+ * successful re-verify path) matches blocker_kind='auth' and restores
+ * idle/pending without touching deliberately-paused streams (feature gates).
+ */
+export async function pausePageSyncForAuth(
+  db: Database,
+  input: {
+    pageId: number;
+    streams: SyncStream[];
+    blockerCode: string;
+    blockerMessage: string;
+    now?: Date;
+  },
+) {
+  if (input.streams.length === 0) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const streams = normalizePageSyncRequestStreams(input.streams);
+  await db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    await listPageSyncStatesInternal(database, { pageId: input.pageId }, { lock: true });
+    for (const stream of streams) {
+      await database.execute(sql`
+        update ${pageSyncStates}
+        set status = 'paused',
+            blocker_kind = 'auth',
+            blocker_code = ${input.blockerCode},
+            blocker_message = ${input.blockerMessage},
+            blocked_at = ${now},
+            leased_seq = null,
+            lease_owner = null,
+            lease_token = null,
+            lease_heartbeat_at = null,
+            lease_expires_at = null,
+            updated_at = ${now}
+        where page_id = ${input.pageId}
+          and stream = ${stream}
+      `);
+    }
+  });
+}
+
 export async function resumePageSync(
   db: Database,
   input: {

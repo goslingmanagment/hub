@@ -7,10 +7,13 @@
 
 import {
   advancePageOfapiAuthStatus,
+  clearPageSyncAuthBlock,
   findPageByOfapiAccountId,
   getLatestOfapiWebhookEventReceivedAt,
   getOfapiCreditState,
+  getSyncStreamsForPlatform,
   listOfapiMappedPages,
+  pausePageSyncForAuth,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -97,6 +100,19 @@ export async function applyOfapiAccountHealthEvent(
     }
 
     if (OFAPI_AUTH_ALERT_STATUSES.has(authStatus)) {
+      // Stage 26: action-required auth death parks the page's REST streams
+      // (paused + blocker_kind='auth') so sync stops burning credits on a
+      // dead vendor session. session_expired stays alert-only — OFAPI
+      // recovers it silently and the session still works.
+      if (OFAPI_AUTH_ACTION_REQUIRED_STATUSES.has(authStatus)) {
+        await pausePageSyncForAuth(app.db, {
+          pageId: page.id,
+          streams: getSyncStreamsForPlatform(page.platform),
+          blockerCode: `ofapi_${authStatus}`,
+          blockerMessage: `OFAPI reported ${authStatus} for account ${row.ofapiAccountId ?? "unknown"}`,
+          now: row.receivedAt,
+        });
+      }
       await notifyOfapiAuthIncident(app, {
         platformAccountId: page.id,
         pageLabel: page.label,
@@ -105,6 +121,9 @@ export async function applyOfapiAccountHealthEvent(
         occurredAt: row.receivedAt,
       });
     } else if (OFAPI_AUTH_RECOVERED_STATUSES.has(authStatus)) {
+      // Stage 26: vendor-signaled recovery is the OFAPI-side re-verify —
+      // release the auth pause the same way credential re-verify does.
+      await clearPageSyncAuthBlock(app.db, page.id, { now: row.receivedAt });
       await resolveOfapiAuthIncident(app, {
         platformAccountId: page.id,
         pageLabel: page.label,

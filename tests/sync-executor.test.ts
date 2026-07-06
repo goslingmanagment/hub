@@ -6,6 +6,7 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 const dbMocks = vi.hoisted(() => ({
   acquirePageSyncLease: vi.fn(),
   blockPageSync: vi.fn(),
+  pausePageSyncForAuth: vi.fn(),
   completePageSync: vi.fn(),
   ensurePageSyncStates: vi.fn(),
   retryPageSync: vi.fn(),
@@ -523,6 +524,12 @@ describe("sync executor", () => {
       blockerKind: "auth",
       blockerCode: "credentials_invalid",
       blockerMessage: "expired session",
+    }));
+    // Stage 26: a dead session parks the WHOLE page, not just the failing stream.
+    expect(dbMocks.pausePageSyncForAuth).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      blockerCode: "credentials_invalid",
+      streams: expect.arrayContaining(["light", "dm_messages", "followers"]),
     }));
     expect(result).toMatchObject({
       kind: "blocked",

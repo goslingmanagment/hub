@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   claimQueuedOfapiCommand,
   finalizeOfapiCommand,
+  findPageById,
   getOfapiCommandById,
   insertObservation,
   listOfapiCommandVerificationCandidates,
@@ -16,6 +17,10 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import { OfapiApiError } from "./ofapi.ts";
+import {
+  isOfapiAccountHealthEnabled,
+  ofapiAuthStatusNeedsAction,
+} from "./ofapi-account-health.ts";
 import {
   asRecord,
   idToString,
@@ -288,6 +293,45 @@ export async function executeOfapiCommand(
   const command = await claimQueuedOfapiCommand(app.db, { commandId, now });
   if (!command) {
     return { status: "not_claimed" as const };
+  }
+
+  // Stage 26: a page whose vendor session needs operator action cannot send —
+  // fail fast with a typed terminal error INSTEAD of spending the one
+  // attempt. Never weakens the one-attempt discipline: no HTTP happens here.
+  // Gated on the health flag because ofapi_auth_status only advances when
+  // the accounts.* projection runs — a stale column must not fail sends.
+  if (isOfapiAccountHealthEnabled(app.config)) {
+    const stored = await findPageById(app.db, command.pageId);
+    if (stored && ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {
+      const failedAt = new Date();
+      await finalizeOfapiCommand(app.db, {
+        commandId: command.id,
+        fromStates: ["in_flight"],
+        state: "failed_terminal",
+        now: failedAt,
+        lastErrorCode: "ofapi_auth_action_required",
+        lastErrorClass: "terminal",
+        verifierResult: {
+          source: "auth_gate",
+          authStatus: stored.page.ofapiAuthStatus,
+          observedAt: failedAt.toISOString(),
+        },
+      });
+      await recordCommandResultObservation(app, {
+        command,
+        state: "failed_terminal",
+        outcome: {
+          errorCode: "ofapi_auth_action_required",
+          errorClass: "terminal",
+          authStatus: stored.page.ofapiAuthStatus,
+        },
+      });
+      app.logger.warn(
+        { commandId: command.id, pageId: command.pageId, authStatus: stored.page.ofapiAuthStatus },
+        "OFAPI command failed fast: account auth needs operator action",
+      );
+      return { status: "failed_terminal" as const, commandId: command.id };
+    }
   }
 
   try {

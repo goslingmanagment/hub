@@ -19,6 +19,8 @@ import {
   type SyncStream,
   type SyncWorkClass,
   yieldPageSync,
+  getSyncStreamsForPlatform,
+  pausePageSyncForAuth,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import type { JobWithMetadata, PgBoss } from "pg-boss";
@@ -533,6 +535,24 @@ export async function executeNextSyncPageChunk(
       await telemetry.finish("failed", failure, {
         chunkStatus: "blocked",
       });
+      // Stage 26: a dead session is dead for the WHOLE page — park every
+      // stream (paused + blocker_kind='auth') so no other stream keeps
+      // burning quota against it. Successful re-verify restores via
+      // clearPageSyncAuthBlock (handleSuccessfulPageVerificationRecovery).
+      try {
+        await pausePageSyncForAuth(app.db, {
+          pageId: platformAccountId,
+          streams: getSyncStreamsForPlatform(provider),
+          blockerCode: "credentials_invalid",
+          blockerMessage: failure.summary,
+          now: failedAt,
+        });
+      } catch (pauseError) {
+        app.logger.warn(
+          { platformAccountId, err: pauseError },
+          "Auth-dead page pause failed; the failing stream stays blocked",
+        );
+      }
       await notifyAuthFailedIncident(app, {
         platformAccountId,
         pageLabel,
