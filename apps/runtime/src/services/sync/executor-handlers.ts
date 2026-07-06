@@ -72,6 +72,9 @@ import {
   type HttpRequestObserver,
 } from "@agency_hub_core/shared";
 
+import type { CanonicalStream } from "@agency_hub_core/platform-core";
+
+import { appPlatformRegistry } from "../../platforms/registry.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import { isPageDmPruneEnabled } from "../page-dm-retention.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
@@ -144,7 +147,7 @@ import {
 import { lookupHydratedFans, upsertHydratedFansForPage, type HydrationCaptureContext } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
 
-type ExecutorRequestContext = {
+export type ExecutorRequestContext = {
   budget: SyncChunkBudget;
   pageContext: ResolvedPageContext;
   telemetry: SyncRunTelemetry;
@@ -4528,30 +4531,17 @@ export async function executeStreamChunk(
     } satisfies StreamChunkResult;
   }
 
-  switch (input.streamState.stream) {
-    case "light":
-      return executeLightChunk(app, input);
-    case "fan_identities":
-      return executeFanIdentitiesChunk(app, input);
-    case "top_spenders":
-      return executeTopSpendersChunk(app, input);
-    case "transactions":
-      return executeTransactionsChunk(app, input);
-    case "subscribers":
-      return executeSubscribersChunk(app, input);
-    case "dm_conversations":
-      return executeDmConversationsChunk(app, input);
-    case "dm_messages":
-      return executeDmMessagesChunk(app, input);
-    case "followers":
-      return executeFollowersChunk(app, input);
-    case "followers_reconcile":
-      return executeFollowersReconcileChunk(app, input);
-    case "fan_earnings":
-      return executeFanEarningsChunk(app, input);
-    case "purchase_history":
-      return executePurchaseHistoryChunk(app, input);
-    default:
-      throw new Error(`Unsupported executor stream "${input.streamState.stream}"`);
+  // Stage 18: registry-dispatched — the adapter's declared capabilities are
+  // the routing table (parity with the old switch is pinned by the registry
+  // test suite; an undeclared stream for a platform now fails loudly instead
+  // of running the wrong platform's handler).
+  const handler = appPlatformRegistry
+    .get(input.pageContext.platform)
+    .pull[input.streamState.stream as CanonicalStream];
+  if (handler === undefined) {
+    throw new Error(
+      `Unsupported executor stream "${input.streamState.stream}" for platform "${input.pageContext.platform}"`,
+    );
   }
+  return handler(app, input);
 }

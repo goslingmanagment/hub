@@ -52,6 +52,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@agency_hub_core/platform-core": "workspace:*",
     "@fastify/cookie": "^11.0.2",
     "@fastify/static": "^9.1.3",
     "@fastify/swagger": "^9.7.0",

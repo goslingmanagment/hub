@@ -1,0 +1,11 @@
+{
+  "name": "@agency_hub_core/platform-core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agency_hub_core/shared": "workspace:*"
+  }
+}
