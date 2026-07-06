@@ -2598,3 +2598,30 @@ query); first natural command_result; Stage 16 shapes on lilly pages;
 chargebacks first run 03:10 UTC; Stage 26 shadow diff review (~48 h);
 Stage 19 would-deny log window → enforce flip; Stage 8/9/10 telemetry
 windows per stage Progress blocks; desktop fleet x-client-version (07-12).
+
+## Stage 28 First Slice — Ops Retention Bounded, Prune Returns Gated (2026-07-06)
+
+**Decision #102:** Stage 28 Task 5 built and deployed same-day (1f8ead8;
+suite 191 files / 1531 tests green). The other half of the deploy day: the
+by-model earnings view (owner request — overviewRevenueByModel endpoint +
+Overview "Earnings by model" card with trend sparklines) shipped in the
+same window (7c4f81e + closed-mock followup 7ee5494).
+
+- **sync_runs bounded** — the reverse-direction retention bug (unbounded
+  growth, no deleter) closed: 30-day sweep, 'running' rows exempt,
+  children cascade, raw payloads keep rows and null the link. 0070 index.
+- **ops_metric_samples** 90 days (was the 14-day Stage 25 stopgap).
+- **Prune = cache policy again**: flag default ON (kill-switch semantics
+  kept one release), runtime-gated on archive coverage (archive ≥ hot per
+  conversation, cached 15 min, fails closed, logs held-state). Prod env
+  pins nothing → the coverage query is now the deciding gate in prod.
+- **Redaction switch retired for good** — flag, sweep arm, repo fn
+  deleted; terminal command payloads are permanent business facts.
+- **Deleter enumeration** — the sanctioned scheduled deleters are exactly:
+  30d observability sweep, 90d samples prune, coverage-gated DM cache
+  prune, pg-boss archival. Any new SQL-deleting file fails the pin test.
+
+**RECORDED for Task 1:** DuckDB ships as a runtime dependency (the
+scheduler container runs exports); nothing is tierable until ~2027-01
+(6-month hot window over data that starts 2026-07) — the tiering job lands
+drill-tested on synthetic partitions ahead of need.
