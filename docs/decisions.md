@@ -2894,3 +2894,19 @@ in-flight branch (kernel/stage-33-dashboard, unpushed: the useKernelEvents
 bridge + polling-site sweep) was ABANDONED; its verified ground truth
 (polling inventory, the v2 event-lane facts) is preserved in the launch
 prompt instead.
+
+**Deploy log (2026-07-06/07, owner-run chain "deploy, check, test, release"):**
+dist-only deploys of main → prod (three passes: f4ae42e enablers; 26a5b2e
+window params; 535cfb8 the walk). Verified: health green; the Fansly
+feature smoke on lilly-1 generated end-to-end with the captured prompt
+containing "Fansly" and ZERO "OnlyFans" (named substitution live);
+top-spenders route serving (401 unauth). FOUND + FIXED (the Stage 16 ramp
+doing its job): fan_earnings capture never returned data — Fansly's
+earnings endpoints answer PER FAN (correlationAccountId); a windowed call
+without one returns [] (probe-confirmed: with a fan id → 21 rows). Capture
+reworked as a spender-scoped checkpointed walk (page_fans net>0, two calls
+per fan, concatenated chunk journals). purchase_history remains blocked on
+its own param contract (order-history wants accountMediaId — the per-fan
+walk shape needs rework; circuit breaker failing loudly as designed).
+Desktop fleet-version telemetry was reset by the container restarts —
+0.1.30 adoption check pending fresh traffic.
