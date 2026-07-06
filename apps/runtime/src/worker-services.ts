@@ -72,6 +72,7 @@ import {
   WORKBOARD_RECOMPUTE_QUEUE,
   WORKBOARD_FAN_RECOMPUTE_QUEUE,
 } from "./services/sync-queue.ts";
+import { ensureOpsMetricsQueue, startGoldenSignalWorker } from "./services/golden-signals.ts";
 import { recomputeAllWorkboardPages } from "./modules/workboard/index.ts";
 import { runClosingClassificationAllPages } from "./modules/workboard/index.ts";
 
@@ -166,6 +167,7 @@ export async function startWorkerServices(
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
+  await ensureOpsMetricsQueue(boss, createdQueues);
   // Stage 25: cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
 
@@ -250,6 +252,7 @@ export async function startWorkerServices(
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   // Stage 23: domain events → debounced per-fan board recompute.
   const workboardEventRecompute = startWorkboardEventRecompute(app, boss);
+  await startGoldenSignalWorker(app, boss);
 
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);

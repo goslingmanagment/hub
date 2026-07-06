@@ -2511,6 +2511,7 @@ const notificationIncidentKindEnum = z.enum([
   "observations_partitions",
   "wrong_transactions_writer",
   "read_gateway_capture",
+  "golden_signal_lag",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const deliveryKindEnum = z.enum([
@@ -3773,6 +3774,22 @@ export const configStagedResponseSchema = z.object({
   ),
 });
 
+export const opsMetricsResponseSchema = z.object({
+  samples: z.array(z.object({
+    metric: z.string(),
+    quantile: z.string(),
+    valueMs: z.number().int(),
+    sampledAt: isoTimestamp,
+  })),
+  thresholdsMs: z.record(z.string(), z.number().int()),
+  smoke: z.object({
+    framesSeen: z.number().int(),
+    gapCount: z.number().int(),
+    duplicateCount: z.number().int(),
+    updatedAt: isoTimestamp.nullable(),
+  }).nullable(),
+});
+
 export const routeSchemas = {
   health: {
     auth: { kind: "public" },
@@ -3781,6 +3798,16 @@ export const routeSchemas = {
     response: {
       200: healthResponseSchema,
       503: healthResponseSchema,
+    },
+  },
+  opsMetrics: {
+    auth: { kind: "monitoring" },
+    tags: ["system"],
+    summary: "Golden-signal lag samples (Stage 25 acceptance instrument)",
+    response: {
+      200: opsMetricsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   healthSync: {

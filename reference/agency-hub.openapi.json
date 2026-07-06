@@ -3164,7 +3164,8 @@
                 "db_disk_usage",
                 "observations_partitions",
                 "wrong_transactions_writer",
-                "read_gateway_capture"
+                "read_gateway_capture",
+                "golden_signal_lag"
               ]
             },
             "in": "query",
@@ -3242,7 +3243,8 @@
                               "db_disk_usage",
                               "observations_partitions",
                               "wrong_transactions_writer",
-                              "read_gateway_capture"
+                              "read_gateway_capture",
+                              "golden_signal_lag"
                             ]
                           },
                           "pageLabel": {
@@ -21596,6 +21598,184 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ops/metrics": {
+      "get": {
+        "summary": "Golden-signal lag samples (Stage 25 acceptance instrument)",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "monitoringTokenAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "samples": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "metric": {
+                            "type": "string"
+                          },
+                          "quantile": {
+                            "type": "string"
+                          },
+                          "valueMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "sampledAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "metric",
+                          "quantile",
+                          "valueMs",
+                          "sampledAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "thresholdsMs": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "smoke": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "framesSeen": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "gapCount": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "duplicateCount": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "updatedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "framesSeen",
+                            "gapCount",
+                            "duplicateCount",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "samples",
+                    "thresholdsMs",
+                    "smoke"
+                  ],
+                  "additionalProperties": false
+                }
               }
             }
           },

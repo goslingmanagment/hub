@@ -19,7 +19,8 @@ export type NotificationIncidentKind =
   | "db_disk_usage"
   | "observations_partitions"
   | "wrong_transactions_writer"
-  | "read_gateway_capture";
+  | "read_gateway_capture"
+  | "golden_signal_lag";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";

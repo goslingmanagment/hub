@@ -95,6 +95,7 @@ export const kernelOperations = {
   ofapiReadGateway: { method: "GET", path: "/api/v1/ofapi/read/*" },
   ofapiWebhookReceive: { method: "POST", path: "/api/v1/ofapi/webhook" },
   openApiJson: { method: "GET", path: "/api/v1/openapi.json" },
+  opsMetrics: { method: "GET", path: "/api/v1/ops/metrics" },
   overview: { method: "GET", path: "/api/v1/overview" },
   overviewGrowth: { method: "GET", path: "/api/v1/overview/growth" },
   overviewRevenue: { method: "GET", path: "/api/v1/overview/revenue" },

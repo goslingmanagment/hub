@@ -140,6 +140,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "observations_partitions",
   "wrong_transactions_writer",
   "read_gateway_capture",
+  "golden_signal_lag",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -1196,6 +1197,15 @@ export const ofapiCommands = pgTable(
     `),
   }),
 );
+
+// Kernel Stage 25: golden-signal samples (five lags, p50/p95, minutely).
+export const opsMetricSamples = pgTable("ops_metric_samples", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  metric: text("metric").notNull(),
+  valueMs: bigint("value_ms", { mode: "number" }).notNull(),
+  quantile: text("quantile").notNull(),
+  sampledAt: timestamp("sampled_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 // Kernel Stage 23: soft claim leases — coordination, not access control.
 export const workboardClaimLeases = pgTable(

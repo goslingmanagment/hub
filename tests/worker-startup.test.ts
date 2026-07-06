@@ -123,6 +123,13 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   WORKBOARD_CLASSIFY_QUEUE: "workboard.classify-closing",
   WORKBOARD_FAN_RECOMPUTE_QUEUE: "workboard.fan-recompute",
 }));
+vi.mock("../apps/runtime/src/services/golden-signals.ts", () => ({
+  OPS_METRICS_SAMPLE_QUEUE: "ops.metrics.sample",
+  ensureOpsMetricsQueue: vi.fn(),
+  ensureOpsMetricsSchedule: vi.fn(),
+  startGoldenSignalWorker: vi.fn(async () => "gs-worker"),
+  runGoldenSignalSample: vi.fn(),
+}));
 vi.mock("../apps/runtime/src/services/workboard-event-recompute.ts", () => ({
   startWorkboardEventRecompute: vi.fn(() => ({ stop: vi.fn(async () => undefined) })),
   runWorkboardFanRecompute: vi.fn(),

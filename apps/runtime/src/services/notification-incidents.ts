@@ -65,6 +65,8 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 Wrong transactions writer refused";
     case "read_gateway_capture":
       return "🚨 Read-gateway capture tee dropping";
+    case "golden_signal_lag":
+      return "🚨 Golden-signal lag over threshold";
   }
 }
 
@@ -427,7 +429,7 @@ export async function resolveOfapiAuthIncident(
 export async function notifyOfapiGlobalIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
-    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions" | "read_gateway_capture";
+    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions" | "read_gateway_capture" | "golden_signal_lag";
     errorSummary: string;
     occurredAt?: Date;
   },
@@ -445,7 +447,7 @@ export async function notifyOfapiGlobalIncident(
 export async function resolveOfapiGlobalIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
-    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions" | "read_gateway_capture";
+    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions" | "read_gateway_capture" | "golden_signal_lag";
     recoveredAt?: Date;
   },
 ) {

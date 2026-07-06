@@ -86,6 +86,7 @@ import {
   getSyncMonitorRecentRequests,
   getSyncMonitorSnapshot,
 } from "../../services/sync-monitor.ts";
+import { getGoldenSignalsReport } from "../../services/golden-signals.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Ops module (target §6.1): sync health, credits, incidents, config,
@@ -124,6 +125,15 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     });
     reply.code(health.statusCode as 200 | 503);
     return health.body;
+  });
+
+  // Stage 25: the golden-signal acceptance instrument (monitoring-token or
+  // dashboard session — same gate as detailed sync health).
+  server.get("/api/v1/ops/metrics", {
+    schema: routeSchemas.opsMetrics,
+  }, async (request) => {
+    await requireSyncHealthAccess(request);
+    return getGoldenSignalsReport(appContext);
   });
 
   server.get("/api/v1/ofapi/credits/summary", {
