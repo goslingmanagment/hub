@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -698,6 +699,85 @@ export function buildProgram() {
           });
           console.log(`seeded ${row.key} (${row.displayName})`);
         }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("ai:feature-smoke")
+    .description("Stage 30: exercise a kernel AI feature end-to-end against this environment (spends provider budget)")
+    .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting")
+    .requiredOption("--page <label>", "page label")
+    .requiredOption("--conversation <ref>", "fan conversation ref (OF: the fan id)")
+    .requiredOption("--as <username>", "chatter/owner user the generation is attributed to")
+    .option("--draft <text>", "improve-draft input")
+    .option("--model <model>", "gateway model override")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { prepareAiFeatureStream } = await import("./modules/ai/index.ts");
+        const user = await findUserByUsername(app.db, options.as);
+        if (!user) {
+          throw new Error(`unknown user: ${options.as}`);
+        }
+        const pageRow = await findPageByLabel(app.db, options.page);
+        if (!pageRow) {
+          throw new Error(`unknown page: ${options.page}`);
+        }
+        const startedAt = Date.now();
+        // Operator smoke runs as the named user with owner-style page reach
+        // (canAccessPage: owner role passes; others need the assignment).
+        const principal = {
+          authMethod: "api_key" as const,
+          user: { id: user.id, username: user.username, role: user.role },
+          assignedPageIds: [pageRow.page.id],
+        };
+        const stream = await prepareAiFeatureStream(
+          app,
+          principal as never,
+          options.feature,
+          {
+            clientRequestId: randomUUID(),
+            pageLabel: options.page,
+            platform: pageRow.page.platform as "onlyfans" | "fansly",
+            conversationRef: options.conversation,
+            ...(options.draft ? { draftText: options.draft } : {}),
+            ...(options.model ? { model: options.model } : {}),
+          },
+        );
+        const preparedMs = Date.now() - startedAt;
+        let text = "";
+        let usage: Record<string, unknown> | null = null;
+        let firstTokenMs: number | null = null;
+        const abort = new AbortController();
+        for await (const frame of stream.stream(abort.signal)) {
+          if (frame.type === "content_delta") {
+            if (firstTokenMs === null) {
+              firstTokenMs = Date.now() - startedAt;
+            }
+            text += frame.text;
+          } else if (frame.type === "usage") {
+            usage = frame.usage as unknown as Record<string, unknown>;
+          }
+        }
+        const totalMs = Date.now() - startedAt;
+        await stream.recordTerminal({
+          outcome: "completed",
+          usage: usage as never,
+          providerResponseId: null,
+          cacheHit: false,
+          durationMs: totalMs,
+          completedAt: new Date(),
+          completionText: text,
+        });
+        console.log(JSON.stringify({
+          feature: options.feature,
+          generationRef: stream.requestId,
+          latencyMs: { contextAndPrepare: preparedMs, firstToken: firstTokenMs, total: totalMs },
+          usage,
+          completionPreview: text.slice(0, 200),
+        }, null, 2));
       } finally {
         await app.close();
       }
