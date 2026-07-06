@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { insertObservation, listEventsSince } from "@agency_hub_core/db";
+import {
+  createModel,
+  createOnlyFansPage,
+  insertObservation,
+  listEventsSince,
+  setPageOfapiAccountId,
+} from "@agency_hub_core/db";
 
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
@@ -205,6 +211,60 @@ describe("canonicalization sweep (Stage 8)", () => {
     expect(dry.stamped).toBe(0);
     expect(dry.appended).toBeGreaterThan(0); // the unmapped row's draft, counted not written
   });
+
+  it("resolves capture-first webhook rows via native_account_ref (prod shape: account_id NULL)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Prod truth: the webhook journal producer stores only the vendor ref —
+    // the page id must resolve at canonicalize time through the page map.
+    const model = await createModel(testDb.db, { slug: "reso", name: "Reso" });
+    const page = await createOnlyFansPage(testDb.db, { modelId: model.id, label: "reso-of" });
+    await setPageOfapiAccountId(testDb.db, {
+      pageId: page.id,
+      ofapiAccountId: "acct_reso11111111111111111111111111111",
+    });
+
+    await insertObservation(testDb.db, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      accountId: null,
+      nativeAccountRef: "acct_reso11111111111111111111111111111",
+      kind: "messages.received",
+      payload: {
+        event: "messages.received",
+        account_id: "acct_reso11111111111111111111111111111",
+        payload: { id: 9100, createdAt: "2026-07-06T08:00:00+00:00", fromUser: { id: 900 }, text: "resolve me", price: 0, isFree: true, mediaCount: 0 },
+      },
+      payloadHash: sha256("wh-reso"),
+      idempotencyKey: "evt-reso-1",
+    });
+    // A ref no page owns stays pending (self-heal contract unchanged).
+    await insertObservation(testDb.db, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      accountId: null,
+      nativeAccountRef: "acct_nobody",
+      kind: "messages.received",
+      payload: {
+        event: "messages.received",
+        account_id: "acct_nobody",
+        payload: { id: 9101, createdAt: "2026-07-06T08:01:00+00:00", fromUser: { id: 901 }, text: "orphan", price: 0, isFree: true, mediaCount: 0 },
+      },
+      payloadHash: sha256("wh-orphan"),
+      idempotencyKey: "evt-reso-2",
+    });
+
+    const run = await runCanonicalization(appStub());
+    expect(run).toMatchObject({ appended: 1, skippedUnmapped: 1, errored: 0 });
+
+    const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "message.received" });
+  }, 60_000);
 
   it("isolates a poison row: one throwing observation never wedges the sweep", async (context) => {
     if (!testDb) {

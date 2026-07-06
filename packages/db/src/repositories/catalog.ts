@@ -335,21 +335,31 @@ export async function findPageById(db: Database, platformAccountId: number) {
   return { page, credentials, proxy };
 }
 
-/** Stage 17: page -> platform-native account ref (canonicalizer context). */
+/** Stage 17: page -> platform-native account ref (canonicalizer context).
+ * ofapiAccountId rides along because OFAPI webhook observations carry the
+ * vendor account ref ("acct_…") as their native_account_ref — OF pages'
+ * platform_account_id is typically empty (OFAPI-era onboarding). */
 export async function listPageNativeAccountRefs(
   db: Database,
-): Promise<Array<{ id: number; platform: string; nativeAccountRef: string | null }>> {
+): Promise<Array<{
+  id: number;
+  platform: string;
+  nativeAccountRef: string | null;
+  ofapiAccountId: string | null;
+}>> {
   const rows = await db
     .select({
       id: pages.id,
       platform: pages.platform,
       nativeAccountRef: pages.platformAccountId,
+      ofapiAccountId: pages.ofapiAccountId,
     })
     .from(pages);
   return rows.map((row) => ({
     id: row.id,
     platform: row.platform,
     nativeAccountRef: row.nativeAccountRef ?? null,
+    ofapiAccountId: row.ofapiAccountId ?? null,
   }));
 }
 

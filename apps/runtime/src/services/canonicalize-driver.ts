@@ -79,7 +79,10 @@ async function runFamily(
   family: CanonicalizerFamily,
   options: CanonicalizationRunOptions,
   totals: CanonicalizationRunResult,
-  runContext: { nativeAccountRefByAccountId: ReadonlyMap<number, string | null> },
+  runContext: {
+    nativeAccountRefByAccountId: ReadonlyMap<number, string | null>;
+    accountIdByNativeRef: ReadonlyMap<string, number>;
+  },
 ) {
   const kinds = options.kinds !== undefined
     ? (family.kinds === null
@@ -121,13 +124,19 @@ async function runFamily(
       // this run still processes (afterId already advanced past the page).
       try {
         const drafts = family.canonicalize(row, runContext);
+        // Capture-first rows (webhook) carry only the vendor account ref;
+        // resolve it against the page map before the unmapped check.
+        const accountId = row.accountId
+          ?? (row.nativeAccountRef
+            ? runContext.accountIdByNativeRef.get(`${row.platform}:${row.nativeAccountRef}`) ?? null
+            : null);
 
         if (options.dryRun) {
           totals.appended += drafts.length;
           continue;
         }
 
-        if (drafts.length > 0 && row.accountId == null) {
+        if (drafts.length > 0 && accountId == null) {
           // Events require an account; an unmapped observation stays below the
           // version floor and self-heals once the account mapping lands.
           totals.skippedUnmapped += 1;
@@ -137,7 +146,7 @@ async function runFamily(
         if (drafts.length > 0) {
           const result = await appendDomainEvents(
             app.db,
-            row.accountId!,
+            accountId!,
             drafts.map((draft) => ({ ...draft, observationId: row.id })),
           );
           totals.appended += result.appended;
@@ -180,10 +189,24 @@ export async function runCanonicalization(
   // Per-run context: Fansly DM direction resolves against the page's own
   // native account ref (Stage 17); built once, shared by all families.
   const pages = await listPageNativeAccountRefs(app.db);
+  // Inverse resolution for capture-first producers: webhook observations
+  // journal the VENDOR account ref (acct_… for OFAPI) and no page id — the
+  // page id resolves here at canonicalize time, keyed platform-scoped over
+  // both identity columns (platform_account_id and ofapi_account_id).
+  const accountIdByNativeRef = new Map<string, number>();
+  for (const page of pages) {
+    if (page.nativeAccountRef) {
+      accountIdByNativeRef.set(`${page.platform}:${page.nativeAccountRef}`, page.id);
+    }
+    if (page.ofapiAccountId) {
+      accountIdByNativeRef.set(`${page.platform}:${page.ofapiAccountId}`, page.id);
+    }
+  }
   const runContext = {
     nativeAccountRefByAccountId: new Map(
       pages.map((page) => [page.id, page.nativeAccountRef] as const),
     ),
+    accountIdByNativeRef,
   };
   for (const family of options.families ?? CANONICALIZER_FAMILIES) {
     // Family isolation: a structural failure in one family (e.g. its list
