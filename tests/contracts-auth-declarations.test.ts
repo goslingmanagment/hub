@@ -64,6 +64,7 @@ describe("route auth declarations", () => {
       "pageSubscribers",
       "pageSubscribersDaily",
       "pageSyncBlocks",
+      "pageTopSpenders",
       "pageTransactions",
       "upsertFanProfile",
       "workboardV2",

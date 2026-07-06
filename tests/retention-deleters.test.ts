@@ -19,11 +19,7 @@ import { describe, expect, it } from "vitest";
 const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/cli.ts",
   "apps/runtime/src/services/erasure/index.ts",
-  "apps/runtime/src/modules/catalog/index.ts",
   "apps/runtime/src/modules/events/index.ts",
-  "apps/runtime/src/modules/identity/index.ts",
-  "apps/runtime/src/modules/ops/index.ts",
-  "apps/runtime/src/modules/workboard/index.ts",
   "apps/runtime/src/services/auth.ts",
   "apps/runtime/src/services/domain-events-stream.ts",
   "apps/runtime/src/services/events-stream.ts",
@@ -58,7 +54,7 @@ describe("retention deleter enumeration (Stage 28)", () => {
       output = execFileSync(
         "grep",
         [
-          "-rlE",
+          "-rE",
           "\\.delete\\(|delete from",
           "--include=*.ts",
           "packages/db/src/repositories",
@@ -69,7 +65,14 @@ describe("retention deleter enumeration (Stage 28)", () => {
     } catch {
       output = "";
     }
-    const found = output.split("\n").filter((line) => line.trim() !== "").sort();
+    // `server.delete(` is an HTTP verb registration (the Stage 31 persona
+    // archive route), not a SQL delete — those lines don't make a deleter.
+    const found = [...new Set(
+      output
+        .split("\n")
+        .filter((line) => line.trim() !== "" && !/server\.delete\(/.test(line))
+        .map((line) => line.slice(0, line.indexOf(":"))),
+    )].sort();
     expect(found).toEqual([...SANCTIONED_DELETER_FILES].sort());
   });
 });

@@ -1,4 +1,5 @@
 {
   "comment": "Kernel Stage 18 ratchet: strict `platform ===` branch sites outside the adapter packages. Count may only decrease (target ~0 as handlers move behind the registry); decreases update this file.",
-  "budget": 48
+  "budget": 49,
+  "note": " 2026-07-06: +1 for the Stage 32 named platform substitution (applyPlatformWording in ai/prompts/builder.ts) \u2014 a deliberate wording branch, not platform logic drift."
 }

@@ -4432,6 +4432,38 @@ export const routeSchemas = {
       404: errorResponseSchema,
     },
   },
+  pageTopSpenders: {
+    auth: { kind: "any", scope: "page" },
+    tags: ["fans"],
+    summary: "Top spenders for one page from the fan-earnings projection (Stage 32 board)",
+    params: pageParamsSchema,
+    querystring: z.object({
+      // 'lifetime' or a month window ('2026-06') — the projection's window values.
+      window: z.string().regex(/^(lifetime|\d{4}-\d{2})$/).default("lifetime"),
+      limit: z.coerce.number().int().min(1).max(500).default(150),
+    }),
+    response: {
+      200: z.object({
+        window: z.string(),
+        /** Freshest observed_at in the window (null = projection empty for this page). */
+        builtAt: z.string().nullable(),
+        /** Spenders with gross > 0 in this window (entries may be a bounded subset). */
+        fanCount: z.number().int().nonnegative(),
+        entries: z.array(z.object({
+          platformUserId: z.string(),
+          username: z.string().nullable(),
+          displayName: z.string().nullable(),
+          grossMills: z.number().int().nonnegative(),
+          netMills: z.number().int().nullable(),
+          currency: z.string(),
+          observedAt: z.string(),
+        })),
+      }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   pageDeletedFans: {
     auth: { kind: "any", scope: "page" },
     tags: ["fans"],

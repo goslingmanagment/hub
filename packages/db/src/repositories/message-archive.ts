@@ -527,3 +527,68 @@ export async function upsertFanEarningsStat(
     where excluded.observed_at >= fan_earnings_stats.observed_at
   `);
 }
+
+// ── Stage 32: board reads over the Stage 16 projection ────────────────────
+
+export interface TopFanEarningsRow {
+  platformUserId: string;
+  username: string | null;
+  displayName: string | null;
+  grossMills: number;
+  netMills: number | null;
+  currency: string;
+  observedAt: Date;
+}
+
+/** Top spenders for one page + window, spend-descending. Columns qualified
+ * throughout (the recorded Stage 8 bare-column ORDER BY trap). */
+export async function listTopFanEarnings(
+  db: Database,
+  input: { accountId: number; window: string; limit: number },
+): Promise<TopFanEarningsRow[]> {
+  const result = await db.execute(sql`
+    select
+      f.platform_user_id as "platformUserId",
+      f.username as "username",
+      f.display_name as "displayName",
+      s.gross_mills as "grossMills",
+      s.net_mills as "netMills",
+      s.currency as "currency",
+      s.observed_at as "observedAt"
+    from fan_earnings_stats s
+    join fans f on f.id = s.fan_id
+    where s.account_id = ${input.accountId}
+      and s."window" = ${input.window}
+      and s.gross_mills > 0
+    order by s.gross_mills desc, f.platform_user_id asc
+    limit ${input.limit}
+  `);
+  return (result.rows as Array<Record<string, unknown>>).map((row) => ({
+    platformUserId: String(row.platformUserId),
+    username: row.username === null ? null : String(row.username),
+    displayName: row.displayName === null ? null : String(row.displayName),
+    grossMills: Number(row.grossMills),
+    netMills: row.netMills === null ? null : Number(row.netMills),
+    currency: String(row.currency),
+    observedAt: new Date(String(row.observedAt)),
+  }));
+}
+
+/** Snapshot honesty for the board UI: how many spenders exist in the window
+ * and when the freshest row was observed (null = projection empty). */
+export async function getFanEarningsSnapshotMeta(
+  db: Database,
+  input: { accountId: number; window: string },
+): Promise<{ fanCount: number; builtAt: Date | null }> {
+  const result = await db.execute(sql`
+    select count(*) filter (where s.gross_mills > 0) as "fanCount",
+           max(s.observed_at) as "builtAt"
+    from fan_earnings_stats s
+    where s.account_id = ${input.accountId} and s."window" = ${input.window}
+  `);
+  const row = (result.rows as Array<Record<string, unknown>>)[0];
+  return {
+    fanCount: row ? Number(row.fanCount) : 0,
+    builtAt: row?.builtAt == null ? null : new Date(String(row.builtAt)),
+  };
+}

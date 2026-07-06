@@ -2,7 +2,9 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import {
   createFanNote,
   findPlatformFan,
+  getFanEarningsSnapshotMeta,
   listFanPageContexts,
+  listTopFanEarnings,
   setFanFlags,
 } from "@agency_hub_core/db";
 
@@ -111,6 +113,39 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       throw new ForbiddenError("Page access denied");
     }
     return getPageFansReport(appContext, request.params.pageLabel, query);
+  });
+
+  // Stage 32: the extension's spenders board reads the Stage 16 projection
+  // instead of rebuilding rankings from ~150 Fansly calls. Page-scoped
+  // per-fan spend for an ASSIGNED page — deliberately not the dashboard's
+  // cross-page revenue aggregates behind the Stage 2 chatter gate.
+  server.get("/api/v1/pages/:pageLabel/top-spenders", {
+    schema: routeSchemas.pageTopSpenders,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    const { window, limit } = request.query;
+    const [meta, entries] = await Promise.all([
+      getFanEarningsSnapshotMeta(appContext.db, { accountId: page.id, window }),
+      listTopFanEarnings(appContext.db, { accountId: page.id, window, limit }),
+    ]);
+    return {
+      window,
+      builtAt: meta.builtAt === null ? null : meta.builtAt.toISOString(),
+      fanCount: meta.fanCount,
+      entries: entries.map((entry) => ({
+        platformUserId: entry.platformUserId,
+        username: entry.username,
+        displayName: entry.displayName,
+        grossMills: entry.grossMills,
+        netMills: entry.netMills,
+        currency: entry.currency,
+        observedAt: entry.observedAt.toISOString(),
+      })),
+    };
   });
 
   server.get("/api/v1/pages/:pageLabel/deleted-fans", {

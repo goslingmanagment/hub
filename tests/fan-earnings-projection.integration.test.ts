@@ -5,7 +5,15 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, insertObservation } from "@agency_hub_core/db";
+import {
+  createFanslyPage,
+  createModel,
+  getFanEarningsSnapshotMeta,
+  insertObservation,
+  listTopFanEarnings,
+  upsertFanEarningsStat,
+  upsertFans,
+} from "@agency_hub_core/db";
 
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
@@ -126,5 +134,84 @@ describe("fan earnings parse side (Stage 16 v3)", () => {
       [page.id],
     );
     expect(after.rows[0]!.n).toBe("2");
+  });
+});
+
+// ── Stage 32: the board reads (top spenders over the projection) ──────────
+
+describe("fan_earnings_stats board reads", () => {
+  it("ranks spenders spend-descending, bounds by limit, and reports honest snapshot meta", async () => {
+    if (!testDb) throw new Error("db not started");
+    const model = await createModel(testDb.db, { slug: "m-reads", name: "M Reads" });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "reads-1",
+      status: "active",
+    });
+
+    const fans = await upsertFans(testDb.db, [
+      { platform: "fansly", platformUserId: "fan-r-1", username: "alice", displayName: "Alice" },
+      { platform: "fansly", platformUserId: "fan-r-2", username: null, displayName: null },
+      { platform: "fansly", platformUserId: "fan-r-3", username: "carol", displayName: "Carol" },
+    ]);
+    const amounts = [
+      { fan: fans[0]!, gross: 5_000, net: 4_000, at: new Date("2026-07-01T00:00:00Z") },
+      { fan: fans[1]!, gross: 12_000, net: null, at: new Date("2026-07-03T00:00:00Z") },
+      { fan: fans[2]!, gross: 0, net: 0, at: new Date("2026-07-02T00:00:00Z") },
+    ];
+    for (const [index, row] of amounts.entries()) {
+      await upsertFanEarningsStat(testDb.db, {
+        accountId: page.id,
+        fanId: row.fan.id,
+        window: "lifetime",
+        grossMills: row.gross,
+        netMills: row.net,
+        observedAt: row.at,
+        sourceEventId: index + 1,
+      });
+    }
+
+    const entries = await listTopFanEarnings(testDb.db, {
+      accountId: page.id,
+      window: "lifetime",
+      limit: 150,
+    });
+    // Zero-spend fans are excluded; order is spend-descending.
+    expect(entries.map((entry) => entry.platformUserId)).toEqual(["fan-r-2", "fan-r-1"]);
+    expect(entries[0]).toMatchObject({
+      username: null,
+      displayName: null,
+      grossMills: 12_000,
+      netMills: null,
+      currency: "USD",
+    });
+    expect(entries[0]!.observedAt.toISOString()).toBe("2026-07-03T00:00:00.000Z");
+
+    const limited = await listTopFanEarnings(testDb.db, {
+      accountId: page.id,
+      window: "lifetime",
+      limit: 1,
+    });
+    expect(limited).toHaveLength(1);
+    expect(limited[0]!.platformUserId).toBe("fan-r-2");
+
+    const meta = await getFanEarningsSnapshotMeta(testDb.db, {
+      accountId: page.id,
+      window: "lifetime",
+    });
+    expect(meta.fanCount).toBe(2); // gross > 0 only
+    expect(meta.builtAt?.toISOString()).toBe("2026-07-03T00:00:00.000Z");
+
+    // A window with no rows reads as an honest empty snapshot.
+    const empty = await getFanEarningsSnapshotMeta(testDb.db, {
+      accountId: page.id,
+      window: "2026-01",
+    });
+    expect(empty).toEqual({ fanCount: 0, builtAt: null });
+    expect(await listTopFanEarnings(testDb.db, {
+      accountId: page.id,
+      window: "2026-01",
+      limit: 10,
+    })).toEqual([]);
   });
 });
