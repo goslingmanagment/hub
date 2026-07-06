@@ -134,9 +134,14 @@ export async function prepareAiFeatureStream(
   const fanBio = feature === "hi-greeting"
     ? await loadFanBio(app, { fanRef })
     : undefined;
-  const pingSegment = policy.usesPingSegment
-    ? analyzePingSegment(transcript.messages, Date.now()).segment
-    : undefined;
+  let pingSegment;
+  if (policy.usesPingSegment) {
+    pingSegment = analyzePingSegment(transcript.messages, Date.now()).segment;
+    // Desktop parity (CG-FLOW-05): pings are blocked while the fan is active.
+    if (pingSegment === "active") {
+      throw new BadRequestError("ping is blocked while the conversation is active");
+    }
+  }
 
   const prompt = buildPrompt({
     feature,

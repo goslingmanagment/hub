@@ -23,6 +23,7 @@ export {
   decodeDomainEventCursor,
   ofapiRead,
   routeSchemas,
+  streamAiFeature,
   streamAiGateway,
   subscribeDomainEvents,
   subscribeSyncEvents,

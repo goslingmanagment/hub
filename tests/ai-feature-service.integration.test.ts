@@ -286,10 +286,27 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     const review = await call("chat-review");
     expect(review.statusCode).toBe(400);
 
-    // ping derives its segment kernel-side and streams.
+    // ping derives its segment kernel-side; an ACTIVE conversation (fresh
+    // fan messages in the seed) is blocked — desktop CG-FLOW-05 parity.
+    const pingActive = await call("ping");
+    expect(pingActive.statusCode, pingActive.body).toBe(400);
+    expect(pingActive.json().message).toContain("active");
+
+    // Age the fan's messages past the 5-day window: ping unblocks.
+    await testDb.pool.query(
+      `update message_archive set occurred_at = now() - interval '10 days'
+       where account_id = $1 and is_sent_by_me = false`,
+      [pageId],
+    );
     const ping = await call("ping");
     expect(ping.statusCode, ping.body).toBe(200);
     expect(capture.input!.body.feature).toBe("ping");
+    // Restore recency for the later hi-greeting assertions.
+    await testDb.pool.query(
+      `update message_archive set occurred_at = now()
+       where account_id = $1 and is_sent_by_me = false`,
+      [pageId],
+    );
 
     // help-me (analysis preamble) streams.
     const helpMe = await call("help-me");

@@ -95,6 +95,7 @@ export function buildSdkFiles(input: SdkGenerationInput): Map<string, string> {
     "  decodeDomainEventCursor,",
     "  ofapiRead,",
     "  routeSchemas,",
+    "  streamAiFeature,",
     "  streamAiGateway,",
     "  subscribeDomainEvents,",
     "  subscribeSyncEvents,",
