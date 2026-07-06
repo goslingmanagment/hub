@@ -8,6 +8,7 @@ import {
   TIERED_TABLES,
   countParquetRows,
   listTierablePartitions,
+  runRestoreDrill,
   runTieringCycle,
 } from "../apps/runtime/src/services/tiering/index.ts";
 import {
@@ -154,5 +155,27 @@ describe("retention tiering (Stage 28)", () => {
     const rerun = await runTieringCycle(appStub(), { now: NOW });
     expect(rerun.results.find((r) => r.partition === "observations_2026_01")).toBeUndefined();
     expect(rerun.failed).toBe(0);
+
+    // ── Phase 4: the restore drill — from Parquet ALONE (general +
+    // restricted), rebuild the partition, match manifest AND the parked
+    // pre-detach rows, and re-attach it to the hot table.
+    const drill = await runRestoreDrill(appStub(), {
+      table: "observations",
+      year: "2026",
+      month: "01",
+    });
+    expect(drill).toMatchObject({
+      restoredRows: 3,
+      manifestRows: 3,
+      parkedRows: 3,
+      countsMatch: true,
+      attached: true,
+    });
+
+    const { rows: restoredHot } = await testDb.pool.query(
+      `select count(*)::int as n, count(*) filter (where kind = 'desktop.guard_audit')::int as restricted
+       from observations where received_at >= '2026-01-01' and received_at < '2026-02-01'`,
+    );
+    expect(restoredHot[0]).toEqual({ n: 3, restricted: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -430,6 +430,120 @@ export async function runTieringCycle(
   };
 }
 
+export interface RestoreDrillResult {
+  table: string;
+  partition: string;
+  restoredRows: number;
+  manifestRows: number;
+  parkedRows: number;
+  attached: boolean;
+  countsMatch: boolean;
+}
+
+/**
+ * Kernel Stage 28 Task 2 — the restore drill that gates any DROP: rebuild
+ * the partition FROM PARQUET ALONE (general + restricted files), re-attach
+ * it to the hot table, and prove counts identical to the manifest AND to
+ * the parked pre-detach table. The parked original in tiered_pending_drop
+ * is untouched — the drill proves the lake alone is sufficient.
+ */
+export async function runRestoreDrill(
+  app: Pick<AppContext, "db" | "config" | "logger">,
+  input: { table: TieredTableSpec["table"]; year: string; month: string },
+): Promise<RestoreDrillResult> {
+  const spec = TIERED_TABLES.find((candidate) => candidate.table === input.table)!;
+  const partition = `${input.table}_${input.year}_${input.month}`;
+  const paths = lakePaths(app.config.lakeDir, spec, {
+    table: input.table,
+    partition,
+    toBound: new Date(0),
+    year: input.year,
+    month: input.month,
+  });
+
+  const manifest = JSON.parse(await readFile(paths.manifest, "utf8")) as TieringManifest;
+  const manifestRows = manifest.rowCount + manifest.restrictedRowCount;
+
+  // Parquet → NDJSON (DuckDB, offline), general + restricted merged back.
+  const scratch = path.join(tmpdir(), `restore-${partition}-${process.pid}`);
+  await mkdir(scratch, { recursive: true });
+  const ndjson = path.join(scratch, "rows.ndjson");
+  const restoreTable = `restore_${partition}`;
+  try {
+    const { DuckDBInstance } = await import("@duckdb/node-api");
+    const instance = await DuckDBInstance.create(":memory:");
+    const connection = await instance.connect();
+    try {
+      const sources = [`read_parquet('${paths.parquet.replaceAll("'", "''")}')`];
+      if (manifest.restrictedRowCount > 0) {
+        sources.push(`read_parquet('${paths.restrictedParquet.replaceAll("'", "''")}')`);
+      }
+      await connection.run(
+        `COPY (${sources.map((source) => `SELECT * FROM ${source}`).join(" UNION ALL ")}) `
+        + `TO '${ndjson.replaceAll("'", "''")}' (FORMAT json)`,
+      );
+    } finally {
+      connection.closeSync();
+    }
+
+    // Rebuild a staging table shaped like the parent and repopulate it from
+    // the NDJSON rows via jsonb_populate_record (types cast back: ISO
+    // timestamps, \x hex bytea, nested payload JSON).
+    await rawQuery(app, `drop table if exists "${restoreTable}"`);
+    // INCLUDING ALL: ATTACH PARTITION requires the child to already carry
+    // the parent's CHECK constraints (defaults alone fail the attach).
+    await rawQuery(app, `create table "${restoreTable}" (like "${input.table}" including all)`);
+    const content = await readFile(ndjson, "utf8");
+    const lines = content.split("\n").filter((line) => line.trim() !== "");
+    const batchSize = 1000;
+    for (let offset = 0; offset < lines.length; offset += batchSize) {
+      const batch = lines.slice(offset, offset + batchSize);
+      const arrayLiteral = `[${batch.join(",")}]`;
+      const { sql } = await import("drizzle-orm");
+      await app.db.execute(sql`
+        insert into ${sql.raw(`"${restoreTable}"`)}
+        overriding system value
+        select * from jsonb_populate_recordset(null::${sql.raw(`"${input.table}"`)}, ${arrayLiteral}::jsonb)
+      `);
+    }
+
+    const restored = await rawQuery<{ n: string }>(app, `select count(*)::text as n from "${restoreTable}"`);
+    const restoredRows = Number(restored[0]?.n ?? 0);
+
+    const parked = await rawQuery<{ n: string }>(
+      app,
+      `select count(*)::text as n from tiered_pending_drop."${partition}"`,
+    ).catch(() => [{ n: "-1" }]);
+    const parkedRows = Number(parked[0]?.n ?? -1);
+
+    const countsMatch = restoredRows === manifestRows
+      && (parkedRows === -1 || parkedRows === restoredRows);
+
+    let attached = false;
+    if (countsMatch) {
+      // Re-attach: the range is free (the original is detached and parked).
+      const monthStart = `${input.year}-${input.month}-01`;
+      await rawQuery(app, `
+        alter table "${input.table}" attach partition "${restoreTable}"
+        for values from ('${monthStart}') to ('${monthStart}'::date + interval '1 month')
+      `);
+      attached = true;
+    }
+
+    return {
+      table: input.table,
+      partition,
+      restoredRows,
+      manifestRows,
+      parkedRows,
+      attached,
+      countsMatch,
+    };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 export const TIERING_QUEUE = "retention-tiering";
 
 export async function ensureTieringQueue(

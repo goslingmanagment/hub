@@ -679,6 +679,30 @@ export function buildProgram() {
       }
     });
 
+  program
+    .command("tiering:restore-drill")
+    .description("Stage 28: rebuild a tiered partition from Parquet alone and re-attach it")
+    .requiredOption("--table <table>", "observations | domain_events")
+    .requiredOption("--year <yyyy>")
+    .requiredOption("--month <mm>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { runRestoreDrill } = await import("./services/tiering/index.ts");
+        const result = await runRestoreDrill(app, {
+          table: options.table,
+          year: options.year,
+          month: options.month,
+        });
+        console.log(JSON.stringify(result, null, 2));
+        if (!result.countsMatch) {
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
   const user = program.command("user");
   const apiKey = program.command("apikey");
 
