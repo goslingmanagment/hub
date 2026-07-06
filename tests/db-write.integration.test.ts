@@ -127,7 +127,6 @@ describe("db write safety", () => {
         trustProxy: false,
         sessionTtlDays: 30,
         fanslyBaseUrl: "https://example.invalid",
-        onlyMonsterBaseUrl: "https://example.invalid",
         syncHttpTraceFile: null,
         fanslyDefaultDelayMs: 2500,
         fanslyDmConversationsDelayMs: 5000,
