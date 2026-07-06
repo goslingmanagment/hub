@@ -2262,3 +2262,46 @@ chaos drill; consumer-zero sweep over v1/fanout_seq/sync_event; singleton
 assertion deleted; 2 workers + scheduler live in prod; then the
 retirement migration (fanout_seq + sync_event columns dropped) under
 explicit owner go.
+
+## Stage 27 Built — Money Codec, Footgun Class Dead by Construction (2026-07-06)
+
+**Decision #97:** Stage 27 tasks 1–3 built in one session on the chain branch
+(06a06d9). Task 4 is ops (deploy → report-totals byte-diff for a fixed
+window → CI gates). Full suite after the commit: **192 files / 1548 tests
+green, unchanged expectations** (the spec's "any expectation change = a bug
+found" held — none changed). No schema change, no data migration (Q6).
+
+Execution decisions:
+- Brands are compile-time only: Mills = bigint brand; **MicroUsd = number
+  brand** (recorded adaptation — the spec sketched bigint, but
+  cost_micro_usd is an int column flowing as JS number everywhere; a bigint
+  brand would have been churn masquerading as safety).
+- **ONE already-mills constructor** (`millsFromInteger`) absorbs the deleted
+  `toMills` byte-for-byte, instead of the sketched `millsFromDbBigint` —
+  pg returns numeric columns as strings and Fansly hands mills-native
+  numbers, so three near-duplicate constructors would have re-created the
+  ambiguity the stage kills. The audit classified ALL 27 toMills call sites
+  as already-mills (repo rows; Fansly wallet balances, subscription prices,
+  transaction amounts — Fansly is mills-native on the wire); none parsed
+  dollars.
+- `dollarsToMills` survives as an honest ALIAS of `millsFromDollars`
+  (~80 call sites; the name states its unit — churn without safety gain).
+  `millsFromCents` bridges the _cents column (×10); the column itself stays
+  cents per the spec's accepted-debt ruling.
+- Four float sites rewrote through the codec with value-preservation
+  property tests: ofapi-dm-archive usdToMills (pinned over 2-decimal wire
+  dollars — the domain where Math.round(x*1000) and the toFixed(3) parse
+  agree exactly), telegram whole-dollar rounding (millsToRoundedDollars),
+  snapshot + workboard mills→dollar numbers (millsToDollarsNumber).
+- AI plane: pricing result typed MicroUsd via microUsdFromDbInt; converters
+  millsToMicroUsd (exact) / microUsdToMills (lossy, truncation named).
+- Enforcement: eslint no-restricted-syntax bans toMills reintroduction; the
+  float-site ratchet rides the TEST SUITE (tests/money-ratchet.test.ts vs
+  scripts/money-float-budget.json, budget 9, only decreases) — first
+  burn-down target recorded: ofapi-dm-sync's dollars→cents write. Boundary
+  suffix audit: contracts money fields all unit-suffixed already; the
+  pattern matches were counters — no additive twins needed.
+
+Exit (Task 4 ops): deploy with the chain → §1 report-totals snapshot
+re-run, diff = 0 (dashboard revenue endpoints + Telegram digest, fixed
+window) → grep-zero + gates green in CI.
