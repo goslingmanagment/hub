@@ -206,7 +206,7 @@ observe-only — a test asserts it cannot affect outbox state).
 **Session 1 (2026-07-06, branch `kernel/stage-31-ai-cutover` in the desktop
 repo; core support in main @ 109096f):**
 
-§8 status — **Task 1 DONE; Tasks 2-5 remain.**
+§8 status — **Tasks 1-4 DONE (build surface complete); Task 5 (ops rollout) remains.**
 
 - [x] **Core support (109096f):** `streamAiFeature` SDK helper (feature-route
   twin of the gateway stream, exported through the generated surface) and
@@ -251,17 +251,38 @@ repo; core support in main @ 109096f):**
   `order by id` resolved to the ::text alias (lexicographic sort stranding
   high ids behind the watermark; the Stage 8 trap, re-caught by the
   idempotency test). Desktop green 772 + 1237.
-- [~] **Task 3 in progress.** DONE: kernel persona routes (core 5711d34 —
-  GET/PUT /api/v1/ai/personas, apiKey lane, tested; account→persona
-  mappings stay client-local per DP 9-A); hub client
-  listAiPersonas/upsertAiPersona; ONE-TIME custom-persona sync on hub
-  reconfigure (fire-and-forget, idempotent upserts keyed by local persona
-  id; builtin skipped — kernel-seeded); parity sign-off CLI names the
-  post-cutover state (source deletion ≠ repo missing). Desktop 017e86a.
-  REMAINS: persona picker/editor UI swap (PersonalitySettings.tsx →
-  kernel CRUD; resolvePersonality collapses to key mapping), the DELETIONS
-  sweep (prompts/, llm/, providers/, both gateway adapters, transport
-  setting collapse to 'feature'-only + HubSettings toggle removal, model
-  selector removal) + the test-suite triage that follows, and grep gates.
-- [ ] Task 4: vendor-key decommission + usage-lane drain mode.
-- [ ] Task 5 (ops): pilot workday → staged fleet rollout → §5 verification.
+- [x] **Task 3 (017e86a + a5ca0a0): the cutover sweep.** Plumbing first
+  (kernel persona routes core 5711d34, hub client persona CRUD, one-time
+  custom-persona sync on reconfigure), then the deletions commit: 80 files,
+  −10,693 lines. Gone: shared prompts/ (byte-migrated kernel-side Stage 30)
+  and llm/ (cost tables, model registry, provider SSE), the direct provider
+  clients, BOTH legacy gateway lanes, the local context loader, the model
+  selector UI, the HubSettings transport toggle. `aiGatewayTransport`
+  collapsed to z.literal('feature') — the ofapiReadTransport precedent,
+  third and last application. Personas IPC = kernel CRUD with local KV as
+  offline cache (delete = kernel archive + mapping cascade). Spend =
+  gateway-reported cost into ai_spend_log (usage_events writes stopped).
+  Coordinator tests rewritten on the feature lane (19); 3 grep gates pin
+  the cutover (no vendor endpoints / deleted-module imports / gateway
+  constructors). Suites 538 + 1096. Core parity harness verified to skip
+  (test) and fail-closed (CLI) against the deleted sources — by design.
+  FIXED FOLLOW-UP (f3e9bfc): mapGatewayUsage dropped the usage frame's
+  costMicroUsd → real streams would have logged zero spend (coordinator
+  tests injected cost and masked it); one-field fix + stream-test pin.
+- [x] **Task 4 (40e8e65): vendor-key decommission + drain mode.**
+  anthropicKey/openRouterKey out of SECRET_NAMES; their files join the
+  Stage 24 boot-time decommission delete (unrecoverable by rollback —
+  owner revokes upstream after fleet confirm). KeySettings.tsx deleted;
+  keyMeta/hasKey VM collapse to hub-only; KeyTestProvider narrows to
+  literal 'hub' (key-tests.ts rebuilt hub-only — the Task 3 sweep had
+  taken the hub connection probe down with the vendor probes; restored);
+  redaction mirror tracks hub credentials only; strict patch schema
+  rejects vendor-key patches. Activity AI row reports the kernel gateway
+  (ai.gatewayConfigured). Usage lane in DRAIN MODE: no producer; the old
+  reporter stays one release to flush rows parked by pre-cutover versions;
+  diagnostics export counts leftovers (db.counts.usageEvents) — §5 exit =
+  zero fleet-wide. Suites 538 + 1100; build clean.
+- [ ] Task 5 (ops): pilot workday → staged fleet rollout (0.1.31) → §5
+  verification (zero vendor traffic 7 days, latency delta, acceptance
+  correlation ≥95%, usage_events drain to zero) → owner comms + vendor key
+  revocation. GATED on desktop 0.1.30 fleet adoption.

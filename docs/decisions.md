@@ -2855,3 +2855,26 @@ per-feature smoke with recorded latency, sanitize regressions green.
 Stages 31/32 fully unblocked. Smoke spend ≈ $0.48 total (three quick
 features ran twice — a parse-retry re-ran them; completions captured both
 times, recorded honestly).
+
+**Decision #111 (2026-07-06):** Stage 31 BUILD COMPLETE (Tasks 1–4) on
+desktop branch `kernel/stage-31-ai-cutover` @ 40e8e65 — the desktop's
+local AI machinery is deleted; the kernel feature lane is the only path.
+Highlights: the deletions sweep (a5ca0a0, −10,693 lines: shared prompts/
++ llm/, provider clients, both legacy gateway lanes, context loader,
+model-selector UI; `aiGatewayTransport` collapsed to
+`z.literal('feature')` — the ofapiReadTransport precedent, third and
+last application); acceptance lifecycle (shown/copied/inserted/
+sent+edited) on the Stage 11 capture spool with the
+operationId+requestId correlation pair; personas as kernel CRUD with the
+local KV as offline cache; spend priced by the gateway usage frame (the
+mapGatewayUsage costMicroUsd omission caught and fixed in f3e9bfc —
+coordinator tests had injected cost directly and masked it); vendor keys
+decommissioned (out of SECRET_NAMES, secret files deleted on boot —
+unrecoverable by rollback; KeySettings dead; the hub connection probe,
+collaterally deleted by the sweep, rebuilt hub-only); usage lane in
+drain mode (no producer; reporter kept one release for parked rows;
+db.counts.usageEvents in the diagnostics export is the drain gauge).
+Suites 538 + 1100 green; 3 grep gates pin the cutover. NOT RELEASED —
+Task 5 (pilot workday → staged fleet 0.1.31 → §5 verification → owner
+comms + upstream vendor-key revocation) is owner-gated and additionally
+gated on 0.1.30 fleet adoption.
