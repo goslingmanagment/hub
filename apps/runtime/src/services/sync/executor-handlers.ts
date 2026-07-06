@@ -3560,13 +3560,17 @@ export async function executeFanEarningsChunk(
   // Snapshot-shaped: one lifetime page + one monthly page per run. Probe-grade
   // unknown payloads are journaled VERBATIM; typing happens at canonicalization
   // once the ramp captures a live corpus (recorded deviation).
+  // The window params are REQUIRED: Fansly answers [] without after/before —
+  // the ramp caught exactly this (empty captures on lilly-1, 2026-07-06); the
+  // Stage 6 probe's proven shape is the all-time window.
+  const window = { after: new Date(0), before: new Date() };
   await assertOwnedPageSyncLease(app.db);
-  const stats = await app.adapter.getEarningsStatsAccountsPage(requestContext, {});
+  const stats = await app.adapter.getEarningsStatsAccountsPage(requestContext, window);
   await persistRawPayload(app.db, {
     platformAccountId: input.pageContext.page.id,
     syncRunId: input.syncRunId,
     endpoint: "fan_earnings_stats",
-    requestParams: {},
+    requestParams: { after: window.after.toISOString(), before: window.before.toISOString() },
     responsePayload: stats.raw,
     mapperVersion: FANSLY_MAPPER_VERSION,
     payloadKind: "mapping_critical",
@@ -3574,12 +3578,12 @@ export async function executeFanEarningsChunk(
   }, { action: "inserting fan_earnings_stats raw payload", platform: "fansly" });
 
   await assertOwnedPageSyncLease(app.db);
-  const monthly = await app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, {});
+  const monthly = await app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, window);
   await persistRawPayload(app.db, {
     platformAccountId: input.pageContext.page.id,
     syncRunId: input.syncRunId,
     endpoint: "fan_earnings_monthly",
-    requestParams: {},
+    requestParams: { after: window.after.toISOString(), before: window.before.toISOString() },
     responsePayload: monthly.raw,
     mapperVersion: FANSLY_MAPPER_VERSION,
     payloadKind: "mapping_critical",
