@@ -188,3 +188,20 @@ export async function loadFanDisplayName(
   `);
   return result.rows[0]?.name ?? input.fanRef;
 }
+
+/** hi-greeting only. The desktop reads the fan's profile "about"; the
+ * kernel's nearest source is the audience-synced fans.metadata — a NAMED
+ * parity checkpoint (Task 5) if the field proves absent in practice. */
+export async function loadFanBio(
+  app: Db,
+  input: { fanRef: string },
+): Promise<string | undefined> {
+  const result = await app.db.execute<{ metadata: Record<string, unknown> | null }>(sql`
+    select metadata from fans where platform_user_id = ${input.fanRef} limit 1
+  `);
+  const metadata = result.rows[0]?.metadata;
+  const bio = metadata && typeof metadata === "object"
+    ? (metadata as Record<string, unknown>).about ?? (metadata as Record<string, unknown>).bio
+    : undefined;
+  return typeof bio === "string" && bio.trim().length > 0 ? bio : undefined;
+}

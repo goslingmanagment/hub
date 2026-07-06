@@ -2771,3 +2771,15 @@ recorded commit, and Task 5's parity sign-off is the gate before any
 client cutover. Remaining: Task 4 (other features + persona seeds), Task 5
 (parity + sign-off, owner-gated), Task 6 (ops; 0071+0072+0073 deploy
 together at the next owner-confirmed window).
+
+**Decision #107 (2026-07-06, same session):** Stage 30 **Task 4 built** —
+all seven inventoried features serve through `/api/v1/ai/features/:feature`
+(suite 1676/1676). FEATURE_POLICIES migrated with verbatim values (one
+recorded adaptation: the Settings-coupled window resolver became kernel
+bucket defaults seeded from the desktop's); the kernel registry is DERIVED
+from the policies, so prompt behavior, model delegation, earnings
+inclusion, and the product gates (draft required, deep minimum 30,
+hi-greeting ≤10 lock, ping segment analysis) have ONE source of truth.
+Remaining in Stage 30: Task 5 parity harness + freeze capture + sign-off
+(OWNER GATE: declare the prompt freeze), persona seeding + extension
+inventory (rides the freeze), Task 6 deploy/smoke/latency.

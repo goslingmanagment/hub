@@ -1830,7 +1830,8 @@ export const aiFeatureStreamBodySchema = z.object({
   reasoningEffort: aiGatewayReasoningEffortSchema.optional(),
   replyTone: z.enum(["none", "casual", "flirty", "upsell", "spicy"]).optional(),
   replyMode: z.enum(["default", "preferSplit"]).optional(),
-  messageCount: z.number().int().min(5).max(500).optional(),
+  messageCount: z.number().int().min(5).max(3000).optional(),
+  draftText: z.string().min(1).max(20_000).optional(),
   isRegeneration: z.boolean().optional(),
 }).strict();
 

@@ -1,5 +1,5 @@
 import type { AiGatewayReasoningEffort, AiGatewayStreamBody } from "@agency_hub_core/contracts";
-import { findAiPersonaByKey } from "@agency_hub_core/db";
+import { findAiPersonaByKey, findPageByLabel } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import {
@@ -9,14 +9,23 @@ import {
 import type { AuthPrincipal } from "../../../services/auth.ts";
 import { BadRequestError, NotFoundError } from "../../../services/errors.ts";
 import {
+  loadFanBio,
   loadFanDisplayName,
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
 } from "../context/index.ts";
 import {
+  DEFAULT_FEATURE_MODELS,
+  DEFAULT_FEATURE_REASONING,
+  DEFAULT_MESSAGE_COUNT_BY_BUCKET,
+  FEATURE_POLICIES,
+  HI_GREETING_MAX_TRANSCRIPT,
+  analyzePingSegment,
   buildPrompt,
   createBundledPersonalities,
+  isOperationFeature,
+  type OperationFeature,
   type Personality,
   type ReplyMode,
   type ReplyTone,
@@ -29,9 +38,10 @@ import {
 // refs). No client cuts over here — the kernel becomes ABLE to serve them
 // (Stages 31/32 do the cutovers).
 //
-// Registry seeds = the desktop's own per-feature defaults at the snapshot
-// commit (constants.ts): model Sonnet 4.6 (fan-summary Opus 4.6),
-// reasoning 'medium', quick window 100 messages.
+// The registry is DERIVED from the migrated FEATURE_POLICIES — one source
+// of truth for prompt behavior, model delegation, earnings inclusion,
+// window buckets, and the desktop's product gates (draft required,
+// deep-feature minimum, hi-greeting lock, ping segment analysis).
 
 export interface AiFeatureRequestBody {
   clientRequestId: string;
@@ -46,32 +56,9 @@ export interface AiFeatureRequestBody {
   replyTone?: ReplyTone;
   replyMode?: ReplyMode;
   messageCount?: number;
+  draftText?: string;
   isRegeneration?: boolean;
 }
-
-interface AiFeatureDefinition {
-  feature: "fast-reply";
-  defaults: {
-    model: string;
-    reasoningEffort: AiGatewayReasoningEffort;
-    messageCount: number;
-  };
-  includesEarnings: boolean;
-}
-
-/** Pilot registry: fast-reply end-to-end; the remaining inventory lands
- * with Stage 30 Task 4. */
-export const AI_FEATURE_REGISTRY: Record<string, AiFeatureDefinition> = {
-  "fast-reply": {
-    feature: "fast-reply",
-    defaults: {
-      model: "anthropic:claude-sonnet-4-6",
-      reasoningEffort: "medium",
-      messageCount: 100,
-    },
-    includesEarnings: true,
-  },
-};
 
 async function resolvePersona(
   app: Pick<AppContext, "db">,
@@ -98,15 +85,19 @@ export async function prepareAiFeatureStream(
   featureKey: string,
   body: AiFeatureRequestBody,
 ): Promise<PreparedAiGatewayStream> {
-  const definition = AI_FEATURE_REGISTRY[featureKey];
-  if (!definition) {
+  if (!(featureKey in FEATURE_POLICIES) || !isOperationFeature(featureKey as never)) {
     throw new NotFoundError(`Unknown AI feature: ${featureKey}`);
+  }
+  const feature = featureKey as OperationFeature;
+  const policy = FEATURE_POLICIES[feature];
+
+  if (policy.requiresDraft && !body.draftText?.trim()) {
+    throw new BadRequestError(`${feature} requires draftText`);
   }
 
   // Page resolution + access control live in prepareAiGatewayStream (the
   // single gate); the context loads need the page id first, so resolve it
   // through the same lookup and let the gateway re-verify.
-  const { findPageByLabel } = await import("@agency_hub_core/db");
   const stored = await findPageByLabel(app.db, body.pageLabel);
   if (!stored || stored.page.platform !== body.platform) {
     throw new NotFoundError("Page not found");
@@ -118,36 +109,58 @@ export async function prepareAiFeatureStream(
   const transcript = await loadTranscriptContext(app, {
     pageId,
     conversationRef: body.conversationRef,
-    limit: body.messageCount ?? definition.defaults.messageCount,
+    limit: body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket],
   });
-  const spending = definition.includesEarnings
+
+  // Desktop product gates, carried (CG-FLOW-03 and the hi-greeting lock).
+  if (policy.minMessages > 0 && transcript.messages.length < policy.minMessages) {
+    throw new BadRequestError(
+      `${feature} requires at least ${policy.minMessages} messages in the conversation`,
+    );
+  }
+  if (feature === "hi-greeting" && transcript.messages.length > HI_GREETING_MAX_TRANSCRIPT) {
+    throw new BadRequestError(
+      `hi-greeting is only available for conversations with at most ${HI_GREETING_MAX_TRANSCRIPT} messages`,
+    );
+  }
+
+  const spending = policy.includesEarnings
     ? await loadSpendingContext(app, { pageId, fanRef })
     : null;
-  const subscription = definition.includesEarnings
+  const subscription = policy.includesEarnings
     ? await loadSubscriptionContext(app, { pageId, fanRef })
     : null;
   const fanDisplayName = await loadFanDisplayName(app, { pageId, fanRef });
+  const fanBio = feature === "hi-greeting"
+    ? await loadFanBio(app, { fanRef })
+    : undefined;
+  const pingSegment = policy.usesPingSegment
+    ? analyzePingSegment(transcript.messages, Date.now()).segment
+    : undefined;
 
   const prompt = buildPrompt({
-    feature: definition.feature,
+    feature,
     personality: persona,
     transcript: transcript.transcript,
     fanSpendingData: spending?.block ?? "",
     fanSubscriptionData: subscription?.block ?? "",
     fanDisplayName,
-    replyTone: body.replyTone,
-    replyMode: body.replyMode,
+    fanBio,
+    draftText: body.draftText,
+    pingSegment,
+    replyTone: policy.supportsReplyTone ? body.replyTone : undefined,
+    replyMode: policy.supportsReplyMode ? body.replyMode : undefined,
   });
 
   const gatewayBody: AiGatewayStreamBody = {
     clientRequestId: body.clientRequestId,
-    feature: definition.feature,
+    feature,
     pageLabel: body.pageLabel,
     platform: body.platform,
     platformUserId: fanRef,
     conversationId: body.conversationRef,
-    model: body.model ?? definition.defaults.model,
-    reasoningEffort: body.reasoningEffort ?? definition.defaults.reasoningEffort,
+    model: body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature],
+    reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,
     prompt: {
       systemBlocks: prompt.systemBlocks,

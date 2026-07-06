@@ -1,0 +1,214 @@
+// MIGRATED (Stage 30) from chatgoose_desktop_fable
+// packages/shared/src/features.ts + the per-feature parameter block of
+// packages/shared/src/constants.ts @ 1db76a4ae13d (2026-07-06).
+// Adapted in imports; the desktop's Settings-coupled message-count resolver
+// is replaced by the kernel window defaults below (recorded deviation —
+// per-feature windows become kernel config in Task 4's registry, seeded
+// with the desktop defaults). Policy VALUES are verbatim.
+
+import type {
+  FeatureType,
+  ModelSelectableFeature,
+  PromptMode,
+  ReasoningEffort,
+  ResultKind,
+} from './types.ts';
+
+/** Features that run as a single operation. 'compare' orchestrates fast-reply per personality card. */
+export type OperationFeature = Exclude<FeatureType, 'compare'>;
+
+export type FeatureSurface = 'ai-dock' | 'panel-tab';
+export type FeatureTimeoutBucket = 'quick' | 'deep';
+export type FeatureMessageCountBucket = 'quick' | 'ping' | 'improve' | 'deep' | 'hi';
+/** 'regenerate' re-runs the same prompt; 'refresh' forces regeneration (drops any cache). */
+export type FeatureRerunAction = 'regenerate' | 'refresh';
+
+export interface FeaturePolicy {
+  surface: FeatureSurface;
+  resultKind: ResultKind;
+  promptMode: PromptMode;
+  timeoutBucket: FeatureTimeoutBucket;
+  messageCountBucket: FeatureMessageCountBucket;
+  /** Model/reasoning selection delegation (improve-draft & hi-greeting → fast-reply). */
+  modelFeature: ModelSelectableFeature;
+  includesEarnings: boolean;
+  /** 0 = no gate; deep features require MIN_MESSAGES_FOR_DEEP (CG-FLOW-03). */
+  minMessages: number;
+  rerunAction: FeatureRerunAction;
+  supportsReplyMode: boolean;
+  supportsReplyTone: boolean;
+  requiresDraft: boolean;
+  usesPingSegment: boolean;
+}
+
+// ─── Message counts (research §5.1; desktop defaults carried) ───────────
+
+export const QUICK_DEFAULT_MESSAGE_COUNT = 100;
+export const IMPROVE_DEFAULT_MESSAGE_COUNT = 25;
+export const DEEP_DEFAULT_MESSAGE_COUNT = 1500;
+export const PING_DEFAULT_MESSAGE_COUNT = QUICK_DEFAULT_MESSAGE_COUNT;
+/** Fixed for hi-greeting; not a user setting (legacy: one API page). */
+export const HI_GREETING_MESSAGE_COUNT = 25;
+
+// ─── Feature thresholds (research §1) ───────────────────────────────────
+
+export const MIN_MESSAGES_FOR_DEEP = 30;
+/** hi-greeting is locked unless the conversation has at most this many messages. */
+export const HI_GREETING_MAX_TRANSCRIPT = 10;
+
+// ─── Model defaults (constants.ts, verbatim) ────────────────────────────
+
+export const DEFAULT_MODEL_ID = 'anthropic:claude-sonnet-4-6';
+export const DEFAULT_FAN_SUMMARY_MODEL_ID = 'anthropic:claude-opus-4-6';
+
+export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
+  'fast-reply': DEFAULT_MODEL_ID,
+  'help-me': DEFAULT_MODEL_ID,
+  'fan-summary': DEFAULT_FAN_SUMMARY_MODEL_ID,
+  'chat-review': DEFAULT_MODEL_ID,
+  'ping': DEFAULT_MODEL_ID,
+};
+
+export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, ReasoningEffort> = {
+  'fast-reply': 'medium',
+  'help-me': 'medium',
+  'fan-summary': 'medium',
+  'chat-review': 'medium',
+  'ping': 'medium',
+};
+
+export const DEFAULT_MESSAGE_COUNT_BY_BUCKET: Record<FeatureMessageCountBucket, number> = {
+  quick: QUICK_DEFAULT_MESSAGE_COUNT,
+  ping: PING_DEFAULT_MESSAGE_COUNT,
+  improve: IMPROVE_DEFAULT_MESSAGE_COUNT,
+  deep: DEEP_DEFAULT_MESSAGE_COUNT,
+  hi: HI_GREETING_MESSAGE_COUNT,
+};
+
+// ─── Policies (features.ts, verbatim values) ────────────────────────────
+
+export const OPERATION_FEATURES = [
+  'fast-reply',
+  'improve-draft',
+  'help-me',
+  'fan-summary',
+  'chat-review',
+  'ping',
+  'hi-greeting',
+] as const satisfies readonly OperationFeature[];
+
+export const FEATURE_POLICIES = {
+  'fast-reply': {
+    surface: 'ai-dock',
+    resultKind: 'reply',
+    promptMode: 'reply',
+    timeoutBucket: 'quick',
+    messageCountBucket: 'quick',
+    modelFeature: 'fast-reply',
+    includesEarnings: true,
+    minMessages: 0,
+    rerunAction: 'regenerate',
+    supportsReplyMode: true,
+    supportsReplyTone: true,
+    requiresDraft: false,
+    usesPingSegment: false,
+  },
+  'improve-draft': {
+    surface: 'ai-dock',
+    resultKind: 'single-reply',
+    promptMode: 'reply',
+    timeoutBucket: 'quick',
+    messageCountBucket: 'improve',
+    modelFeature: 'fast-reply',
+    includesEarnings: true,
+    minMessages: 0,
+    rerunAction: 'regenerate',
+    supportsReplyMode: false,
+    supportsReplyTone: false,
+    requiresDraft: true,
+    usesPingSegment: false,
+  },
+  'help-me': {
+    surface: 'panel-tab',
+    resultKind: 'xml',
+    promptMode: 'analysis',
+    timeoutBucket: 'quick',
+    messageCountBucket: 'quick',
+    modelFeature: 'help-me',
+    includesEarnings: true,
+    minMessages: 0,
+    rerunAction: 'regenerate',
+    supportsReplyMode: false,
+    supportsReplyTone: false,
+    requiresDraft: false,
+    usesPingSegment: false,
+  },
+  'fan-summary': {
+    surface: 'panel-tab',
+    resultKind: 'single-reply',
+    promptMode: 'analysis',
+    timeoutBucket: 'deep',
+    messageCountBucket: 'deep',
+    modelFeature: 'fan-summary',
+    includesEarnings: true,
+    minMessages: MIN_MESSAGES_FOR_DEEP,
+    rerunAction: 'refresh',
+    supportsReplyMode: false,
+    supportsReplyTone: false,
+    requiresDraft: false,
+    usesPingSegment: false,
+  },
+  'chat-review': {
+    surface: 'panel-tab',
+    resultKind: 'xml',
+    promptMode: 'analysis',
+    timeoutBucket: 'deep',
+    messageCountBucket: 'deep',
+    modelFeature: 'chat-review',
+    includesEarnings: true,
+    minMessages: MIN_MESSAGES_FOR_DEEP,
+    rerunAction: 'refresh',
+    supportsReplyMode: false,
+    supportsReplyTone: false,
+    requiresDraft: false,
+    usesPingSegment: false,
+  },
+  'ping': {
+    surface: 'ai-dock',
+    resultKind: 'reply',
+    promptMode: 'reply',
+    timeoutBucket: 'quick',
+    messageCountBucket: 'ping',
+    modelFeature: 'ping',
+    includesEarnings: true,
+    minMessages: 0,
+    rerunAction: 'regenerate',
+    supportsReplyMode: false,
+    supportsReplyTone: false,
+    requiresDraft: false,
+    usesPingSegment: true,
+  },
+  'hi-greeting': {
+    surface: 'ai-dock',
+    resultKind: 'reply',
+    promptMode: 'reply',
+    timeoutBucket: 'quick',
+    messageCountBucket: 'hi',
+    modelFeature: 'fast-reply',
+    includesEarnings: false,
+    minMessages: 0,
+    rerunAction: 'regenerate',
+    supportsReplyMode: false,
+    supportsReplyTone: false,
+    requiresDraft: false,
+    usesPingSegment: false,
+  },
+} as const satisfies Record<OperationFeature, FeaturePolicy>;
+
+export function isOperationFeature(feature: FeatureType): feature is OperationFeature {
+  return feature !== 'compare';
+}
+
+export function getFeaturePolicy(feature: OperationFeature): FeaturePolicy {
+  return FEATURE_POLICIES[feature];
+}

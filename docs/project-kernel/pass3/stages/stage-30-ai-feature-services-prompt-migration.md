@@ -195,9 +195,18 @@ exited (entry criterion "29 exited" — deploy pending owner window).
   transcript (`[10:00] Fan: …`, `[Tip: $5.00]`), spending + subscription
   blocks; restricted-class row + ledger row land; stored persona via
   personaKey; unknown feature 404s.
-- [ ] Task 4: remaining features (improve-draft, help-me, fan-summary,
-  chat-review, ping, hi-greeting) + persona seeding + extension inventory
-  (reference read).
+- [x] **Task 4 (same session): all seven features live** — FEATURE_POLICIES
+  migrated (values verbatim; the desktop's Settings-coupled window resolver
+  replaced by kernel bucket defaults, recorded); registry DERIVED from the
+  policies (model delegation improve/hi→fast-reply, earnings inclusion,
+  window buckets quick 100 / improve 25 / deep 1500 / ping 100 / hi 25);
+  desktop product gates carried: requiresDraft 400, deep minMessages 30
+  (CG-FLOW-03), hi-greeting ≤10-message lock, ping segment ANALYZED
+  kernel-side (migrated analyzePingSegment over the transcript); fanBio for
+  hi-greeting from fans.metadata (NAMED parity checkpoint if absent in
+  practice). Gate test exercises all seven through the route. Persona
+  seeding + extension panel-feature inventory ride Task 5's freeze window
+  (the extension's personas are the seeds' source of truth).
 - [ ] Task 5: parity harness + freeze-window capture + sign-off (OWNER GATE:
   declare the freeze first).
 - [ ] Task 6: deploy (0071+0072+0073 ride together) + smoke CLI + latency

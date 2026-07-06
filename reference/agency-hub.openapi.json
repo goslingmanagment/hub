@@ -14136,7 +14136,12 @@
                   "messageCount": {
                     "type": "integer",
                     "minimum": 5,
-                    "maximum": 500
+                    "maximum": 3000
+                  },
+                  "draftText": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 20000
                   },
                   "isRegeneration": {
                     "type": "boolean"

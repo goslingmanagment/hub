@@ -246,6 +246,77 @@ describe("AI feature service pilot (Stage 30)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("AI feature registry gates (Stage 30 Task 4)", () => {
+  it("enforces the desktop product gates across the seven features", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const call = (feature: string, extra: Record<string, unknown> = {}) =>
+      apiServer!.inject({
+        method: "POST",
+        url: `/api/v1/ai/features/${feature}`,
+        headers: { authorization: `Bearer ${chatterKey}` },
+        payload: {
+          clientRequestId: randomUUID(),
+          pageLabel: "svc-of",
+          platform: "onlyfans",
+          conversationRef: FAN,
+          ...extra,
+        },
+      });
+
+    // improve-draft demands a draft, then embeds it.
+    const noDraft = await call("improve-draft");
+    expect(noDraft.statusCode, noDraft.body).toBe(400);
+    const withDraft = await call("improve-draft", { draftText: "hey love, sup" });
+    expect(withDraft.statusCode, withDraft.body).toBe(200);
+    expect(capture.input!.body.feature).toBe("improve-draft");
+    expect(
+      capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n"),
+    ).toContain("hey love, sup");
+
+    // Deep features gate on the minimum window (3 messages < 30).
+    const summary = await call("fan-summary");
+    expect(summary.statusCode, summary.body).toBe(400);
+    expect(summary.json().message).toContain("at least 30");
+    const review = await call("chat-review");
+    expect(review.statusCode).toBe(400);
+
+    // ping derives its segment kernel-side and streams.
+    const ping = await call("ping");
+    expect(ping.statusCode, ping.body).toBe(200);
+    expect(capture.input!.body.feature).toBe("ping");
+
+    // help-me (analysis preamble) streams.
+    const helpMe = await call("help-me");
+    expect(helpMe.statusCode, helpMe.body).toBe(200);
+
+    // hi-greeting: allowed on a short conversation, WITHOUT earnings blocks.
+    const hi = await call("hi-greeting");
+    expect(hi.statusCode, hi.body).toBe(200);
+    expect(capture.input!.body.feature).toBe("hi-greeting");
+    const hiText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
+    expect(hiText).not.toContain("<fan_spending_data>");
+
+    // hi-greeting locks once the conversation outgrows the legacy cap (10).
+    for (let extra = 0; extra < 12; extra += 1) {
+      await testDb.pool.query(
+        `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+           fan_native_id, is_sent_by_me, occurred_at, text_plain)
+         values ($1, 'onlyfans', $2, $3, $2, false, now(), 'more chatter')`,
+        [pageId, FAN, String(9100 + extra)],
+      );
+    }
+    const hiLocked = await call("hi-greeting");
+    expect(hiLocked.statusCode, hiLocked.body).toBe(400);
+    expect(hiLocked.json().message).toContain("at most 10");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("prompt migration manifest (Stage 30)", () => {
   const root = join(__dirname, "..", "apps", "runtime", "src", "modules", "ai", "prompts");
   const manifest = JSON.parse(readFileSync(join(root, "prompt-manifest.json"), "utf8")) as {

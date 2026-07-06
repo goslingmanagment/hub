@@ -121,6 +121,11 @@
       "sourceSha256": "8976642f3055f17a1596e49a16fcebce14a24dfbf3079d79b15988d8505a5884",
       "coreSha256": "8976642f3055f17a1596e49a16fcebce14a24dfbf3079d79b15988d8505a5884",
       "byteIdenticalToSource": true
+    },
+    "feature-policies.ts": {
+      "sourceSha256": "832ff495138694e0a05d8c8b5c8010befdadf1e5331df2b3c803bc58e47c6e80",
+      "coreSha256": "9511e1fc116d71b15e846274f4564a5c0a618346ff5f61da9017f7e19942ba23",
+      "byteIdenticalToSource": false
     }
   }
 }
