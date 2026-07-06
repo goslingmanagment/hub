@@ -2521,3 +2521,80 @@ bulk) → auth-dead drill (staged credential kill or next natural death).
 (chain tip 4e2dcdd). The ratchets guarded their own stage: the first full
 run caught the resolver's platform ternary raising the Stage 18 branch
 count 48→49 — replaced with a vocabulary map (followup 4e2dcdd).
+
+## THE BIG DEPLOY — Chain 0057–0069 Live in Prod (2026-07-06)
+
+**Decision #101 (owner-directed "deploy and do what you need"):** the entire
+built backlog — stages 8, 9, 10, 11, 12-glue, 14, 16, 17, 19, 20, 21, 22,
+23, 24-core, 25, 27, 18, 26 — merged to main (fast-forward 05b6f3e →
+aa522c8 + deploy-prep commits) and DEPLOYED to prod in one pass, migrations
+0057–0069. Owner point-confirms per gate (deploy scope + shadow flip; probe
+credential; six flag flips) — the #70 pattern held throughout.
+
+**Pre-deploy evidence:**
+- Stage 7 reconcile snapshot (28 h window, deploy moved earlier by owner):
+  pull 11 producers both platforms, webhook 10.7k; `operator` source proven
+  LIVE by the probe-credential audit rows (user.created + api_key.issued);
+  `command_result` wired-but-no-traffic (watch: first natural desktop send).
+  Formal 48 h close-out stays post-hoc queryable (observations timestamped).
+- p95 baseline (20 gateway reads, probe chatter key): p50 0.964 s / p95 1.869 s.
+- **0068 rehearsal on a REAL prod copy** (passport): server-side dump→restore
+  into kernel_rehearsal (7.1 GB), migrations 0057–0069 forward clean, 0068
+  9.6 s (432k sync_http_attempts rewrite — the prod lock window), DOWN-path
+  proven (enum restored), re-apply 9.4 s. Rehearsal DB dropped after.
+- First-ever OFF-BOX BACKUP: 3.0 GB pg_dump -Fc on the dev machine
+  (scratchpad; 37 min over SSH). The accepted no-backup risk now has one
+  point-in-time exception.
+- Deploy-prep commit 4363d3c: the FIRST production build since Stage 18
+  caught three stale packages/onlyfans refs (build-production.mjs,
+  deploy-production.sh manifest/overlay/dist-Dockerfile, Dockerfile) and
+  Buffer in the SDK cursor codec (dashboard tsc) → isomorphic
+  TextEncoder/btoa rewrite, suites green.
+
+**Deploy:** full image build (lockfile changed), nohup-detached (tool
+timeouts must never kill a stack recreate). EGRESS_PACER_MODE=shadow set in
+.env.production pre-restart (Stage 26 48 h shadow window started at deploy).
+Stack recreate brought up agency-hub-scheduler-1 (Stage 25 role; compose
+synced by the deploy script). Migrations applied at boot (advisory-locked):
+schema_migrations 69, platforms seeded, enum platform GONE.
+
+**Post-deploy verification:**
+- Scheduler: leadership acquired, schedules registered, timekeeper running.
+- Golden signals sampling (ops_metric_samples rows within minutes).
+- p95 after: p50 0.962 s (byte-flat) / p95 1.059 s (improved) — Stage 9's
+  capture tee costs nothing. read-gateway captured EXACTLY 20 observations
+  for the 20 probe reads (1:1 — Stage 9 exit evidence). Probe key revoked.
+- Shadow pacer logged 20 egress_pacer_shadow decisions (Stage 26 lane live).
+- archive:backfill ran (2 archive + 34 hot batches).
+- Workboard v2 serving (deploy script's same-origin dashboard check).
+
+**LIVE DEFECT FOUND AND FIXED WITHIN THE HOUR (2dc8e3f):** the first sweep
+appended 1,428 events — all PULL-family. The golden-signal canonicalize
+breach fired immediately (Stage 25's alarm working as designed) on a stuck
+4,000-row re-scan loop: webhook observations journal with account_id NULL
+and only the vendor ref (native_account_ref = acct_…, capture-first by
+design), but the sweep's unmapped check read row.accountId — the ENTIRE
+webhook corpus (11k rows) skipped forever, and the keyset scan burned its
+whole page budget on the same stuck rows (new observations starved). Fix:
+the run context builds an inverse page map (platform-scoped over BOTH
+platform_account_id and ofapi_account_id — OF pages' external id is empty
+in the OFAPI era) and the driver resolves the ref before the check;
+genuinely unmapped refs keep the skip-and-retry self-heal. Pinned by a
+prod-shape test. Redeployed (dist-only path): backlog fully drained in 3
+ticks — 10,836 events, live lag 55 s, tip.received events present,
+remaining 1,988 pending rows = undeclared kinds (typing) by design.
+
+**Staged flips (owner-confirmed, runbook step 6), written with audit rows:**
+fanslyFanEarningsSyncEnabled + fanslyPurchaseHistorySyncEnabled +
+fanslyNewStreamPageAllowlist="lilly-1,lilly-2" (Stage 16 lilly ramp),
+fanslyDeepBackfillIgnoreRetentionLimit (Stage 17),
+ofapiChargebacksReconcileEnabled + ofapiFanIdentitiesSyncEnabled (Stage 14,
+boot-apply → worker bounced). GOTCHA: SSH heredoc quoting silently wrote
+NOTHING on the first attempt (verify-after-write caught it); file+scp+psql -f
+is the reliable path.
+
+**Ops watches armed:** Stage 7 48 h close-out (~01:50 UTC 07-07, post-hoc
+query); first natural command_result; Stage 16 shapes on lilly pages;
+chargebacks first run 03:10 UTC; Stage 26 shadow diff review (~48 h);
+Stage 19 would-deny log window → enforce flip; Stage 8/9/10 telemetry
+windows per stage Progress blocks; desktop fleet x-client-version (07-12).
