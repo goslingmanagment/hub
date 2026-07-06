@@ -2810,3 +2810,32 @@ until parity sign-off.
   (idempotent; run post-deploy).
 
 Client cutover stages (31/32) are now unblocked on the parity side.
+
+**Decision #109 (2026-07-06, owner-confirmed window):** the Stage 28.4 /
+29 / 30 backlog is **DEPLOYED to production** (root@45.8.230.111).
+Sequence: full-chain deploy (image from 6bba967-era tree; migrations
+0071_erasure_log + 0072_ai_restricted_class + 0073_ai_personas applied at
+startup under the advisory lock — schema_migrations 73; all containers
+healthy incl. scheduler) followed by a dist-only redeploy of HEAD 0541b22
+(the first image snapshot missed the ai:personas-seed CLI by minutes —
+gotcha: the docker build context snapshots at launch; anything committed
+after the deploy starts needs a follow-up dist-only pass).
+
+Post-deploy verification:
+- erasure_log / ai_generation_content / ai_acceptance_events / ai_personas
+  all exist; erasure and capture tables empty (nothing invoked — correct).
+- Route smoke: /api/v1/ai/restricted/generations → 401 (exists,
+  owner-gated); POST /api/v1/ai/features/fast-reply → 400 on empty body
+  (exists, contract-validating).
+- Personas seeded via ai:personas-seed: builtin:lora (7,049 chars).
+- Golden-signal volume gauges live: ai_content_rows=0,
+  ai_content_bytes≈40KB (empty-relation baseline) sampling minutely.
+- Prod now serves: the erasure CLI (unused until a real request — the
+  drill is the rehearsal), the hardened gateway (budgets + quota_denied +
+  restricted capture on every generation INCLUDING the nightly classifier,
+  whose next run books spend under workboard-closing), and all seven
+  kernel feature services (no client consumes them until 31/32).
+
+Stage 29's remaining exit items (production probes + invoice week) and
+Stage 30 Task 6's smoke-per-feature + latency numbers run against this
+deployment.

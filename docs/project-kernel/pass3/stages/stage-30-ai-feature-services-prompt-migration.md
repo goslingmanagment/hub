@@ -216,6 +216,16 @@ exited (entry criterion "29 exited" — deploy pending owner window).
   (cross-repo import). CAVEAT: assembly-level parity per the passport;
   context-VALUE parity for the three named loader gaps is a Stage 31
   cutover checkpoint. `ai:personas-seed` CLI added (run post-deploy).
-- [ ] Task 6: deploy running (0071+0072+0073 one window) + smoke CLI +
-  latency numbers; extension panel-feature/persona inventory (reference
-  read) lands here too.
+- [x] **Extension inventory (reference read, bar-tone-menu branch):** the
+  extension has the SAME 7 features (no extras; `compare` is a UI mode over
+  fast-reply, currently starved — prompts/drafts/ absent so card set = 1);
+  ONE bundled persona (Lora, builtin:lora v2, IDENTICAL to the desktop's —
+  the kernel seed covers both clients); templates are byte-identical to the
+  desktop's EXCEPT one word — "Fansly" vs "OnlyFans" in each file's first
+  line. NAMED for Stage 32: the kernel feature service must swap the
+  platform word for Fansly pages (a one-word template variant, exactly the
+  substitution the desktop made OnlyFans-ward from legacy). The extension
+  calls providers directly (Anthropic + OpenRouter /v1/messages) — Stage 32
+  is a real transport cutover, unlike the desktop's hub-AI lane.
+- [ ] Task 6: deploy running (0071+0072+0073 one window) + smoke per
+  feature + latency numbers.
