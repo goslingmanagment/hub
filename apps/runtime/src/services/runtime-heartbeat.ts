@@ -10,7 +10,7 @@ import { buildRunningSnapshot } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
-export type RuntimeRole = "api" | "worker";
+export type RuntimeRole = "api" | "worker" | "scheduler";
 
 /** How often each process refreshes its heartbeat row. The staleness TTL on the
  *  repository side (INSTANCE_STALE_TTL_MS) is a small multiple of this. */

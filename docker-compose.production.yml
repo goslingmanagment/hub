@@ -40,6 +40,24 @@ services:
       retries: 6
       start_period: 20s
 
+  # Stage 25: cron registration + firing live in the scheduler role
+  # (leader-elected via a session advisory lock). One active instance is
+  # required; add a second `scheduler-standby` entry (same definition) for a
+  # hot standby — it idles on the lock and takes over when the leader dies.
+  scheduler:
+    image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    command: ["node", "apps/runtime/dist/startup.js", "scheduler"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Scale-out (Stage 25 Task 4): duplicate this service as worker-2 with the
+  # same definition (distinct WORKER_HEALTH_FILE) when the prod rollout goes
+  # to two workers — job coordination is singleton-key/lock based, no other
+  # config changes needed.
   worker:
     image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
     restart: unless-stopped

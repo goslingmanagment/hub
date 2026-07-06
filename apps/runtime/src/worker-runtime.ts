@@ -9,6 +9,8 @@ export async function runWorkerRuntime() {
   const app = await createAppContext();
   const boss = new PgBoss({
     connectionString: app.config.databaseUrl,
+    // Stage 25: cron registration + firing belong to the scheduler role.
+    schedule: false,
   });
   // PgBoss extends EventEmitter: without a listener an 'error' event throws.
   // The worker is nothing without its queue, so fail fast and let Docker's

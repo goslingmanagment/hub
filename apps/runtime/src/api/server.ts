@@ -373,7 +373,11 @@ export async function buildApiServer(appContext: AppContext) {
   let boss: PgBoss | null = null;
   const createdQueues = new Set<string>();
   if (appContext.config.databaseUrl) {
-    boss = new PgBoss({ connectionString: appContext.config.databaseUrl });
+    boss = new PgBoss({
+      connectionString: appContext.config.databaseUrl,
+      // Stage 25: the api enqueues only; cron belongs to the scheduler role.
+      schedule: false,
+    });
     // Without a listener an EventEmitter 'error' throws and takes the API
     // down on a transient Postgres blip (audit B8). Log only: this instance
     // merely enqueues jobs, and /health covers API liveness.

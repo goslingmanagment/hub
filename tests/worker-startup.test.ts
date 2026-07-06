@@ -288,19 +288,19 @@ describe("worker startup", () => {
       orphanedRunFailed: 1,
       orphanedRunPartial: 1,
     }), "Orphaned sync run startup cleanup complete");
-    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledTimes(1);
-    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledWith(boss);
+    // Stage 25: schedules are the scheduler role's job, never the worker's.
+    expect(queueMocks.ensureTelegramDailyReportSchedule).not.toHaveBeenCalled();
     expect(ofapiCommandMocks.ensureOfapiCommandQueues).toHaveBeenCalledWith(
       boss,
       expect.any(Set),
     );
-    expect(ofapiCommandMocks.ensureOfapiCommandSchedules).toHaveBeenCalledWith(boss);
+    expect(ofapiCommandMocks.ensureOfapiCommandSchedules).not.toHaveBeenCalled();
     expect(ofapiCommandMocks.startOfapiCommandWorker).toHaveBeenCalledWith(app, boss);
     expect(ofapiDmAnalyticsMocks.ensureOfapiDmAnalyticsQueues).toHaveBeenCalledWith(
       boss,
       expect.any(Set),
     );
-    expect(ofapiDmAnalyticsMocks.ensureOfapiDmAnalyticsSchedules).toHaveBeenCalledWith(boss);
+    expect(ofapiDmAnalyticsMocks.ensureOfapiDmAnalyticsSchedules).not.toHaveBeenCalled();
     expect(ofapiDmAnalyticsMocks.startOfapiDmAnalyticsWorker).toHaveBeenCalledWith(app, boss);
     expect(app.logger.info).toHaveBeenCalledWith("Worker started");
 
@@ -339,10 +339,11 @@ describe("worker startup", () => {
     const runtime = await startWorkerServices(app as never, boss as never);
 
     expect(queueMocks.ensureSyncQueues).toHaveBeenCalledWith(boss, expect.any(Set));
-    expect(queueMocks.ensurePlannerSchedule).toHaveBeenCalledWith(boss);
+    // Stage 25: cron registration moved to the scheduler role — the worker
+    // creates queues and consumes, but never registers schedules.
+    expect(queueMocks.ensurePlannerSchedule).not.toHaveBeenCalled();
     expect(plannerMocks.runSyncPlannerCycle).toHaveBeenCalledWith(app, boss);
-    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledTimes(1);
-    expect(queueMocks.ensureTelegramDailyReportSchedule).toHaveBeenCalledWith(boss);
+    expect(queueMocks.ensureTelegramDailyReportSchedule).not.toHaveBeenCalled();
     expect(boss.work).toHaveBeenCalledWith(
       "telegram.daily-report",
       { batchSize: 1 },

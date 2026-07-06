@@ -15,25 +15,21 @@ import type { AppContext } from "./bootstrap.ts";
 import {
   DB_DISK_USAGE_CHECK_QUEUE,
   ensureDbDiskUsageQueue,
-  ensureDbDiskUsageSchedule,
   runDbDiskUsageCheck,
 } from "./services/db-disk-alert.ts";
 import {
   OBSERVATIONS_PARTITIONS_QUEUE,
   ensureObservationsPartitionQueue,
-  ensureObservationsPartitionSchedule,
   runObservationsPartitionCheck,
 } from "./services/observations-partitions.ts";
 import {
   CANONICALIZE_SWEEP_QUEUE,
   ensureCanonicalizeQueues,
-  ensureCanonicalizeSchedule,
   runCanonicalization,
 } from "./services/canonicalize-driver.ts";
 import {
   MESSAGE_ARCHIVE_SWEEP_QUEUE,
   ensureMessageArchiveQueues,
-  ensureMessageArchiveSchedule,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
@@ -45,38 +41,30 @@ import {
 } from "./services/workboard-event-recompute.ts";
 import {
   ensureOfapiChargebacksQueue,
-  ensureOfapiChargebacksSchedule,
   startOfapiChargebacksWorker,
 } from "./services/ofapi-chargebacks-sync.ts";
 import {
   ensureOfapiCreditQueues,
-  ensureOfapiCreditSchedules,
   startOfapiCreditWorker,
 } from "./services/ofapi-credits.ts";
 import {
   ensureOfapiCommandQueues,
-  ensureOfapiCommandSchedules,
   startOfapiCommandWorker,
 } from "./services/ofapi-command-executor.ts";
 import {
   ensureOfapiDmAnalyticsQueues,
-  ensureOfapiDmAnalyticsSchedules,
   startOfapiDmAnalyticsWorker,
 } from "./services/ofapi-dm-analytics.ts";
 import {
   ensureOfapiQueues,
-  ensureOfapiSchedules,
   startOfapiEventWorker,
 } from "./services/ofapi-events.ts";
 import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
-  ensureTelegramDailyReportSchedule,
-  ensurePlannerSchedule,
   ensureSyncQueues,
   ensureWorkboardQueues,
-  ensureWorkboardRecomputeSchedule,
   RAW_PAYLOAD_CLEANUP_QUEUE,
   SYNC_PLANNER_QUEUE,
   TELEGRAM_DAILY_REPORT_QUEUE,
@@ -178,21 +166,8 @@ export async function startWorkerServices(
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
-  await Promise.all([
-    ensurePlannerSchedule(boss),
-    boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
-    ensureTelegramDailyReportSchedule(boss),
-    ensureWorkboardRecomputeSchedule(boss),
-    ensureOfapiSchedules(boss),
-    ensureOfapiCreditSchedules(boss),
-    ensureOfapiChargebacksSchedule(boss),
-    ensureOfapiCommandSchedules(boss),
-    ensureOfapiDmAnalyticsSchedules(boss),
-    ensureDbDiskUsageSchedule(boss),
-    ensureObservationsPartitionSchedule(boss),
-    ensureCanonicalizeSchedule(boss),
-    ensureMessageArchiveSchedule(boss),
-  ]);
+  // Stage 25: cron registration moved to the scheduler role (leader-elected;
+  // services/schedules.ts) — workers only create queues and consume.
 
   await boss.work(SYNC_PLANNER_QUEUE, {
     batchSize: 1,

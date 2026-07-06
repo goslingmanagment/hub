@@ -3,6 +3,7 @@ import { loadConfig } from "@agency_hub_core/shared";
 
 import { runMigrations } from "../../../packages/db/src/migrate-runner.ts";
 import { runApiRuntime } from "./api-runtime.ts";
+import { runSchedulerRuntime } from "./scheduler-runtime.ts";
 import { runWorkerRuntime } from "./worker-runtime.ts";
 
 const MIGRATION_LOCK_KEY_1 = 31415;
@@ -34,7 +35,9 @@ async function runStartupMigrations() {
 
 function resolveRole() {
   const role = process.argv[2] ?? process.env.AGENCY_HUB_ROLE ?? "worker";
-  if (role !== "api" && role !== "worker") {
+  // Stage 25: 'scheduler' owns cron registration + firing (leader-elected);
+  // workers and the api run pg-boss with schedule: false.
+  if (role !== "api" && role !== "worker" && role !== "scheduler") {
     throw new Error(`Unsupported Agency Hub runtime role "${role}"`);
   }
 
@@ -47,6 +50,10 @@ export async function main() {
 
   if (role === "api") {
     await runApiRuntime();
+    return;
+  }
+  if (role === "scheduler") {
+    await runSchedulerRuntime();
     return;
   }
 
