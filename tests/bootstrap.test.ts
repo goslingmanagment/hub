@@ -15,9 +15,6 @@ const bootstrapMocks = vi.hoisted(() => {
   const adapter = {
     close: vi.fn(async () => {}),
   };
-  const onlyFansAdapter = {
-    close: vi.fn(async () => {}),
-  };
   const encryptionKey = Buffer.alloc(32, 7);
 
   return {
@@ -43,7 +40,6 @@ const bootstrapMocks = vi.hoisted(() => {
       trustProxy: false,
       sessionTtlDays: 30,
       fanslyBaseUrl: "https://example.invalid",
-      onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: 2500,
       fanslyDmConversationsDelayMs: 5000,
@@ -67,8 +63,6 @@ const bootstrapMocks = vi.hoisted(() => {
       ofapiDmProjectionEnabled: false,
       ofapiDmSyncEnabled: false,
     })),
-    onlyFansAdapter,
-    OnlyFansAdapter: vi.fn(() => onlyFansAdapter),
     pool,
   };
 });
@@ -101,14 +95,6 @@ vi.mock("@agency_hub_core/fansly", async (importOriginal) => {
   };
 });
 
-vi.mock("@agency_hub_core/onlyfans", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@agency_hub_core/onlyfans")>();
-  return {
-    ...actual,
-    OnlyFansAdapter: bootstrapMocks.OnlyFansAdapter,
-  };
-});
-
 describe("bootstrap", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -131,21 +117,15 @@ describe("bootstrap", () => {
       baseUrl: "https://example.invalid",
       globalDelayMs: 2500,
     });
-    expect(bootstrapMocks.OnlyFansAdapter).toHaveBeenCalledWith({
-      baseUrl: "https://example.invalid",
-      defaultDelayMs: 1000,
-    });
     expect(app.db).toBe(bootstrapMocks.db);
     expect(app.adapter).toBe(bootstrapMocks.adapter);
     // No boot overrides in the DB → nothing skipped, config is the env config.
     expect(bootstrapMocks.getConfigOverrides).toHaveBeenCalledWith(bootstrapMocks.db);
     expect(app.bootSkipped).toEqual([]);
-    const onlyFansCloseSpy = vi.spyOn(app.onlyFansAdapter, "close");
 
     await app.close();
 
     expect(bootstrapMocks.adapter.close).toHaveBeenCalledTimes(1);
-    expect(onlyFansCloseSpy).toHaveBeenCalledTimes(1);
     expect(bootstrapMocks.pool.end).toHaveBeenCalledTimes(1);
   });
 

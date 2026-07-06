@@ -60,7 +60,6 @@ import { sendManualDailyRevenueTelegramReport } from "./services/telegram-report
 import { sendTelegramTestMessage } from "./services/telegram.ts";
 import {
   loadFanslySessionBundleFromFile,
-  loadOnlyMonsterTokenBundleFromFile,
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
   type ResolvedPageContext,
@@ -699,25 +698,16 @@ export function buildProgram() {
     .command("onlyfans")
     .requiredOption("--model <slug>")
     .requiredOption("--label <label>")
-    .requiredOption("--token-file <file>")
     .requiredOption("--username <username>")
-    .option("--proxy-url <url>")
-    .option("--proxy-username <username>")
-    .option("--proxy-password <password>")
-    .option("--proxy-password-file <file>")
-    .option("--proxy-password-env <name>")
     .action(async (options) => {
       const app = await createAppContext();
       try {
-        const auth = await loadOnlyMonsterTokenBundleFromFile(options.tokenFile);
-        const proxy = await buildProxyInput(options);
-
+        // Stage 18: no pasted tokens, no hub proxy — identity is matched
+        // against the accounts connected at the OFAPI vendor.
         const { page: created } = await onboardOnlyFansPage(app, {
           modelSlug: options.model,
           label: options.label,
-          auth,
           username: options.username,
-          proxy,
         });
         await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, app, created.label);
 
@@ -826,17 +816,11 @@ export function buildProgram() {
             `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.id})`,
           );
         } else {
-          const verified = await refreshPageMetadata(app, context, "light");
-          const recoveredAt = new Date();
+          // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
+          // credentials to verify; their access is the OFAPI mapping.
           printPageEgressSummary(await egressSummaryPromise);
-          await handleSuccessfulPageVerificationRecovery(app, {
-            platformAccountId: context.page.id,
-            pageLabel: context.page.label,
-            platform: context.platform,
-            recoveredAt,
-          });
-          console.log(
-            `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.platform_account_id})`,
+          throw new Error(
+            "OnlyMonster is retired: OnlyFans pages verify via their OFAPI mapping (setPageOfapiAccountId), not pasted credentials",
           );
         }
       } finally {

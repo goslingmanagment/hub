@@ -6,7 +6,6 @@ import {
   decryptJsonWithKeyVersion,
   encryptJson,
   type FanslySessionBundle,
-  type OnlyMonsterTokenBundle,
   type ProxyConfig,
   type StoredPlatformCredentialBundle,
 } from "@agency_hub_core/shared";
@@ -58,15 +57,6 @@ function normalizeSessionBundle(input: Record<string, unknown>): FanslySessionBu
   };
 }
 
-function normalizeOnlyMonsterTokenBundle(input: Record<string, unknown>): OnlyMonsterTokenBundle {
-  const token = input.token ?? input.authToken ?? input["x-om-auth-token"];
-  if (typeof token !== "string") {
-    throw new Error("Token file must include token");
-  }
-
-  return { token };
-}
-
 function asRecord(value: unknown) {
   if (typeof value !== "object" || value === null) {
     throw new Error("Credentials payload must be an object");
@@ -89,11 +79,6 @@ export async function loadFanslySessionBundleFromFile(filePath: string) {
 }
 
 export const loadSessionBundleFromFile = loadFanslySessionBundleFromFile;
-
-export async function loadOnlyMonsterTokenBundleFromFile(filePath: string) {
-  const raw = JSON.parse(await readFile(filePath, "utf8")) as Record<string, unknown>;
-  return normalizeOnlyMonsterTokenBundle(raw);
-}
 
 export async function saveEncryptedCredentials(
   app: Pick<AppContext, "config" | "db">,
@@ -201,6 +186,19 @@ function resolveStoredPageContext(
     throw new NotFoundError(`Page "${label}" not found`);
   }
 
+  if (stored.page.platform === "onlyfans") {
+    // Stage 18: OnlyMonster retired — OnlyFans pages hold no hub-side session
+    // material (OFAPI streams authenticate vendor-side; everything else
+    // skips). The empty token keeps the context shape stable for callers.
+    return {
+      page: stored.page,
+      platform: "onlyfans" as const,
+      auth: { token: "" },
+      proxy: resolveStoredProxyConfig(app, stored.proxy),
+      egressKey: resolveStoredProxyEgressKey(stored.proxy),
+    };
+  }
+
   if (!stored.credentials) {
     throw new BadRequestError(`Page "${label}" has no stored platform credentials`);
   }
@@ -254,35 +252,7 @@ function resolveStoredPageContext(
     };
   }
 
-  let auth: OnlyMonsterTokenBundle;
-  try {
-    auth = isStoredPlatformCredentialBundle(decrypted)
-      ? decrypted.platform === "onlyfans"
-        ? decrypted.auth
-        : (() => {
-          throw new BadRequestError(
-            `Page "${label}" has Fansly credentials stored for an OnlyFans page`,
-          );
-        })()
-      : normalizeOnlyMonsterTokenBundle(asRecord(decrypted));
-  } catch (error) {
-    if (error instanceof BadRequestError) {
-      throw error;
-    }
-    throw new BadRequestError(
-      `Page "${label}" has invalid stored platform credentials: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`,
-    );
-  }
-
-  return {
-    page: stored.page,
-    platform: "onlyfans" as const,
-    auth,
-    proxy,
-    egressKey,
-  };
+  throw new BadRequestError(`Page "${label}" has an unknown platform`);
 }
 
 export type ResolvedPageContext = Awaited<ReturnType<typeof resolvePageContext>>;

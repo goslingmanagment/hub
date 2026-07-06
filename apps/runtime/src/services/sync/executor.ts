@@ -21,7 +21,6 @@ import {
   yieldPageSync,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
-import { OnlyMonsterApiError } from "@agency_hub_core/onlyfans";
 import type { JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -64,7 +63,7 @@ interface ExecutorCoordinator {
 }
 
 function isAuthError(error: unknown) {
-  if (error instanceof FanslyApiError || error instanceof OnlyMonsterApiError) {
+  if (error instanceof FanslyApiError) {
     return error.status === 401 || error.status === 403;
   }
 
@@ -188,7 +187,7 @@ function classifyTaskFailure(
   blockerCode?: string;
   blockerReason?: string;
 } {
-  if (error instanceof FanslyApiError || error instanceof OnlyMonsterApiError) {
+  if (error instanceof FanslyApiError) {
     if (error.status === 429) {
       return {
         mode: "retry",

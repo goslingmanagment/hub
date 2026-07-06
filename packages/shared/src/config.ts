@@ -81,7 +81,6 @@ const envSchema = z.object({
   TRUST_PROXY: trustProxySchema,
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
-  ONLYMONSTER_BASE_URL: z.string().url().default("https://omapi.onlymonster.ai"),
   ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: booleanSchema.default(false),
   ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT: booleanSchema.default(false),
   ONLYFANS_PUBLIC_PROFILE_PROXY_URL: optionalTrimmedStringSchema,
@@ -205,7 +204,6 @@ export interface AppConfig {
   trustProxy: boolean | number | string;
   sessionTtlDays: number;
   fanslyBaseUrl: string;
-  onlyMonsterBaseUrl: string;
   onlyFansPublicProfileResolutionEnabled?: boolean;
   onlyFansPublicProfileAllowDirect?: boolean;
   onlyFansPublicProfileProxy?: ProxyConfig | null;
@@ -403,7 +401,6 @@ export function loadConfig(
     trustProxy: parsed.TRUST_PROXY,
     sessionTtlDays: parsed.SESSION_TTL_DAYS,
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,
-    onlyMonsterBaseUrl: parsed.ONLYMONSTER_BASE_URL,
     onlyFansPublicProfileResolutionEnabled: parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED,
     onlyFansPublicProfileAllowDirect: parsed.ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT,
     onlyFansPublicProfileProxy,

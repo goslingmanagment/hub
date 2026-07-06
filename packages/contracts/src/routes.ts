@@ -2643,15 +2643,10 @@ const fanslyCredentialsSchema = z.object({
 
 const onlyfansCredentialsSchema = z.object({
   platform: z.literal("onlyfans"),
-  auth: z.object({
-    token: z.string().min(1),
-  }),
+  // Stage 18: OnlyMonster retired — OnlyFans pages onboard against the OFAPI
+  // vendor by username (the account must already be connected there); no
+  // pasted credentials, no per-page proxy (egress is vendor-side).
   username: z.string().min(1),
-  proxy: z.object({
-    url: z.string().min(1),
-    username: z.string().nullable().optional(),
-    password: z.string().nullable().optional(),
-  }).nullable().optional(),
 });
 
 const credentialProxySchema = z.object({
@@ -2732,10 +2727,9 @@ export const updateCredentialsBodySchema = z.discriminatedUnion("platform", [
     proxy: credentialProxySchema,
   }),
   z.object({
+    // Stage 18: OnlyFans pages hold no pasted credentials (OFAPI vendor-side)
+    // — the update route rejects this variant with a clear 400.
     platform: z.literal("onlyfans"),
-    auth: onlyfansCredentialsSchema.shape.auth.optional(),
-    username: z.string().min(1).optional(),
-    proxy: credentialProxySchema,
   }),
 ]);
 

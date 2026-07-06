@@ -107,14 +107,10 @@ export async function loadAdapters() {
       return dispatcher as never;
     });
 
-  const [{ FanslyAdapter }, { OnlyFansAdapter }] = await Promise.all([
-    import("../../packages/fansly/src/adapter.ts"),
-    import("../../packages/onlyfans/src/adapter.ts"),
-  ]);
+  const { FanslyAdapter } = await import("../../packages/fansly/src/adapter.ts");
 
   return {
     FanslyAdapter,
-    OnlyFansAdapter,
     createProxyRequestDispatcher,
     createRequestDispatcher,
     directDispatchers,

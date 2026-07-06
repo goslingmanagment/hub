@@ -22,7 +22,6 @@ async function main() {
       isProduction: false,
       sessionTtlDays: 30,
       fanslyBaseUrl: "https://apiv3.fansly.com/api/v1",
-      onlyMonsterBaseUrl: "https://omapi.onlymonster.ai",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: 2500,
       fanslyDmConversationsDelayMs: 5000,
@@ -46,7 +45,6 @@ async function main() {
     pool: {} as never,
     db: {} as never,
     adapter: {} as never,
-    onlyFansAdapter: {} as never,
     async close() {},
   });
 

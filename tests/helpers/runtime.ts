@@ -18,7 +18,6 @@ export function createTestAppContext(
     followerPageDelayMs?: number;
     logger?: StartedTestDatabase["logger"];
     onlyFansDefaultDelayMs?: number;
-    onlyFansAdapter?: AppContext["onlyFansAdapter"];
     ofapi?: AppContext["ofapi"];
     aiGatewayProvider?: AppContext["aiGatewayProvider"];
     ofapiEventRetentionDays?: number;
@@ -86,7 +85,6 @@ export function createTestAppContext(
       trustProxy: overrides?.trustProxy ?? false,
       sessionTtlDays: overrides?.sessionTtlDays ?? 30,
       fanslyBaseUrl: "https://example.invalid",
-      onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
       fanslyDmConversationsDelayMs: overrides?.fanslyDmConversationsDelayMs ?? 5000,
@@ -163,7 +161,6 @@ export function createTestAppContext(
     // Tests apply no boot overrides, so the raw env baseline equals the effective config.
     rawConfig: config,
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
-    onlyFansAdapter: overrides?.onlyFansAdapter ?? ({} as AppContext["onlyFansAdapter"]),
     ofapi: overrides?.ofapi,
     aiGatewayProvider: overrides?.aiGatewayProvider,
     async close() {},

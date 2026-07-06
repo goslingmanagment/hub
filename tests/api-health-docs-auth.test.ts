@@ -39,7 +39,7 @@ function createRouteTestContext(input?: {
   healthSyncMonitoringToken?: string | null;
   syncSharedRateLimitEnabled?: boolean;
   adapter?: AppContext["adapter"];
-  onlyFansAdapter?: AppContext["onlyFansAdapter"];
+  ofapi?: AppContext["ofapi"];
 }) {
   const encryptionKey = Buffer.alloc(32, 7);
 
@@ -55,7 +55,6 @@ function createRouteTestContext(input?: {
       trustProxy: false,
       sessionTtlDays: 30,
       fanslyBaseUrl: "https://example.invalid",
-      onlyMonsterBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: 2500,
       fanslyDmConversationsDelayMs: 5000,
@@ -80,7 +79,7 @@ function createRouteTestContext(input?: {
     pool: {} as AppContext["pool"],
     db: {} as AppContext["db"],
     adapter: input?.adapter ?? {} as AppContext["adapter"],
-    onlyFansAdapter: input?.onlyFansAdapter ?? {} as AppContext["onlyFansAdapter"],
+    ...(input?.ofapi ? { ofapi: input.ofapi } : {}),
     async close() {},
   } satisfies AppContext;
 }
@@ -400,34 +399,18 @@ describe("admin credential verification", () => {
     }
   });
 
-  it("passes egress key and shared rate limiter into OnlyFans credential verification", async () => {
+  it("verifies OnlyFans identity against the OFAPI account list (Stage 18)", async () => {
     routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
-    let requestContext: Record<string, unknown> | null = null;
+    const listAccounts = vi.fn(async () => [{
+      id: "acct_42",
+      username: "@lora_of",
+      onlyfansName: "lora_of",
+      displayName: "Lora OF",
+      avatarUrl: null,
+      onlyfansUserId: null,
+    }]);
     const server = await buildApiServer(createRouteTestContext({
-      syncSharedRateLimitEnabled: true,
-      onlyFansAdapter: {
-        async listAccountsPage(contextInput: Record<string, unknown>) {
-          requestContext = contextInput;
-          return {
-            parsed: {
-              accounts: [{
-                id: 42,
-                platform_account_id: "of-acct-42",
-                platform: "onlyfans",
-                name: "Lora OF",
-                email: null,
-                avatar: "https://example.com/lora.png",
-                username: "lora_of",
-                organisation_id: "org-1",
-                subscribe_price: null,
-                subscription_expiration_date: null,
-              }],
-              nextCursor: null,
-            },
-            raw: null,
-          };
-        },
-      } as unknown as AppContext["onlyFansAdapter"],
+      ofapi: { listAccounts } as unknown as AppContext["ofapi"],
     }));
 
     try {
@@ -439,13 +422,7 @@ describe("admin credential verification", () => {
         },
         payload: {
           platform: "onlyfans",
-          auth: {
-            token: "onlyfans-token",
-          },
-          username: "lora_of",
-          proxy: {
-            url: "https://proxy.example:443",
-          },
+          username: "Lora_OF",
         },
       });
 
@@ -453,13 +430,24 @@ describe("admin credential verification", () => {
       expect(response.json()).toMatchObject({
         valid: true,
         platform: "onlyfans",
-        username: "lora_of",
+        username: "@lora_of",
         displayName: "Lora OF",
       });
-      expect(requestContext).toMatchObject({
-        egressKey: "https://proxy.example:443",
+      expect(listAccounts).toHaveBeenCalledTimes(1);
+
+      const miss = await server.inject({
+        method: "POST",
+        url: "/api/v1/admin/credentials/verify",
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=owner-token`,
+        },
+        payload: {
+          platform: "onlyfans",
+          username: "nobody_here",
+        },
       });
-      expect(typeof (requestContext as Record<string, unknown> | null)?.rateLimitWaiter).toBe("function");
+      expect(miss.statusCode).toBe(400);
+      expect(miss.json().message).toContain("No connected OFAPI account");
     } finally {
       await server.close();
     }

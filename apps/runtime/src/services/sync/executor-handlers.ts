@@ -51,11 +51,6 @@ import {
   type FanslyAccount,
   type FanslyFollower,
 } from "@agency_hub_core/fansly";
-import {
-  ONLYMONSTER_MAPPER_VERSION,
-  OnlyMonsterApiError,
-  type OnlyMonsterChatMessage,
-} from "@agency_hub_core/onlyfans";
 import { sql } from "drizzle-orm";
 import {
   buildFanslyDmConversationMetadata,
@@ -88,10 +83,7 @@ import {
   parseFanslyMetadataAccountCreatedAt,
   resolveFanslyPlatformAccountId,
 } from "../fansly.ts";
-import { getOnlyMonsterAccountId } from "../onlyfans.ts";
 import { buildFanslyFollowerPresenceSignals } from "../fansly-presence.ts";
-import { syncOnlyFansIdentities } from "./onlyfans-identities.ts";
-import { syncOnlyFansTransactions } from "./onlyfans-transactions.ts";
 import {
   summarizeCheckpoint,
   type DmMessagesChunkSummary,
@@ -388,10 +380,6 @@ function isTerminalFanslyServerError(error: unknown): error is FanslyApiError & 
     error.status < 600;
 }
 
-function isOnlyMonsterNotFoundError(error: unknown): error is OnlyMonsterApiError & { status: 404 } {
-  return error instanceof OnlyMonsterApiError && error.status === 404;
-}
-
 async function probeFanslyAccountResolution(
   app: AppContext,
   requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0],
@@ -431,20 +419,6 @@ async function probeFanslyAccountResolution(
   return response.parsed.some((account) => account.id === partnerPlatformUserId)
     ? "resolved"
     : "unknown";
-}
-
-function buildOnlyFansRequestContext(app: AppContext, input: ExecutorRequestContext) {
-  if (input.pageContext.platform !== "onlyfans") {
-    throw new Error("Expected an OnlyFans page context");
-  }
-
-  return {
-    auth: input.pageContext.auth,
-    proxy: input.pageContext.proxy,
-    egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
-  };
 }
 
 async function triggerFollowersReconcileAnomaly(
@@ -629,42 +603,6 @@ async function normalizeDmTimestampWithAnomaly(
   return normalized;
 }
 
-async function normalizeOnlyMonsterDmTimestampWithAnomaly(
-  telemetry: SyncRunTelemetry,
-  input: {
-    context: string;
-    value: string | null | undefined;
-  },
-) {
-  if (typeof input.value !== "string" || input.value.trim().length === 0) {
-    return null;
-  }
-
-  const normalized = new Date(input.value);
-  if (Number.isNaN(normalized.getTime())) {
-    await telemetry.addAnomaly({
-      code: "dm_timestamp_invalid",
-      severity: "warn",
-      message: "OnlyMonster DM timestamp could not be parsed",
-      details: {
-        context: input.context,
-        rawValue: input.value,
-      },
-    });
-    return null;
-  }
-
-  if (isClearlyImplausibleDmTimestamp(normalized)) {
-    await recordDmTimestampAnomaly(telemetry, {
-      context: input.context,
-      rawValue: input.value,
-      normalizedAt: normalized,
-    });
-  }
-
-  return normalized;
-}
-
 function resolveDmSenderRole(
   senderId: string | null | undefined,
   pageAccountId: string,
@@ -680,33 +618,6 @@ function resolveDmSenderRole(
     return "fan" as const;
   }
   return "unknown" as const;
-}
-
-function onlyMonsterMessageId(message: OnlyMonsterChatMessage) {
-  return String(message.id);
-}
-
-function onlyMonsterSenderPlatformUserId(message: OnlyMonsterChatMessage) {
-  return Number.isFinite(message.from_user) ? String(message.from_user) : null;
-}
-
-function resolveOnlyMonsterSenderRole(message: OnlyMonsterChatMessage): DmSenderRole {
-  return message.is_sent_by_me ? "model" : "fan";
-}
-
-function onlyMonsterMessagesHistoryExhausted(input: {
-  itemCount: number;
-  hasMore: boolean | undefined;
-  limit: number;
-  oldestMessageId: string | null;
-}) {
-  if (!input.oldestMessageId || input.itemCount === 0) {
-    return true;
-  }
-  if (input.hasMore !== undefined) {
-    return !input.hasMore;
-  }
-  return input.itemCount < input.limit;
 }
 
 async function listOnlyFansKnownDmConversationCandidateIds(
@@ -1011,8 +922,10 @@ export async function onlyfansLightChunk(
   if (input.pageContext.platform !== "onlyfans") {
     throw new Error("onlyfansLightChunk received a non-onlyfans page");
   }
+  // OnlyMonster metadata refresh retired (Stage 18): OnlyFans page identity
+  // is static post-onboarding; counts ride the OFAPI audience sweep. An
+  // OFAPI-native metadata refresh is a recorded follow-up, not a blocker.
   await input.telemetry.recordPhaseStarted("page_metadata");
-  const account = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
   await withOwnedPageSyncTransaction(app.db, async (db) => {
     await updatePageSyncTimestampCache(db, {
       pageId: input.pageContext.page.id,
@@ -1023,9 +936,7 @@ export async function onlyfansLightChunk(
   return {
     satisfied: true,
     yieldReason: null,
-    stats: {
-      username: account.parsed.account.username,
-    },
+    stats: { skipped: "onlymonster_retired" },
   } satisfies StreamChunkResult;
 }
 
@@ -1586,25 +1497,12 @@ export async function executeFanIdentitiesChunk(
     } satisfies StreamChunkResult;
   }
 
-  const platformAccountIdValue = input.pageContext.page.platformAccountId;
-  if (!platformAccountIdValue) {
-    throw new Error("OnlyFans page is missing platform account id");
-  }
-
-  const result = await syncOnlyFansIdentities(app, {
-    pageLabel: input.pageContext.page.label,
-    platformAccountId: input.pageContext.page.id,
-    platformAccountIdValue,
-    requestContext: buildOnlyFansRequestContext(app, input),
-    syncRunId: input.syncRunId,
-    telemetry: input.telemetry,
-    budget: input.budget,
-  });
-
+  // OnlyMonster identity walker retired (Stage 18): unmapped pages have no
+  // identity vendor — map the page to OFAPI (setPageOfapiAccountId) instead.
   return {
-    satisfied: result.satisfied,
-    yieldReason: result.yieldReason,
-    stats: result as Record<string, unknown>,
+    satisfied: true,
+    yieldReason: null,
+    stats: { skipped: "onlyfans_identities_requires_ofapi_mapping" },
   } satisfies StreamChunkResult;
 }
 
@@ -1622,7 +1520,7 @@ export async function fanslyTransactionsChunk(
 
   // Resolve the live transaction windowing config ONCE per chunk and thread both
   // scalars into the sync entry points, so every read-site in this chunk
-  // (transactions.ts + onlyfans-transactions.ts) sees one consistent window.
+  // (transactions.ts) sees one consistent window.
   const effective = await loadEffectiveConfig(app.db, app.config);
   const transactionLookbackDays = effective.transactionLookbackDays;
   const transactionRescanCapDays = effective.transactionRescanCapDays;
@@ -1670,41 +1568,15 @@ export async function onlyfansTransactionsChunk(
   if (input.pageContext.platform !== "onlyfans") {
     throw new Error("onlyfansTransactionsChunk received a non-onlyfans page");
   }
+  // OnlyMonster transactions walker retired (Stage 18): OnlyFans transaction
+  // truth is the OFAPI webhook lane through the Stage 13 writer gate, with
+  // the Stage 14 budget-guarded backfill CLI for history — a pull stream
+  // would be a second writer.
   await input.telemetry.recordPhaseStarted("transactions");
-
-  // Resolve the live transaction windowing config ONCE per chunk and thread both
-  // scalars into the sync entry points, so every read-site in this chunk
-  // (transactions.ts + onlyfans-transactions.ts) sees one consistent window.
-  const effective = await loadEffectiveConfig(app.db, app.config);
-  const transactionLookbackDays = effective.transactionLookbackDays;
-  const transactionRescanCapDays = effective.transactionRescanCapDays;
-
-  const payload = input.streamState.requestPayload;
-  const requestedRevision = asNumber(payload?.revision);
-  const transactionsStart = requestedRevision === input.streamState.requestSeq &&
-      typeof payload?.onlyFansTransactionsStart === "string"
-    ? new Date(payload.onlyFansTransactionsStart)
-    : null;
-
-  const result = await syncOnlyFansTransactions(app, {
-    pageLabel: input.pageContext.page.label,
-    platformAccountId: input.pageContext.page.id,
-    platformAccountIdValue: String(input.pageContext.page.platformAccountId),
-    pageMetadata: input.pageContext.page.metadata,
-    commissionRate: input.pageContext.page.commissionRate,
-    rescanStart: transactionsStart,
-    transactionLookbackDays,
-    transactionRescanCapDays,
-    requestContext: buildOnlyFansRequestContext(app, input),
-    syncRunId: input.syncRunId,
-    telemetry: input.telemetry,
-    budget: input.budget,
-  });
-
   return {
-    satisfied: result.satisfied,
-    yieldReason: result.yieldReason,
-    stats: result as Record<string, unknown>,
+    satisfied: true,
+    yieldReason: null,
+    stats: { skipped: "onlyfans_transactions_webhook_sourced" },
   } satisfies StreamChunkResult;
 }
 
@@ -2532,330 +2404,6 @@ export async function executeFollowersReconcileChunk(
   } satisfies StreamChunkResult;
 }
 
-async function executeOnlyFansDmConversationsChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & {
-    streamState: PageSyncLease;
-    syncRunId: number;
-  },
-) {
-  if (input.pageContext.platform !== "onlyfans") {
-    throw new Error("OnlyFans DM conversation sync requires an OnlyFans page");
-  }
-
-  assertDmSharedRateLimitEnabled(app);
-  await input.telemetry.recordPhaseStarted("dm_conversations");
-
-  const requestContext = {
-    auth: input.pageContext.auth,
-    proxy: input.pageContext.proxy,
-    egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
-  };
-  const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_conversations");
-  await input.telemetry.recordCheckpointLoaded("dm_conversations", summarizeCheckpoint(checkpoint));
-
-  const checkpointStateRecord = asRecord(checkpoint?.state);
-  const existingState = parseDmConversationCursorState(checkpoint?.state);
-  let state = existingState ?? {
-    version: 1 as const,
-    mode: "full_scan" as const,
-    generation: (asNumber(checkpointStateRecord?.generation) ?? 0) + 1,
-    offset: 0,
-    pageCount: 0,
-    providerReportedTotal: null,
-    unchangedPageStreak: 0,
-    fullSweepStartedAt: new Date().toISOString(),
-    lastFullSweepCompletedAt: asNullableString(checkpointStateRecord?.lastFullSweepCompletedAt),
-  };
-
-  const onlyMonsterAccountId = getOnlyMonsterAccountId(input.pageContext.page.metadata);
-  let fanIds = state.snapshotConversationIds ?? null;
-  if (!fanIds) {
-    const [knownFanIds, fanIdsResponse] = await Promise.all([
-      listOnlyFansKnownDmConversationCandidateIds(app.db, input.pageContext.page.id),
-      app.onlyFansAdapter.getRecentChatFanIds(requestContext, onlyMonsterAccountId, {
-        limit: 10000,
-      }),
-    ]);
-    await persistRawPayload(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      syncRunId: input.syncRunId,
-      endpoint: "recent_chat_fan_ids",
-      requestParams: { limit: 10000 },
-      responsePayload: fanIdsResponse.raw,
-      mapperVersion: ONLYMONSTER_MAPPER_VERSION,
-      payloadKind: "dm_metadata",
-      retainUntil: dmRetentionDate(),
-    }, {
-      action: "inserting recent_chat_fan_ids raw payload",
-      platform: "onlyfans",
-    });
-    fanIds = Array.from(new Set(
-      [
-        ...knownFanIds,
-        ...fanIdsResponse.parsed.fan_ids,
-      ]
-      .map((fanId) => fanId.trim())
-      .filter((fanId) => fanId.length > 0),
-    ));
-    state = {
-      ...state,
-      providerReportedTotal: fanIds.length,
-      snapshotConversationIds: fanIds,
-    };
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "dm_conversations",
-      state,
-    });
-    await input.telemetry.recordCheckpointAdvanced(
-      "dm_conversations",
-      summarizeCheckpoint(progressCheckpoint),
-    );
-  }
-
-  let offset = Math.min(state.offset, fanIds.length);
-  let processedConversations = 0;
-  const heads: Array<{
-    fanPlatformUserId: string;
-    message: OnlyMonsterChatMessage;
-    lastMessageAt: Date;
-  }> = [];
-
-  while (
-    offset < fanIds.length &&
-    input.budget.hasRequestCapacity() &&
-    input.budget.hasWallClockCapacity()
-  ) {
-    await assertOwnedPageSyncLease(app.db);
-    const fanPlatformUserId = fanIds[offset]!;
-    offset += 1;
-
-    let page;
-    try {
-      page = await app.onlyFansAdapter.getChatMessagesPage(
-        requestContext,
-        onlyMonsterAccountId,
-        fanPlatformUserId,
-        {
-          limit: 1,
-          order: "desc",
-          pageIndex: 0,
-        },
-      );
-    } catch (error) {
-      if (!isOnlyMonsterNotFoundError(error)) {
-        throw error;
-      }
-
-      await input.telemetry.addAnomaly({
-        code: "onlymonster_chat_not_found",
-        severity: "warn",
-        message: "Skipped OnlyMonster chat because messages endpoint returned 404",
-        details: {
-          context: "onlyfans_dm_conversations",
-          offset: offset - 1,
-        },
-      });
-      continue;
-    }
-    await persistRawPayload(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      syncRunId: input.syncRunId,
-      endpoint: "dm_conversation_heads",
-      requestParams: { chatId: fanPlatformUserId, limit: 1, order: "desc", pageIndex: 0 },
-      responsePayload: page.raw,
-      mapperVersion: ONLYMONSTER_MAPPER_VERSION,
-      payloadKind: "dm_metadata",
-      retainUntil: dmRetentionDate(),
-    }, {
-      action: "inserting dm_conversation_heads raw payload",
-      platform: "onlyfans",
-    });
-    const head = page.parsed.items[0] ?? null;
-    if (!head) {
-      continue;
-    }
-
-    const lastMessageAt = await normalizeOnlyMonsterDmTimestampWithAnomaly(input.telemetry, {
-      context: "onlyfans_dm_conversations:lastMessage",
-      value: head.created_at,
-    });
-    if (!lastMessageAt) {
-      continue;
-    }
-
-    heads.push({
-      fanPlatformUserId,
-      message: head,
-      lastMessageAt,
-    });
-  }
-
-  const existingConversations = await listPageDmConversationsByPlatformConversationIds(app.db, {
-    platformAccountId: input.pageContext.page.id,
-    platformConversationIds: heads.map((head) => head.fanPlatformUserId),
-  });
-  const existingByChatId = new Map(
-    existingConversations.map((conversation) => [
-      conversation.platformConversationId,
-      conversation,
-    ]),
-  );
-
-  const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-    let dmMessagesFollowupNeeded = false;
-    const fanRows = await upsertFans(dbTx, heads.map((head) => ({
-      platform: "onlyfans" as const,
-      platformUserId: head.fanPlatformUserId,
-    })));
-    if (fanRows.length > 0) {
-      await upsertFanPages(dbTx, fanRows.map((fan) => ({
-        fanId: fan.id,
-        platformAccountId: input.pageContext.page.id,
-      })));
-    }
-    const fanByPlatformUserId = new Map(
-      fanRows.map((fan) => [fan.platformUserId, fan] as const),
-    );
-
-    for (const head of heads) {
-      const message = head.message;
-      const existing = existingByChatId.get(head.fanPlatformUserId) ?? null;
-      const fan = fanByPlatformUserId.get(head.fanPlatformUserId);
-      const senderRole = resolveOnlyMonsterSenderRole(message);
-      const platformMessageId = onlyMonsterMessageId(message);
-      const senderPlatformUserId = onlyMonsterSenderPlatformUserId(message);
-      const upsertedConversation = await upsertPageDmConversation(dbTx, {
-        platformAccountId: input.pageContext.page.id,
-        fanId: fan?.id ?? existing?.fanId ?? null,
-        platformConversationId: head.fanPlatformUserId,
-        partnerPlatformUserId: head.fanPlatformUserId,
-        partnerUsername: fan?.username ?? existing?.partnerUsername ?? null,
-        partnerDisplayName: fan?.displayName ?? existing?.partnerDisplayName ?? null,
-        conversationFlags: existing?.conversationFlags ?? 0,
-        unreadCount: !message.is_sent_by_me && !message.is_opened ? 1 : 0,
-        subscriptionTierId: existing?.subscriptionTierId ?? null,
-        lastMessageId: platformMessageId,
-        lastUnreadMessageId: !message.is_sent_by_me && !message.is_opened ? platformMessageId : null,
-        lastMessageAt: head.lastMessageAt,
-        lastMessageSenderId: senderPlatformUserId,
-        lastMessageSenderRole: senderRole,
-        lastMessagePreview: truncateDmPreview(message.text),
-        lastFanMessageAt: senderRole === "fan" ? head.lastMessageAt : existing?.lastFanMessageAt ?? null,
-        lastModelMessageAt: senderRole === "model" ? head.lastMessageAt : existing?.lastModelMessageAt ?? null,
-        storedMessageCount: existing?.storedMessageCount ?? 0,
-        newestStoredMessageId: existing?.newestStoredMessageId ?? null,
-        oldestStoredMessageId: existing?.oldestStoredMessageId ?? null,
-        messageCoverageStatus: existing?.messageCoverageStatus ?? "pending_backfill",
-        messageBackfillComplete: existing?.messageBackfillComplete ?? false,
-        lastMessageSyncAt: existing?.lastMessageSyncAt ?? null,
-        isVisible: true,
-        // OnlyFans conversations are intentionally NOT generation-retired: the candidate
-        // set is a derived top-N recent-chat list, not an authoritative roster, so no
-        // invisible-by-generation sweep runs. The generation is still stamped only to
-        // satisfy the shared cursor-state/upsert contract used by the Fansly path.
-        lastSeenGeneration: state.generation,
-        metadata: {
-          ...existing?.metadata,
-          provider: "onlymonster",
-          recentChatActivity: true,
-        },
-      });
-      processedConversations += 1;
-      if (upsertedConversation && shouldRequestDmMessagesFollowup(upsertedConversation)) {
-        dmMessagesFollowupNeeded = true;
-      }
-    }
-
-    const nextState = {
-      ...state,
-      offset,
-      pageCount: state.pageCount + 1,
-      providerReportedTotal: fanIds.length,
-      unchangedPageStreak: heads.length === 0 ? state.unchangedPageStreak + 1 : 0,
-      snapshotConversationIds: fanIds,
-    };
-
-    if (offset >= fanIds.length) {
-      const completedState = {
-        version: 1,
-        generation: state.generation,
-        lastFullSweepCompletedAt: new Date().toISOString(),
-      };
-      return {
-        kind: "complete" as const,
-        dmMessagesFollowupNeeded,
-        checkpoint: await upsertCheckpoint(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "dm_conversations",
-          state: completedState,
-          lastSuccessfulRunId: input.syncRunId,
-        }),
-      };
-    }
-
-    return {
-      kind: "progress" as const,
-      dmMessagesFollowupNeeded,
-      checkpoint: await upsertCheckpointProgress(dbTx, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "dm_conversations",
-        state: nextState,
-      }),
-    };
-  });
-  await input.telemetry.recordCheckpointAdvanced(
-    "dm_conversations",
-    summarizeCheckpoint(pageWrite.checkpoint),
-  );
-
-  if (pageWrite.dmMessagesFollowupNeeded) {
-    await requestPageSync(app.db, {
-      pageId: input.pageContext.page.id,
-      streams: ["dm_messages"],
-      source: "scheduled",
-      ...pageSyncDependencyInput(app),
-    });
-  }
-
-  if (pageWrite.kind === "complete") {
-    return {
-      satisfied: true,
-      yieldReason: null,
-      stats: {
-        generation: state.generation,
-        offset,
-        pageCount: state.pageCount + 1,
-        processedConversations,
-        providerReportedTotal: fanIds.length,
-        fullSweepCompleted: true,
-      },
-    } satisfies StreamChunkResult;
-  }
-
-  state = {
-    ...state,
-    offset,
-    pageCount: state.pageCount + 1,
-    providerReportedTotal: fanIds.length,
-  };
-  return {
-    satisfied: false,
-    yieldReason: input.budget.resolveYieldReason(),
-    stats: {
-      generation: state.generation,
-      offset: state.offset,
-      pageCount: state.pageCount,
-      processedConversations,
-      providerReportedTotal: state.providerReportedTotal,
-      fullSweepCompleted: false,
-    },
-  } satisfies StreamChunkResult;
-}
-
 export async function onlyfansDmConversationsChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -2863,12 +2411,17 @@ export async function onlyfansDmConversationsChunk(
     syncRunId: number;
   },
 ) {
-  // OFAPI-mapped pages sync DMs via OFAPI REST (decision #49); everything
-  // else stays on the parked OnlyMonster polling path behind its own flag.
+  // OFAPI-mapped pages sync DMs via OFAPI REST (decision #49). The parked
+  // OnlyMonster polling path was deleted in Stage 18 — unmapped pages skip
+  // gracefully (mapping a page is the fix, not resurrecting the vendor).
   if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
     return executeOfapiDmConversationsChunk(app, input);
   }
-  return executeOnlyFansDmConversationsChunk(app, input);
+  return {
+    satisfied: true,
+    yieldReason: null,
+    stats: { skipped: "onlyfans_dm_requires_ofapi_mapping" },
+  } satisfies StreamChunkResult;
 }
 
 export async function fanslyDmConversationsChunk(
@@ -3355,382 +2908,6 @@ export async function fanslyDmConversationsChunk(
   } satisfies StreamChunkResult;
 }
 
-async function executeOnlyFansDmMessagesChunk(
-  app: AppContext,
-  input: ExecutorRequestContext & {
-    streamState: PageSyncLease;
-    syncRunId: number;
-  },
-) {
-  if (input.pageContext.platform !== "onlyfans") {
-    throw new Error("OnlyFans DM message sync requires an OnlyFans page");
-  }
-
-  assertDmSharedRateLimitEnabled(app);
-  await input.telemetry.recordPhaseStarted("dm_messages");
-
-  const chunkStartedAt = Date.now();
-  const dmMessagesRequestObserver = new DmMessagesChunkRequestObserver();
-  let emittedDmMessagesChunkSummary: DmMessagesChunkSummary | null = null;
-
-  const requestContext = {
-    auth: input.pageContext.auth,
-    proxy: input.pageContext.proxy,
-    egressKey: input.pageContext.egressKey,
-    requestObserver: composeRequestObservers(
-      input.telemetry.getRequestObserver(),
-      input.budget,
-      dmMessagesRequestObserver,
-    ),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
-  };
-  const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_messages");
-  await input.telemetry.recordCheckpointLoaded("dm_messages", summarizeCheckpoint(checkpoint));
-
-  let state = parseDmMessagesCursorState(checkpoint?.state) ?? emptyDmMessagesCursorState();
-
-  if (!parseDmMessagesCursorState(checkpoint?.state)) {
-    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "dm_messages",
-      state,
-    });
-    await input.telemetry.recordCheckpointAdvanced(
-      "dm_messages",
-      summarizeCheckpoint(progressCheckpoint),
-    );
-  }
-
-  const onlyMonsterAccountId = getOnlyMonsterAccountId(input.pageContext.page.metadata);
-  let processedMessages = 0;
-  let completedConversations = 0;
-  let overlapHits = 0;
-  let exhaustedEligibleConversations = false;
-
-  const emitDmMessagesChunkSummary = async () => {
-    if (emittedDmMessagesChunkSummary) {
-      return emittedDmMessagesChunkSummary;
-    }
-
-    emittedDmMessagesChunkSummary = dmMessagesRequestObserver.buildSummary(Date.now() - chunkStartedAt);
-    await input.telemetry.recordDmMessagesChunkSummary(emittedDmMessagesChunkSummary);
-    return emittedDmMessagesChunkSummary;
-  };
-
-  try {
-    conversationLoop: while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
-      await assertOwnedPageSyncLease(app.db);
-      let conversation = state.currentConversationId
-        ? await getPageDmConversationById(app.db, state.currentConversationId)
-        : null;
-
-      if (!conversation || !conversation.isVisible || conversation.fanId === null) {
-        const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
-          platformAccountId: input.pageContext.page.id,
-        });
-        if (!candidate) {
-          exhaustedEligibleConversations = true;
-          break;
-        }
-
-        conversation = await getPageDmConversationById(app.db, candidate.id);
-        if (!conversation) {
-          exhaustedEligibleConversations = true;
-          break;
-        }
-
-        const currentMode = conversation.storedMessageCount === 0
-          ? "backfill"
-          : conversation.lastMessageId !== conversation.newestStoredMessageId
-            ? "incremental"
-            : conversation.messageCoverageStatus === "pending_backfill"
-              ? "backfill"
-              : "incremental";
-
-        state = {
-          ...emptyDmMessagesCursorState(),
-          currentConversationId: conversation.id,
-          currentPlatformConversationId: conversation.platformConversationId,
-          currentBeforeMessageId: currentMode === "backfill"
-            ? conversation.oldestStoredMessageId
-            : null,
-          currentMode,
-        };
-        const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "dm_messages",
-          state,
-        });
-        await input.telemetry.recordCheckpointAdvanced(
-          "dm_messages",
-          summarizeCheckpoint(progressCheckpoint),
-        );
-      }
-
-      if (!conversation || !state.currentMode) {
-        exhaustedEligibleConversations = true;
-        break;
-      }
-
-      const currentMode = state.currentMode;
-      let collectedThisConversation = 0;
-      while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
-        const currentConversation = conversation;
-        await assertOwnedPageSyncLease(app.db);
-        dmMessagesRequestObserver.recordConversationTouched(currentConversation.id);
-
-        const limit = 25;
-        let page;
-        try {
-          page = await app.onlyFansAdapter.getChatMessagesPage(
-            requestContext,
-            onlyMonsterAccountId,
-            currentConversation.platformConversationId,
-            {
-              limit,
-              messageId: state.currentBeforeMessageId,
-              order: "desc",
-            },
-          );
-        } catch (error) {
-          if (!isOnlyMonsterNotFoundError(error)) {
-            throw error;
-          }
-
-          const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-            await upsertPageDmConversation(dbTx, {
-              platformAccountId: currentConversation.platformAccountId,
-              fanId: currentConversation.fanId,
-              platformConversationId: currentConversation.platformConversationId,
-              partnerPlatformUserId: currentConversation.partnerPlatformUserId,
-              partnerUsername: currentConversation.partnerUsername,
-              partnerDisplayName: currentConversation.partnerDisplayName,
-              conversationFlags: currentConversation.conversationFlags,
-              unreadCount: currentConversation.unreadCount,
-              subscriptionTierId: currentConversation.subscriptionTierId,
-              lastMessageId: currentConversation.lastMessageId,
-              lastUnreadMessageId: currentConversation.lastUnreadMessageId,
-              lastMessageAt: currentConversation.lastMessageAt,
-              lastMessageSenderId: currentConversation.lastMessageSenderId,
-              lastMessageSenderRole: currentConversation.lastMessageSenderRole,
-              lastMessagePreview: currentConversation.lastMessagePreview,
-              lastFanMessageAt: currentConversation.lastFanMessageAt,
-              lastModelMessageAt: currentConversation.lastModelMessageAt,
-              storedMessageCount: currentConversation.storedMessageCount,
-              newestStoredMessageId: currentConversation.newestStoredMessageId,
-              oldestStoredMessageId: currentConversation.oldestStoredMessageId,
-              messageCoverageStatus: currentConversation.messageCoverageStatus,
-              messageBackfillComplete: currentConversation.messageBackfillComplete,
-              lastMessageSyncAt: currentConversation.lastMessageSyncAt,
-              isVisible: currentConversation.isVisible,
-              lastSeenGeneration: currentConversation.lastSeenGeneration,
-              metadata: {
-                ...currentConversation.metadata,
-                [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
-                  ONLYMONSTER_DM_MESSAGE_SYNC_EXCLUDED_REASON_CHAT_NOT_FOUND,
-              },
-            });
-            return upsertCheckpointProgress(dbTx, {
-              platformAccountId: input.pageContext.page.id,
-              stream: "dm_messages",
-              state: emptyDmMessagesCursorState(),
-            });
-          });
-
-          await input.telemetry.addNote(
-            "Excluded OnlyMonster DM conversation after messages endpoint returned 404",
-            {
-              exclusionReason: ONLYMONSTER_DM_MESSAGE_SYNC_EXCLUDED_REASON_CHAT_NOT_FOUND,
-            },
-          );
-
-          state = emptyDmMessagesCursorState();
-          await input.telemetry.recordCheckpointAdvanced(
-            "dm_messages",
-            summarizeCheckpoint(progressCheckpoint),
-          );
-          continue conversationLoop;
-        }
-        // Stage 1: DM message pages are captured raw (previously zero raw
-        // persistence on this path); far-future retention via dmRetentionDate.
-        await persistRawPayload(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          syncRunId: input.syncRunId,
-          endpoint: "dm_messages",
-          requestParams: {
-            chatId: currentConversation.platformConversationId,
-            limit,
-            messageId: state.currentBeforeMessageId ?? null,
-            order: "desc",
-          },
-          responsePayload: page.raw,
-          mapperVersion: ONLYMONSTER_MAPPER_VERSION,
-          payloadKind: "dm_messages",
-          retainUntil: dmRetentionDate(),
-        }, {
-          action: "inserting dm_messages raw payload",
-          platform: "onlyfans",
-        });
-
-        const platformMessageIds = page.parsed.items.map((message) => onlyMonsterMessageId(message));
-        const existingIds = await getExistingPageDmMessageIds(app.db, {
-          conversationId: currentConversation.id,
-          platformMessageIds,
-        });
-        const overlapFound = platformMessageIds.some((messageId) => existingIds.has(messageId));
-
-        const normalizedMessages: Parameters<typeof upsertPageDmMessages>[1] = [];
-        for (const message of page.parsed.items) {
-          const createdAt = await normalizeOnlyMonsterDmTimestampWithAnomaly(input.telemetry, {
-            context: "onlyfans_dm_messages:message",
-            value: message.created_at,
-          });
-          if (!createdAt) {
-            continue;
-          }
-
-          normalizedMessages.push({
-            conversationId: currentConversation.id,
-            platformAccountId: input.pageContext.page.id,
-            platformMessageId: onlyMonsterMessageId(message),
-            senderPlatformUserId: onlyMonsterSenderPlatformUserId(message),
-            senderRole: resolveOnlyMonsterSenderRole(message),
-            createdAt,
-            content: normalizeDmMessageText(message.text),
-            totalTipAmountCents: 0,
-            inReplyToMessageId: null,
-            inReplyToRootMessageId: null,
-          });
-        }
-        const insertedMessageCount = normalizedMessages
-          .filter((message) => !existingIds.has(message.platformMessageId))
-          .length;
-        collectedThisConversation += insertedMessageCount;
-        processedMessages += normalizedMessages.length;
-
-        const oldestMessageId = platformMessageIds.at(-1) ?? null;
-        const providerHistoryExhausted = onlyMonsterMessagesHistoryExhausted({
-          itemCount: page.parsed.items.length,
-          hasMore: page.parsed.has_more,
-          limit,
-          oldestMessageId,
-        });
-        const hitWindowCap =
-          currentMode === "backfill" &&
-          (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_LIVE_BACKFILL_CAP;
-        const shouldComplete = currentMode === "incremental"
-          ? overlapFound || providerHistoryExhausted
-          : overlapFound || providerHistoryExhausted || hitWindowCap;
-
-        if (shouldComplete) {
-          if (overlapFound) {
-            overlapHits += 1;
-          }
-          const messageCoverageStatus = resolveDmConversationCoverageStatus({
-            currentMode,
-            existingStatus: currentConversation.messageCoverageStatus,
-            overlapFound,
-            providerHistoryExhausted,
-            hitWindowCap,
-          });
-          const finalized = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-            await upsertPageDmMessages(dbTx, normalizedMessages);
-            const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
-              conversationId: currentConversation.id,
-              messageCoverageStatus,
-              enforceRetention: isPageDmPruneEnabled(app.config),
-            });
-            const progressCheckpoint = await upsertCheckpointProgress(dbTx, {
-              platformAccountId: input.pageContext.page.id,
-              stream: "dm_messages",
-              state: emptyDmMessagesCursorState(),
-            });
-            return {
-              finalizedConversation,
-              progressCheckpoint,
-            };
-          });
-          conversation = finalized.finalizedConversation.conversation;
-          completedConversations += 1;
-          state = emptyDmMessagesCursorState();
-          await input.telemetry.recordCheckpointAdvanced(
-            "dm_messages",
-            summarizeCheckpoint(finalized.progressCheckpoint),
-          );
-          continue conversationLoop;
-        }
-
-        state = {
-          ...state,
-          currentBeforeMessageId: oldestMessageId,
-        };
-        const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-          await upsertPageDmMessages(dbTx, normalizedMessages);
-          return upsertCheckpointProgress(dbTx, {
-            platformAccountId: input.pageContext.page.id,
-            stream: "dm_messages",
-            state,
-          });
-        });
-        await input.telemetry.recordCheckpointAdvanced(
-          "dm_messages",
-          summarizeCheckpoint(progressCheckpoint),
-        );
-
-        if (input.budget.shouldYield()) {
-          break;
-        }
-      }
-    }
-
-    const dmMessagesChunk = await emitDmMessagesChunkSummary();
-
-    if (!exhaustedEligibleConversations) {
-      return {
-        satisfied: false,
-        yieldReason: input.budget.resolveYieldReason(),
-        stats: {
-          currentConversationId: state.currentConversationId,
-          currentBeforeMessageId: state.currentBeforeMessageId,
-          currentMode: state.currentMode,
-          processedMessages,
-          completedConversations,
-          overlapHits,
-          dmMessagesChunk,
-        },
-      } satisfies StreamChunkResult;
-    }
-
-    const completedCheckpoint = await upsertCheckpoint(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "dm_messages",
-      state,
-      lastSuccessfulRunId: input.syncRunId,
-    });
-    await input.telemetry.recordCheckpointAdvanced(
-      "dm_messages",
-      summarizeCheckpoint(completedCheckpoint),
-    );
-
-    return {
-      satisfied: true,
-      yieldReason: null,
-      stats: {
-        currentConversationId: state.currentConversationId,
-        currentBeforeMessageId: state.currentBeforeMessageId,
-        currentMode: state.currentMode,
-        processedMessages,
-        completedConversations,
-        overlapHits,
-        dmMessagesChunk,
-      },
-    } satisfies StreamChunkResult;
-  } catch (error) {
-    await emitDmMessagesChunkSummary().catch(() => undefined);
-    throw error;
-  }
-}
-
 export async function onlyfansDmMessagesChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -3741,7 +2918,12 @@ export async function onlyfansDmMessagesChunk(
   if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
     return executeOfapiDmMessagesChunk(app, input);
   }
-  return executeOnlyFansDmMessagesChunk(app, input);
+  // OnlyMonster polling retired (Stage 18) — see onlyfansDmConversationsChunk.
+  return {
+    satisfied: true,
+    yieldReason: null,
+    stats: { skipped: "onlyfans_dm_requires_ofapi_mapping" },
+  } satisfies StreamChunkResult;
 }
 
 export async function fanslyDmMessagesChunk(
@@ -4323,27 +3505,11 @@ export async function fanslyDmMessagesChunk(
 export async function resolveExecutorPageContext(
   app: AppContext,
   platformAccountId: number,
-  stream: SyncStream,
+  _stream: SyncStream,
 ) {
-  const stored = await findPageById(app.db, platformAccountId);
-  if (
-    stored?.page.platform === "onlyfans" &&
-    (
-      (stream === "subscribers" && isOfapiAudienceSyncEligiblePage(app.config, stored.page)) ||
-      (isOnlyFansDmPollingStream(stream) && isOfapiDmSyncEligiblePage(app.config, stored.page))
-    )
-  ) {
-    return {
-      page: stored.page,
-      platform: "onlyfans" as const,
-      // OFAPI-owned streams never read the legacy OnlyMonster token, but the
-      // shared executor context keeps the shape stable for legacy handlers.
-      auth: { token: "" },
-      proxy: resolveStoredProxyConfig(app, stored.proxy),
-      egressKey: resolveStoredProxyEgressKey(stored.proxy),
-    } satisfies ResolvedPageContext;
-  }
-
+  // Stage 18: platform-specific credential handling lives in
+  // resolvePageContextById (OnlyFans pages resolve token-less — OnlyMonster
+  // is retired and OFAPI streams authenticate vendor-side).
   return resolvePageContextById(app, platformAccountId);
 }
 

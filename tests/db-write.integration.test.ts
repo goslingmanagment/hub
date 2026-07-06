@@ -32,7 +32,7 @@ import {
   upsertTransaction,
 } from "@agency_hub_core/db";
 import type { FanslyAccountMeResponse } from "@agency_hub_core/fansly";
-import type { OnlyMonsterAccount } from "@agency_hub_core/onlyfans";
+import type { OfapiAccountRecord } from "../apps/runtime/src/services/ofapi.ts";
 
 import { onboardFanslyPage, onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboarding.ts";
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
@@ -74,8 +74,7 @@ describe("db write safety", () => {
         trustProxy: false,
         sessionTtlDays: 30,
         fanslyBaseUrl: "https://example.invalid",
-        onlyMonsterBaseUrl: "https://example.invalid",
-        syncHttpTraceFile: null,
+          syncHttpTraceFile: null,
         fanslyDefaultDelayMs: 2500,
         fanslyDmConversationsDelayMs: 5000,
         fanslyDmMessagesDelayMs: 5000,
@@ -109,8 +108,7 @@ describe("db write safety", () => {
   }
 
   function createOnlyFansOnboardingApp(input: {
-    accounts: OnlyMonsterAccount[];
-    getAccount?: (accountId: number) => Promise<OnlyMonsterAccount>;
+    accounts: OfapiAccountRecord[];
   }) {
     if (!testDb) {
       throw new Error("Test database is not available");
@@ -150,30 +148,11 @@ describe("db write safety", () => {
         telegramReportHourUtc: 9,
         isProduction: false,
       },
-      onlyFansAdapter: {
-        async listAccountsPage() {
-          return {
-            parsed: {
-              accounts: input.accounts,
-            },
-            raw: {
-              accounts: input.accounts,
-            },
-          };
+      ofapi: {
+        async listAccounts() {
+          return input.accounts;
         },
-        async getAccount(_: unknown, accountId: number) {
-          const account = input.getAccount
-            ? await input.getAccount(accountId)
-            : input.accounts.find((candidate) => candidate.id === accountId);
-          if (!account) {
-            throw new Error(`missing account ${accountId}`);
-          }
-          return {
-            parsed: { account },
-            raw: { account },
-          };
-        },
-      },
+      } as never,
     };
   }
 
@@ -1352,17 +1331,13 @@ describe("db write safety", () => {
       name: "Lora",
     });
 
-    const account: OnlyMonsterAccount = {
-      id: 42,
-      platform_account_id: "of-acct-42",
-      platform: "onlyfans",
-      name: "Lora OF",
-      email: "lora@example.com",
-      avatar: "https://public.onlyfans.com/files/lora/avatar.jpg",
-      username: "lora_of",
-      organisation_id: "org-1",
-      subscribe_price: 12.5,
-      subscription_expiration_date: "2026-04-01T00:00:00.000Z",
+    const account: OfapiAccountRecord = {
+      id: "acct_42",
+      username: "@lora_of",
+      displayName: "Lora OF",
+      onlyfansName: "lora_of",
+      onlyfansUserId: "of-uid-42",
+      avatarUrl: "https://public.onlyfans.com/files/lora/avatar.jpg",
     };
 
     const app = createOnlyFansOnboardingApp({
@@ -1372,19 +1347,13 @@ describe("db write safety", () => {
     const { page } = await onboardOnlyFansPage(app, {
       modelSlug: "lora",
       label: "lora-of",
-      auth: {
-        token: "om-token",
-      },
-      username: "lora_of",
-      proxy: {
-        url: "http://proxy.example",
-      },
+      username: "Lora_OF",
     });
 
     const pageRows = await testDb.pool.query(`
       select platform,
              label,
-             external_page_id,
+             ofapi_account_id,
              username,
              display_name,
              follower_count,
@@ -1398,8 +1367,8 @@ describe("db write safety", () => {
     expect(pageRows.rows[0]).toMatchObject({
       platform: "onlyfans",
       label: "lora-of",
-      external_page_id: "of-acct-42",
-      username: "lora_of",
+      ofapi_account_id: "acct_42",
+      username: "@lora_of",
       display_name: "Lora OF",
       follower_count: null,
       subscriber_count: null,
@@ -1407,12 +1376,18 @@ describe("db write safety", () => {
     });
     expect(JSON.parse(pageRows.rows[0]?.metadata ?? "{}")).toMatchObject({
       avatarUrl: "https://public.onlyfans.com/files/lora/avatar.jpg",
-      onlyMonsterAccountId: 42,
-      subscribePriceMills: 12500,
+      onlyfansUserId: "of-uid-42",
     });
+
+    // Stage 18: no pasted credentials — onboarding must leave the vault empty.
+    const credentialRows = await testDb.pool.query(`
+      select count(*)::int as count from page_credentials
+      where platform_account_id = ${page.id}
+    `);
+    expect(credentialRows.rows[0]?.count).toBe(0);
   });
 
-  it("fails cleanly when the OnlyFans username is not accessible for the token", async (context) => {
+  it("fails cleanly when the OnlyFans username is not connected at the OFAPI vendor", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1431,15 +1406,12 @@ describe("db write safety", () => {
       onboardOnlyFansPage(app, {
         modelSlug: "lora",
         label: "lora-of",
-        auth: {
-          token: "om-token",
-        },
         username: "missing",
       }),
-    ).rejects.toThrow('OnlyMonster account "missing" was not found for this token');
+    ).rejects.toThrow('No connected OFAPI account matches "missing"');
   });
 
-  it("uses the first OnlyFans username match when multiple accounts share the username", async (context) => {
+  it("refuses to onboard when multiple OFAPI accounts match the username", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1450,17 +1422,13 @@ describe("db write safety", () => {
       name: "Lora",
     });
 
-    const duplicate: OnlyMonsterAccount = {
-      id: 42,
-      platform_account_id: "of-acct-42",
-      platform: "onlyfans",
-      name: "Lora OF",
-      email: null,
-      avatar: "https://example.com/lora.png",
+    const duplicate: OfapiAccountRecord = {
+      id: "acct_42",
       username: "lora_of",
-      organisation_id: "org-1",
-      subscribe_price: null,
-      subscription_expiration_date: null,
+      displayName: "Lora OF",
+      onlyfansName: "lora_of",
+      onlyfansUserId: null,
+      avatarUrl: null,
     };
 
     const app = createOnlyFansOnboardingApp({
@@ -1468,36 +1436,23 @@ describe("db write safety", () => {
         duplicate,
         {
           ...duplicate,
-          id: 43,
-          platform_account_id: "of-acct-43",
+          id: "acct_43",
         },
       ],
     });
 
-    const { page } = await onboardOnlyFansPage(app, {
-      modelSlug: "lora",
-      label: "lora-of",
-      auth: {
-        token: "om-token",
-      },
-      username: "lora_of",
-    });
+    await expect(
+      onboardOnlyFansPage(app, {
+        modelSlug: "lora",
+        label: "lora-of",
+        username: "lora_of",
+      }),
+    ).rejects.toThrow('Multiple OFAPI accounts match "lora_of"');
 
-    const pageRows = await testDb.pool.query(`
-      select external_page_id,
-             username,
-             metadata::text as metadata
-      from pages
-      where id = ${page.id}
+    const counts = await testDb.pool.query(`
+      select count(*)::int as pages_count from pages
     `);
-
-    expect(pageRows.rows[0]).toMatchObject({
-      external_page_id: "of-acct-42",
-      username: "lora_of",
-    });
-    expect(JSON.parse(pageRows.rows[0]?.metadata ?? "{}")).toMatchObject({
-      onlyMonsterAccountId: 42,
-    });
+    expect(counts.rows[0]?.pages_count).toBe(0);
   });
 
   it("rejects Fansly credential updates that point at a different upstream account", async (context) => {
@@ -1563,7 +1518,7 @@ describe("db write safety", () => {
     expect(credentialRows.rows[0]?.count).toBe(0);
   });
 
-  it("rejects OnlyFans credential updates that point at a different upstream account", async (context) => {
+  it("rejects OnlyFans credential updates outright (Stage 18: no hub-held credentials)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1577,55 +1532,15 @@ describe("db write safety", () => {
       modelId: model.id,
       label: "onlyfans-credentials-page",
     });
-    await updatePageMetadata(testDb.db, page.id, {
-      platformAccountIdValue: "of-acct-42",
-      username: "lora_of",
-      displayName: "Lora OF",
-      followerCount: 0,
-      subscriberCount: 0,
-      earningsBalanceMills: 0n,
-      metadata: {},
-      syncType: "light",
-    });
 
-    const mismatchAccount: OnlyMonsterAccount = {
-      id: 99,
-      platform_account_id: "of-acct-99",
-      platform: "onlyfans",
-      name: "Other OF",
-      email: null,
-      avatar: "https://example.com/other.png",
-      username: "other_of",
-      organisation_id: "org-2",
-      subscribe_price: null,
-      subscription_expiration_date: null,
-    };
-
-    const app = createTestAppContext(testDb, {
-      onlyFansAdapter: {
-        async listAccountsPage() {
-          return {
-            parsed: {
-              accounts: [mismatchAccount],
-            },
-            raw: {
-              accounts: [mismatchAccount],
-            },
-          };
-        },
-      } as never,
-    });
+    const app = createTestAppContext(testDb);
 
     await expect(
       updatePageCredentials(app, page.label, {
         platform: "onlyfans",
-        auth: {
-          token: "replacement-token",
-        },
-        username: "other_of",
       }),
     ).rejects.toThrow(
-      'Submitted credentials belong to upstream account "of-acct-99", but page "onlyfans-credentials-page" is bound to "of-acct-42"',
+      'OnlyFans pages have no stored credentials to update: page "onlyfans-credentials-page" syncs via its OFAPI account mapping',
     );
 
     const credentialRows = await testDb.pool.query(`
@@ -1636,7 +1551,7 @@ describe("db write safety", () => {
     expect(credentialRows.rows[0]?.count).toBe(0);
   });
 
-  it("leaves no persisted rows behind when OnlyFans account verification fails during onboarding", async (context) => {
+  it("leaves no persisted rows behind when OnlyFans onboarding fails mid-transaction", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1647,36 +1562,35 @@ describe("db write safety", () => {
       name: "Lora",
     });
 
-    const account: OnlyMonsterAccount = {
-      id: 42,
-      platform_account_id: "of-acct-42",
-      platform: "onlyfans",
-      name: "Lora OF",
-      email: null,
-      avatar: "https://example.com/lora.png",
+    const account: OfapiAccountRecord = {
+      id: "acct_42",
       username: "lora_of",
-      organisation_id: "org-1",
-      subscribe_price: null,
-      subscription_expiration_date: null,
+      displayName: "Lora OF",
+      onlyfansName: "lora_of",
+      onlyfansUserId: null,
+      avatarUrl: null,
     };
 
     const app = createOnlyFansOnboardingApp({
       accounts: [account],
-      async getAccount() {
-        throw new Error("invalid om auth");
-      },
     });
 
+    await onboardOnlyFansPage(app, {
+      modelSlug: "lora",
+      label: "lora-of",
+      username: "lora_of",
+    });
+
+    // Same OFAPI account under a second label: the pages_ofapi_account_uniq
+    // constraint fires AFTER the second page row is inserted, so the whole
+    // transaction must roll back without leaving an orphan page.
     await expect(
       onboardOnlyFansPage(app, {
         modelSlug: "lora",
-        label: "lora-of",
-        auth: {
-          token: "om-token",
-        },
+        label: "lora-of-second",
         username: "lora_of",
       }),
-    ).rejects.toThrow("invalid om auth");
+    ).rejects.toThrow();
 
     const counts = await testDb.pool.query(`
       select
@@ -1685,7 +1599,7 @@ describe("db write safety", () => {
     `);
 
     expect(counts.rows[0]).toMatchObject({
-      pages_count: 0,
+      pages_count: 1,
       credentials_count: 0,
     });
   });

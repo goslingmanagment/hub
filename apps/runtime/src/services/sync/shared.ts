@@ -8,25 +8,22 @@ import {
   updatePageMetadata,
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
-import { ONLYMONSTER_MAPPER_VERSION } from "@agency_hub_core/onlyfans";
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
   type ResolvedFanslyPageContext,
-  type ResolvedOnlyFansPageContext,
   type ResolvedPageContext,
 } from "../page-context.ts";
 import { buildFanslyMetadata } from "../fansly.ts";
-import {
-  buildOnlyFansMetadata,
-  getOnlyMonsterAccountId,
-  resolveOnlyFansDisplayName,
-} from "../onlyfans.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
+
+// Legacy mapper tag for OnlyFans failed-payload rows (kept byte-identical to
+// the retired packages/onlyfans export so recorded rows stay comparable).
+const ONLYMONSTER_MAPPER_VERSION = "onlymonster-phase3-v1";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 // Stage 1 retention stand-down: raw payloads are captured business facts. Rows
@@ -319,21 +316,12 @@ export function trimFanslyMessagingGroupsPayload(raw: unknown) {
   };
 }
 
-export function refreshPageMetadata(
-  app: AppContext,
-  pageContext: ResolvedFanslyPageContext,
-  syncType?: "light" | "followers",
-  telemetry?: SyncRunTelemetry,
-): ReturnType<AppContext["adapter"]["getAccountMe"]>;
-export function refreshPageMetadata(
-  app: AppContext,
-  pageContext: ResolvedOnlyFansPageContext,
-  syncType?: "light" | "followers",
-  telemetry?: SyncRunTelemetry,
-): ReturnType<AppContext["onlyFansAdapter"]["getAccount"]>;
+/** Fansly-only since Stage 18: the OnlyMonster metadata refresh is retired
+ * (OnlyFans page identity is static post-onboarding; counts ride the OFAPI
+ * audience sweep). */
 export async function refreshPageMetadata(
   app: AppContext,
-  pageContext: ResolvedPageContext,
+  pageContext: ResolvedFanslyPageContext,
   syncType?: "light" | "followers",
   telemetry?: SyncRunTelemetry,
 ) {
@@ -341,7 +329,7 @@ export async function refreshPageMetadata(
     egressKey: pageContext.egressKey,
   });
 
-  if (pageContext.platform === "fansly") {
+  {
     const accountMe = await app.adapter.getAccountMe({
       session: pageContext.session,
       proxy: pageContext.proxy,
@@ -375,45 +363,6 @@ export async function refreshPageMetadata(
 
     return accountMe;
   }
-
-  const account = await app.onlyFansAdapter.getAccount(
-    {
-      auth: pageContext.auth,
-      proxy: pageContext.proxy,
-      egressKey: pageContext.egressKey,
-      requestObserver: telemetry?.getRequestObserver() ?? null,
-      rateLimitWaiter,
-    },
-    getOnlyMonsterAccountId(pageContext.page.metadata),
-  );
-  await persistRawPayload(app.db, {
-    platformAccountId: pageContext.page.id,
-    endpoint: "onlymonster_account",
-    requestParams: {},
-    responsePayload: account.raw,
-    mapperVersion: ONLYMONSTER_MAPPER_VERSION,
-    payloadKind: "mapping_critical",
-    retainUntil: retentionDate(),
-  }, {
-    action: "inserting onlymonster_account raw payload",
-    platform: "onlyfans",
-  });
-
-  await updatePageMetadata(app.db, pageContext.page.id, {
-    platformAccountIdValue: account.parsed.account.platform_account_id,
-    username: account.parsed.account.username,
-    displayName: resolveOnlyFansDisplayName(account.parsed.account, {
-      displayName: pageContext.page.displayName,
-      username: pageContext.page.username,
-    }),
-    followerCount: null,
-    subscriberCount: null,
-    earningsBalanceMills: 0n,
-    metadata: buildOnlyFansMetadata(account.parsed.account, pageContext.page.metadata),
-    ...(syncType ? { syncType } : {}),
-  });
-
-  return account;
 }
 
 export async function persistFailedSyncPayload(

@@ -1589,65 +1589,13 @@
                           "onlyfans"
                         ]
                       },
-                      "auth": {
-                        "type": "object",
-                        "properties": {
-                          "token": {
-                            "type": "string",
-                            "minLength": 1
-                          }
-                        },
-                        "required": [
-                          "token"
-                        ]
-                      },
                       "username": {
                         "type": "string",
                         "minLength": 1
-                      },
-                      "proxy": {
-                        "anyOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "url": {
-                                "type": "string",
-                                "minLength": 1
-                              },
-                              "username": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "password": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              }
-                            },
-                            "required": [
-                              "url"
-                            ]
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
                       }
                     },
                     "required": [
                       "platform",
-                      "auth",
                       "username"
                     ]
                   }
@@ -7351,60 +7299,9 @@
                           "onlyfans"
                         ]
                       },
-                      "auth": {
-                        "type": "object",
-                        "properties": {
-                          "token": {
-                            "type": "string",
-                            "minLength": 1
-                          }
-                        },
-                        "required": [
-                          "token"
-                        ]
-                      },
                       "username": {
                         "type": "string",
                         "minLength": 1
-                      },
-                      "proxy": {
-                        "anyOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "url": {
-                                "type": "string",
-                                "minLength": 1
-                              },
-                              "username": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "password": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              }
-                            },
-                            "required": [
-                              "url"
-                            ]
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
                       },
                       "modelSlug": {
                         "type": "string",
@@ -7417,7 +7314,6 @@
                     },
                     "required": [
                       "platform",
-                      "auth",
                       "username",
                       "modelSlug",
                       "label"
@@ -8323,61 +8219,6 @@
                         "type": "string",
                         "enum": [
                           "onlyfans"
-                        ]
-                      },
-                      "auth": {
-                        "type": "object",
-                        "properties": {
-                          "token": {
-                            "type": "string",
-                            "minLength": 1
-                          }
-                        },
-                        "required": [
-                          "token"
-                        ]
-                      },
-                      "username": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "proxy": {
-                        "anyOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "url": {
-                                "type": "string",
-                                "minLength": 1
-                              },
-                              "username": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "password": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              }
-                            },
-                            "required": [
-                              "url"
-                            ]
-                          },
-                          {
-                            "type": "null"
-                          }
                         ]
                       }
                     },

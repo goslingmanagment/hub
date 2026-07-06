@@ -313,16 +313,16 @@ describe("config", () => {
   });
 
   it("loads dotenv values into the supplied env object without mutating process.env", async () => {
-    const originalOnlyMonsterBaseUrl = process.env.ONLYMONSTER_BASE_URL;
+    const originalFanslyBaseUrl = process.env.FANSLY_BASE_URL;
     const dotenvPath = path.join(testCwd, ".env");
 
     await writeFile(
       dotenvPath,
-      "ONLYMONSTER_BASE_URL=https://example.invalid/from-dotenv\n",
+      "FANSLY_BASE_URL=https://example.invalid/from-dotenv\n",
       "utf8",
     );
 
-    delete process.env.ONLYMONSTER_BASE_URL;
+    delete process.env.FANSLY_BASE_URL;
 
     try {
       const env: NodeJS.ProcessEnv = {
@@ -330,14 +330,14 @@ describe("config", () => {
       };
       const config = loadConfig(env);
 
-      expect(env.ONLYMONSTER_BASE_URL).toBe("https://example.invalid/from-dotenv");
-      expect(config.onlyMonsterBaseUrl).toBe("https://example.invalid/from-dotenv");
-      expect(process.env.ONLYMONSTER_BASE_URL).toBeUndefined();
+      expect(env.FANSLY_BASE_URL).toBe("https://example.invalid/from-dotenv");
+      expect(config.fanslyBaseUrl).toBe("https://example.invalid/from-dotenv");
+      expect(process.env.FANSLY_BASE_URL).toBeUndefined();
     } finally {
-      if (originalOnlyMonsterBaseUrl === undefined) {
-        delete process.env.ONLYMONSTER_BASE_URL;
+      if (originalFanslyBaseUrl === undefined) {
+        delete process.env.FANSLY_BASE_URL;
       } else {
-        process.env.ONLYMONSTER_BASE_URL = originalOnlyMonsterBaseUrl;
+        process.env.FANSLY_BASE_URL = originalFanslyBaseUrl;
       }
       await rm(dotenvPath, { force: true });
     }

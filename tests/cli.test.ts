@@ -328,7 +328,8 @@ describe("CLI parsing", () => {
     const onlyFansCommand = addCommand?.commands.find((command) => command.name() === "onlyfans");
     expect(onlyFansCommand).toBeDefined();
     const onlyFansHelp = onlyFansCommand?.helpInformation();
-    expect(onlyFansHelp).toContain("--token-file <file>");
+    // Stage 18: OFAPI-era onboarding takes an identity, not credentials.
+    expect(onlyFansHelp).not.toContain("--token-file");
     expect(onlyFansHelp).toContain("--username <username>");
 
     const modelCommand = helpProgram.commands.find((command) => command.name() === "model");
@@ -410,10 +411,6 @@ describe("CLI parsing", () => {
   });
 
   it("queues an initial full sync after adding an OnlyFans page", async () => {
-    const tempFile = await createTempJsonFile("onlyfans-token.json", {
-      token: "om-token",
-    });
-    cleanupDirectories.add(tempFile.directory);
     cliMocks.onboardOnlyFansPage.mockResolvedValue({
       page: {
         id: 202,
@@ -432,8 +429,6 @@ describe("CLI parsing", () => {
       "lora",
       "--label",
       "lora-of",
-      "--token-file",
-      tempFile.filePath,
       "--username",
       "lora_onlyfans",
     ], { from: "user" });
@@ -441,11 +436,7 @@ describe("CLI parsing", () => {
     expect(cliMocks.onboardOnlyFansPage).toHaveBeenCalledWith(expect.anything(), {
       modelSlug: "lora",
       label: "lora-of",
-      auth: {
-        token: "om-token",
-      },
       username: "lora_onlyfans",
-      proxy: null,
     });
 
     const boss = cliMocks.bossInstances[0];

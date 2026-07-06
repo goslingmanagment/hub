@@ -42,9 +42,6 @@ const dbMocks = vi.hoisted(() => ({
   refreshFanPageSubscriberState: vi.fn(),
 }));
 
-const onlyFansTransactionMocks = vi.hoisted(() => ({
-  syncOnlyFansTransactions: vi.fn(),
-}));
 
 const sharedMocks = vi.hoisted(() => ({
   dmRetentionDate: vi.fn(() => new Date("2026-09-17T00:00:00.000Z")),
@@ -80,7 +77,6 @@ vi.mock("@agency_hub_core/db", async () => {
     ...dbMocks,
   };
 });
-vi.mock("../apps/runtime/src/services/sync/onlyfans-transactions.ts", () => onlyFansTransactionMocks);
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
 vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
   const actual = await vi.importActual<typeof import("../apps/runtime/src/services/sync/fan-hydration.ts")>(
@@ -192,7 +188,6 @@ describe("sync executor handlers", () => {
         mock.mockReset();
       }
     }
-    onlyFansTransactionMocks.syncOnlyFansTransactions.mockReset();
     sharedMocks.persistRawPayload.mockReset();
     sharedMocks.refreshPageMetadata.mockReset();
     fanHydrationMocks.hydrateFans.mockReset();
@@ -1591,23 +1586,14 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     }));
   });
 
-  it("consumes OnlyFans manual transaction override payloads revision-safely", async () => {
+  it("records OnlyFans transaction pulls as skips (webhook-sourced since Stage 18)", async () => {
     const telemetry = createTelemetry();
     const app = {
       db: {},
       config: {
         syncSharedRateLimitEnabled: false,
       },
-      onlyFansAdapter: {},
     } as never;
-    onlyFansTransactionMocks.syncOnlyFansTransactions.mockResolvedValue({
-      satisfied: true,
-      yieldReason: null,
-      processedTransactions: 10,
-      processedChargebacks: 2,
-      processed: 12,
-      newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
-    });
 
     const result = await onlyfansTransactionsChunk(app, {
       pageContext: {
@@ -1619,24 +1605,23 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
           metadata: {},
           commissionRate: 0.2,
         },
-        auth: { token: "secret" },
+        auth: { token: "" },
         proxy: null,
       },
       streamState: {
         requestSeq: 7,
-        requestPayload: {
-          revision: 7,
-          onlyFansTransactionsStart: "2026-03-01T00:00:00.000Z",
-        },
+        requestPayload: null,
       },
       syncRunId: 200,
       telemetry: telemetry as never,
       budget: new SyncChunkBudget(),
     } as never);
 
-    expect(onlyFansTransactionMocks.syncOnlyFansTransactions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      rescanStart: new Date("2026-03-01T00:00:00.000Z"),
-    }));
+    // The stream completes without egress: OF transaction truth arrives via
+    // the Stage 13 webhook writer gate, never a pull walker.
+    expect(result.satisfied).toBe(true);
+    expect(result.yieldReason).toBe(null);
+    expect(result.stats).toMatchObject({ skipped: "onlyfans_transactions_webhook_sourced" });
   });
 
   it("passes the active lease to Fansly transaction syncs for mid-run progress updates", async () => {
@@ -1725,50 +1710,6 @@ it("guards against non-empty partial follower reconcile wipes", async () => {
     expect(transactionMocks.syncTransactions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       budget: expect.any(SyncChunkBudget),
     }));
-    expect(result.satisfied).toBe(false);
-    expect(result.yieldReason).toBe("request_budget");
-  });
-
-  it("propagates yielded OnlyFans transaction chunks", async () => {
-    const telemetry = createTelemetry();
-    const app = {
-      db: {},
-      config: {
-        syncSharedRateLimitEnabled: false,
-      },
-      onlyFansAdapter: {},
-    } as never;
-    onlyFansTransactionMocks.syncOnlyFansTransactions.mockResolvedValue({
-      satisfied: false,
-      yieldReason: "request_budget",
-      processedTransactions: 4,
-      processedChargebacks: 0,
-      processed: 4,
-      newestSeenAt: new Date("2026-03-10T00:00:00.000Z"),
-    });
-
-    const result = await onlyfansTransactionsChunk(app, {
-      pageContext: {
-        platform: "onlyfans",
-        page: {
-          id: 100,
-          label: "onlyfans-page",
-          platformAccountId: "of-100",
-          metadata: {},
-          commissionRate: 0.2,
-        },
-        auth: { token: "secret" },
-        proxy: null,
-      },
-      streamState: {
-        requestSeq: 7,
-        requestPayload: null,
-      },
-      syncRunId: 201,
-      telemetry: telemetry as never,
-      budget: new SyncChunkBudget(),
-    } as never);
-
     expect(result.satisfied).toBe(false);
     expect(result.yieldReason).toBe("request_budget");
   });

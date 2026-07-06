@@ -6,8 +6,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { NotFoundError } from "./errors.ts";
-import { getOnlyMonsterAccountId } from "./onlyfans.ts";
+import { BadRequestError, NotFoundError } from "./errors.ts";
 import { removeProxy, resolvePageContext, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
@@ -32,25 +31,20 @@ export async function setPageProxy(
     egressKey: proxyEgressKey,
   });
 
-  if (pageContext.platform === "fansly") {
-    await app.adapter.verifySession({
-      session: pageContext.session,
-      proxy: normalizedProxy,
-      egressKey: proxyEgressKey,
-      rateLimitWaiter,
-    });
-  } else {
-    await app.onlyFansAdapter.getAccount(
-      {
-        auth: pageContext.auth,
-        proxy: normalizedProxy,
-        egressKey: proxyEgressKey,
-        requestObserver: null,
-        rateLimitWaiter,
-      },
-      getOnlyMonsterAccountId(pageContext.page.metadata),
+  if (pageContext.platform !== "fansly") {
+    // Stage 18: OnlyFans egress happens at the OFAPI vendor — a hub-side
+    // proxy would never carry that traffic, so assigning one is an error.
+    throw new BadRequestError(
+      `Page "${pageContext.page.label}" is an OnlyFans page: its egress is vendor-side (OFAPI), hub proxies do not apply`,
     );
   }
+
+  await app.adapter.verifySession({
+    session: pageContext.session,
+    proxy: normalizedProxy,
+    egressKey: proxyEgressKey,
+    rateLimitWaiter,
+  });
 
   await saveProxy(app, pageContext.page.id, normalizedProxy, {
     rateLimitScopeKey: preservesStoredProxyRoute ? proxyEgressKey : undefined,

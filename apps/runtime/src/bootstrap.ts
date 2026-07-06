@@ -1,6 +1,5 @@
 import { assertRuntimeSchemaReady, createDb, createPool, getConfigOverrides, type Database } from "@agency_hub_core/db";
 import { FanslyAdapter } from "@agency_hub_core/fansly";
-import { OnlyFansAdapter } from "@agency_hub_core/onlyfans";
 import type {
   FanslyAccount,
   FanslyAccountMeResponse,
@@ -112,7 +111,6 @@ export interface AppContext {
   pool: ReturnType<typeof createPool>;
   db: Database;
   adapter: AdapterLike;
-  onlyFansAdapter: OnlyFansAdapter;
   // onlyfansapi.com management client; absent when OFAPI_API_KEY is not set
   // (admin webhook registration then 503s). Optional so existing AppContext
   // literals (tests, codegen) need not provide it.
@@ -181,11 +179,6 @@ export async function createAppContext(): Promise<AppContext> {
       baseUrl: config.fanslyBaseUrl,
       globalDelayMs: config.fanslyDefaultDelayMs,
     });
-    const onlyFansAdapter = new OnlyFansAdapter({
-      baseUrl: config.onlyMonsterBaseUrl,
-      defaultDelayMs: config.onlyFansDefaultDelayMs,
-    });
-
     const ofapi = config.ofapiApiKey
       ? createOfapiClient({
         baseUrl: config.ofapiBaseUrl,
@@ -208,12 +201,10 @@ export async function createAppContext(): Promise<AppContext> {
       pool,
       db,
       adapter,
-      onlyFansAdapter,
       ofapi,
       aiGatewayProvider,
       async close() {
         await adapter.close?.();
-        await onlyFansAdapter.close();
         await pool.end();
       },
     };

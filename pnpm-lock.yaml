@@ -151,9 +151,6 @@ importers:
       '@agency_hub_core/fansly':
         specifier: workspace:*
         version: link:../../packages/fansly
-      '@agency_hub_core/onlyfans':
-        specifier: workspace:*
-        version: link:../../packages/onlyfans
       '@agency_hub_core/platform-core':
         specifier: workspace:*
         version: link:../../packages/platform-core
@@ -240,15 +237,6 @@ importers:
         version: 8.20.0
 
   packages/fansly:
-    dependencies:
-      '@agency_hub_core/shared':
-        specifier: workspace:*
-        version: link:../shared
-      undici:
-        specifier: ^7.27.2
-        version: 7.27.2
-
-  packages/onlyfans:
     dependencies:
       '@agency_hub_core/shared':
         specifier: workspace:*

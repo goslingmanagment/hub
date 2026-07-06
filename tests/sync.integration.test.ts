@@ -252,33 +252,6 @@ function createInstrumentedFanslyLightAdapter(probe: ReturnType<typeof createCon
   };
 }
 
-function createInstrumentedOnlyFansLightAdapter(probe: ReturnType<typeof createConcurrencyProbe>) {
-  return {
-    async getAccount(_context: unknown, accountId: number) {
-      return probe.run(async () => {
-        await sleep(75);
-        return {
-          parsed: {
-            account: {
-              id: accountId,
-              platform_account_id: `of-${accountId}`,
-              platform: "onlyfans" as const,
-              name: `OnlyFans ${accountId}`,
-              email: `of-${accountId}@example.com`,
-              avatar: "https://example.com/avatar.png",
-              username: `of_${accountId}`,
-              organisation_id: "org-1",
-              subscribe_price: 10,
-              subscription_expiration_date: "2026-04-01T00:00:00.000Z",
-            },
-          },
-          raw: {},
-        };
-      });
-    },
-  };
-}
-
 async function createFanslyLightPage(
   testDb: StartedTestDatabase,
   input: {
@@ -827,7 +800,6 @@ describe("sync integration", () => {
     const probe = createConcurrencyProbe();
     const app = createTestAppContext(testDb, {
       adapter: createInstrumentedFanslyLightAdapter(probe) as never,
-      onlyFansAdapter: createInstrumentedOnlyFansLightAdapter(probe) as never,
       fanslyDefaultDelayMs: 1,
       onlyFansDefaultDelayMs: 1,
       syncPageExecutorConcurrency: 4,

@@ -123,7 +123,6 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   { key: "fanslyDmDeepBackfillContinuationJitterMs", envName: "FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS", configField: "fanslyDmDeepBackfillContinuationJitterMs", kind: "number", subsystem: "Fansly", label: "Deep backfill continuation jitter (ms)", default: "0", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 0 },
 
   // ── Sync / OnlyFans (OnlyMonster) ─────────────────────────────────────────
-  { key: "onlyMonsterBaseUrl", envName: "ONLYMONSTER_BASE_URL", configField: "onlyMonsterBaseUrl", kind: "url", subsystem: "Sync", label: "OnlyMonster base URL", default: "https://omapi.onlymonster.ai", editability: NEVER, runtimeApply: "none", comparable: true },
   // No `requires`: the precondition is (proxy set) OR allow-direct — an OR that the
   // simple AND-list can't express. It lives in the shared invariant validator
   // (used by loadConfig and, in Stage B/C, by PATCH), not as a misleading dependency.

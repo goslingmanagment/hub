@@ -18,7 +18,6 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
-import { findOnlyFansAccountByUsername } from "./onlyfans.ts";
 import { removeProxy, resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
@@ -212,6 +211,20 @@ export async function updatePageCredentials(
     throw new NotFoundError(`Page "${pageLabel}" not found`);
   }
 
+  if (stored.page.platform !== body.platform) {
+    throw new BadRequestError(
+      `Platform mismatch: page is ${stored.page.platform}, credentials are for ${body.platform}`,
+    );
+  }
+  if (body.platform === "onlyfans") {
+    // Stage 18: OnlyMonster retired. OnlyFans pages hold no pasted
+    // credentials or hub-side proxy — identity and egress live at the OFAPI
+    // vendor (setPageOfapiAccountId), so there is nothing to update here.
+    throw new BadRequestError(
+      `OnlyFans pages have no stored credentials to update: page "${stored.page.label}" syncs via its OFAPI account mapping`,
+    );
+  }
+
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
   const storedEgressKey = resolveStoredProxyEgressKey(stored.proxy);
   const hasExplicitProxyInput = body.proxy !== undefined;
@@ -243,75 +256,34 @@ export async function updatePageCredentials(
     egressKey: proxyEgressKey,
   });
 
-  if (stored.page.platform !== body.platform) {
-    throw new BadRequestError(
-      `Platform mismatch: page is ${stored.page.platform}, credentials are for ${body.platform}`,
-    );
-  }
-
-  const storedCredentials = body.platform === "fansly"
-    ? body.session === undefined
-      ? decryptStoredCredentials(app, stored)
-      : null
-    : body.auth === undefined
-      ? decryptStoredCredentials(app, stored)
-      : null;
+  const storedCredentials = body.session === undefined
+    ? decryptStoredCredentials(app, stored)
+    : null;
 
   // Verify credentials with platform adapter
-  if (body.platform === "fansly") {
-    const session = body.session ?? (
-      storedCredentials?.platform === "fansly" ? storedCredentials.session : null
-    );
-    if (!session) {
-      throw new BadRequestError(`Page "${stored.page.label}" has no stored Fansly session`);
-    }
-
-    const verification = await app.adapter.verifySession({
-      session,
-      proxy,
-      egressKey: proxyEgressKey,
-      rateLimitWaiter,
-    });
-    assertVerifiedAccountIdentity(
-      stored.page.label,
-      stored.page.platformAccountId,
-      verification.parsed.account.id,
-    );
-  } else {
-    const auth = body.auth ?? (
-      storedCredentials?.platform === "onlyfans" ? storedCredentials.auth : null
-    );
-    if (!auth) {
-      throw new BadRequestError(`Page "${stored.page.label}" has no stored OnlyFans auth token`);
-    }
-    const username = body.username ?? stored.page.username;
-    if (!username) {
-      throw new BadRequestError(`Page "${stored.page.label}" has no stored OnlyFans username`);
-    }
-
-    const context = {
-      auth,
-      proxy,
-      egressKey: proxyEgressKey,
-      requestObserver: null,
-      rateLimitWaiter,
-    };
-    const account = await findOnlyFansAccountByUsername(app.onlyFansAdapter, context, username);
-    assertVerifiedAccountIdentity(
-      stored.page.label,
-      stored.page.platformAccountId,
-      account.platform_account_id,
-    );
+  const session = body.session ?? (
+    storedCredentials?.platform === "fansly" ? storedCredentials.session : null
+  );
+  if (!session) {
+    throw new BadRequestError(`Page "${stored.page.label}" has no stored Fansly session`);
   }
 
+  const verification = await app.adapter.verifySession({
+    session,
+    proxy,
+    egressKey: proxyEgressKey,
+    rateLimitWaiter,
+  });
+  assertVerifiedAccountIdentity(
+    stored.page.label,
+    stored.page.platformAccountId,
+    verification.parsed.account.id,
+  );
+
   // Save encrypted credentials
-  const credentials: StoredPlatformCredentialBundle | null = body.platform === "fansly"
-    ? body.session
-      ? { platform: "fansly", session: body.session }
-      : null
-    : body.auth
-      ? { platform: "onlyfans", auth: body.auth }
-      : null;
+  const credentials: StoredPlatformCredentialBundle | null = body.session
+    ? { platform: "fansly", session: body.session }
+    : null;
 
   if (credentials) {
     const encrypted = encryptJson(

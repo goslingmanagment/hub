@@ -12,8 +12,6 @@ import {
   normalizeOnlyFansAvatarUrl,
   resolveOnlyFansDisplayName,
 } from "./onlyfans.ts";
-import { resolvePageContext } from "./page-context.ts";
-import { refreshPageMetadata } from "./sync/shared.ts";
 
 export interface OnlyFansPageMetadataBackfillPageResult {
   pageId: number | null;
@@ -146,28 +144,10 @@ export async function backfillOnlyFansPageMetadata(
         throw new Error(`Page "${stored.page.label}" is not an OnlyFans page`);
       }
 
-      let credentialsError: unknown = null;
-      if (stored.credentials) {
-        try {
-          const pageContext = await resolvePageContext(app, stored.page.label);
-          if (pageContext.platform !== "onlyfans") {
-            throw new Error(`Page "${pageContext.page.label}" is not an OnlyFans page`);
-          }
-
-          await refreshPageMetadata(app, pageContext, "light");
-          const refreshed = await findPageById(app.db, pageContext.page.id);
-          pages.push(pageResult(refreshed?.page ?? pageContext.page));
-          continue;
-        } catch (error) {
-          credentialsError = error;
-        }
-      }
-
-      if (!stored.page.ofapiAccountId && credentialsError) {
-        throw credentialsError;
-      }
+      // Stage 18: the OnlyMonster credentials path is retired — identity
+      // backfill is OFAPI-only (updateOnlyFansPageIdentityFromOfapi).
       if (!stored.page.ofapiAccountId) {
-        throw new Error(`Page "${stored.page.label}" has no stored platform credentials or OFAPI account mapping`);
+        throw new Error(`Page "${stored.page.label}" has no OFAPI account mapping`);
       }
 
       const accountsById = await getOfapiAccountsById();

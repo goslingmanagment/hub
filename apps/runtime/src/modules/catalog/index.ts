@@ -17,7 +17,6 @@ import {
   updatePageByLabel,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
-import { OnlyMonsterApiError } from "@agency_hub_core/onlyfans";
 import {
   buildProxyEgressKey,
   createProxyRequestDispatcher,
@@ -120,12 +119,11 @@ function isAdminPageVerifyBadRequest(error: unknown) {
     return true;
   }
 
-  if (error instanceof FanslyApiError || error instanceof OnlyMonsterApiError) {
+  if (error instanceof FanslyApiError) {
     return error.status === 401 || error.status === 403;
   }
 
-  return error instanceof Error
-    && error.message === "OnlyFans page metadata is missing onlyMonsterAccountId";
+  return false;
 }
 
 export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) {
@@ -279,9 +277,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
       await onboardOnlyFansPage(appContext, {
         modelSlug: body.modelSlug,
         label: body.label,
-        auth: body.auth,
         username: body.username,
-        proxy: body.proxy ?? null,
       });
       const syncQueueState = await queueInitialOnboardingSync(body.label, request.log);
       const page = await getPageSummary(appContext, body.label);
@@ -339,14 +335,13 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     requireOwner(principal);
     const body = request.body;
     try {
-      const proxy = body.proxy ? normalizeProxyConfig(body.proxy) : null;
-      if (proxy) {
-        await assertAllowedProxyTarget(proxy);
-      }
-      const egressKey = buildProxyEgressKey(proxy);
-      const rateLimitWaiter = createSyncRateLimitWaiter(appContext, { egressKey });
-
       if (body.platform === "fansly") {
+        const proxy = body.proxy ? normalizeProxyConfig(body.proxy) : null;
+        if (proxy) {
+          await assertAllowedProxyTarget(proxy);
+        }
+        const egressKey = buildProxyEgressKey(proxy);
+        const rateLimitWaiter = createSyncRateLimitWaiter(appContext, { egressKey });
         const result = await appContext.adapter.verifySession({
           session: body.session,
           proxy,
@@ -360,24 +355,25 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
           displayName: result.parsed.account.displayName,
         };
       } else {
-        const { findOnlyFansAccountByUsername } = await import("../../services/onlyfans.ts");
-        const context = {
-          auth: body.auth,
-          proxy,
-          egressKey,
-          requestObserver: null,
-          rateLimitWaiter,
-        };
-        const account = await findOnlyFansAccountByUsername(
-          appContext.onlyFansAdapter,
-          context,
-          body.username,
+        // Stage 18: OnlyMonster retired — "verifying" an OnlyFans identity
+        // means the account is connected at the OFAPI vendor.
+        if (!appContext.ofapi) {
+          throw new Error("OFAPI is not configured (OFAPI_API_KEY)");
+        }
+        const needle = body.username.trim().toLowerCase().replace(/^@/, "");
+        const accounts = await appContext.ofapi.listAccounts();
+        const account = accounts.find((candidate) =>
+          (candidate.username ?? "").toLowerCase().replace(/^@/, "") === needle
+          || (candidate.onlyfansName ?? "").toLowerCase() === needle,
         );
+        if (!account) {
+          throw new Error(`No connected OFAPI account matches "${body.username}"`);
+        }
         return {
           valid: true as const,
           platform: "onlyfans" as const,
           username: account.username,
-          displayName: account.name ?? null,
+          displayName: account.displayName ?? account.onlyfansName,
         };
       }
     } catch (error) {
@@ -434,11 +430,14 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     requireOwner(principal);
     try {
       const pageContext = await resolvePageContext(appContext, request.params.pageLabel);
-      if (pageContext.platform === "fansly") {
-        await refreshPageMetadata(appContext, pageContext, "light");
-      } else {
-        await refreshPageMetadata(appContext, pageContext, "light");
+      if (pageContext.platform !== "fansly") {
+        // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
+        // credentials; access rides the OFAPI mapping.
+        throw new BadRequestError(
+          "OnlyFans pages verify via their OFAPI mapping, not pasted credentials",
+        );
       }
+      await refreshPageMetadata(appContext, pageContext, "light");
       const recoveredAt = new Date();
       await handleSuccessfulPageVerificationRecovery(appContext, {
         platformAccountId: pageContext.page.id,

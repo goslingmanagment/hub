@@ -1,4 +1,4 @@
 {
   "comment": "Kernel Stage 18 ratchet: strict `platform ===` branch sites outside the adapter packages. Count may only decrease (target ~0 as handlers move behind the registry); decreases update this file.",
-  "budget": 55
+  "budget": 48
 }

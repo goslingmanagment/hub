@@ -8,10 +8,6 @@ import {
   getTransactionClassification,
   transactionTypesByReportingBucket,
 } from "@agency_hub_core/shared";
-import {
-  mapOnlyMonsterTransactionState,
-  mapOnlyMonsterTransactionType,
-} from "../packages/onlyfans/src/index.ts";
 
 describe("Fansly transaction mapping", () => {
   it("maps known types into the Phase 1 taxonomy", () => {
@@ -39,24 +35,6 @@ describe("Fansly transaction mapping", () => {
     expect(mapFanslyTransactionState(1)).toBe("pending");
     expect(mapFanslyTransactionState(2)).toBe("posted");
     expect(mapFanslyTransactionState(999)).toBe("unknown");
-  });
-
-  it("maps OnlyMonster strings into the shared taxonomy", () => {
-    expect(mapOnlyMonsterTransactionType("Tip from")).toBe("tip");
-    expect(mapOnlyMonsterTransactionType("Payment for message")).toBe("message_purchase");
-    expect(mapOnlyMonsterTransactionType("Subscription")).toBe("subscription");
-    expect(mapOnlyMonsterTransactionType("Recurring subscription")).toBe("subscription");
-    expect(mapOnlyMonsterTransactionType("Post purchase")).toBe("post_purchase");
-    expect(mapOnlyMonsterTransactionType("Live stream")).toBe("stream_tip");
-    expect(mapOnlyMonsterTransactionType("mystery")).toBe("other");
-  });
-
-  it("maps OnlyMonster statuses into transaction states", () => {
-    expect(mapOnlyMonsterTransactionState("loading")).toBe("posted");
-    expect(mapOnlyMonsterTransactionState("done")).toBe("posted");
-    expect(mapOnlyMonsterTransactionState("undo")).toBe("posted");
-    expect(mapOnlyMonsterTransactionState("pending return")).toBe("pending");
-    expect(mapOnlyMonsterTransactionState("mystery")).toBe("unknown");
   });
 
   it("classifies canonical transaction types for reporting and spender analytics", () => {

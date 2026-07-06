@@ -583,8 +583,10 @@ describe("audience stream plumbing", () => {
           ofapiAccountId: OFAPI_ACCOUNT,
         },
       });
+    // Stage 18: every OnlyFans stream resolves token-less (OnlyMonster is
+    // retired); non-OFAPI streams skip inside their handlers instead.
     await expect(resolveExecutorPageContext(appContext, page.id, "transactions"))
-      .rejects.toThrow(`Page "${page.id}" has no stored platform credentials`);
+      .resolves.toMatchObject({ platform: "onlyfans", auth: { token: "" } });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("exposes the audience block for eligible OnlyFans pages", async (context) => {

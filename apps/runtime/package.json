@@ -6,7 +6,6 @@
     "@agency_hub_core/contracts": "workspace:*",
     "@agency_hub_core/db": "workspace:*",
     "@agency_hub_core/fansly": "workspace:*",
-    "@agency_hub_core/onlyfans": "workspace:*",
     "@agency_hub_core/platform-core": "workspace:*",
     "@agency_hub_core/shared": "workspace:*",
     "@anthropic-ai/sdk": "^0.100.1",
