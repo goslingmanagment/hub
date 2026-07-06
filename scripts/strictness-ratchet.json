@@ -70,7 +70,6 @@
   "packages/shared/src/proxy.ts": 6,
   "packages/shared/src/time.ts": 26,
   "tests/adapter-fansly-global-delay.test.ts": 1,
-  "tests/ai-feature-service.integration.test.ts": 3,
   "tests/ai-gateway.integration.test.ts": 5,
   "tests/ai-restricted-class.integration.test.ts": 3,
   "tests/ai-usage.repository.integration.test.ts": 11,

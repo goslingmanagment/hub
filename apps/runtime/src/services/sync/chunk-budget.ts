@@ -25,8 +25,11 @@ export class SyncChunkBudget implements HttpRequestObserver {
     return this.requestCount;
   }
 
-  hasRequestCapacity() {
-    return this.requestCount < this.maxRequests;
+  /** Room for `count` more requests (default 1). Multi-call units — e.g. the
+   * fan-earnings walk's two calls per fan — reserve their full cost up front
+   * so a chunk can never START a unit it cannot finish within budget. */
+  hasRequestCapacity(count = 1) {
+    return this.requestCount + count <= this.maxRequests;
   }
 
   hasWallClockCapacity() {

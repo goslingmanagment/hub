@@ -129,6 +129,12 @@ export async function prepareAiFeatureStream(
     fanBio: string | undefined;
     pingSegment: PingSegment | undefined;
   };
+  if (body.clientContext && stored.page.platform !== "fansly") {
+    // The Stage 32 deviation is Fansly-motivated (no webhook lane; the kernel
+    // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting
+    // client values there would let a bearer fabricate transcript/spend.
+    throw new BadRequestError("clientContext is only accepted for fansly pages");
+  }
   if (body.clientContext) {
     // Client-loaded context path (Stage 32). The product gates run on the
     // client-reported counts/segment — the same values the client's own

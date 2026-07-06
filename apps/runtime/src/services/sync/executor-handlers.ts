@@ -3532,7 +3532,9 @@ export async function executeFanEarningsChunk(
   const statsRows: unknown[] = [];
   const monthlyRows: unknown[] = [];
 
-  while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+  // Each fan costs TWO provider calls (lifetime + monthly stats) — reserve
+  // both up front so the chunk never overshoots its request budget by one.
+  while (input.budget.hasRequestCapacity(2) && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
     const fans = await listPageFanNativeIds(app.db, {
       platformAccountId: input.pageContext.page.id,

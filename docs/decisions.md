@@ -3003,3 +3003,27 @@ Family CI green same-day: core 28824417152, desktop PR #1 28824630105
 the 35-stage Project Kernel migration's documentation standard is in force:
 CLAUDE.md + decisions.md + docs/generated/ are the living surface;
 docs/project-kernel/ is the archive.
+
+**Decision #115 (2026-07-07, GPT-5.5 xhigh release audits — owner-directed):**
+Codex (gpt-5.5, xhigh) audited three surfaces before tonight's releases.
+(1) CORE lint burn-down (#113): CONFIRMED behavior-neutral — all
+locking.ts outcome paths equivalent, no cleanup regressions. (2) Its three
+core findings against Stage 31/32 code: [fixed] the fan_earnings walk could
+overshoot the chunk request budget by one — hasRequestCapacity(count) now
+reserves both per-fan calls up front (chunk-budget.ts + walk, pinned in
+tests/chunk-budget.test.ts); [fixed] clientContext accepted for ANY platform
+— now fansly-only per the Stage 32 rationale (OnlyFans context is
+kernel-fresh; a bearer could fabricate transcript/spend), 400 otherwise,
+integration block moved to a fansly page + OF-rejection pin; [OPEN — owner
+call] persona upsert/archive routes are `apiKey`-auth (any chatter/device
+bearer can edit the GLOBAL persona system blocks; stage-32 spec said
+owner/team-lead-gated). Deliberate tension: the desktop's persona
+sync/editor runs under chatter credentials — gating writes to owner breaks
+that flow. Options when decided: (a) accept for the trusted single-tenant
+team, (b) role-gate writes and move desktop persona sync to an owner-run
+step, (c) per-user personas. Not changed tonight. (3) DESKTOP 0.1.31 and
+EXTENSION 1.7.0 findings: fixed in their repos (desktop: device-token-only
+AI gate, stale copy, pre-build tag assert; extension E10: Bearer-"set"
+poisoning, key-gated token flow, null-safe bearer). Desktop finding
+"vendor-key-only installs stranded" judged vacuous: 0.1.30 reads are
+hub-only, a working install necessarily has hub credentials.

@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  createFanslyPage,
   createModel,
   createOnlyFansPage,
   storeProxyConfig,
@@ -22,7 +23,7 @@ import type {
   AiGatewayProvider,
   AiGatewayProviderInput,
 } from "../apps/runtime/src/services/ai-gateway.ts";
-import { createUserAccount, issueChatterApiKey } from "../apps/runtime/src/services/auth.ts";
+import { assignPageToUser, createUserAccount, issueChatterApiKey } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -64,9 +65,27 @@ beforeEach(async (context) => {
   appContext = createTestAppContext(testDb);
   appContext.config.chatMuseAiGatewayEnabled = true;
   const model = await createModel(appContext.db, { slug: "svc", name: "Svc" });
+  if (!model) {
+    throw new Error("test setup: model creation failed");
+  }
   const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "svc-of" });
+  if (!page) {
+    throw new Error("test setup: page creation failed");
+  }
   pageId = page.id;
   await storeProxyConfig(appContext.db, page.id, {
+    url: "socks5://proxy.example:1080",
+    encryptedAuth: null,
+    keyVersion: null,
+    rateLimitScopeKey: "shared-ai-proxy",
+  });
+  // The client-context lane is fansly-only (audit hardening) — its tests run
+  // against this page.
+  const fanslyPage = await createFanslyPage(appContext.db, { modelId: model.id, label: "svc-fs" });
+  if (!fanslyPage) {
+    throw new Error("test setup: fansly page creation failed");
+  }
+  await storeProxyConfig(appContext.db, fanslyPage.id, {
     url: "socks5://proxy.example:1080",
     encryptedAuth: null,
     keyVersion: null,
@@ -83,6 +102,7 @@ beforeEach(async (context) => {
     username: "svc-chatter",
     pageLabel: "svc-of",
   }, { source: "cli" })).key;
+  await assignPageToUser(appContext, { username: "svc-chatter", pageLabel: "svc-fs" }, { source: "cli" });
 
   apiServer = await buildApiServer(appContext);
   await apiServer.ready();
@@ -385,8 +405,8 @@ describe("client-context path (Stage 32)", () => {
         headers: { authorization: `Bearer ${chatterKey}` },
         payload: {
           clientRequestId: randomUUID(),
-          pageLabel: "svc-of",
-          platform: "onlyfans",
+          pageLabel: "svc-fs",
+          platform: "fansly",
           conversationRef: FAN,
           clientContext,
           ...extra,
@@ -429,6 +449,23 @@ describe("client-context path (Stage 32)", () => {
     expect(pingActive.json().message).toContain("active");
     const ping = await call("ping", { ...baseContext, pingSegment: "segment-a" });
     expect(ping.statusCode, ping.body).toBe(200);
+
+    // Audit hardening: OnlyFans context is kernel-fresh — client-fabricated
+    // context is refused there (fansly-only lane).
+    const onlyfansContext = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fan-summary",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        clientContext: baseContext,
+      },
+    });
+    expect(onlyfansContext.statusCode, onlyfansContext.body).toBe(400);
+    expect(onlyfansContext.json().message).toContain("only accepted for fansly");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
