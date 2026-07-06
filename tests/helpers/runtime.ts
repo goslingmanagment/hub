@@ -98,6 +98,7 @@ export function createTestAppContext(
       transactionRescanCapDays: 30,
       syncSharedRateLimitEnabled: overrides?.syncSharedRateLimitEnabled ?? false,
       egressPacerMode: "off" as const,
+      lakeDir: "lake",
       syncPageExecutorConcurrency: overrides?.syncPageExecutorConcurrency ?? 1,
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,

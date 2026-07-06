@@ -101,6 +101,8 @@ const envSchema = z.object({
   FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS: z.coerce.number().int().min(0).default(0),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
   SYNC_SHARED_RATE_LIMIT_ENABLED: booleanSchema.default(true),
+  // Stage 28: on-box lake root for tiered Parquet exports (Q3 declined).
+  LAKE_DIR: z.string().min(1).default("lake"),
   // Stage 26: class-aware egress pacer rollout mode. off = old policy only;
   // shadow = old policy enforces while the new pacer computes + logs the
   // diff; enforce = the new pacer paces (per-vendor cutover after the 48 h
@@ -229,6 +231,7 @@ export interface AppConfig {
   onlyFansDefaultDelayMs: number;
   syncSharedRateLimitEnabled: boolean;
   egressPacerMode: "off" | "shadow" | "enforce";
+  lakeDir: string;
   syncPageExecutorConcurrency: number;
   transactionLookbackDays: number;
   transactionRescanCapDays: number;
@@ -426,6 +429,7 @@ export function loadConfig(
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,
     syncSharedRateLimitEnabled: parsed.SYNC_SHARED_RATE_LIMIT_ENABLED,
     egressPacerMode: parsed.EGRESS_PACER_MODE,
+    lakeDir: parsed.LAKE_DIR,
     syncPageExecutorConcurrency: parsed.SYNC_PAGE_EXECUTOR_CONCURRENCY,
     transactionLookbackDays: parsed.TRANSACTION_LOOKBACK_DAYS,
     transactionRescanCapDays: parsed.TRANSACTION_RESCAN_CAP_DAYS,

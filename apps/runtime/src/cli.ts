@@ -661,6 +661,24 @@ export function buildProgram() {
   sync.enablePositionalOptions();
   const queue = program.command("queue");
   const telegram = program.command("telegram");
+  program
+    .command("tiering:run")
+    .description("Stage 28: export→verify→detach aged ledger partitions into the lake")
+    .option("--execute", "actually tier (default is a dry-run listing)")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { runTieringCycle } = await import("./services/tiering/index.ts");
+        const cycle = await runTieringCycle(app, { dryRun: !options.execute });
+        console.log(JSON.stringify(cycle, null, 2));
+        if (cycle.failed > 0) {
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
   const user = program.command("user");
   const apiKey = program.command("apikey");
 

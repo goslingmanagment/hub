@@ -73,6 +73,7 @@ import {
   WORKBOARD_FAN_RECOMPUTE_QUEUE,
 } from "./services/sync-queue.ts";
 import { ensureOpsMetricsQueue, startGoldenSignalWorker } from "./services/golden-signals.ts";
+import { ensureTieringQueue, startTieringWorker } from "./services/tiering/index.ts";
 import { recomputeAllWorkboardPages } from "./modules/workboard/index.ts";
 import { runClosingClassificationAllPages } from "./modules/workboard/index.ts";
 
@@ -253,6 +254,8 @@ export async function startWorkerServices(
   // Stage 23: domain events → debounced per-fan board recompute.
   const workboardEventRecompute = startWorkboardEventRecompute(app, boss);
   await startGoldenSignalWorker(app, boss);
+  await ensureTieringQueue(boss);
+  await startTieringWorker(app, boss);
 
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);

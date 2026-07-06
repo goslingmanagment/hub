@@ -2,6 +2,7 @@ import type { PgBoss } from "pg-boss";
 
 import { ensureCanonicalizeQueues, ensureCanonicalizeSchedule } from "./canonicalize-driver.ts";
 import { ensureOpsMetricsQueue, ensureOpsMetricsSchedule } from "./golden-signals.ts";
+import { ensureTieringQueue, ensureTieringSchedule } from "./tiering/index.ts";
 import { ensureDbDiskUsageQueue, ensureDbDiskUsageSchedule } from "./db-disk-alert.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
@@ -40,6 +41,7 @@ export async function registerAllSchedules(boss: Pick<PgBoss, "schedule" | "crea
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
+  await ensureTieringQueue(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
@@ -55,5 +57,6 @@ export async function registerAllSchedules(boss: Pick<PgBoss, "schedule" | "crea
     ensureCanonicalizeSchedule(boss),
     ensureMessageArchiveSchedule(boss),
     ensureOpsMetricsSchedule(boss),
+    ensureTieringSchedule(boss),
   ]);
 }

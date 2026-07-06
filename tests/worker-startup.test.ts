@@ -111,6 +111,7 @@ vi.mock("../apps/runtime/src/services/ofapi-chargebacks-sync.ts", () => ({
   runOfapiChargebacksReconcile: vi.fn(),
 }));
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
+  ensureQueueCreated: vi.fn(async () => {}),
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,
   ensureSyncQueues: queueMocks.ensureSyncQueues,

@@ -65,6 +65,7 @@ function createRouteTestContext(input?: {
       transactionRescanCapDays: 30,
       syncSharedRateLimitEnabled: input?.syncSharedRateLimitEnabled ?? false,
       egressPacerMode: "off" as const,
+      lakeDir: "lake",
       syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
