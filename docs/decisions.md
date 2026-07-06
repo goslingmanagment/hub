@@ -2910,3 +2910,15 @@ its own param contract (order-history wants accountMediaId — the per-fan
 walk shape needs rework; circuit breaker failing loudly as designed).
 Desktop fleet-version telemetry was reset by the container restarts —
 0.1.30 adoption check pending fresh traffic.
+
+**Extension 1.6.0 RELEASED (2026-07-06 ~19:40 UTC):** signed xpi live on
+https://ext.gosling-agency.ru/updates.json (sha256:0729e450…, gecko ≥142,
+753 KB). The Stage 32 cutover ships: kernel-only AI (vendor host
+permissions gone from the manifest), device-token sign-in, kernel spenders
+board (lifetime gross from fan_earnings_stats), acceptance telemetry,
+x-client-version producer identity. Old versions keep working until
+update. §5 week-watch from here: fleet on the version header, kernel-only
+network panel + measured Fansly quota drop, chatter walkthrough,
+acceptance observations under producer chatgoose-extension@1.6.0. The
+NEXT release deletes the board fallback (spendersLegacyRebuild) and the
+legacy chatter-key path.
