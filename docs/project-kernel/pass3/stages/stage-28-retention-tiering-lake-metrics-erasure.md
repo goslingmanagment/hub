@@ -228,8 +228,28 @@ load).
   revenue_daily rollups (pinned — Stage 33's serving-swap gate), fan_ltv (reversal-netted),
   response_sla (median/p95 from message_archive). RECORDED: models read Postgres only until
   lake data exists (~2027); AI acceptance model lands with Stage 29.
-- [ ] Task 4 erasure CLI (+ erasure_log migration — deliberately NOT in 0070, rides the
-  erasure commit); Task 6 ops (first prod cycle ~2027-01 + plateau watch + §5 exit criteria).
+- [x] **Task 4** — erasure procedure: `erasure:run` CLI (dry-run default; `--execute`
+  demands `--confirm <scopeRef>` verbatim), migration 0071 erasure_log, services/erasure.
+  Reaches ALL planes: hot tables, attached partitions, **parked tables in
+  tiered_pending_drop** (a parent DELETE never reaches detached tables — caught at design),
+  and the lake (Parquet filter-out rewrite + manifest re-checksum + `erasures[]` record).
+  RECORDED DECISIONS: catalog rows survive (erasure removes captured facts, offboarding is
+  a different act); fan-scope transactions ANONYMIZED not deleted (aggregates stay
+  truthful; page scope deletes them); NO post-erasure projection rebuilds (post-tiering a
+  hot-only replay would destroy tiered-month projection rows — purge directly, drill
+  proves non-resurrection); observation exclusivity (shared batch observations survive,
+  counted in plan + tombstone as `sharedObservationsKept`); payload text-match reaches
+  undeclared kinds (parse_version 0). Hot FK stance is introspected at run time —
+  an unmapped non-cascade FK to fans fails the plan loudly. The audit is a service-level
+  dual-write (audit_events + operator observation with account_id NULL, structurally
+  unreachable by a re-run of the erasure itself). Drill: synthetic fan A vs bystander B
+  across every plane incl. a parked partition and lake files; dry-run plan == executed
+  counts exactly; idempotent re-run converges to zero. Gotchas: drizzle sql`` expands
+  arrays as `($1, $2, …)` — use `in ${arr}`, never `any(${arr})` or `in (${arr})`;
+  the shared-lineage NOT-pred needs `not coalesce((pred), false)` (NULL conversation_ref
+  ate the guard). retention-deleters allowlist gains the module as the one sanctioned
+  NON-scheduled deleter.
+- [ ] Task 6 ops (first prod cycle ~2027-01 + plateau watch + §5 exit criteria).
 
 Standing facts: Q3 declined → on-box lake (S3 mirror stays a copy job if the owner ever
 reverses); the no-backup risk re-accepted 2026-07-04 — BUT this session's #101 deploy

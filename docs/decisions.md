@@ -2658,3 +2658,57 @@ build fix 5c505a3); deployed with the retention slice.
 
 **Remains in Stage 28:** Task 4 (erasure CLI + erasure_log migration) and
 Task 6 ops (first prod cycle, plateau watch, §5 exit criteria).
+
+**Decision #104 (2026-07-06, session continuation):** Stage 28 **Task 4
+built and drill-proven** — the audited break-glass erasure. `erasure:run`
+CLI (dry-run default; `--execute` demands `--confirm <scopeRef>` verbatim),
+migration 0071 `erasure_log`, `services/erasure/`. Build order within the
+stage held: the erasure lands only after tiering existed, because erasure
+must reach EVERY plane history can live in — hot tables, attached ledger
+partitions, **detached-but-parked tables in tiered_pending_drop** (a
+parent-table DELETE never reaches those — caught at design time), and the
+Parquet lake (filter-out rewrite, manifest re-checksum, an `erasures[]`
+record inside the manifest).
+
+- **Semantics rulings (recorded):** catalog rows (models/pages/users)
+  survive — erasure removes captured facts and derived projections, not the
+  agency's own records; offboarding is a different act. The `fans` row IS
+  captured identity and goes. Fan-scope transactions are ANONYMIZED (fan
+  linkage + vendor identifiers nulled), never deleted — the money moved and
+  aggregates must stay truthful; page/model scope deletes the page's
+  transactions outright.
+- **No post-erasure projection rebuilds** — deliberate deviation from the
+  stage doc's letter: once partitions tier, a full account rebuild replays
+  hot events only and would DESTROY projection rows sourced from detached
+  months. Erasure purges projection rows directly; non-resurrection is
+  structural (source observations/events are gone) and the drill proves it
+  by replaying projections after the erase.
+- **Observation exclusivity:** an observation dies only if no OTHER fan's
+  events reference it; shared batch captures survive and are counted in
+  plan + tombstone (`sharedObservationsKept`) — residual risk visible, not
+  hidden. Undeclared kinds (parse_version 0) are reached by payload text
+  match (quoted-JSON always; bare-numeric with boundaries).
+- **Loud-failure curation:** the fan-FK stance is introspected from
+  pg_constraint at run time; an unmapped non-cascade FK to `fans` fails the
+  plan with the table name — a new table can't silently join the fan graph
+  without an erasure ruling. (fan_earnings_stats RESTRICTs fans — cleared
+  before the fans row by curated order.)
+- **Audit is service-level dual-write:** audit_events + operator
+  observation with account_id NULL — the erasure's own trail is
+  structurally unreachable by a re-run of itself.
+- **Drill (tests/erasure.integration.test.ts):** synthetic fan A vs
+  bystander B on one page, facts across every plane including a parked
+  partition and lake parquet+manifests; dry-run plan == executed counts
+  EXACTLY; B and the shared observation survive; manifests re-stamped with
+  fresh checksums; idempotent re-run converges to zero everywhere.
+- **Gotchas banked:** drizzle sql`` expands arrays to `($1, $2, …)` — write
+  `in ${arr}`; `any(${arr})` and `in (${arr})` both break (malformed array
+  literal / record comparison). A negated ledger pred needs
+  `not coalesce((pred), false)` — NULL conversation_ref silently ate the
+  shared-lineage guard under three-valued logic.
+- retention-deleters allowlist gains services/erasure as the ONE sanctioned
+  non-scheduled deleter.
+
+**Remains in Stage 28:** Task 6 ops only (first prod tiering cycle
+~2027-01, plateau watch, §5 exit criteria). Erasure stays unused until a
+real request; the drill is the rehearsal.

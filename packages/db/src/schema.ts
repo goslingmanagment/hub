@@ -2615,3 +2615,31 @@ export const projectionSeqWatermarks = pgTable(
     pk: primaryKey({ columns: [table.projection, table.accountId] }),
   }),
 );
+
+// Stage 28: erasure tombstones — every break-glass erasure run (dry or
+// executed) records its scope, initiator, per-plane plan, and (executions)
+// the counts actually removed. An executed row with completed_at NULL died
+// mid-flight and must be re-run to convergence.
+export const erasureLog = pgTable(
+  "erasure_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    scopeType: text("scope_type").notNull(),
+    scopeRef: text("scope_ref").notNull(),
+    initiatedBy: bigint("initiated_by", { mode: "number" })
+      .references(() => users.id)
+      .notNull(),
+    dryRun: boolean("dry_run").notNull(),
+    plan: jsonb("plan").$type<Record<string, unknown>>().notNull(),
+    executedCounts: jsonb("executed_counts").$type<Record<string, unknown>>(),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    scopeIdx: index("erasure_log_scope_idx").on(
+      table.scopeType,
+      table.scopeRef,
+      table.startedAt,
+    ),
+  }),
+);

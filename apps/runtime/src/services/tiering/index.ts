@@ -100,6 +100,8 @@ export interface TieringManifest {
   sha256: string;
   restrictedSha256: string | null;
   exportedAt: string;
+  /** Stage 28 erasure rewrites append themselves here (filter-out + re-checksum). */
+  erasures?: Array<{ scopeRef: string; removedRows: number; at: string }>;
 }
 
 const PARTITION_NAME = /^(observations|domain_events)_(\d{4})_(\d{2})$/;
@@ -240,7 +242,7 @@ function duckdbColumnsLiteral(columns: Record<string, string>): string {
   return `{${Object.entries(columns).map(([name, type]) => `${name}: '${type}'`).join(", ")}}`;
 }
 
-async function ndjsonToParquet(
+export async function ndjsonToParquet(
   ndjsonPath: string,
   parquetPath: string,
   columns: Record<string, string>,
@@ -253,6 +255,21 @@ async function ndjsonToParquet(
       `COPY (SELECT * FROM read_json('${ndjsonPath.replaceAll("'", "''")}', format='newline_delimited', columns=${duckdbColumnsLiteral(columns)})) `
       + `TO '${parquetPath.replaceAll("'", "''")}' (FORMAT parquet)`,
     );
+  } finally {
+    connection.closeSync();
+  }
+}
+
+export async function readParquetIds(parquetPath: string): Promise<number[]> {
+  const { DuckDBInstance } = await import("@duckdb/node-api");
+  const instance = await DuckDBInstance.create(":memory:");
+  const connection = await instance.connect();
+  try {
+    const reader = await connection.run(
+      `SELECT id::bigint AS id FROM read_parquet('${parquetPath.replaceAll("'", "''")}') ORDER BY id`,
+    );
+    const rows = await reader.getRowObjects();
+    return rows.map((row) => Number(row.id));
   } finally {
     connection.closeSync();
   }

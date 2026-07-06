@@ -14,8 +14,11 @@ import { describe, expect, it } from "vitest";
 //   - the golden-signals sampler prune (ops_metric_samples; 90 days)
 //   - the page_dm_messages prune (cache policy, archive-coverage-gated)
 //   - pg-boss's own archival tables
+// The Stage 28 erasure module is the one sanctioned NON-scheduled deleter:
+// owner-initiated, dry-run default, tombstoned in erasure_log.
 const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/cli.ts",
+  "apps/runtime/src/services/erasure/index.ts",
   "apps/runtime/src/modules/catalog/index.ts",
   "apps/runtime/src/modules/events/index.ts",
   "apps/runtime/src/modules/identity/index.ts",

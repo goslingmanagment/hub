@@ -8,6 +8,8 @@ import { PgBoss } from "pg-boss";
 import {
   createModel,
   findPageByLabel,
+  findUserByUsername,
+  insertErasureLog,
 } from "@agency_hub_core/db";
 import {
   createProxyRequestDispatcher,
@@ -51,6 +53,7 @@ import {
   issueChatterApiKey,
   listApiKeysForUsers,
   listUsersDetailed,
+  recordAudit,
   revokeUserApiKeys,
   setUserPassword,
   unassignPageFromUser,
@@ -674,6 +677,80 @@ export function buildProgram() {
         if (cycle.failed > 0) {
           process.exitCode = 1;
         }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("erasure:run")
+    .description("Stage 28: audited break-glass erasure across hot DB, ledger partitions, and lake (dry-run default)")
+    .requiredOption("--scope <scope>", "fan | page | model")
+    .requiredOption("--initiated-by <username>", "the owner account initiating the erasure")
+    .option("--platform <platform>", "fan scope: onlyfans | fansly")
+    .option("--ref <ref>", "fan scope: the platform-native fan id")
+    .option("--page <label>", "page scope: the page label")
+    .option("--model <slug>", "model scope: the model slug")
+    .option("--execute", "actually erase (requires --confirm)")
+    .option("--confirm <scopeRef>", "must equal the scope ref printed by the dry run")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { planErasure, executeErasure, erasureScopeRef } = await import("./services/erasure/index.ts");
+        const scope = (() => {
+          if (options.scope === "fan") {
+            if (!options.platform || !options.ref) {
+              throw new Error("fan scope requires --platform and --ref");
+            }
+            return { scopeType: "fan" as const, platform: options.platform, fanRef: options.ref };
+          }
+          if (options.scope === "page") {
+            if (!options.page) {
+              throw new Error("page scope requires --page");
+            }
+            return { scopeType: "page" as const, pageLabel: options.page };
+          }
+          if (options.scope === "model") {
+            if (!options.model) {
+              throw new Error("model scope requires --model");
+            }
+            return { scopeType: "model" as const, modelSlug: options.model };
+          }
+          throw new Error(`unknown scope: ${options.scope}`);
+        })();
+
+        const initiator = await findUserByUsername(app.db, options.initiatedBy);
+        if (!initiator) {
+          throw new Error(`unknown user: ${options.initiatedBy}`);
+        }
+        const scopeRef = erasureScopeRef(scope);
+
+        if (!options.execute) {
+          const plan = await planErasure(app, scope);
+          await insertErasureLog(app.db, {
+            scopeType: scope.scopeType,
+            scopeRef,
+            initiatedBy: initiator.id,
+            dryRun: true,
+            plan: plan as unknown as Record<string, unknown>,
+          });
+          await recordAudit(app, {
+            source: "cli",
+            actorUserId: initiator.id,
+            eventType: "erasure.dry_run",
+            metadata: { scopeRef, totalRows: plan.totalRows },
+          });
+          console.log(JSON.stringify(plan, null, 2));
+          console.log(`\nDRY RUN — nothing erased. To execute:\n  erasure:run ... --execute --confirm '${scopeRef}'`);
+          return;
+        }
+
+        if (options.confirm !== scopeRef) {
+          throw new Error(`--execute requires --confirm '${scopeRef}' (got: ${options.confirm ?? "nothing"})`);
+        }
+        // The service records the executed-erasure audit itself (dual-write).
+        const result = await executeErasure(app, scope, { initiatedBy: initiator.id });
+        console.log(JSON.stringify({ logId: result.logId, executedCounts: result.executedCounts }, null, 2));
       } finally {
         await app.close();
       }

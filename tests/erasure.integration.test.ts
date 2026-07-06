@@ -1,0 +1,509 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import {
+  createModel,
+  createOnlyFansPage,
+  createOrGetOfapiCommand,
+} from "@agency_hub_core/db";
+
+import {
+  erasureScopeRef,
+  executeErasure,
+  planErasure,
+} from "../apps/runtime/src/services/erasure/index.ts";
+import { rebuildFanEarningsProjection } from "../apps/runtime/src/services/projections/fan-earnings.ts";
+import {
+  TIERED_TABLES,
+  ndjsonToParquet as ndjsonFileToParquet,
+  readParquetIds,
+} from "../apps/runtime/src/services/tiering/index.ts";
+import {
+  startIntegrationTestDatabase,
+  type StartedTestDatabase,
+} from "./helpers/db.ts";
+import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
+
+// Stage 28 Task 4 — the synthetic-fan erasure drill. Fan A (the target) and
+// fan B (the bystander) share a page; A's facts are spread across every
+// plane the erasure must reach: hot relational tables, attached ledger
+// partitions, a detached-but-parked partition in tiered_pending_drop, and
+// Parquet lake files. One shared observation carries BOTH fans' lineage —
+// it must survive and be reported, not silently kept or wrongly deleted.
+const FAN_A = "111000111";
+const FAN_B = "222000222";
+
+let testDb: StartedTestDatabase | null = null;
+let lakeDir = "";
+let pageId = 0;
+let fanAId = 0;
+let fanBId = 0;
+let ownerId = 0;
+const scope = { scopeType: "fan", platform: "onlyfans", fanRef: FAN_A } as const;
+
+function appStub() {
+  return {
+    db: testDb!.db,
+    config: { lakeDir } as never,
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+  } as never;
+}
+
+async function one<T>(text: string, params: unknown[] = []): Promise<T> {
+  const { rows } = await testDb!.pool.query(text, params);
+  return rows[0] as T;
+}
+
+async function count(text: string, params: unknown[] = []): Promise<number> {
+  const row = await one<{ n: string }>(`select count(*)::text as n from ${text}`, params);
+  return Number(row.n);
+}
+
+async function ndjsonToParquet(
+  docs: Array<Record<string, unknown>>,
+  parquetPath: string,
+  columns: Record<string, string>,
+): Promise<void> {
+  const scratch = path.join(lakeDir, `seed-${path.basename(parquetPath)}.ndjson`);
+  await writeFile(scratch, docs.map((doc) => JSON.stringify(doc)).join("\n") + "\n");
+  await ndjsonFileToParquet(scratch, parquetPath, columns);
+  await rm(scratch);
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return createHash("sha256").update(await readFile(filePath)).digest("hex");
+}
+
+async function seedObservation(input: {
+  kind: string;
+  payload: Record<string, unknown>;
+  idempotencyKey: string;
+  parseVersion?: number;
+}): Promise<number> {
+  const row = await one<{ id: string }>(
+    `insert into observations (source, producer, platform, account_id, kind, payload,
+                               payload_hash, idempotency_key, observed_at, received_at, parse_version)
+     values ('webhook', 'ofapi:webhook', 'onlyfans', $1, $2, $3::jsonb, sha256($4::bytea), $4,
+             now(), now(), $5)
+     returning id::text as id`,
+    [pageId, input.kind, JSON.stringify(input.payload), input.idempotencyKey, input.parseVersion ?? 1],
+  );
+  await testDb!.pool.query(
+    `insert into observation_keys (source, idempotency_key, observation_id, received_at)
+     values ('webhook', $1, $2, now())`,
+    [input.idempotencyKey, Number(row.id)],
+  );
+  return Number(row.id);
+}
+
+async function seedEvent(input: {
+  seq: number;
+  type: string;
+  fanRef: string | null;
+  conversationRef: string | null;
+  observationId: number;
+}): Promise<number> {
+  const dedup = `drill:${input.seq}`;
+  const row = await one<{ id: string }>(
+    `insert into domain_events (account_id, account_seq, type, occurred_at, fan_identity_ref,
+                                conversation_ref, data, schema_version, observation_id, dedup_key)
+     values ($1, $2, $3, now(), $4, $5, '{}'::jsonb, 1, $6, $7)
+     returning id::text as id`,
+    [pageId, input.seq, input.type, input.fanRef, input.conversationRef, input.observationId, dedup],
+  );
+  await testDb!.pool.query(
+    `insert into domain_event_keys (account_id, dedup_key, event_id, occurred_at)
+     values ($1, $2, $3, now())`,
+    [pageId, dedup, Number(row.id)],
+  );
+  return Number(row.id);
+}
+
+beforeAll(async () => {
+  testDb = await startIntegrationTestDatabase();
+  lakeDir = await mkdtemp(path.join(tmpdir(), "kernel-erasure-"));
+}, 120_000);
+
+afterAll(async () => {
+  await testDb?.stop();
+  if (lakeDir) {
+    await rm(lakeDir, { recursive: true, force: true });
+  }
+});
+
+describe("erasure drill (Stage 28 Task 4)", () => {
+  it("erases the synthetic fan from every plane; the bystander and shared lineage survive", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const db = testDb.db;
+
+    // ── Seed: catalog, identities, per-fan hot rows.
+    const model = await createModel(db, { slug: "erasure-model", name: "Erasure Model" });
+    const page = await createOnlyFansPage(db, { modelId: model.id, label: "erasure-of" });
+    pageId = page.id;
+    ownerId = Number((await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-owner', 'owner') returning id::text as id`,
+    )).id);
+
+    for (const [ref, name] of [[FAN_A, "Fan A"], [FAN_B, "Fan B"]] as const) {
+      await testDb.pool.query(
+        `insert into fans (platform, platform_user_id, username, display_name)
+         values ('onlyfans', $1, $2, $2)`,
+        [ref, name],
+      );
+    }
+    fanAId = Number((await one<{ id: string }>(
+      `select id::text as id from fans where platform_user_id = $1`, [FAN_A],
+    )).id);
+    fanBId = Number((await one<{ id: string }>(
+      `select id::text as id from fans where platform_user_id = $1`, [FAN_B],
+    )).id);
+
+    for (const fanId of [fanAId, fanBId]) {
+      await testDb.pool.query(
+        `insert into page_fans (fan_id, platform_account_id) values ($1, $2)`,
+        [fanId, pageId],
+      );
+    }
+    await testDb.pool.query(
+      `insert into fan_notes (fan_id, platform_account_id, body) values ($1, $2, 'whale, be gentle')`,
+      [fanAId, pageId],
+    );
+    // RESTRICT FK to fans — the erasure must clear this BEFORE the fans row.
+    await testDb.pool.query(
+      `insert into fan_earnings_stats (account_id, fan_id, "window", gross_mills, observed_at, source_event_id)
+       values ($1, $2, 'lifetime', 250000, now(), 1)`,
+      [pageId, fanAId],
+    );
+
+    // DM thread + messages for both fans; a classifier verdict quoting A.
+    for (const [fanId, ref] of [[fanAId, FAN_A], [fanBId, FAN_B]] as const) {
+      await testDb.pool.query(
+        `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id)
+         values ($1, $2, $3)`,
+        [pageId, fanId, ref],
+      );
+      const thread = await one<{ id: string }>(
+        `select id::text as id from page_dm_threads where platform_conversation_id = $1`, [ref],
+      );
+      await testDb.pool.query(
+        `insert into page_dm_messages (conversation_id, platform_account_id, platform_message_id,
+                                       sender_platform_user_id, sender_role, created_at, content)
+         values ($1, $2, $3, $4, 'fan', now(), 'hey')`,
+        [Number(thread.id), pageId, `msg-${ref}`, ref],
+      );
+      await testDb.pool.query(
+        `insert into wb_closing_cache (platform_account_id, platform_message_id, content_hash,
+                                       needs_reply, layer, reason)
+         values ($1, $2, 'h', true, 'l2', 'fan asked about customs')`,
+        [pageId, `msg-${ref}`],
+      );
+    }
+
+    // Archive rows: received-from-A, sent-to-A (conversation only), and B's.
+    for (const [ref, native, mine] of [
+      [FAN_A, FAN_A, false],
+      [FAN_A, null, true],
+      [FAN_B, FAN_B, false],
+    ] as const) {
+      await testDb.pool.query(
+        `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+                                      fan_native_id, is_sent_by_me, occurred_at, text_plain)
+         values ($1, 'onlyfans', $2, $3, $4, $5, now(), 'archived text')`,
+        [pageId, ref, `arch-${ref}-${mine ? "out" : "in"}`, native, mine],
+      );
+    }
+    await testDb.pool.query(
+      `insert into dm_message_archive (platform, platform_account_id, ofapi_account_id,
+         platform_conversation_id, fan_platform_user_id, platform_message_id, source,
+         source_event_type, source_idempotency_key, source_journal_id, source_received_at,
+         retain_until)
+       values ('onlyfans', $1, 'acct_erasure1', $2, $2, 'dm-1', 'webhook',
+               'messages.received', 'idem-dm-1', 1, now(), now() + interval '10 years')`,
+      [pageId, FAN_A],
+    );
+    await createOrGetOfapiCommand(db, {
+      id: randomUUID(),
+      clientCommandId: randomUUID(),
+      pageId,
+      chatterUserId: ownerId,
+      ofapiAccountId: "acct_erasure1",
+      conversationId: FAN_A,
+      kind: "send_text_message_v1",
+      payload: { text: "our side of the conversation" },
+      payloadHash: "b".repeat(64),
+    });
+
+    // Transactions: A's is anonymized (money stays), B's untouched.
+    for (const [fanId, ref, txn] of [[fanAId, FAN_A, "txn-a"], [fanBId, FAN_B, "txn-b"]] as const) {
+      await testDb.pool.query(
+        `insert into transactions (platform_account_id, fan_id, transaction_id, correlation_account_id,
+           sender_id, raw_type, canonical_type, transaction_state, raw_status, gross_amount_mills,
+           source_destination_amount_mills, creator_net_amount_mills, occurred_at, source)
+         values ($1, $2, $3, $4, $4, 'tip', 'tip', 'posted', 'done', 10000, 10000, 8000, now(), 'ofapi:webhook')`,
+        [pageId, fanId, txn, ref],
+      );
+    }
+
+    // ── Ledger (hot): exclusive, shared, payload-only, and bystander rows.
+    const obsExclusive = await seedObservation({
+      kind: "messages.received",
+      payload: { user_id: FAN_A, text: "hello" },
+      idempotencyKey: "obs-exclusive",
+    });
+    const obsShared = await seedObservation({
+      kind: "fans.batch",
+      payload: { users: [FAN_A, FAN_B] },
+      idempotencyKey: "obs-shared",
+    });
+    const obsPayloadOnly = await seedObservation({
+      kind: "users.typing",
+      payload: { user_id: FAN_A },
+      idempotencyKey: "obs-typing",
+      parseVersion: 0,
+    });
+    const obsBystander = await seedObservation({
+      kind: "messages.received",
+      payload: { user_id: FAN_B, text: "hi" },
+      idempotencyKey: "obs-bystander",
+    });
+    await seedEvent({ seq: 1, type: "message.received", fanRef: FAN_A, conversationRef: FAN_A, observationId: obsExclusive });
+    await seedEvent({ seq: 2, type: "fan.seen", fanRef: FAN_A, conversationRef: null, observationId: obsShared });
+    await seedEvent({ seq: 3, type: "fan.seen", fanRef: FAN_B, conversationRef: null, observationId: obsShared });
+    await seedEvent({ seq: 4, type: "message.received", fanRef: FAN_B, conversationRef: FAN_B, observationId: obsBystander });
+    await testDb.pool.query(
+      `insert into domain_event_seq (account_id, next_seq) values ($1, 5)
+       on conflict (account_id) do update set next_seq = 5`,
+      [pageId],
+    );
+
+    // ── Ledger (parked): a detached partition the parent DELETE can't reach.
+    await testDb.pool.query(`create schema if not exists tiered_pending_drop`);
+    await testDb.pool.query(
+      `create table tiered_pending_drop.domain_events_2024_02 (like domain_events including all)`,
+    );
+    await testDb.pool.query(
+      `create table tiered_pending_drop.observations_2024_02 (like observations including all)`,
+    );
+    await testDb.pool.query(
+      `insert into tiered_pending_drop.observations_2024_02
+         (id, source, producer, platform, account_id, kind, payload, payload_hash,
+          idempotency_key, received_at, parse_version)
+       overriding system value
+       select v.id, 'webhook', 'ofapi:webhook', 'onlyfans', $1, 'messages.received',
+              v.payload::jsonb, sha256(v.key::bytea), v.key, now(), 1
+       from (values (7001, '{"user_id": "${FAN_A}"}', 'parked-a'),
+                    (7002, '{"user_id": "${FAN_B}"}', 'parked-b')) as v(id, payload, key)`,
+      [pageId],
+    );
+    await testDb.pool.query(
+      `insert into tiered_pending_drop.domain_events_2024_02
+         (id, account_id, account_seq, type, occurred_at, fan_identity_ref, data,
+          schema_version, observation_id, dedup_key)
+       overriding system value
+       select v.id, $1, v.seq, 'message.received', now(), v.ref, '{}'::jsonb, 1, v.obs, v.dedup
+       from (values (6001, 101, '${FAN_A}', 7001, 'parked:1'),
+                    (6002, 102, '${FAN_B}', 7002, 'parked:2')) as v(id, seq, ref, obs, dedup)`,
+      [pageId],
+    );
+
+    // ── Lake: Parquet + manifests for both ledgers, A and B rows in each.
+    const eventSpec = TIERED_TABLES.find((spec) => spec.table === "domain_events")!;
+    const obsSpec = TIERED_TABLES.find((spec) => spec.table === "observations")!;
+    const eventsDir = path.join(lakeDir, "ledger", "domain_events", "2024");
+    const obsDir = path.join(lakeDir, "capture", "observations", "2024");
+    await mkdir(eventsDir, { recursive: true });
+    await mkdir(obsDir, { recursive: true });
+
+    const lakeEventRow = (id: number, ref: string, obs: number) => ({
+      id,
+      account_id: pageId,
+      account_seq: id,
+      type: "message.received",
+      occurred_at: "2024-01-10T00:00:00Z",
+      fan_identity_ref: ref,
+      conversation_ref: ref,
+      message_ref: null,
+      transaction_ref: null,
+      data: {},
+      schema_version: 1,
+      observation_id: obs,
+      dedup_key: `lake:${id}`,
+      created_at: "2024-01-10T00:00:00Z",
+    });
+    const lakeObsRow = (id: number, ref: string) => ({
+      id,
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      account_id: pageId,
+      native_account_ref: null,
+      kind: "messages.received",
+      payload: { user_id: ref },
+      payload_hash: "00",
+      idempotency_key: `lake-${id}`,
+      observed_at: "2024-01-10T00:00:00Z",
+      received_at: "2024-01-10T00:00:00Z",
+      actor_principal_id: null,
+      parse_version: 1,
+    });
+    await ndjsonToParquet(
+      [lakeEventRow(8001, FAN_A, 9001), lakeEventRow(8002, FAN_B, 9002)],
+      path.join(eventsDir, "01.parquet"),
+      eventSpec.columns,
+    );
+    await ndjsonToParquet(
+      [lakeObsRow(9001, FAN_A), lakeObsRow(9002, FAN_B)],
+      path.join(obsDir, "01.parquet"),
+      obsSpec.columns,
+    );
+    for (const [dir, table, lo, hi] of [
+      [eventsDir, "domain_events", 8001, 8002],
+      [obsDir, "observations", 9001, 9002],
+    ] as const) {
+      await writeFile(path.join(dir, "01.manifest.json"), JSON.stringify({
+        table,
+        partition: `${table}_2024_01`,
+        rowCount: 2,
+        restrictedRowCount: 0,
+        minId: lo,
+        maxId: hi,
+        sha256: await sha256File(path.join(dir, "01.parquet")),
+        restrictedSha256: null,
+        exportedAt: "2024-02-01T00:00:00Z",
+      }, null, 2));
+    }
+
+    // ── Dry run: the plan sees every plane; the shared observation is
+    // reported, not targeted.
+    const plan = await planErasure(appStub(), scope);
+    expect(plan.scopeRef).toBe(erasureScopeRef(scope));
+    expect(plan.sharedObservations).toBe(1);
+    const planRows = new Map(plan.targets.map((target) => [
+      `${target.plane}:${target.target}:${target.action}`,
+      target.rows,
+    ]));
+    expect(planRows.get("hot:page_dm_threads:delete")).toBe(1);
+    expect(planRows.get("hot:page_dm_messages:cascade")).toBe(1);
+    expect(planRows.get("hot:wb_closing_cache:delete")).toBe(1);
+    expect(planRows.get("hot:fan_earnings_stats:delete")).toBe(1);
+    expect(planRows.get("hot:message_archive:delete")).toBe(2); // in + out
+    expect(planRows.get("hot:dm_message_archive:delete")).toBe(1);
+    expect(planRows.get("hot:ofapi_commands:delete")).toBe(1);
+    expect(planRows.get("hot:transactions:anonymize")).toBe(1);
+    expect(planRows.get("hot:fan_notes:cascade")).toBe(1);
+    expect(planRows.get("hot:page_fans:cascade")).toBe(1);
+    expect(planRows.get("hot:fans:delete")).toBe(1);
+    expect(planRows.get("ledger:domain_events:delete")).toBe(2); // e1 + e2
+    expect(planRows.get("ledger:observations:delete")).toBe(2); // exclusive + payload-only
+    expect(planRows.get("ledger:tiered_pending_drop.domain_events_2024_02:delete")).toBe(1);
+    expect(planRows.get("ledger:tiered_pending_drop.observations_2024_02:delete")).toBe(1);
+    expect(planRows.get("ledger:domain_event_keys:delete")).toBe(2);
+    expect(planRows.get("ledger:observation_keys:delete")).toBe(2);
+    expect(planRows.get("lake:ledger/domain_events/2024/01.parquet:rewrite")).toBe(1);
+    expect(planRows.get("lake:capture/observations/2024/01.parquet:rewrite")).toBe(1);
+
+    // ── Execute. Nothing changed between plan and execute, so the executed
+    // counts must equal the dry-run plan exactly.
+    const result = await executeErasure(appStub(), scope, { initiatedBy: ownerId });
+    for (const [key, rows] of planRows) {
+      expect(result.executedCounts[key], key).toBe(rows);
+    }
+
+    // Hot: A gone with cascades; B intact.
+    expect(await count(`fans where id = ${fanAId}`)).toBe(0);
+    expect(await count(`fans where id = ${fanBId}`)).toBe(1);
+    expect(await count(`fan_notes`)).toBe(0);
+    expect(await count(`fan_earnings_stats`)).toBe(0);
+    expect(await count(`page_fans`)).toBe(1);
+    expect(await count(`page_dm_threads`)).toBe(1);
+    expect(await count(`page_dm_messages`)).toBe(1);
+    expect(await count(`wb_closing_cache where platform_message_id = 'msg-${FAN_A}'`)).toBe(0);
+    expect(await count(`wb_closing_cache where platform_message_id = 'msg-${FAN_B}'`)).toBe(1);
+    expect(await count(`message_archive where fan_native_id = '${FAN_A}' or conversation_ref = '${FAN_A}'`)).toBe(0);
+    expect(await count(`message_archive`)).toBe(1);
+    expect(await count(`dm_message_archive`)).toBe(0);
+    expect(await count(`ofapi_commands`)).toBe(0);
+
+    // A's transaction survives — anonymized; B's untouched.
+    const txnA = await one<Record<string, unknown>>(
+      `select fan_id, correlation_account_id, sender_id, gross_amount_mills::text as gross
+       from transactions where transaction_id = 'txn-a'`,
+    );
+    expect(txnA).toMatchObject({
+      fan_id: null,
+      correlation_account_id: null,
+      sender_id: null,
+      gross: "10000",
+    });
+    const txnB = await one<{ fan_id: string }>(
+      `select fan_id::text as fan_id from transactions where transaction_id = 'txn-b'`,
+    );
+    expect(Number(txnB.fan_id)).toBe(fanBId);
+
+    // Ledger: A's events gone everywhere; the SHARED observation survives.
+    expect(await count(`domain_events where fan_identity_ref = '${FAN_A}'`)).toBe(0);
+    expect(await count(`domain_events`)).toBe(2); // e3 (B on shared) + e4
+    expect(await count(`observations where id = ${obsExclusive}`)).toBe(0);
+    expect(await count(`observations where id = ${obsPayloadOnly}`)).toBe(0);
+    expect(await count(`observations where id = ${obsShared}`)).toBe(1);
+    expect(await count(`observations where id = ${obsBystander}`)).toBe(1);
+    expect(await count(`domain_event_keys`)).toBe(2);
+    expect(await count(`observation_keys where observation_id in (${obsExclusive}, ${obsPayloadOnly})`)).toBe(0);
+    expect(await count(`tiered_pending_drop.domain_events_2024_02`)).toBe(1);
+    expect(await count(`tiered_pending_drop.observations_2024_02`)).toBe(1);
+    expect(await count(`tiered_pending_drop.observations_2024_02 where id = 7002`)).toBe(1);
+
+    // Lake: files rewritten in place — A filtered out, manifests re-stamped
+    // with fresh counts, checksums, and an erasure record.
+    expect(await readParquetIds(path.join(eventsDir, "01.parquet"))).toEqual([8002]);
+    expect(await readParquetIds(path.join(obsDir, "01.parquet"))).toEqual([9002]);
+    for (const dir of [eventsDir, obsDir]) {
+      const manifest = JSON.parse(await readFile(path.join(dir, "01.manifest.json"), "utf8"));
+      expect(manifest.rowCount).toBe(1);
+      expect(manifest.sha256).toBe(await sha256File(path.join(dir, "01.parquet")));
+      expect(manifest.erasures).toHaveLength(1);
+      expect(manifest.erasures[0]).toMatchObject({
+        scopeRef: plan.scopeRef,
+        removedRows: 1,
+      });
+    }
+
+    // Tombstone + audit: the log row completed with counts; the audit event
+    // and its operator observation exist and are unreachable by a re-run
+    // (account_id NULL).
+    const log = await one<{ dry_run: boolean; executed_counts: Record<string, number>; completed: boolean }>(
+      `select dry_run, executed_counts, completed_at is not null as completed
+       from erasure_log where id = ${result.logId}`,
+    );
+    expect(log.dry_run).toBe(false);
+    expect(log.completed).toBe(true);
+    expect(log.executed_counts["hot:fans:delete"]).toBe(1);
+    expect(log.executed_counts.sharedObservationsKept).toBe(1);
+    expect(await count(
+      `audit_events where event_type = 'erasure.executed' and actor_user_id = ${ownerId}`,
+    )).toBe(1);
+    expect(await count(
+      `observations where source = 'operator' and kind = 'erasure.executed' and account_id is null`,
+    )).toBe(1);
+
+    // ── Idempotent re-run: converges to zero everywhere.
+    const rerun = await executeErasure(appStub(), scope, { initiatedBy: ownerId });
+    for (const value of Object.values(rerun.executedCounts)) {
+      expect(value).toBe(0);
+    }
+    expect(rerun.plan.targets.filter((target) => target.plane === "lake")).toHaveLength(0);
+
+    // ── Non-resurrection: replaying projections over what remains cannot
+    // bring the fan back (the source facts are gone).
+    await rebuildFanEarningsProjection(appStub());
+    expect(await count(`fans where platform_user_id = '${FAN_A}'`)).toBe(0);
+    expect(await count(`fan_earnings_stats`)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
