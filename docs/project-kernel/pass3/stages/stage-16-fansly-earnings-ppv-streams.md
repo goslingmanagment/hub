@@ -249,7 +249,17 @@ The ramp did its job twice:
    400 code-99s the per-fan `accountIds` walk — the endpoint wants
    `accountMediaId` (probe-recorded). The walk shape needs rework; the
    mass-skip circuit breaker is doing exactly what it was built for.
-   OPEN ITEM for a follow-up session.
+   OPEN ITEM — INVESTIGATED 2026-07-06 late: the endpoint is per-MEDIA
+   (`accountMediaId`/`accountMediaBundleId` required; `accountIds` is only
+   a fan filter — the extension's working shape confirms it), and the
+   kernel has NO fansly media refs to walk: message_archive.media_metadata
+   is empty for ALL 320k fansly rows (the Stage 17 canonicalizer never
+   extracts attachments; OnlyFans rows have them). Rework chain: (1) the
+   fansly DM canonicalizer maps attachment/media refs into media_metadata,
+   (2) events:replay backfills, (3) purchase_history becomes a media-scoped
+   walk over recent PPV-bearing archive rows. INTERIM (~20:25 UTC):
+   `fanslyPurchaseHistorySyncEnabled` = false — runs no-op as "flag_off"
+   instead of blocking on the breaker; re-enable with the rework.
 
 Allowlist opened fleet-wide (all 5 fansly pages) after the lilly-1
 verification, 2026-07-06 ~19:05 UTC (owner-approved).
