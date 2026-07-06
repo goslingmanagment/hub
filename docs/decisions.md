@@ -2922,3 +2922,23 @@ network panel + measured Fansly quota drop, chatter walkthrough,
 acceptance observations under producer chatgoose-extension@1.6.0. The
 NEXT release deletes the board fallback (spendersLegacyRebuild) and the
 legacy chatter-key path.
+
+**Family law (recorded per Stage 35, 2026-07-06 — binding family-wide):**
+(a) **Anti-deletion rule** — removing or superseding any hand-curated
+document requires a tombstone entry in the owning repo's decision log;
+deprecated specs get a banner, never deletion (generated docs under
+`docs/generated/` are exempt — they are regenerated, not curated).
+(b) **Updated-in-change** — hand-curated docs are updated in the same
+change that invalidates them. (c) **Cross-repo decisions live in THIS
+log**; client repos reference entries by number, never copy them. Client
+logs exist as of today: desktop `docs/decisions.md` (D1–D5), extension
+`docs/decisions.md` (E1–E7). NUMBERING NOTE (append-only honesty): this
+log has historical gaps — #27–#45 and #47 were never written (the era
+between the v1 build log and the OFAPI integration entries) and one
+duplicate #80 exists; numbers are never reused or renumbered.
+TOMBSTONE (recorded retroactively): the 2026-07-02 cleanup deleted the
+OFAPI feature-plan doc, the deploy-audit report, and the pre-deploy fix
+reports (contents survive in the memory of the working sessions and in
+this log's entries #48–#53); the Workboard v3 PRD and brief were deleted
+2026-06-10 by owner decision and are unrecoverable (reflog expired) —
+lesson recorded in the owner's project notes.
