@@ -9,19 +9,33 @@ export type DecodedDomainEventCursor =
   | { ok: true; watermarks: Map<number, number> }
   | { ok: false; reason: string };
 
+// Isomorphic base64url (no Buffer): this file ships to the browser through
+// the SDK (dashboard) as well as to node (server + desktop). btoa/atob are
+// global in both since node 16; TextEncoder/TextDecoder carry the UTF-8 leg.
 function toBase64Url(text: string): string {
-  return Buffer.from(text, "utf8").toString("base64url");
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function fromBase64Url(text: string): string | null {
   try {
-    const decoded = Buffer.from(text, "base64url");
-    // Round-trip guard: base64url decoding never throws on garbage, it just
-    // truncates — re-encoding catches non-canonical input.
-    if (decoded.toString("base64url") !== text.replace(/=+$/, "")) {
+    const base64 = text.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // Round-trip guard: catches non-canonical input (whitespace, padding
+    // variants, trailing bits) the permissive decoder would silently accept.
+    if (toBase64Url(decoded) !== text.replace(/=+$/, "")) {
       return null;
     }
-    return decoded.toString("utf8");
+    return decoded;
   } catch {
     return null;
   }

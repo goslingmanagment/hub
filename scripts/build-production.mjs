@@ -13,7 +13,7 @@ const workspaceAliases = {
   "@agency_hub_core/contracts": path.join(workspaceRoot, "packages/contracts/src/index.ts"),
   "@agency_hub_core/db": path.join(workspaceRoot, "packages/db/src/index.ts"),
   "@agency_hub_core/fansly": path.join(workspaceRoot, "packages/fansly/src/index.ts"),
-  "@agency_hub_core/onlyfans": path.join(workspaceRoot, "packages/onlyfans/src/index.ts"),
+  "@agency_hub_core/platform-core": path.join(workspaceRoot, "packages/platform-core/src/index.ts"),
   "@agency_hub_core/shared": path.join(workspaceRoot, "packages/shared/src/index.ts"),
 };
 
@@ -95,7 +95,7 @@ await Promise.all([
   cleanDist("packages/contracts/dist"),
   cleanDist("packages/db/dist"),
   cleanDist("packages/fansly/dist"),
-  cleanDist("packages/onlyfans/dist"),
+  cleanDist("packages/platform-core/dist"),
   cleanDist("packages/shared/dist"),
 ]);
 
@@ -119,8 +119,8 @@ await buildPackage("packages/fansly/dist", {
   index: "packages/fansly/src/index.ts",
 }, nodeBundledPackageOptions);
 
-await buildPackage("packages/onlyfans/dist", {
-  index: "packages/onlyfans/src/index.ts",
+await buildPackage("packages/platform-core/dist", {
+  index: "packages/platform-core/src/index.ts",
 }, nodeBundledPackageOptions);
 
 await buildPackage("packages/db/dist", {

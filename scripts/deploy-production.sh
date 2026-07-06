@@ -256,7 +256,7 @@ DEPENDENCY_MANIFEST_FILES=(
   packages/contracts/package.json
   packages/db/package.json
   packages/fansly/package.json
-  packages/onlyfans/package.json
+  packages/platform-core/package.json
   packages/shared/package.json
 )
 
@@ -267,7 +267,7 @@ DIST_OVERLAY_PATHS=(
   packages/db/dist
   packages/db/migrations
   packages/fansly/dist
-  packages/onlyfans/dist
+  packages/platform-core/dist
   packages/shared/dist
 )
 
@@ -921,7 +921,7 @@ COPY packages/contracts/dist ./packages/contracts/dist
 COPY packages/db/dist ./packages/db/dist
 COPY packages/db/migrations ./packages/db/migrations
 COPY packages/fansly/dist ./packages/fansly/dist
-COPY packages/onlyfans/dist ./packages/onlyfans/dist
+COPY packages/platform-core/dist ./packages/platform-core/dist
 COPY packages/shared/dist ./packages/shared/dist
 EOF
 
