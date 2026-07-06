@@ -1996,7 +1996,13 @@ export async function ensureSyncProviderRateLimitProfile(
   input: {
     provider: "fansly" | "onlyfans";
     egressKey: string;
-    scopes: Array<{ scope: string; minSpacingMs: number }>;
+    scopes: Array<{
+      scope: string;
+      minSpacingMs: number;
+      // Stage 26: which priority class the row belongs to (default 'bulk' —
+      // pre-existing sync rows are all bulk-class traffic).
+      priorityClass?: "interactive" | "commands" | "bulk";
+    }>;
     now?: Date;
   },
 ) {
@@ -2010,6 +2016,7 @@ export async function ensureSyncProviderRateLimitProfile(
     ${scope.scope},
     ${input.egressKey},
     ${scope.minSpacingMs},
+    ${scope.priorityClass ?? "bulk"},
     ${now}
   )`);
 
@@ -2019,11 +2026,13 @@ export async function ensureSyncProviderRateLimitProfile(
       scope,
       egress_key,
       min_spacing_ms,
+      priority_class,
       updated_at
     )
     values ${sql.join(values, sql`, `)}
     on conflict (provider, scope, egress_key) do update
     set min_spacing_ms = excluded.min_spacing_ms,
+        priority_class = excluded.priority_class,
         updated_at = excluded.updated_at
   `);
 }

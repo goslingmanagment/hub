@@ -38,6 +38,14 @@ export default [
       "no-restricted-syntax": ["error", {
         selector: "CallExpression > Identifier[name='toMills']",
         message: "toMills was deleted (Stage 27): use millsFromInteger / millsFromDollars / millsFromCents.",
+      }, {
+        // Kernel Stage 26: outbound transport resolves through the egress
+        // seam (services/egress/resolveEgress). Type-only Dispatcher imports
+        // are fine; new VALUE imports of undici are not. Pre-seam importers
+        // are exempted in the block below and counted by the raw-fetch
+        // ratchet (scripts/check-raw-fetch.mjs).
+        selector: "ImportDeclaration[source.value='undici'][importKind='value']",
+        message: "Import undici only inside services/egress or packages/shared/http-client (Stage 26): resolve transports via resolveEgress.",
       }],
       "no-restricted-imports": ["error", {
         patterns: [
@@ -50,6 +58,27 @@ export default [
             message: "Import a module only through its modules/<name>/index.ts.",
           },
         ],
+      }],
+    },
+  },
+  {
+    // Stage 26 exemptions: the resolver's own modules + the dispatcher
+    // factory (the legal undici homes) and the pre-seam Fansly adapter
+    // (adopts the seam in Task 3; tracked by the raw-fetch ratchet).
+    files: [
+      "apps/runtime/src/services/egress/**/*.ts",
+      "packages/shared/src/http-client.ts",
+      "packages/fansly/src/adapter.ts",
+    ],
+    languageOptions: {
+      parser: tsParser,
+      ecmaVersion: "latest",
+      sourceType: "module",
+    },
+    rules: {
+      "no-restricted-syntax": ["error", {
+        selector: "CallExpression > Identifier[name='toMills']",
+        message: "toMills was deleted (Stage 27): use millsFromInteger / millsFromDollars / millsFromCents.",
       }],
     },
   },

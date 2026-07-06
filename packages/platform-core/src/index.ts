@@ -127,3 +127,12 @@ export function checkAdapterConformance(adapter: PlatformAdapter): string[] {
   }
   return problems;
 }
+
+export {
+  EGRESS_PRIORITY_CLASSES,
+  egressScopeKey,
+  type EgressContext,
+  type EgressPriorityClass,
+  type EgressResolver,
+  type EgressScope,
+} from "./egress.ts";

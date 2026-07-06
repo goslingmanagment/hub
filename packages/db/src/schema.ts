@@ -545,6 +545,11 @@ export const syncRateLimits = pgTable(
     scope: text("scope").notNull(),
     egressKey: text("egress_key").notNull(),
     minSpacingMs: integer("min_spacing_ms").notNull(),
+    // Stage 26: which egress priority class the row paces (vendor caps are
+    // class-neutral shared rows and stay at the 'bulk' default).
+    priorityClass: text("priority_class", { enum: ["interactive", "commands", "bulk"] })
+      .notNull()
+      .default("bulk"),
     nextAvailableAt: timestamp("next_available_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

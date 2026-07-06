@@ -156,7 +156,7 @@ export async function syncOfapiFanIdentities(
 
   // Guarded offset walk; returns the budget block that ended it, if any.
   const walk = async (
-    fetch: GuardedFetch,
+    fetchPage: GuardedFetch,
     onItems: (items: Record<string, unknown>[]) => Promise<void>,
   ): Promise<"completed" | OfapiBudgetBlock> => {
     for (let offset = 0; ;) {
@@ -164,7 +164,7 @@ export async function syncOfapiFanIdentities(
       if (block !== null) {
         return block;
       }
-      const page = await fetch(offset);
+      const page = await fetchPage(offset);
       await guard.recordResponse(page);
       stats.requestsUsed += 1;
       await onItems(page.items);

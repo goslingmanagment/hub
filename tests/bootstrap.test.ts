@@ -49,6 +49,7 @@ const bootstrapMocks = vi.hoisted(() => {
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
       syncSharedRateLimitEnabled: false,
+      egressPacerMode: "off" as const,
       syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
@@ -162,6 +163,7 @@ describe("bootstrap", () => {
     bootstrapMocks.loadConfig.mockReturnValueOnce({
       ...bootstrapMocks.loadConfig(),
       syncSharedRateLimitEnabled: false,
+      egressPacerMode: "off" as const,
       syncPageExecutorConcurrency: 4,
     });
     const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");

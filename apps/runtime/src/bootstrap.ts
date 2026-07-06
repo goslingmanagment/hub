@@ -23,6 +23,7 @@ import {
 
 import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
+import { createEgressPacer } from "./services/egress/pacer.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
 import type { AiGatewayProvider } from "./services/ai-gateway.ts";
 import {
@@ -185,6 +186,18 @@ export async function createAppContext(): Promise<AppContext> {
         apiKey: config.ofapiApiKey,
         restDelayMs: config.ofapiRestDelayMs,
         onCreditSpend: createOfapiCreditSpendSink({ db, logger, config }),
+        // Stage 26: off = legacy slot only; shadow computes + logs the
+        // class-aware decision off-path; enforce cuts pacing over.
+        pacer: config.egressPacerMode === "off"
+          ? null
+          : createEgressPacer({ config, db }, { vendor: "ofapi" }),
+        onShadowDiff: (diff) => {
+          logger.info({
+            component: "egress_pacer_shadow",
+            vendor: "ofapi",
+            ...diff,
+          }, "Egress pacer shadow decision");
+        },
       })
       : undefined;
     const aiGatewayProvider = config.chatMuseAiGatewayEnabled && config.anthropicApiKey

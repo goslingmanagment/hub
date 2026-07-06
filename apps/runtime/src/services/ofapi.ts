@@ -12,6 +12,10 @@ import {
 } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
+import type { EgressPriorityClass } from "@agency_hub_core/platform-core";
+
+import type { EgressPacer } from "./egress/pacer.ts";
+
 import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
 
 const OFAPI_REQUEST_TIMEOUT_MS = 15_000;
@@ -535,6 +539,15 @@ export function createOfapiClient(input: {
   apiKey: string;
   restDelayMs?: number;
   onCreditSpend?: OfapiCreditSpendSink | null;
+  // Stage 26: class-aware egress pacer. shadow = the legacy process-global
+  // slot still enforces while the pacer's decision is computed off-path and
+  // reported through onShadowDiff; enforce = the pacer paces.
+  pacer?: EgressPacer | null;
+  onShadowDiff?: (diff: {
+    priorityClass: EgressPriorityClass;
+    oldWaitMs: number;
+    newWaitMs: number;
+  }) => void;
 }): OfapiClient {
   const baseUrl = (input.baseUrl ?? OFAPI_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const restDelayMs = Math.max(0, input.restDelayMs ?? OFAPI_DEFAULT_REST_DELAY_MS);
@@ -591,13 +604,34 @@ export function createOfapiClient(input: {
   }
   // Client-wide pacing across concurrent executor chunks: each caller claims the
   // next slot and sleeps until it; OFAPI rate limits are account-global.
+  // Stage 26: in enforce mode the class-aware DB pacer replaces this slot
+  // machine; in shadow mode the slot machine still enforces while the pacer's
+  // decision is computed fire-and-forget (no latency added) and diffed.
+  const pacer = input.pacer ?? null;
   let nextRequestSlotAt = 0;
 
-  async function waitForRequestSlot() {
+  async function waitForRequestSlot(priorityClass: EgressPriorityClass = "bulk") {
+    if (pacer && pacer.mode === "enforce") {
+      return pacer.pace(priorityClass);
+    }
+
     const now = Date.now();
     const slotAt = Math.max(now, nextRequestSlotAt);
     nextRequestSlotAt = slotAt + restDelayMs;
     const waitMs = slotAt - now;
+
+    if (pacer && pacer.mode === "shadow") {
+      void pacer.plan(priorityClass)
+        .then((decision) => {
+          input.onShadowDiff?.({
+            priorityClass,
+            oldWaitMs: waitMs,
+            newWaitMs: decision.waitMs,
+          });
+        })
+        .catch(() => undefined);
+    }
+
     if (waitMs > 0) {
       await delay(waitMs);
     }
@@ -637,7 +671,7 @@ export function createOfapiClient(input: {
       },
       requestMetadata: options.requestMetadata,
       retries: OFAPI_OBSERVED_RETRIES,
-      waitForRateLimit: waitForRequestSlot,
+      waitForRateLimit: () => waitForRequestSlot("bulk"),
       execute: async () => {
         const response = await fetch(url, {
           method: "GET",
@@ -772,7 +806,7 @@ export function createOfapiClient(input: {
     const query = new URLSearchParams(options.query);
     const url = `${baseUrl}${options.pathname}${query.size > 0 ? `?${query.toString()}` : ""}`;
     const requestId = `${options.operation}:${randomUUID()}`;
-    await waitForRequestSlot();
+    await waitForRequestSlot("interactive");
 
     let response: Response;
     try {
@@ -876,7 +910,7 @@ export function createOfapiClient(input: {
       encodeURIComponent(conversationId)
     }/messages`;
     const requestId = `${operation}:${randomUUID()}`;
-    await waitForRequestSlot();
+    await waitForRequestSlot("commands");
 
     let response: Response;
     try {
@@ -1004,7 +1038,7 @@ export function createOfapiClient(input: {
       encodeURIComponent(conversationId)
     }/typing`;
     const requestId = `${operation}:${randomUUID()}`;
-    await waitForRequestSlot();
+    await waitForRequestSlot("commands");
 
     let response: Response;
     try {
@@ -1076,7 +1110,7 @@ export function createOfapiClient(input: {
       encodeURIComponent(conversationId)
     }/messages/${encodeURIComponent(messageId)}`;
     const requestId = `${operation}:${randomUUID()}`;
-    await waitForRequestSlot();
+    await waitForRequestSlot("commands");
 
     let response: Response;
     try {
@@ -1156,7 +1190,7 @@ export function createOfapiClient(input: {
       encodeURIComponent(conversationId)
     }/mark-as-read`;
     const requestId = `${operation}:${randomUUID()}`;
-    await waitForRequestSlot();
+    await waitForRequestSlot("commands");
 
     let response: Response;
     try {

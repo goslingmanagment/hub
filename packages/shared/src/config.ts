@@ -101,6 +101,11 @@ const envSchema = z.object({
   FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS: z.coerce.number().int().min(0).default(0),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
   SYNC_SHARED_RATE_LIMIT_ENABLED: booleanSchema.default(true),
+  // Stage 26: class-aware egress pacer rollout mode. off = old policy only;
+  // shadow = old policy enforces while the new pacer computes + logs the
+  // diff; enforce = the new pacer paces (per-vendor cutover after the 48 h
+  // shadow window).
+  EGRESS_PACER_MODE: z.enum(["off", "shadow", "enforce"]).default("off"),
   SYNC_PAGE_EXECUTOR_CONCURRENCY: z.coerce.number().int().positive().default(4),
   TRANSACTION_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
   TRANSACTION_RESCAN_CAP_DAYS: z.coerce.number().int().positive().default(30),
@@ -222,6 +227,7 @@ export interface AppConfig {
   fanslyDmDeepBackfillContinuationJitterMs?: number;
   onlyFansDefaultDelayMs: number;
   syncSharedRateLimitEnabled: boolean;
+  egressPacerMode: "off" | "shadow" | "enforce";
   syncPageExecutorConcurrency: number;
   transactionLookbackDays: number;
   transactionRescanCapDays: number;
@@ -419,6 +425,7 @@ export function loadConfig(
     fanslyDmDeepBackfillContinuationJitterMs: parsed.FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS,
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,
     syncSharedRateLimitEnabled: parsed.SYNC_SHARED_RATE_LIMIT_ENABLED,
+    egressPacerMode: parsed.EGRESS_PACER_MODE,
     syncPageExecutorConcurrency: parsed.SYNC_PAGE_EXECUTOR_CONCURRENCY,
     transactionLookbackDays: parsed.TRANSACTION_LOOKBACK_DAYS,
     transactionRescanCapDays: parsed.TRANSACTION_RESCAN_CAP_DAYS,

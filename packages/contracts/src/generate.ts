@@ -31,6 +31,7 @@ async function main() {
       transactionLookbackDays: 7,
       transactionRescanCapDays: 30,
       syncSharedRateLimitEnabled: false,
+      egressPacerMode: "off" as const,
       syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
