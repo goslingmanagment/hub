@@ -2712,3 +2712,46 @@ record inside the manifest).
 **Remains in Stage 28:** Task 6 ops only (first prod tiering cycle
 ~2027-01, plateau watch, §5 exit criteria). Erasure stays unused until a
 real request; the drill is the rehearsal.
+
+**Decision #105 (2026-07-06, same session as #104):** Stage 29 **Tasks 1–5
+all built green-local** — AI gateway hardening + the DP 6-A restricted
+capture class. Migration 0072. Key rulings:
+
+- **generation_ref = the gateway's existing requestId** (already exposed on
+  the meta frame) — assumption 3 verified, no envelope change; it is the
+  acceptance correlation key end-to-end.
+- **user_id NULL = system lane** on ai_usage_events (DROP NOT NULL, the
+  Stage 9 credit-ledger precedent) — the classifier's nightly spend books
+  without a synthetic user.
+- **Denials are ledger facts:** every quota/budget breach writes a
+  quota_denied row AND throws the typed error (HTTP 429 `quota_denied`).
+  Client-visible taxonomy change recorded: gateway quota paths no longer
+  return `rate_limit_exceeded`. Quota 429 still outranks
+  provider-unconfigured 503 (pre-Stage-29 ordering preserved; reservation
+  rows carry provider NULL until one resolves).
+- **Per-feature budgets are GLOBAL per day** (JSON config map), not
+  per-user — the point is "the nightly classifier run fits", and the
+  per-user/page daily quota already exists one layer up.
+- **Classifier egress stays DIRECT** (no page proxy) in the internal lane —
+  byte-identical to the retired SDK call; prompts/model/params carried over
+  byte-for-byte; @anthropic-ai/sdk now import-banned outside the gateway
+  provider files (ESLint paths ban + importer-list pin test).
+- **Acceptance feed is a projection, not a canonicalizer** — acceptance
+  rows are a side table, not domain events; the pure-parser discipline of
+  the canonicalize driver stays intact. Watermark = account_id 0 sentinel
+  over observation ids; correlation best-effort until Stage 31.
+- **All outcomes captured** in ai_generation_content (a cancelled stream's
+  partial completion is still a fact); restricted tables lake-excluded by
+  construction (pin test) and inside the erasure reach (fan scope via
+  conversation_ref, page scope via page_id).
+- **OpenRouter with no vendor SDK** — fetch-based SSE through the SAME
+  page-proxy fetch wrapper as Anthropic (raw-fetch ratchet stays 13);
+  prefix routing; ships implemented-but-unkeyed until OPENROUTER_API_KEY
+  lands; pricing catalog is provisional pending the §5 invoice week.
+- ai-usage batch lane marked deprecated (successor = gateway finalize;
+  removal gated on Stage 31 fleet cutover).
+
+**Remains in Stage 29:** Task 6 ops (deploy 0072+0071 together, §5 probes,
+invoice reconciliation week). NOTE: Stage 28.4 (#104) is committed and
+pushed but NOT yet deployed — the deploy gate needs an owner confirm; 0071
+and 0072 ride the next deploy window together.

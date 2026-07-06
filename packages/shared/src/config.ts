@@ -185,6 +185,8 @@ const envSchema = z.object({
   CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(200),
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
   CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
+  CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS: z.string().default("{}"),
+  OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   WB_CLOSING_LLM_ENABLED: booleanSchema.default(false),
@@ -294,8 +296,12 @@ export interface AppConfig {
   chatMuseAiGatewayDailyRequestLimit?: number;
   chatMuseAiGatewayDailyMicroUsdLimit?: number;
   chatMuseAiGatewayRequestMicroUsdLimit?: number;
+  /** Stage 29: JSON object mapping feature -> daily micro-USD ceiling (global,
+   * all principals). Absent feature = no per-feature ceiling. */
+  chatMuseAiGatewayFeatureDailyMicroUsdLimits?: string;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
+  openrouterApiKey?: string | null;
   wbClosingLlmEnabled?: boolean;
   wbClosingLlmModel?: string;
   wbClosingLlmDailyCapMin?: number;
@@ -490,6 +496,8 @@ export function loadConfig(
     chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,
     chatMuseAiGatewayRequestMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT,
+    chatMuseAiGatewayFeatureDailyMicroUsdLimits: parsed.CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS,
+    openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     // L2 only runs when explicitly enabled AND a key is present (safe by default).

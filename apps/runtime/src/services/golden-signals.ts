@@ -39,6 +39,9 @@ export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {
   projection: 180_000,
   command_settle: 300_000,
   sse_delivery: 600_000,
+  // Stage 29 (DP 6 owner note): restricted-class volume guard — a gauge in
+  // BYTES riding the p95 slot so the existing breach latch covers it.
+  ai_content_bytes: 5_000_000_000,
 };
 
 export async function ensureOpsMetricsQueue(
@@ -146,12 +149,25 @@ export async function computeGoldenSignals(
     ? null
     : Number(smoke.rows[0].staleness_ms);
 
+  // Stage 29: restricted-class capture volume (rows + total relation bytes).
+  // Gauges, not latencies — they ride the same sample table; the byte gauge
+  // carries the alert threshold.
+  const aiVolume = await app.db.execute<{ rows: string; bytes: string }>(sql`
+    select count(*)::text as rows,
+           pg_total_relation_size('ai_generation_content')::text as bytes
+    from ai_generation_content
+  `);
+  const aiRows = Number(aiVolume.rows[0]?.rows ?? 0);
+  const aiBytes = Number(aiVolume.rows[0]?.bytes ?? 0);
+
   return [
     ...toSamples("capture", capture),
     ...toSamples("canonicalize", canonicalize),
     ...toSamples("projection", projection),
     ...toSamples("command_settle", commandSettle),
     ...toSamples("sse_delivery", { p50: staleness, p95: staleness }),
+    ...toSamples("ai_content_rows", { p50: aiRows, p95: aiRows }),
+    ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),
   ];
 }
 

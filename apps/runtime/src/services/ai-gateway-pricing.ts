@@ -9,7 +9,7 @@ export interface AiGatewayCostUsage {
 }
 
 export interface AiGatewayCostEstimate {
-  provider: "anthropic";
+  provider: "anthropic" | "openrouter";
   providerModelId: string;
   costMicroUsd: MicroUsd;
   costApproximate: boolean;
@@ -75,6 +75,49 @@ const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
   },
 };
 
+// Stage 29: OpenRouter catalog (second provider). Prices are the vendor's
+// published per-million rates at implementation time; the §5 invoice
+// reconciliation week trues them up. cache-write is not billed separately.
+const OPENROUTER_PRICING: Record<string, AnthropicGatewayPricing> = {
+  "openrouter:openai/gpt-4o-mini": {
+    providerModelId: "openai/gpt-4o-mini",
+    inputUsdPerMillion: 0.15,
+    cacheWrite5mUsdPerMillion: 0,
+    cacheWrite1hUsdPerMillion: 0,
+    cacheReadUsdPerMillion: 0.075,
+    outputUsdPerMillion: 0.6,
+  },
+  "openrouter:openai/gpt-4.1-mini": {
+    providerModelId: "openai/gpt-4.1-mini",
+    inputUsdPerMillion: 0.4,
+    cacheWrite5mUsdPerMillion: 0,
+    cacheWrite1hUsdPerMillion: 0,
+    cacheReadUsdPerMillion: 0.1,
+    outputUsdPerMillion: 1.6,
+  },
+  "openrouter:meta-llama/llama-3.3-70b-instruct": {
+    providerModelId: "meta-llama/llama-3.3-70b-instruct",
+    inputUsdPerMillion: 0.12,
+    cacheWrite5mUsdPerMillion: 0,
+    cacheWrite1hUsdPerMillion: 0,
+    cacheReadUsdPerMillion: 0.12,
+    outputUsdPerMillion: 0.3,
+  },
+};
+
+export function aiGatewayProviderForModel(model: string): "anthropic" | "openrouter" {
+  return model.startsWith("openrouter:") ? "openrouter" : "anthropic";
+}
+
+export function resolveOpenrouterGatewayModel(model: string): AnthropicGatewayPricing {
+  const pricing = OPENROUTER_PRICING[model];
+  if (!pricing) {
+    throw new Error(`Unsupported OpenRouter gateway model: ${model}`);
+  }
+
+  return pricing;
+}
+
 function nonnegative(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -94,7 +137,10 @@ export function estimateAiGatewayUsageCost(
   model: string,
   usage: AiGatewayCostUsage,
 ): AiGatewayCostEstimate {
-  const pricing = resolveAnthropicGatewayModel(model);
+  const provider = aiGatewayProviderForModel(model);
+  const pricing = provider === "openrouter"
+    ? resolveOpenrouterGatewayModel(model)
+    : resolveAnthropicGatewayModel(model);
   const inputTokens = nonnegative(usage.inputTokens);
   const outputTokens = nonnegative(usage.outputTokens);
   const cacheWriteTokens = nonnegative(usage.cacheWriteTokens);
@@ -126,7 +172,7 @@ export function estimateAiGatewayUsageCost(
     outputTokens * pricing.outputUsdPerMillion;
 
   return {
-    provider: "anthropic",
+    provider,
     providerModelId: pricing.providerModelId,
     costMicroUsd: microUsdFromDbInt(Math.round(rawCostMicroUsd)),
     costApproximate,

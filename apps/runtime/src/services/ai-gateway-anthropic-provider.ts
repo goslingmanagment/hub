@@ -122,6 +122,14 @@ function createSdkClient(apiKey: string, fetchImpl?: typeof fetch): AnthropicGat
   };
 }
 
+/** Stage 29 internal lane: a direct (no page proxy) SDK client — server
+ * egress, exactly what the pre-gateway direct classifier call did. */
+export function createDirectAnthropicClientResolver(
+  apiKey: string,
+): AnthropicGatewayClientResolver {
+  return () => ({ client: createSdkClient(apiKey) });
+}
+
 export function createPageProxyAnthropicClientResolver(
   apiKey: string,
 ): AnthropicGatewayClientResolver {

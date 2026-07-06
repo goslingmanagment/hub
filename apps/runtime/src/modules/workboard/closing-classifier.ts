@@ -1,5 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
-
+import { runGatewayCompletion, type GatewayInternalApp } from "../../services/ai-gateway-internal.ts";
 import type { ConversationState } from "./types.ts";
 
 // L2 conversation classifier abstraction. The orchestration (cap, cache, cost
@@ -139,44 +138,38 @@ function parseVerdicts(text: string, messages: ClosingClassifierInput[]): Closin
   });
 }
 
-export function createAnthropicClosingClassifier(opts: { apiKey: string; model: string }): ClosingClassifier {
-  const client = new Anthropic({ apiKey: opts.apiKey });
+/**
+ * Stage 29: the classifier runs THROUGH the gateway's internal lane — same
+ * model, same prompts byte-for-byte, same max_tokens/temperature as the
+ * retired direct SDK call. Its spend now lands in the ledger under
+ * "workboard-closing" (subject to the per-feature budget) and its content
+ * joins the restricted class. Rollback = git revert (one release window).
+ */
+export function createGatewayClosingClassifier(
+  app: GatewayInternalApp,
+  opts: { model: string; providerOverride?: Parameters<typeof runGatewayCompletion>[1]["providerOverride"] },
+): ClosingClassifier {
+  const gatewayModel = opts.model.includes(":") ? opts.model : `anthropic:${opts.model}`;
   return {
     model: opts.model,
     async classifyBatch(messages) {
-      const response = await client.messages.create({
-        model: opts.model,
-        max_tokens: 1536,
-        // Classification, not generation: pin temperature to 0 so a borderline tail
-        // gets the SAME verdict every run (no buy_signal↔smalltalk flapping) and the
-        // permanent per-message cache stays meaningful.
+      const result = await runGatewayCompletion(app, {
+        feature: "workboard-closing",
+        model: gatewayModel,
+        // Classification, not generation: pin temperature to 0 so a borderline
+        // tail gets the SAME verdict every run (no buy_signal↔smalltalk
+        // flapping) and the permanent per-message cache stays meaningful.
+        maxTokens: 1536,
         temperature: 0,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: buildUserContent(messages) }],
+        systemBlocks: [{ text: SYSTEM_PROMPT, cache: "none" }],
+        userBlocks: [{ text: buildUserContent(messages), cache: "none" }],
+        ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),
       });
-      const text = response.content
-        .map((block) => (block.type === "text" ? block.text : ""))
-        .join("");
       return {
-        verdicts: parseVerdicts(text, messages),
-        inputTokens: response.usage?.input_tokens ?? 0,
-        outputTokens: response.usage?.output_tokens ?? 0,
+        verdicts: parseVerdicts(result.text, messages),
+        inputTokens: result.usage?.inputTokens ?? 0,
+        outputTokens: result.usage?.outputTokens ?? 0,
       };
     },
   };
-}
-
-/** Build the classifier from config, or null when L2 is disabled / no key (safe default). */
-export function maybeCreateClosingClassifier(config: {
-  wbClosingLlmEnabled?: boolean;
-  anthropicApiKey?: string | null;
-  wbClosingLlmModel?: string;
-}): ClosingClassifier | null {
-  if (!config.wbClosingLlmEnabled || !config.anthropicApiKey) {
-    return null;
-  }
-  return createAnthropicClosingClassifier({
-    apiKey: config.anthropicApiKey,
-    model: config.wbClosingLlmModel ?? "claude-haiku-4-5",
-  });
 }

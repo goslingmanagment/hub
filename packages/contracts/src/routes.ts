@@ -1813,6 +1813,46 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
   }).strict(),
 ]);
 
+// Stage 29 restricted capture class (DP 6-A): owner-only reads.
+export const aiRestrictedGenerationSchema = z.object({
+  generationRef: z.string(),
+  feature: z.string(),
+  model: z.string(),
+  provider: z.string(),
+  userId: z.number().nullable(),
+  pageId: z.number().nullable(),
+  conversationRef: z.string().nullable(),
+  promptBlocks: z.array(z.unknown()),
+  completion: z.string(),
+  params: z.record(z.string(), z.unknown()),
+  createdAt: z.string(),
+});
+
+export const aiRestrictedGenerationsQuerySchema = z.object({
+  feature: z.string().optional(),
+  pageId: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+export const aiRestrictedGenerationsResponseSchema = z.object({
+  generations: z.array(aiRestrictedGenerationSchema),
+});
+
+export const aiRestrictedAcceptanceEventSchema = z.object({
+  lifecycle: z.enum(["shown", "inserted", "edited", "sent"]),
+  userId: z.number().nullable(),
+  occurredAt: z.string(),
+});
+
+export const aiRestrictedGenerationParamsSchema = z.object({
+  generationRef: z.string().min(1),
+});
+
+export const aiRestrictedGenerationDetailResponseSchema = z.object({
+  generation: aiRestrictedGenerationSchema,
+  acceptance: z.array(aiRestrictedAcceptanceEventSchema),
+});
+
 export const adminChatterUsageQuerySchema = z.object({
   from: businessDate.optional(),
   to: businessDate.optional(),
@@ -3868,7 +3908,12 @@ export const routeSchemas = {
   aiUsageBatch: {
     auth: { kind: "apiKey" },
     tags: ["usage"],
-    summary: "Ingest a batch of chatter AI usage events",
+    // Stage 29 (§6.4 policy): the gateway ledger is authoritative — this
+    // client-reported lane is deprecated; successor = the gateway's own
+    // finalize write (POST /api/v1/ai/gateway/stream). Removal only after
+    // Stage 31 confirms the fleet cutover. It keeps serving until then.
+    deprecated: true,
+    summary: "Ingest a batch of chatter AI usage events (deprecated: gateway ledger is authoritative)",
     body: aiUsageBatchBodySchema,
     response: {
       200: aiUsageBatchResponseSchema,
@@ -4937,6 +4982,29 @@ export const routeSchemas = {
       200: z.array(adminUserSchema),
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  aiRestrictedGenerations: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "List restricted AI generation content (owner only)",
+    querystring: aiRestrictedGenerationsQuerySchema,
+    response: {
+      200: aiRestrictedGenerationsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  aiRestrictedGenerationDetail: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Get one restricted AI generation with its acceptance lifecycle (owner only)",
+    params: aiRestrictedGenerationParamsSchema,
+    response: {
+      200: aiRestrictedGenerationDetailResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
     },
   },
   adminChatterUsage: {

@@ -245,13 +245,14 @@ describe("ChatMuse AI gateway runtime gate", () => {
     const response = await streamGateway(gatewayBody());
     expect(response.statusCode, response.body).toBe(429);
     expect(response.json()).toMatchObject({
-      error: "rate_limit_exceeded",
+      error: "quota_denied",
     });
 
+    // Stage 29: the denial itself is a ledger fact (quota_denied row).
     const usageRows = await testDb!.pool.query<{ count: number }>(
       "select count(*)::int as count from ai_usage_events",
     );
-    expect(usageRows.rows[0]?.count).toBe(1);
+    expect(usageRows.rows[0]?.count).toBe(2);
   });
 
   it("rejects requests whose estimated provider cost exceeds the per-request ceiling", async () => {
@@ -273,14 +274,15 @@ describe("ChatMuse AI gateway runtime gate", () => {
 
     expect(response.statusCode, response.body).toBe(429);
     expect(response.json()).toMatchObject({
-      error: "rate_limit_exceeded",
+      error: "quota_denied",
       message: "ChatMuse AI gateway request cost ceiling exceeded",
     });
     expect(providerCalls).toBe(0);
+    // Stage 29: the denial itself is a ledger fact (quota_denied row).
     const usageRows = await testDb!.pool.query<{ count: number }>(
       "select count(*)::int as count from ai_usage_events",
     );
-    expect(usageRows.rows[0]?.count).toBe(0);
+    expect(usageRows.rows[0]?.count).toBe(1);
   });
 
   it("streams SSE frames from an injected provider after auth and quota pass", async () => {

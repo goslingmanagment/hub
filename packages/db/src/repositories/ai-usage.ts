@@ -35,8 +35,9 @@ export interface ReserveAiGatewayUsageEventInput {
   clientEventId: string;
   feature: AiUsageFeature;
   model: string;
-  pageId: number;
-  provider: AiGatewayProvider;
+  pageId: number | null;
+  /** NULL when a quota denial is recorded before provider resolution. */
+  provider: AiGatewayProvider | null;
   conversationId?: string | null;
   isRegeneration: boolean;
   reservedAt: Date;
@@ -229,7 +230,8 @@ export async function insertAiUsageEvents(
 export async function reserveAiGatewayUsageEvent(
   db: Database,
   input: {
-    userId: number;
+    /** NULL = system lane (internal gateway completions). */
+    userId: number | null;
     event: ReserveAiGatewayUsageEventInput;
   },
 ) {
@@ -263,10 +265,45 @@ export async function reserveAiGatewayUsageEvent(
   return inserted.length === 1;
 }
 
+/** Stage 29: a denied request leaves a ledger row too — quota_denied is a
+ * first-class outcome, not silence. Duplicate client ids no-op. */
+export async function recordAiGatewayQuotaDenied(
+  db: Database,
+  input: {
+    userId: number | null;
+    event: ReserveAiGatewayUsageEventInput;
+  },
+) {
+  await db.insert(aiUsageEvents).values({
+    userId: input.userId,
+    clientEventId: input.event.clientEventId,
+    feature: input.event.feature,
+    model: input.event.model,
+    pageId: input.event.pageId,
+    provider: input.event.provider,
+    providerResponseId: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheWriteTokens: 0,
+    cacheReadTokens: 0,
+    costMicroUsd: 0,
+    costApproximate: false,
+    quotaAccepted: false,
+    gatewayOutcome: "quota_denied",
+    conversationId: input.event.conversationId ?? null,
+    durationMs: null,
+    isCacheHit: false,
+    isRegeneration: input.event.isRegeneration,
+    completedAt: input.event.reservedAt,
+  }).onConflictDoNothing({
+    target: [aiUsageEvents.userId, aiUsageEvents.clientEventId],
+  });
+}
+
 export async function finalizeAiGatewayUsageEvent(
   db: Database,
   input: {
-    userId: number;
+    userId: number | null;
     event: FinalizeAiGatewayUsageEventInput;
   },
 ) {
@@ -285,12 +322,14 @@ export async function finalizeAiGatewayUsageEvent(
       completedAt: input.event.completedAt,
     })
     .where(sql`
-      ${aiUsageEvents.userId} = ${input.userId}
+      ${aiUsageEvents.userId} is not distinct from ${input.userId}
       and ${aiUsageEvents.clientEventId} = ${input.event.clientEventId}
     `)
     .returning({ id: aiUsageEvents.id });
 
-  return updated.length === 1;
+  // The row id feeds the Stage 29 restricted-content FK; null = no such
+  // reservation (the caller treats that as a failed finalize).
+  return updated[0]?.id ?? null;
 }
 
 export async function markStaleAiGatewayReservationsFailed(
@@ -328,6 +367,32 @@ export async function getAiGatewayDailyUsageTotals(
     from ${aiUsageEvents}
     where ${aiUsageEvents.userId} = ${input.userId}
       and ${aiUsageEvents.pageId} = ${input.pageId}
+      and ${aiUsageEvents.completedAt} >= ${input.from}
+      and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+      and (
+        ${aiUsageEvents.provider} is not null
+        or ${aiUsageEvents.gatewayOutcome} is not null
+        or ${aiUsageEvents.quotaAccepted} is not null
+      )
+  `);
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+
+  return {
+    requestCount: normalizeNumber(row?.requestCount as NumericValue, "requestCount"),
+    costMicroUsd: normalizeNumber(row?.costMicroUsd as NumericValue, "costMicroUsd"),
+  };
+}
+
+/** Stage 29 per-feature budget check: global (all principals) daily totals. */
+export async function getAiGatewayFeatureDailyTotals(
+  db: Database,
+  input: { feature: AiUsageFeature; from: Date; toExclusive: Date },
+): Promise<AiGatewayDailyUsageTotals> {
+  const result = await db.execute(sql`
+    select count(*)::int as "requestCount",
+           coalesce(sum(${aiUsageEvents.costMicroUsd}), 0)::bigint as "costMicroUsd"
+    from ${aiUsageEvents}
+    where ${aiUsageEvents.feature} = ${input.feature}
       and ${aiUsageEvents.completedAt} >= ${input.from}
       and ${aiUsageEvents.completedAt} < ${input.toExclusive}
       and (

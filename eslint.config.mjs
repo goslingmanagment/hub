@@ -48,6 +48,38 @@ export default [
         message: "Import undici only inside services/egress or packages/shared/http-client (Stage 26): resolve transports via resolveEgress.",
       }],
       "no-restricted-imports": ["error", {
+        paths: [{
+          // Kernel Stage 29: vendor AI SDKs live only inside the gateway
+          // (services/ai-gateway*) — everything else goes through it, so
+          // spend, budgets, and the restricted capture class cannot be
+          // bypassed. The exemption block below carves out the gateway.
+          name: "@anthropic-ai/sdk",
+          message: "Vendor AI SDK imports are gateway-only (Stage 29): call the gateway (prepareAiGatewayStream / runGatewayCompletion).",
+        }],
+        patterns: [
+          {
+            group: [
+              "**/modules/*/*",
+              "**/modules/*/*/**",
+              "!**/modules/*/index.ts",
+            ],
+            message: "Import a module only through its modules/<name>/index.ts.",
+          },
+        ],
+      }],
+    },
+  },
+  {
+    // Stage 29 exemption: the gateway providers are the ONE legal home for
+    // vendor AI SDK imports (module-boundary patterns still apply).
+    files: ["apps/runtime/src/services/ai-gateway*.ts"],
+    languageOptions: {
+      parser: tsParser,
+      ecmaVersion: "latest",
+      sourceType: "module",
+    },
+    rules: {
+      "no-restricted-imports": ["error", {
         patterns: [
           {
             group: [

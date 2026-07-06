@@ -532,6 +532,32 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, lineage: LedgerLinea
     run: (tx) => execCount(tx, sql`delete from ofapi_commands where ${commandPred}`),
   });
 
+  // Stage 29 restricted class: generations tied to the fan's conversation
+  // (acceptance rows resolve through them, so they go first).
+  const generationPred = sql`page_id in ${scope.pageIds} and conversation_ref = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "ai_acceptance_events",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ai_acceptance_events
+      where generation_ref in (
+        select generation_ref from ai_generation_content where ${generationPred})`),
+    run: (tx) => execCount(tx, sql`
+      delete from ai_acceptance_events
+      where generation_ref in (
+        select generation_ref from ai_generation_content where ${generationPred})`),
+  });
+  targets.push({
+    plane: "hot",
+    target: "ai_generation_content",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ai_generation_content where ${generationPred}`),
+    run: (tx) => execCount(tx, sql`
+      delete from ai_generation_content where ${generationPred}`),
+  });
+
   // Transactions: the money moved — anonymize, never delete (fan scope).
   const txnPred = sql`fan_id = ${fanId} or (platform_account_id in ${scope.pageIds}
     and (correlation_account_id = ${ref} or sender_id = ${ref}))`;
@@ -597,7 +623,24 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
       delete from ${sql.raw(`"${table}"`)} where ${sql.raw(`"${column}"`)} in ${pageIds}`),
   });
 
+  // Stage 29 restricted class: acceptance rows resolve through the
+  // generations table — delete them by join before it.
+  targets.push({
+    plane: "hot",
+    target: "ai_acceptance_events",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ai_acceptance_events
+      where generation_ref in (
+        select generation_ref from ai_generation_content where page_id in ${pageIds})`),
+    run: (tx) => execCount(tx, sql`
+      delete from ai_acceptance_events
+      where generation_ref in (
+        select generation_ref from ai_generation_content where page_id in ${pageIds})`),
+  });
+
   const deletions: Array<[string, string]> = [
+    ["ai_generation_content", "page_id"],
     ["wb_closing_cache", "platform_account_id"],
     ["page_dm_threads", "platform_account_id"], // messages ride the cascade
     ["message_archive", "account_id"],

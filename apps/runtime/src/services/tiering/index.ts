@@ -28,6 +28,11 @@ export const TIERING_HOT_WINDOW_MONTHS = 6;
 
 export const RESTRICTED_OBSERVATION_KINDS = new Set(["desktop.guard_audit"]);
 
+// Stage 29: the restricted AI class NEVER exports to the lake — excluded by
+// construction (only TIERED_TABLES tier) and pinned by test so a future
+// "tier everything" sweep cannot pick these up silently.
+export const LAKE_EXCLUDED_TABLES = ["ai_generation_content", "ai_acceptance_events"] as const;
+
 interface TieredTableSpec {
   table: "observations" | "domain_events";
   plane: string;

@@ -32,6 +32,7 @@ import {
   ensureMessageArchiveQueues,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
+import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
@@ -235,6 +236,10 @@ export async function startWorkerServices(
     const earnings = await runFanEarningsProjection(app);
     if (earnings.upserted > 0) {
       app.logger.info(earnings, "Fan-earnings projection sweep complete");
+    }
+    const acceptance = await runAiAcceptanceProjection(app);
+    if (acceptance.projected > 0) {
+      app.logger.info(acceptance, "AI acceptance projection sweep complete");
     }
   });
 

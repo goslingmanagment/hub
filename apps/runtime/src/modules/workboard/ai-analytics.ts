@@ -29,7 +29,7 @@ import { resolveAccessibleWorkboardPage } from "./page-access.ts";
 import { type ClosingSettingsOverride, DEFAULT_MODEL, estimateCostUsd, resolveClosingSettings } from "./ai-settings.ts";
 import { CLOSING_CLASSIFIER_FEATURE, runClosingClassificationForPage } from "./classify-closing.ts";
 import { isClosingMessage } from "./closing.ts";
-import { createAnthropicClosingClassifier } from "./closing-classifier.ts";
+import { createGatewayClosingClassifier } from "./closing-classifier.ts";
 import { recomputeWorkboardPage } from "./recompute.ts";
 import { summarizeSpenderDiagnostics } from "./spender-diagnostics.ts";
 
@@ -170,7 +170,7 @@ async function executeClassifyRun(
 ): Promise<void> {
   try {
     const cleared = reclassify ? await supersedeClosingCacheForPage(app.db, platformAccountId) : 0;
-    const classifier = createAnthropicClosingClassifier({ apiKey: app.config.anthropicApiKey!, model: eff.model });
+    const classifier = createGatewayClosingClassifier(app, { model: eff.model });
     const result = await runClosingClassificationForPage(app.db, classifier, {
       platformAccountId,
       capMin: eff.capMin,

@@ -50,3 +50,11 @@ export class ServiceUnavailableError extends AppError {
     super(message, 503, "service_unavailable");
   }
 }
+
+// Stage 29: quota/budget breaches carry their own code (the ledger's
+// gateway_outcome value) so clients can distinguish them from generic 429s.
+export class QuotaDeniedError extends AppError {
+  constructor(message = "AI gateway quota exceeded") {
+    super(message, 429, "quota_denied");
+  }
+}

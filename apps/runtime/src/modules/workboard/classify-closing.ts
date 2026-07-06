@@ -17,7 +17,7 @@ import { UTC_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import { type ClosingConfigLike, resolveClosingSettings } from "./ai-settings.ts";
 import { isClosingMessage } from "./closing.ts";
-import { type ClosingClassifier, type ClosingContextMessage, createAnthropicClosingClassifier } from "./closing-classifier.ts";
+import { type ClosingClassifier, type ClosingContextMessage, createGatewayClosingClassifier } from "./closing-classifier.ts";
 
 export const CLOSING_CLASSIFIER_FEATURE = "closing-classifier";
 const DEFAULT_BATCH_SIZE = 15;
@@ -175,7 +175,12 @@ export async function runClosingClassificationAllPages(
   }
   const factory =
     opts.createClassifier
-    ?? ((model: string) => createAnthropicClosingClassifier({ apiKey: opts.config.anthropicApiKey!, model }));
+    // Stage 29: the default classifier rides the gateway's internal lane
+    // (ledger + budgets + restricted capture) — no direct vendor SDK.
+    ?? ((model: string) => createGatewayClosingClassifier(
+      { db, config: opts.config, logger: { warn: () => {} } },
+      { model },
+    ));
 
   const pageIds = await listWorkboardRecomputePageIds(db);
   const overrides = new Map((await listClosingSettings(db)).map((s) => [s.platform_account_id, s]));

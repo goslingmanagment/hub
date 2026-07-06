@@ -1,4 +1,8 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
+import {
+  getAiGenerationContentByRef,
+  listAiGenerationContent,
+} from "@agency_hub_core/db";
 
 import {
   prepareAiGatewayStream,
@@ -6,6 +10,7 @@ import {
 } from "../../services/ai-gateway.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { requireApiKeyUser, requireOwner } from "../../services/auth.ts";
+import { NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // AI module (target §6.1): gateway stream, usage ledger intake, usage
@@ -37,6 +42,8 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     let terminalProviderResponseId: string | null = null;
     let terminalCacheHit = false;
     let streamedContent = false;
+    let completionText = "";
+    let terminalStopReason: string | null = null;
     let terminalDoneFrame: Parameters<typeof serializeAiGatewaySseFrame>[0] | null = null;
     raw.writeHead(200, {
       "content-type": "text/event-stream",
@@ -65,10 +72,12 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
           terminalCacheHit = frame.cacheHit;
         } else if (frame.type === "content_delta" && frame.text.length > 0) {
           streamedContent = true;
+          completionText += frame.text;
         } else if (frame.type === "error") {
           terminalOutcome = "failed";
         } else if (frame.type === "done") {
           terminalDoneFrame = frame;
+          terminalStopReason = frame.stopReason ?? null;
           continue;
         }
         writeFrame(frame);
@@ -113,6 +122,8 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
           cacheHit: terminalCacheHit,
           durationMs: Date.now() - startedAt,
           completedAt: new Date(),
+          completionText,
+          stopReason: terminalStopReason,
         });
       } catch (error) {
         request.log.error({
@@ -133,4 +144,55 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     requireOwner(principal);
     return getAdminChatterUsageReport(appContext, request.query);
   });
+
+  // Stage 29 restricted capture class (DP 6-A): owner-only — never
+  // team_lead/chatter (assumption 5; grant machinery is the later upgrade).
+  server.get("/api/v1/ai/restricted/generations", {
+    schema: routeSchemas.aiRestrictedGenerations,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const rows = await listAiGenerationContent(appContext.db, request.query);
+    return { generations: rows.map(serializeRestrictedGeneration) };
+  });
+
+  server.get("/api/v1/ai/restricted/generations/:generationRef", {
+    schema: routeSchemas.aiRestrictedGenerationDetail,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const found = await getAiGenerationContentByRef(
+      appContext.db,
+      request.params.generationRef,
+    );
+    if (!found) {
+      throw new NotFoundError("Generation not found");
+    }
+    return {
+      generation: serializeRestrictedGeneration(found.generation),
+      acceptance: found.acceptance.map((event) => ({
+        lifecycle: event.lifecycle,
+        userId: event.userId,
+        occurredAt: event.occurredAt.toISOString(),
+      })),
+    };
+  });
+}
+
+function serializeRestrictedGeneration(
+  row: Awaited<ReturnType<typeof listAiGenerationContent>>[number],
+) {
+  return {
+    generationRef: row.generationRef,
+    feature: row.feature,
+    model: row.model,
+    provider: row.provider,
+    userId: row.userId,
+    pageId: row.pageId,
+    conversationRef: row.conversationRef,
+    promptBlocks: row.promptBlocks,
+    completion: row.completion,
+    params: row.params,
+    createdAt: row.createdAt.toISOString(),
+  };
 }

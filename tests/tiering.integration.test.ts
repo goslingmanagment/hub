@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  LAKE_EXCLUDED_TABLES,
   TIERED_TABLES,
   countParquetRows,
   listTierablePartitions,
@@ -67,6 +68,13 @@ afterAll(async () => {
 });
 
 describe("retention tiering (Stage 28)", () => {
+  it("never tiers the Stage 29 restricted AI class (exclusion pin)", () => {
+    for (const excluded of LAKE_EXCLUDED_TABLES) {
+      expect(TIERED_TABLES.map((spec) => spec.table)).not.toContain(excluded);
+    }
+  });
+
+
   it("covers every Postgres column in the DuckDB schema (drift pin)", async (context) => {
     if (!testDb) {
       context.skip();

@@ -17,6 +17,7 @@ export * from "./repositories/ops-metrics.ts";
 export * from "./repositories/access-grants.ts";
 export * from "./repositories/domain-events.ts";
 export * from "./repositories/message-archive.ts";
+export * from "./repositories/ai-restricted.ts";
 export * from "./repositories/erasure.ts";
 export * from "./repositories/ofapi.ts";
 export * from "./repositories/ofapi-commands.ts";

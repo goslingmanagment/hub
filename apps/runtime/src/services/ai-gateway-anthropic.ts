@@ -53,7 +53,7 @@ export interface NormalizedAnthropicGatewayUsage {
   cacheHit: boolean;
 }
 
-const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
+export const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "fast-reply": 800,
   "improve-draft": 800,
   "help-me": 1200,
@@ -62,6 +62,9 @@ const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "scan": 8192,
   "ping": 800,
   "hi-greeting": 800,
+  // Stage 29: the closing classifier's gateway lane (classification, not
+  // generation — its own direct-SDK constants carried over).
+  "workboard-closing": 1536,
 };
 
 const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
@@ -73,6 +76,7 @@ const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
   "scan": 0.4,
   "ping": 0.65,
   "hi-greeting": 0.7,
+  "workboard-closing": 0,
 };
 
 const ANTHROPIC_ADAPTIVE_THINKING_MODELS = new Set([
@@ -92,6 +96,7 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "scan": 24000,
   "ping": 8000,
   "hi-greeting": 8000,
+  "workboard-closing": 8000,
 };
 
 const APPROX_CHARS_PER_TOKEN = 4;

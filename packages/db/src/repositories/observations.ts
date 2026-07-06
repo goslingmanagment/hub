@@ -319,3 +319,35 @@ export async function getObservationPartitionLeadMonths(
   }
   return lead;
 }
+
+// Stage 29: the acceptance projection walks desktop.ai_acceptance
+// observations by id — a plain keyset listing, no parse_version coupling
+// (the client-capture family stamps those; this side-table feed keeps its
+// own watermark).
+export interface ObservationByKindRow {
+  id: number;
+  payload: unknown;
+  actorPrincipalId: number | null;
+  observedAt: Date | null;
+  receivedAt: Date;
+}
+
+export async function listObservationsByKindAfterId(
+  db: Database,
+  input: { kind: string; afterId: number; limit?: number },
+): Promise<ObservationByKindRow[]> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select id::text as id, payload, actor_principal_id, observed_at, received_at
+    from observations
+    where kind = ${input.kind} and id > ${input.afterId}
+    order by id asc
+    limit ${input.limit ?? 500}
+  `);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    payload: row.payload,
+    actorPrincipalId: row.actor_principal_id == null ? null : Number(row.actor_principal_id),
+    observedAt: row.observed_at == null ? null : new Date(row.observed_at as string | Date),
+    receivedAt: new Date(row.received_at as string | Date),
+  }));
+}

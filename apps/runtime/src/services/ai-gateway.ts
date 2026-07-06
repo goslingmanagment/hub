@@ -10,15 +10,20 @@ import {
   finalizeAiGatewayUsageEvent,
   findPageByLabel,
   getAiGatewayDailyUsageTotals,
+  getAiGatewayFeatureDailyTotals,
+  insertAiGenerationContent,
   markStaleAiGatewayReservationsFailed,
+  recordAiGatewayQuotaDenied,
   reserveAiGatewayUsageEvent,
 } from "@agency_hub_core/db";
 import type { ProxyConfig } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
-import { BadRequestError, ConflictError, NotFoundError, ServiceUnavailableError, TooManyRequestsError } from "./errors.ts";
+import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 import { estimateAnthropicGatewayRequestCost } from "./ai-gateway-anthropic.ts";
+import { estimateOpenrouterGatewayRequestCost } from "./ai-gateway-openrouter-provider.ts";
+import { aiGatewayProviderForModel } from "./ai-gateway-pricing.ts";
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey } from "./page-context.ts";
 
 export const DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT = 200;
@@ -66,6 +71,41 @@ export interface AiGatewayTerminalRecordInput {
   cacheHit: boolean;
   durationMs: number;
   completedAt: Date;
+  /** Stage 29 restricted class: the accumulated completion text, verbatim. */
+  completionText: string;
+  stopReason?: string | null;
+}
+
+/** Stage 29: model prefix routes the provider — "openrouter:*" to the
+ * second provider, everything else to Anthropic. */
+export function selectAiGatewayProvider(
+  app: Pick<AppContext, "aiGatewayProvider" | "aiGatewayOpenrouterProvider">,
+  model: string,
+): AiGatewayProvider | undefined {
+  return aiGatewayProviderForModel(model) === "openrouter"
+    ? app.aiGatewayOpenrouterProvider
+    : app.aiGatewayProvider;
+}
+
+export function parseAiGatewayFeatureLimits(raw: string | undefined): Record<string, number> {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+    const limits: Record<string, number> = {};
+    for (const [feature, value] of Object.entries(parsed)) {
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+        limits[feature] = Math.floor(value);
+      }
+    }
+    return limits;
+  } catch {
+    return {};
+  }
 }
 
 export function isChatMuseAiGatewayEnabled(
@@ -161,15 +201,57 @@ export async function prepareAiGatewayStream(
     }, "recovered stale ai gateway reservations");
   }
 
+  // Quota answers do not depend on provider config: a 429 outranks the 503
+  // below (pre-Stage-29 ordering preserved), so the reservation carries the
+  // provider only once one resolves.
+  const provider = selectAiGatewayProvider(app, input.model);
+  const reservationEvent = {
+    clientEventId: input.clientRequestId,
+    feature: input.feature,
+    model: input.model,
+    pageId: page.id,
+    provider: provider?.provider ?? null,
+    conversationId: input.conversationId ?? null,
+    isRegeneration: input.isRegeneration,
+    reservedAt: now,
+  };
+  async function denyQuota(message: string): Promise<never> {
+    // A denial is a ledger fact, not silence (gateway_outcome=quota_denied).
+    await recordAiGatewayQuotaDenied(app.db, {
+      userId: principal.user.id,
+      event: reservationEvent,
+    });
+    throw new QuotaDeniedError(message);
+  }
+
   const quota = await evaluateAiGatewayQuota(app, {
     userId: principal.user.id,
     pageId: page.id,
     now,
   });
   if (!quota.accepted) {
-    throw new TooManyRequestsError("ChatMuse AI gateway daily quota exceeded");
+    await denyQuota("ChatMuse AI gateway daily quota exceeded");
   }
-  if (!app.aiGatewayProvider) {
+
+  // Stage 29: per-feature GLOBAL daily ceilings (all principals) — sized so
+  // scheduled internal lanes fit; absent feature = no per-feature ceiling.
+  const featureLimits = parseAiGatewayFeatureLimits(
+    app.config.chatMuseAiGatewayFeatureDailyMicroUsdLimits,
+  );
+  const featureLimit = featureLimits[input.feature];
+  if (featureLimit !== undefined) {
+    const day = utcDayBounds(now);
+    const featureTotals = await getAiGatewayFeatureDailyTotals(app.db, {
+      feature: input.feature,
+      from: day.from,
+      toExclusive: day.toExclusive,
+    });
+    if (featureTotals.costMicroUsd >= featureLimit) {
+      await denyQuota(`ChatMuse AI gateway daily budget for ${input.feature} exceeded`);
+    }
+  }
+
+  if (!provider) {
     throw new ServiceUnavailableError("ChatMuse AI gateway provider execution is not configured");
   }
   const requestMicroUsdLimit = resolveNonnegativeLimit(
@@ -178,25 +260,18 @@ export async function prepareAiGatewayStream(
   );
   let estimatedRequestCostMicroUsd = 0;
   try {
-    estimatedRequestCostMicroUsd = estimateAnthropicGatewayRequestCost(input).costMicroUsd;
+    estimatedRequestCostMicroUsd = provider.provider === "openrouter"
+      ? estimateOpenrouterGatewayRequestCost(input).costMicroUsd
+      : estimateAnthropicGatewayRequestCost(input).costMicroUsd;
   } catch {
     throw new BadRequestError("Unsupported ChatMuse AI gateway model");
   }
   if (requestMicroUsdLimit <= 0 || estimatedRequestCostMicroUsd > requestMicroUsdLimit) {
-    throw new TooManyRequestsError("ChatMuse AI gateway request cost ceiling exceeded");
+    await denyQuota("ChatMuse AI gateway request cost ceiling exceeded");
   }
   const reserved = await reserveAiGatewayUsageEvent(app.db, {
     userId: principal.user.id,
-    event: {
-      clientEventId: input.clientRequestId,
-      feature: input.feature,
-      model: input.model,
-      pageId: page.id,
-      provider: app.aiGatewayProvider.provider,
-      conversationId: input.conversationId ?? null,
-      isRegeneration: input.isRegeneration,
-      reservedAt: now,
-    },
+    event: reservationEvent,
   });
   if (!reserved) {
     throw new ConflictError("ChatMuse AI gateway request id is already reserved");
@@ -218,12 +293,12 @@ export async function prepareAiGatewayStream(
       feature: input.feature,
       pageLabel: page.label,
       model: input.model,
-      provider: app.aiGatewayProvider.provider,
+      provider: provider.provider,
       providerResponseId: null,
       quota: quotaFrame,
     },
     stream(signal) {
-      return app.aiGatewayProvider!.stream({
+      return provider.stream({
         requestId,
         principal,
         page: {
@@ -238,7 +313,7 @@ export async function prepareAiGatewayStream(
         signal,
       });
     },
-    recordTerminal(record) {
+    async recordTerminal(record) {
       const usage = record.usage ?? {
         inputTokens: 0,
         outputTokens: 0,
@@ -247,7 +322,7 @@ export async function prepareAiGatewayStream(
         costMicroUsd: 0,
         costApproximate: false,
       };
-      return finalizeAiGatewayUsageEvent(app.db, {
+      const usageEventId = await finalizeAiGatewayUsageEvent(app.db, {
         userId: principal.user.id,
         event: {
           clientEventId: input.clientRequestId,
@@ -264,6 +339,35 @@ export async function prepareAiGatewayStream(
           completedAt: record.completedAt,
         },
       });
+      // Stage 29 (DP 6-A): the restricted class stores the generation
+      // VERBATIM — prompt blocks, completion, params — keyed by the
+      // gateway-issued requestId (= generation_ref on the meta frame, the
+      // acceptance correlation key). All outcomes captured; a cancelled
+      // stream's partial completion is still a fact.
+      await insertAiGenerationContent(app.db, {
+        usageEventId,
+        generationRef: requestId,
+        feature: input.feature,
+        model: input.model,
+        provider: provider.provider,
+        userId: principal.user.id,
+        pageId: page.id,
+        conversationRef: input.conversationId ?? null,
+        promptBlocks: [
+          { role: "system", blocks: input.prompt.systemBlocks },
+          { role: "user", blocks: input.prompt.userBlocks },
+        ],
+        completion: record.completionText,
+        params: {
+          maxTokens: input.maxTokens ?? null,
+          temperature: input.temperature ?? null,
+          reasoningEffort: input.reasoningEffort,
+          isRegeneration: input.isRegeneration,
+          outcome: record.outcome,
+          stopReason: record.stopReason ?? null,
+        },
+      });
+      return usageEventId !== null;
     },
   };
 }

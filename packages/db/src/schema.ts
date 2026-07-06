@@ -1658,9 +1658,10 @@ export const aiUsageEvents = pgTable(
   "ai_usage_events",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
+    // NULL = system lane (internal gateway completions, e.g. the workboard
+    // closing classifier) — the Stage 9 credit-ledger precedent.
     userId: bigint("user_id", { mode: "number" })
-      .references(() => users.id, { onDelete: "cascade" })
-      .notNull(),
+      .references(() => users.id, { onDelete: "cascade" }),
     pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, {
       onDelete: "set null",
     }),
@@ -2613,6 +2614,64 @@ export const projectionSeqWatermarks = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.projection, table.accountId] }),
+  }),
+);
+
+// Stage 29: the DP 6-A restricted capture class — every gateway generation's
+// prompt blocks VERBATIM + completion + params, keyed by the gateway-issued
+// generation ref. Owner-only reads; excluded from lake exports; inside the
+// Stage 28 erasure reach.
+export const aiGenerationContent = pgTable(
+  "ai_generation_content",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    usageEventId: bigint("usage_event_id", { mode: "number" })
+      .references(() => aiUsageEvents.id, { onDelete: "restrict" }),
+    generationRef: text("generation_ref").notNull().unique(),
+    feature: text("feature").notNull(),
+    model: text("model").notNull(),
+    provider: text("provider").notNull(),
+    userId: bigint("user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    pageId: bigint("page_id", { mode: "number" }),
+    conversationRef: text("conversation_ref"),
+    promptBlocks: jsonb("prompt_blocks").$type<unknown[]>().notNull(),
+    completion: text("completion").notNull(),
+    params: jsonb("params").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    featureCreatedIdx: index("ai_generation_content_feature_created_idx").on(
+      table.feature,
+      table.createdAt,
+    ),
+    pageConversationIdx: index("ai_generation_content_page_conversation_idx").on(
+      table.pageId,
+      table.conversationRef,
+    ),
+  }),
+);
+
+export const aiAcceptanceEvents = pgTable(
+  "ai_acceptance_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    generationRef: text("generation_ref").notNull(),
+    lifecycle: text("lifecycle").$type<"shown" | "inserted" | "edited" | "sent">().notNull(),
+    userId: bigint("user_id", { mode: "number" }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }),
+  },
+  (table) => ({
+    uniq: unique("ai_acceptance_events_generation_ref_lifecycle_occurred_at_key").on(
+      table.generationRef,
+      table.lifecycle,
+      table.occurredAt,
+    ),
+    generationIdx: index("ai_acceptance_events_generation_idx").on(table.generationRef),
   }),
 );
 

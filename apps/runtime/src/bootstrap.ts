@@ -26,6 +26,7 @@ import type { OfapiClient } from "./services/ofapi.ts";
 import { createEgressPacer } from "./services/egress/pacer.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
 import type { AiGatewayProvider } from "./services/ai-gateway.ts";
+import { createOpenrouterAiGatewayProvider } from "./services/ai-gateway-openrouter-provider.ts";
 import {
   createAnthropicAiGatewayProvider,
   createPageProxyAnthropicClientResolver,
@@ -120,6 +121,9 @@ export interface AppContext {
   // a real implementation. Tests may inject a fake provider to exercise SSE
   // plumbing without external network calls.
   aiGatewayProvider?: AiGatewayProvider;
+  // Stage 29: second provider ("openrouter:*" models route here); absent
+  // when OPENROUTER_API_KEY is unset — implemented-but-unkeyed ships fine.
+  aiGatewayOpenrouterProvider?: AiGatewayProvider;
   close(): Promise<void>;
 }
 
@@ -205,6 +209,9 @@ export async function createAppContext(): Promise<AppContext> {
         resolveClient: createPageProxyAnthropicClientResolver(config.anthropicApiKey),
       })
       : undefined;
+    const aiGatewayOpenrouterProvider = config.chatMuseAiGatewayEnabled && config.openrouterApiKey
+      ? createOpenrouterAiGatewayProvider({ apiKey: config.openrouterApiKey })
+      : undefined;
 
     return {
       config,
@@ -216,6 +223,7 @@ export async function createAppContext(): Promise<AppContext> {
       adapter,
       ofapi,
       aiGatewayProvider,
+      aiGatewayOpenrouterProvider,
       async close() {
         await adapter.close?.();
         await pool.end();
