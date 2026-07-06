@@ -54,7 +54,17 @@ export type ExecutorPullHandler = (
   input: ExecutorChunkInput,
 ) => Promise<StreamChunkResult>;
 
-export type AppPlatformAdapter = PlatformAdapter<ExecutorPullHandler>;
+/** Sync-trigger scope policy: which streams a manual/API trigger of each
+ * scope schedules. POLICY, not capability — e.g. Fansly's "all" deliberately
+ * excludes the bulk fan_earnings/purchase_history streams (Stage 16: manual
+ * sync-all must not fire the heavy crawls). Always a subset of
+ * capabilities.streams (pinned by the registry suite). A scope absent from
+ * the map is unsupported on that platform (resolveStreamsForScope throws). */
+export type SyncScopePolicy = Partial<Record<"light" | "followers" | "all" | "data" | "messages", CanonicalStream[]>>;
+
+export type AppPlatformAdapter = PlatformAdapter<ExecutorPullHandler> & {
+  syncScopes: SyncScopePolicy;
+};
 export type AppPlatformRegistry = PlatformRegistry<AppPlatformAdapter>;
 
 /** Mirrors getSyncStreamsForPlatform("fansly"): every stream but fan_identities. */
@@ -117,6 +127,22 @@ export const fanslyPlatformAdapter: AppPlatformAdapter = {
     presenceSource: "poll",
     billing: "session",
   },
+  syncScopes: {
+    light: ["light"],
+    followers: ["followers"],
+    data: ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"],
+    messages: ["dm_conversations", "dm_messages"],
+    all: [
+      "light",
+      "transactions",
+      "top_spenders",
+      "subscribers",
+      "followers",
+      "followers_reconcile",
+      "dm_conversations",
+      "dm_messages",
+    ],
+  },
   pull: FANSLY_PULL,
   session: {
     kind: "browser_session",
@@ -141,6 +167,20 @@ export const onlyfansPlatformAdapter: AppPlatformAdapter = {
     ],
     presenceSource: "webhook",
     billing: "credit_metered",
+  },
+  syncScopes: {
+    light: ["light", "transactions", "fan_identities"],
+    data: ["light", "transactions", "fan_identities", "top_spenders", "subscribers"],
+    messages: ["dm_conversations", "dm_messages"],
+    all: [
+      "light",
+      "transactions",
+      "fan_identities",
+      "top_spenders",
+      "subscribers",
+      "dm_conversations",
+      "dm_messages",
+    ],
   },
   pull: ONLYFANS_PULL,
   session: {

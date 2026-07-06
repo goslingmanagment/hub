@@ -7,11 +7,11 @@ import {
   requestPageSync as requestPageSyncRows,
   resetPageDmSyncState,
   resetPageSync,
-  getSyncStreamsForPlatform,
   resolvePageSyncPriority,
   resumePageSync,
   type SyncStream,
 } from "@agency_hub_core/db";
+import { appPlatformRegistry } from "../platforms/registry.ts";
 import type { Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
@@ -150,7 +150,7 @@ const BLOCK_TASKS: Record<SyncBlockKey, readonly SyncStream[]> = {
 };
 
 function blockTasksForPlatform(platform: Platform, block: SyncBlockKey) {
-  const supportedStreams = new Set(getSyncStreamsForPlatform(platform));
+  const supportedStreams = new Set(appPlatformRegistry.get(platform).capabilities.streams);
   return BLOCK_TASKS[block].filter((stream) => supportedStreams.has(stream));
 }
 

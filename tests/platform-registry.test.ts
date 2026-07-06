@@ -46,6 +46,17 @@ describe("platform registry (Stage 18)", () => {
     }
   });
 
+  it("scope policies are subsets of capabilities (a scope can never schedule an unservable stream)", () => {
+    for (const adapter of appPlatformRegistry.all()) {
+      const capabilities = new Set(adapter.capabilities.streams);
+      for (const [scope, streams] of Object.entries(adapter.syncScopes)) {
+        for (const stream of streams ?? []) {
+          expect(capabilities.has(stream), `${adapter.key}/${scope}/${stream}`).toBe(true);
+        }
+      }
+    }
+  });
+
   it("adapters conform: every declared stream has a handler, none undeclared", () => {
     expect(checkAdapterConformance(fanslyPlatformAdapter)).toEqual([]);
     expect(checkAdapterConformance(onlyfansPlatformAdapter)).toEqual([]);

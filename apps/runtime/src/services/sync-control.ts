@@ -14,6 +14,7 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
+import { appPlatformRegistry } from "../platforms/registry.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
 import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
@@ -41,49 +42,13 @@ export function resolveStreamsForScope(
   platform: "fansly" | "onlyfans",
   scope: SyncTriggerScope,
 ): SyncStream[] {
-  if (scope === "light") {
-    return platform === "fansly"
-      ? ["light"]
-      : ["light", "transactions", "fan_identities"];
+  // Stage 18 Task 4: scope policy is adapter-owned (registry) — the
+  // per-platform arrays moved behind the seam; outputs pinned unchanged.
+  const streams = appPlatformRegistry.get(platform).syncScopes[scope];
+  if (streams === undefined) {
+    throw new Error(`${scope} sync is not supported for ${platform} pages`);
   }
-
-  if (scope === "followers") {
-    if (platform !== "fansly") {
-      throw new Error("Follower sync is not supported for OnlyFans pages");
-    }
-    return ["followers"];
-  }
-
-  if (scope === "data") {
-    return platform === "fansly"
-      ? ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"]
-      : ["light", "transactions", "fan_identities", "top_spenders", "subscribers"];
-  }
-
-  if (scope === "messages") {
-    return ["dm_conversations", "dm_messages"];
-  }
-
-  return platform === "fansly"
-    ? [
-      "light",
-      "transactions",
-      "top_spenders",
-      "subscribers",
-      "followers",
-      "followers_reconcile",
-      "dm_conversations",
-      "dm_messages",
-    ]
-    : [
-      "light",
-      "transactions",
-      "fan_identities",
-      "top_spenders",
-      "subscribers",
-      "dm_conversations",
-      "dm_messages",
-    ];
+  return [...streams];
 }
 
 export async function requestPageSync(
