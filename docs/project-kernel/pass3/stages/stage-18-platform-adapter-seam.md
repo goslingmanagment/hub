@@ -181,17 +181,33 @@ OnlyMonster deletion pending). Suite **193/1555**.
   halves (bodies verbatim; narrowing via `!==` assertion guards; transactions prelude
   duplicated); per-platform pull maps route to the halves; execute*Chunk compat shells
   remain for tests/sync-handlers.test.ts + 2 integration suites.
-- [ ] **Next session order:** (1) re-point the 3 test suites to the split halves; delete the
-  shells (ratchet drops ~6); (2) relocate handler groups into apps/runtime/src/platforms/
-  {fansly,onlyfans-ofapi}/ modules (git-mv-style, exports preserved); (3) Task 3:
-  onlyfans-ofapi adapter gains webhook/commands halves; DELETE packages/onlyfans
-  (OnlyMonster) + bootstrap adapter/onlyFansAdapter/AdapterLike + OnlyMonster service paths
-  (executeOnlyFansDm*Chunk arms, onlyfans-transactions OnlyMonster branches) — re-grep
-  consumers first; (4) Task 4: app-layer callers of getSyncStreamsForPlatform (sync-blocks
-  :153) + resolveStreamsForScope onto capabilities (page-sync.ts:902 use is db-internal —
-  stays pinned, recorded); (5) Task 5: 0068 platforms reference table + 7-column enum→text
-  (rehearse+reverse on staging BEFORE prod — passport rule); (6) Task 7 ops (48 h telemetry
-  diff, staged deploy Fansly first).
+**Session 2 (2026-07-06, same chain branch @ a476139; decision #99):** BUILD SIDE COMPLETE.
+
+- [x] **Shells deleted + suites re-pointed** (1f11df9) — ratchet 64 → 58.
+- [x] **Task 4** (69ca3ba) — resolveStreamsForScope + sync-blocks supportedStreams read the
+  adapter (syncScopes policy map + capabilities.streams); scope-subset-of-capabilities pinned.
+  page-sync.ts's getSyncStreamsForPlatform use is db-internal — stays pinned, recorded.
+  Ratchet 58 → 55.
+- [x] **Task 3 tail: OnlyMonster DELETED** (c8d93d0, −7,742 lines) — packages/onlyfans +
+  workspace dep + ONLYMONSTER_BASE_URL gone; bootstrap onlyFansAdapter gone; OF pages resolve
+  token-less (no stored credentials); onboarding/verify/update-credentials/page-proxies/CLI
+  re-pointed to OFAPI-era semantics (ambiguous username now 409s; proxy on OF pages 400s —
+  egress is vendor-side); OF transactions pull = recorded skip (webhook-sourced). Ratchet
+  55 → **48**.
+- [x] **Task 5** (a476139) — migration 0068 platforms reference table; 7 enum columns → text
+  + FK; DROP TYPE platform; drizzle platformEnum → text(..., {enum}). **Rehearsed locally
+  up → down → up on postgres:16**; down file = docs/runbooks/0068-platforms-reference-down.sql
+  (must NOT live in migrations/ — the runner applies every .sql there). Test reset helper now
+  preserves the platforms seed rows. STAGING rehearsal on a prod copy before deploy =
+  owner-gated (passport).
+- [ ] **DEFERRED (recorded, decision #99): relocation leg** — handler bodies into
+  packages/fansly-adjacent + onlyfans-ofapi modules, AppContext.adapter retirement (~31
+  consumers), adapter webhook/commands halves, shared platforms const → registry-derived.
+  Pure file motion, zero semantic delta; do as a dedicated compiler-driven session, possibly
+  folded into Stage 26 entry (same modules gain resolveEgress there — avoid moving lines
+  twice).
+- [ ] **Task 7 ops** (owner-gated): staging rehearsal of 0068 + reverse on prod copy; staged
+  deploy (Fansly first, 48 h soak); 48 h telemetry diff; record here.
 
 Gotchas: registry⇄executor-handlers is a value-level circular import that works because the
 handler fns are hoisted declarations consumed at call time — do NOT convert them to const

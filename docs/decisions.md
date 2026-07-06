@@ -2352,3 +2352,86 @@ getSyncStreamsForPlatform's page-sync.ts:902 use is db-package-internal —
 app callers move to capabilities, the db-internal list stays pinned);
 Task 5 — platforms reference table + 7-column enum→text migration
 (staging rehearsal + reverse REQUIRED before prod); Task 7 ops.
+
+## Stage 18 Build Side Complete — OnlyMonster Deleted, Enum Retired (2026-07-06)
+
+**Decision #99:** Stage 18's build half is complete on the chain branch
+(c8d93d0 "18.5 OnlyMonster deleted" → a476139 "18.6 platforms reference
+table"). Two commits, −7,742 lines net on the first. Physical
+handler-relocation is DEFERRED (recorded below) — the seam's semantic
+guarantees are all live and test-pinned.
+
+**18.5 — OnlyMonster deletion (Task 3 tail):**
+- `packages/onlyfans` deleted whole (adapter, mappers, errors, types) +
+  workspace dep + `ONLYMONSTER_BASE_URL` config key/registry row.
+  `onlyFansDefaultDelayMs` KEPT — the sync rate-limiter still paces
+  OF egress with it (platform pacing, not vendor plumbing).
+- `bootstrap.ts`: `onlyFansAdapter` field/construction/close gone.
+  `adapter: AdapterLike` (Fansly) KEPT for now — its retirement rides the
+  relocation leg (below), where the registry becomes the only adapter
+  surface.
+- **OF pages resolve token-less**: `resolvePageContext`'s OnlyMonster
+  decrypt arm died; OF pages return `{ auth: { token: "" }, proxy,
+  egressKey }` without requiring stored credentials (they have none).
+  `resolveExecutorPageContext` = pure delegation now.
+- **Credential surfaces re-pointed to OFAPI-era semantics:**
+  verify-credentials matches `ofapi.listAccounts()` by username
+  (route + test); update-credentials OF variant → 400 ("no stored
+  credentials to update"); page proxies → 400 for OF (egress is
+  vendor-side); CLI `page add onlyfans` lost --token-file/--proxy-*.
+  Contract OF variants shrunk accordingly (createPage = {platform,
+  username(+modelSlug,label)}; updateCredentials = {platform} tag only).
+- **Failed-payload mapper tag** `onlymonster-phase3-v1` kept byte-identical
+  as a local constant in sync/shared.ts (recorded rows stay comparable);
+  honest re-tagging for OFAPI streams can ride a later leg.
+- Tests: OFAPI-era onboarding fixtures (happy path also pins an EMPTY
+  credential vault; ambiguity → 409 — the old "first match wins" behavior
+  is deliberately dead; tx atomicity re-proven via the
+  pages_ofapi_account_uniq constraint firing mid-transaction); OnlyMonster
+  adapter/lookup/mapper/token-file tests deleted; sync-handlers pins the
+  transactions skip stub (webhook-sourced). Ratchet 55 → 48.
+
+**18.6 — platforms reference table (Task 5):**
+- Migration 0068: `platforms(key, display_name, adapter_version)` seeded
+  fansly/onlyfans; the 7 enum columns (pages.platform, fans.platform,
+  dm_message_archive.platform, sync_http_attempts/sync_run_events/
+  sync_rate_limits/page_fan_external_notes.provider) → text USING ::text
+  + FK to platforms(key); DROP TYPE platform last.
+- **Rehearsed locally on postgres:16: up → down → up, all clean.** The
+  down file lives at docs/runbooks/0068-platforms-reference-down.sql (it
+  CANNOT live in packages/db/migrations — the runner pattern-matches and
+  applies every .sql there, and its filename regex rejects dotted
+  suffixes). Staging rehearsal on a prod copy before deploy remains
+  OWNER-GATED (passport rule).
+- Drizzle: platformEnum died; columns are text(..., {enum}) so TS
+  narrowing is unchanged; workboard-v2's raw `'fansly'::platform` casts
+  dropped (type gone). GOTCHA fixed: the integration reset helper
+  truncated ALL public tables — platforms is reference data pages FK
+  into, so resetIntegrationDatabase now excludes it.
+
+**RECORDED DEVIATION — relocation deferred:** the spec's remaining build
+items (§2: handler bodies into packages/fansly-adjacent +
+packages/onlyfans-ofapi modules; AppContext.adapter retirement with ~31
+consumers re-pointed; webhook/commands halves declared on the adapter;
+shared/types platforms const → registry-derived) are pure file/naming
+motion with zero semantic delta — the isolation properties they serve are
+already delivered by the split halves + registry dispatch + conformance
+pins. Doing that churn mid-chain, right before Stage 26 rewires the same
+modules' transport layer (resolveEgress), would move the same lines twice.
+It goes to a dedicated mechanical session (compiler-driven), possibly
+folded into Stage 26's entry. Wiring an adapter `webhook/commands` surface
+NOW, with no consumer re-pointed to it, would be API surface without users
+— declined on scope discipline.
+
+**Stage 18 remaining after this:** relocation leg (above) + Task 7 ops
+(staging rehearsal of 0068 on a prod copy, staged deploy Fansly-first,
+48 h telemetry diff) — owner-gated.
+
+**Full suite after the last code commit: 186 files / 1512 tests green**
+(chain tip 24dee3e). The suite itself earned its keep twice on the way:
+run 1 caught two stale pins still exercising the retired OnlyMonster
+credentials arm of the metadata backfill (re-pinned to OFAPI-only
+semantics in 24dee3e), and the first post-migration run caught
+resetIntegrationDatabase truncating the platforms seed rows. File/test
+counts dropped vs #98 (193/1555 → 186/1512) because OnlyMonster's own
+test files went down with the package — deletions, not regressions.
