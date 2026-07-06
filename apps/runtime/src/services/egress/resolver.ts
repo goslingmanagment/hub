@@ -34,6 +34,12 @@ import { createEgressPacer } from "./pacer.ts";
 
 export type AppEgressContext = EgressContext<Dispatcher>;
 
+/** Which vendor's pacing rows a platform's page-scoped egress rides. */
+const PLATFORM_VENDORS = {
+  onlyfans: "ofapi",
+  fansly: "fansly",
+} as const;
+
 export async function resolveEgress(
   app: AppContext,
   scope: EgressScope,
@@ -67,8 +73,7 @@ export async function resolveEgress(
   const dispatcher = proxy
     ? createProxyRequestDispatcher(proxy)
     : createRequestDispatcher();
-  const vendor = stored.page.platform === "onlyfans" ? "ofapi" : "fansly";
-  const pacer = createEgressPacer(app, { vendor });
+  const pacer = createEgressPacer(app, { vendor: PLATFORM_VENDORS[stored.page.platform] });
 
   return {
     egressKey,
