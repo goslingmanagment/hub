@@ -2839,3 +2839,19 @@ Post-deploy verification:
 Stage 29's remaining exit items (production probes + invoice week) and
 Stage 30 Task 6's smoke-per-feature + latency numbers run against this
 deployment.
+
+**Decision #110 (2026-07-06):** Stage 30 **EXITED** — production smoke of
+every feature service via the new `ai:feature-smoke` CLI (lora-of,
+conversation 310112051, as admin). Headline: **kernel context+prepare =
+77–159 ms** across all features — the only latency added vs client-local
+assembly; provider time dominates identically in either mode (DP 5 holds
+with two orders of magnitude of headroom; this is Stage 31's comparison
+number). fast-reply 2.0s total / $0.024; deep features on their tuned
+models (fan-summary Opus, 123s, $0.24). hi-greeting correctly 400-gated on
+a long conversation — the migrated product gate firing in production.
+Every smoke generation landed in ai_generation_content with its ledger
+row. All §5 exit criteria met: byte-diff proof, parity sign-off (#108),
+per-feature smoke with recorded latency, sanitize regressions green.
+Stages 31/32 fully unblocked. Smoke spend ≈ $0.48 total (three quick
+features ran twice — a parse-retry re-ran them; completions captured both
+times, recorded honestly).

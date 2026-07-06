@@ -227,5 +227,28 @@ exited (entry criterion "29 exited" — deploy pending owner window).
   substitution the desktop made OnlyFans-ward from legacy). The extension
   calls providers directly (Anthropic + OpenRouter /v1/messages) — Stage 32
   is a real transport cutover, unlike the desktop's hub-AI lane.
-- [ ] Task 6: deploy running (0071+0072+0073 one window) + smoke per
-  feature + latency numbers.
+- [x] **Task 6 DONE — deployed + smoked (#109/#110).** Deployed 2026-07-06
+  (full chain 0071-0073 + dist-only catch-up; prod dist = 6f2e530-era).
+  Personas seeded (builtin:lora). Production smoke via `ai:feature-smoke`
+  on lora-of, conversation 310112051 (627 archived messages), as admin:
+
+  | feature | kernel prep | first token | total | cost |
+  |---|---|---|---|---|
+  | fast-reply | 159 ms | 1.7 s | 2.0 s | $0.024 |
+  | improve-draft | 77 ms | 1.6 s | 1.9 s | $0.002 |
+  | help-me | 83 ms | 18.1 s | 29.2 s | $0.020 |
+  | ping | 92 ms | 10.0 s | 10.1 s | $0.006 |
+  | fan-summary (deep, Opus) | 103 ms | 3.1 s | 123 s | $0.237 |
+  | chat-review (deep) | 148 ms | 48.5 s | 93 s | $0.123 |
+  | hi-greeting | — | — | — | correctly 400-gated (conversation >10) |
+
+  **THE Stage 31 latency number: kernel context+prepare = 77–159 ms** — the
+  only cost added vs client-local assembly (provider time is identical
+  either way; the high first-token on help-me/ping/chat-review is adaptive
+  thinking at reasoning=medium, same as client-side). DP 5's "never in the
+  minus" holds with two orders of magnitude of headroom. Every generation
+  landed in ai_generation_content with its ledger row (outcome=completed).
+
+**STAGE 30 EXIT CRITERIA (§5): ALL MET** — byte-diff proof (manifest, CI
+test), parity signed off (#108), smoke exercised every feature with
+latency + outcomes recorded, sanitize regressions green kernel-side.
