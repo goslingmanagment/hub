@@ -2982,3 +2982,24 @@ piped exit code; the vestigial `baseUrl` was removed and the full check
 re-verified green with an unmasked exit. Lesson, family-wide: never read
 a suite's result through a pipe — `cmd | tail` reports the pipe's exit,
 not the suite's.
+
+**Decision #114 (2026-07-07, Stage 35 Tasks 4–6 — the closing stage is done):**
+Maps regenerated into `docs/generated/` in all three repos (core 24 /
+desktop 12 / extension 18, banner-pinned to commit, Pass 1 originals
+banner-superseded, map prompts carry a committed regeneration addendum);
+client CLAUDE.md files rewritten/created to post-migration truth with SDK
+versioning-and-pinning sections; release-hygiene asserts live in both
+release paths (extension deploy.sh proven against the live feed; desktop
+windows-build.yml). Orientation drills — a fresh session per repo, CLAUDE.md
+as sole entry — PASS ×3 with file:line-verified answers; every doc defect
+they surfaced was fixed in-change (core map index routing; extension MV2→MV3,
+stale gateway-contract pointer flagged, E3 correction; desktop SPEC
+§6.2/§8.6 superseded banners + precedence note). The regeneration itself
+found and fixed a shipped extension bug (E8: options-page device-token
+sign-in unreachable — missing protocol case; next release must also migrate
+the 4 legacy-key-only hub ops before deleting the chatter-key path).
+Family CI green same-day: core 28824417152, desktop PR #1 28824630105
+(first-ever PR CI, on a real draft PR), extension 28825364090. With this,
+the 35-stage Project Kernel migration's documentation standard is in force:
+CLAUDE.md + decisions.md + docs/generated/ are the living surface;
+docs/project-kernel/ is the archive.

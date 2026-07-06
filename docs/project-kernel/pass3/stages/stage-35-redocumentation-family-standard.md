@@ -272,3 +272,76 @@ type 'KernelClient'`. Everything reverted; both clients re-verified green
 **Remaining:** Task 4 (maps ×3 + banners), Task 5 (client CLAUDE.md work + SDK
 pinning sections + release-hygiene asserts), Task 6 (orientation drills +
 green-CI snapshot + retrospective pointer).
+
+## Progress (2026-07-07, second push) — Tasks 4–6
+
+**Task 4 DONE:** maps regenerated ×3 into each repo's `docs/generated/` with the
+banner discipline (core: 24 maps @ 0bc74f6; desktop: 12 maps @ d044790;
+extension: 18 maps @ 1586f07 — all committed). Superseded banners prepended to
+every Pass 1 original (21/14/18 files). The map prompts gained a committed
+"Stage 35 regeneration addendum" (output location + banner spec + re-verify
+rule), per assumption 3. Three-claims spot-check done per repo — all exact.
+Derived references verified: the Stage 19 policy table
+(`docs/generated/authorization-policy.md`) carries its regeneration command;
+the Stage 26 "egress inventory" exists as the LIVING raw-fetch ratchet
+(`scripts/check-raw-fetch.mjs` + budget), not a doc — recorded here as the
+inventory's current form.
+*Method note:* regeneration ran on Opus subagents; fact sheets from an aborted
+earlier run were extracted transcript-to-file (never through the orchestrator
+context) and used as pre-verified source material.
+
+**Task 5 DONE:** desktop CLAUDE.md rewritten to post-migration truth + Kernel
+SDK versioning-and-pinning section; extension CLAUDE.md + AGENTS.md created
+from scratch (post-Stage-32 truth, DP 1-B live-reader role, SPEC_FINAL marked
+historical) + same SDK section; release-hygiene asserts shipped AND dry-run
+proven — extension `deploy.sh` (package==manifest before signing; served
+feed==release after upload; verified against the live 1.6.0 feed) and desktop
+`windows-build.yml` (served latest.yml==package.json==tag) + RELEASE.md
+recovery note.
+
+**Task 6 DONE — orientation drills ALL THREE PASS (fresh Opus session per
+repo, CLAUDE.md as sole entry):**
+- **core:** all three answers (fan-earnings write path
+  observations→domain_events→fan_earnings_stats→top-spenders route; staged-flip
+  owner+advisory-lock mechanics; unmapped-webhook capture-then-skip) verified
+  file:line-exact. Friction: no map index visible from the routing table —
+  fixed (row now routes through `00-overview.md`).
+- **extension:** PASS; drill also surfaced doc bugs, all fixed in-change:
+  CLAUDE.md said MV2 (manifest is v3), the `ai-gateway-contract.md` pointer
+  described the V1 raw gateway (now flagged PARTIALLY STALE with the correct
+  feature-lane sources), `boundaries.md` now advertised by name, E3's
+  "vendor hosts left in manifest" corrected by an appended note.
+- **desktop:** PASS; drill flagged SPEC §6.2 (stream v1) and §8.6 (Direct AI)
+  as stale → SUPERSEDED banners added to both sections + a precedence note in
+  the routing table (decisions/generated win over SPEC).
+
+**Bug found by the regeneration (extension E8):** `issueAgencyHubDeviceToken`
+was UNREACHABLE in shipped 1.6.0 (missing `getRuntimeRequestType` case —
+options-page device-token sign-in silently dead; the legacy chatter-key path
+masked it). Fixed + test-pinned on bar-tone-menu; ships next release. Related
+map fact for that release: 4 hub-client ops still authenticate with the legacy
+key only — migrate them to the device token BEFORE deleting the chatter-key
+path.
+
+**Family green-CI snapshot (2026-07-07, all same-day):**
+- core `CI` (full quality gate incl. ratchet + sync-critical Testcontainers):
+  run 28824417152 SUCCESS.
+- desktop PR CI on a real PR (#1, draft, kernel/stage-31-ai-cutover):
+  run 28824630105 `pnpm check` PASS — the zero-PR-CI era is over. (The PR is
+  a DRAFT opened to exercise CI; merging it is the owner-gated 0.1.31 release.)
+- extension `CI` on bar-tone-menu: run 28825364090 SUCCESS.
+- CI floor fix recorded: the ratchet's shrink demand initially failed the
+  Docker image build (context excludes tests/) — now armed only when the full
+  workspace is visible; per-file budgets unconditional.
+
+**Retrospective pointer:** the migration's raw record is
+`pass3/execution-log.md` (per-stage statuses + deviations) +
+`docs/decisions.md` #62–#114 + each stage file's `## Progress` block. A
+synthesized retrospective is deliberately NOT written here — it is owner-called
+future work; this pointer is where it starts.
+
+**Stage exit state:** all §5 exit criteria met same-day (drills ×3 PASS with
+transcripts summarized above, maps banner-dated ≥ last substantive commit,
+family CI green, decisions.md current in all three repos with family law +
+tombstones). Remaining owner calls: flip the execution-log row to `exited`,
+decide the draft PR #1's fate at 0.1.31 time.
