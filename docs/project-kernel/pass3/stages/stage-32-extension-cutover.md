@@ -316,7 +316,27 @@ Branch `kernel/stage-32-extension-cutover` (pushed).
   Integration-tested (client transcript verbatim in the captured prompt;
   min-30 satisfied by client count against a 3-row archive; hi-greeting
   lock; ping segment required/active-blocked/proceeds).
-- [~] **Task 3 in progress — the transport seam landed (432544e).**
+- [x] **Task 3 COMPLETE (seam 432544e + sweep a036a48, −9,004 lines).**
+  operations.ts + compare-operations.ts run through
+  kernelGateway.streamFeature (refs + clientContext out, gateway-priced
+  spend back via the slim src/shared/spend.ts; 'kernel' = summary-cache
+  sentinel, pre-cutover entries invalidate once; service_unavailable
+  retries once, the rate-limit auto-retry died with Retry-After). Compare
+  runs only 'current' persona cards; draft cards error explicitly.
+  DELETED: both vendor clients, llm stream utils/costs, model
+  registry/capabilities, shared prompts.ts + prompts/*.md,
+  prompt-injection, feature-readiness, the usage self-reporter
+  (parseRetryAfterMs inlined into fansly-client). Settings v9 drops
+  vendor keys + model/reasoning selections; options API-keys/Models
+  sections gone; readiness = hub-configured. Manifest loses the two
+  vendor host permissions (structural no-direct-AI proof). Gates:
+  scripts/check-ai-cutover.mjs in `pnpm check` + the manifest pin test.
+  Suite triaged to green: 643 tests (test rewrites of note: prompt-content
+  assertions became kernel-REQUEST assertions; duck-typed error keys kept
+  the retry path testable across dual module instances; the deep
+  idle-keepalive test now rides reasoning deltas — the kernel lane's
+  inter-chunk provider activity).
+  *(the original seam entry follows)*
   `kernel-feature-gateway.ts`: SDK aiFeatureStream with refs+clientContext,
   frame fan-out (onText/onMeta/onUsage/onReasoningDelta/onStopReason),
   kernel gate wordings → extension error keys (not_enough_history /
