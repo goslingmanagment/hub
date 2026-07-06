@@ -301,7 +301,20 @@ Branch `kernel/stage-32-extension-cutover` (pushed).
   a Stage 30 registry addendum when the owner wants kernel-held variants.
 - [ ] Task 3: AI panel → feature services + persona swap + vendor deletion
   + manifest permission shrink (the named substitution is live kernel-side).
-- [ ] Task 4: board → kernel query — REQUIRES the core read endpoint over
-  fan_earnings_stats (not yet built) + Stage 16 prod freshness/parity check.
+- **Core enabler (core be5facb): the board read endpoint.**
+  `GET /api/v1/pages/:pageLabel/top-spenders` (auth any + page scope;
+  page-scoped per-fan spend for an ASSIGNED page — not the Stage 2-gated
+  dashboard revenue aggregates). Snapshot-honest: builtAt =
+  max(observed_at), fanCount = gross>0 spenders, entries spend-descending
+  (qualified ORDER BY — the Stage 8 trap). window ∈ lifetime|YYYY-MM,
+  limit ≤ 500 default 150. Ratchet fallout resolved: platform-branch
+  budget 49 (+1 named substitution), builder.ts coreSha256 refreshed in
+  the prompt manifest, retention-deleter scan filters `server.delete(`
+  registrations (a LATENT Stage 31 trip) and its allowlist tightened by
+  four noise-only modules. Core suite 205/1689 green.
+- [ ] Task 4 (extension side): board → kernel query via the new endpoint —
+  re-vendor the SDK first (pageTopSpenders op) + Stage 16 prod
+  freshness/parity gate check + hidden one-release fallback + quota
+  instrumentation.
 - [ ] Task 5: acceptance events + spool + x-client-version.
 - [ ] Task 6 (ops): ≥1.6.0 release + §5 verification.
