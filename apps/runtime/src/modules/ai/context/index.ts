@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import { listArchiveConversationMessages } from "@agency_hub_core/db";
+import { millsToDollarsNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import {
@@ -45,8 +46,8 @@ function archiveRowToOfapiShape(row: {
   if (!Number.isFinite(id) || row.occurredAt === null) {
     return null;
   }
-  const priceDollars = row.priceMills === null ? null : Number(row.priceMills) / 1000;
-  const tipDollars = Number(row.tipAmountMills) / 1000;
+  const priceDollars = row.priceMills === null ? null : millsToDollarsNumber(row.priceMills);
+  const tipDollars = millsToDollarsNumber(row.tipAmountMills);
   const media = row.mediaMetadata ?? [];
   return {
     id,
@@ -115,7 +116,7 @@ export async function loadSpendingContext(
   `);
   const rows: FanTransactionRow[] = result.rows.map((row) => ({
     type: SPENDING_TYPE_BY_CANONICAL[row.canonical_type] ?? row.canonical_type,
-    amount: Number(row.gross) / 1000,
+    amount: millsToDollarsNumber(row.gross),
     date: new Date(row.occurred_at).toISOString(),
   }));
 
