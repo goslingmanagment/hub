@@ -10,9 +10,11 @@ import {
   deletePageByLabel,
   DuplicateModelSlugError,
   DuplicatePageLabelError,
+  getSyncStreamsForPlatform,
   listAdminModels,
   listAdminPages,
   ModelHasPagesError,
+  pausePageSync,
   updateModelBySlug,
   updatePageByLabel,
 } from "@agency_hub_core/db";
@@ -317,7 +319,13 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     // (migration 0056) make an actual row DELETE structurally impossible on a
     // fact-bearing page. Same response shape as before.
     try {
-      await deletePageByLabel(appContext.db, request.params.pageLabel);
+      const deleted = await deletePageByLabel(appContext.db, request.params.pageLabel);
+      // The planner/lease queries exclude tombstoned pages; pausing here also
+      // stops in-flight leases and keeps the sync states legibly parked.
+      await pausePageSync(appContext.db, {
+        pageId: deleted.id,
+        streams: getSyncStreamsForPlatform(deleted.platform),
+      });
       await recordAudit(appContext, {
         ...auditCtx(principal),
         eventType: "admin.page_soft_delete",

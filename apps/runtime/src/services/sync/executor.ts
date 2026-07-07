@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   acquirePageSyncLease,
   blockPageSync,
+  clearPageSyncLease,
   completePageSync,
   ensurePageSyncStates,
   findPageById,
@@ -122,12 +123,8 @@ async function buildLeaseLostResult(
 async function createChunkTelemetry(
   app: AppContext,
   taskLease: PageSyncLease,
+  storedPage: NonNullable<Awaited<ReturnType<typeof findPageById>>>,
 ) {
-  const storedPage = await findPageById(app.db, taskLease.pageId);
-  if (!storedPage) {
-    throw new Error(`Page ${taskLease.pageId} not found`);
-  }
-
   const trigger = normalizeRunSource(taskLease.requestSource);
   const run = await startTaskRun(app, taskLease, trigger);
   const telemetry = new SyncRunTelemetry(app, {
@@ -144,7 +141,6 @@ async function createChunkTelemetry(
   await telemetry.recordRunStarted();
 
   return {
-    storedPage,
     run,
     telemetry,
   };
@@ -347,7 +343,33 @@ export async function executeNextSyncPageChunk(
     };
   }
 
-  const { storedPage, run, telemetry } = await createChunkTelemetry(app, taskLease);
+  const storedPage = await findPageById(app.db, taskLease.pageId);
+  if (!storedPage) {
+    // The page was tombstoned between scheduling and lease acquisition (the
+    // planner filters on status='active' are the primary guard). Release the
+    // lease as paused and go idle — a deleted page must never loop the
+    // executor through throw/reclaim cycles.
+    await clearPageSyncLease(app.db, {
+      pageId: platformAccountId,
+      stream: taskLease.stream,
+      leaseToken: taskLease.leaseToken ?? "",
+      nextStatus: "paused",
+    });
+    app.logger.warn(
+      { platformAccountId, stream: taskLease.stream },
+      "Sync lease acquired for a missing or tombstoned page — lease released, stream paused",
+    );
+    return {
+      kind: "idle",
+      platformAccountId,
+      stream: null,
+      runId: null,
+      needsContinuation: false,
+      continuationPriority: null,
+    };
+  }
+
+  const { run, telemetry } = await createChunkTelemetry(app, taskLease, storedPage);
   const budget = new SyncChunkBudget();
   let leaseFenced = false;
   const runHeartbeat = setInterval(() => {

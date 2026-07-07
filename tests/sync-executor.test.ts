@@ -10,6 +10,7 @@ const dbMocks = vi.hoisted(() => ({
   acquirePageSyncLease: vi.fn(),
   blockPageSync: vi.fn(),
   pausePageSyncForAuth: vi.fn(),
+  clearPageSyncLease: vi.fn(),
   completePageSync: vi.fn(),
   ensurePageSyncStates: vi.fn(),
   retryPageSync: vi.fn(),
@@ -161,6 +162,7 @@ describe("sync executor", () => {
       },
     });
     dbMocks.heartbeatPageSyncLease.mockResolvedValue(true);
+    dbMocks.clearPageSyncLease.mockResolvedValue(true);
     dbMocks.listRunnablePageSync.mockResolvedValue([]);
     dbMocks.yieldPageSync.mockResolvedValue(true);
     handlerMocks.resolveExecutorPageContext.mockResolvedValue({
@@ -503,6 +505,38 @@ describe("sync executor", () => {
 
     expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(500);
     expect(boss.complete).not.toHaveBeenCalled();
+  });
+
+  it("releases the lease and goes idle when the leased page is missing or tombstoned", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    // findPageById filters status='active': a page tombstoned after scheduling
+    // resolves to null. This must park the stream, not throw — a throw here
+    // used to loop forever through pg-boss retries + lease reclaim.
+    dbMocks.findPageById.mockResolvedValueOnce(null);
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(result).toMatchObject({
+      kind: "idle",
+      platformAccountId: 55,
+      runId: null,
+      needsContinuation: false,
+    });
+    expect(dbMocks.clearPageSyncLease).toHaveBeenCalledWith({}, {
+      pageId: 55,
+      stream: "followers",
+      leaseToken: "lease-1",
+      nextStatus: "paused",
+    });
+    // No run row, no telemetry, no chunk execution for a dead page.
+    expect(dbMocks.startSyncRun).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances).toHaveLength(0);
+    expect(handlerMocks.executeStreamChunk).not.toHaveBeenCalled();
   });
 
   it("marks auth failures durably and does not request continuation", async () => {

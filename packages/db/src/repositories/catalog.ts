@@ -632,6 +632,7 @@ export async function deletePageByLabel(db: Database, label: string) {
     .returning({
       id: pages.id,
       label: pages.label,
+      platform: pages.platform,
     });
 
   if (!deleted) {

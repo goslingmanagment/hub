@@ -848,7 +848,9 @@ export async function ensurePageSyncStates(
   },
 ) {
   const now = input?.now ?? new Date();
-  const clauses = [sql`true`];
+  // Tombstoned pages (deletePageByLabel) must never get sync states seeded
+  // or maintained — a deleted page otherwise re-enters the planner forever.
+  const clauses = [sql`p.status = 'active'`];
   if (input?.pageId !== undefined) {
     clauses.push(sql`p.id = ${input.pageId}`);
   }
@@ -1310,7 +1312,7 @@ export async function listRunnablePageSync(
              st.requested_at as "requestedAt",
              st.request_source as "requestSource"
       from ${pageSyncStates} st
-      inner join ${pages} p on p.id = st.page_id
+      inner join ${pages} p on p.id = st.page_id and p.status = 'active'
       left join ${egressEndpoints} ee on ee.platform_account_id = st.page_id
       where st.request_seq > st.applied_seq
         and st.status <> 'paused'
@@ -1382,6 +1384,10 @@ export async function acquirePageSyncLease(
         and st.blocker_kind is null
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
+        and exists (
+          select 1 from ${pages} p
+          where p.id = st.page_id and p.status = 'active'
+        )
       order by ${streamPriorityBySourceSql("st.stream", "st.request_source")} desc,
                st.requested_at asc nulls last,
                ${streamOrderSql("st.stream")} asc
