@@ -293,14 +293,25 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
         group by 1
       ),
       active_subscribers as (
+        -- Historical dates must count subscriptions that were active THEN,
+        -- not only rows still in the platform's current set: is_current=false
+        -- means "retired by a later sweep", and gating on it made every past
+        -- day's count decay as fans churned. For retired rows the effective
+        -- end is least(ends_at, last_seen_at) — last_seen_at is the
+        -- retirement stamp (deactivate sets it; retired rows are never
+        -- touched again), which covers early cancellation (ends_at still in
+        -- the future) and natural expiry (retirement lagging ends_at) alike.
         select ds.business_date,
                count(ps.id)::int as active_subscribers
         from date_series ds
         left join page_subscriptions ps
           on ps.platform_account_id = ${platformAccountId}
-         and ps.is_current = true
          and coalesce((ps.source_created_at at time zone 'UTC')::date, ds.business_date) <= ds.business_date
-         and coalesce((ps.ends_at at time zone 'UTC')::date, ds.business_date) >= ds.business_date
+         and (case
+                when ps.is_current
+                  then coalesce((ps.ends_at at time zone 'UTC')::date, ds.business_date)
+                else (least(ps.ends_at, ps.last_seen_at) at time zone 'UTC')::date
+              end) >= ds.business_date
         group by ds.business_date
       )
       insert into daily_subscribers (
