@@ -236,6 +236,14 @@ async function throwForErrorResponse(
   throw error;
 }
 
+/** Raw/stream paths carry a null operation (the options doc's contract):
+ * fire the logout hook for 401/403s that never pass throwForErrorResponse. */
+function notifyAuthError(options: KernelClientOptions, error: KernelApiError) {
+  if (error.category === "auth") {
+    options.onAuthError?.(error, null);
+  }
+}
+
 export function createKernelClient(
   operations: Record<KernelOperationKey, KernelOperationDef>,
   options: KernelClientOptions,
@@ -285,7 +293,18 @@ export function createKernelClient(
       body?: unknown;
       headers?: Record<string, string>;
     }) {
-      return executeKernelRequest({ def: operations[key], options, ...input });
+      const def = operations[key];
+      const response = await executeKernelRequest({ def, options, ...input });
+      if (response.status === 401 || response.status === 403) {
+        notifyAuthError(options, new KernelApiError(
+          `${def.method} ${def.path} failed with ${response.status}`,
+          "auth",
+          response.status,
+          null,
+          null,
+        ));
+      }
+      return response;
     },
   } as Record<string, unknown>;
 
@@ -450,13 +469,15 @@ export function subscribeSyncEvents(options: KernelClientOptions, input: {
       return;
     }
     if (!response.ok || !response.body) {
-      throw new KernelApiError(
+      const error = new KernelApiError(
         `events/stream failed with ${response.status}`,
         response.status === 401 || response.status === 403 ? "auth" : "server",
         response.status,
         null,
         await response.text().catch(() => null),
       );
+      notifyAuthError(options, error);
+      throw error;
     }
     for await (const frame of parseSseStream(response.body)) {
       if (frame.event !== "sync" || frame.data === "") {
@@ -516,13 +537,15 @@ export function streamAiFeature(options: KernelClientOptions, input: {
         body = text;
       }
       const envelope = (body ?? {}) as { error?: unknown; message?: unknown };
-      throw new KernelApiError(
+      const error = new KernelApiError(
         typeof envelope.message === "string" ? envelope.message : `ai/features/${input.feature} failed with ${response.status}`,
         response.status === 401 || response.status === 403 ? "auth" : response.status >= 500 ? "server" : "validation",
         response.status,
         typeof envelope.error === "string" ? envelope.error : null,
         body,
       );
+      notifyAuthError(options, error);
+      throw error;
     }
     for await (const frame of parseSseStream(response.body)) {
       if (frame.event !== "ai" || frame.data === "") {
@@ -578,13 +601,15 @@ export function streamAiGateway(options: KernelClientOptions, input: {
         body = text;
       }
       const envelope = (body ?? {}) as { error?: unknown; message?: unknown };
-      throw new KernelApiError(
+      const error = new KernelApiError(
         typeof envelope.message === "string" ? envelope.message : `ai/gateway/stream failed with ${response.status}`,
         response.status === 401 || response.status === 403 ? "auth" : response.status >= 500 ? "server" : "validation",
         response.status,
         typeof envelope.error === "string" ? envelope.error : null,
         body,
       );
+      notifyAuthError(options, error);
+      throw error;
     }
     for await (const frame of parseSseStream(response.body)) {
       if (frame.event !== "ai" || frame.data === "") {
@@ -672,13 +697,15 @@ export function subscribeDomainEvents(options: KernelClientOptions, input: {
       return;
     }
     if (!response.ok || !response.body) {
-      throw new KernelApiError(
+      const error = new KernelApiError(
         `events/v2/stream failed with ${response.status}`,
         response.status === 401 || response.status === 403 ? "auth" : "server",
         response.status,
         null,
         await response.text().catch(() => null),
       );
+      notifyAuthError(options, error);
+      throw error;
     }
     for await (const frame of parseSseStream(response.body)) {
       if (frame.event !== "domain" || frame.data === "" || frame.id === null) {
