@@ -40,8 +40,10 @@ export class SyncChunkBudget implements HttpRequestObserver {
     return !this.hasRequestCapacity() || !this.hasWallClockCapacity();
   }
 
-  resolveYieldReason(): SyncChunkYieldReason | null {
-    if (!this.hasRequestCapacity()) {
+  /** Mirror hasRequestCapacity: a caller whose unit costs N requests resolves
+   * its yield reason against the same N (the fan-earnings walk reserves 2). */
+  resolveYieldReason(requiredCapacity = 1): SyncChunkYieldReason | null {
+    if (!this.hasRequestCapacity(requiredCapacity)) {
       return "request_budget";
     }
 

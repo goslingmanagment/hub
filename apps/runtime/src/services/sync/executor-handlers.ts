@@ -3649,7 +3649,9 @@ export async function executeFanEarningsChunk(
   }
   return {
     satisfied: false,
-    yieldReason: input.budget.resolveYieldReason(),
+    // The walk exits on hasRequestCapacity(2) — resolve the reason against
+    // the same two-call unit cost or every non-final chunk yields reasonless.
+    yieldReason: input.budget.resolveYieldReason(2),
     stats: { fansFetched, fansSkipped, cursorFanId },
   };
 }
