@@ -18,6 +18,8 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   EMPTY_TRANSCRIPT_TEXT,
   createBundledPersonalities,
+  loadFanBio,
+  loadFanDisplayName,
 } from "../apps/runtime/src/modules/ai/index.ts";
 import type {
   AiGatewayProvider,
@@ -466,6 +468,26 @@ describe("client-context path (Stage 32)", () => {
     });
     expect(onlyfansContext.statusCode, onlyfansContext.body).toBe(400);
     expect(onlyfansContext.json().message).toContain("only accepted for fansly");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("fan context platform scoping (review R3-2)", () => {
+  it("fan name/bio lookups are platform-scoped (native ids can collide across platforms)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await testDb.pool.query(
+      `insert into fans (platform, platform_user_id, display_name, metadata)
+       values ('onlyfans', '999000111', 'OF Fan', '{"about":"onlyfans bio"}'),
+              ('fansly',   '999000111', 'Fansly Fan', '{"about":"fansly bio"}')`,
+    );
+    await expect(
+      loadFanDisplayName(appContext, { pageId: 0, fanRef: "999000111", platform: "fansly" }),
+    ).resolves.toBe("Fansly Fan");
+    await expect(
+      loadFanBio(appContext, { fanRef: "999000111", platform: "onlyfans" }),
+    ).resolves.toBe("onlyfans bio");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

@@ -170,8 +170,10 @@ export async function prepareAiFeatureStream(
       messageCount: transcript.messages.length,
       fanSpendingData: spending?.block ?? "",
       fanSubscriptionData: subscription?.block ?? "",
-      fanDisplayName: await loadFanDisplayName(app, { pageId, fanRef }),
-      fanBio: feature === "hi-greeting" ? await loadFanBio(app, { fanRef }) : undefined,
+      fanDisplayName: await loadFanDisplayName(app, { pageId, fanRef, platform: stored.page.platform }),
+      fanBio: feature === "hi-greeting"
+        ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
+        : undefined,
       pingSegment: policy.usesPingSegment
         ? analyzePingSegment(transcript.messages, Date.now()).segment
         : undefined,

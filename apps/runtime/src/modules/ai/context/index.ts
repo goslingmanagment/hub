@@ -177,13 +177,17 @@ export async function loadSubscriptionContext(
 
 export async function loadFanDisplayName(
   app: Db,
-  input: { pageId: number; fanRef: string },
+  input: { pageId: number; fanRef: string; platform: "fansly" | "onlyfans" },
 ): Promise<string> {
+  // fans are unique on (platform, platform_user_id) — the native id alone can
+  // collide across platforms, and a LIMIT 1 without the platform filter could
+  // serve the other platform's fan into the prompt (review R3-2). The LEFT
+  // join is deliberate: a fan not yet linked to the page keeps their name.
   const result = await app.db.execute<{ name: string | null }>(sql`
     select coalesce(pf.page_alias, f.display_name, f.username) as name
     from fans f
     left join page_fans pf on pf.fan_id = f.id and pf.platform_account_id = ${input.pageId}
-    where f.platform_user_id = ${input.fanRef}
+    where f.platform_user_id = ${input.fanRef} and f.platform = ${input.platform}
     limit 1
   `);
   return result.rows[0]?.name ?? input.fanRef;
@@ -194,10 +198,12 @@ export async function loadFanDisplayName(
  * parity checkpoint (Task 5) if the field proves absent in practice. */
 export async function loadFanBio(
   app: Db,
-  input: { fanRef: string },
+  input: { fanRef: string; platform: "fansly" | "onlyfans" },
 ): Promise<string | undefined> {
   const result = await app.db.execute<{ metadata: Record<string, unknown> | null }>(sql`
-    select metadata from fans where platform_user_id = ${input.fanRef} limit 1
+    select metadata from fans
+    where platform_user_id = ${input.fanRef} and platform = ${input.platform}
+    limit 1
   `);
   const metadata = result.rows[0]?.metadata;
   const bio = metadata && typeof metadata === "object"
