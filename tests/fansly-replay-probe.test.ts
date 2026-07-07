@@ -111,4 +111,50 @@ describe("runFanslyReplayProbe", () => {
       runFanslyReplayProbe(fakeApp({}), { pageLabels: ["of-page"], calls: 1 }),
     ).rejects.toThrow(/not a Fansly page/);
   });
+
+  it("rejects a non-positive calls count instead of silently firing zero probes (review R1-5)", async () => {
+    await expect(
+      runFanslyReplayProbe(fakeApp({}), { pageLabels: ["lilly-1"], calls: Number.NaN, dryRun: true }),
+    ).rejects.toThrow(/positive integer/);
+    await expect(
+      runFanslyReplayProbe(fakeApp({}), { pageLabels: ["lilly-1"], calls: 0, dryRun: true }),
+    ).rejects.toThrow(/positive integer/);
+  });
+});
+
+describe("summarizeReplayProbe verdict line (review R1-5)", () => {
+  it("refuses a verdict when no real probes fired (dry-run)", () => {
+    const summary = summarizeReplayProbe([
+      {
+        page: "p1",
+        family: "earnings/stats/accounts",
+        attempt: 1,
+        verdict: "skipped",
+        httpStatus: null,
+        errorCode: null,
+        itemCount: null,
+        wallClockMs: 0,
+        message: "dry-run (not called)",
+      },
+    ]);
+    expect(summary).toContain("NO PROBES FIRED");
+    expect(summary).not.toContain("No auth rejections");
+  });
+
+  it("keeps the green line for a real all-replayable run", () => {
+    const summary = summarizeReplayProbe([
+      {
+        page: "p1",
+        family: "earnings/stats/accounts",
+        attempt: 1,
+        verdict: "replayable",
+        httpStatus: 200,
+        errorCode: null,
+        itemCount: 3,
+        wallClockMs: 12,
+        message: null,
+      },
+    ]);
+    expect(summary).toContain("No auth rejections");
+  });
 });

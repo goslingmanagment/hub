@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { PgBoss } from "pg-boss";
 
 import {
@@ -1081,7 +1081,14 @@ export function buildProgram() {
       "Stage 6 gate: probe whether core can replay Fansly earnings/order-history endpoints server-side",
     )
     .option("--page <label>", "Fansly page label; may be repeated", collectStringOption, [])
-    .option("--calls <n>", "calls per family per page (default 1)", (v) => Number.parseInt(v, 10), 1)
+    .option("--calls <n>", "calls per family per page (default 1)", (value) => {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        // NaN would fire zero probes yet print the green verdict (review R1-5).
+        throw new InvalidArgumentError("--calls must be a positive integer");
+      }
+      return parsed;
+    }, 1)
     .option("--fan <accountId>", "fan account id → correlationAccountId + order-history accountIds (well-formed call)")
     .option("--media <accountMediaId>", "accountMediaId for order-history (well-formed call)")
     .option("--bundle <accountMediaBundleId>", "accountMediaBundleId for order-history (well-formed call)")

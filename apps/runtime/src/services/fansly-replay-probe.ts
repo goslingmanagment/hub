@@ -20,7 +20,9 @@ export type ReplayProbeVerdict =
   | "replayable"
   | "auth-rejected"
   | "route-rejected"
-  | "transport-error";
+  | "transport-error"
+  /** Dry-run rows: no call fired — never counts toward a verdict. */
+  | "skipped";
 
 export interface ReplayProbeResult {
   page: string;
@@ -86,7 +88,12 @@ export async function runFanslyReplayProbe(
   app: AppContext,
   options: ReplayProbeOptions,
 ): Promise<ReplayProbeResult[]> {
-  const calls = Math.max(1, options.calls ?? 1);
+  const calls = options.calls ?? 1;
+  if (!Number.isInteger(calls) || calls < 1) {
+    // NaN (from a garbage --calls) used to fire ZERO probes and still print
+    // the green "no auth rejections" line — a false gate signal (review R1-5).
+    throw new Error("replay-probe calls must be a positive integer");
+  }
   const now = new Date();
   const results: ReplayProbeResult[] = [];
 
@@ -111,7 +118,7 @@ export async function runFanslyReplayProbe(
             page: pageLabel,
             family,
             attempt,
-            verdict: "replayable",
+            verdict: "skipped",
             httpStatus: null,
             errorCode: null,
             itemCount: null,
@@ -196,9 +203,15 @@ export function summarizeReplayProbe(results: ReplayProbeResult[]): string {
       ].join(" | "),
     );
   }
-  const authRejected = results.filter((r) => r.verdict === "auth-rejected");
+  const probed = results.filter((r) => r.verdict !== "skipped");
+  const authRejected = probed.filter((r) => r.verdict === "auth-rejected");
   lines.push("");
-  if (authRejected.length === 0) {
+  if (probed.length === 0) {
+    lines.push(
+      "→ NO PROBES FIRED (dry-run or zero calls) — no replayability verdict. " +
+        "Re-run without --dry-run before filling the stage-06 table.",
+    );
+  } else if (authRejected.length === 0) {
     lines.push(
       "→ No auth rejections: every probed family accepted the pasted session server-side (replayable). " +
         "Fill the stage-06 verdict table and clear Stages 16/17.",
