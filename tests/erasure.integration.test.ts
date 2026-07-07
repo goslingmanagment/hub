@@ -506,4 +506,54 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`fans where platform_user_id = '${FAN_A}'`)).toBe(0);
     expect(await count(`fan_earnings_stats`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("page-scope erasure purges the page's secret/config rows (decision #118)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Soft delete (#72) deliberately keeps page_credentials/egress_endpoints
+    // for undelete; erasure is the one-way door and must purge them — before
+    // #118 the encrypted secrets were present-but-unpurgeable forever.
+    const model = await createModel(testDb.db, { slug: "erasure-118", name: "Erasure 118" });
+    const page = model
+      ? await createOnlyFansPage(testDb.db, { modelId: model.id, label: "erasure-118-page" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed #118 page");
+    }
+    await testDb.pool.query(
+      `insert into page_credentials (platform_account_id, encrypted_session, key_version)
+       values ($1, 'enc:drill-session', 1)`,
+      [page.id],
+    );
+    await testDb.pool.query(
+      `insert into egress_endpoints (platform_account_id, url)
+       values ($1, 'socks5://proxy.example:1080')`,
+      [page.id],
+    );
+    await testDb.pool.query(
+      `insert into fans (platform, platform_user_id, username, display_name)
+       values ('onlyfans', '333000333', 'Fan C', 'Fan C')`,
+    );
+    await testDb.pool.query(
+      `insert into page_fans (fan_id, platform_account_id)
+       select id, $1 from fans where platform_user_id = '333000333'`,
+      [page.id],
+    );
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-118-owner', 'owner') returning id::text as id`,
+    );
+
+    const result = await executeErasure(
+      appStub(),
+      { scopeType: "page", pageLabel: "erasure-118-page" },
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(result.executedCounts["hot:page_credentials:delete"], "page_credentials target").toBe(1);
+    expect(result.executedCounts["hot:egress_endpoints:delete"], "egress_endpoints target").toBe(1);
+    expect(await count(`page_credentials where platform_account_id = ${page.id}`)).toBe(0);
+    expect(await count(`egress_endpoints where platform_account_id = ${page.id}`)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

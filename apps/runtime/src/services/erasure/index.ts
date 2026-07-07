@@ -667,6 +667,12 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["revenue_daily", "platform_account_id"],
     ["projection_seq_watermarks", "account_id"],
     ["domain_event_seq", "account_id"],
+    // Decision #118: erasure is the one-way door for the page's secrets too.
+    // Soft delete (#72) deliberately keeps these for undelete; without them
+    // here a tombstoned page's encrypted credentials were unpurgeable by ANY
+    // path (all other credential readers/deleters are active-gated).
+    ["page_credentials", "platform_account_id"],
+    ["egress_endpoints", "platform_account_id"],
   ];
 
   // page_dm_messages counted separately (cascade of page_dm_threads).

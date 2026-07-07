@@ -3091,3 +3091,15 @@ note is historical, the design-pass prompt and PRD skeleton are banner'd and
 must not be run. No identity/auth work waits on a chatter web surface —
 chatter password self-service remains owner-managed (dashboard Set password,
 #116) unless the owner later orders a standalone change-password page.
+
+**Decision #118 (2026-07-07, owner):** Stage 28.4 page-scope erasure also
+purges the page's config/secret rows (`page_credentials`,
+`egress_endpoints`). Soft delete (#72) stays a two-way door and deliberately
+keeps them; erasure is the one-way door and previously left encrypted secrets
+present-but-unreachable forever (all credential readers/deleters are
+active-gated, and the erasure target list omitted both tables). DP 7
+unaffected — these are config, not captured facts; the erasure module is
+already on the retention-deleters allowlist. Regression: the page-scope
+erasure drill in `tests/erasure.integration.test.ts` seeds both rows and
+pins their `hot:*:delete` targets. Origin: external review finding R2-1
+(the reviewer's delete-in-soft-delete fix was rejected as reversing #72).
