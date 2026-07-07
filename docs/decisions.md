@@ -3103,3 +3103,57 @@ already on the retention-deleters allowlist. Regression: the page-scope
 erasure drill in `tests/erasure.integration.test.ts` seeds both rows and
 pins their `hot:*:delete` targets. Origin: external review finding R2-1
 (the reviewer's delete-in-soft-delete fix was rejected as reversing #72).
+
+## External-Review Fix Batch Deployed — Stage 26 Shadow Window Restarted (2026-07-07)
+
+Three automated reviews of main (`0ebf936..1a06b5d`, `..05b6f3e`,
+`..1ea4e10`) produced 25 findings; all verified in-repo before acting
+(five parallel audit agents). 21 fixed across 17 commits
+(`15c53ae..0d60fe9`) plus #118 (`d3a581d`); 4 no-action: R1-2 stale
+(already fixed by 5021ac2/0056), R1-6 benign by design (capture-first),
+R1-8 deprecated surface (#117), R3-5 optional Drizzle hygiene. Three
+reviewer-proposed fixes were REJECTED and replaced: delete-children-in-
+soft-delete (reverses #72 — replaced by #118 erasure coverage), inner
+page_fans join in the AI name lookup (blanks un-linked fans — platform
+filter instead), skip-observation-on-stale-finalize (drops a captured
+fact — the idempotency key already dedupes the race).
+
+Headline fixes: the shadow egress pacer is isolated to `shadow:vendor:*`
+rows and shadow bulk claims only its class row — **all Stage 26
+shadow-diff data collected before this deploy is invalid; the 48 h
+observation window restarts at this deploy, and the enforce cutover must
+be judged only on post-2026-07-07 numbers.** Observation idempotency keys
+are per-fetch (`page:stream:run:requestSeq.N`) — multi-page chunks
+journal fully (`fan_earnings_monthly` had been dropped every chunk).
+Global notification incidents (null page) are listable and manually
+resolvable. SDK `onAuthError` fires for raw()/SSE 401s. Webhook
+transaction provenance survives REST backfill. Tombstoned pages leave the
+visible-model surface. CI regenerates contracts and fails on drift; three
+guard tests joined the `[sync-critical]` PR slice (19→22).
+`fansly:replay-probe` refuses verdicts on dry-run/zero-call runs. The
+fan_earnings walk yields `request_budget`, not null. Write eligibility
+requires an active page (backfill + spend sweep). Incident resolve texts
+are exhaustive per kind. Ten auth flows commit mutation+audit atomically
+(`withAuditTransaction`). The #116 provisioning flow is extracted and
+unit-tested. AI-context money rides `millsToDollarsNumber`. Dynamic
+undici imports are lint-banned; the two ipify diagnostics ride an
+`undiciRequest` re-export from http-client.
+
+Deploy: dist-only `d3a581dc2861` (~19:00 UTC). Script verified API
+health, worker healthcheck, and image labels; the `/api/v1/health/sync`
+gate then timed out 8× — post-restart worker catch-up plus autovacuum
+made the visible_pages aggregation exceed the 30 s per-attempt cap, and
+each abandoned attempt left its query running server-side (17 stacked
+backends at peak, a self-amplifying loop). The script was deliberately
+stopped before exhausting retries to prevent an auto-rollback of a
+healthy stack (locks released cleanly; no rollback ran); the two
+remaining gates were completed by hand: sync-health 200 with pages
+(56 s → 34 s as the backlog drained), `/login` 200 with the root mount.
+Deploy-script follow-up for a future session: the sync gate's 30 s
+per-attempt cap is too tight for cold-start churn — raise its max_time
+or make the API cancel the query when the client disconnects.
+
+Still open after this batch: prompt-1-map re-runs for
+`docs/generated/00-overview.md` (claims TS 5.8/Vitest 3; repo is on
+TS 6/Vitest 4) and `18-retention-erasure-tiering.md` (generator-emitted
+trailing whitespace) — fresh session, hand-edit banned by their banners.
