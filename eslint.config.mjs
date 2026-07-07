@@ -87,6 +87,11 @@ export default tseslint.config(
         // ratchet (scripts/check-raw-fetch.mjs).
         selector: "ImportDeclaration[source.value='undici'][importKind='value']",
         message: "Import undici only inside services/egress or packages/shared/http-client (Stage 26): resolve transports via resolveEgress.",
+      }, {
+        // Same wall, dynamic form: await import("undici") must not bypass
+        // the Stage 26 seam either (review R3-9).
+        selector: "ImportExpression > Literal[value='undici']",
+        message: "Dynamic undici imports bypass the Stage 26 wall: use undiciRequest from @agency_hub_core/shared (http-client) or resolve transports via resolveEgress.",
       }],
       "no-restricted-imports": ["error", {
         paths: [{

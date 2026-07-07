@@ -21,6 +21,7 @@ import {
   parsePeriod,
   redactSensitiveText,
   millsFromInteger,
+  undiciRequest,
   type ProxyConfig,
   type TransactionType,
 } from "@agency_hub_core/shared";
@@ -228,13 +229,12 @@ function collectStringOption(value: string, previous: string[] = []) {
 }
 
 async function lookupExitIpViaDispatcher(input: { url: string } | null) {
-  const { request } = await import("undici");
   const dispatcher = input
     ? createProxyRequestDispatcher(input)
     : createRequestDispatcher();
 
   try {
-    const { statusCode, body } = await request("https://api.ipify.org?format=json", {
+    const { statusCode, body } = await undiciRequest("https://api.ipify.org?format=json", {
       method: "GET",
       signal: AbortSignal.timeout(30_000),
       dispatcher,

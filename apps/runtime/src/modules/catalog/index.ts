@@ -22,6 +22,7 @@ import {
   createProxyRequestDispatcher,
   normalizeProxyConfig,
   redactSensitiveText,
+  undiciRequest,
   type Platform,
 } from "@agency_hub_core/shared";
 
@@ -388,7 +389,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    const { request: undiciRequest } = await import("undici");
     let proxy: ReturnType<typeof normalizeProxyConfig>;
     try {
       proxy = normalizeProxyConfig(request.body.proxy);

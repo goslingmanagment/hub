@@ -1,7 +1,12 @@
 import { inspect } from "node:util";
 
-import { Agent, ProxyAgent, buildConnector } from "undici";
+import { Agent, ProxyAgent, buildConnector, request } from "undici";
 import { SocksClient } from "socks";
+
+// Stage 26: the sanctioned undici request for non-platform diagnostics that
+// must ride an explicit dispatcher (proxy exit-IP checks). Platform-bound
+// traffic still resolves through services/egress/resolveEgress.
+export { request as undiciRequest };
 
 import type { ProxyConfig } from "./types.ts";
 import {
