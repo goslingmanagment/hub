@@ -2402,7 +2402,7 @@ describe("api integration", () => {
     ]);
   });
 
-  it("dual-writes operator observations at the audit choke point (Stage 7 producer 6)", async (context) => {
+  it("dual-writes operator observations at the audit choke point (Stage 7 producer 6) [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -2428,7 +2428,7 @@ describe("api integration", () => {
     expect(Number(issued.rows[0]!.n)).toBeGreaterThanOrEqual(1);
   });
 
-  it("gates raw revenue routes to dashboard session roles (Stage 2 chatter-read-scope)", async (context) => {
+  it("gates raw revenue routes to dashboard session roles (Stage 2 chatter-read-scope) [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -9504,7 +9504,7 @@ describe("api integration", () => {
     expect(chatterList.statusCode).toBe(403);
   });
 
-  it("soft-deletes pages: tombstone keeps facts, RESTRICT blocks raw DELETE (Stage 13)", async (context) => {
+  it("soft-deletes pages: tombstone keeps facts, RESTRICT blocks raw DELETE (Stage 13) [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
