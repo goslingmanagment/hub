@@ -11,9 +11,24 @@ export interface PageSyncExecutionContext {
   stream: SyncStream;
   requestSeq: number;
   leaseToken: string;
+  /** Mutable per-chunk fetch counter (observation idempotency keys). */
+  fetchSeq?: number;
 }
 
 const pageSyncExecutionContextStorage = new AsyncLocalStorage<PageSyncExecutionContext>();
+
+/** Unique per fetch within a chunk: "<requestSeq>.<n>". Null outside one.
+ * Multi-fetch chunks (pagination walks, multi-endpoint units) previously all
+ * shared the chunk's requestSeq, and every observation after the first was
+ * silently dropped by the (source, idempotency_key) claim. */
+export function nextPageSyncObservationSeq(): string | null {
+  const context = pageSyncExecutionContextStorage.getStore();
+  if (!context) {
+    return null;
+  }
+  context.fetchSeq = (context.fetchSeq ?? 0) + 1;
+  return `${context.requestSeq}.${context.fetchSeq}`;
+}
 
 export class PageSyncLeaseLostError extends Error {
   constructor(message = "Page sync lease lost") {

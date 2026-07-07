@@ -5,6 +5,7 @@ import {
   getPageSyncExecutionContext,
   insertObservation,
   insertRawPayload,
+  nextPageSyncObservationSeq,
   updatePageMetadata,
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
@@ -98,8 +99,9 @@ export async function persistRawPayload(
   // Stage 7 producer 2: every fetched page is also an observation. As loud as
   // the raw insert — a failed capture fails the chunk (which retries); never a
   // silent drop. The idempotency key is unique per fetch by construction
-  // (page:stream:run:requestSeq); when a caller runs outside the page-executor
-  // context a UUID takes requestSeq's place — retries then produce extra
+  // (page:stream:run:requestSeq.fetchN — the fetch counter lives on the
+  // executor context, so multi-page walks journal every page); outside the
+  // page-executor context a UUID takes its place — retries then produce extra
   // observations with distinct keys, which the Stage 7 reconciliation expects.
   const context = getPageSyncExecutionContext();
   const stream = context?.stream ?? null;
@@ -120,7 +122,7 @@ export async function persistRawPayload(
         input.platformAccountId,
         stream ?? input.endpoint,
         input.syncRunId ?? "norun",
-        context?.requestSeq ?? randomUUID(),
+        nextPageSyncObservationSeq() ?? randomUUID(),
       ].join(":"),
     });
   } catch (error) {
@@ -404,7 +406,7 @@ export async function persistFailedSyncPayload(
         input.platformAccountId,
         `${input.endpoint}:failed`,
         input.syncRunId,
-        getPageSyncExecutionContext()?.requestSeq ?? randomUUID(),
+        nextPageSyncObservationSeq() ?? randomUUID(),
       ].join(":"),
     });
   } catch (error) {
