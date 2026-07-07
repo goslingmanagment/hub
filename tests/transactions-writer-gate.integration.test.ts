@@ -7,6 +7,7 @@ import {
   insertObservation,
   setPageOfapiAccountId,
   upsertOfapiSpendProjectionEvent,
+  upsertTransaction,
 } from "@agency_hub_core/db";
 import { createHash } from "node:crypto";
 
@@ -218,5 +219,80 @@ describe("transactions single-writer gate (Stage 13)", () => {
        values ($1, 'bad-source-tx', '2110', 'tip', 'posted', '1', 1000, 1000, 800, now(), 'made_up')`,
       [page.id],
     )).rejects.toThrow(/transactions_source_check/);
+  });
+
+  it("REST backfill upsert preserves webhook provenance (source + observation link) (review R2-2)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("prov", "acct-prov");
+    if (!page) {
+      throw new Error("Failed to seed provenance page");
+    }
+    const observation = await insertObservation(appContext.db, {
+      source: "pull",
+      producer: "test:provenance",
+      platform: "onlyfans",
+      accountId: page.id,
+      kind: "test_fixture",
+      payload: { fixture: true },
+      payloadHash: createHash("sha256").update(JSON.stringify({ fixture: true })).digest(),
+      idempotencyKey: `test:provenance:${page.id}`,
+    });
+
+    const base = {
+      platformAccountId: page.id,
+      transactionId: "prov-1",
+      rawType: "tip",
+      canonicalType: "tip" as const,
+      transactionState: "posted" as const,
+      rawStatus: "done",
+      grossAmountMills: 10_000n,
+      sourceDestinationAmountMills: 10_000n,
+      creatorNetAmountMills: 8_000n,
+      occurredAt: new Date("2026-07-01T00:00:00Z"),
+    };
+    await upsertTransaction(appContext.db, {
+      ...base,
+      source: "ofapi:webhook",
+      sourceObservationId: observation.observationId,
+    });
+    await upsertTransaction(appContext.db, {
+      ...base,
+      source: "ofapi:rest",
+      grossAmountMills: 12_000n,
+    });
+
+    const first = await testDb.pool.query<{
+      source: string;
+      source_observation_id: string | null;
+      gross_amount_mills: string;
+    }>(
+      `select source, source_observation_id::text as source_observation_id, gross_amount_mills::text as gross_amount_mills
+       from transactions where platform_account_id = $1 and transaction_id = 'prov-1'`,
+      [page.id],
+    );
+    // Webhook provenance survives; amounts still converge (Audit B2).
+    expect(first.rows[0]?.source).toBe("ofapi:webhook");
+    expect(first.rows[0]?.source_observation_id).toBe(String(observation.observationId));
+    expect(first.rows[0]?.gross_amount_mills).toBe("12000");
+
+    // Reverse order upgrades: REST first, webhook after wins provenance.
+    await upsertTransaction(appContext.db, { ...base, transactionId: "prov-2", source: "ofapi:rest" });
+    await upsertTransaction(appContext.db, {
+      ...base,
+      transactionId: "prov-2",
+      source: "ofapi:webhook",
+      sourceObservationId: observation.observationId,
+    });
+    const second = await testDb.pool.query<{ source: string; source_observation_id: string | null }>(
+      `select source, source_observation_id::text as source_observation_id
+       from transactions where platform_account_id = $1 and transaction_id = 'prov-2'`,
+      [page.id],
+    );
+    expect(second.rows[0]?.source).toBe("ofapi:webhook");
+    expect(second.rows[0]?.source_observation_id).toBe(String(observation.observationId));
   });
 });

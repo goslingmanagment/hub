@@ -102,6 +102,16 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     platformFeeMills: sql<bigint | null>`coalesce(excluded.platform_fee_mills, ${transactions.platformFeeMills})`,
     vatAmountMills: sql<bigint | null>`coalesce(excluded.vat_amount_mills, ${transactions.vatAmountMills})`,
     taxAmountMills: sql<bigint | null>`coalesce(excluded.tax_amount_mills, ${transactions.taxAmountMills})`,
+    // Provenance (Stage 13/14 posture): the observation link is fill-only —
+    // a writer with no link never erases one — and REST backfill never
+    // downgrades webhook provenance. Amounts/state above stay last-writer
+    // (Audit B2: money truth converges, provenance is the audit trail).
+    sourceObservationId: sql<number | null>`coalesce(excluded.source_observation_id, ${transactions.sourceObservationId})`,
+    source: sql<string>`case
+      when ${transactions.source} = 'ofapi:webhook' and excluded.source = 'ofapi:rest'
+        then ${transactions.source}
+      else excluded.source
+    end`,
     scanToken: input.scanToken === undefined
       ? sql`${transactions.scanToken}`
       : (input.scanToken ?? null),
