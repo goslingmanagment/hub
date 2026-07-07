@@ -1,7 +1,9 @@
 interface Filter {
   key: string;
   label: string;
-  count?: number;
+  // `| undefined` so callers can pass a still-loading query's count directly
+  // under exactOptionalPropertyTypes; the render already guards with != null.
+  count?: number | undefined;
 }
 
 interface FilterButtonsProps {

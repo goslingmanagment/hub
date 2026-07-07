@@ -41,7 +41,10 @@ export function SubscribersPage() {
 
   const { data, isLoading, isError } = usePageSubscribers(pageLabel!, params);
 
-  // Filter count queries (lightweight, limit: 1)
+  // Filter count queries (lightweight, limit: 1). Like the other chips, the
+  // "All" count ignores the active filter AND the search box — chips mean
+  // "population per category"; search only narrows the table below.
+  const { data: allCount } = usePageSubscribers(pageLabel!, { limit: 1 });
   const { data: expiringCount } = usePageSubscribers(pageLabel!, { limit: 1, expiringWithinDays: 7 });
   const { data: newCount } = usePageSubscribers(pageLabel!, { limit: 1, startedWithinHours: 24 });
   const { data: noRenewCount } = usePageSubscribers(pageLabel!, { limit: 1, autoRenew: false });
@@ -66,7 +69,7 @@ export function SubscribersPage() {
   const items = data.items;
   const total = data.total;
   const filters = [
-    { key: "all", label: "All", count: total },
+    { key: "all", label: "All", count: allCount?.total },
     { key: "expiring7d", label: "Expiring ≤7d", count: expiringCount?.total },
     { key: "new24h", label: "New 24h", count: newCount?.total },
     { key: "norenew", label: "Auto-renew Off", count: noRenewCount?.total },
@@ -78,7 +81,7 @@ export function SubscribersPage() {
         <h1 className="text-xl font-extrabold text-text-primary">
           Subscribers &mdash; {pageLabel}
         </h1>
-        <p className="text-sm text-text-muted mt-1">{total} total</p>
+        <p className="text-sm text-text-muted mt-1">{allCount?.total ?? total} total</p>
       </div>
 
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">

@@ -31,13 +31,15 @@ export function usePageRevenueDaily(pageLabel: string, period = "30d", options: 
 
 export function usePageSubscribers(
   pageLabel: string,
+  // `| undefined` per key: callers pass literals where undefined means "not
+  // filtered", which exactOptionalPropertyTypes otherwise rejects.
   params: {
-    limit?: number;
-    offset?: number;
-    query?: string;
-    expiringWithinDays?: number;
-    startedWithinHours?: number;
-    autoRenew?: boolean;
+    limit?: number | undefined;
+    offset?: number | undefined;
+    query?: string | undefined;
+    expiringWithinDays?: number | undefined;
+    startedWithinHours?: number | undefined;
+    autoRenew?: boolean | undefined;
   } = {},
   options: QueryOptions = {},
 ) {
