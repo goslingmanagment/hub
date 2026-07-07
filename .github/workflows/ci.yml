@@ -34,6 +34,15 @@ jobs:
       - name: Lint (family standard + architecture walls)
         run: pnpm lint
 
+      # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
+      # consistency, but editing routes.ts without `pnpm contracts:generate`
+      # kept the committed artifacts mutually consistent yet stale. The
+      # generator boots the API server with a stub config — no DB needed.
+      - name: Contracts are regenerated (routes.ts ↔ committed artifacts)
+        run: |
+          pnpm contracts:generate
+          git diff --exit-code reference/agency-hub.openapi.json packages/sdk docs/generated/authorization-policy.md
+
       - name: Production build
         run: pnpm build:production
 
