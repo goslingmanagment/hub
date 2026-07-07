@@ -10,11 +10,12 @@ compute no money; everything privileged happens here, behind the generated SDK.
 Production: one VPS (Docker: api + worker + scheduler + Postgres 16), deployed
 by `scripts/deploy-production.sh` (owner-gated).
 
-**Current state (2026-07-06): the Project Kernel migration (35 stages) is
-essentially complete — stages 1–32 built and in production, the extension 1.6.0
-and desktop kernel-AI cutovers shipped. The dashboard is being rebuilt from
-scratch (decision #112, `docs/project-kernel/dashboard/`); Stage 35
-(this documentation standard) is the closing stage. `docs/project-kernel/` is
+**Current state (2026-07-07): the Project Kernel migration (35 stages) is
+essentially complete — stages 1–32 built and in production, the extension 1.7.0
+and desktop 0.1.31 kernel cutovers shipped. The dashboard rebuild was CANCELLED
+(decision #117 reversing #112): `apps/dashboard` is the live, maintained admin
+console; the workboard direction is deprecated (#117). Stage 35 (this
+documentation standard) is the closing stage. `docs/project-kernel/` is
 the migration's historical archive — living docs are `docs/` + `docs/generated/`.**
 
 ## Read these before designing or building anything
@@ -28,7 +29,6 @@ the migration's historical archive — living docs are `docs/` + `docs/generated
 | `docs/runbooks/` | Operational rituals — incl. the break-glass direct-read runbook (DP 8) and go-live checklists |
 | `docs/ai-gateway-contract.md`, `docs/ofapi-command-outbox-contract.md` | The two most load-bearing client contracts in prose |
 | `reference/agency-hub.openapi.json` | The generated OpenAPI snapshot — the contract clients see |
-| `docs/project-kernel/dashboard/` | The dashboard-rebuild PRD (in progress; owner reviews before build) |
 
 ## Hard rules (each exists because something broke without it)
 

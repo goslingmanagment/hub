@@ -1,5 +1,11 @@
 # Stage 34 — Workboard application — PLACEHOLDER
 
+> **DEPRECATED (decision #117, 2026-07-07, owner).** The workboard direction
+> is closed — do not run the design pass, do not build this stage. The
+> "Progress (2026-07-07)" note below (DPs resolved, hosting, repo) is
+> historical. The dashboard's Workboard v2 page keeps serving as-is but is
+> not a product direction. This file stays as the scope tombstone.
+
 **Repo(s):** new repo (name/home TBD by the owner — DP 4a = B, own repository) ·
 **Depends on:** 20 (SDK), 21 (stream v2), 22 (sessions/grants), 23 (workboard module), Q4
 (design pass) · **Passport:** roadmap.md §4, stage 34

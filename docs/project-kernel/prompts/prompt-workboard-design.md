@@ -1,5 +1,8 @@
 # Workboard app — design-pass session (Stage 34)
 
+> **DEPRECATED (decision #117, 2026-07-07, owner).** Do not run this session
+> — the workboard direction is closed. Kept as a tombstone.
+
 Run this in a FRESH session opened in `~/code/core`. You are designing the
 standalone workboard application — the chatter's revenue tool: log in, see
 your assigned pages, see who to message now and why. This is the design pass

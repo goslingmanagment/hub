@@ -1,5 +1,8 @@
 # Workboard — PRD (v1, Fansly-only)
 
+> **DEPRECATED (decision #117, 2026-07-07, owner).** The workboard direction
+> is closed; this skeleton is never filled. Kept as a tombstone.
+
 > STATUS: SKELETON — the design session fills this; the owner reviews before
 > any code. Decided inputs (do not reopen): kernel-session login, per-page
 > grants, workboard.gosling-agency.ru on the agency VPS, own repo

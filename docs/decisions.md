@@ -1804,7 +1804,7 @@ extraction commit: **186 files / 1505 tests green**. server.ts shrank
 3,768 → 2,063 lines. One verified checkpoint commit per module — each gated on
 typecheck + an EMPTY `contracts:generate` diff + targeted suites + the new
 role matrix: workboard (2ba8c15, with the extraction scaffold), identity
-(383e649), ai (9f985a6), events (245df9b, the whole SSE lifecycle), 
+(383e649), ai (9f985a6), events (245df9b, the whole SSE lifecycle),
 conversations (f88d611), ingest (a0718f6), audience (bc17a6a), finance
 (72ca544, incl. the overview aggregate and getRevenueDailySeries).
 
@@ -3068,3 +3068,26 @@ deprecations — both entries currently read as active plans.
 Client-side counterparts: extension E12 (hub-failure diagnostics) already
 recorded; extension E9 deletion and the desktop probe fix reference this
 entry.
+
+**Decision #117 (2026-07-07, owner):** #112 REVERSED; workboard direction
+CLOSED — the #116d open adjudication is resolved. (1) The dashboard rebuild
+is CANCELLED: `apps/dashboard` is NOT deprecated — it is the live, maintained
+admin surface (the owner runs the agency from it daily). The #112 carry-over
+features (grants + device-token admin UI, erasure UI, golden-signals page,
+stream-v2 replacing the polling timers) become BACKLOG items for the live
+dashboard — incremental work, no rebuild, no parity gate. TOMBSTONE:
+`docs/project-kernel/prompts/prompt-dashboard-rebuild.md` AND the PRD
+workspace `docs/project-kernel/dashboard/` (skeleton prd.md + README) deleted
+in this change (the prompt's verified ground truth — the polling inventory and
+v2 event-lane facts — originated in the abandoned Stage 33 branch notes;
+re-derive from code if needed); CLAUDE.md header and SESSIONS.md harness
+table updated in the same change. Consequence for #113: the strictness-ratchet debt attributed
+to "the deprecated dashboard's share dies with the rebuild" is REAL debt now
+and burns down like everything else. (2) The workboard direction is
+DEPRECATED (owner, same session — including the dashboard's Workboard v2
+page as a product direction; the page keeps serving as-is): Stage 34 stays a
+placeholder with a deprecation banner, its 2026-07-07 "DPs RESOLVED" progress
+note is historical, the design-pass prompt and PRD skeleton are banner'd and
+must not be run. No identity/auth work waits on a chatter web surface —
+chatter password self-service remains owner-managed (dashboard Set password,
+#116) unless the owner later orders a standalone change-password page.

@@ -1,10 +1,13 @@
 # Stage 33 — Dashboard modernization
 
-> **SUPERSEDED (decision #112, 2026-07-07).** The owner ruled a full dashboard
-> REBUILD in its own session with its own PRD (`docs/project-kernel/prompts/
-> prompt-dashboard-rebuild.md`); the current app is deprecated and will be
-> deleted after the new one's parity sign-off. This spec's requirements carry
-> over as PRD inputs; its incremental tasks do not execute.
+> **SUPERSEDED (decision #112, 2026-07-07) — then #112 REVERSED (decision
+> #117, 2026-07-07).** #112 briefly ruled a full rebuild; the owner reversed
+> it the same day: `apps/dashboard` is the live, maintained admin surface —
+> NOT deprecated, no rebuild, no parity gate (the rebuild launch prompt was
+> deleted, tombstone in #117). This stage's task plan still does not execute
+> as a stage; its §2 features (grants + device-token admin UI, erasure UI,
+> golden-signals, stream-v2 over the polling timers) are BACKLOG items for
+> the live dashboard, picked up incrementally.
 
 **Repo(s):** core/dashboard (same repo) · **Depends on:** 20 (SDK adoption this builds on), 21,
 22, 28; soft: 24 (v2 proven under fleet load) · **Passport:** roadmap.md §4, stage 33

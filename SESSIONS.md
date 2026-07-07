@@ -11,7 +11,6 @@ code. Prompts state goals, hard constraints, and done-criteria — not steps.
 | Prompt | Use |
 |---|---|
 | `docs/project-kernel/prompts/prompt-4-stage-execution.md` | The (historical) stage-execution harness that ran the 35-stage migration — parameterized `STAGE=NN`; keep for reference and for any remaining stage tails |
-| `docs/project-kernel/prompts/prompt-dashboard-rebuild.md` | The dashboard rebuild session (PRD first → owner review → staged build) |
 | `docs/prompts/` (map prompts) | Regenerate `docs/generated/` maps after substantive changes |
 
 ## Standing rules for any core session
