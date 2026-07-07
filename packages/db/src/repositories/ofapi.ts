@@ -510,6 +510,13 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
       sourceIdempotencyKey: ofapiSpendProjectionEvents.sourceIdempotencyKey,
     })
     .from(ofapiSpendProjectionEvents)
+    // Events journaled pre-tombstone must not be written post-tombstone: the
+    // sweep only applies rows whose page is still live (review R2-4). The
+    // events stay journaled and would apply again on undelete.
+    .innerJoin(pages, and(
+      eq(pages.id, ofapiSpendProjectionEvents.pageId),
+      eq(pages.status, "active"),
+    ))
     .where(and(
       eq(ofapiSpendProjectionEvents.sourceEventType, "transactions.new"),
       eq(ofapiSpendProjectionEvents.projectionStatus, "projected"),

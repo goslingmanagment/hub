@@ -12,6 +12,7 @@ import {
 import { createHash } from "node:crypto";
 
 import { applyOfapiSpendProjectionTransactions } from "../apps/runtime/src/services/ofapi-spend-transaction-ingest.ts";
+import { loadWriteEligibility } from "../apps/runtime/src/services/ofapi-transactions-backfill.ts";
 import {
   assertPageTransactionsWriter,
   WrongTransactionsWriterError,
@@ -294,5 +295,60 @@ describe("transactions single-writer gate (Stage 13)", () => {
     );
     expect(second.rows[0]?.source).toBe("ofapi:webhook");
     expect(second.rows[0]?.source_observation_id).toBe(String(observation.observationId));
+  });
+
+  it("truth ingest skips backlog rows for tombstoned pages (review R2-4)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("tomb", "acct-tomb");
+    if (!page) {
+      throw new Error("Failed to seed tomb page");
+    }
+    await seedProjectedTransaction({
+      pageId: page.id,
+      ofapiAccountId: "acct-tomb",
+      transactionId: "tomb-tx-1",
+      sourceIdempotencyKey: "whk:tomb-1",
+    });
+    // The event was journaled pre-tombstone; the page dies before the sweep.
+    await testDb.pool.query(
+      "update pages set status = 'deleted', deleted_at = now() where id = $1",
+      [page.id],
+    );
+
+    const applied = await applyOfapiSpendProjectionTransactions(appContext);
+    expect(applied).toBe(0);
+    const written = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from transactions where platform_account_id = $1",
+      [page.id],
+    );
+    expect(written.rows[0]?.n).toBe("0");
+  });
+
+  it("backfill eligibility refuses a tombstoned page (review R2-4)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("tomb2", "acct-tomb2");
+    if (!page) {
+      throw new Error("Failed to seed tomb2 page");
+    }
+    await testDb.pool.query(
+      "update pages set status = 'deleted', deleted_at = now() where id = $1",
+      [page.id],
+    );
+
+    const eligibility = await loadWriteEligibility(appContext.db, {
+      pageId: page.id,
+      from: new Date("2026-01-01T00:00:00Z"),
+      to: null,
+    });
+    expect(eligibility.eligible).toBe(false);
+    expect(eligibility.reason).toBe("page_not_active");
   });
 });

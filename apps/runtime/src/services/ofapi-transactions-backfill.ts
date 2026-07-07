@@ -395,7 +395,8 @@ async function loadPostedTransactionIds(
   return found;
 }
 
-async function loadWriteEligibility(
+/** Exported for tests (the tombstone-race regression drives it directly). */
+export async function loadWriteEligibility(
   db: Database,
   input: {
     pageId: number;
@@ -408,6 +409,7 @@ async function loadWriteEligibility(
       id: pages.id,
       platform: pages.platform,
       label: pages.label,
+      status: pages.status,
       ofapiAccountId: pages.ofapiAccountId,
       transactionsWriter: pages.transactionsWriter,
       credentialId: pageCredentials.id,
@@ -417,10 +419,13 @@ async function loadWriteEligibility(
     .where(eq(pages.id, input.pageId))
     .limit(1);
 
-  if (!page) {
+  // Soft delete clears neither ofapiAccountId nor the writer assignment, so a
+  // queued job could pass eligibility after the tombstone landed (review
+  // R2-4). Refuse quietly — no incident noise for racing in-flight chunks.
+  if (!page || page.status !== "active") {
     return {
       eligible: false as const,
-      reason: "page_not_found",
+      reason: page ? "page_not_active" : "page_not_found",
       hasCredentials: false,
       activeNonOfapiTransactions: 0,
       ofapiAccountId: null,
