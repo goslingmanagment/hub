@@ -749,15 +749,22 @@ wait_for_sync_health() {
   local url="${VERIFY_URL%/}/api/v1/health/sync"
   local attempt=0
 
-  while (( attempt < 12 )); do
+  # Cold-start reality (2026-07-07/08, two deploys in a row): right after a
+  # stack recreate the visible_pages aggregation takes 50s+ (worker catch-up
+  # + autovacuum), and every attempt abandoned at a short cap leaves its
+  # query running server-side — attempts stack into a self-amplifying pile
+  # (17 backends at peak) and the gate can roll back a HEALTHY stack. A
+  # 150s per-attempt cap lets the first attempt actually finish; fewer,
+  # slower retries keep the worst case bounded without stacking.
+  while (( attempt < 6 )); do
     attempt=$((attempt + 1))
-    SYNC_STATUS_CODE="$(curl_status_with_monitoring_token "$sync_file" "$url" "$SYNC_MONITORING_TOKEN" 30 || true)"
+    SYNC_STATUS_CODE="$(curl_status_with_monitoring_token "$sync_file" "$url" "$SYNC_MONITORING_TOKEN" 150 || true)"
     case "$SYNC_STATUS_CODE" in
       200|503)
         grep -q '"pages"' "$sync_file" && return 0
         ;;
     esac
-    sleep 5
+    sleep 10
   done
 
   return 1
