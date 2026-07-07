@@ -130,6 +130,15 @@ describe("class-aware pacing properties (Stage 26)", () => {
     return rows[0]!.next_available_at;
   }
 
+  async function readShadowRow(scope: string) {
+    const { rows } = await testDb!.pool.query<{ next_available_at: Date }>(
+      `select next_available_at from sync_rate_limits
+       where egress_key = 'shadow:vendor:ofapi' and scope = $1`,
+      [scope],
+    );
+    return rows[0]!.next_available_at;
+  }
+
   it("bulk backlog lives in bulk's class row — the vendor horizon stays imminent-send-short", async (context) => {
     if (!testDb) {
       context.skip();
@@ -153,10 +162,40 @@ describe("class-aware pacing properties (Stage 26)", () => {
     expect(vendorNext - now).toBeLessThanOrEqual(capMs * 2);
 
     // An interactive arrival therefore pays vendor arithmetic, not the queue.
-    const interactive = await pacer.plan("interactive");
-    expect(interactive.waitMs).toBeLessThanOrEqual(capMs * 3);
+    const interactiveWaitMs = await pacer.pace("interactive");
+    expect(interactiveWaitMs).toBeLessThanOrEqual(capMs * 3);
 
     await Promise.all(bulkRuns);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("shadow plan() never moves the enforce rows and keeps bulk out of shadow's vendor row", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const capMs = 200;
+    const pacer = createEgressPacer(pacedApp(capMs), { vendor: "ofapi", mode: "shadow" });
+
+    // Seed + snapshot the ENFORCE rows via one real pace.
+    await pacer.pace("interactive");
+    const vendorBefore = (await readRow("vendor_global")).getTime();
+    const classBefore = (await readRow("class:bulk")).getTime();
+
+    // A saturated shadow burst — the ofapi.ts shadow path under bulk load.
+    await Promise.all(Array.from({ length: 6 }, () => pacer.plan("bulk")));
+    const interactive = await pacer.plan("interactive");
+
+    // Enforce rows untouched byte-for-byte.
+    expect((await readRow("vendor_global")).getTime()).toBe(vendorBefore);
+    expect((await readRow("class:bulk")).getTime()).toBe(classBefore);
+
+    // Shadow's own universe keeps the Stage 26 shape: the bulk backlog parks
+    // on shadow class:bulk; shadow vendor holds no bulk claims, so an
+    // interactive shadow read pays vendor arithmetic, not the queue.
+    const now = Date.now();
+    expect((await readShadowRow("class:bulk")).getTime() - now).toBeGreaterThan(capMs * 3);
+    expect(interactive.waitMs).toBeLessThanOrEqual(capMs * 2);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("the vendor cap spaces same-class reservations at the preserved rate", async (context) => {
@@ -183,9 +222,10 @@ describe("class-aware pacing properties (Stage 26)", () => {
 
     const startedAt = Date.now();
     const bulkRun = pacer.pace("bulk");
-    // Ten higher-class plans land while bulk is in flight.
+    // Ten higher-class sends land while bulk is in flight (real enforce
+    // contention — shadow plan() no longer touches these rows).
     for (let i = 0; i < 10; i += 1) {
-      await pacer.plan("interactive");
+      await pacer.pace("interactive");
     }
     await bulkRun;
     // Bulk's class slot was claimed at reservation; its final vendor claim is
@@ -201,7 +241,7 @@ describe("class-aware pacing properties (Stage 26)", () => {
     }
 
     const pacer = createEgressPacer(pacedApp(), { vendor: "ofapi" });
-    await pacer.plan("interactive");
+    await pacer.pace("interactive");
     const { rows } = await testDb.pool.query<{ scope: string; priority_class: string }>(
       `select scope, priority_class from sync_rate_limits
        where egress_key = 'vendor:ofapi' order by scope`,

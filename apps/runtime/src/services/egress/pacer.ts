@@ -88,12 +88,18 @@ export function createEgressPacer(
   const vendorEgressKey = `vendor:${input.vendor}`;
   const capSpacingMs = egressVendorCapSpacingMs(app, input.vendor);
 
-  let ensured: Promise<void> | null = null;
-  function ensureRows() {
-    if (!ensured) {
-      ensured = ensureSyncProviderRateLimitProfile(app.db, {
+  // Shadow decisions live under their own rows: plan() must never move the
+  // horizons pace() enforces (Stage 26: the vendor row only ever holds
+  // imminent sends — decision #100).
+  const shadowEgressKey = `shadow:${vendorEgressKey}`;
+
+  const ensured: Record<string, Promise<void> | null> = {};
+  function ensureRows(egressKey: string) {
+    let pending = ensured[egressKey] ?? null;
+    if (!pending) {
+      pending = ensureSyncProviderRateLimitProfile(app.db, {
         provider,
-        egressKey: vendorEgressKey,
+        egressKey,
         scopes: [
           { scope: "vendor_global", minSpacingMs: capSpacingMs },
           { scope: "class:interactive", minSpacingMs: 0, priorityClass: "interactive" },
@@ -101,39 +107,33 @@ export function createEgressPacer(
           { scope: "class:bulk", minSpacingMs: capSpacingMs, priorityClass: "bulk" },
         ],
       }).catch((error) => {
-        ensured = null;
+        ensured[egressKey] = null;
         throw error;
       });
+      ensured[egressKey] = pending;
     }
-    return ensured;
+    return pending;
   }
 
-  async function reserveScopes(scopes: string[], now: Date) {
+  async function reserveScopes(egressKey: string, scopes: string[], now: Date) {
     return reserveSyncProviderRateLimit(app.db, {
-      scopes: scopes.map((scope) => ({ provider, scope, egressKey: vendorEgressKey })),
+      scopes: scopes.map((scope) => ({ provider, scope, egressKey })),
       now,
     });
   }
 
-  /** Shadow decision: models the enforce path without sleeping — the class
-   * slot and the imminent-send vendor claim are both taken at real now (the
-   * caller IS about to send under the legacy policy). */
+  /** Shadow decision under shadow-scoped rows. Bulk claims ONLY its class
+   * slot: in enforce, bulk's vendor claim happens at send time and the class
+   * row's identical spacing already models bulk's serialization; pre-claiming
+   * the vendor here would rebuild the single-pass horizon drag decision #100
+   * rejected. Interactive shadow waits may undercount by at most the 1-2
+   * imminent bulk vendor claims (≤ 2×spacing). */
   async function plan(priorityClass: EgressPriorityClass): Promise<EgressPaceDecision> {
-    await ensureRows();
+    await ensureRows(shadowEgressKey);
     const now = new Date();
-    if (priorityClass === "bulk") {
-      const classAt = await reserveScopes(["class:bulk"], now);
-      const vendorAt = await reserveScopes(["vendor_global"], now);
-      const scheduledAt = classAt > vendorAt ? classAt : vendorAt;
-      return {
-        scheduledAt,
-        waitMs: Math.max(0, scheduledAt.getTime() - now.getTime()),
-      };
-    }
-    const scheduledAt = await reserveScopes(
-      ["vendor_global", `class:${priorityClass}`],
-      now,
-    );
+    const scheduledAt = priorityClass === "bulk"
+      ? await reserveScopes(shadowEgressKey, ["class:bulk"], now)
+      : await reserveScopes(shadowEgressKey, ["vendor_global", `class:${priorityClass}`], now);
     return {
       scheduledAt,
       waitMs: Math.max(0, scheduledAt.getTime() - now.getTime()),
@@ -151,18 +151,19 @@ export function createEgressPacer(
     mode,
     plan,
     async pace(priorityClass) {
-      await ensureRows();
+      await ensureRows(vendorEgressKey);
       const startedAt = Date.now();
       if (priorityClass === "bulk") {
         // Phase 1: wait out bulk's own backlog on its class row.
-        const classAt = await reserveScopes(["class:bulk"], new Date());
+        const classAt = await reserveScopes(vendorEgressKey, ["class:bulk"], new Date());
         await sleepUntil(classAt);
         // Phase 2: the send is imminent — claim the vendor slot now.
-        const vendorAt = await reserveScopes(["vendor_global"], new Date());
+        const vendorAt = await reserveScopes(vendorEgressKey, ["vendor_global"], new Date());
         await sleepUntil(vendorAt);
         return Math.max(0, Date.now() - startedAt);
       }
       const scheduledAt = await reserveScopes(
+        vendorEgressKey,
         ["vendor_global", `class:${priorityClass}`],
         new Date(),
       );
