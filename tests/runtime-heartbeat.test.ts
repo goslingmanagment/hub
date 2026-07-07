@@ -1,3 +1,7 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Shared, hoisted mock state so the vi.mock factories (hoisted above imports) can reference it.
@@ -134,5 +138,56 @@ describe("startRuntimeHeartbeat", () => {
       expect.objectContaining({ role: "api", timeoutMs: 1 }),
       "runtime heartbeat stop timed out removing instance row; leaving instance row for TTL cleanup",
     );
+  });
+
+  // Review finding: the scheduler container healthcheck watches this file's
+  // mtime. It must refresh ONLY after a successful upsert — a wedged event
+  // loop or a lost DB both stop the clock.
+  it("writes the health file only after a successful heartbeat upsert", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "runtime-heartbeat-"));
+    const healthFilePath = join(dir, "scheduler-health.json");
+    try {
+      const { startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+      const hb = startRuntimeHeartbeat(makeApp(), "scheduler", { healthFilePath });
+
+      // The immediate beat is parked inside the upsert — no file yet.
+      await vi.waitFor(() => expect(h.calls).toContain("upsert:start"));
+      expect(existsSync(healthFilePath)).toBe(false);
+
+      h.getReleaseUpsert()!();
+      await vi.waitFor(() => expect(existsSync(healthFilePath)).toBe(true));
+      expect(JSON.parse(readFileSync(healthFilePath, "utf8"))).toMatchObject({ status: "ready" });
+
+      await hb.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not write the health file when the upsert fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "runtime-heartbeat-"));
+    const healthFilePath = join(dir, "scheduler-health.json");
+    try {
+      h.upsertInstanceHeartbeat.mockImplementationOnce(async () => {
+        h.calls.push("upsert:failed");
+        throw new Error("db unreachable");
+      });
+      const logger = { warn: vi.fn() };
+      const app = ({ db: {}, config: {}, bootSkipped: [], logger }) as never;
+
+      const { startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+      const hb = startRuntimeHeartbeat(app, "scheduler", { healthFilePath });
+
+      await vi.waitFor(() => expect(h.calls).toContain("upsert:failed"));
+      await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ role: "scheduler" }),
+        "runtime heartbeat upsert failed",
+      ));
+      expect(existsSync(healthFilePath)).toBe(false);
+
+      await hb.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

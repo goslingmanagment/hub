@@ -70,6 +70,19 @@ describe("compose config", () => {
     expect(worker).toContain("stale worker health file");
   });
 
+  // Review finding: the scheduler is the only cron timekeeper — a wedged (not
+  // crashed) one silently stalls the planner, sweeps and reports. Its health
+  // file refreshes only after a successful heartbeat upsert, so mtime
+  // freshness certifies event loop + DB together.
+  it("docker-compose.production.yml gives the scheduler a heartbeat-file healthcheck", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    const scheduler = getServiceBlock(text, "scheduler");
+
+    expect(scheduler).toContain("SCHEDULER_HEALTH_FILE");
+    expect(scheduler).toContain("healthcheck:");
+    expect(scheduler).toContain("stale scheduler health file");
+  });
+
   it("deploy-production.sh reads monitoring token without executing env files", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const envReader = getShellFunction(text, "read_remote_env_value");
@@ -357,6 +370,15 @@ describe("compose config", () => {
     expect(workerGate).toContain("ps -q worker");
     expect(workerGate).toContain(".State.Health.Status");
     expect(text).toMatch(/wait_for_worker_health \|\| fail/);
+  });
+
+  it("deploy-production.sh gates the deploy on scheduler container health", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const schedulerGate = getShellFunction(text, "wait_for_scheduler_health");
+
+    expect(schedulerGate).toContain("ps -q scheduler");
+    expect(schedulerGate).toContain(".State.Health.Status");
+    expect(text).toMatch(/wait_for_scheduler_health \|\| fail/);
   });
 
   it("startup.ts exits explicitly when main() fails (audit B8)", async () => {

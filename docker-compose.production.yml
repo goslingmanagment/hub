@@ -42,17 +42,35 @@ services:
 
   # Stage 25: cron registration + firing live in the scheduler role
   # (leader-elected via a session advisory lock). One active instance is
-  # required; add a second `scheduler-standby` entry (same definition) for a
-  # hot standby — it idles on the lock and takes over when the leader dies.
+  # required; add a second `scheduler-standby` entry for a hot standby — same
+  # definition MINUS the healthcheck and SCHEDULER_HEALTH_FILE (a standby
+  # idles on the lock and never heartbeats, so the check would flag it).
   scheduler:
     image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
     restart: unless-stopped
     env_file:
       - .env.production
+    environment:
+      SCHEDULER_HEALTH_FILE: /tmp/agency-hub-scheduler-health.json
     command: ["node", "apps/runtime/dist/startup.js", "scheduler"]
     depends_on:
       postgres:
         condition: service_healthy
+    # The heartbeat refreshes the file only AFTER a successful DB upsert (60s
+    # cadence), so mtime freshness certifies the event loop and a DB
+    # round-trip together — no separate DB probe needed here.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const fs = require('node:fs'); const file = process.env.SCHEDULER_HEALTH_FILE || '/tmp/agency-hub-scheduler-health.json'; const stat = fs.statSync(file); if (Date.now() - stat.mtimeMs > 150000) throw new Error('stale scheduler health file');",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
   # Scale-out (Stage 25 Task 4): duplicate this service as worker-2 with the
   # same definition (distinct WORKER_HEALTH_FILE) when the prod rollout goes

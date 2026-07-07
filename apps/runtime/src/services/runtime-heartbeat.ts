@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 import {
   reapStaleInstances,
@@ -20,6 +22,23 @@ export const HEARTBEAT_STOP_TIMEOUT_MS = 5_000;
 export interface RuntimeHeartbeat {
   readonly instanceId: string;
   stop(): Promise<void>;
+}
+
+/** Liveness file for Docker healthchecks: mtime freshness is the signal, the
+ *  JSON body is for humans. The worker writes it around its service lifecycle;
+ *  the scheduler rides startRuntimeHeartbeat (healthFilePath option), where a
+ *  write happens only AFTER a successful heartbeat upsert — so a fresh file
+ *  certifies both the event loop and a DB round-trip. */
+export async function writeRuntimeHealthFile(
+  path: string,
+  status: "starting" | "ready" | "stopping",
+) {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify({
+    status,
+    timestamp: new Date().toISOString(),
+    pid: process.pid,
+  })}\n`, "utf8");
 }
 
 async function waitForShutdownStep(
@@ -57,12 +76,13 @@ function remainingStopMs(deadlineMs: number): number {
 export function startRuntimeHeartbeat(
   app: AppContext,
   role: RuntimeRole,
-  options: { startedAt?: Date; stopTimeoutMs?: number } = {},
+  options: { startedAt?: Date; stopTimeoutMs?: number; healthFilePath?: string | null } = {},
 ): RuntimeHeartbeat {
   const instanceId = randomUUID();
   const startedAt = options.startedAt ?? new Date();
   const imageTag = process.env.IMAGE_TAG ?? process.env.GIT_SHA ?? null;
   const stopTimeoutMs = options.stopTimeoutMs ?? HEARTBEAT_STOP_TIMEOUT_MS;
+  const healthFilePath = options.healthFilePath ?? null;
 
   // `stopped` flips on shutdown so an in-flight beat skips its upsert; `inFlight` serializes
   // beats (a slow beat must not overlap the next tick) and lets stop() await the active beat
@@ -90,6 +110,12 @@ export function startRuntimeHeartbeat(
         // correct; attach the boot-skipped list so the view can surface ignored overrides.
         running: buildRunningSnapshot(effectiveConfig, app.bootSkipped),
       });
+      // The health file refreshes only after a SUCCESSFUL upsert: a wedged
+      // event loop or a lost DB both stop the mtime, which is what the
+      // container healthcheck watches.
+      if (healthFilePath) {
+        await writeRuntimeHealthFile(healthFilePath, "ready");
+      }
       // Idempotent across instances; whichever process runs it first wins.
       await reapStaleInstances(app.db).catch(() => undefined);
     } catch (error) {

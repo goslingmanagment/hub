@@ -44,7 +44,13 @@ export async function runSchedulerRuntime() {
   await registerAllSchedules(boss);
   app.logger.info("Scheduler online: schedules registered, timekeeper running");
 
-  const heartbeat = startRuntimeHeartbeat(app, "scheduler", { startedAt: processStartedAt });
+  const heartbeat = startRuntimeHeartbeat(app, "scheduler", {
+    startedAt: processStartedAt,
+    // Docker healthcheck watches this file's mtime (compose: SCHEDULER_HEALTH_FILE).
+    // NB: a hot STANDBY never starts the heartbeat (it idles on the lock), so a
+    // standby service entry must not carry this healthcheck.
+    healthFilePath: process.env.SCHEDULER_HEALTH_FILE ?? null,
+  });
 
   // Losing the lock session means another scheduler may already be firing
   // cron — exit immediately rather than double-fire.

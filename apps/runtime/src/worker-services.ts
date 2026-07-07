@@ -1,6 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-
 import {
   closeOrphanedSyncRuns,
   deleteExpiredRawPayloads,
@@ -12,6 +9,7 @@ import { toBusinessDate, UTC_TIME_ZONE, addUtcDays, startOfBusinessDay } from "@
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "./bootstrap.ts";
+import { writeRuntimeHealthFile } from "./services/runtime-heartbeat.ts";
 import {
   DB_DISK_USAGE_CHECK_QUEUE,
   ensureDbDiskUsageQueue,
@@ -119,15 +117,6 @@ function listPendingTelegramReportDates(
   }
 
   return dates;
-}
-
-async function writeWorkerHealthFile(path: string, status: "starting" | "ready" | "stopping") {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify({
-    status,
-    timestamp: new Date().toISOString(),
-    pid: process.pid,
-  })}\n`, "utf8");
 }
 
 export async function startWorkerServices(
@@ -300,11 +289,11 @@ export async function startWorkerServices(
     signal: abortController.signal,
   });
   if (healthFilePath) {
-    await writeWorkerHealthFile(healthFilePath, "ready");
+    await writeRuntimeHealthFile(healthFilePath, "ready");
   }
   const healthTimer = healthFilePath
     ? setInterval(() => {
-      void writeWorkerHealthFile(healthFilePath, "ready").catch((error) => {
+      void writeRuntimeHealthFile(healthFilePath, "ready").catch((error) => {
         app.logger.warn({ err: error, healthFilePath }, "Failed to update worker health file");
       });
     }, WORKER_HEALTH_WRITE_INTERVAL_MS)
@@ -318,7 +307,7 @@ export async function startWorkerServices(
         clearInterval(healthTimer);
       }
       if (healthFilePath) {
-        await writeWorkerHealthFile(healthFilePath, "stopping").catch((error) => {
+        await writeRuntimeHealthFile(healthFilePath, "stopping").catch((error) => {
           app.logger.warn({ err: error, healthFilePath }, "Failed to mark worker health file stopping");
         });
       }

@@ -718,6 +718,32 @@ wait_for_worker_health() {
   return 1
 }
 
+# The scheduler is the only cron timekeeper: a wedged one silently stalls the
+# sync planner, sweeps and reports. Asserts the compose healthcheck (scheduler
+# health file freshness, written only after a successful heartbeat upsert)
+# reaches 'healthy'.
+wait_for_scheduler_health() {
+  local attempt=0
+  local status
+
+  while (( attempt < 60 )); do
+    attempt=$((attempt + 1))
+    status="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; container_id=\$(${REMOTE_COMPOSE} ps -q scheduler 2>/dev/null || true); if [[ -z \"\$container_id\" ]]; then printf missing; else docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \"\$container_id\"; fi" || true)"
+    case "$status" in
+      healthy)
+        return 0
+        ;;
+      missing|exited|dead|restarting)
+        log "Scheduler container status: ${status:-unknown}"
+        ;;
+    esac
+    sleep 3
+  done
+
+  log "Scheduler container last observed status: ${status:-unknown}"
+  return 1
+}
+
 wait_for_sync_health() {
   local sync_file="$1"
   local url="${VERIFY_URL%/}/api/v1/health/sync"
@@ -1039,6 +1065,9 @@ wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VE
 
 log "Waiting for the worker container healthcheck"
 wait_for_worker_health || fail "Worker container never reached a healthy state"
+
+log "Waiting for the scheduler container healthcheck"
+wait_for_scheduler_health || fail "Scheduler container never reached a healthy state"
 
 verify_post_deploy_image_labels
 
