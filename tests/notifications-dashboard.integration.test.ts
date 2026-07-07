@@ -342,6 +342,65 @@ describe("notifications dashboard", () => {
     expect(afterRes.json().items.length).toBe(0);
   });
 
+  it("lists global incidents (null page) alongside page-scoped ones", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const { server, cookie } = await buildServer();
+
+    const model = await createModel(testDb.db, { slug: "m2", name: "Model2" });
+    const page = model
+      ? await createFanslyPage(testDb.db, { modelId: model.id, label: "p2" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed page p2");
+    }
+    await openNotificationIncident(testDb.db, {
+      incidentKey: "auth_blocked:" + page.id,
+      kind: "auth_blocked",
+      platformAccountId: page.id,
+      errorSummary: "Token expired",
+    });
+    // A global incident exactly as notifyOfapiGlobalIncident opens it.
+    await openNotificationIncident(testDb.db, {
+      incidentKey: "db_disk_usage:global",
+      kind: "db_disk_usage",
+      platformAccountId: null,
+      errorSummary: "disk 91%",
+    });
+
+    const listRes = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/notifications/incidents",
+      headers: { cookie },
+    });
+    expect(listRes.statusCode).toBe(200);
+    const listBody = listRes.json();
+    expect(listBody.total).toBe(2);
+    const global = listBody.items.find(
+      (item: { incidentKey: string }) => item.incidentKey === "db_disk_usage:global",
+    );
+    expect(global).toBeDefined();
+    expect(global.pageLabel).toBeNull();
+    expect(global.platform).toBeNull();
+
+    // The pageLabel filter still excludes globals (left join, filter on label).
+    const filtered = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/notifications/incidents?pageLabel=p2",
+      headers: { cookie },
+    });
+    expect(filtered.json().total).toBe(1);
+    expect(filtered.json().items[0].pageLabel).toBe("p2");
+
+    // A listed global incident is manually resolvable.
+    const resolveRes = await server.inject({
+      method: "POST",
+      url: `/api/v1/admin/notifications/incidents/${global.id}/resolve`,
+      headers: { cookie },
+    });
+    expect(resolveRes.statusCode).toBe(200);
+    expect(resolveRes.json().ok).toBe(true);
+  });
+
   it("report preview returns text", async (context) => {
     if (!testDb) { context.skip(); return; }
     const { server, cookie } = await buildServer();

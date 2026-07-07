@@ -133,8 +133,9 @@ export interface NotificationIncidentWithPage {
   id: number;
   incidentKey: string;
   kind: NotificationIncidentKind;
-  pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  /** Null for global incidents (db_disk_usage, observations_partitions, …). */
+  pageLabel: string | null;
+  platform: "fansly" | "onlyfans" | null;
   stream: string | null;
   status: NotificationIncidentStatus;
   openedAt: Date;
@@ -174,7 +175,7 @@ export async function listNotificationIncidentsWithPages(
   const countResult = await db
     .select({ total: count() })
     .from(notificationIncidents)
-    .innerJoin(pages, eq(notificationIncidents.platformAccountId, pages.id))
+    .leftJoin(pages, eq(notificationIncidents.platformAccountId, pages.id))
     .where(whereClause);
 
   const rows = await db
@@ -194,7 +195,7 @@ export async function listNotificationIncidentsWithPages(
       notificationCount: sql<number>`(select count(*)::int from ${telegramDeliveryAttempts} where ${telegramDeliveryAttempts.notificationIncidentId} = ${notificationIncidents.id})`,
     })
     .from(notificationIncidents)
-    .innerJoin(pages, eq(notificationIncidents.platformAccountId, pages.id))
+    .leftJoin(pages, eq(notificationIncidents.platformAccountId, pages.id))
     .where(whereClause)
     .orderBy(desc(notificationIncidents.openedAt))
     .limit(limit)

@@ -3196,13 +3196,27 @@
                             ]
                           },
                           "pageLabel": {
-                            "type": "string"
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           },
                           "platform": {
-                            "type": "string",
-                            "enum": [
-                              "fansly",
-                              "onlyfans"
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "fansly",
+                                  "onlyfans"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "stream": {

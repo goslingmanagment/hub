@@ -125,7 +125,7 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/overview/revenue` | `overviewRevenue` | `session` | — | — |
 | GET | `/api/v1/overview/revenue/by-model` | `overviewRevenueByModel` | `session` | — | — |
 | GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — |
-| GET | `/api/v1/pages` | `pagesDrill` | `any` | — | — |
+| GET | `/api/v1/pages` | `pages` | `any` | — | — |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/profile` | `pageConversationProfile` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `session` | — | page |

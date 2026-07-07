@@ -2693,8 +2693,9 @@ export const notificationsIncidentItemSchema = z.object({
   id: intId,
   incidentKey: z.string(),
   kind: notificationIncidentKindEnum,
-  pageLabel: z.string(),
-  platform: platformEnum,
+  /** Null for global incidents (db_disk_usage, observations_partitions, …). */
+  pageLabel: z.string().nullable(),
+  platform: platformEnum.nullable(),
   stream: z.string().nullable(),
   status: notificationIncidentStatusEnum,
   openedAt: isoTimestamp,

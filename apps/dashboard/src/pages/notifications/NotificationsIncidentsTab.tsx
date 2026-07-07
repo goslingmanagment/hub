@@ -110,7 +110,7 @@ export function NotificationsIncidentsTab() {
                         {item.status === "open" ? "Open" : "Resolved"}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 text-[13px] font-medium text-text-primary">{item.pageLabel}</td>
+                    <td className="px-4 py-2.5 text-[13px] font-medium text-text-primary">{item.pageLabel ?? "Global"}</td>
                     <td className="px-4 py-2.5 text-[12px] text-text-secondary">{kindLabel(item.kind)}</td>
                     <td className="px-4 py-2.5 text-[12px] text-text-muted">{item.stream ?? "—"}</td>
                     <td className="px-4 py-2.5 text-[12px] text-text-muted">{formatRelativeTime(item.openedAt)}</td>
