@@ -87,7 +87,42 @@ function openMessageForIncident(
   ].join("\n");
 }
 
-function resolveMessageForIncident(
+/** Exhaustive over NotificationIncidentKind — a missing case is a compile
+ * error, not a fallthrough into another kind's text (review R2-7: the old
+ * ternary resolved golden_signal_lag as "OFAPI webhooks delivering again"). */
+function resolveDetailForIncident(
+  input: { kind: NotificationIncidentKind; stream?: SyncStream | null },
+): string {
+  switch (input.kind) {
+    case "auth_blocked":
+      return "Auth failed";
+    case "proxy_failed":
+      return "Proxy failed";
+    case "stream_failed_threshold":
+      return `Stream ${input.stream ?? "unknown"} recovered`;
+    case "ofapi_auth":
+      return "OFAPI account auth recovered";
+    case "ofapi_low_credit":
+      return "OFAPI credit balance recovered";
+    case "ofapi_burn_rate":
+      return "OFAPI credit burn rate back to normal";
+    case "db_disk_usage":
+      return "Server disk usage back under the threshold";
+    case "observations_partitions":
+      return "Observations partition lead restored";
+    case "ofapi_webhook_silence":
+      return "OFAPI webhooks delivering again";
+    case "wrong_transactions_writer":
+      return "Transactions writer conflict cleared";
+    case "read_gateway_capture":
+      return "Read-gateway capture tee healthy again";
+    case "golden_signal_lag":
+      return "Golden-signal lag back under threshold";
+  }
+}
+
+/** Exported for tests (the resolve-text regression pins the per-kind lines). */
+export function resolveMessageForIncident(
   input: {
     kind: NotificationIncidentKind;
     pageLabel: string | null;
@@ -95,23 +130,7 @@ function resolveMessageForIncident(
     stream?: SyncStream | null;
   },
 ) {
-  const detail = input.kind === "auth_blocked"
-    ? "Auth failed"
-    : input.kind === "proxy_failed"
-      ? "Proxy failed"
-      : input.kind === "stream_failed_threshold"
-        ? `Stream ${input.stream ?? "unknown"} recovered`
-        : input.kind === "ofapi_auth"
-          ? "OFAPI account auth recovered"
-          : input.kind === "ofapi_low_credit"
-            ? "OFAPI credit balance recovered"
-            : input.kind === "ofapi_burn_rate"
-              ? "OFAPI credit burn rate back to normal"
-              : input.kind === "db_disk_usage"
-                ? "Server disk usage back under the threshold"
-                : input.kind === "observations_partitions"
-                  ? "Observations partition lead restored"
-                  : "OFAPI webhooks delivering again";
+  const detail = resolveDetailForIncident(input);
 
   return [
     "✅ Resolved",
