@@ -235,6 +235,26 @@ export async function recordAudit(app: Pick<AppContext, "db">, input: AuditConte
   });
 }
 
+/** Mutation + audit dual-write commit together (review R1-7). Mirrors the
+ * sync-context idiom: a handle without a transaction API (unit-test fakes)
+ * runs directly — the real Database always has one. */
+async function withAuditTransaction<T>(
+  app: Pick<AppContext, "db">,
+  run: (db: AppContext["db"]) => Promise<T>,
+): Promise<T> {
+  const transaction = (
+    app.db as AppContext["db"] & {
+      transaction?: (callback: (tx: unknown) => Promise<T>) => Promise<T>;
+    }
+  ).transaction;
+
+  if (typeof transaction !== "function") {
+    return run(app.db);
+  }
+
+  return transaction.call(app.db, async (tx) => run(tx as unknown as AppContext["db"]));
+}
+
 async function recordFailedLoginAuditBestEffort(
   app: Pick<AppContext, "db" | "logger">,
   input: {
@@ -302,20 +322,27 @@ export async function createUserAccount(
     ? await argon2.hash(input.password, { type: argon2.argon2id })
     : null;
 
-  const created = await createUser(app.db, {
-    username: input.username,
-    role: input.role,
-    passwordHash,
-  });
+  // Mutation + audit dual-write commit together (review R1-7): an audit
+  // failure must not leave the user row committed behind a 500 (the retry
+  // then hits "already exists").
+  const created = await withAuditTransaction(app, async (dbTx) => {
+    const createdUser = await createUser(dbTx, {
+      username: input.username,
+      role: input.role,
+      passwordHash,
+    });
 
-  await recordAudit(app, {
-    ...audit,
-    eventType: "user.created",
-    targetUserId: created.id,
-    metadata: {
-      username: created.username,
-      role: created.role,
-    },
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.created",
+      targetUserId: createdUser.id,
+      metadata: {
+        username: createdUser.username,
+        role: createdUser.role,
+      },
+    });
+
+    return createdUser;
   });
 
   return getAuthenticatedUserById(app, created.id);
@@ -341,8 +368,7 @@ export async function setUserPassword(
   }
 
   const passwordHash = await argon2.hash(input.password, { type: argon2.argon2id });
-  await app.db.transaction(async (tx) => {
-    const dbTx = tx as unknown as typeof app.db;
+  await withAuditTransaction(app, async (dbTx) => {
     await updateUserPasswordHash(
       dbTx,
       user.id,
@@ -391,8 +417,7 @@ export async function changeOwnPassword(
   }
 
   const passwordHash = await argon2.hash(input.newPassword, { type: argon2.argon2id });
-  await app.db.transaction(async (tx) => {
-    const dbTx = tx as unknown as typeof app.db;
+  await withAuditTransaction(app, async (dbTx) => {
     await updateUserPasswordHash(dbTx, user.id, passwordHash);
     await updateUserMustChangePassword(dbTx, user.id, false);
     const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "password_changed");
@@ -427,25 +452,28 @@ export async function assignPageToUser(
 
   // Stage 22: the grant log is the durable record; the legacy assignment row
   // is dual-written until the read path flips (then the table freezes).
-  await insertAccessGrant(app.db, {
-    userId: user.id,
-    scopeType: "page",
-    scopeId: page.id,
-    grantedBy: audit.actorUserId ?? null,
-  });
-  if (!app.config?.accessGrantsReadEnabled) {
-    await assignUserToPage(app.db, user.id, page.id);
-  }
+  // Grant + assignment + audit commit together (review R1-7).
+  await withAuditTransaction(app, async (dbTx) => {
+    await insertAccessGrant(dbTx, {
+      userId: user.id,
+      scopeType: "page",
+      scopeId: page.id,
+      grantedBy: audit.actorUserId ?? null,
+    });
+    if (!app.config?.accessGrantsReadEnabled) {
+      await assignUserToPage(dbTx, user.id, page.id);
+    }
 
-  await recordAudit(app, {
-    ...audit,
-    eventType: "user.page_assigned",
-    targetUserId: user.id,
-    platformAccountId: page.id,
-    metadata: {
-      username: user.username,
-      pageLabel: page.label,
-    },
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.page_assigned",
+      targetUserId: user.id,
+      platformAccountId: page.id,
+      metadata: {
+        username: user.username,
+        pageLabel: page.label,
+      },
+    });
   });
 }
 
@@ -469,25 +497,28 @@ export async function unassignPageFromUser(
 
   // Stage 22: revoke = a stamp on the grant log, never a delete. The legacy
   // hard-delete continues only while assignments are still the read path.
-  await revokeAccessGrants(app.db, {
-    userId: user.id,
-    scopeType: "page",
-    scopeId: page.id,
-    revokedBy: audit.actorUserId ?? null,
-  });
-  if (!app.config?.accessGrantsReadEnabled) {
-    await unassignUserFromPage(app.db, user.id, page.id);
-  }
+  // Revoke + audit commit together (review R1-7).
+  await withAuditTransaction(app, async (dbTx) => {
+    await revokeAccessGrants(dbTx, {
+      userId: user.id,
+      scopeType: "page",
+      scopeId: page.id,
+      revokedBy: audit.actorUserId ?? null,
+    });
+    if (!app.config?.accessGrantsReadEnabled) {
+      await unassignUserFromPage(dbTx, user.id, page.id);
+    }
 
-  await recordAudit(app, {
-    ...audit,
-    eventType: "user.page_unassigned",
-    targetUserId: user.id,
-    platformAccountId: page.id,
-    metadata: {
-      username: user.username,
-      pageLabel: page.label,
-    },
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.page_unassigned",
+      targetUserId: user.id,
+      platformAccountId: page.id,
+      metadata: {
+        username: user.username,
+        pageLabel: page.label,
+      },
+    });
   });
 }
 
@@ -518,8 +549,7 @@ export async function issueChatterApiKey(
   const rawKey = `${API_KEY_PREFIX}${tokenBody}`;
   const keyPrefix = `${API_KEY_PREFIX}${tokenBody.slice(0, API_KEY_DISPLAY_LENGTH)}`;
   const tokenDigest = sha256Hex(rawKey);
-  await app.db.transaction(async (tx) => {
-    const dbTx = tx as unknown as typeof app.db;
+  await withAuditTransaction(app, async (dbTx) => {
     await lockUserForApiKeyRotation(dbTx, user.id);
     if (page) {
       await insertAccessGrant(dbTx, {
@@ -582,16 +612,21 @@ export async function revokeUserApiKeys(
     throw new NotFoundError(`User "${input.username}" not found`);
   }
 
-  const revoked = await revokeApiKeysForUser(app.db, user.id, input.reason ?? "revoked");
+  // Revoke + audit commit together (review R1-7).
+  const revoked = await withAuditTransaction(app, async (dbTx) => {
+    const revokedKeys = await revokeApiKeysForUser(dbTx, user.id, input.reason ?? "revoked");
 
-  await recordAudit(app, {
-    ...audit,
-    eventType: "api_key.revoked",
-    targetUserId: user.id,
-    metadata: {
-      username: user.username,
-      revokedCount: revoked.length,
-    },
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "api_key.revoked",
+      targetUserId: user.id,
+      metadata: {
+        username: user.username,
+        revokedCount: revokedKeys.length,
+      },
+    });
+
+    return revokedKeys;
   });
 
   return revoked;
@@ -757,25 +792,29 @@ export async function loginWithPassword(
 
   clearLoginBackoff(app, input.username);
 
-  const sessionToken = randomToken(32);
-  const expiresAt = new Date(Date.now() + app.config.sessionTtlDays * 24 * 60 * 60 * 1000);
-  await createAuthSession(app.db, {
-    userId: user.id,
-    tokenDigest: sha256Hex(sessionToken),
-    expiresAt,
-  });
-
   const authenticatedUser = await getAuthenticatedUserById(app, user.id);
   if (!authenticatedUser) {
     throw new UnauthorizedError("Authentication failed");
   }
 
-  await recordAudit(app, {
-    source: "api",
-    actorUserId: user.id,
-    targetUserId: user.id,
-    eventType: "auth.login",
-    metadata: { username: user.username },
+  // Session row + audit dual-write commit together (review R1-7): an audit
+  // failure must not leave a usable-but-undisclosed session row behind a 500.
+  const sessionToken = randomToken(32);
+  const expiresAt = new Date(Date.now() + app.config.sessionTtlDays * 24 * 60 * 60 * 1000);
+  await withAuditTransaction(app, async (dbTx) => {
+    await createAuthSession(dbTx, {
+      userId: user.id,
+      tokenDigest: sha256Hex(sessionToken),
+      expiresAt,
+    });
+
+    await recordAudit({ db: dbTx }, {
+      source: "api",
+      actorUserId: user.id,
+      targetUserId: user.id,
+      eventType: "auth.login",
+      metadata: { username: user.username },
+    });
   });
 
   return {
@@ -832,12 +871,15 @@ export async function logoutSessionToken(app: AppContext, sessionToken: string) 
     return false;
   }
 
-  await revokeAuthSession(app.db, session.id, "logout");
-  await recordAudit(app, {
-    source: "api",
-    actorUserId: session.userId,
-    targetUserId: session.userId,
-    eventType: "auth.logout",
+  // Revoke + audit commit together (review R1-7).
+  await withAuditTransaction(app, async (dbTx) => {
+    await revokeAuthSession(dbTx, session.id, "logout");
+    await recordAudit({ db: dbTx }, {
+      source: "api",
+      actorUserId: session.userId,
+      targetUserId: session.userId,
+      eventType: "auth.logout",
+    });
   });
 
   return true;
@@ -939,19 +981,24 @@ export async function issueDeviceToken(
   const rawToken = `${DEVICE_TOKEN_PREFIX}${tokenBody}`;
   const keyPrefix = `${DEVICE_TOKEN_PREFIX}${tokenBody.slice(0, API_KEY_DISPLAY_LENGTH)}`;
   const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
-  const created = await createDeviceToken(app.db, {
-    userId: user.id,
-    label: input.label,
-    tokenDigest: sha256Hex(rawToken),
-    keyPrefix,
-    expiresAt,
-  });
+  // Token row + audit commit together (review R1-7).
+  const created = await withAuditTransaction(app, async (dbTx) => {
+    const createdToken = await createDeviceToken(dbTx, {
+      userId: user.id,
+      label: input.label,
+      tokenDigest: sha256Hex(rawToken),
+      keyPrefix,
+      expiresAt,
+    });
 
-  await recordAudit(app, {
-    ...audit,
-    eventType: "device_token.issued",
-    targetUserId: user.id,
-    metadata: { username: user.username, label: input.label, keyPrefix },
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "device_token.issued",
+      targetUserId: user.id,
+      metadata: { username: user.username, label: input.label, keyPrefix },
+    });
+
+    return createdToken;
   });
 
   return {
@@ -1040,12 +1087,16 @@ export async function revokeDeviceTokensForUsername(
   if (!user) {
     throw new NotFoundError(`User "${input.username}" not found`);
   }
-  const revoked = await revokeDeviceTokensForUser(app.db, user.id, "revoked");
-  await recordAudit(app, {
-    ...audit,
-    eventType: "device_token.revoked",
-    targetUserId: user.id,
-    metadata: { username: user.username, revokedCount: revoked.length },
+  // Revoke + audit commit together (review R1-7).
+  const revoked = await withAuditTransaction(app, async (dbTx) => {
+    const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "revoked");
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "device_token.revoked",
+      targetUserId: user.id,
+      metadata: { username: user.username, revokedCount: revokedTokens.length },
+    });
+    return revokedTokens;
   });
   return { revokedCount: revoked.length };
 }
@@ -1065,17 +1116,20 @@ export async function grantModelToUser(
   if (!model) {
     throw new NotFoundError(`Model "${input.modelSlug}" not found`);
   }
-  await insertAccessGrant(app.db, {
-    userId: user.id,
-    scopeType: "model",
-    scopeId: model.id,
-    grantedBy: audit.actorUserId ?? null,
-  });
-  await recordAudit(app, {
-    ...audit,
-    eventType: "user.model_granted",
-    targetUserId: user.id,
-    metadata: { username: user.username, modelSlug: model.slug },
+  // Grant + audit commit together (review R1-7).
+  await withAuditTransaction(app, async (dbTx) => {
+    await insertAccessGrant(dbTx, {
+      userId: user.id,
+      scopeType: "model",
+      scopeId: model.id,
+      grantedBy: audit.actorUserId ?? null,
+    });
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.model_granted",
+      targetUserId: user.id,
+      metadata: { username: user.username, modelSlug: model.slug },
+    });
   });
   return { ok: true as const };
 }
@@ -1093,17 +1147,20 @@ export async function revokeModelFromUser(
   if (!model) {
     throw new NotFoundError(`Model "${input.modelSlug}" not found`);
   }
-  await revokeAccessGrants(app.db, {
-    userId: user.id,
-    scopeType: "model",
-    scopeId: model.id,
-    revokedBy: audit.actorUserId ?? null,
-  });
-  await recordAudit(app, {
-    ...audit,
-    eventType: "user.model_revoked",
-    targetUserId: user.id,
-    metadata: { username: user.username, modelSlug: model.slug },
+  // Revoke + audit commit together (review R1-7).
+  await withAuditTransaction(app, async (dbTx) => {
+    await revokeAccessGrants(dbTx, {
+      userId: user.id,
+      scopeType: "model",
+      scopeId: model.id,
+      revokedBy: audit.actorUserId ?? null,
+    });
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.model_revoked",
+      targetUserId: user.id,
+      metadata: { username: user.username, modelSlug: model.slug },
+    });
   });
   return { ok: true as const };
 }
