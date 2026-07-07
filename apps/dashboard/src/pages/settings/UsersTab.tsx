@@ -364,6 +364,34 @@ function IssueKeyButton({
 /*  button remains as the legacy/automation fallback)                  */
 /* ------------------------------------------------------------------ */
 
+/** #116 provisioning flow, extracted for tests: create → optional password →
+ * optional page assign. Idempotent retry: when a later step failed on a prior
+ * submit (createdUsername already equals this username), the create step is
+ * skipped; re-setting the password on retry is an idempotent server-side
+ * operation. */
+export async function provisionChatter(input: {
+  username: string;
+  password: string;
+  pageLabel: string;
+  createdUsername: string | null;
+  createUser: (username: string) => Promise<void>;
+  onUserCreated: (username: string) => void;
+  setPassword: (password: string) => Promise<void>;
+  assignPage: (pageLabel: string) => Promise<void>;
+}): Promise<void> {
+  const trimmed = input.username.trim();
+  if (input.createdUsername !== trimmed) {
+    await input.createUser(trimmed);
+    input.onUserCreated(trimmed);
+  }
+  if (input.password) {
+    await input.setPassword(input.password);
+  }
+  if (input.pageLabel) {
+    await input.assignPage(input.pageLabel);
+  }
+}
+
 function AddChatterModal({
   onClose,
 }: {
@@ -388,25 +416,27 @@ function AddChatterModal({
 
     setIsPending(true);
     try {
-      // Idempotent retry: a partial failure (user created, later step failed)
-      // must not recreate the user.
-      if (createdUsername !== trimmed) {
-        await createUser.mutateAsync({ username: trimmed, role: "chatter" });
-        setCreatedUsername(trimmed);
-      }
-
-      if (password) {
-        // mustChangePassword stays off (#116): no chatter-reachable surface
-        // can complete a forced change yet.
-        await setUserPassword.mutateAsync({
-          password,
-          mustChangePassword: false,
-        });
-      }
-
-      if (selectedPage) {
-        await assignPage.mutateAsync({ pageLabel: selectedPage });
-      }
+      await provisionChatter({
+        username,
+        password,
+        pageLabel: selectedPage,
+        createdUsername,
+        createUser: async (name) => {
+          await createUser.mutateAsync({ username: name, role: "chatter" });
+        },
+        onUserCreated: setCreatedUsername,
+        setPassword: async (pw) => {
+          // mustChangePassword stays off (#116): no chatter-reachable surface
+          // can complete a forced change yet.
+          await setUserPassword.mutateAsync({
+            password: pw,
+            mustChangePassword: false,
+          });
+        },
+        assignPage: async (pageLabel) => {
+          await assignPage.mutateAsync({ pageLabel });
+        },
+      });
 
       toast.success(
         password
