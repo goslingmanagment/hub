@@ -3157,3 +3157,37 @@ Still open after this batch: prompt-1-map re-runs for
 `docs/generated/00-overview.md` (claims TS 5.8/Vitest 3; repo is on
 TS 6/Vitest 4) and `18-retention-erasure-tiering.md` (generator-emitted
 trailing whitespace) — fresh session, hand-edit banned by their banners.
+
+## Project-Review Fix Batch: the 4 Surviving Findings (2026-07-08)
+
+The Workflow-orchestrated project review (5 finder passes → adversarial
+verify → 7 confirmed findings, run before the external-review batch
+landed) was re-checked against `d0a4651`: two findings were already
+resolved by that batch (revenue-route enforcement is live in `enforce`
+on prod via `REVENUE_ROUTE_ROLE_ENFORCEMENT`; the AddChatterModal
+orchestration was fixed by R3-7), one narrowed to a P4 residue (the
+strictness ratchet's fail-open now only affects partial-workspace runs,
+where the shrink check is skipped). The remaining four were re-confirmed
+by a fresh adversarial verifier agent against ground truth, then fixed
+in `22687a0..4d87146` (each commit carries the full failure analysis):
+
+- **P1** deleted page → perpetual schedule/lease/throw/reclaim churn
+  (~2–3 min cycle, forever). Planner/lease queries now require
+  `p.status='active'`; the executor parks (not throws) on a missing
+  page; the DELETE route pauses the page's streams. `22687a0`.
+- **P2** historical `active_subscribers` decayed retroactively: the
+  full-history rebuild gated on `is_current=true`. Retired rows now
+  count through `least(ends_at, last_seen_at)`. Projection rebuild
+  self-heals prod on the next sweep — no migration. `a651836`.
+- **P2** the scheduler had no healthcheck and no deploy gate: heartbeat
+  file written only after a successful instance-heartbeat upsert +
+  compose healthcheck + `wait_for_scheduler_health`. Standby entries
+  must not carry the healthcheck. Follow-up (small, separate): golden-
+  signal alert on the sync planner queue's newest-job age, for the
+  healthy-process/dead-timekeeper wedge. `7243593`.
+- **P3** the Subscribers "All" chip/header showed the filtered total;
+  both now ride a dedicated unfiltered `{limit:1}` count. `4d87146`.
+
+Verification: `pnpm check` green; red-green proven for both new
+integration pins (they fail on the pre-fix queries); 11 adjacent
+integration suites (196 tests) green under Docker.
