@@ -1,10 +1,7 @@
 import { useState } from "react";
 import type {
   AdminCreateUserBody,
-  AdminIssueApiKeyBody,
   AdminUser,
-  ApiKeyItem,
-  IssuedApiKeyResponse,
 } from "@agency_hub_core/contracts";
 import { creatableUserRoles } from "@agency_hub_core/shared";
 import {
@@ -13,6 +10,7 @@ import {
   useAdminPages,
   useAdminIssueApiKey,
   useAdminRevokeApiKeys,
+  useAdminSetPassword,
   useAdminUserApiKeys,
   useAdminAssignPage,
   useAdminUnassignPage,
@@ -283,12 +281,7 @@ export function UsersTab() {
 
       {/* ---- Modals ---- */}
       {modal?.type === "addChatter" && (
-        <AddChatterModal
-          onClose={() => setModal(null)}
-          onKeyIssued={(key, username) =>
-            setModal({ type: "revealKey", key, username })
-          }
-        />
+        <AddChatterModal onClose={() => setModal(null)} />
       )}
       {modal?.type === "createUser" && (
         <CreateUserModal onClose={() => setModal(null)} />
@@ -366,42 +359,61 @@ function IssueKeyButton({
 }
 
 /* ------------------------------------------------------------------ */
-/*  AddChatterModal — create user + issue key in one flow              */
+/*  AddChatterModal — create user; password is the human credential    */
+/*  (#116: keys left the human onboarding path — the row's Issue Key   */
+/*  button remains as the legacy/automation fallback)                  */
 /* ------------------------------------------------------------------ */
 
 function AddChatterModal({
   onClose,
-  onKeyIssued,
 }: {
   onClose: () => void;
-  onKeyIssued: (key: string, username: string) => void;
 }) {
   const createUser = useAdminCreateUser();
   const { data: allPages } = useAdminPages();
   const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [selectedPage, setSelectedPage] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [createdUsername, setCreatedUsername] = useState<string | null>(null);
 
-  const issueKey = useAdminIssueApiKey(username.trim());
+  const setUserPassword = useAdminSetPassword(username.trim());
+  const assignPage = useAdminAssignPage(username.trim());
+
+  const passwordTooShort = password.length > 0 && password.length < 8;
 
   async function handleSubmit() {
     const trimmed = username.trim();
-    if (!trimmed) return;
+    if (!trimmed || passwordTooShort) return;
 
     setIsPending(true);
     try {
+      // Idempotent retry: a partial failure (user created, later step failed)
+      // must not recreate the user.
       if (createdUsername !== trimmed) {
         await createUser.mutateAsync({ username: trimmed, role: "chatter" });
         setCreatedUsername(trimmed);
       }
 
-      const body: AdminIssueApiKeyBody = selectedPage
-        ? { pageLabel: selectedPage }
-        : {};
-      const result = await issueKey.mutateAsync(body);
+      if (password) {
+        // mustChangePassword stays off (#116): no chatter-reachable surface
+        // can complete a forced change yet.
+        await setUserPassword.mutateAsync({
+          password,
+          mustChangePassword: false,
+        });
+      }
 
-      onKeyIssued(result.key, trimmed);
+      if (selectedPage) {
+        await assignPage.mutateAsync({ pageLabel: selectedPage });
+      }
+
+      toast.success(
+        password
+          ? `${trimmed} created — they can now sign in from the extension/desktop`
+          : `${trimmed} created (no password — set one, or issue a key)`,
+      );
+      onClose();
     } catch (error) {
       setIsPending(false);
       toast.error(
@@ -420,6 +432,26 @@ function AddChatterModal({
             placeholder="e.g. sarah"
             className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
           />
+        </Field>
+
+        <Field label="Password">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="min 8 characters"
+            autoComplete="new-password"
+            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+          <p className="mt-1 text-xs text-text-muted">
+            The chatter signs in with this in ChatGoose (extension or desktop)
+            to mint their own device token — no key to send around.
+          </p>
+          {passwordTooShort && (
+            <p className="mt-1 text-xs text-danger">
+              Password must be at least 8 characters.
+            </p>
+          )}
         </Field>
 
         {allPages && allPages.length > 0 && (
@@ -450,11 +482,11 @@ function AddChatterModal({
         </button>
         <button
           type="button"
-          disabled={isPending || !username.trim()}
+          disabled={isPending || !username.trim() || passwordTooShort}
           onClick={handleSubmit}
           className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
         >
-          {isPending ? "Creating..." : "Create & Issue Key"}
+          {isPending ? "Creating..." : "Create Chatter"}
         </button>
       </div>
     </ModalShell>
@@ -700,7 +732,29 @@ function ChatterDetailModal({
   const { data: allPages } = useAdminPages();
   const assignPage = useAdminAssignPage(user.username);
   const unassignPage = useAdminUnassignPage(user.username);
+  const setUserPassword = useAdminSetPassword(user.username);
   const [selectedLabel, setSelectedLabel] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+
+  async function handleSetPassword() {
+    if (newPassword.length < 8) return;
+    try {
+      // mustChangePassword stays off (#116): no chatter-reachable surface
+      // can complete a forced change yet.
+      await setUserPassword.mutateAsync({
+        password: newPassword,
+        mustChangePassword: false,
+      });
+      setNewPassword("");
+      toast.success(
+        `Password set for ${user.username} — their active sessions were signed out`,
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to set password",
+      );
+    }
+  }
 
   const assignedLabels = new Set(user.assignedPages.map((p) => p.label));
   const availablePages = (allPages ?? []).filter(
@@ -734,6 +788,35 @@ function ChatterDetailModal({
   return (
     <ModalShell title={`Manage ${user.username}`} onClose={onClose}>
       <div className="space-y-6">
+        {/* Password (#116: the human credential — device tokens ride it) */}
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-text-primary">
+            Password
+          </h3>
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="New password (min 8 characters)"
+              autoComplete="new-password"
+              className="flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+            <button
+              type="button"
+              disabled={newPassword.length < 8 || setUserPassword.isPending}
+              onClick={handleSetPassword}
+              className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
+            >
+              {setUserPassword.isPending ? "Setting..." : "Set password"}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-text-muted">
+            The chatter signs in with this in ChatGoose to mint a device token.
+            Setting a password signs out their active sessions.
+          </p>
+        </div>
+
         {/* Key History */}
         <div>
           <h3 className="mb-2 text-sm font-semibold text-text-primary">

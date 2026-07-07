@@ -3,6 +3,7 @@ import type {
   AdminAssignPageBody,
   AdminCreateUserBody,
   AdminIssueApiKeyBody,
+  AdminSetPasswordBody,
 } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
@@ -55,6 +56,16 @@ export function useAdminRevokeApiKeys(username: string) {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
       qc.invalidateQueries({ queryKey: ["admin", "users", username, "apiKeys"] });
     },
+  });
+}
+
+export function useAdminSetPassword(username: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AdminSetPasswordBody) =>
+      kernel.adminSetPassword({ params: { username }, body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 }
 

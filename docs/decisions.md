@@ -3033,3 +3033,38 @@ upsert/archive stay `apiKey`-auth. Rationale: single-tenant (DP 9-A), the
 bearer set is the agency's own trusted team, and the desktop's persona
 sync/editor legitimately runs under chatter credentials. Revisit only if the
 team grows beyond trusted operators or a per-user persona design lands.
+
+**Decision #116 (2026-07-07, owner via identity-planning session):** Family
+credential ruling — HUMANS authenticate with username+password (one per
+person) and per-device tokens (`agency_hub_device_`, minted by the person's
+own sign-in in each client); ROBOTS (probes, scripts) use API keys
+(`agency_hub_core_`). Keys leave the HUMAN onboarding path; they never leave
+the kernel. Concretely:
+(a) **Chatter password provisioning moves into the live dashboard** (the gap
+that stranded token adoption: chatter creation offered no password field, no
+set-password control existed, so tokens were unissuable without CLI/devtools).
+Ships as: optional password on chatter creation + "Set password" in the
+chatter detail modal, both riding the existing
+`PATCH /api/v1/admin/users/:username/password`. If a dashboard rebuild
+proceeds (#112), this is parity scope.
+(b) **`must_change_password` stays FROZEN for chatters** until a self-serve
+change-password surface exists somewhere: the gate's allowlist
+(me/logout/authChangePassword) correctly blocks device-token issuance, and no
+client or chatter-reachable page renders a change-password form — a flagged
+chatter would be stranded. The allowlist is NOT widened (that would hollow the
+flag); provisioning always sends `mustChangePassword: false`.
+(c) **Client key-fallback deletion gate** (replaces "after fleet migration"
+with something checkable): (1) provisioning UI live in prod, (2) every active
+chatter holds a device token with `last_used_at` fresher than 14 days,
+(3) one week fleet-wide without CG-HUB-03. Then, as one kernel-declared step:
+the extension executes its E9 deletion, the desktop adds `hubApiKey` to
+decommission-on-boot. Dashboard "Issue Key" survives — for automation.
+(d) **The workboard is not an input to this plan.** Owner stated in this
+session that the workboard direction is deprecated (the v2 dashboard page
+included); identity work must not wait on Stage 34. OPEN ADJUDICATION left
+with the owner, not resolved here: reconcile #112 (dashboard rebuild ruling)
+and the Stage 34 progress note (2026-07-07 "DPs RESOLVED") with the stated
+deprecations — both entries currently read as active plans.
+Client-side counterparts: extension E12 (hub-failure diagnostics) already
+recorded; extension E9 deletion and the desktop probe fix reference this
+entry.
