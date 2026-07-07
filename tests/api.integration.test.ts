@@ -9597,6 +9597,26 @@ describe("api integration", () => {
       "select status from pages where label = 'stage13-empty'",
     );
     expect(emptyRow.rows[0]?.status).toBe("deleted");
+
+    // Tombstoned pages leave the visible-model surface (review R2-3): both of
+    // stage13-model's pages are deleted, so the model disappears from
+    // GET /models instead of listing with a positive pageCount and no pages.
+    const models = await server.inject({
+      method: "GET",
+      url: "/api/v1/models",
+      headers: { cookie: ownerCookie },
+    });
+    expect(models.statusCode).toBe(200);
+    const modelSlugs = (models.json() as Array<{ slug: string }>).map((m) => m.slug);
+    expect(modelSlugs).not.toContain("stage13-model");
+    // The admin/catalog surface deliberately still sees tombstoned pages
+    // (model deletion stays refused while tombstones exist).
+    const adminModels = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/models",
+      headers: { cookie: ownerCookie },
+    });
+    expect(JSON.stringify(adminModels.json())).toContain("stage13-model");
   });
 
   it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering [sync-critical]", async (context) => {

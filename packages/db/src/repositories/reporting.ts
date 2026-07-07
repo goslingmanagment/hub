@@ -119,7 +119,9 @@ export async function listVisibleModels(db: Database, pageIds?: number[]) {
     name: models.name,
     pageCount: sql<number>`count(${pages.id})::int`,
   }).from(models)
-    .innerJoin(pages, eq(pages.modelId, models.id))
+    // Visible surface sees live pages only (Stage 13 tombstones excluded);
+    // the admin/catalog queries deliberately keep seeing them.
+    .innerJoin(pages, and(eq(pages.modelId, models.id), eq(pages.status, "active")))
     .where(clauses.length > 0 ? and(...clauses) : undefined)
     .groupBy(models.id, models.slug, models.name)
     .orderBy(models.sortOrder, models.slug);
@@ -141,7 +143,7 @@ export async function findVisibleModel(db: Database, modelSlug: string, pageIds?
     name: models.name,
     pageCount: sql<number>`count(${pages.id})::int`,
   }).from(models)
-    .innerJoin(pages, eq(pages.modelId, models.id))
+    .innerJoin(pages, and(eq(pages.modelId, models.id), eq(pages.status, "active")))
     .where(and(...clauses))
     .groupBy(models.id, models.slug, models.name);
 
