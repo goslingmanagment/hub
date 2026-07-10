@@ -11,6 +11,7 @@ code. Prompts state goals, hard constraints, and done-criteria — not steps.
 | Prompt | Use |
 |---|---|
 | `docs/project-kernel/prompts/prompt-4-stage-execution.md` | The (historical) stage-execution harness that ran the 35-stage migration — parameterized `STAGE=NN`; keep for reference and for any remaining stage tails |
+| `~/code/workboard` (no prompt file) | Stage 34 standalone-workboard design pass (reopened by #119) — open a fresh session there; its CLAUDE.md + `docs/prd.md` skeleton are the brief. Fills the PRD, STOPS for owner review before any code |
 | `docs/prompts/` (map prompts) | Regenerate `docs/generated/` maps after substantive changes |
 
 ## Standing rules for any core session

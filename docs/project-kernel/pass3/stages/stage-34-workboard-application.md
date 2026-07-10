@@ -1,10 +1,12 @@
 # Stage 34 — Workboard application — PLACEHOLDER
 
-> **DEPRECATED (decision #117, 2026-07-07, owner).** The workboard direction
-> is closed — do not run the design pass, do not build this stage. The
-> "Progress (2026-07-07)" note below (DPs resolved, hosting, repo) is
-> historical. The dashboard's Workboard v2 page keeps serving as-is but is
-> not a product direction. This file stays as the scope tombstone.
+> **REOPENED (decision #119, 2026-07-08, owner) — standalone app only.**
+> #117's closure is narrowed: what stays deprecated is the workboard INSIDE
+> core (the dashboard's Workboard v2 page as a product direction; the page
+> keeps serving as-is). THIS stage — the standalone workboard application —
+> is ACTIVE again, and the "Progress (2026-07-07)" note below (DPs resolved,
+> hosting, repo) is back in force. Entry criterion unchanged: owner-approved
+> PRD (design pass) before any code.
 
 **Repo(s):** new repo (name/home TBD by the owner — DP 4a = B, own repository) ·
 **Depends on:** 20 (SDK), 21 (stream v2), 22 (sessions/grants), 23 (workboard module), Q4
@@ -164,3 +166,14 @@ The deferred decisions are RESOLVED (owner): **DP 4b = kernel sessions**
 created: launch prompt `../../prompts/prompt-workboard-design.md` + PRD
 skeleton `../../workboard/prd.md`. Entry criterion unchanged: owner-approved
 PRD before any Stage 34 code.
+
+## Progress (2026-07-08)
+
+Reopened by #119 (the #117 closure narrowed to the in-core direction). The
+repo `~/code/workboard` was scaffolded the same day (family standard from
+day one: CLAUDE.md, AGENTS.md pointer, decisions.md with the family law +
+W1, README, PRD skeleton at `docs/prd.md`). The separate launch-prompt
+ritual was dropped (owner: "не усложняем") — the repo's CLAUDE.md + PRD
+skeleton are the brief; the design pass is a fresh session there asked to
+write the PRD. Core copies carry retirement banners. Entry criterion
+unchanged: owner-approved PRD before any application code.

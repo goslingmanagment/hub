@@ -1,7 +1,13 @@
 # Workboard app — design-pass session (Stage 34)
 
-> **DEPRECATED (decision #117, 2026-07-07, owner).** Do not run this session
-> — the workboard direction is closed. Kept as a tombstone.
+> **RETIRED (2026-07-08, same day as #119, owner: "не усложняем").** The
+> separate launch-prompt ritual was dropped when the repo `~/code/workboard`
+> was scaffolded — that repo's CLAUDE.md (rules + decided inputs) and
+> `docs/prd.md` skeleton (section briefs + seeded owner questions) are the
+> brief now. To run the design pass: open a fresh session in
+> `~/code/workboard` and ask it to write the PRD. This copy is frozen
+> history (kept per the anti-deletion rule). Background: #119 reopened the
+> standalone app after #117; only the in-core direction stays deprecated.
 
 Run this in a FRESH session opened in `~/code/core`. You are designing the
 standalone workboard application — the chatter's revenue tool: log in, see

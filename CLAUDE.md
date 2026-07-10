@@ -14,7 +14,9 @@ by `scripts/deploy-production.sh` (owner-gated).
 essentially complete — stages 1–32 built and in production, the extension 1.7.0
 and desktop 0.1.31 kernel cutovers shipped. The dashboard rebuild was CANCELLED
 (decision #117 reversing #112): `apps/dashboard` is the live, maintained admin
-console; the workboard direction is deprecated (#117). Stage 35 (this
+console; the in-core workboard direction is deprecated (#117), but the
+STANDALONE workboard app (Stage 34, repo `~/code/workboard`) was REOPENED by
+#119 — design pass pending, owner-approved PRD before any code. Stage 35 (this
 documentation standard) is the closing stage. `docs/project-kernel/` is
 the migration's historical archive — living docs are `docs/` + `docs/generated/`.**
 

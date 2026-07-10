@@ -3191,3 +3191,71 @@ in `22687a0..4d87146` (each commit carries the full failure analysis):
 Verification: `pnpm check` green; red-green proven for both new
 integration pins (they fail on the pre-fix queries); 11 adjacent
 integration suites (196 tests) green under Docker.
+
+**Decision #119 (2026-07-08, owner):** #117 clause (2) NARROWED — the
+workboard closure was recorded wider than the owner's intent. What is
+deprecated is the workboard INSIDE core: the dashboard's Workboard v2 page
+as a product direction (the page keeps serving as-is — unchanged from #117).
+The STANDALONE workboard application (Stage 34, DP 4a = B) is an ACTIVE
+direction again — the owner wants it built. The 2026-07-07 resolutions in
+the Stage 34 progress note are REINSTATED as decisions of record: **DP 4b =
+kernel sessions** (no IdP, no browser device tokens), **DP 4c = per-page
+grants** (the existing `assignedPageIds` enforcement shape), hosting = same
+VPS at `workboard.gosling-agency.ru`, repo `~/code/workboard`, v1
+Fansly-only. The #117 tombstone banners on the design-pass prompt
+(`docs/project-kernel/prompts/prompt-workboard-design.md`), the PRD skeleton
+(`docs/project-kernel/workboard/prd.md`), and the Stage 34 placeholder are
+replaced with pointers here in the same change; CLAUDE.md header and the
+SESSIONS.md harness table updated likewise. Entry criterion unchanged:
+owner-approved PRD (the design pass stops there) before any Stage 34 code.
+#116d's identity ruling is unaffected: no identity/auth work waits on the
+workboard; chatter password self-service remains owner-managed (#116) until
+the app actually ships a change-password surface. Same day, executing this
+decision: the repo `~/code/workboard` was scaffolded (family standard from
+day one — CLAUDE.md, AGENTS.md pointer, `docs/decisions.md` with the family
+law + W1, README, PRD skeleton at `docs/prd.md`; that repo's docs are NOT
+gitignored) and the separate launch-prompt ritual was DROPPED (owner: "не
+усложняем") — the new repo's CLAUDE.md carries the rules and decided
+inputs, its PRD skeleton the section briefs and seeded owner questions; the
+design pass is now just a fresh session in `~/code/workboard` asked to
+write the PRD. The core copies (design-pass prompt, PRD skeleton, workspace
+README) carry retirement banners and are frozen history. The founding
+inputs were then RE-CONFIRMED by the owner in a structured interview
+(2026-07-08, doubting the 07-07 record): login/password against core,
+per-page grants, Fansly-only v1, same-VPS subdomain — all stand; NEW: v1 is
+desktop-browser-only; board UX shape deliberately OPEN (the PRD proposes
+variants with mockups). Recorded as W1 in the new repo's log.
+
+**Decision #120 (2026-07-10, owner):** AI gateway daily caps raised and the
+quota denial made legible end-to-end. Trigger: on 2026-07-09 the lora-vip-of
+chatter hit the 200-requests/day cap (23:27–23:50 UTC, 25 `quota_denied`
+ledger rows; the desktop showed only the generic CG-HUB-02 card). (1) Default
+daily caps per chatter/page UTC day: requests 200 → **500**, cost
+$5 → **$10** (5M → 10M micro-USD). Both moved together deliberately — at the
+observed ~$0.011/request, 500 requests ≈ $5.3 would have silently hit the old
+cost cap ~470 requests in. Changed in the zod env defaults + config registry +
+runtime constants; prod sets no env overrides, so the deploy carries them.
+(2) SDK stream helpers (`streamAiFeature`/`streamAiGateway`) now classify
+non-2xx openings via `categoryForStatus` instead of an auth/server/validation
+ternary — a 429 reaches clients as `rate_limit` with the body's `quota_denied`
+code (previously it surfaced as "validation"). (3) Desktop (0.1.31+): new
+`HubFailureReason` 'quota' → new **CG-HUB-03** ("Daily AI generation limit
+reached… resets at midnight UTC"); hub timeouts/connection drops in the AI
+feature lane map to CG-NET-02/CG-NET-01 instead of CG-HUB-02; the CG-HUB-02
+recovery text no longer promises "sync retries automatically" (false for
+generation and for one-attempt outbox sends). Follow-ups noted, not done: the
+Fansly extension shares the CG-HUB-02 blindness (own repo/session); kernel
+product-gate 400s are still string-matched by the desktop (`mapKernelGateError`)
+and deserve structured codes; the dock could pre-warn from the quota frame's
+`remainingRequestsToday`.
+
+*Same night, executing #120's follow-ups:* the kernel's four product gates
+now throw `ProductGateError` with machine codes (`gate_min_messages`,
+`gate_hi_greeting_limit`, `gate_ping_active`, `gate_draft_required`; messages
+unchanged); desktop (9b1334a) and extension (fed6a84, bar-tone-menu) map those
+codes structurally with the message match kept as a pre-#120 fallback; the
+extension got its own quota card (`hub_quota_exceeded` / CG-HUB-09 — its
+CG-HUB-03 was already taken by the legacy family); and the desktop dock
+pre-warns from the meta quota frame (amber strip at ≤25 requests left,
+`quotaRemainingRequests` on operation:complete). Deployed/released separately
+per gate.

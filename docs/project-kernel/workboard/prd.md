@@ -1,7 +1,8 @@
 # Workboard — PRD (v1, Fansly-only)
 
-> **DEPRECATED (decision #117, 2026-07-07, owner).** The workboard direction
-> is closed; this skeleton is never filled. Kept as a tombstone.
+> **MOVED (2026-07-08, same day as #119).** The live skeleton is
+> `~/code/workboard/docs/prd.md` — the design session fills THAT copy. This
+> one is frozen history (kept per the anti-deletion rule).
 
 > STATUS: SKELETON — the design session fills this; the owner reviews before
 > any code. Decided inputs (do not reopen): kernel-session login, per-page
