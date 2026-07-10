@@ -110,9 +110,11 @@ describe("config registry", () => {
     "ofapiFanIdentitiesSyncEnabled",
     // Fast-reply freshness PR4: readthrough reconcile (own window).
     "ofapiDmReadthroughReconcileEnabled",
+    // Wave 2 corrections reconciler (OFF until the fingerprint backfill).
+    "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the thirteen live keys, the eighteen boot keys, and nothing else", () => {
+  it("wires exactly the thirteen live keys, the nineteen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

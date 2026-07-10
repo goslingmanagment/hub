@@ -161,6 +161,9 @@ const envSchema = z.object({
   // Fast-reply freshness PR4: REST readthrough reconcile into the cold
   // archive (boot-applied staged flag; own verification window).
   OFAPI_DM_READTHROUGH_RECONCILE_ENABLED: booleanSchema.default(false),
+  // Wave 2 corrections: the material!=emitted reconciler. OFF until the
+  // fingerprint backfill has run on prod (preamble 1).
+  OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED: booleanSchema.default(false),
   // Stage 1 retention stand-down kill-switches (default OFF = no destruction).
   // Fast-reply freshness Wave 1: prune default OFF again — the hot table's
   // purchased_at/deleted_at feed the AI union read; the runtime coverage gate
@@ -296,6 +299,8 @@ export interface AppConfig {
   ofapiDesktopCommandExecutionEnabled?: boolean;
   /** Fast-reply freshness PR4: readthrough reconcile (boot flag). */
   ofapiDmReadthroughReconcileEnabled?: boolean;
+  /** Wave 2 corrections: the material!=emitted reconciler (boot flag). */
+  ofapiDmCorrectionsReconcileEnabled?: boolean;
   pageDmPruneEnabled?: boolean;
   diskUsageAlertPercent?: number;
   revenueRouteRoleEnforcement?: "log" | "enforce";
@@ -497,6 +502,7 @@ export function loadConfig(
     ofapiDesktopCommandOutboxEnabled: parsed.OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED,
     ofapiDesktopCommandExecutionEnabled: parsed.OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED,
     ofapiDmReadthroughReconcileEnabled: parsed.OFAPI_DM_READTHROUGH_RECONCILE_ENABLED,
+    ofapiDmCorrectionsReconcileEnabled: parsed.OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED,
     pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     revenueRouteRoleEnforcement: parsed.REVENUE_ROUTE_ROLE_ENFORCEMENT,

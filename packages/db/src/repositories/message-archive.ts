@@ -55,12 +55,49 @@ function tipMillsFromEventData(data: unknown, priceMills: bigint | null): bigint
     ?? priceMills;
 }
 
+/** Wave 2: superseding-event head fields (schema-v2 message.* events carry
+ * the COMPLETE merged head in data.head — mills as decimal strings). */
+function supersedingHead(data: unknown): Record<string, unknown> | null {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return null;
+  }
+  const record = data as Record<string, unknown>;
+  if (record.supersedesEventId === undefined || record.supersedesEventId === null) {
+    return null;
+  }
+  const head = record.head;
+  return typeof head === "object" && head !== null && !Array.isArray(head)
+    ? head as Record<string, unknown>
+    : null;
+}
+
+function headMills(value: unknown): bigint | null {
+  if (typeof value === "string" && /^[0-9]+$/.test(value)) {
+    return BigInt(value);
+  }
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+    return BigInt(value);
+  }
+  return null;
+}
+
+function headDate(value: unknown): Date | null {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 /**
  * Applies one account's message.* events (ordered by account_seq) onto the
  * archive. received/sent insert (first writer wins — cross-producer dedup
  * already collapsed same-fact events upstream); deleted tombstones;
  * ppv_unlocked is a NO-OP in v1 (notification-shaped, unreliable message ref
- * — recorded deviation). Returns rows written/tombstoned.
+ * — recorded deviation). Wave 2: a SUPERSEDING event (schema v2,
+ * data.supersedesEventId + data.head) REPLACES the row's material — the
+ * same-message superseding merge; account_seq ordering keeps replays
+ * monotone, and deleted_at stays sticky. Returns rows written/tombstoned.
  */
 export async function applyMessageEventsToArchive(
   db: Database,
@@ -76,6 +113,55 @@ export async function applyMessageEventsToArchive(
   for (const event of input.events) {
     if (event.type === "message.received" || event.type === "message.sent") {
       if (!event.messageRef) {
+        continue;
+      }
+      const head = supersedingHead(event.data);
+      if (head !== null) {
+        // Wave 2 superseding merge: the head REPLACES material (this is the
+        // repair path — first-writer-wins would leave the row unhealed).
+        // deleted_at is deliberately NOT in the SET list (sticky), and the
+        // stub flag clears (the head is complete by construction).
+        const result = await db.execute(sql`
+          insert into message_archive (
+            account_id, platform, conversation_ref, message_ref, fan_native_id,
+            sender_role, is_sent_by_me, occurred_at, text_plain, price_mills,
+            is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
+            source_event_id
+          ) values (
+            ${input.accountId},
+            ${input.platform},
+            ${event.conversationRef},
+            ${event.messageRef},
+            ${event.fanIdentityRef},
+            ${typeof head.senderRole === "string" ? head.senderRole : "unknown"},
+            ${head.isSentByMe === true},
+            ${headDate(head.createdAt) ?? event.occurredAt},
+            ${typeof head.text === "string" ? head.text : ""},
+            ${headMills(head.priceMills)},
+            ${head.isTip === true},
+            ${headMills(head.tipAmountMills) ?? 0n},
+            ${typeof head.inReplyToMessageId === "string" ? head.inReplyToMessageId : null},
+            ${JSON.stringify(Array.isArray(head.media) ? head.media : [])}::jsonb,
+            ${event.id}
+          )
+          on conflict (account_id, platform, message_ref) do update set
+            conversation_ref = coalesce(excluded.conversation_ref, message_archive.conversation_ref),
+            fan_native_id = coalesce(excluded.fan_native_id, message_archive.fan_native_id),
+            sender_role = excluded.sender_role,
+            is_sent_by_me = excluded.is_sent_by_me,
+            occurred_at = excluded.occurred_at,
+            text_plain = excluded.text_plain,
+            price_mills = excluded.price_mills,
+            is_tip = excluded.is_tip,
+            tip_amount_mills = excluded.tip_amount_mills,
+            in_reply_to_ref = excluded.in_reply_to_ref,
+            media_metadata = excluded.media_metadata,
+            source_event_id = excluded.source_event_id,
+            content_pending = false,
+            updated_at = now()
+          returning id
+        `);
+        inserted += result.rows.length;
         continue;
       }
       const price = dollarsFieldToMills(dataField(event.data, "price"));

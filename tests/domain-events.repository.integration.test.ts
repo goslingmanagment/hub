@@ -61,14 +61,22 @@ describe("domain events append protocol (Stage 8)", () => {
       event({ dedupKey: "msg:received:m1" }),
       event({ dedupKey: "msg:received:m2" }),
     ]);
-    expect(first).toEqual({ appended: 2, deduped: 0, highWater: 2 });
+    expect(first).toMatchObject({ appended: 2, deduped: 0, highWater: 2 });
 
-    // The same facts again — from any producer — append nothing.
+    // The same facts again — from any producer — append nothing. Wave 2:
+    // the per-event outcome resolves a DEDUPED key to the EXISTING event id
+    // (the corrections reconciler links supersedes through this).
     const second = await appendDomainEvents(testDb.db, 7, [
       event({ dedupKey: "msg:received:m2" }),
       event({ dedupKey: "msg:received:m3" }),
     ]);
-    expect(second).toEqual({ appended: 1, deduped: 1, highWater: 3 });
+    expect(second).toMatchObject({ appended: 1, deduped: 1, highWater: 3 });
+    expect(second.events[0]).toMatchObject({
+      dedupKey: "msg:received:m2",
+      appended: false,
+      eventId: first.events[1]!.eventId,
+    });
+    expect(second.events[1]!.appended).toBe(true);
 
     expect(await getAccountHighWater(testDb.db, 7)).toBe(3);
     const rows = await listEventsSince(testDb.db, { accountId: 7, afterSeq: 0 });
@@ -81,7 +89,7 @@ describe("domain events append protocol (Stage 8)", () => {
 
     // Another account's sequence is independent.
     const other = await appendDomainEvents(testDb.db, 8, [event({ dedupKey: "msg:received:m1" })]);
-    expect(other).toEqual({ appended: 1, deduped: 0, highWater: 1 });
+    expect(other).toMatchObject({ appended: 1, deduped: 0, highWater: 1 });
   });
 
   it("keeps account_seq gapless 1..K under concurrent appenders", async (context) => {

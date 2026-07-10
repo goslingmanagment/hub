@@ -30,6 +30,7 @@ import {
   ensureMessageArchiveQueues,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
+import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
@@ -221,6 +222,12 @@ export async function startWorkerServices(
     const readthrough = await runOfapiDmReadthroughReconcile(app);
     if (readthrough.scanned > 0) {
       app.logger.info(readthrough, "Readthrough reconcile sweep complete");
+    }
+    // Wave 2: the corrections reconciler drains material!=emitted into the
+    // ledger AFTER the projectors above have merged this minute's material.
+    const corrections = await runDmCorrectionsReconcile(app);
+    if (corrections.scanned > 0) {
+      app.logger.info(corrections, "DM corrections reconcile sweep complete");
     }
   });
 

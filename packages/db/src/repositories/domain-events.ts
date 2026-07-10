@@ -26,11 +26,22 @@ export interface DomainEventInput {
   dedupKey: string;
 }
 
+export interface AppendedDomainEventOutcome {
+  dedupKey: string;
+  /** The event id this key resolves to: the freshly appended event, or the
+   * EXISTING claim's event on dedupe (Wave 2: the corrections reconciler
+   * links supersedesEventId / emitted_event_id through this). */
+  eventId: number;
+  appended: boolean;
+}
+
 export interface AppendDomainEventsResult {
   appended: number;
   deduped: number;
   /** The account's high-water sequence after this batch. */
   highWater: number;
+  /** Per-event outcome in input order (additive, Wave 2). */
+  events: AppendedDomainEventOutcome[];
 }
 
 /**
@@ -45,7 +56,7 @@ export async function appendDomainEvents(
 ): Promise<AppendDomainEventsResult> {
   if (events.length === 0) {
     const highWater = await getAccountHighWater(db, accountId);
-    return { appended: 0, deduped: 0, highWater };
+    return { appended: 0, deduped: 0, highWater, events: [] };
   }
 
   return db.transaction(async (tx) => {
@@ -61,6 +72,7 @@ export async function appendDomainEvents(
     let nextSeq = Number(locked.rows[0]!.next_seq);
     let appended = 0;
     let deduped = 0;
+    const outcomes: AppendedDomainEventOutcome[] = [];
 
     for (const event of events) {
       const allocated = await tx.execute<{ id: string }>(sql`
@@ -76,8 +88,20 @@ export async function appendDomainEvents(
       `);
       if (claimed.rows.length === 0) {
         deduped += 1;
+        // Surface the EXISTING claim's event id — the dedup outcome is a
+        // resolution, not a black hole (Wave 2 linkage).
+        const existing = await tx.execute<{ event_id: string }>(sql`
+          select event_id::text from domain_event_keys
+          where account_id = ${accountId} and dedup_key = ${event.dedupKey}
+        `);
+        outcomes.push({
+          dedupKey: event.dedupKey,
+          eventId: Number(existing.rows[0]!.event_id),
+          appended: false,
+        });
         continue;
       }
+      outcomes.push({ dedupKey: event.dedupKey, eventId, appended: true });
 
       await tx.execute(sql`
         insert into domain_events (
@@ -117,7 +141,7 @@ export async function appendDomainEvents(
       `);
     }
 
-    return { appended, deduped, highWater: nextSeq - 1 };
+    return { appended, deduped, highWater: nextSeq - 1, events: outcomes };
   });
 }
 
