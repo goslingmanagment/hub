@@ -38,6 +38,7 @@ import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboardi
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
+import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
 import {
   countHarvestObservations,
   listFanslyBackscrollManifest,
@@ -1146,6 +1147,33 @@ export function buildProgram() {
             `deduped ${result.deduped}, stamped ${result.stamped}, ` +
             `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}, ` +
             `errored ${result.errored}`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("corrections:backfill-fingerprints")
+    .description(
+      "Wave 2 preamble: fingerprint every dm_message_archive row; close emitted_* against "
+        + "existing ledger claims; seed legacy provenance. MUST run (and drainOpen be sized) "
+        + "BEFORE enabling OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED",
+    )
+    .option("--dry-run", "count without writing", false)
+    .option("--batch <n>", "batch size (default 500)", (v) => Number.parseInt(v, 10))
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runDmCorrectionsFingerprintBackfill(app, {
+          dryRun: Boolean(options.dryRun),
+          ...(options.batch !== undefined ? { batchSize: options.batch } : {}),
+        });
+        console.log(JSON.stringify(result));
+        console.log(
+          `${options.dryRun ? "[dry-run] would fingerprint" : "fingerprinted"} ${result.fingerprinted} `
+            + `(closed-in-ledger ${result.emittedClosed}, INITIAL DRAIN BOUND ${result.drainOpen} first `
+            + `events, stubs skipped ${result.stubsSkipped}) of ${result.scanned} scanned`,
         );
       } finally {
         await app.close();
