@@ -75,7 +75,7 @@ the migration's historical archive — living docs are `docs/` + `docs/generated
   gets the platform word swapped at assembly (`applyPlatformWording`) in
   STATIC sources only — runtime data (transcripts, bios) is never rewritten.
   Any prompt edit updates `prompt-manifest.json` or the drift pin fails.
-- **Migrations are forward-only**, numbered (next after 0074), applied by the
+- **Migrations are forward-only**, numbered (next after 0077), applied by the
   deploy script; never edit an applied migration.
 - **Contracts drive everything:** edit `packages/contracts/src/routes.ts`,
   then `pnpm contracts:generate` (regenerates the SDK surface + OpenAPI).

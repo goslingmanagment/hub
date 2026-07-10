@@ -3333,3 +3333,32 @@ no rollback, "stop" means don't run further; migration 0076 is additive and
 image-rollback compatible. Deploy ritual: image+0076 → backfill (dry-run →
 real, review `drainOpen` bound) → flag #122 → 1970 campaign (size → dry-run
 → real), per `docs/runbooks/fastreply-freshness.md`.
+
+**Decision #123 (2026-07-10, owner-authorized blanket, recorded by the
+session):** W2.1 lineage intake for the corrections reconciler. The Wave-2
+reconciler lineage-skipped 100% of the initial drain on prod: OFAPI webhook
+observation intake only began ~2026-07-05 (#49), and `ofapi_webhook_events`
+retains ~14 days (the Wave-2 spec's "36500d" assumption was wrong), so
+17,172 pre-#49 archive rows had no observation to anchor first events to —
+8,549 of them with no surviving journal payload at all. Resolution, in
+order of honesty: (1) surviving journal rows (live table or the frozen
+`ofapi_webhook_events_w2_lineage_snapshot`, 138,082 rows) are journaled
+VERBATIM as webhook-source observations under the row's ORIGINAL
+idempotency key — the reconciler's primary lookup resolves them unchanged;
+(2) journal-less rows get an operator-source reconstruction observation
+whose payload is the archive row's material head — the cold archive IS the
+journal's durable copy by design, so this is late intake of a retained
+fact, not fabrication; the reconciler gains a fallback lookup arm for the
+operator lane. "Never fake lineage" stands: ids and timestamps are the
+row's own, and rows resolving neither way stay skip-and-counted. The
+intake kinds (`ofapi_webhook_lineage_backfill`,
+`dm_archive_material_reconstruction`) are registered with NO canonicalize
+family — events come from the reconciler under canonical dedup keys. Same
+decision covers the two sweep repairs: the reconcile cursor persists
+across runs (skipped rows retry once per full cycle instead of
+head-blocking the signal — the 2026-07-10 starvation), and lineage skips
+log ONE aggregated warn per sweep with a sample instead of a line per row
+(500/min against the pre-#49 backlog). Ritual: `corrections:intake-lineage
+--dry-run` → real → re-enable `OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED` →
+watch the drain; the snapshot table stays until the drain completes and
+its drop is a separate owner decision.

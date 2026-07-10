@@ -60,6 +60,9 @@ export interface DmCorrectionsRunResult {
   /** Guarded emitted-advance refused (concurrent material advance). */
   staleAdvances: number;
   errored: number;
+  /** First few lineage-skipped row ids — one aggregated warn per sweep
+   * (the per-row warn was 500 lines/min against the pre-#49 backlog). */
+  lineageSkipSample: number[];
 }
 
 function emptyResult(): DmCorrectionsRunResult {
@@ -71,7 +74,16 @@ function emptyResult(): DmCorrectionsRunResult {
     lineageSkips: 0,
     staleAdvances: 0,
     errored: 0,
+    lineageSkipSample: [],
   };
+}
+
+const LINEAGE_SKIP_SAMPLE_CAP = 5;
+
+function noteLineageSkip(totals: DmCorrectionsRunResult, rowId: number) {
+  if (totals.lineageSkipSample.length < LINEAGE_SKIP_SAMPLE_CAP) {
+    totals.lineageSkipSample.push(rowId);
+  }
 }
 
 /** The observation source lane each archive source's idempotency key lives
@@ -83,7 +95,7 @@ const OBSERVATION_SOURCE_BY_ARCHIVE_SOURCE: Record<string, ObservationSource> = 
   command: "command_result",
 };
 
-async function resolveLineageObservationId(
+export async function resolveLineageObservationId(
   db: Database,
   row: RepairRow,
 ): Promise<number | null> {
@@ -91,11 +103,19 @@ async function resolveLineageObservationId(
     return row.restMaterialObservationId;
   }
   const source = OBSERVATION_SOURCE_BY_ARCHIVE_SOURCE[row.source];
-  if (!source) {
-    return null;
+  if (source) {
+    const observation = await findObservationByKey(db, source, row.sourceIdempotencyKey);
+    if (observation) {
+      return observation.id;
+    }
   }
-  const observation = await findObservationByKey(db, source, row.sourceIdempotencyKey);
-  return observation?.id ?? null;
+  // W2.1 fallback: pre-#49 webhook rows whose journal payload no longer
+  // survives get an operator-lane reconstruction observation keyed by the
+  // row's ORIGINAL idempotency key (corrections:intake-lineage, decision
+  // #123). The webhook-lane intake reuses the original key in the webhook
+  // source, so the primary lookup above already found those.
+  const reconstruction = await findObservationByKey(db, "operator", row.sourceIdempotencyKey);
+  return reconstruction?.id ?? null;
 }
 
 /** The COMPLETE merged head, as carried in superseding-event data. Mills as
@@ -161,10 +181,7 @@ export async function reconcileDmRepairRow(
   const observationId = await resolveLineageObservationId(app.db, row);
   if (observationId === null) {
     totals.lineageSkips += 1;
-    app.logger.warn(
-      { rowId: row.id, source: row.source, messageId: row.platformMessageId },
-      "DM corrections: source observation unresolvable; row left flagged (never faking lineage)",
-    );
+    noteLineageSkip(totals, row.id);
     return;
   }
 
@@ -201,10 +218,7 @@ export async function reconcileDmRepairRow(
       // preamble rows always carry emitted_event_id or a canonical claim;
       // anything else is a bug worth surfacing, not silently re-emitting.
       totals.lineageSkips += 1;
-      app.logger.warn(
-        { rowId: row.id, messageId: row.platformMessageId },
-        "DM corrections: no prior event to supersede; row left flagged",
-      );
+      noteLineageSkip(totals, row.id);
       return;
     }
     draft = {
@@ -246,23 +260,42 @@ export async function reconcileDmRepairRow(
   }
 }
 
+/** Where the NEXT sweep resumes. Module-level on purpose: skipped rows
+ * (stubs, unresolvable lineage) stay flagged in the signal, and a sweep that
+ * always restarted from the head would rescan exactly those rows forever —
+ * the post-Wave-1 REST/command rows behind them would never get their first
+ * events (the 2026-07-10 head-block). A wrap resets to the head, so skipped
+ * rows are retried once per full cycle, not once per minute. In-memory is
+ * enough: a worker restart costs one head pass. */
+let sweepCursor: number | null = null;
+
+/** Test hook: start the next sweep from the signal head. */
+export function resetDmCorrectionsSweepCursor() {
+  sweepCursor = null;
+}
+
 /** The minutely bounded sweep. Keyset-paged; per-row fault isolation
  * (one poison row costs its own pass, never the sweep). */
 export async function runDmCorrectionsReconcile(
   app: Pick<AppContext, "db" | "config" | "logger">,
+  options: { pageSize?: number; maxPages?: number } = {},
 ): Promise<DmCorrectionsRunResult> {
   const totals = emptyResult();
   if (!isDmCorrectionsReconcileEnabled(app.config)) {
     return totals;
   }
+  const pageSize = options.pageSize ?? SWEEP_PAGE_SIZE;
+  const maxPages = options.maxPages ?? SWEEP_MAX_PAGES;
 
-  let afterId: number | null = null;
-  for (let page = 0; page < SWEEP_MAX_PAGES; page += 1) {
+  let afterId: number | null = sweepCursor;
+  let reachedEnd = false;
+  for (let page = 0; page < maxPages; page += 1) {
     const rows = await listDmRepairSignalRows(app.db, {
       afterId,
-      limit: SWEEP_PAGE_SIZE,
+      limit: pageSize,
     });
     if (rows.length === 0) {
+      reachedEnd = true;
       break;
     }
     afterId = rows[rows.length - 1]!.id;
@@ -278,9 +311,18 @@ export async function runDmCorrectionsReconcile(
         );
       }
     }
-    if (rows.length < SWEEP_PAGE_SIZE) {
+    if (rows.length < pageSize) {
+      reachedEnd = true;
       break;
     }
+  }
+  sweepCursor = reachedEnd ? null : afterId;
+
+  if (totals.lineageSkips > 0) {
+    app.logger.warn(
+      { lineageSkips: totals.lineageSkips, sample: totals.lineageSkipSample },
+      "DM corrections: source observations unresolvable; rows left flagged (never faking lineage) — run corrections:intake-lineage",
+    );
   }
   return totals;
 }

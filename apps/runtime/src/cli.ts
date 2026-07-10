@@ -39,6 +39,7 @@ import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
+import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage-intake.ts";
 import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import {
   countHarvestObservations,
@@ -1175,6 +1176,34 @@ export function buildProgram() {
           `${options.dryRun ? "[dry-run] would fingerprint" : "fingerprinted"} ${result.fingerprinted} `
             + `(closed-in-ledger ${result.emittedClosed}, INITIAL DRAIN BOUND ${result.drainOpen} first `
             + `events, stubs skipped ${result.stubsSkipped}) of ${result.scanned} scanned`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("corrections:intake-lineage")
+    .description(
+      "W2.1 (decision #123): journal the observations the reconciler cannot lineage-resolve — "
+        + "verbatim from the webhook journal/snapshot when the payload survives, reconstructed "
+        + "from the archive material head when it does not. Run BEFORE re-enabling "
+        + "OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED",
+    )
+    .option("--dry-run", "count without writing", false)
+    .option("--batch <n>", "batch size (default 200)", (v) => Number.parseInt(v, 10))
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runDmCorrectionsLineageIntake(app, {
+          dryRun: Boolean(options.dryRun),
+          ...(options.batch !== undefined ? { batchSize: options.batch } : {}),
+        });
+        console.log(JSON.stringify(result));
+        console.log(
+          `${options.dryRun ? "[dry-run] would intake" : "intaken"} ${result.journalIntaken} journal `
+            + `+ ${result.materialIntaken} material (already-resolvable ${result.alreadyResolvable}, `
+            + `stubs ${result.stubsSkipped}, errored ${result.errored}) of ${result.scanned} scanned`,
         );
       } finally {
         await app.close();

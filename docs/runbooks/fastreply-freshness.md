@@ -138,9 +138,14 @@ mass-appends redundant superseding events for the whole history (preamble 1).
   `ofapi_webhook_events_w2_lineage_snapshot` (138,082 rows, 2026-07-10).
   Two sweep defects on top: the sweep restarts from the signal head every
   run (afterId never persists — head-block starves post-Wave-1 REST rows)
-  and it warns per row (500/min). Fix program = W2.1 (late observation
-  intake from the snapshot; owner decision on the 8,549 journal-less rows;
-  cursor + warn-once). Do NOT re-enable the flag before W2.1.
+  and it warns per row (500/min). FIXED by W2.1 (decision #123): lineage
+  intake CLI + operator-lane fallback + persistent sweep cursor +
+  aggregated warn. Re-enable sequence, in this order:
+  `corrections:intake-lineage --dry-run` (expect journal+material ≈ the
+  open drain) → real run → flip `OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED`
+  back on (env + recreate) → watch `DM corrections reconcile sweep
+  complete`: firstEvents drains ≈17k at ≤500/min (~35 min), lineageSkips
+  → 0. The snapshot table stays until the drain completes.
 - **The backfill expectation was miscalibrated**: prod reality is
   emittedClosed 4,902 / drainOpen 17,172 — the ledger lane is younger than
   the archive, not older.
