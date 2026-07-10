@@ -24,6 +24,12 @@ import { sql } from "drizzle-orm";
 import { aiUsageFeatures, fanFlagTypes, userRoles } from "@agency_hub_core/shared";
 import type { ConfigOverrideValue, RunningSnapshot } from "@agency_hub_core/shared";
 
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
+
 export type OfapiCommandKind =
   | "send_text_message_v1"
   | "send_media_message_v1"
@@ -1038,6 +1044,21 @@ export const dmMessageArchive = pgTable(
     // rest_platform_changed_at is a separate input). No FK to observations.
     restMaterialObservationId: bigint("rest_material_observation_id", { mode: "number" }),
     restMaterialObservedAt: timestamp("rest_material_observed_at", { withTimezone: true }),
+    // Wave 2 corrections: sha256 over the reduced material tuple (bytea; hex
+    // only in dedup keys); emitted_* = what the ledger last said about this
+    // message; material != emitted is the queryable repair signal that
+    // drives the bounded reconciler. revision_no counts ledger revisions.
+    materialFingerprint: bytea("material_fingerprint"),
+    emittedFingerprint: bytea("emitted_fingerprint"),
+    emittedEventId: bigint("emitted_event_id", { mode: "number" }),
+    revisionNo: integer("revision_no").default(1).notNull(),
+    materialFieldProvenance: jsonb("material_field_provenance")
+      .$type<Record<string, string>>()
+      .default({})
+      .notNull(),
+    // The platform's own edit time from REST payloads (changedAt) — the
+    // future platform-change ordering input; never observation time.
+    restPlatformChangedAt: timestamp("rest_platform_changed_at", { withTimezone: true }),
     rawShapeVersion: text("raw_shape_version").default("ofapi-message-v1").notNull(),
     mediaMetadata: jsonb("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
     retentionPolicy: text("retention_policy").default("default").notNull(),
@@ -1054,6 +1075,9 @@ export const dmMessageArchive = pgTable(
       .on(table.platformAccountId, table.platformConversationId, table.messageCreatedAt.desc()),
     retainUntilIdx: index("dm_message_archive_retain_until_idx").on(table.retainUntil),
     sourceJournalIdx: index("dm_message_archive_source_journal_idx").on(table.sourceJournalId),
+    repairSignalIdx: index("dm_message_archive_repair_signal_idx")
+      .on(table.platformAccountId, table.id)
+      .where(sql`${table.materialFingerprint} is distinct from ${table.emittedFingerprint}`),
     sourceCheck: check("dm_message_archive_source_check", sql`
       ${table.source} in ('webhook', 'command', 'rest_reconcile', 'rest_backfill')
     `),
@@ -2447,12 +2471,6 @@ export const configAuditLog = pgTable(
 // companion observation_keys. account_id has NO FK by design — unmapped
 // accounts are captured too; integrity is the insert protocol's job
 // (repositories/observations.ts). Nothing consumes this until Stage 8.
-
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return "bytea";
-  },
-});
 
 export const OBSERVATION_SOURCES = [
   "webhook",

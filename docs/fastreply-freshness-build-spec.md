@@ -362,3 +362,27 @@ union additions and zero errors) → serve immediately. PR4 flag follows the sam
 The off→shadow→serve transition rule stays (it is ordering, not duration). All
 fail-open fallbacks and the instant PATCH rollback remain the safety net; manifests
 are the live monitor.
+
+## WAVE 2 SCOPE BOUNDARY (owner, 2026-07-10)
+
+BUILD NOW (green-local; deploy waits ~2-3 days of wave-1 soak for attribution):
+- The corrections mechanism: material fingerprints + superseding events in
+  domain_events + the migration preamble (fingerprint backfill BEFORE the reconciler,
+  REST-only initial drain bound, stub skip-and-count, provenance seeding) + the
+  message_archive same-message superseding merge + enrichment extension (complete
+  merged head in v2 frames).
+- Sends-as-facts through the candidate path, AFTER fixing the direct-confirm raced
+  seam (executor ignores finalize no-op; webhook path checks).
+- First consumer: the Fansly 1970-timestamp repair rides the superseding capability.
+  NB: the OF reducer/material head is dm_message_archive-specific; the Fansly repair
+  slice needs its own short design note in-session (superseding events in
+  domain_events are generic — the head store for Fansly differs). Stop-and-ask if
+  the design is not cleanly derivable.
+
+DEFERRED (pending wave-1 manifest data, decide in ~2 weeks):
+- Pipeline pacing (event-driven canonicalize/projection).
+- Freshness badge / contract phase (needs a desktop release; only if manifests show
+  kernel-invisible heads actually occur).
+
+Wave-1 field data to size against: readthrough reconcile caught 2 webhook-missed
+messages within minutes of activation — webhook loss is routine, not exceptional.
