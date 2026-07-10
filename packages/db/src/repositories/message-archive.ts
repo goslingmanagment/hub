@@ -417,6 +417,35 @@ export async function listArchiveConversationMessages(
   return result.rows.map(mapArchiveRow);
 }
 
+/**
+ * Internal AI transcript reader (fastreply-freshness PR2). Distinct from the
+ * dashboard's listArchiveConversationMessages on purpose: tombstones and
+ * content-pending stubs are filtered HERE, in the reader/repo layer (prompt
+ * code never re-filters — the prompt unit is manifest-pinned), and the cap
+ * is 1500 (AI windows read deeper than the dashboard's 500 clamp, whose
+ * route contract is unchanged).
+ */
+export async function listArchiveConversationMessagesForAi(
+  db: Database,
+  input: {
+    accountId: number;
+    conversationRef: string;
+    limit?: number;
+  },
+): Promise<ArchiveMessageRow[]> {
+  const limit = Math.min(input.limit ?? 100, 1500);
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select ma.* from message_archive ma
+    where ma.conversation_ref = ${input.conversationRef}
+      and ma.account_id = ${input.accountId}
+      and ma.deleted_at is null
+      and ma.content_pending = false
+    order by ma.occurred_at desc nulls last, ma.id desc
+    limit ${limit}
+  `);
+  return result.rows.map(mapArchiveRow);
+}
+
 export async function searchArchiveMessages(
   db: Database,
   input: {

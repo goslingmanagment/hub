@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import { listArchiveConversationMessages } from "@agency_hub_core/db";
+import { listArchiveConversationMessagesForAi } from "@agency_hub_core/db";
 import { millsToDollarsNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../../bootstrap.ts";
@@ -76,8 +76,10 @@ export async function loadTranscriptContext(
   input: { pageId: number; conversationRef: string; limit?: number },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
-  const rows = await listArchiveConversationMessages(app.db, {
-    accountIds: [input.pageId],
+  // The AI reader filters tombstones + content-pending stubs in the repo
+  // layer and accepts the deeper 1500 cap (fastreply-freshness PR2).
+  const rows = await listArchiveConversationMessagesForAi(app.db, {
+    accountId: input.pageId,
     conversationRef: input.conversationRef,
     limit,
   });

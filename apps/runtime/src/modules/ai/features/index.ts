@@ -6,7 +6,7 @@ import {
   prepareAiGatewayStream,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
-import type { AuthPrincipal } from "../../../services/auth.ts";
+import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
 import { BadRequestError, NotFoundError, ProductGateError } from "../../../services/errors.ts";
 import {
   loadFanBio,
@@ -108,11 +108,18 @@ export async function prepareAiFeatureStream(
     throw new ProductGateError(`${feature} requires draftText`, "gate_draft_required");
   }
 
-  // Page resolution + access control live in prepareAiGatewayStream (the
-  // single gate); the context loads need the page id first, so resolve it
-  // through the same lookup and let the gateway re-verify.
+  // Access is checked HERE, before any context loads — a principal without
+  // the page must not pull its transcript/spend into a prompt (fastreply-
+  // freshness PR2). Combined not-found shape mirrors the gateway's: page
+  // existence, access, and platform mismatch are indistinguishable to the
+  // caller. The gateway re-checks at stream time (canAccessPage needs only
+  // principal + pageId — no state from the context loads).
   const stored = await findPageByLabel(app.db, body.pageLabel);
-  if (!stored || stored.page.platform !== body.platform) {
+  if (
+    !stored ||
+    !canAccessPage(principal, stored.page.id) ||
+    stored.page.platform !== body.platform
+  ) {
     throw new NotFoundError("Page not found");
   }
   const pageId = stored.page.id;
