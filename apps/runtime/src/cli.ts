@@ -54,9 +54,11 @@ import { rebuildFanEarningsProjection } from "./services/projections/fan-earning
 import {
   assignPageToUser,
   createUserAccount,
+  deactivateUser,
   issueChatterApiKey,
   listApiKeysForUsers,
   listUsersDetailed,
+  reactivateUser,
   recordAudit,
   revokeUserApiKeys,
   setUserPassword,
@@ -1881,13 +1883,47 @@ export function buildProgram() {
       try {
         const users = await listUsersDetailed(app);
         printRows(
-          ["username", "role", "assigned_pages"],
+          ["username", "role", "assigned_pages", "status"],
           users.map((user) => [
             user.username,
             user.role,
             user.assignedPages.map((page) => page.label).join(","),
+            user.disabledAt ? "deactivated" : "active",
           ]),
         );
+      } finally {
+        await app.close();
+      }
+    });
+
+  user
+    .command("deactivate")
+    .requiredOption("--username <username>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await deactivateUser(app, {
+          username: options.username,
+        }, auditContext());
+        console.log(
+          `Deactivated ${options.username} (revoked ${result.revokedApiKeys} key(s), `
+          + `${result.revokedDeviceTokens} device token(s), ${result.revokedSessions} session(s))`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  user
+    .command("reactivate")
+    .requiredOption("--username <username>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        await reactivateUser(app, {
+          username: options.username,
+        }, auditContext());
+        console.log(`Reactivated ${options.username} — password login works again; issue fresh keys if needed`);
       } finally {
         await app.close();
       }
