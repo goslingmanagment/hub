@@ -74,11 +74,30 @@ export interface SetConfigOverrideInput {
   groupId: string;
 }
 
+/** Transition rejection raised by a patch's `validateTransition` hook (e.g. the
+ *  aiTranscriptFreshUnionMode stepwise rule). Maps to a 400 at the handler. */
+export class ConfigOverrideTransitionError extends Error {
+  constructor(readonly key: string, message: string) {
+    super(message);
+    this.name = "ConfigOverrideTransitionError";
+  }
+}
+
 /** One key in an atomic patch: either an UPSERT (`value`) or a CLEAR (`clear: true`, which
  *  deletes the row and reverts to env). Both forms carry the optional optimistic-lock
- *  `expectedVersion` and share the FOR-UPDATE/version-check discipline in one transaction. */
+ *  `expectedVersion` and share the FOR-UPDATE/version-check discipline in one transaction.
+ *  An upsert may carry `validateTransition`: it runs against the CURRENT row value (null
+ *  when absent) under the same FOR-UPDATE lock that guards the write — current→next is
+ *  validated race-free, no extra lock. A clear never carries one (reverting to env needs
+ *  no transition check). */
 export type AtomicConfigPatch =
-  | { key: string; value: ConfigOverrideValue; clear?: false; expectedVersion?: number }
+  | {
+    key: string;
+    value: ConfigOverrideValue;
+    clear?: false;
+    expectedVersion?: number;
+    validateTransition?: (current: ConfigOverrideValue | null) => string | null;
+  }
   | { key: string; clear: true; value?: undefined; expectedVersion?: number };
 
 export interface SetConfigOverridesInput {
@@ -144,6 +163,13 @@ export async function applyConfigPatchesInTx(
     const currentVersion = current?.version ?? null;
     if (patch.expectedVersion != null && patch.expectedVersion !== (currentVersion ?? 0)) {
       throw new ConfigOverrideVersionConflictError(patch.key, patch.expectedVersion, currentVersion);
+    }
+
+    if (patch.clear !== true && patch.validateTransition) {
+      const transitionError = patch.validateTransition(current?.value ?? null);
+      if (transitionError !== null) {
+        throw new ConfigOverrideTransitionError(patch.key, transitionError);
+      }
     }
 
     if (patch.clear === true) {

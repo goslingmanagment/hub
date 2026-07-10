@@ -185,6 +185,13 @@ const envSchema = z.object({
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(10_000_000),
   CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
   CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS: z.string().default("{}"),
+  // Fast-reply freshness (Wave 1 PR3): AI transcript union-read mode. off =
+  // archive only; shadow = union computed + manifested, archive served;
+  // serve = union served (archive fallback on union error). LIVE-wired:
+  // read per generation via loadEffectiveConfig — flips need no restart.
+  // Keep the env at the default; the PATCH lane owns transitions (stepwise
+  // up, any rollback), and clearing the override must resolve to off.
+  AI_TRANSCRIPT_FRESH_UNION_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
   OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
@@ -296,6 +303,8 @@ export interface AppConfig {
   /** Stage 29: JSON object mapping feature -> daily micro-USD ceiling (global,
    * all principals). Absent feature = no per-feature ceiling. */
   chatMuseAiGatewayFeatureDailyMicroUsdLimits?: string;
+  /** Fast-reply freshness PR3: AI transcript union-read mode (live-wired). */
+  aiTranscriptFreshUnionMode?: "off" | "shadow" | "serve";
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   openrouterApiKey?: string | null;
@@ -492,6 +501,7 @@ export function loadConfig(
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,
     chatMuseAiGatewayRequestMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT,
     chatMuseAiGatewayFeatureDailyMicroUsdLimits: parsed.CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS,
+    aiTranscriptFreshUnionMode: parsed.AI_TRANSCRIPT_FRESH_UNION_MODE,
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,

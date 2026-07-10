@@ -83,6 +83,32 @@ export function validateConfigOverride(
   }
 }
 
+/** Fast-reply freshness PR3: the aiTranscriptFreshUnionMode transition rule
+ *  (v7 amendment 1). Upward moves are stepwise only (off→shadow→serve, one
+ *  step at a time — off→serve is rejected so every enable passes through a
+ *  shadow verification window); any downward move is an allowed rollback
+ *  (serve→shadow, serve→off, shadow→off); re-writing the same value is a
+ *  no-op and allowed. `current` is the stored override row's value (null =
+ *  no override = the env default, off); an invalid stored value degrades to
+ *  off, which forces the stepwise path on the way back up. Clearing an
+ *  override (DELETE) needs no transition check — it resolves to off.
+ *  Validated INSIDE the locked write transaction (applyConfigPatchesInTx's
+ *  validateTransition hook) so the check races nothing. */
+export function validateAiTranscriptFreshUnionModeTransition(
+  current: ConfigOverrideValue | null,
+  next: string,
+): string | null {
+  const order: Record<string, number> = { off: 0, shadow: 1, serve: 2 };
+  const currentMode = current === "shadow" || current === "serve" ? (current as string) : "off";
+  if (!(next in order)) {
+    return "aiTranscriptFreshUnionMode must be one of: off, shadow, serve";
+  }
+  if (order[next]! - order[currentMode]! > 1) {
+    return `aiTranscriptFreshUnionMode may only step upward one mode at a time (${currentMode} → ${next}); go through shadow first`;
+  }
+  return null;
+}
+
 /** The descriptor `costWarning` for each of `keys` that carries one, keyed by config key.
  *  Folded into the audit note server-side at write time so the cost warning that applied is
  *  durable evidence derived from the registry — never trusting (or depending on) the UI to

@@ -154,3 +154,27 @@ describe("collectCostWarnings", () => {
     expect(collectCostWarnings([])).toEqual({});
   });
 });
+
+// Fast-reply freshness PR3: the union-mode transition rule (v7 amendment 1).
+// Upward stepwise only; any rollback allowed; null/invalid current = off.
+describe("validateAiTranscriptFreshUnionModeTransition", () => {
+  it("allows stepwise upward moves and rejects the off→serve jump", async () => {
+    const { validateAiTranscriptFreshUnionModeTransition } = await import("@agency_hub_core/shared");
+    expect(validateAiTranscriptFreshUnionModeTransition(null, "shadow")).toBeNull();
+    expect(validateAiTranscriptFreshUnionModeTransition("off", "shadow")).toBeNull();
+    expect(validateAiTranscriptFreshUnionModeTransition("shadow", "serve")).toBeNull();
+    expect(validateAiTranscriptFreshUnionModeTransition(null, "serve")).toMatch(/shadow first/);
+    expect(validateAiTranscriptFreshUnionModeTransition("off", "serve")).toMatch(/shadow first/);
+  });
+
+  it("allows every rollback and same-value writes; invalid current degrades to off", async () => {
+    const { validateAiTranscriptFreshUnionModeTransition } = await import("@agency_hub_core/shared");
+    expect(validateAiTranscriptFreshUnionModeTransition("serve", "shadow")).toBeNull();
+    expect(validateAiTranscriptFreshUnionModeTransition("serve", "off")).toBeNull();
+    expect(validateAiTranscriptFreshUnionModeTransition("shadow", "off")).toBeNull();
+    expect(validateAiTranscriptFreshUnionModeTransition("serve", "serve")).toBeNull();
+    // A hand-edited/garbage stored value forces the stepwise path back up.
+    expect(validateAiTranscriptFreshUnionModeTransition("garbage", "serve")).toMatch(/shadow first/);
+    expect(validateAiTranscriptFreshUnionModeTransition(null, "nonsense")).toMatch(/one of/);
+  });
+});

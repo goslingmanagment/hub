@@ -86,6 +86,8 @@ describe("config registry", () => {
     "fanslyPurchaseHistorySyncEnabled",
     "fanslyNewStreamPageAllowlist",
     "fanslyDeepBackfillIgnoreRetentionLimit",
+    // Fast-reply freshness PR3: union-read mode, read per generation.
+    "aiTranscriptFreshUnionMode",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",
@@ -108,7 +110,7 @@ describe("config registry", () => {
     "ofapiFanIdentitiesSyncEnabled",
   ];
 
-  it("wires exactly the twelve live keys, the seventeen boot keys, and nothing else", () => {
+  it("wires exactly the thirteen live keys, the seventeen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

@@ -1,6 +1,10 @@
 import { sql } from "drizzle-orm";
 
-import { listArchiveConversationMessagesForAi } from "@agency_hub_core/db";
+import {
+  listAiTranscriptUnionMessages,
+  listArchiveConversationMessagesForAi,
+  type AiTranscriptUnionRow,
+} from "@agency_hub_core/db";
 import { millsToDollarsNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../../bootstrap.ts";
@@ -41,6 +45,9 @@ function archiveRowToOfapiShape(row: {
   tipAmountMills: bigint | number | string;
   /** Not surfaced by the archive read today — labels degrade gracefully. */
   mediaMetadata?: Array<Record<string, unknown>> | null;
+  /** PPV purchase state — the union read supplies it (dm arm + hot-table
+   * purchased_at upgrade); the archive read leaves it null → 'unknown'. */
+  isOpened?: boolean | null;
 }): OfapiChatMessage | null {
   const id = Number(row.messageRef);
   if (!Number.isFinite(id) || row.occurredAt === null) {
@@ -55,6 +62,7 @@ function archiveRowToOfapiShape(row: {
     isSentByMe: row.isSentByMe,
     createdAt: row.occurredAt.toISOString(),
     price: priceDollars,
+    isOpened: row.isOpened ?? null,
     isTip: row.isTip,
     tipAmount: row.isTip && tipDollars > 0 ? tipDollars : null,
     mediaCount: media.length,
@@ -66,28 +74,106 @@ function archiveRowToOfapiShape(row: {
   } as OfapiChatMessage;
 }
 
+/** PR3: the effective union-read mode for one generation. "unknown" = the
+ * mode read failed or the stored value was invalid — NOT a silent archive
+ * fallback: it is recorded in the manifest as unknown-freshness. */
+export type AiTranscriptUnionMode = "off" | "shadow" | "serve" | "unknown";
+
+export const TRANSCRIPT_LOADER_VERSION = "transcript-union-v1";
+
 export interface TranscriptContext {
   transcript: string;
   messages: TranscriptMessage[];
+  /** PR3: per-generation context manifest — counts/heads/timings only, no
+   * message text. Lands as the ADDITIVE params.contextManifest key on the
+   * restricted generation record. */
+  contextManifest: Record<string, unknown>;
 }
 
 export async function loadTranscriptContext(
   app: Db,
-  input: { pageId: number; conversationRef: string; limit?: number },
+  input: {
+    pageId: number;
+    conversationRef: string;
+    limit?: number;
+    unionMode?: AiTranscriptUnionMode;
+  },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
+  const mode = input.unionMode ?? "off";
+
   // The AI reader filters tombstones + content-pending stubs in the repo
-  // layer and accepts the deeper 1500 cap (fastreply-freshness PR2).
-  const rows = await listArchiveConversationMessagesForAi(app.db, {
+  // layer and accepts the deeper 1500 cap (fastreply-freshness PR2). It is
+  // read in EVERY mode: it serves off/shadow/unknown, it is the serve-mode
+  // fallback, and it anchors the manifest comparison.
+  const archiveRows = await listArchiveConversationMessagesForAi(app.db, {
     accountId: input.pageId,
     conversationRef: input.conversationRef,
     limit,
   });
-  const shaped = rows
+
+  // shadow EXECUTES the union query too (that is the point of shadow — and
+  // why `off` is the PERF rollback while `shadow` is the correctness one).
+  let unionRows: AiTranscriptUnionRow[] | null = null;
+  let unionError = false;
+  let queryDurationMs: number | null = null;
+  if (mode === "shadow" || mode === "serve") {
+    const startedAt = performance.now();
+    try {
+      unionRows = await listAiTranscriptUnionMessages(app.db, {
+        pageId: input.pageId,
+        conversationRef: input.conversationRef,
+        limit,
+      });
+    } catch {
+      // Union failure is NEVER a hard failure: archive serves, and the
+      // manifest carries the stale-context bit.
+      unionError = true;
+    }
+    queryDurationMs = Math.round(performance.now() - startedAt);
+  }
+
+  const serveUnion = mode === "serve" && unionRows !== null;
+  const servedRows = serveUnion ? unionRows! : archiveRows;
+  const shaped = servedRows
     .map((row) => archiveRowToOfapiShape(row as never))
     .filter((row): row is OfapiChatMessage => row !== null);
   const messages = normalizeTranscriptMessages(shaped).slice(-limit);
-  return { transcript: formatTranscript(messages), messages };
+
+  // Both readers return newest-first, so index 0 is the head.
+  const archiveHead = archiveRows[0] ?? null;
+  const unionHead = unionRows?.[0] ?? null;
+  const archiveRefs = new Set(archiveRows.map((row) => row.messageRef));
+  const unionRefs = unionRows === null ? null : new Set(unionRows.map((row) => row.messageRef));
+  const contextManifest: Record<string, unknown> = {
+    loaderVersion: TRANSCRIPT_LOADER_VERSION,
+    mode,
+    source: serveUnion ? "union" : "archive",
+    archiveCount: archiveRows.length,
+    unionCount: unionRows === null ? null : unionRows.length,
+    archiveHeadRef: archiveHead?.messageRef ?? null,
+    archiveHeadAt: archiveHead?.occurredAt?.toISOString() ?? null,
+    unionHeadRef: unionHead?.messageRef ?? null,
+    unionHeadAt: unionHead?.occurredAt?.toISOString() ?? null,
+    headsEqual: unionRows === null
+      ? null
+      : (archiveHead?.messageRef ?? null) === (unionHead?.messageRef ?? null),
+    additions: unionRows === null
+      ? null
+      : unionRows.filter((row) => !archiveRefs.has(row.messageRef)).length,
+    tombstones: unionRefs === null
+      ? null
+      : archiveRows.filter((row) => !unionRefs.has(row.messageRef)).length,
+    // Signed: positive = the union head is newer than the archive head.
+    gapMs: archiveHead?.occurredAt != null && unionHead?.occurredAt != null
+      ? unionHead.occurredAt.getTime() - archiveHead.occurredAt.getTime()
+      : null,
+    queryDurationMs,
+    unionError,
+    staleContext: mode === "serve" && unionError,
+  };
+
+  return { transcript: formatTranscript(messages), messages, contextManifest };
 }
 
 const SPENDING_TYPE_BY_CANONICAL: Record<string, string> = {

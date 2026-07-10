@@ -1,6 +1,7 @@
 export * from "./client.ts";
 export * from "./schema.ts";
 export * from "./schema-guard.ts";
+export * from "./repositories/ai-transcript-union.ts";
 export * from "./repositories/catalog.ts";
 export * from "./repositories/config-settings.ts";
 export * from "./repositories/dm-analytics.ts";

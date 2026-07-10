@@ -165,10 +165,24 @@ export async function evaluateAiGatewayQuota(
   };
 }
 
+/** PR3: internal-only knobs for a prepared stream. NEVER a field on
+ * aiGatewayStreamBodySchema — the body is client-forgeable, shared with the
+ * raw gateway route, and a schema change would force an SDK regen. */
+export interface AiGatewayStreamInternalOptions {
+  /** Per-generation transcript context manifest (counts/heads only, no
+   * text) — recorded as the ADDITIVE params.contextManifest key on the
+   * restricted generation record. Shadow generations settle through the
+   * same recordTerminal finally-path, so there is no second write path;
+   * quota-denied / pre-stream throws never reach recordTerminal and thus
+   * never manifest, by design. */
+  contextManifest?: Record<string, unknown>;
+}
+
 export async function prepareAiGatewayStream(
   app: AppContext,
   principal: AuthPrincipal,
   input: AiGatewayStreamBody,
+  internal?: AiGatewayStreamInternalOptions,
 ): Promise<PreparedAiGatewayStream> {
   if (!isChatMuseAiGatewayEnabled(app.config)) {
     throw new ServiceUnavailableError("ChatMuse AI gateway is disabled");
@@ -365,6 +379,9 @@ export async function prepareAiGatewayStream(
           isRegeneration: input.isRegeneration,
           outcome: record.outcome,
           stopReason: record.stopReason ?? null,
+          ...(internal?.contextManifest !== undefined
+            ? { contextManifest: internal.contextManifest }
+            : {}),
         },
       });
       return usageEventId !== null;

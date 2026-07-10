@@ -8,12 +8,14 @@ import {
 } from "../../../services/ai-gateway.ts";
 import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
 import { BadRequestError, NotFoundError, ProductGateError } from "../../../services/errors.ts";
+import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import {
   loadFanBio,
   loadFanDisplayName,
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
+  type AiTranscriptUnionMode,
 } from "../context/index.ts";
 import {
   DEFAULT_FEATURE_MODELS,
@@ -136,6 +138,9 @@ export async function prepareAiFeatureStream(
     fanBio: string | undefined;
     pingSegment: PingSegment | undefined;
   };
+  // PR3: the per-generation transcript context manifest (kernel-context path
+  // only); rides an INTERNAL argument into the gateway, never the body.
+  let contextManifest: Record<string, unknown> | undefined;
   if (body.clientContext && stored.page.platform !== "fansly") {
     // The Stage 32 deviation is Fansly-motivated (no webhook lane; the kernel
     // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting
@@ -161,11 +166,29 @@ export async function prepareAiFeatureStream(
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
     };
   } else {
+    // PR3 (C6): read the union mode ONCE per generation, here, just before
+    // the transcript load, via the live overlay (flips need no restart).
+    // A failed read or an invalid stored value is NOT a silent archive
+    // fallback — it degrades to "unknown" and the manifest records it.
+    // The union read is OnlyFans-only (dm_message_archive is the OFAPI
+    // post-settle store; Fansly has no webhook lane).
+    let unionMode: AiTranscriptUnionMode = "off";
+    if (stored.page.platform === "onlyfans") {
+      try {
+        const effective = await loadEffectiveConfig(app.db, app.config);
+        const raw = effective.aiTranscriptFreshUnionMode;
+        unionMode = raw === "off" || raw === "shadow" || raw === "serve" ? raw : "unknown";
+      } catch {
+        unionMode = "unknown";
+      }
+    }
     const transcript = await loadTranscriptContext(app, {
       pageId,
       conversationRef: body.conversationRef,
       limit: body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket],
+      unionMode,
     });
+    contextManifest = transcript.contextManifest;
     const spending = policy.includesEarnings
       ? await loadSpendingContext(app, { pageId, fanRef })
       : null;
@@ -235,5 +258,10 @@ export async function prepareAiFeatureStream(
       userBlocks: prompt.userBlocks,
     },
   };
-  return prepareAiGatewayStream(app, principal, gatewayBody);
+  return prepareAiGatewayStream(
+    app,
+    principal,
+    gatewayBody,
+    contextManifest !== undefined ? { contextManifest } : undefined,
+  );
 }

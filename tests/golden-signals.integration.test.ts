@@ -47,7 +47,15 @@ describe("golden signals (Stage 25)", () => {
       on conflict (id) do update set updated_at = excluded.updated_at, frames_seen = excluded.frames_seen
     `);
 
-    const samples = await computeGoldenSignals(appStub());
+    const { samples, failedProbes } = await computeGoldenSignals(appStub());
+    expect(failedProbes).toEqual([]);
+    // PR3: every health-floor family emits its backlog gauge (zero when
+    // caught up), so the series exists from the very first sample.
+    const floorSamples = samples.filter((sample) => sample.metric.startsWith("obs_backlog_"));
+    expect(floorSamples.length).toBeGreaterThanOrEqual(2);
+    for (const sample of floorSamples) {
+      expect(sample.valueMs).toBe(0);
+    }
     const capture = samples.find((sample) => sample.metric === "capture" && sample.quantile === "p95");
     expect(capture).toBeDefined();
     expect(capture!.valueMs).toBeGreaterThanOrEqual(4_000);
@@ -73,6 +81,36 @@ describe("golden signals (Stage 25)", () => {
       "select count(*)::int as open from notification_incidents where kind = 'golden_signal_lag' and status = 'open'",
     );
     expect(incidents.rows[0].open).toBe(0);
+  });
+
+  it("measures real observation backlog through the health-floor gauge (PR3)", async () => {
+    // One webhook observation stuck below the family floor for 20 minutes.
+    const { HEALTH_FLOOR_REGISTRY } = await import("../apps/runtime/src/services/health-floors.ts");
+    const webhookFloor = HEALTH_FLOOR_REGISTRY.find((floor) => floor.source === "webhook");
+    expect(webhookFloor).toBeDefined();
+    const kind = webhookFloor!.kinds![0]!;
+    await harness.pool.query(
+      `insert into observations (id, source, producer, kind, payload, payload_hash, idempotency_key, received_at, parse_version)
+       overriding system value
+       values (nextval(pg_get_serial_sequence('observations', 'id')), 'webhook', 'test', $1, '{}', '\\x00', 'floor-probe-1', now() - interval '20 minutes', 0)`,
+      [kind],
+    );
+    const { samples } = await computeGoldenSignals(appStub());
+    const gauge = samples.find(
+      (sample) => sample.metric === webhookFloor!.name && sample.quantile === "p95",
+    );
+    expect(gauge).toBeDefined();
+    expect(gauge!.valueMs).toBeGreaterThan(600_000);
+    // The gauge rides the p95 latch: the sample run flags the family metric.
+    const breached = await runGoldenSignalSample(appStub());
+    expect(breached.breaches).toContain(webhookFloor!.name);
+    // Consume it (stamp to the floor) → the gauge returns to zero.
+    await harness.pool.query(
+      "update observations set parse_version = $1 where idempotency_key = 'floor-probe-1'",
+      [webhookFloor!.version],
+    );
+    const after = await runGoldenSignalSample(appStub());
+    expect(after.breaches).toEqual([]);
   });
 
   it("opens the incident latch on a p95 breach and resolves it on recovery", async () => {

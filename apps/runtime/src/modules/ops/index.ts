@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { routeSchemas } from "@agency_hub_core/contracts";
 import {
   clearConfigOverride,
+  ConfigOverrideTransitionError,
   ConfigOverrideVersionConflictError,
   getLatestRealDeliveryAttempt,
   getTelegramSettings,
@@ -18,6 +19,7 @@ import {
   collectCostWarnings,
   encryptJson,
   getDescriptor,
+  validateAiTranscriptFreshUnionModeTransition,
   validateConfigOverride,
   validateStagedOverride,
   type ConfigOverrideValue,
@@ -828,7 +830,19 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       if (!validated.ok) {
         throw new BadRequestError(validated.error);
       }
-      return { key: patch.key, value: validated.value, expectedVersion: patch.expectedVersion };
+      // Fast-reply freshness PR3: the union-mode flag pins a transition rule
+      // (stepwise up, any rollback), checked against the CURRENT row value
+      // inside the same locked tx that writes the override.
+      const validateTransition = patch.key === "aiTranscriptFreshUnionMode"
+        ? (current: ConfigOverrideValue | null) =>
+          validateAiTranscriptFreshUnionModeTransition(current, String(validated.value))
+        : undefined;
+      return {
+        key: patch.key,
+        value: validated.value,
+        expectedVersion: patch.expectedVersion,
+        ...(validateTransition ? { validateTransition } : {}),
+      };
     });
 
     // Fold the patched keys' descriptor costWarnings into the audit note so the warning that
@@ -866,6 +880,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     } catch (error) {
       if (error instanceof ConfigOverrideVersionConflictError) {
         throw new ConflictError(error.message);
+      }
+      if (error instanceof ConfigOverrideTransitionError) {
+        throw new BadRequestError(error.message);
       }
       throw error;
     }

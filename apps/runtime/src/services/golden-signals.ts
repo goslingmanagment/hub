@@ -11,6 +11,11 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  computeHealthFloorBacklogMs,
+  HEALTH_FLOOR_REGISTRY,
+  HEALTH_FLOOR_THRESHOLD_MS,
+} from "./health-floors.ts";
+import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
@@ -42,6 +47,11 @@ export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {
   // Stage 29 (DP 6 owner note): restricted-class volume guard — a gauge in
   // BYTES riding the p95 slot so the existing breach latch covers it.
   ai_content_bytes: 5_000_000_000,
+  // Fast-reply freshness PR3: per-family observation-backlog gauges (health
+  // floors) ride the p95 slot so the existing breach latch covers them.
+  ...Object.fromEntries(
+    HEALTH_FLOOR_REGISTRY.map((floor) => [floor.name, HEALTH_FLOOR_THRESHOLD_MS]),
+  ),
 };
 
 export async function ensureOpsMetricsQueue(
@@ -85,11 +95,18 @@ async function quantiles(app: Pick<AppContext, "db">, query: ReturnType<typeof s
   };
 }
 
+export interface GoldenSignalsComputation {
+  samples: OpsMetricSampleInput[];
+  /** Health-floor probes that THREW (PR3): each must open/retain the
+   * incident latch itself — a failed probe is a blind spot, not a zero. */
+  failedProbes: string[];
+}
+
 /** Compute the five signals over the trailing window. No-traffic metrics
  * emit no rows (absence is visible on the endpoint as a stale series). */
 export async function computeGoldenSignals(
   app: Pick<AppContext, "db">,
-): Promise<OpsMetricSampleInput[]> {
+): Promise<GoldenSignalsComputation> {
   const windowSql = sql`now() - make_interval(mins => ${SAMPLE_WINDOW_MINUTES})`;
 
   // 1. Capture: webhook receipt → settled journal row.
@@ -160,15 +177,34 @@ export async function computeGoldenSignals(
   const aiRows = Number(aiVolume.rows[0]?.rows ?? 0);
   const aiBytes = Number(aiVolume.rows[0]?.bytes ?? 0);
 
-  return [
-    ...toSamples("capture", capture),
-    ...toSamples("canonicalize", canonicalize),
-    ...toSamples("projection", projection),
-    ...toSamples("command_settle", commandSettle),
-    ...toSamples("sse_delivery", { p50: staleness, p95: staleness }),
-    ...toSamples("ai_content_rows", { p50: aiRows, p95: aiRows }),
-    ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),
-  ];
+  // Fast-reply freshness PR3: per-family observation-backlog gauges from the
+  // shared health-floor registry. Per-family try/catch — one failed probe
+  // must not suppress the rest, and it surfaces via failedProbes so the
+  // latch treats a blind spot as a breach (never a silent zero).
+  const floorSamples: OpsMetricSampleInput[] = [];
+  const failedProbes: string[] = [];
+  for (const floor of HEALTH_FLOOR_REGISTRY) {
+    try {
+      const backlogMs = await computeHealthFloorBacklogMs(app.db, floor);
+      floorSamples.push(...toSamples(floor.name, { p50: backlogMs, p95: backlogMs }));
+    } catch {
+      failedProbes.push(floor.name);
+    }
+  }
+
+  return {
+    samples: [
+      ...toSamples("capture", capture),
+      ...toSamples("canonicalize", canonicalize),
+      ...toSamples("projection", projection),
+      ...toSamples("command_settle", commandSettle),
+      ...toSamples("sse_delivery", { p50: staleness, p95: staleness }),
+      ...toSamples("ai_content_rows", { p50: aiRows, p95: aiRows }),
+      ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),
+      ...floorSamples,
+    ],
+    failedProbes,
+  };
 }
 
 export interface GoldenSignalRunResult {
@@ -181,7 +217,7 @@ export interface GoldenSignalRunResult {
 export async function runGoldenSignalSample(
   app: Pick<AppContext, "db" | "config" | "logger">,
 ): Promise<GoldenSignalRunResult> {
-  const samples = await computeGoldenSignals(app);
+  const { samples, failedProbes } = await computeGoldenSignals(app);
   await insertOpsMetricSamples(app.db, samples);
   const pruned = await pruneOpsMetricSamples(app.db, RETENTION_DAYS);
 
@@ -191,7 +227,10 @@ export async function runGoldenSignalSample(
       const threshold = GOLDEN_SIGNAL_THRESHOLDS_MS[sample.metric];
       return threshold !== undefined && sample.valueMs > threshold;
     })
-    .map((sample) => sample.metric);
+    .map((sample) => sample.metric)
+    // A failed health-floor probe is a blind spot: it opens/retains the
+    // incident exactly like a threshold breach (PR3).
+    .concat(failedProbes);
 
   if (breaches.length > 0) {
     await notifyOfapiGlobalIncident(app, {
