@@ -39,6 +39,7 @@ import {
   revokeAccessGrants,
   revokeDeviceTokensForUser,
   updateDeviceTokenUse,
+  updateUserDisabledAt,
   updateUserMustChangePassword,
 } from "@agency_hub_core/db";
 import {
@@ -91,6 +92,8 @@ export interface AdminUserApiKeyStatus {
 
 export interface AdminUserDetailed extends AuthenticatedUser {
   apiKeyStatus: AdminUserApiKeyStatus | null;
+  disabledAt: string | null;
+  lastActiveAt: string | null;
 }
 
 export interface AuthPrincipal {
@@ -142,9 +145,20 @@ function mapAssignedPages(
   }));
 }
 
+/** Decision #126: a deactivated user is frozen on every mutation path that
+ * could re-open access (credentials, assignments) — reactivate first. */
+function assertUserNotDeactivated(user: { username: string; disabledAt: Date | null }) {
+  if (user.disabledAt) {
+    throw new BadRequestError(`User "${user.username}" is deactivated`);
+  }
+}
+
 async function getAuthenticatedUserById(app: AppContext, userId: number) {
   const user = await findUserById(app.db, userId);
-  if (!user) {
+  // Deactivation is fail-closed at the principal root (decision #126): every
+  // authenticate* path resolves through here, so a disabled row can never
+  // become a principal even if a credential row survived revocation.
+  if (!user || user.disabledAt) {
     return null;
   }
 
@@ -173,10 +187,21 @@ async function getAdminUserById(app: AppContext, userId: number) {
     return null;
   }
 
-  const [assignedPages, activeApiKeys] = await Promise.all([
+  const [assignedPages, activeApiKeys, allApiKeys, userDeviceTokens] = await Promise.all([
     listEffectivePageAssignments(app, user.id),
     roleCanUseApiKey(user.role) ? findActiveApiKeysForUser(app.db, user.id) : Promise.resolve([]),
+    roleCanUseApiKey(user.role) ? listApiKeys(app.db, [user.id]) : Promise.resolve([]),
+    roleCanUseSession(user.role) ? listDeviceTokensForUser(app.db, user.id) : Promise.resolve([]),
   ]);
+
+  // Honest activity signal: rotation revokes the old key, so the freshest
+  // last_used may live on a revoked row — scan all keys AND device tokens
+  // (the #116 password flow leaves api-key columns empty forever).
+  const lastActiveMs = Math.max(
+    0,
+    ...allApiKeys.map((key) => key.lastUsedAt?.getTime() ?? 0),
+    ...userDeviceTokens.map((token) => token.lastUsedAt?.getTime() ?? 0),
+  );
 
   return {
     id: user.id,
@@ -192,6 +217,8 @@ async function getAdminUserById(app: AppContext, userId: number) {
         activeKeyLastUsedAt: activeApiKeys[0]?.lastUsedAt?.toISOString() ?? null,
       }
       : null,
+    disabledAt: user.disabledAt?.toISOString() ?? null,
+    lastActiveAt: lastActiveMs > 0 ? new Date(lastActiveMs).toISOString() : null,
   } satisfies AdminUserDetailed;
 }
 
@@ -366,6 +393,7 @@ export async function setUserPassword(
   if (!roleCanUseSession(user.role)) {
     throw new BadRequestError(`Role "${user.role}" cannot use password login`);
   }
+  assertUserNotDeactivated(user);
 
   const passwordHash = await argon2.hash(input.password, { type: argon2.argon2id });
   await withAuditTransaction(app, async (dbTx) => {
@@ -392,6 +420,86 @@ export async function setUserPassword(
       },
     });
   });
+}
+
+/**
+ * Decision #126: offboarding is a tombstone, never a DELETE — fact tables
+ * reference users.id (ofapi_commands is RESTRICT) and spend/audit attribution
+ * must survive. Tombstone + every credential revocation commit together;
+ * getAuthenticatedUserById fails closed on the tombstone as the belt.
+ */
+export async function deactivateUser(
+  app: AppContext,
+  input: { username: string },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+  if (user.role === "owner") {
+    throw new BadRequestError("Owner accounts cannot be deactivated");
+  }
+  if (audit.actorUserId != null && audit.actorUserId === user.id) {
+    throw new BadRequestError("You cannot deactivate your own account");
+  }
+  if (user.disabledAt) {
+    throw new BadRequestError(`User "${user.username}" is already deactivated`);
+  }
+
+  return withAuditTransaction(app, async (dbTx) => {
+    await updateUserDisabledAt(dbTx, user.id, new Date());
+    const revokedKeys = await revokeApiKeysForUser(dbTx, user.id, "user_deactivated");
+    const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "user_deactivated");
+    const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "user_deactivated");
+
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.deactivated",
+      targetUserId: user.id,
+      metadata: {
+        username: user.username,
+        revokedApiKeys: revokedKeys.length,
+        revokedDeviceTokens: revokedTokens.length,
+        revokedSessions: revokedSessions.length,
+      },
+    });
+
+    return {
+      ok: true as const,
+      revokedApiKeys: revokedKeys.length,
+      revokedDeviceTokens: revokedTokens.length,
+      revokedSessions: revokedSessions.length,
+    };
+  });
+}
+
+/** Clears the #126 tombstone. The stored password works again immediately;
+ * keys and device tokens stay revoked — issue fresh ones. */
+export async function reactivateUser(
+  app: AppContext,
+  input: { username: string },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+  if (!user.disabledAt) {
+    throw new BadRequestError(`User "${user.username}" is not deactivated`);
+  }
+
+  await withAuditTransaction(app, async (dbTx) => {
+    await updateUserDisabledAt(dbTx, user.id, null);
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "user.reactivated",
+      targetUserId: user.id,
+      metadata: { username: user.username },
+    });
+  });
+
+  return { ok: true as const };
 }
 
 /**
@@ -444,6 +552,7 @@ export async function assignPageToUser(
   if (!user) {
     throw new NotFoundError(`User "${input.username}" not found`);
   }
+  assertUserNotDeactivated(user);
 
   const page = await findPageSummaryByLabel(app.db, input.pageLabel);
   if (!page) {
@@ -537,6 +646,7 @@ export async function issueChatterApiKey(
   if (!roleCanUseApiKey(user.role)) {
     throw new BadRequestError(`Role "${user.role}" cannot use API keys`);
   }
+  assertUserNotDeactivated(user);
 
   const page = input.pageLabel
     ? await findPageSummaryByLabel(app.db, input.pageLabel)
@@ -769,7 +879,9 @@ export async function loginWithPassword(
 
   const user = await findUserByUsername(app.db, input.username);
 
-  if (!user || !roleCanUseSession(user.role) || !user.passwordHash) {
+  // Deactivated shares the invalid-credentials path (decision #126): the same
+  // 401, dummy verify, and backoff as an unknown username — no oracle.
+  if (!user || !roleCanUseSession(user.role) || !user.passwordHash || user.disabledAt) {
     // Run a dummy verification so this path takes comparable time to the
     // wrong-password path below, avoiding a username-enumeration timing oracle.
     await argon2.verify(DUMMY_PASSWORD_HASH, input.password).catch(() => false);
@@ -976,6 +1088,7 @@ export async function issueDeviceToken(
   if (!roleCanUseSession(user.role)) {
     throw new BadRequestError(`Role "${user.role}" cannot hold device tokens`);
   }
+  assertUserNotDeactivated(user);
 
   const tokenBody = randomToken(24);
   const rawToken = `${DEVICE_TOKEN_PREFIX}${tokenBody}`;

@@ -59,6 +59,29 @@ export function useAdminRevokeApiKeys(username: string) {
   });
 }
 
+export function useAdminDeactivateUser(username: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () =>
+      kernel.adminDeactivateUser({ params: { username } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      qc.invalidateQueries({ queryKey: ["admin", "users", username, "apiKeys"] });
+    },
+  });
+}
+
+export function useAdminReactivateUser(username: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () =>
+      kernel.adminReactivateUser({ params: { username } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
+  });
+}
+
 export function useAdminSetPassword(username: string) {
   const qc = useQueryClient();
   return useMutation({

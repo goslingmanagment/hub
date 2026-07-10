@@ -19,7 +19,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `apiKey` | bearer API key |
 | `any` | any authenticated principal |
 
-## Routes (149)
+## Routes (151)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -75,6 +75,7 @@ body remain handler-checked and are noted per route in the service layer.
 | DELETE | `/api/v1/admin/users/:username/api-keys` | `adminRevokeApiKeys` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/:username/api-keys` | `adminListApiKeys` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/api-keys` | `adminIssueApiKey` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/:username/deactivate` | `adminDeactivateUser` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/:username/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/:username/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/device-tokens` | `adminIssueDeviceToken` | `owner-session` | — | — |
@@ -84,6 +85,7 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/users/:username/pages` | `adminAssignPage` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/:username/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/users/:username/password` | `adminSetPassword` | `owner-session` | — | — |
+| POST | `/api/v1/admin/users/:username/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
 | POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — |
 | POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `apiKey` | — | — |

@@ -182,6 +182,9 @@ export const users = pgTable("users", {
   role: userRoleEnum("role").notNull(),
   passwordHash: text("password_hash"),
   mustChangePassword: boolean("must_change_password").default(false).notNull(),
+  // Deactivation tombstone (decision #126, mirrors the Stage 13 pages
+  // standard): NULL = active. Set freezes every auth path; never hard-delete.
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

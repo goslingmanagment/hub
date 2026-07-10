@@ -3419,3 +3419,27 @@ untouched: only never-attempted rows expire; anything past claim stays the
 one-attempt/indeterminate machinery's territory. Fail direction is closed —
 worst case a legitimately-queued-but-stale send cancels and the chatter
 retries; strictly better than an hours-late duplicate DM.
+
+**Decision #126 (2026-07-10, user offboarding — deactivation tombstone, never
+DELETE):** users (chatters, staff) are never hard-deleted; offboarding sets a
+`users.disabled_at` tombstone (migration 0079), mirroring the Stage 13 pages
+soft-delete standard. Hard delete is structurally impossible anyway
+(`ofapi_commands.chatter_user_id` is RESTRICT) and undesirable: gateway spend,
+audit events, and command attribution reference `users.id` and must survive
+offboarding. `adminDeactivateUser` (owner-only) sets the tombstone and revokes
+every credential — API keys, device tokens, sessions, reason
+`user_deactivated` — in ONE transaction with the `user.deactivated` audit row.
+Fail-closed belt: `getAuthenticatedUserById` returns null for a tombstoned
+row, so all three authenticate paths (session, api-key, device-token) die at
+the principal root even if a credential row somehow survived; login folds
+disabled into the invalid-credentials branch (same 401 + dummy argon2 verify +
+backoff — no enumeration oracle). A tombstoned user is frozen: password set,
+key/device-token issuance, and page assignment all refuse with 400 until
+`adminReactivateUser` clears the tombstone. Reactivation restores password
+login ONLY — revoked keys/tokens stay revoked (issue fresh ones); the username
+stays reserved (unique) while tombstoned, deliberately: recreating it would
+silently inherit the old row's attribution history. Owners cannot be
+deactivated, nor can the caller deactivate itself. Sibling change, same
+motivation (honest admin surface): `adminListUsers` now carries
+`lastActiveAt = max(api-key last_used, device-token last_used)` — the key-only
+column showed "Never" for every #116 password+device-token chatter.

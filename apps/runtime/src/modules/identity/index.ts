@@ -8,6 +8,7 @@ import {
   assignPageToUser,
   changeOwnPassword,
   createUserAccount,
+  deactivateUser,
   getAuthenticatedUserByUsername,
   grantModelToUser,
   issueChatterApiKey,
@@ -19,6 +20,7 @@ import {
   listUsersDetailed,
   loginWithPassword,
   logoutSessionToken,
+  reactivateUser,
   requireOwner,
   requireSessionUser,
   revokeDeviceTokensForUsername,
@@ -159,6 +161,26 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       pageLabel: request.params.pageLabel,
     }, auditCtx(principal));
     return { ok: true as const };
+  });
+
+  server.post("/api/v1/admin/users/:username/deactivate", {
+    schema: routeSchemas.adminDeactivateUser,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return deactivateUser(appContext, {
+      username: request.params.username,
+    }, auditCtx(principal));
+  });
+
+  server.post("/api/v1/admin/users/:username/reactivate", {
+    schema: routeSchemas.adminReactivateUser,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return reactivateUser(appContext, {
+      username: request.params.username,
+    }, auditCtx(principal));
   });
 
   // API key management

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { findAdminUserByUsername, provisionChatter } from "../apps/dashboard/src/pages/settings/UsersTab.tsx";
+import {
+  findAdminUserByUsername,
+  provisionChatter,
+  shortKeyPrefix,
+  sortChattersByActivity,
+} from "../apps/dashboard/src/pages/settings/UsersTab.tsx";
 
 describe("findAdminUserByUsername", () => {
   it("returns the latest user record for modal-backed settings flows", () => {
@@ -11,6 +16,8 @@ describe("findAdminUserByUsername", () => {
       mustChangePassword: false,
       assignedPages: [],
       apiKeyStatus: null,
+      disabledAt: null,
+      lastActiveAt: null,
     };
     const refreshedUser = {
       ...staleUser,
@@ -34,6 +41,46 @@ describe("findAdminUserByUsername", () => {
 
   it("returns null when the target user is no longer present", () => {
     expect(findAdminUserByUsername([], "missing")).toBeNull();
+  });
+});
+
+describe("sortChattersByActivity", () => {
+  function chatter(username: string, lastActiveAt: string | null) {
+    return {
+      id: username.length,
+      username,
+      role: "chatter" as const,
+      mustChangePassword: false,
+      assignedPages: [],
+      apiKeyStatus: null,
+      disabledAt: null,
+      lastActiveAt,
+    };
+  }
+
+  it("puts freshest activity first and never-active rows last, alphabetically", () => {
+    const sorted = sortChattersByActivity([
+      chatter("codex-probe-b", null),
+      chatter("ivan", "2026-05-15T00:00:00.000Z"),
+      chatter("codex-probe-a", null),
+      chatter("maxim", "2026-07-10T00:00:00.000Z"),
+    ]);
+    expect(sorted.map((user) => user.username)).toEqual([
+      "maxim",
+      "ivan",
+      "codex-probe-a",
+      "codex-probe-b",
+    ]);
+  });
+});
+
+describe("shortKeyPrefix", () => {
+  it("strips the constant key prefix down to the identifying tail", () => {
+    expect(shortKeyPrefix("agency_hub_core_xsVTN_Y2cv")).toBe("…xsVTN_Y2cv");
+  });
+
+  it("leaves unexpected prefixes untouched", () => {
+    expect(shortKeyPrefix("legacy_abc")).toBe("legacy_abc");
   });
 });
 

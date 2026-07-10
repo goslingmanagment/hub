@@ -7,8 +7,10 @@ import { creatableUserRoles } from "@agency_hub_core/shared";
 import {
   useAdminUsers,
   useAdminCreateUser,
+  useAdminDeactivateUser,
   useAdminPages,
   useAdminIssueApiKey,
+  useAdminReactivateUser,
   useAdminRevokeApiKeys,
   useAdminSetPassword,
   useAdminUserApiKeys,
@@ -18,7 +20,6 @@ import {
 import { ModalShell } from "@/components/shared/ModalShell";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Field } from "@/components/shared/Field";
-import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { formatRelativeTime, formatDateTime } from "@/lib/format";
 import { toast } from "sonner";
 import { PageAssignmentsEditor } from "./PageAssignmentsEditor.js";
@@ -35,6 +36,8 @@ type ModalState =
   | { type: "assignPages"; username: string }
   | { type: "confirmNewKey"; username: string }
   | { type: "confirmRevoke"; username: string }
+  | { type: "confirmDeactivate"; username: string }
+  | { type: "confirmReactivate"; username: string }
   | { type: "revealKey"; key: string; username: string }
   | { type: "chatterDetail"; username: string };
 
@@ -53,11 +56,74 @@ export function findAdminUserByUsername(
   return users.find((user) => user.username === username) ?? null;
 }
 
+/** Working chatters float up (freshest activity first); never-active rows
+ * (probes, stale accounts) sink together, alphabetically. */
+export function sortChattersByActivity(users: readonly AdminUser[]): AdminUser[] {
+  return [...users].sort((a, b) => {
+    const aTime = a.lastActiveAt ? Date.parse(a.lastActiveAt) : 0;
+    const bTime = b.lastActiveAt ? Date.parse(b.lastActiveAt) : 0;
+    if (aTime !== bTime) {
+      return bTime - aTime;
+    }
+    return a.username.localeCompare(b.username);
+  });
+}
+
+/** Every key shares the constant `agency_hub_core_` prefix — only the tail
+ * identifies it, so that's all the table shows. */
+export function shortKeyPrefix(keyPrefix: string): string {
+  return keyPrefix.replace(/^agency_hub_core_/, "…");
+}
+
 const thClass =
-  "px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted";
+  "whitespace-nowrap px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted";
 const tdClass = "px-4 py-3 text-sm";
 const btnSecondary =
-  "rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover";
+  "whitespace-nowrap rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover";
+
+/* ------------------------------------------------------------------ */
+/*  PageChips — compact assignment chips; platform reads as a dot      */
+/* ------------------------------------------------------------------ */
+
+const PAGE_CHIP_LIMIT = 5;
+
+function PageChips({ pages }: { pages: AdminUser["assignedPages"] }) {
+  if (pages.length === 0) {
+    return <span className="text-text-muted">{"—"}</span>;
+  }
+
+  const visible = pages.length <= PAGE_CHIP_LIMIT
+    ? pages
+    : pages.slice(0, PAGE_CHIP_LIMIT - 1);
+  const overflow = pages.slice(visible.length);
+
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {visible.map((page) => (
+        <span
+          key={page.id}
+          title={`${page.label} — ${page.platform === "fansly" ? "Fansly" : "OnlyFans"} / ${page.modelName}`}
+          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-hover-alt px-2 py-0.5 text-xs text-text-secondary"
+        >
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+              page.platform === "fansly" ? "bg-fansly" : "bg-onlyfans"
+            }`}
+          />
+          {page.label}
+        </span>
+      ))}
+      {overflow.length > 0 && (
+        <span
+          title={overflow.map((page) => page.label).join(", ")}
+          className="inline-flex items-center rounded-full border border-border bg-hover-alt px-2 py-0.5 text-xs text-text-muted"
+        >
+          +{overflow.length}
+        </span>
+      )}
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Main Component                                                     */
@@ -74,8 +140,11 @@ export function UsersTab() {
   }
 
   const items = users ?? [];
-  const chatters = items.filter((u) => u.role === "chatter");
-  const staff = items.filter((u) => u.role !== "chatter");
+  const chatters = sortChattersByActivity(
+    items.filter((u) => u.role === "chatter" && !u.disabledAt),
+  );
+  const staff = items.filter((u) => u.role !== "chatter" && !u.disabledAt);
+  const deactivated = items.filter((u) => u.disabledAt);
   const modalUser = modal && "username" in modal
     ? findAdminUserByUsername(items, modal.username)
     : null;
@@ -86,14 +155,31 @@ export function UsersTab() {
         {/* ---- Chatters ---- */}
         <div>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-text-primary">Chatters</h2>
-            <button
-              type="button"
-              onClick={() => setModal({ type: "addChatter" })}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90"
-            >
-              Add Chatter
-            </button>
+            <h2 className="text-sm font-bold text-text-primary">
+              Chatters
+              {chatters.length > 0 && (
+                <span className="ml-1.5 font-normal text-text-muted">{chatters.length}</span>
+              )}
+            </h2>
+            <div className="flex items-center gap-4">
+              <span className="hidden items-center gap-3 text-[11px] text-text-muted sm:inline-flex">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-fansly" />
+                  Fansly
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-onlyfans" />
+                  OnlyFans
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setModal({ type: "addChatter" })}
+                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90"
+              >
+                Add Chatter
+              </button>
+            </div>
           </div>
 
           {chatters.length === 0 ? (
@@ -114,59 +200,60 @@ export function UsersTab() {
                 </thead>
                 <tbody>
                   {chatters.map((user) => (
-                    <tr key={user.id} className="border-t border-border">
+                    <tr
+                      key={user.id}
+                      onClick={() =>
+                        setModal({ type: "chatterDetail", username: user.username })}
+                      className="cursor-pointer border-t border-border transition-colors hover:bg-hover-alt"
+                    >
                       <td className={`${tdClass} font-medium text-text-primary`}>
-                        {user.username}
+                        <span title={user.username} className="block max-w-[200px] truncate">
+                          {user.username}
+                        </span>
                       </td>
 
                       {/* Key Status */}
-                      <td className={tdClass}>
+                      <td className={`${tdClass} whitespace-nowrap`}>
                         {hasActiveKey(user) ? (
-                          <span className="inline-flex items-center gap-1.5">
+                          <span
+                            className="inline-flex items-center gap-1.5"
+                            title={`${user.apiKeyStatus!.activeKeyPrefix}…`}
+                          >
                             <span className="inline-block h-2 w-2 rounded-full bg-green" />
-                            <span className="text-text-secondary">
-                              Active
-                              <span className="ml-1 text-text-muted">
-                                ({user.apiKeyStatus!.activeKeyPrefix}...)
-                              </span>
-                            </span>
+                            <span className="text-text-secondary">Active</span>
+                            <code className="font-mono text-xs text-text-muted">
+                              {shortKeyPrefix(user.apiKeyStatus!.activeKeyPrefix!)}
+                            </code>
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1.5">
                             <span className="inline-block h-2 w-2 rounded-full bg-text-muted/40" />
-                            <span className="text-text-muted">No active key</span>
+                            <span className="text-text-muted">No key</span>
                           </span>
                         )}
                       </td>
 
-                      {/* Last Active */}
-                      <td className={`${tdClass} text-text-muted`}>
-                        {user.apiKeyStatus?.activeKeyLastUsedAt
-                          ? formatRelativeTime(user.apiKeyStatus.activeKeyLastUsedAt)
+                      {/* Last Active — key OR device-token use (#116 chatters
+                          hold no key, so the key column alone reads "Never") */}
+                      <td
+                        className={`${tdClass} whitespace-nowrap text-text-muted`}
+                        title={user.lastActiveAt ? formatDateTime(user.lastActiveAt) : undefined}
+                      >
+                        {user.lastActiveAt
+                          ? formatRelativeTime(user.lastActiveAt)
                           : "Never"}
                       </td>
 
                       {/* Pages */}
                       <td className={tdClass}>
-                        {user.assignedPages.length > 0 ? (
-                          <div className="flex flex-wrap gap-1.5">
-                            {user.assignedPages.map((page) => (
-                              <span
-                                key={page.id}
-                                className="inline-flex items-center gap-1"
-                              >
-                                <PlatformBadge platform={page.platform} />
-                                <span className="text-text-secondary">{page.label}</span>
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-text-muted">{"\u2014"}</span>
-                        )}
+                        <PageChips pages={user.assignedPages} />
                       </td>
 
-                      {/* Actions */}
-                      <td className={`${tdClass} text-right`}>
+                      {/* Actions; clicks stay in the cell (the row opens Manage) */}
+                      <td
+                        className={`${tdClass} text-right`}
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <div className="flex items-center justify-end gap-1.5">
                           {hasActiveKey(user) ? (
                             <>
@@ -223,7 +310,12 @@ export function UsersTab() {
         {/* ---- Staff ---- */}
         <div>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-text-primary">Staff</h2>
+            <h2 className="text-sm font-bold text-text-primary">
+              Staff
+              {staff.length > 0 && (
+                <span className="ml-1.5 font-normal text-text-muted">{staff.length}</span>
+              )}
+            </h2>
             <button
               type="button"
               onClick={() => setModal({ type: "createUser" })}
@@ -249,19 +341,25 @@ export function UsersTab() {
                 </thead>
                 <tbody>
                   {staff.map((user) => (
-                    <tr key={user.id} className="border-t border-border">
+                    <tr
+                      key={user.id}
+                      onClick={() =>
+                        setModal({ type: "assignPages", username: user.username })}
+                      className="cursor-pointer border-t border-border transition-colors hover:bg-hover-alt"
+                    >
                       <td className={`${tdClass} font-medium text-text-primary`}>
                         {user.username}
                       </td>
                       <td className={`${tdClass} text-text-secondary capitalize`}>
                         {user.role.replaceAll("_", " ")}
                       </td>
-                      <td className={`${tdClass} text-text-secondary`}>
-                        {user.assignedPages.length > 0
-                          ? user.assignedPages.map((page) => page.label).join(", ")
-                          : "\u2014"}
+                      <td className={tdClass}>
+                        <PageChips pages={user.assignedPages} />
                       </td>
-                      <td className={`${tdClass} text-right`}>
+                      <td
+                        className={`${tdClass} text-right`}
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <button
                           type="button"
                           onClick={() => setModal({ type: "assignPages", username: user.username })}
@@ -277,6 +375,15 @@ export function UsersTab() {
             </section>
           )}
         </div>
+
+        {/* ---- Deactivated (#126: tombstoned, not deleted) ---- */}
+        {deactivated.length > 0 && (
+          <DeactivatedSection
+            users={deactivated}
+            onReactivate={(username) =>
+              setModal({ type: "confirmReactivate", username })}
+          />
+        )}
       </div>
 
       {/* ---- Modals ---- */}
@@ -314,13 +421,175 @@ export function UsersTab() {
           onClose={() => setModal(null)}
         />
       )}
-      {modal?.type === "chatterDetail" && modalUser && (
-        <ChatterDetailModal
+      {modal?.type === "confirmDeactivate" && modalUser && (
+        <DeactivateUserModal
           user={modalUser}
           onClose={() => setModal(null)}
         />
       )}
+      {modal?.type === "confirmReactivate" && modalUser && (
+        <ReactivateUserModal
+          user={modalUser}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.type === "chatterDetail" && modalUser && (
+        <ChatterDetailModal
+          user={modalUser}
+          onClose={() => setModal(null)}
+          onDeactivate={() =>
+            setModal({ type: "confirmDeactivate", username: modalUser.username })}
+        />
+      )}
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  DeactivatedSection — collapsed list of tombstoned users (#126)     */
+/* ------------------------------------------------------------------ */
+
+function DeactivatedSection({
+  users,
+  onReactivate,
+}: {
+  users: AdminUser[];
+  onReactivate: (username: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="mb-3 flex items-center gap-1.5 text-sm font-bold text-text-muted transition-colors hover:text-text-primary"
+      >
+        <span
+          className={`inline-block text-xs transition-transform ${open ? "rotate-90" : ""}`}
+        >
+          {"▸"}
+        </span>
+        Deactivated ({users.length})
+      </button>
+
+      {open && (
+        <section className="overflow-hidden rounded-xl border border-border bg-card">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="bg-hover-alt">
+                {["Username", "Role", "Deactivated", ""].map((col) => (
+                  <th key={col} className={thClass}>
+                    {col}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id} className="border-t border-border">
+                  <td className={`${tdClass} font-medium text-text-muted`}>
+                    {user.username}
+                  </td>
+                  <td className={`${tdClass} capitalize text-text-muted`}>
+                    {user.role.replaceAll("_", " ")}
+                  </td>
+                  <td className={`${tdClass} text-text-muted`}>
+                    {user.disabledAt ? formatRelativeTime(user.disabledAt) : "—"}
+                  </td>
+                  <td className={`${tdClass} text-right`}>
+                    <button
+                      type="button"
+                      onClick={() => onReactivate(user.username)}
+                      className={btnSecondary}
+                    >
+                      Reactivate
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  DeactivateUserModal / ReactivateUserModal                          */
+/* ------------------------------------------------------------------ */
+
+function DeactivateUserModal({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const deactivate = useAdminDeactivateUser(user.username);
+
+  async function handleConfirm() {
+    try {
+      const result = await deactivate.mutateAsync();
+      const revoked = result.revokedApiKeys + result.revokedDeviceTokens + result.revokedSessions;
+      toast.success(
+        revoked > 0
+          ? `${user.username} deactivated — signed out everywhere (${revoked} credential${revoked === 1 ? "" : "s"} revoked)`
+          : `${user.username} deactivated`,
+      );
+      onClose();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to deactivate user",
+      );
+    }
+  }
+
+  return (
+    <ConfirmModal
+      title={`Deactivate ${user.username}`}
+      message={`This signs ${user.username} out everywhere: their API key, device sessions, and dashboard sessions are revoked, and they move to the Deactivated list. History and attribution are preserved — you can reactivate them later.`}
+      confirmLabel="Deactivate"
+      isPending={deactivate.isPending}
+      onConfirm={handleConfirm}
+      onClose={onClose}
+    />
+  );
+}
+
+function ReactivateUserModal({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const reactivate = useAdminReactivateUser(user.username);
+
+  async function handleConfirm() {
+    try {
+      await reactivate.mutateAsync();
+      toast.success(
+        `${user.username} reactivated — their password works again; keys and devices stay revoked`,
+      );
+      onClose();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to reactivate user",
+      );
+    }
+  }
+
+  return (
+    <ConfirmModal
+      title={`Reactivate ${user.username}`}
+      message={`${user.username} will be able to sign in with their existing password again immediately. Previously revoked API keys and device tokens stay revoked — issue fresh ones if needed.`}
+      confirmLabel="Reactivate"
+      isPending={reactivate.isPending}
+      onConfirm={handleConfirm}
+      onClose={onClose}
+    />
   );
 }
 
@@ -351,7 +620,7 @@ function IssueKeyButton({
       type="button"
       disabled={issueKey.isPending}
       onClick={handleClick}
-      className="rounded-lg bg-accent px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
+      className={`${btnSecondary} disabled:opacity-50`}
     >
       {issueKey.isPending ? "Issuing..." : "Issue Key"}
     </button>
@@ -752,9 +1021,11 @@ function KeyRevealModal({
 function ChatterDetailModal({
   user,
   onClose,
+  onDeactivate,
 }: {
   user: AdminUser;
   onClose: () => void;
+  onDeactivate: () => void;
 }) {
   const { data: apiKeys, isLoading: keysLoading } = useAdminUserApiKeys(
     user.username,
@@ -907,6 +1178,21 @@ function ChatterDetailModal({
           assignPending={assignPage.isPending}
           unassignPending={unassignPage.isPending}
         />
+
+        {/* Deactivation (#126: tombstone, never delete) */}
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-danger/25 bg-danger/5 px-3 py-2.5">
+          <p className="text-xs text-text-muted">
+            Deactivating signs {user.username} out everywhere and hides them
+            from the list. History is preserved; you can reactivate later.
+          </p>
+          <button
+            type="button"
+            onClick={onDeactivate}
+            className="shrink-0 rounded-lg border border-danger/25 bg-card px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10"
+          >
+            Deactivate
+          </button>
+        </div>
       </div>
 
       <div className="mt-6 flex items-center justify-end">

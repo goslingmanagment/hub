@@ -320,3 +320,16 @@ export async function revokeDeviceTokensForUser(db: Database, userId: number, re
 export async function updateUserMustChangePassword(db: Database, userId: number, value: boolean) {
   await db.update(users).set({ mustChangePassword: value }).where(eq(users.id, userId));
 }
+
+export async function updateUserDisabledAt(
+  db: Database,
+  userId: number,
+  disabledAt: Date | null,
+) {
+  const [updated] = await db.update(users).set({
+    disabledAt,
+    updatedAt: new Date(),
+  }).where(eq(users.id, userId)).returning();
+
+  return updated;
+}

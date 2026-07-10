@@ -148,6 +148,11 @@ export const adminUserApiKeyStatusSchema = z.object({
 
 export const adminUserSchema = authUserSchema.extend({
   apiKeyStatus: adminUserApiKeyStatusSchema.nullable(),
+  // Decision #126: deactivation tombstone (null = active) and the honest
+  // activity signal — max(last api-key use, last device-token use), so a
+  // password+device-token chatter (#116) no longer reads "Never".
+  disabledAt: isoTimestamp.nullable(),
+  lastActiveAt: isoTimestamp.nullable(),
 });
 
 export const authStateSchema = z.object({
@@ -5250,6 +5255,44 @@ export const routeSchemas = {
     params: z.object({ username: z.string().min(1) }),
     response: {
       200: z.object({ revokedCount: z.number().int() }),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminDeactivateUser: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Deactivate a user (decision #126: soft tombstone, never delete)",
+    description: "Sets the disabled_at tombstone and revokes every credential "
+      + "(API keys, device tokens, sessions) in one transaction. History and "
+      + "attribution are preserved; the row disappears from the default admin "
+      + "list. Owners and the calling account itself cannot be deactivated.",
+    params: z.object({ username: z.string().min(1) }),
+    response: {
+      200: z.object({
+        ok: z.literal(true),
+        revokedApiKeys: z.number().int().nonnegative(),
+        revokedDeviceTokens: z.number().int().nonnegative(),
+        revokedSessions: z.number().int().nonnegative(),
+      }),
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminReactivateUser: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Reactivate a deactivated user",
+    description: "Clears the disabled_at tombstone. The stored password works "
+      + "again immediately; API keys and device tokens stay revoked — issue "
+      + "fresh ones.",
+    params: z.object({ username: z.string().min(1) }),
+    response: {
+      200: z.object({ ok: z.literal(true) }),
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
