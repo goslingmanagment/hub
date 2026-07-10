@@ -329,6 +329,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     // improve-draft demands a draft, then embeds it.
     const noDraft = await call("improve-draft");
     expect(noDraft.statusCode, noDraft.body).toBe(400);
+    expect(noDraft.json().error).toBe("gate_draft_required");
     const withDraft = await call("improve-draft", { draftText: "hey love, sup" });
     expect(withDraft.statusCode, withDraft.body).toBe(200);
     expect(capture.input!.body.feature).toBe("improve-draft");
@@ -340,6 +341,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     const summary = await call("fan-summary");
     expect(summary.statusCode, summary.body).toBe(400);
     expect(summary.json().message).toContain("at least 30");
+    expect(summary.json().error).toBe("gate_min_messages");
     const review = await call("chat-review");
     expect(review.statusCode).toBe(400);
 
@@ -348,6 +350,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     const pingActive = await call("ping");
     expect(pingActive.statusCode, pingActive.body).toBe(400);
     expect(pingActive.json().message).toContain("active");
+    expect(pingActive.json().error).toBe("gate_ping_active");
 
     // Age the fan's messages past the 5-day window: ping unblocks.
     await testDb.pool.query(
@@ -388,6 +391,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     const hiLocked = await call("hi-greeting");
     expect(hiLocked.statusCode, hiLocked.body).toBe(400);
     expect(hiLocked.json().message).toContain("at most 10");
+    expect(hiLocked.json().error).toBe("gate_hi_greeting_limit");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

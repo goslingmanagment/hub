@@ -7,7 +7,7 @@ import {
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
 import type { AuthPrincipal } from "../../../services/auth.ts";
-import { BadRequestError, NotFoundError } from "../../../services/errors.ts";
+import { BadRequestError, NotFoundError, ProductGateError } from "../../../services/errors.ts";
 import {
   loadFanBio,
   loadFanDisplayName,
@@ -105,7 +105,7 @@ export async function prepareAiFeatureStream(
   const policy = FEATURE_POLICIES[feature];
 
   if (policy.requiresDraft && !body.draftText?.trim()) {
-    throw new BadRequestError(`${feature} requires draftText`);
+    throw new ProductGateError(`${feature} requires draftText`, "gate_draft_required");
   }
 
   // Page resolution + access control live in prepareAiGatewayStream (the
@@ -182,18 +182,20 @@ export async function prepareAiFeatureStream(
 
   // Desktop product gates, carried (CG-FLOW-03 and the hi-greeting lock).
   if (policy.minMessages > 0 && contextValues.messageCount < policy.minMessages) {
-    throw new BadRequestError(
+    throw new ProductGateError(
       `${feature} requires at least ${policy.minMessages} messages in the conversation`,
+      "gate_min_messages",
     );
   }
   if (feature === "hi-greeting" && contextValues.messageCount > HI_GREETING_MAX_TRANSCRIPT) {
-    throw new BadRequestError(
+    throw new ProductGateError(
       `hi-greeting is only available for conversations with at most ${HI_GREETING_MAX_TRANSCRIPT} messages`,
+      "gate_hi_greeting_limit",
     );
   }
   // Desktop parity (CG-FLOW-05): pings are blocked while the fan is active.
   if (policy.usesPingSegment && contextValues.pingSegment === "active") {
-    throw new BadRequestError("ping is blocked while the conversation is active");
+    throw new ProductGateError("ping is blocked while the conversation is active", "gate_ping_active");
   }
 
   const prompt = buildPrompt({

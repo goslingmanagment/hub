@@ -58,3 +58,13 @@ export class QuotaDeniedError extends AppError {
     super(message, 429, "quota_denied");
   }
 }
+
+// Stage 30 product gates (min messages, hi-greeting lock, active-ping block,
+// draft required): each denial carries its own code so clients map the CG-*
+// wording structurally; the message strings stay stable for clients that
+// still match on them (#120 follow-up).
+export class ProductGateError extends AppError {
+  constructor(message: string, code: `gate_${string}`) {
+    super(message, 400, code);
+  }
+}
