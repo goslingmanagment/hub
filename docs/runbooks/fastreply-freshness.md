@@ -78,3 +78,62 @@ Desktop: NOTHING to build (0.1.33 is live) — at deploy, only verify the feed s
 - **Migration 0075** (single tx, forward-only): `dm_message_archive` gains
   `rest_material_observation_id` / `rest_material_observed_at`; `source_journal_id`
   drops NOT NULL (REST-inserted rows have no webhook journal row — never fake ids).
+
+## Wave 2 — corrections program (branch kernel/fastreply-corrections)
+
+Design notes: `docs/fastreply-corrections-design-notes.md`. Deploy waits for the
+Wave-1 soak window (~2–3 days of manifest/reconcile attribution data per the scope
+boundary). ORDER IS LOAD-BEARING — the reconciler flag before the backfill
+mass-appends redundant superseding events for the whole history (preamble 1).
+
+### Deploy sequence (owner-gated, in this exact order)
+
+1. **Deploy the image** (migration **0076** applies at container boot: fingerprint/
+   emitted/revision/provenance/rest_platform_changed_at columns + the partial
+   repair-signal index). Both new flags default OFF — nothing behavioral changes at
+   deploy beyond: (a) writers now compute `material_fingerprint` on every material
+   write (webhook INSERTs also close `emitted`), and (b) the readthrough floor is
+   **v2** — the gauge series becomes `obs_backlog_readthrough_v2` and v1-stamped
+   observations replay through the reducer on the first sweeps (a brief backlog
+   blip, then zero; the replays are material no-ops).
+2. **Preamble backfill** (owner CLI, one-shot, idempotent/resumable):
+   `corrections:backfill-fingerprints --dry-run` → review counts → run for real.
+   The output's **INITIAL DRAIN BOUND** (`drainOpen`) = Wave-1 REST-only +
+   command-only rows that will get FIRST events when the reconciler turns on;
+   `emittedClosed` should be the overwhelming majority (webhook history already in
+   the ledger); `stubsSkipped` = null-ref tombstone stubs (documented survivors).
+3. **Flip `OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED`** (staged boot flag #122 +
+   restart). Watch the worker's `DM corrections reconcile sweep complete` line:
+   `firstEvents` drains ≈ drainOpen at ≤500 rows/min then goes quiet;
+   `superseding` stays near zero in steady state (each one = a real material
+   correction reaching the ledger); `lineageSkips`/`stubSkips` nonzero-but-stable
+   is fine, growing is not.
+4. **Fansly 1970 repair** (owner CLI, one-shot campaign):
+   - size first (prod psql): `SELECT count(*) FROM domain_events_pre_2024 WHERE
+     occurred_at < '2000-01-01' AND type IN ('message.received','message.sent');`
+   - `events:repair-fansly-1970 --dry-run` (add `--account <id>` to pilot one page)
+     → real run. Superseding events land with corrected timestamps; the minutely
+     archive projection sweep applies the heals (verify:
+     `SELECT count(*) FROM message_archive WHERE occurred_at < '2000-01-01'` → 0
+     for fansly accounts once the sweep passes).
+   - `missingObservation`/`missingItem`/`outOfRange` counts are review lists, not
+     failures — those events stay 1970 (source facts unreachable; never guessed).
+   - New observations are correct from this deploy (asFanslyTimestamp in the
+     canonicalizer); the campaign only covers the historical damage.
+5. **Sends-as-facts** ships active (no flag): it engages only on the direct-confirm
+   path when `ofapiDmColdArchiveEnabled` is ON (it is), writes fill-grade
+   `source='command'` rows that a later webhook upgrades, and the reconciler emits
+   their first `message.sent` events dedupe-proof against late webhooks. The raced
+   direct-confirm/webhook seam is fixed with it — a lost failure race no longer
+   journals a false `failed_*` fact.
+
+### Rollback
+
+- Reconciler: staged flag off + restart — sweeps stop; fingerprint columns are
+  passive bookkeeping; no cleanup. (Turning it back on later resumes from the
+  repair signal exactly where it stopped.)
+- The 1970 repair and any appended superseding events are FACTS (append-only
+  ledger) — there is no rollback; "stop" = don't run the campaign further. The
+  archive projection keeps whatever it last applied.
+- Writer changes (reducer, sends-as-facts, seam fix) are unflagged code — rollback
+  is a redeploy of the previous image (rollback-compatible: 0076 is additive).

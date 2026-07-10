@@ -343,6 +343,23 @@ async function collectFanLineage(
     }
   }
 
+  // Wave 2: REST-material lineage — observations that materially advanced
+  // the fan's dm_message_archive rows (rest_material_observation_id), even
+  // when the payload text match misses them. Collected BEFORE the hot
+  // targets delete those rows (buildWork runs lineage first).
+  const restLineage = await rows<{ id: string }>(app, sql`
+    select distinct d.rest_material_observation_id::text as id
+    from dm_message_archive d
+    where d.rest_material_observation_id is not null
+      and d.platform_account_id in ${scope.pageIds}
+      and (d.fan_platform_user_id = ${scope.fanRef}
+        or d.platform_conversation_id = ${scope.fanRef}
+        or d.sender_platform_user_id = ${scope.fanRef})
+  `);
+  for (const row of restLineage) {
+    candidates.add(Number(row.id));
+  }
+
   // Lake-side lineage + payload matches.
   const eventFiles = lakeFiles.filter((file) => file.table === "domain_events");
   const obsFiles = lakeFiles.filter((file) => file.table === "observations");

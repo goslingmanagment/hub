@@ -937,6 +937,71 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(replayed).toMatchObject({ archive_status: "skipped", archive_error: "erasure_fenced" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("fan erasure reaches REST-material lineage observations even when the payload text match misses (Wave 2)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { setPageOfapiAccountId, insertObservation, upsertDmMessageArchiveFromReadthrough } =
+      await import("@agency_hub_core/db");
+    const FAN_L = "666500666";
+    const model = await createModel(testDb.db, { slug: "lineage", name: "Lineage" });
+    const page = model
+      ? await createOnlyFansPage(testDb.db, { modelId: model.id, label: "lineage-of" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed lineage page");
+    }
+    await setPageOfapiAccountId(testDb.db, { pageId: page.id, ofapiAccountId: "acct_lineage" });
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('lineage-owner', 'owner') returning id::text as id`,
+    );
+
+    // An observation whose PAYLOAD does NOT contain the fan ref anywhere —
+    // only rest_material_observation_id links it to the fan's row.
+    const opaque = await insertObservation(testDb.db, {
+      source: "readthrough",
+      producer: "read-gateway",
+      platform: "onlyfans",
+      accountId: page.id,
+      kind: "ofapi_gateway_chat_messages_v2",
+      payload: { note: "opaque envelope, no fan ref in text" },
+      payloadHash: Buffer.alloc(32),
+      idempotencyKey: "lineage-opaque-1",
+    });
+    const written = await upsertDmMessageArchiveFromReadthrough(testDb.db, {
+      platform: "onlyfans",
+      platformAccountId: page.id,
+      ofapiAccountId: "acct_lineage",
+      platformConversationId: FAN_L,
+      fanPlatformUserId: FAN_L,
+      platformMessageId: "60001",
+      senderPlatformUserId: FAN_L,
+      senderRole: "fan",
+      isSentByMe: false,
+      messageCreatedAt: new Date("2026-07-03T09:00:00Z"),
+      textPlain: "lineage message",
+      isTip: false,
+      tipAmountMills: 0n,
+      mediaMetadata: [],
+      observationId: opaque.observationId,
+      observationReceivedAt: opaque.receivedAt,
+      retentionPolicy: "default",
+      retainUntil: new Date("2126-01-01T00:00:00Z"),
+    });
+    expect(written.status).toBe("written");
+
+    await executeErasure(
+      appStub(),
+      { scopeType: "fan", platform: "onlyfans", fanRef: FAN_L },
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(await count(`dm_message_archive where fan_platform_user_id = '${FAN_L}'`)).toBe(0);
+    // The opaque observation is gone via the rest-material lineage arm.
+    expect(await count(`observations where id = ${opaque.observationId}`)).toBe(0);
+    expect(await count(`observation_keys where observation_id = ${opaque.observationId}`)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("page-scope erasure purges the page's secret/config rows (decision #118)", async (context) => {
     if (!testDb) {
       context.skip();
