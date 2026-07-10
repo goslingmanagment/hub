@@ -39,6 +39,7 @@ import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
+import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import {
   countHarvestObservations,
   listFanslyBackscrollManifest,
@@ -1174,6 +1175,36 @@ export function buildProgram() {
           `${options.dryRun ? "[dry-run] would fingerprint" : "fingerprinted"} ${result.fingerprinted} `
             + `(closed-in-ledger ${result.emittedClosed}, INITIAL DRAIN BOUND ${result.drainOpen} first `
             + `events, stubs skipped ${result.stubsSkipped}) of ${result.scanned} scanned`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("events:repair-fansly-1970")
+    .description(
+      "Wave 2: append superseding events (corrected timestamps from source observations) for "
+        + "the Fansly 1970 message events — replay cannot heal them (msg dedup key). Idempotent; "
+        + "the archive projection sweep applies the heal",
+    )
+    .option("--dry-run", "count without writing", false)
+    .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
+    .option("--limit <n>", "max events to scan this run", (v) => Number.parseInt(v, 10))
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runFansly1970Repair(app, {
+          dryRun: Boolean(options.dryRun),
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+          ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        });
+        console.log(JSON.stringify(result));
+        console.log(
+          `${options.dryRun ? "[dry-run] would repair" : "repaired"} ${result.repaired} `
+            + `(already ${result.alreadyRepaired}, missing-obs ${result.missingObservation}, `
+            + `missing-item ${result.missingItem}, out-of-range ${result.outOfRange}, `
+            + `errored ${result.errored}) of ${result.scanned} scanned`,
         );
       } finally {
         await app.close();

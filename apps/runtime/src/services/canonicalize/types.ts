@@ -67,3 +67,19 @@ export function asDate(value: unknown, fallback: Date): Date {
   }
   return fallback;
 }
+
+/** Fansly numeric timestamps arrive in epoch SECONDS below ~2001-09 in ms
+ * terms (< 1e12) and in MILLISECONDS above — the same heuristic the
+ * hot-table path has always used (normalizeFanslyTimestamp). Strings and
+ * anything unparseable fall back like asDate. */
+export function asFanslyTimestamp(value: unknown, fallback: Date): Date {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    const ms = value >= 1_000_000_000_000 ? value : value * 1000;
+    const parsed = new Date(ms);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+    return fallback;
+  }
+  return asDate(value, fallback);
+}

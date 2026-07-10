@@ -18,6 +18,7 @@
 
 import {
   asDate,
+  asFanslyTimestamp,
   asNumber,
   asString,
   isRecord,
@@ -165,7 +166,13 @@ function fanslyDmMessages(
     const tipMills = asNumber(item.totalTipAmount);
     events.push({
       type: `message.${direction}`,
-      occurredAt: asDate(item.createdAt, observation.receivedAt),
+      // Fansly DM createdAt arrives in epoch SECONDS (fixture-proven); the
+      // bare asDate treated it as ms → 1970 events in the pre_2024 partition
+      // (audit known finding #2). The heuristic conversion matches the
+      // hot-table path (normalizeFanslyTimestamp). Historical 1970 events
+      // are healed by the events:repair-fansly-1970 superseding campaign —
+      // replay alone cannot heal (the msg dedup key drops re-emissions).
+      occurredAt: asFanslyTimestamp(item.createdAt, observation.receivedAt),
       fanIdentityRef: direction === "received" ? senderId : null,
       conversationRef: asString(item.groupId),
       messageRef: messageId,
