@@ -3302,3 +3302,34 @@ kinds journal the response verbatim); the gate keeps the
 while something consumes them, so the golden-signal latch never fires over
 a lane that is deliberately dark, and a rollback stops v2 accumulation
 instead of latching a permanent incident.
+
+**Decision #122 (2026-07-10, owner):** the Wave-2 DM corrections program
+ships as ONE staged boot flag `OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED`
+(staged group #122) plus unflagged writer changes. Mechanism: every material
+write to `dm_message_archive` computes `material_fingerprint` (sha256 over
+material fields only; columns land in migration 0076), `material != emitted`
+is the queryable repair signal, and a minutely reconciler drains it into the
+ledger — FIRST events for REST/command-only rows that never reached
+`domain_events`, SUPERSEDING events (same event type, new account_seq, dedup
+key `msg:<dir>:<id>:<fingerprint>`, `supersedesEventId` + fingerprint in the
+event DATA, `emitted_event_id` stamped back on the archive row) for rows
+whose material advanced past what was emitted. HARD PRECONDITION, order
+load-bearing: `corrections:backfill-fingerprints` runs to completion BEFORE
+the flag flips — enabling against NULL fingerprints mass-appends redundant
+superseding events for the entire history. Sends-as-facts ships ACTIVE (no
+flag), engaged only on the direct-confirm path while
+`ofapiDmColdArchiveEnabled` is on: confirmed sends write fill-grade
+`source='command'` archive rows a later webhook upgrades, and the raced
+direct-confirm/webhook seam ships fixed with it (a lost failure race no
+longer journals a false `failed_*` fact). The Fansly 1970 repair
+(`events:repair-fansly-1970`) is the FIRST superseding consumer — a one-shot
+owner CLI campaign; rows it cannot resolve
+(`missingObservation`/`missingItem`/`outOfRange`) stay 1970 BY DESIGN
+(source facts unreachable; timestamps are never guessed). Rollback
+semantics: flag off + restart stops the sweeps (fingerprint columns are
+passive bookkeeping, re-enabling resumes from the repair signal); appended
+superseding events and the 1970 repair are FACTS in the append-only ledger —
+no rollback, "stop" means don't run further; migration 0076 is additive and
+image-rollback compatible. Deploy ritual: image+0076 → backfill (dry-run →
+real, review `drainOpen` bound) → flag #122 → 1970 campaign (size → dry-run
+→ real), per `docs/runbooks/fastreply-freshness.md`.
