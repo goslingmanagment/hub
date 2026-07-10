@@ -1070,13 +1070,92 @@ describe("OFAPI command outbox intake", () => {
       appContext,
       { send } as never,
       new Date("2026-06-19T20:00:00.000Z"),
-    )).resolves.toEqual({ stale: 1, purged: 0, enqueued: 0 });
+    )).resolves.toEqual({ expired: 0, stale: 1, purged: 0, enqueued: 0 });
     expect(send).not.toHaveBeenCalled();
     expect((await getCommand(commandId)).json()).toMatchObject({
       state: "indeterminate",
       attemptCount: 1,
       lastErrorCode: "worker_attempt_stale",
       verifierResult: { source: "stale_recovery" },
+    });
+  });
+
+  // W3.2 (A4+A23, decision #125): queued-only rows past the TTL expire to
+  // cancelled at the sweep — WHILE execution is disabled (the exact bug
+  // window where rows used to park forever and fire hours late on re-enable).
+  it("expires parked queued rows past the TTL to cancelled: journaled, idempotent, fresh rows survive, expired rows stay retryable", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+
+    const aged = await createCommand(commandBody());
+    const agedId = (aged.json() as { commandId: string }).commandId;
+    const fresh = await createCommand(commandBody());
+    const freshId = (fresh.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      "update ofapi_commands set created_at = now() - interval '11 minutes' where id = $1",
+      [agedId],
+    );
+
+    const send = vi.fn();
+    await expect(sweepOfapiCommands(appContext, { send } as never))
+      .resolves.toMatchObject({ expired: 1, enqueued: 0 });
+    expect(send).not.toHaveBeenCalled();
+
+    expect((await getCommand(agedId)).json()).toMatchObject({
+      state: "cancelled",
+      lastErrorCode: "expired_queued_ttl",
+      attemptCount: 0,
+    });
+    expect((await getCommand(freshId)).json()).toMatchObject({
+      state: "queued",
+    });
+
+    // Journaled under the same idempotency key a client cancel would use —
+    // the two paths dedupe into one fact.
+    const observations = await testDb!.pool.query<{ kind: string }>(
+      `select kind from observations
+       where source = 'command_result' and idempotency_key = $1`,
+      [`cmd:${agedId}:cancelled`],
+    );
+    expect(observations.rows).toHaveLength(1);
+    expect(observations.rows[0]).toMatchObject({ kind: "command.cancelled" });
+
+    // Idempotent re-run: nothing left to expire, no duplicate observation.
+    await expect(sweepOfapiCommands(appContext, { send } as never))
+      .resolves.toMatchObject({ expired: 0 });
+    const observationCount = await testDb!.pool.query<{ count: number }>(
+      `select count(*)::int as count from observations
+       where source = 'command_result' and idempotency_key = $1`,
+      [`cmd:${agedId}:cancelled`],
+    );
+    expect(observationCount.rows[0]?.count).toBe(1);
+
+    // cancelled is a RETRYABLE_SOURCE_STATES member: the chatter can retry.
+    const retry = await createCommand(commandBody({ retryOfCommandId: agedId }));
+    expect(retry.statusCode, retry.body).toBe(202);
+    expect(retry.json()).toMatchObject({
+      retryOfCommandId: agedId,
+      state: "queued",
+    });
+  });
+
+  it("never claims a queued row older than the TTL even when an execute job races the sweep (W3.2 claim belt)", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(commandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      "update ofapi_commands set created_at = now() - interval '11 minutes' where id = $1",
+      [commandId],
+    );
+
+    await expect(executeOfapiCommand(appContext, commandId))
+      .resolves.toMatchObject({ status: "not_claimed" });
+    expect(sendTextMessage).not.toHaveBeenCalled();
+    expect((await getCommand(commandId)).json()).toMatchObject({
+      state: "queued",
+      attemptCount: 0,
     });
   });
 
@@ -1097,7 +1176,7 @@ describe("OFAPI command outbox intake", () => {
       appContext,
       { send: vi.fn() } as never,
       new Date("2026-06-19T20:00:00.000Z"),
-    )).resolves.toEqual({ stale: 0, purged: 0, enqueued: 0 });
+    )).resolves.toEqual({ expired: 0, stale: 0, purged: 0, enqueued: 0 });
 
     const payloads = await testDb!.pool.query<{
       payload_text: string;

@@ -6606,6 +6606,11 @@ describe("api integration", () => {
           session: {
             authorization: "token",
           },
+          // W3.1 (decision #124): the auto-queued sync resolves the page
+          // context, which fails closed proxyless.
+          proxy: {
+            url: "socks5://proxy-auto-sync.example",
+          },
         },
       });
 
@@ -7659,6 +7664,7 @@ describe("api integration", () => {
     expect(response.json()).toEqual({
       updated: true,
       verified: true,
+      syncUnblocked: true,
     });
 
     const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
@@ -7702,6 +7708,10 @@ describe("api integration", () => {
     server = await buildApiServer(appContext);
     await server.ready();
 
+    // W3.1: verify resolves the page context, which fails closed proxyless.
+    await saveProxy(createTestAppContext(activeTestDb), fixture!.lanaPage!.id, {
+      url: "socks5://127.0.0.1:1080",
+    });
     await storeFanslySession(
       activeTestDb.db,
       fixture!.lanaPage.id,
@@ -7765,6 +7775,7 @@ describe("api integration", () => {
       verified: true,
       username: "lana_page",
       platform: "fansly",
+      syncUnblocked: true,
     });
 
     const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
@@ -7843,6 +7854,10 @@ describe("api integration", () => {
     server = await buildApiServer(appContext);
     await server.ready();
 
+    // W3.1: verify resolves the page context, which fails closed proxyless.
+    await saveProxy(createTestAppContext(activeTestDb), fixture.lanaPage!.id, {
+      url: "socks5://127.0.0.1:1080",
+    });
     await storeFanslySession(
       activeTestDb.db,
       fixture.lanaPage.id,

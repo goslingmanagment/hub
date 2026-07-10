@@ -28,6 +28,7 @@ describe("Fansly adapter Stage 6 replay-probe methods", () => {
         fanslyClientCheck: "check-1",
         fanslySessionId: "session-1",
       },
+      proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0),
     };
 

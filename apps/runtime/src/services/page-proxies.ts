@@ -18,7 +18,10 @@ export async function setPageProxy(
 ) {
   const normalizedProxy = normalizeProxyConfig(proxy);
   await assertAllowedProxyTarget(normalizedProxy);
-  const pageContext = await resolvePageContext(app, pageLabel);
+  // allowMissingProxy: assigning a proxy is the REPAIR for the fail-closed
+  // proxyless state — resolving here must not refuse it. Verification below
+  // egresses through the NEW proxy, never the stored (possibly null) one.
+  const pageContext = await resolvePageContext(app, pageLabel, { allowMissingProxy: true });
   const storedProxyRouteKey = pageContext.proxy ? buildProxyEgressKey(pageContext.proxy) : null;
   const proxyRouteKey = buildProxyEgressKey(normalizedProxy);
   const preservesStoredProxyRoute = Boolean(

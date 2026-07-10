@@ -5,7 +5,9 @@ import { SocksClient } from "socks";
 
 // Stage 26: the sanctioned undici request for non-platform diagnostics that
 // must ride an explicit dispatcher (proxy exit-IP checks). Platform-bound
-// traffic still resolves through services/egress/resolveEgress.
+// traffic resolves its transport from the page context
+// (services/page-context.ts → adapter dispatcher); Fansly egress without a
+// stored proxy is refused there, fail-closed (W3.1, decision #124).
 export { request as undiciRequest };
 
 import type { ProxyConfig } from "./types.ts";

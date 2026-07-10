@@ -158,6 +158,9 @@ const envSchema = z.object({
   OFAPI_DESKTOP_READ_GATEWAY_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED: booleanSchema.default(false),
+  // W3.2 (decision #125): queued-only outbox rows older than this expire to
+  // cancelled. Floor 60s so a typo can't cancel the whole queue instantly.
+  OFAPI_QUEUED_COMMAND_TTL_MS: z.coerce.number().int().min(60_000).default(600_000),
   // Fast-reply freshness PR4: REST readthrough reconcile into the cold
   // archive (boot-applied staged flag; own verification window).
   OFAPI_DM_READTHROUGH_RECONCILE_ENABLED: booleanSchema.default(false),
@@ -273,6 +276,7 @@ export interface AppConfig {
   fanslyDeepBackfillIgnoreRetentionLimit?: boolean;
   ofapiDmColdArchiveRetentionDays?: number;
   ofapiRestDelayMs?: number;
+  ofapiQueuedCommandTtlMs?: number;
   ofapiDmBootstrapMaxRequestsPerRun?: number;
   ofapiDmDailyCreditBudget?: number;
   ofapiCreditFloor?: number;
@@ -477,6 +481,7 @@ export function loadConfig(
     fanslyDeepBackfillIgnoreRetentionLimit: parsed.FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT,
     ofapiDmColdArchiveRetentionDays: parsed.OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
+    ofapiQueuedCommandTtlMs: parsed.OFAPI_QUEUED_COMMAND_TTL_MS,
     ofapiDmBootstrapMaxRequestsPerRun: parsed.OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN,
     ofapiDmDailyCreditBudget: parsed.OFAPI_DM_DAILY_CREDIT_BUDGET,
     ofapiCreditFloor: parsed.OFAPI_CREDIT_FLOOR,

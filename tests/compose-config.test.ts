@@ -7,9 +7,12 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function getServiceBlock(text: string, serviceName: string) {
+  // NB: JS regex has no \Z end-of-input anchor — a literal \Z matches the
+  // letter "Z" (the W3 `TZ: UTC` pin exposed this by cutting blocks at "T").
+  // (?![\s\S]) is the true end-of-input.
   const match = text.match(
     new RegExp(
-      `^  ${serviceName}:\\n([\\s\\S]*?)(?=^  [^\\s].*:|^volumes:|\\Z)`,
+      `^  ${serviceName}:\\n([\\s\\S]*?)(?=^  [^\\s].*:|^volumes:|(?![\\s\\S]))`,
       "m",
     ),
   );

@@ -607,6 +607,13 @@ describe("sync integration", () => {
     }
 
     const { page } = await seedFanslyPage(testDb.db, Buffer.alloc(32, 7));
+    // W3.1 (decision #124): Fansly resolution fails closed proxyless.
+    await storeProxyConfig(testDb.db, page!.id, {
+      url: "socks5://proxy-converge.example",
+      encryptedAuth: null,
+      keyVersion: null,
+      rateLimitScopeKey: null,
+    });
     const app = createTestAppContext(testDb, {
       databaseUrl: testDb.connectionString,
       adapter: createFanslySyncAdapter() as never,
@@ -693,12 +700,14 @@ describe("sync integration", () => {
     }
   }, 30_000);
 
-  it("serializes two direct Fansly pages on the same egress even with parallel workers", async (context) => {
+  it("serializes two Fansly pages sharing one proxy egress even with parallel workers", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
+    // W3.1 (decision #124): proxyless Fansly pages fail closed, so the
+    // shared-egress serialization property now rides a shared proxy key.
     const model = await createModel(testDb.db, {
       slug: "serial-fansly",
       name: "Serial Fansly",
@@ -707,11 +716,13 @@ describe("sync integration", () => {
       modelId: model.id,
       label: "serial-a",
       authorization: "serial-a",
+      proxyUrl: "socks5://proxy-serial.example",
     });
     const secondPage = await createFanslyLightPage(testDb, {
       modelId: model.id,
       label: "serial-b",
       authorization: "serial-b",
+      proxyUrl: "socks5://proxy-serial.example",
     });
     const probe = createConcurrencyProbe();
     const app = createTestAppContext(testDb, {
@@ -733,10 +744,12 @@ describe("sync integration", () => {
       const firstRevisions = await requestLightSync(app, boss, {
         platformAccountId: firstPage.id,
         provider: "fansly",
+        proxyUrl: "socks5://proxy-serial.example",
       });
       const secondRevisions = await requestLightSync(app, boss, {
         platformAccountId: secondPage.id,
         provider: "fansly",
+        proxyUrl: "socks5://proxy-serial.example",
       });
 
       await Promise.all([
@@ -763,12 +776,14 @@ describe("sync integration", () => {
     }
   }, 20_000);
 
-  it("overlaps pages on different egresses and across direct Fansly vs direct OnlyFans", async (context) => {
+  it("overlaps pages on different proxy egresses and across Fansly vs direct OnlyFans", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
+    // W3.1 (decision #124): proxyless Fansly pages fail closed — the
+    // different-egress overlap property now rides two distinct proxy keys.
     const fanslyModel = await createModel(testDb.db, {
       slug: "parallel-fansly",
       name: "Parallel Fansly",
@@ -781,6 +796,7 @@ describe("sync integration", () => {
       modelId: fanslyModel.id,
       label: "parallel-direct",
       authorization: "parallel-direct",
+      proxyUrl: "socks5://proxy-parallel-b.example",
     });
     const proxiedFanslyPage = await createFanslyLightPage(testDb, {
       modelId: fanslyModel.id,
@@ -815,6 +831,7 @@ describe("sync integration", () => {
       const directFanslyRevisions = await requestLightSync(app, boss, {
         platformAccountId: directFanslyPage.id,
         provider: "fansly",
+        proxyUrl: "socks5://proxy-parallel-b.example",
       });
       const proxiedFanslyRevisions = await requestLightSync(app, boss, {
         platformAccountId: proxiedFanslyPage.id,

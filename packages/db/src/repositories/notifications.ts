@@ -11,6 +11,7 @@ import {
 export type NotificationIncidentKind =
   | "auth_blocked"
   | "proxy_failed"
+  | "proxy_missing"
   | "stream_failed_threshold"
   | "ofapi_auth"
   | "ofapi_low_credit"

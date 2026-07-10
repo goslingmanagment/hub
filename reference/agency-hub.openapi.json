@@ -3104,6 +3104,7 @@
               "enum": [
                 "auth_blocked",
                 "proxy_failed",
+                "proxy_missing",
                 "stream_failed_threshold",
                 "ofapi_auth",
                 "ofapi_low_credit",
@@ -3183,6 +3184,7 @@
                             "enum": [
                               "auth_blocked",
                               "proxy_failed",
+                              "proxy_missing",
                               "stream_failed_threshold",
                               "ofapi_auth",
                               "ofapi_low_credit",
@@ -8274,11 +8276,15 @@
                     },
                     "verified": {
                       "type": "boolean"
+                    },
+                    "syncUnblocked": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "updated",
-                    "verified"
+                    "verified",
+                    "syncUnblocked"
                   ],
                   "additionalProperties": false
                 }
@@ -8453,12 +8459,16 @@
                         "fansly",
                         "onlyfans"
                       ]
+                    },
+                    "syncUnblocked": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "verified",
                     "username",
-                    "platform"
+                    "platform",
+                    "syncUnblocked"
                   ],
                   "additionalProperties": false
                 }

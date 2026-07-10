@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   claimQueuedOfapiCommand,
+  expireStaleQueuedOfapiCommands,
   finalizeOfapiCommand,
   findPageById,
   getOfapiCommandById,
@@ -16,6 +17,7 @@ import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/share
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   isOfapiDmColdArchiveEnabled,
   resolveOfapiDmColdArchiveRetentionDays,
@@ -37,6 +39,12 @@ export const OFAPI_COMMAND_SWEEP_QUEUE = "ofapi.commands.sweep";
 
 const COMMAND_SWEEP_LIMIT = 100;
 const STALE_IN_FLIGHT_MS = 2 * 60 * 1000;
+// W3.2 (A4+A23, decision #125): queued-only rows older than this expire to
+// `cancelled` at each sweep. 10 min = the desktop's VERIFY_AUTO_STOP_AGE_MS:
+// the kernel must never execute a queued row the desktop has already stopped
+// watching (15 min would leave a 5-min blind execution window). Overridable
+// live via the ofapiQueuedCommandTtlMs registry row (non-staged).
+export const QUEUED_COMMAND_TTL_MS = 10 * 60 * 1000;
 const WEBHOOK_CORRELATION_WINDOW_MS = 10 * 60 * 1000;
 const WEBHOOK_CLOCK_SKEW_MS = 5 * 1000;
 
@@ -99,6 +107,11 @@ export function isOfapiCommandExecutionEnabled(
   config?: Pick<AppContext["config"], "ofapiDesktopCommandExecutionEnabled">,
 ) {
   return config?.ofapiDesktopCommandExecutionEnabled === true;
+}
+
+async function resolveQueuedCommandTtlMs(app: Pick<AppContext, "db" | "config">) {
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  return effective.ofapiQueuedCommandTtlMs ?? QUEUED_COMMAND_TTL_MS;
 }
 
 /**
@@ -352,7 +365,15 @@ export async function executeOfapiCommand(
     return { status: "client_unavailable" as const };
   }
 
-  const command = await claimQueuedOfapiCommand(app.db, { commandId, now });
+  // W3.2 belt (decision #125): a row older than the queued TTL is
+  // unclaimable — even if this execute job races the sweep's expiry, the
+  // stale send cannot fire.
+  const ttlMs = await resolveQueuedCommandTtlMs(app);
+  const command = await claimQueuedOfapiCommand(app.db, {
+    commandId,
+    now,
+    minCreatedAt: new Date(now.getTime() - ttlMs),
+  });
   if (!command) {
     return { status: "not_claimed" as const };
   }
@@ -540,6 +561,30 @@ export async function sweepOfapiCommands(
   boss: Pick<PgBoss, "send">,
   now = new Date(),
 ) {
+  // W3.2 (A4, decision #125): expire parked queued rows FIRST — before the
+  // execution-disabled early return below, because rows parked while
+  // execution is off are the exact bug window (they used to fire hours late
+  // on re-enable). Each expiry is journaled with the same idempotency key a
+  // client cancel would use, so the two paths dedupe into one fact.
+  const ttlMs = await resolveQueuedCommandTtlMs(app);
+  const expired = await expireStaleQueuedOfapiCommands(app.db, {
+    createdBefore: new Date(now.getTime() - ttlMs),
+    now,
+  });
+  for (const command of expired) {
+    await recordCommandResultObservation(app, {
+      command,
+      state: "cancelled",
+      outcome: { errorCode: "expired_queued_ttl", queuedTtlMs: ttlMs },
+    });
+  }
+  if (expired.length > 0) {
+    app.logger.warn(
+      { count: expired.length, queuedTtlMs: ttlMs, commandIds: expired.map((row) => row.id) },
+      "Expired stale queued OFAPI commands to cancelled (queued TTL)",
+    );
+  }
+
   const stale = await markStaleInFlightOfapiCommandsIndeterminate(app.db, {
     startedBefore: new Date(now.getTime() - STALE_IN_FLIGHT_MS),
     now,
@@ -555,14 +600,14 @@ export async function sweepOfapiCommands(
   // payloads are kept business facts, permanently. The sweep no longer has a
   // redaction arm (repository fn deleted with it).
   if (!isOfapiCommandExecutionEnabled(app.config) || !app.ofapi) {
-    return { stale: stale.length, purged: 0, enqueued: 0 };
+    return { expired: expired.length, stale: stale.length, purged: 0, enqueued: 0 };
   }
 
   const queued = await listQueuedOfapiCommandIds(app.db, { limit: COMMAND_SWEEP_LIMIT });
   for (const command of queued) {
     await sendOfapiCommandExecuteJob(boss, command.id);
   }
-  return { stale: stale.length, purged: 0, enqueued: queued.length };
+  return { expired: expired.length, stale: stale.length, purged: 0, enqueued: queued.length };
 }
 
 type SentWebhookRow = {

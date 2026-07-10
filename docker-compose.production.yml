@@ -21,6 +21,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env.production
+    environment:
+      # E7/D8-N1 (W3): every naive Date parse must stay UTC even if a future
+      # base image ships a local timezone.
+      TZ: UTC
     command: ["node", "apps/runtime/dist/startup.js", "api"]
     ports:
       - "127.0.0.1:3000:3000"
@@ -52,6 +56,7 @@ services:
       - .env.production
     environment:
       SCHEDULER_HEALTH_FILE: /tmp/agency-hub-scheduler-health.json
+      TZ: UTC
     command: ["node", "apps/runtime/dist/startup.js", "scheduler"]
     depends_on:
       postgres:
@@ -83,6 +88,7 @@ services:
       - .env.production
     environment:
       WORKER_HEALTH_FILE: /tmp/agency-hub-worker-health.json
+      TZ: UTC
     command: ["node", "apps/runtime/dist/startup.js", "worker"]
     depends_on:
       postgres:

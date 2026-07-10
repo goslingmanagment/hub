@@ -66,6 +66,20 @@ export function CredentialsTab() {
                       {conn.label}
                     </span>
                     <PlatformBadge platform={conn.platform} />
+                    {conn.platform === "fansly" && (
+                      conn.proxyUrl ? (
+                        <span className="rounded-full border border-border bg-hover px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-muted">
+                          Proxy
+                        </span>
+                      ) : (
+                        <span
+                          className="rounded-full border border-danger/30 bg-danger/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-danger"
+                          title="Fansly egress is fail-closed: without a proxy this page cannot sync"
+                        >
+                          No proxy — sync refused
+                        </span>
+                      )
+                    )}
                   </div>
                   <div className="mt-0.5 text-xs text-text-muted">
                     @{conn.username ?? conn.displayName ?? "unknown"}

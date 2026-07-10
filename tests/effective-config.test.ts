@@ -111,7 +111,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
   });
 
-  it("covers exactly the thirteen wired keys", () => {
-    expect(LIVE_CONFIG_KEYS.size).toBe(13);
+  it("covers exactly the fourteen wired keys", () => {
+    // W3.2 added ofapiQueuedCommandTtlMs (read live by the command sweep).
+    expect(LIVE_CONFIG_KEYS.size).toBe(14);
   });
 });

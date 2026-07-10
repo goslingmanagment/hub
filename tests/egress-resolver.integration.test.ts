@@ -72,7 +72,7 @@ beforeEach(async (context) => {
 });
 
 describe("egress resolver (Stage 26)", () => {
-  it("resolves page scopes onto the page's proxy identity", async (context) => {
+  it("resolves page scopes onto the page's proxy identity and refuses proxyless Fansly pages", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -84,11 +84,11 @@ describe("egress resolver (Stage 26)", () => {
     expect(proxiedContext.dispatcher).not.toBeNull();
     await proxiedContext.close();
 
+    // W3.1 (decision #124, reversing the Stage-26 recorded direct fallback):
+    // a Fansly page without a proxy is REFUSED, never direct-dispatched.
     const direct = await seedFanslyPage("egress-direct");
-    const directContext = await resolveEgress(appContext, { kind: "page", pageId: direct.id });
-    expect(directContext.egressKey).toBe("direct");
-    expect(directContext.dispatcher).not.toBeNull();
-    await directContext.close();
+    await expect(resolveEgress(appContext, { kind: "page", pageId: direct.id }))
+      .rejects.toThrow(/fail-closed/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("records the vendor address policies: ofapi vendor-direct, fansly refused, unknown throws", async (context) => {

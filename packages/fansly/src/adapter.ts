@@ -17,7 +17,7 @@ import {
   type ProxyConfig,
 } from "@agency_hub_core/shared";
 
-import { FanslyApiError } from "./errors.ts";
+import { FanslyApiError, FanslyProxyMissingError } from "./errors.ts";
 import type {
   FanslyAccount,
   FanslyAccountMeResponse,
@@ -741,7 +741,13 @@ export class FanslyAdapter {
   }
 
   private getDispatcher(proxy?: ProxyConfig | null) {
-    return proxy ? this.buildProxyDispatcher(proxy) : this.directDispatcher;
+    // W3.1 (decision #124): fail closed. Every Fansly request funnels through
+    // here; without the page's proxy it would egress from the shared VPS IP.
+    // resolveStoredPageContext refuses first — this is the belt.
+    if (!proxy) {
+      throw new FanslyProxyMissingError();
+    }
+    return this.buildProxyDispatcher(proxy);
   }
 
   private buildProxyDispatcher(proxy: ProxyConfig) {

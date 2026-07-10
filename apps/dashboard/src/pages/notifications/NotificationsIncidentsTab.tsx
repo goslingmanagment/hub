@@ -10,6 +10,7 @@ function kindLabel(kind: string) {
   switch (kind) {
     case "auth_blocked": return "Auth Blocked";
     case "proxy_failed": return "Proxy Failed";
+    case "proxy_missing": return "Proxy Missing";
     case "stream_failed_threshold": return "Stream Failed 3x";
     default: return kind;
   }
@@ -58,6 +59,7 @@ export function NotificationsIncidentsTab() {
           <option value="">All Types</option>
           <option value="auth_blocked">Auth Blocked</option>
           <option value="proxy_failed">Proxy Failed</option>
+          <option value="proxy_missing">Proxy Missing</option>
           <option value="stream_failed_threshold">Stream Failed 3x</option>
         </select>
 

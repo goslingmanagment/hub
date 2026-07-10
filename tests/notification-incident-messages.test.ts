@@ -31,4 +31,14 @@ describe("resolveMessageForIncident", () => {
       resolveMessageForIncident({ kind: "ofapi_webhook_silence", pageLabel: null, platform: null }),
     ).toContain("OFAPI webhooks delivering again");
   });
+
+  it("proxy_missing resolves with its own egress-restored text (W3.1)", () => {
+    const message = resolveMessageForIncident({
+      kind: "proxy_missing",
+      pageLabel: "p1",
+      platform: "fansly",
+    });
+    expect(message).toContain("Proxy assigned");
+    expect(message).toContain("egress restored");
+  });
 });

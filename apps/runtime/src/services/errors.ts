@@ -51,6 +51,16 @@ export class ServiceUnavailableError extends AppError {
   }
 }
 
+// W3.1 (decision #124): Fansly egress fails closed — resolving a Fansly page
+// without a stored proxy refuses the whole resolution instead of egressing
+// from the shared VPS IP. 409 because the page's stored state conflicts with
+// the fail-closed egress policy; assigning a proxy clears it.
+export class ProxyMissingError extends AppError {
+  constructor(message: string) {
+    super(message, 409, "proxy_missing");
+  }
+}
+
 // Stage 29: quota/budget breaches carry their own code (the ledger's
 // gateway_outcome value) so clients can distinguish them from generic 429s.
 export class QuotaDeniedError extends AppError {

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { telegramSettings, telegramDeliveryAttempts } from "../schema.ts";
@@ -133,6 +133,30 @@ export async function getLatestRealDeliveryAttempt(
   });
 
   return row ?? null;
+}
+
+/**
+ * W3.3 (D3-N1): delivery state of an incident's OPEN notification. sentCount
+ * says whether the page ever reached Telegram; totalCount caps the re-send
+ * loop (an incident whose open never even attempted a send — alerts disabled
+ * at open time — stays silent: totalCount 0).
+ */
+export async function getIncidentOpenedDeliveryState(
+  db: Database,
+  notificationIncidentId: number,
+): Promise<{ sentCount: number; totalCount: number }> {
+  const [row] = await db
+    .select({
+      sentCount: sql<number>`count(*) filter (where ${telegramDeliveryAttempts.status} = 'sent')::int`,
+      totalCount: sql<number>`count(*)::int`,
+    })
+    .from(telegramDeliveryAttempts)
+    .where(and(
+      eq(telegramDeliveryAttempts.kind, "incident_opened"),
+      eq(telegramDeliveryAttempts.notificationIncidentId, notificationIncidentId),
+    ));
+
+  return { sentCount: row?.sentCount ?? 0, totalCount: row?.totalCount ?? 0 };
 }
 
 export async function hasScheduledReportForDate(

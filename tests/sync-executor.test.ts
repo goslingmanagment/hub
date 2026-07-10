@@ -6,6 +6,8 @@ import type * as SyncSharedModule from "../apps/runtime/src/services/sync/shared
 import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
+import { ProxyMissingError } from "../apps/runtime/src/services/errors.ts";
+
 const dbMocks = vi.hoisted(() => ({
   acquirePageSyncLease: vi.fn(),
   blockPageSync: vi.fn(),
@@ -852,6 +854,36 @@ describe("sync executor", () => {
         chunkStatus: "failed",
       },
     );
+    expect(result).toMatchObject({
+      kind: "failed",
+      runId: 777,
+      needsContinuation: false,
+    });
+  });
+
+  it("parks the stream with blocker proxy_missing when the context refuses proxyless Fansly egress (W3.1)", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+    handlerMocks.resolveExecutorPageContext.mockRejectedValue(
+      new ProxyMissingError('Page "55" has no assigned proxy; Fansly egress is refused (fail-closed)'),
+    );
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    // W3.1 (decision #124): a refused proxyless resolution is a config state
+    // — the stream parks (manual action) instead of hot-retrying the refusal.
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      blockerKind: "manual_action_required",
+      blockerCode: "proxy_missing",
+    }));
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       kind: "failed",
       runId: 777,

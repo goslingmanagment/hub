@@ -16,6 +16,7 @@ export function CredentialsModal({
   onClose: () => void;
 }) {
   const updateCredentials = useAdminUpdateCredentials(connection.label);
+  const [syncStillBlocked, setSyncStillBlocked] = useState(false);
   const [values, setValues] = useState<PlatformCredentialsValues>({
     authorization: "",
     fanslyClientId: "",
@@ -40,13 +41,20 @@ export function CredentialsModal({
 
   async function handleSubmit() {
     try {
-      await updateCredentials.mutateAsync(buildCredentialsBody({
+      const result = await updateCredentials.mutateAsync(buildCredentialsBody({
         platform: connection.platform,
         values,
         requireCredentials: false,
         hadStoredProxy,
         initialStoredProxy: hadStoredProxy ? { url: connection.proxyUrl!, hasAuth: connection.proxyHasAuth } : null,
       }));
+      // W3.3 (D4-N1): verified but the auth block could not be cleared —
+      // streams are still paused, so an all-clear toast would be a lie.
+      if (result.syncUnblocked === false) {
+        setSyncStillBlocked(true);
+        toast.warning("Credentials verified, but sync is still blocked");
+        return;
+      }
       toast.success("Credentials updated");
       onClose();
     } catch (error) {
@@ -56,6 +64,13 @@ export function CredentialsModal({
 
   return (
     <ModalShell title={title} onClose={onClose}>
+      {syncStillBlocked && (
+        <div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+          Credentials verified, but the sync block could not be cleared — streams are
+          still paused and the incident stays open. Retry verification; if this
+          persists, check the worker logs.
+        </div>
+      )}
       <div className="space-y-4">
         <PlatformCredentialsFields
           platform={connection.platform}

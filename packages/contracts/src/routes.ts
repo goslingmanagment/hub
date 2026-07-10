@@ -2622,6 +2622,7 @@ export const archiveMessageItemSchema = z.object({
 const notificationIncidentKindEnum = z.enum([
   "auth_blocked",
   "proxy_failed",
+  "proxy_missing",
   "stream_failed_threshold",
   "ofapi_auth",
   "ofapi_low_credit",
@@ -2858,6 +2859,10 @@ export const verifyPageResponseSchema = z.object({
   verified: z.boolean(),
   username: z.string().nullable(),
   platform: platformEnum,
+  // W3.3 (D4-N1): false = the credentials verified but the auth block could
+  // not be cleared — streams stay blocked and the incidents stay open; the
+  // dashboard renders a warning instead of an all-clear.
+  syncUnblocked: z.boolean(),
 });
 
 export const adminCreatePageResponseSchema = z.object({
@@ -2882,6 +2887,8 @@ export const adminUpdatePageResponseSchema = z.object({
 export const updateCredentialsResponseSchema = z.object({
   updated: z.boolean(),
   verified: z.boolean(),
+  // W3.3 (D4-N1): see verifyPageResponseSchema.syncUnblocked.
+  syncUnblocked: z.boolean(),
 });
 
 export const deletedResponseSchema = z.object({

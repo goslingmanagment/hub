@@ -31,6 +31,7 @@ describe("adapter hardening", () => {
       session: {
         authorization: "super-secret-token",
       },
+      proxy: { url: "socks5://proxy.example:1080" },
       requestObserver,
     }, "acct-secret-123", {
       offset: 200,

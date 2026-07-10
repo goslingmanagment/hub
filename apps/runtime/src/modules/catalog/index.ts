@@ -447,7 +447,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
       }
       await refreshPageMetadata(appContext, pageContext, "light");
       const recoveredAt = new Date();
-      await handleSuccessfulPageVerificationRecovery(appContext, {
+      const recovery = await handleSuccessfulPageVerificationRecovery(appContext, {
         platformAccountId: pageContext.page.id,
         pageLabel: pageContext.page.label,
         platform: pageContext.platform,
@@ -457,6 +457,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
         verified: true,
         username: pageContext.page.username,
         platform: pageContext.platform,
+        syncUnblocked: recovery.syncUnblocked,
       };
     } catch (error) {
       if (error instanceof NotFoundError) {

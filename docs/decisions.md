@@ -3362,3 +3362,60 @@ log ONE aggregated warn per sweep with a sample instead of a line per row
 --dry-run` → real → re-enable `OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED` →
 watch the drain; the snapshot table stays until the drain completes and
 its drop is a separate owner decision.
+
+**Decision #124 (2026-07-10, W3.1 / B6+A35 — REVERSES the Stage-26 recorded
+direct fallback):** Fansly egress fails CLOSED. Stage 26 recorded "a page
+without a proxy egresses direct under egress key `direct`" as the address
+policy and pinned it in `tests/egress-resolver.integration.test.ts`; on prod
+that fallback was reachable silently — `resolveEgress` was dead code, the real
+path (`resolveStoredPageContext` → `FanslyAdapter.getDispatcher(null)`)
+returned the direct undici agent with no throw, no log, no incident
+(`proxy_failed` only fires when `hasProxy`), and erasure purges
+`egress_endpoints`, so an erased-but-syncing page burned the shared VPS IP —
+model-ban class risk. New policy, enforced in three layers: (1)
+`resolveStoredPageContext` refuses a proxyless Fansly page with a typed
+`ProxyMissingError` (409 `proxy_missing`) AND opens a `proxy_missing`
+notification incident (new kind, migration 0078) — the sync executor parks
+the stream as `manual_action_required`/`proxy_missing` instead of
+hot-retrying; (2) belt: `FanslyAdapter.getDispatcher` throws
+`FanslyProxyMissingError` on a null proxy, so no code path can direct-dispatch
+Fansly traffic; (3) `resolveEgress` refuses proxyless fansly-vendor page
+scopes and the Stage-26 test pin is FLIPPED to expect-refusal. The incident
+resolves on the next successful chunk or verification with a proxy present.
+`setPageProxy` (the repair path) resolves with an explicit
+`allowMissingProxy` escape hatch — it verifies through the NEW proxy, never
+the stored null. OnlyFans pages are untouched (egress is vendor-side at
+OFAPI; proxyless OF pages still resolve with egress key `direct`). A page
+that loses its proxy now stops syncing LOUDLY — that stop is intended;
+operational precondition (E2): assign proxies to any active proxyless Fansly
+pages BEFORE deploying this, or their sync parks at the first chunk.
+
+**Decision #125 (2026-07-10, W3.2 / A4+A23 — outbox queued-TTL semantics):**
+queued-only OFAPI command rows expire to `cancelled` after a TTL. The sweep
+re-enqueued queued rows forever with no age bound, and while execution was
+disabled it returned early — rows parked invisibly (`command_settle` samples
+only finished attempts) and fired hours late on re-enable: a stale DM to a
+fan. The desktop's cancel route has zero product callers (A23), so nothing
+client-side drains a parked queue. Semantics: at the TOP of every minutely
+sweep — deliberately BEFORE the execution-disabled early return, because a
+parked queue is the exact bug window — rows still `queued` with
+`attempt_count = 0` and `created_at` older than the TTL are UPDATEd to
+`cancelled` with `last_error_code = 'expired_queued_ttl'`. This reuses the
+existing state (no migration, no contract change, no client re-vendor): the
+desktop already renders `cancelled`, and it is already in
+`RETRYABLE_SOURCE_STATES`, so an expired send stays chatter-retryable. Each
+expiry is journaled via `recordCommandResultObservation` under
+`cmd:<id>:cancelled` — the same idempotency key a client cancel would use, so
+the two paths dedupe into one fact. Belt: `claimQueuedOfapiCommand` carries a
+`created_at >= now - TTL` predicate, so an execute job racing the sweep can
+never fire a stale send. TTL = 10 minutes (`QUEUED_COMMAND_TTL_MS`), pinned
+to the desktop's `VERIFY_AUTO_STOP_AGE_MS`: the kernel must never execute a
+queued row the desktop has already stopped watching (15 min would leave a
+5-min blind execution window). Overridable live via the non-staged
+`ofapiQueuedCommandTtlMs` registry row (env
+`OFAPI_QUEUED_COMMAND_TTL_MS`, floor 60s), read per sweep — no restart, no
+staged flag: the guard ships fail-closed deliberately. One-attempt law
+untouched: only never-attempted rows expire; anything past claim stays the
+one-attempt/indeterminate machinery's territory. Fail direction is closed —
+worst case a legitimately-queued-but-stale send cancels and the chatter
+retries; strictly better than an hours-late duplicate DM.

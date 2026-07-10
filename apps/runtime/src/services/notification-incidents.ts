@@ -1,11 +1,13 @@
 import {
   clearPageSyncAuthBlock,
+  getIncidentOpenedDeliveryState,
   getTelegramSettings,
   hasRecentTerminalProxyFailure,
   insertDeliveryAttempt,
   openNotificationIncidentWithRecoveryGuard,
   recordNotificationIncidentRecovery,
   resolveNotificationIncident,
+  type NotificationIncidentRow,
   type NotificationIncidentKind,
   type SyncStream,
 } from "@agency_hub_core/db";
@@ -15,6 +17,9 @@ import type { AppContext } from "../bootstrap.ts";
 import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 
 const STREAM_FAILURE_THRESHOLD = 3;
+// W3.3 (D3-N1): total incident_opened attempts allowed per incident before
+// the re-send loop gives up. Pacing comes free from the monitor cadence.
+const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 
 function incidentKey(
   input: {
@@ -47,6 +52,8 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 Auth failed";
     case "proxy_failed":
       return "🚨 Proxy failed";
+    case "proxy_missing":
+      return "🚨 Fansly proxy missing — sync refused (fail-closed)";
     case "stream_failed_threshold":
       return "🚨 Stream failed 3x in a row";
     case "ofapi_auth":
@@ -98,6 +105,8 @@ function resolveDetailForIncident(
       return "Auth failed";
     case "proxy_failed":
       return "Proxy failed";
+    case "proxy_missing":
+      return "Proxy assigned; Fansly egress restored";
     case "stream_failed_threshold":
       return `Stream ${input.stream ?? "unknown"} recovered`;
     case "ofapi_auth":
@@ -187,6 +196,16 @@ async function openIncidentAndNotify(
     });
 
     if (result.transition === "existing" || result.transition === "suppressed" || !result.incident) {
+      // W3.3 (D3-N1): "existing" used to return BEFORE the Telegram send, so
+      // one transient send failure at open time lost that incident's page
+      // permanently — every later monitor pass on the standing condition
+      // re-hit this branch. If the open notification never reached Telegram,
+      // re-send here (capped; delivery is at-least-once — a process death
+      // between the Telegram accept and the attempt insert can page twice,
+      // preferable to permanent pager loss).
+      if (result.transition === "existing" && result.incident && result.incident.status === "open") {
+        await retryUndeliveredOpenNotification(app, input, result.incident);
+      }
       return true;
     }
 
@@ -218,6 +237,53 @@ async function openIncidentAndNotify(
     }, "Notification incident open failed; continuing");
     return false;
   }
+}
+
+/**
+ * W3.3 (D3-N1): re-send an incident's open notification when no attempt has
+ * ever reached Telegram. totalCount === 0 means alerts were disabled when the
+ * incident opened (no attempt was recorded) — that stays silent on purpose;
+ * a later re-enable must not page for every incident opened while off.
+ */
+async function retryUndeliveredOpenNotification(
+  app: Pick<AppContext, "db" | "logger" | "config">,
+  input: {
+    kind: NotificationIncidentKind;
+    pageLabel: string | null;
+    platform: "fansly" | "onlyfans" | null;
+    stream?: SyncStream | null;
+    errorSummary?: string | null;
+  },
+  incident: NotificationIncidentRow,
+) {
+  const state = await getIncidentOpenedDeliveryState(app.db, incident.id);
+  if (
+    state.sentCount > 0
+    || state.totalCount === 0
+    || state.totalCount >= MAX_OPEN_DELIVERY_ATTEMPTS
+  ) {
+    return;
+  }
+
+  const settings = await getTelegramSettings(app.db, {
+    defaultReportHourUtc: app.config.telegramReportHourUtc,
+  });
+  if (!settings.enabled || !settings.syncFailureAlertsEnabled) {
+    return;
+  }
+
+  const delivery = await sendTelegramMessage(app, {
+    text: openMessageForIncident({
+      ...input,
+      errorSummary: input.errorSummary ?? null,
+    }),
+  });
+
+  await insertDeliveryAttempt(app.db, {
+    kind: "incident_opened",
+    notificationIncidentId: incident.id,
+    ...deliveryAttemptFields(delivery),
+  });
 }
 
 /**
@@ -359,7 +425,12 @@ export async function notifySyncChunkFailureIncident(
       return;
     }
 
-    if ((input.previousConsecutiveFailures + 1) !== STREAM_FAILURE_THRESHOLD) {
+    // W3.3 (A36): `<`, not exact equality — after a manual resolve mid-streak
+    // the count never equals the threshold again, so exact-match meant no
+    // re-alert ever. At-or-above keeps hitting the open path: dedupe handles
+    // the standing case, the `reopened` transition restores post-resolve
+    // alerting, and the D3-N1 retry covers a lost open send.
+    if ((input.previousConsecutiveFailures + 1) < STREAM_FAILURE_THRESHOLD) {
       return;
     }
 
@@ -397,10 +468,44 @@ export async function resolveSyncChunkRecoveryIncidents(
     kind: "proxy_failed",
     recoveredAt,
   });
+  // W3.1: a successful chunk implies the page context resolved, which the
+  // fail-closed guard only allows with a proxy present.
+  await resolveIncidentAndNotify(app, {
+    ...input,
+    kind: "proxy_missing",
+    recoveredAt,
+  });
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "stream_failed_threshold",
     recoveredAt,
+  });
+}
+
+/**
+ * W3.1 (B6+A35, decision #124): the fail-closed egress guard refused to
+ * resolve a Fansly page context because no proxy is stored. Opens
+ * immediately — a missing proxy is a config/erasure aftermath, not a
+ * transient. Deduped by kind+page until a proxy is assigned and the page
+ * verifies or syncs again.
+ */
+export async function notifyProxyMissingIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    platformAccountId: number;
+    pageLabel: string;
+    errorSummary: string;
+    occurredAt?: Date;
+  },
+) {
+  await openIncidentAndNotify(app, {
+    kind: "proxy_missing",
+    platformAccountId: input.platformAccountId,
+    pageLabel: input.pageLabel,
+    platform: "fansly",
+    errorCode: "proxy_missing",
+    errorSummary: input.errorSummary,
+    ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
   });
 }
 
@@ -487,7 +592,7 @@ export async function handleSuccessfulPageVerificationRecovery(
     platform: "fansly" | "onlyfans";
     recoveredAt?: Date;
   },
-) {
+): Promise<{ syncUnblocked: boolean }> {
   const recoveredAt = input.recoveredAt ?? new Date();
   try {
     await clearPageSyncAuthBlock(app.db, input.platformAccountId, {
@@ -495,10 +600,15 @@ export async function handleSuccessfulPageVerificationRecovery(
       now: recoveredAt,
     });
   } catch (error) {
+    // W3.3 (D4-N1): the streams are still blocked, so the incidents are
+    // still TRUE — resolving them here would report a recovery that did not
+    // happen while credential-update kept returning verified:true. The
+    // caller surfaces syncUnblocked:false instead.
     app.logger.warn({
       platformAccountId: input.platformAccountId,
       err: error,
-    }, "Failed to clear auth_blocked during page verification recovery");
+    }, "Failed to clear auth_blocked during page verification recovery; incidents stay open");
+    return { syncUnblocked: false };
   }
 
   await resolveIncidentAndNotify(app, {
@@ -511,4 +621,12 @@ export async function handleSuccessfulPageVerificationRecovery(
     kind: "proxy_failed",
     recoveredAt,
   });
+  // W3.1: a successful verification reached Fansly, which the fail-closed
+  // dispatcher only allows with a proxy present.
+  await resolveIncidentAndNotify(app, {
+    ...input,
+    kind: "proxy_missing",
+    recoveredAt,
+  });
+  return { syncUnblocked: true };
 }

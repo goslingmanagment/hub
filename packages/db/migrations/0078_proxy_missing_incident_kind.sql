@@ -1,0 +1,11 @@
+-- 0078: W3.1 (B6+A35) — new notification incident kind for the fail-closed
+-- Fansly egress guard. A Fansly page whose proxy assignment is gone (never
+-- set, or purged by erasure) used to fall back to the direct VPS IP silently;
+-- resolveStoredPageContext now refuses the resolution (decision #124) and
+-- opens a 'proxy_missing' incident so the refusal pages the owner instead of
+-- silently stopping sync.
+--
+-- ADD VALUE inside the runner's per-file transaction is safe on PG 16: the
+-- new value only can't be USED in the same transaction, and this file never
+-- uses it.
+ALTER TYPE notification_incident_kind ADD VALUE 'proxy_missing';

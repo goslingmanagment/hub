@@ -132,10 +132,13 @@ function isUniqueViolation(error: unknown): boolean {
 /**
  * Claims one queued row for its only vendor attempt. The partial unique lane
  * index is the final concurrency authority; a competing lane claim returns null.
+ * W3.2 (A4, decision #125): `minCreatedAt` is the claim-side TTL belt — a row
+ * older than the queued TTL is unclaimable even if it races the sweep's
+ * expiry, so a stale send can never fire.
  */
 export async function claimQueuedOfapiCommand(
   db: Database,
-  input: { commandId: string; now: Date },
+  input: { commandId: string; now: Date; minCreatedAt?: Date },
 ) {
   try {
     const [claimed] = await db
@@ -154,6 +157,7 @@ export async function claimQueuedOfapiCommand(
         eq(ofapiCommands.id, input.commandId),
         eq(ofapiCommands.state, "queued"),
         eq(ofapiCommands.attemptCount, 0),
+        ...(input.minCreatedAt ? [gte(ofapiCommands.createdAt, input.minCreatedAt)] : []),
       ))
       .returning();
     return claimed ?? null;
@@ -163,6 +167,33 @@ export async function claimQueuedOfapiCommand(
     }
     throw error;
   }
+}
+
+/**
+ * W3.2 (A4, decision #125): expire queued-only rows older than the TTL to
+ * `cancelled` — fail closed, reusing the state the desktop already renders
+ * and RETRYABLE_SOURCE_STATES already includes (an expired send stays
+ * chatter-retryable). Only attempt_count = 0 rows qualify: a row that ever
+ * started an attempt belongs to the one-attempt law, never to a TTL. Returns
+ * the full rows so the caller journals one observation per expiry.
+ */
+export async function expireStaleQueuedOfapiCommands(
+  db: Database,
+  input: { createdBefore: Date; now: Date },
+) {
+  return db
+    .update(ofapiCommands)
+    .set({
+      state: "cancelled",
+      lastErrorCode: "expired_queued_ttl",
+      updatedAt: input.now,
+    })
+    .where(and(
+      eq(ofapiCommands.state, "queued"),
+      eq(ofapiCommands.attemptCount, 0),
+      lt(ofapiCommands.createdAt, input.createdBefore),
+    ))
+    .returning();
 }
 
 export async function listQueuedOfapiCommandIds(

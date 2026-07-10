@@ -18,7 +18,8 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, NotFoundError } from "./errors.ts";
+import { BadRequestError, NotFoundError, ProxyMissingError } from "./errors.ts";
+import { notifyProxyMissingIncident } from "./notification-incidents.ts";
 
 function decryptStoredJson<T>(
   app: Pick<AppContext, "config">,
@@ -167,9 +168,20 @@ export function resolveStoredProxyEgressKey(
   return storedProxy.rateLimitScopeKey ?? buildProxyEgressKey({ url: storedProxy.url });
 }
 
-export async function resolvePageContext(app: AppContext, label: string) {
+export interface ResolvePageContextOptions {
+  /** W3.1 escape hatch for the proxy-ASSIGNMENT flow only (setPageProxy):
+   * resolving there must not fail closed on the very state it repairs. The
+   * caller must never egress with the stored (null) proxy. */
+  allowMissingProxy?: boolean;
+}
+
+export async function resolvePageContext(
+  app: AppContext,
+  label: string,
+  options?: ResolvePageContextOptions,
+) {
   const stored = await findPageByLabel(app.db, label);
-  return resolveStoredPageContext(app, stored, label);
+  return resolveStoredPageContext(app, stored, label, options);
 }
 
 export async function resolvePageContextById(app: AppContext, platformAccountId: number) {
@@ -177,10 +189,11 @@ export async function resolvePageContextById(app: AppContext, platformAccountId:
   return resolveStoredPageContext(app, stored, String(platformAccountId));
 }
 
-function resolveStoredPageContext(
+async function resolveStoredPageContext(
   app: AppContext,
   stored: Awaited<ReturnType<typeof findPageByLabel>> | Awaited<ReturnType<typeof findPageById>>,
   label: string,
+  options?: ResolvePageContextOptions,
 ) {
   if (!stored) {
     throw new NotFoundError(`Page "${label}" not found`);
@@ -240,6 +253,25 @@ function resolveStoredPageContext(
         `Page "${label}" has invalid stored platform credentials: ${
           error instanceof Error ? error.message : "Unknown error"
         }`,
+      );
+    }
+
+    if (!proxy && !options?.allowMissingProxy) {
+      // W3.1 (decision #124): Fansly egress fails CLOSED. Every real request
+      // path resolves through this context; without the page's proxy the
+      // request would ride the shared VPS IP (model-ban class risk — erasure
+      // purges egress_endpoints, so an erased-but-syncing page used to go
+      // direct silently). Refuse the resolution and page the owner; the
+      // incident open never throws, so the refusal itself cannot be lost to
+      // a Telegram hiccup.
+      await notifyProxyMissingIncident(app, {
+        platformAccountId: stored.page.id,
+        pageLabel: stored.page.label,
+        errorSummary: `Page "${label}" has no assigned proxy; Fansly egress refused (fail-closed)`,
+      });
+      throw new ProxyMissingError(
+        `Page "${label}" has no assigned proxy; Fansly egress is refused (fail-closed). ` +
+          "Assign a proxy on the Credentials tab to resume sync.",
       );
     }
 

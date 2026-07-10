@@ -74,6 +74,7 @@ describe("Fansly adapter query serialization", () => {
       session: {
         authorization: "token",
       },
+      proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0),
     };
 

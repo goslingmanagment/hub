@@ -32,6 +32,7 @@ describe("adapter hardening", () => {
       session: {
         authorization: "token",
       },
+      proxy: { url: "socks5://proxy.example:1080" },
       requestObserver,
     };
 

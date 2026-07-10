@@ -23,10 +23,11 @@ import {
   getSyncStreamsForPlatform,
   pausePageSyncForAuth,
 } from "@agency_hub_core/db";
-import { FanslyApiError } from "@agency_hub_core/fansly";
+import { FanslyApiError, FanslyProxyMissingError } from "@agency_hub_core/fansly";
 import type { JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { ProxyMissingError } from "../errors.ts";
 import {
   notifyAuthFailedIncident,
   notifySyncChunkFailureIncident,
@@ -185,6 +186,18 @@ function classifyTaskFailure(
   blockerCode?: string;
   blockerReason?: string;
 } {
+  // W3.1 (decision #124): a refused proxyless resolution is a config state,
+  // not a transient — park the stream (manual action: assign a proxy) instead
+  // of hot-retrying a guaranteed refusal every cycle.
+  if (error instanceof ProxyMissingError || error instanceof FanslyProxyMissingError) {
+    return {
+      mode: "blocked",
+      blockerType: "manual_action_required",
+      blockerCode: "proxy_missing",
+      blockerReason: failure.summary,
+    };
+  }
+
   if (error instanceof FanslyApiError) {
     if (error.status === 429) {
       return {

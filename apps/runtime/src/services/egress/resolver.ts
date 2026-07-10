@@ -7,7 +7,7 @@ import {
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { NotFoundError } from "../errors.ts";
+import { NotFoundError, ProxyMissingError } from "../errors.ts";
 import {
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
@@ -21,9 +21,11 @@ import { createEgressPacer } from "./pacer.ts";
 // RECORDED ADDRESS POLICY (owner-visible, per vendor):
 // - page scope       — the page's assigned proxy is the address identity
 //   (Fansly direct-to-platform MUST ride it; OFAPI account-scoped reads ride
-//   it so large bodies don't traverse the hub VPS direct route). A page
-//   without a proxy egresses direct under egress key "direct" — same
-//   semantics resolveStoredProxyEgressKey has always had.
+//   it so large bodies don't traverse the hub VPS direct route). A FANSLY
+//   page without a proxy is REFUSED (W3.1, decision #124 — this reverses the
+//   Stage-26 recorded direct fallback): a direct request would ride the
+//   shared VPS IP. OnlyFans pages without a proxy still egress direct under
+//   egress key "direct" (their platform traffic is vendor-side anyway).
 // - vendor "ofapi"   — vendor-DIRECT (dispatcher null, hub address). The
 //   OFAPI gateway terminates at onlyfansapi.com, not at the platform;
 //   address consistency to the vendor gateway is deliberately not
@@ -70,10 +72,18 @@ export async function resolveEgress(
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);
   const egressKey = resolveStoredProxyEgressKey(stored.proxy);
+  const vendor = PLATFORM_VENDORS[stored.page.platform];
+  if (!proxy && vendor === "fansly") {
+    // W3.1 (decision #124): fansly-vendor traffic is direct-to-platform, so
+    // a proxyless page would egress from the shared VPS IP — refused.
+    throw new ProxyMissingError(
+      `Page ${scope.pageId} has no assigned proxy; Fansly egress is refused (fail-closed)`,
+    );
+  }
   const dispatcher = proxy
     ? createProxyRequestDispatcher(proxy)
     : createRequestDispatcher();
-  const pacer = createEgressPacer(app, { vendor: PLATFORM_VENDORS[stored.page.platform] });
+  const pacer = createEgressPacer(app, { vendor });
 
   return {
     egressKey,
