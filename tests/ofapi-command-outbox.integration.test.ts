@@ -933,6 +933,124 @@ describe("OFAPI command outbox intake", () => {
     });
   });
 
+  it("sends-as-facts (Wave 2): a direct-confirmed text send lands in dm_message_archive as source=command with observation-key lineage", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    appContext.config.ofapiDmColdArchiveEnabled = true;
+    const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "555600555" });
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(commandBody({ payload: { text: "fact me" } }));
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await expect(executeOfapiCommand(appContext, commandId)).resolves.toMatchObject({
+      status: "confirmed",
+    });
+
+    const rows = await testDb!.pool.query(
+      `select source, source_event_type, source_idempotency_key, source_journal_id,
+              sender_role::text as sender_role, is_sent_by_me, text_plain,
+              platform_conversation_id, emitted_fingerprint,
+              material_fingerprint is not null as has_material
+       from dm_message_archive where platform_message_id = '555600555'`,
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]).toMatchObject({
+      source: "command",
+      source_event_type: "messages.sent",
+      source_idempotency_key: `cmd:${commandId}:confirmed`,
+      source_journal_id: null,
+      sender_role: "model",
+      is_sent_by_me: true,
+      text_plain: "fact me",
+      platform_conversation_id: CONVERSATION,
+      // emitted NULL: the corrections reconciler appends the first
+      // message.sent event through the cmd observation lineage.
+      emitted_fingerprint: null,
+      has_material: true,
+    });
+
+    // A later webhook for the same send is a fill/no-op, never a duplicate
+    // row (the candidate path collapses the race by construction).
+    const { upsertDmMessageArchive } = await import("@agency_hub_core/db");
+    const webhook = await upsertDmMessageArchive(appContext.db, {
+      platform: "onlyfans",
+      platformAccountId: rows.rows[0]!.platform_account_id ?? (await testDb!.pool.query(
+        `select platform_account_id from dm_message_archive where platform_message_id = '555600555'`,
+      )).rows[0]!.platform_account_id,
+      ofapiAccountId: ACCOUNT_ONE,
+      platformConversationId: CONVERSATION,
+      fanPlatformUserId: CONVERSATION,
+      platformMessageId: "555600555",
+      senderPlatformUserId: null,
+      senderRole: "model",
+      isSentByMe: true,
+      // A real late webhook arrives AFTER the confirm — platform createdAt
+      // and receipt time both later than the command's confirm instant.
+      messageCreatedAt: new Date(Date.now() + 2_000),
+      textPlain: "fact me",
+      isTip: false,
+      tipAmountMills: 0n,
+      source: "webhook",
+      sourceEventType: "messages.sent",
+      sourceIdempotencyKey: "wh-fact-555600555",
+      sourceJournalId: 77,
+      sourceReceivedAt: new Date(Date.now() + 3_000),
+      rawShapeVersion: "ofapi-message-v1",
+      mediaMetadata: [],
+      retentionPolicy: "default",
+      retainUntil: new Date("2126-01-01T00:00:00Z"),
+    });
+    // Webhook replaces command-grade createdAt under W → written, same row.
+    expect(webhook.status).toBe("written");
+    const after = await testDb!.pool.query(
+      "select count(*)::int as n from dm_message_archive where platform_message_id = '555600555'",
+    );
+    expect(after.rows[0].n).toBe(1);
+  });
+
+  it("raced seam (Wave 2 fix): a failure finalize losing to a webhook confirm records NO failure fact", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    let resolveWebhookDone: () => void;
+    const webhookDone = new Promise<void>((resolve) => { resolveWebhookDone = resolve; });
+    // The vendor call "fails" client-side AFTER the webhook has already
+    // confirmed the command (the send actually landed).
+    const sendTextMessage = vi.fn().mockImplementation(async () => {
+      await webhookDone;
+      throw new OfapiApiError("connection reset mid-response", null, null);
+    });
+    appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(commandBody({ payload: { text: "raced send" } }));
+    const commandId = (created.json() as { commandId: string }).commandId;
+    const attemptStartedAt = new Date("2026-06-19T21:00:00.000Z");
+    const execution = executeOfapiCommand(appContext, commandId, attemptStartedAt);
+    // Give the executor a beat to claim in_flight, then confirm via webhook.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const verified = await verifyOfapiCommandFromSentWebhook(appContext, {
+      id: 9101,
+      eventType: "messages.sent",
+      ofapiAccountId: ACCOUNT_ONE,
+      receivedAt: new Date("2026-06-19T21:00:01.000Z"),
+      payload: {
+        event: "messages.sent",
+        account_id: ACCOUNT_ONE,
+        payload: { id: 777800777, text: "<p>raced send</p>", toUser: { id: Number(CONVERSATION) } },
+      },
+    });
+    expect(verified).toMatchObject({ status: "confirmed", commandId });
+    resolveWebhookDone!();
+    const raced = await execution;
+    // Pre-fix this returned failure AND journaled a failed_* observation for
+    // a CONFIRMED command; now the executor reports the actual state.
+    expect(raced).toMatchObject({ status: "confirmed", commandId, raced: true });
+
+    expect((await getCommand(commandId)).json()).toMatchObject({ state: "confirmed" });
+    const observations = await testDb!.pool.query(
+      `select kind from observations where source = 'command_result' order by kind`,
+    );
+    // Exactly ONE fact: the webhook confirm. No failed_* observation exists.
+    expect(observations.rows).toEqual([{ kind: "command.confirmed" }]);
+  });
+
   it("marks a stale in-flight attempt indeterminate even while execution is disabled", async () => {
     const created = await createCommand(commandBody());
     const commandId = (created.json() as { commandId: string }).commandId;

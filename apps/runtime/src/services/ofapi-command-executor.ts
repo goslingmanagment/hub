@@ -9,12 +9,17 @@ import {
   listOfapiCommandVerificationCandidates,
   listQueuedOfapiCommandIds,
   markStaleInFlightOfapiCommandsIndeterminate,
+  reduceDmMessageCandidate,
   type OfapiCommandRow,
 } from "@agency_hub_core/db";
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import {
+  isOfapiDmColdArchiveEnabled,
+  resolveOfapiDmColdArchiveRetentionDays,
+} from "./ofapi-dm-archive.ts";
 import { OfapiApiError } from "./ofapi.ts";
 import {
   isOfapiAccountHealthEnabled,
@@ -173,6 +178,74 @@ export function sendOfapiCommandExecuteJob(
   );
 }
 
+/**
+ * Wave 2 sends-as-facts: a CONFIRMED text/media send becomes a message fact
+ * through the candidate path (source='command'). Direct-confirm path only —
+ * the webhook-confirm path's journal row already feeds the webhook candidate
+ * through the cold-archive lane. Fill-grade material (a later webhook
+ * upgrades it under W); source_idempotency_key is the command_result
+ * observation's key (real lineage — the corrections reconciler resolves the
+ * first message.sent event through it, dedupe-proof against a late webhook).
+ * Best-effort: a fact-write hiccup must never unsettle a settled command.
+ */
+async function recordConfirmedSendFact(
+  app: AppContext,
+  command: OfapiCommandRow,
+  platformMessageId: string,
+  confirmedAt: Date,
+) {
+  if (!isOfapiDmColdArchiveEnabled(app.config)) {
+    return;
+  }
+  if (command.kind !== "send_text_message_v1" && command.kind !== "send_media_message_v1") {
+    return;
+  }
+  try {
+    const payload = command.payload as { text?: unknown; price?: unknown };
+    const text = typeof payload.text === "string" ? normalizeDmMessageText(payload.text) : "";
+    const priceMills = command.kind === "send_media_message_v1"
+      && typeof payload.price === "number" && payload.price > 0
+      ? millsFromDollars(payload.price)
+      : null;
+    const retentionDays = resolveOfapiDmColdArchiveRetentionDays(app);
+    const result = await reduceDmMessageCandidate(app.db, {
+      source: "command",
+      platform: "onlyfans",
+      platformAccountId: command.pageId,
+      ofapiAccountId: command.ofapiAccountId,
+      platformMessageId,
+      platformConversationId: command.conversationId,
+      fanPlatformUserId: command.conversationId,
+      senderRole: "model",
+      isSentByMe: true,
+      // The direct response carries no platform timestamp — confirm time is
+      // the honest fill; a later webhook replaces it under W.
+      messageCreatedAt: confirmedAt,
+      textPlain: text,
+      priceMills,
+      isTip: false,
+      tipAmountMills: 0n,
+      // Media ids are known but their metadata is NOT — never fabricated;
+      // the webhook's media array fills/replaces under W.
+      sourceIdempotencyKey: `cmd:${command.id}:confirmed`,
+      sourceReceivedAt: confirmedAt,
+      retentionPolicy: "default",
+      retainUntil: new Date(confirmedAt.getTime() + retentionDays * 24 * 60 * 60 * 1000),
+    });
+    if (result.status === "deferred") {
+      app.logger.warn(
+        { commandId: command.id, platformMessageId },
+        "Confirmed-send fact deferred behind an erasure fence; webhook lane remains the fallback",
+      );
+    }
+  } catch (error) {
+    app.logger.error(
+      { err: error, commandId: command.id, platformMessageId },
+      "Confirmed-send fact write failed — command stays settled; webhook lane remains the fallback",
+    );
+  }
+}
+
 function canExecuteCommandKind(
   app: AppContext,
   command: Pick<OfapiCommandRow, "kind">,
@@ -293,7 +366,7 @@ export async function executeOfapiCommand(
     const stored = await findPageById(app.db, command.pageId);
     if (stored && ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {
       const failedAt = new Date();
-      await finalizeOfapiCommand(app.db, {
+      const gateFinalized = await finalizeOfapiCommand(app.db, {
         commandId: command.id,
         fromStates: ["in_flight"],
         state: "failed_terminal",
@@ -306,6 +379,11 @@ export async function executeOfapiCommand(
           observedAt: failedAt.toISOString(),
         },
       });
+      if (!gateFinalized) {
+        // Raced (Wave 2 seam discipline): the command settled elsewhere
+        // between claim and gate — never journal a failure fact for it.
+        return { status: "not_claimed" as const };
+      }
       await recordCommandResultObservation(app, {
         command,
         state: "failed_terminal",
@@ -369,7 +447,7 @@ export async function executeOfapiCommand(
     }
     const confirmedAt = new Date();
     verifierResult.confirmedAt = confirmedAt.toISOString();
-    await finalizeOfapiCommand(app.db, {
+    const finalized = await finalizeOfapiCommand(app.db, {
       commandId: command.id,
       fromStates: ["in_flight", "indeterminate"],
       state: "confirmed",
@@ -377,11 +455,26 @@ export async function executeOfapiCommand(
       platformMessageId,
       verifierResult,
     });
+    if (!finalized) {
+      // Raced seam (Wave 2 fix): the webhook verifier finalized first — it
+      // owns the fact and the observation; a second emission here would be
+      // a duplicate at best and a divergent fact at worst. The command IS
+      // confirmed either way.
+      app.logger.info(
+        { commandId: command.id, platformMessageId },
+        "OFAPI command direct-confirm lost the finalize race (webhook verifier won); skipping duplicate emission",
+      );
+      return { status: "confirmed" as const, commandId: command.id, raced: true };
+    }
     await recordCommandResultObservation(app, {
       command,
       state: "confirmed",
       outcome: { platformMessageId: platformMessageId ?? null, verifierResult },
     });
+    // Wave 2 sends-as-facts: the finalize WINNER emits the fact.
+    if (platformMessageId !== null) {
+      await recordConfirmedSendFact(app, command, platformMessageId, confirmedAt);
+    }
     app.logger.info(
       { commandId: command.id, pageId: command.pageId, commandKind: command.kind, platformMessageId },
       "OFAPI command confirmed by vendor response",
@@ -390,7 +483,7 @@ export async function executeOfapiCommand(
   } catch (error) {
     const failure = classifyOfapiCommandFailure(error);
     const finishedAt = new Date();
-    await finalizeOfapiCommand(app.db, {
+    const finalized = await finalizeOfapiCommand(app.db, {
       commandId: command.id,
       fromStates: ["in_flight"],
       state: failure.state,
@@ -403,6 +496,22 @@ export async function executeOfapiCommand(
         observedAt: finishedAt.toISOString(),
       },
     });
+    if (!finalized) {
+      // Raced seam: the send actually LANDED and the messages.sent webhook
+      // confirmed it while the response erred client-side. Recording a
+      // failed_* observation here would journal a FALSE fact about a
+      // confirmed command (the pre-fix behavior).
+      const current = await getOfapiCommandById(app.db, { commandId: command.id });
+      app.logger.warn(
+        { commandId: command.id, attemptedState: failure.state, actualState: current?.state },
+        "OFAPI command failure finalize lost the race; command already settled elsewhere — no failure fact recorded",
+      );
+      return {
+        status: (current?.state ?? "indeterminate") as "confirmed" | "failed_retryable" | "failed_terminal" | "indeterminate",
+        commandId: command.id,
+        raced: true,
+      };
+    }
     await recordCommandResultObservation(app, {
       command,
       state: failure.state,
