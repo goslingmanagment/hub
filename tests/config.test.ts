@@ -52,8 +52,8 @@ describe("config", () => {
     expect(config.syncSharedRateLimitEnabled).toBe(true);
     expect(config.syncPageExecutorConcurrency).toBe(4);
     expect(config.trustProxy).toBe(false);
-    expect(config.chatMuseAiGatewayDailyRequestLimit).toBe(200);
-    expect(config.chatMuseAiGatewayDailyMicroUsdLimit).toBe(5_000_000);
+    expect(config.chatMuseAiGatewayDailyRequestLimit).toBe(500);
+    expect(config.chatMuseAiGatewayDailyMicroUsdLimit).toBe(10_000_000);
     expect(config.chatMuseAiGatewayRequestMicroUsdLimit).toBe(5_000_000);
     expect(config.ofapiEventWorkerReplicas).toBe(1);
   });

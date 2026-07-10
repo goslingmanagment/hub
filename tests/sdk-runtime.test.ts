@@ -228,6 +228,23 @@ describe("AI gateway stream helper (protocol conformance on a fake stream)", () 
       code: "gateway_disabled",
     });
   });
+
+  it("surfaces a 429 quota denial as rate_limit with the ledger code, not validation", async () => {
+    const impl = (async () => new Response(
+      JSON.stringify({ error: "quota_denied", message: "ChatMuse AI gateway daily quota exceeded", statusCode: 429 }),
+      { status: 429 },
+    )) as unknown as typeof fetch;
+    const handle = streamAiGateway(
+      { baseUrl: "http://hub", fetch: impl },
+      { body: {} as never, onFrame: () => undefined },
+    );
+    await expect(handle.done).rejects.toMatchObject({
+      category: "rate_limit",
+      status: 429,
+      code: "quota_denied",
+      message: "ChatMuse AI gateway daily quota exceeded",
+    });
+  });
 });
 
 describe("sync events helper (protocol conformance on a fake stream)", () => {

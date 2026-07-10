@@ -26,8 +26,8 @@ import { estimateOpenrouterGatewayRequestCost } from "./ai-gateway-openrouter-pr
 import { aiGatewayProviderForModel } from "./ai-gateway-pricing.ts";
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey } from "./page-context.ts";
 
-export const DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT = 200;
-export const DEFAULT_AI_GATEWAY_DAILY_MICRO_USD_LIMIT = 5_000_000;
+export const DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT = 500;
+export const DEFAULT_AI_GATEWAY_DAILY_MICRO_USD_LIMIT = 10_000_000;
 export const DEFAULT_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT = 5_000_000;
 export const AI_GATEWAY_STALE_RESERVATION_MS = 30 * 60 * 1000;
 

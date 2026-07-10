@@ -182,8 +182,8 @@ const envSchema = z.object({
   // prod parity diff is exactly zero.
   ACCESS_GRANTS_READ_ENABLED: booleanSchema.default(false),
   CHATMUSE_AI_GATEWAY_ENABLED: booleanSchema.default(false),
-  CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(200),
-  CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
+  CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(500),
+  CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(10_000_000),
   CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
   CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS: z.string().default("{}"),
   OPENROUTER_API_KEY: z.string().optional(),

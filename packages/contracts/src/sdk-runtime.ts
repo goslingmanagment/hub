@@ -537,9 +537,11 @@ export function streamAiFeature(options: KernelClientOptions, input: {
         body = text;
       }
       const envelope = (body ?? {}) as { error?: unknown; message?: unknown };
+      // categoryForStatus, not an auth/server ternary: a 429 quota denial must
+      // reach clients as rate_limit (code "quota_denied"), not "validation".
       const error = new KernelApiError(
         typeof envelope.message === "string" ? envelope.message : `ai/features/${input.feature} failed with ${response.status}`,
-        response.status === 401 || response.status === 403 ? "auth" : response.status >= 500 ? "server" : "validation",
+        categoryForStatus(response.status),
         response.status,
         typeof envelope.error === "string" ? envelope.error : null,
         body,
@@ -603,7 +605,7 @@ export function streamAiGateway(options: KernelClientOptions, input: {
       const envelope = (body ?? {}) as { error?: unknown; message?: unknown };
       const error = new KernelApiError(
         typeof envelope.message === "string" ? envelope.message : `ai/gateway/stream failed with ${response.status}`,
-        response.status === 401 || response.status === 403 ? "auth" : response.status >= 500 ? "server" : "validation",
+        categoryForStatus(response.status),
         response.status,
         typeof envelope.error === "string" ? envelope.error : null,
         body,
