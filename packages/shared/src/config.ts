@@ -121,8 +121,6 @@ const envSchema = z.object({
   TELEGRAM_PROXY_PAGE_LABEL: optionalTrimmedStringSchema,
   OFAPI_BASE_URL: z.string().url().default("https://app.onlyfansapi.com/api"),
   OFAPI_API_KEY: optionalTrimmedStringSchema,
-  OFAPI_WEBHOOK_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(1000),
-  OFAPI_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   // Stage 1 retention stand-down: the webhook journal holds business facts; the
   // default matches the env so a missing env can never re-enable a short purge.
   OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
@@ -161,9 +159,10 @@ const envSchema = z.object({
   OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED: booleanSchema.default(false),
   // Stage 1 retention stand-down kill-switches (default OFF = no destruction).
-  // Stage 28: prune returned as a cache policy — default ON, still gated at
-  // runtime on the archive coverage query (kill-switch kept one release).
-  PAGE_DM_PRUNE_ENABLED: booleanSchema.default(true),
+  // Fast-reply freshness Wave 1: prune default OFF again — the hot table's
+  // purchased_at/deleted_at feed the AI union read; the runtime coverage gate
+  // stays for a deliberate re-enable.
+  PAGE_DM_PRUNE_ENABLED: booleanSchema.default(false),
   // Stage 1 containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
@@ -250,8 +249,6 @@ export interface AppConfig {
   telegramProxyPageLabel?: string | null;
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
-  ofapiWebhookRateLimitMax?: number;
-  ofapiWebhookRateLimitWindowSeconds?: number;
   ofapiEventRetentionDays?: number;
   ofapiEventWorkerReplicas?: number;
   ofapiDmProjectionEnabled?: boolean;
@@ -450,8 +447,6 @@ export function loadConfig(
     telegramProxyPageLabel: parsed.TELEGRAM_PROXY_PAGE_LABEL ?? null,
     ofapiBaseUrl: parsed.OFAPI_BASE_URL,
     ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
-    ofapiWebhookRateLimitMax: parsed.OFAPI_WEBHOOK_RATE_LIMIT_MAX,
-    ofapiWebhookRateLimitWindowSeconds: parsed.OFAPI_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
     ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,
     ofapiEventWorkerReplicas: parsed.OFAPI_EVENT_WORKER_REPLICAS,
     ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,

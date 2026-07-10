@@ -88,19 +88,14 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
       },
     );
 
+    // No route-level rate limit ON PURPOSE (fast-reply freshness PR1): a 429
+    // here drops signed deliveries BEFORE the journal — OFAPI stops retrying
+    // after 5 attempts and the fact is lost. receiveOfapiWebhook already
+    // implements the full target order (HMAC → validate → journal+observation
+    // in one tx → 200 incl. duplicates → best-effort boss.send with sweep
+    // recovery; journal-tx failure → 5xx retried by OFAPI).
     instance.post("/api/v1/ofapi/webhook", {
       schema: routeSchemas.ofapiWebhookReceive,
-      config: {
-        rateLimit: {
-          max: appContext.config.ofapiWebhookRateLimitMax ?? 1000,
-          timeWindow: (appContext.config.ofapiWebhookRateLimitWindowSeconds ?? 60) * 1000,
-          errorResponseBuilder: () => ({
-            error: "rate_limit_exceeded",
-            message: "Too many OFAPI webhook deliveries",
-            statusCode: 429,
-          }),
-        },
-      },
     }, async (request) => {
       return receiveOfapiWebhook(appContext, boss, {
         rawBody: Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0),

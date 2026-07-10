@@ -44,7 +44,6 @@ import {
   listHarvestTransactionResidue,
 } from "@agency_hub_core/db";
 import {
-  rebuildMessageArchiveProjection,
   runMessageArchiveBackfills,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
@@ -1272,18 +1271,27 @@ export function buildProgram() {
   program
     .command("projection:rebuild")
     .description("Stage 10: rebuild a projection from the domain-event ledger (truncate scope + replay)")
-    .argument("<projection>", "projection name (message_archive)")
+    .argument("<projection>", "projection name (fan_earnings_stats; message_archive rebuild is disabled)")
     .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
     .action(async (projection, options) => {
       if (projection !== "message_archive" && projection !== "fan_earnings_stats") {
         throw new Error(`Unknown projection: ${projection}`);
       }
+      if (projection === "message_archive") {
+        // Fast-reply freshness Wave 1 (PR1): the rebuild replays only the
+        // ATTACHED domain_events parent — detached/tiered partitions are
+        // invisible to it — and the reset destroys backfill_source rows that
+        // have no event-ledger counterpart. Running it would silently shrink
+        // the archive. Disabled until a partition-complete rebuild exists.
+        throw new Error(
+          "projection:rebuild message_archive is disabled: the replay only sees attached "
+            + "domain_events partitions and destroys backfill_source rows (fastreply-freshness PR1)",
+        );
+      }
       const app = await createAppContext();
       try {
         const scope = options.account !== undefined ? { accountId: options.account } : {};
-        const result = projection === "message_archive"
-          ? await rebuildMessageArchiveProjection(app, scope)
-          : await rebuildFanEarningsProjection(app, scope);
+        const result = await rebuildFanEarningsProjection(app, scope);
         console.log(JSON.stringify(result));
       } finally {
         await app.close();
