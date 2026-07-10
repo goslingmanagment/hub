@@ -125,14 +125,19 @@ describe("domain events append protocol (Stage 8)", () => {
     const result = await appendDomainEvents(testDb.db, 5, [
       event({ dedupKey: "txn:ancient", type: "transaction.posted", occurredAt: new Date("2023-05-01T00:00:00Z") }),
       event({ dedupKey: "txn:backfill-2024", type: "transaction.posted", occurredAt: new Date("2024-02-10T00:00:00Z") }),
+      // 0077 regression: corrected Fansly backscroll timestamps land in the
+      // yearly 2025 catch-all — before it, this insert failed 23514 on prod
+      // (tiering had detached every 0057 monthly in the 2024–2025 range).
+      event({ dedupKey: "msg:backscroll-2025", type: "message.sent", occurredAt: new Date("2025-12-19T18:40:24Z") }),
     ]);
-    expect(result.appended).toBe(2);
+    expect(result.appended).toBe(3);
 
     const placed = await testDb.pool.query<{ tableoid: string; dedup_key: string }>(
       "select tableoid::regclass::text as tableoid, dedup_key from domain_events where account_id = 5 order by account_seq",
     );
     expect(placed.rows[0]?.tableoid).toBe("domain_events_pre_2024");
-    expect(placed.rows[1]?.tableoid).toBe("domain_events_2024_02");
+    expect(placed.rows[1]?.tableoid).toBe("domain_events_2024");
+    expect(placed.rows[2]?.tableoid).toBe("domain_events_2025");
   });
 
   it("pre-creates partitions ahead and reports the lead", async (context) => {

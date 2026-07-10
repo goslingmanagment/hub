@@ -127,6 +127,31 @@ mass-appends redundant superseding events for the whole history (preamble 1).
    direct-confirm/webhook seam is fixed with it — a lost failure race no longer
    journals a false `failed_*` fact.
 
+### Post-deploy findings (2026-07-10) — READ BEFORE RESUMING THE SEQUENCE
+
+- **Step 3 was rolled back the same hour.** The reconciler lineage-skipped
+  100% of the drain: OFAPI webhook observations only exist since ~07-04/05
+  (the #49 flip) — rows journaled 06-19..07-04 never had one, and the
+  `ofapi_webhook_events` journal itself retains only ~14 days (the spec's
+  "36500d" assumption was wrong), so 8,549 of the 17,172 open rows have no
+  surviving journal row either. Surviving payloads are frozen in
+  `ofapi_webhook_events_w2_lineage_snapshot` (138,082 rows, 2026-07-10).
+  Two sweep defects on top: the sweep restarts from the signal head every
+  run (afterId never persists — head-block starves post-Wave-1 REST rows)
+  and it warns per row (500/min). Fix program = W2.1 (late observation
+  intake from the snapshot; owner decision on the 8,549 journal-less rows;
+  cursor + warn-once). Do NOT re-enable the flag before W2.1.
+- **The backfill expectation was miscalibrated**: prod reality is
+  emittedClosed 4,902 / drainOpen 17,172 — the ledger lane is younger than
+  the archive, not older.
+- **Migration 0077 is a hard precondition for step 4 (1970 repair)**:
+  tiering had detached every 2024–2025 domain_events monthly, so corrected
+  timestamps (both the Wave-2 canonicalizer fix and the campaign's
+  superseding events) had no landing partition — inserts failed 23514 and
+  the observations retried forever. 0077 re-opens the range with YEARLY
+  partitions (`domain_events_2024`/`_2025`) whose names the tiering regex
+  can never match again.
+
 ### Rollback
 
 - Reconciler: staged flag off + restart — sweeps stop; fingerprint columns are
