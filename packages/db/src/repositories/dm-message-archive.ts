@@ -1,7 +1,8 @@
-import { and, eq, lt, sql, type SQL } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { dmMessageArchive } from "../schema.ts";
+import { reduceDmMessageCandidate } from "./dm-message-candidate.ts";
 import {
   isDmArchiveScopeFenced,
   tryAcquireDmArchiveWriterFenceLock,
@@ -85,107 +86,12 @@ export interface DmMessageArchiveWriteResult {
   row?: typeof dmMessageArchive.$inferSelect;
 }
 
-// ── Amendment-3 merge fragments (fast-reply freshness PR4) ─────────────────
-// a = the existing dm_message_archive row; excluded = the incoming values.
-// P = tombstone-stub hydration predicate; W = webhook may replace
-// webhook-owned material (once REST advanced the row, webhook is fill-only
-// + monotone until Wave 2's platform-change ordering).
-
-const A = {
-  conversationId: sql.raw(`"dm_message_archive"."platform_conversation_id"`),
-  fanId: sql.raw(`"dm_message_archive"."fan_platform_user_id"`),
-  senderId: sql.raw(`"dm_message_archive"."sender_platform_user_id"`),
-  senderRole: sql.raw(`"dm_message_archive"."sender_role"`),
-  isSentByMe: sql.raw(`"dm_message_archive"."is_sent_by_me"`),
-  createdAt: sql.raw(`"dm_message_archive"."message_created_at"`),
-  text: sql.raw(`"dm_message_archive"."text_plain"`),
-  price: sql.raw(`"dm_message_archive"."price_mills"`),
-  isOpened: sql.raw(`"dm_message_archive"."is_opened"`),
-  isTip: sql.raw(`"dm_message_archive"."is_tip"`),
-  tipAmount: sql.raw(`"dm_message_archive"."tip_amount_mills"`),
-  replyTo: sql.raw(`"dm_message_archive"."in_reply_to_message_id"`),
-  media: sql.raw(`"dm_message_archive"."media_metadata"`),
-  deletedAt: sql.raw(`"dm_message_archive"."deleted_at"`),
-  restObsId: sql.raw(`"dm_message_archive"."rest_material_observation_id"`),
-  sourceReceivedAt: sql.raw(`"dm_message_archive"."source_received_at"`),
-};
-
-const X = {
-  conversationId: sql.raw(`excluded."platform_conversation_id"`),
-  fanId: sql.raw(`excluded."fan_platform_user_id"`),
-  senderId: sql.raw(`excluded."sender_platform_user_id"`),
-  senderRole: sql.raw(`excluded."sender_role"`),
-  isSentByMe: sql.raw(`excluded."is_sent_by_me"`),
-  createdAt: sql.raw(`excluded."message_created_at"`),
-  text: sql.raw(`excluded."text_plain"`),
-  price: sql.raw(`excluded."price_mills"`),
-  isOpened: sql.raw(`excluded."is_opened"`),
-  isTip: sql.raw(`excluded."is_tip"`),
-  tipAmount: sql.raw(`excluded."tip_amount_mills"`),
-  replyTo: sql.raw(`excluded."in_reply_to_message_id"`),
-  media: sql.raw(`excluded."media_metadata"`),
-  sourceReceivedAt: sql.raw(`excluded."source_received_at"`),
-};
-
-/** P := the existing row is a tombstone stub awaiting hydration. */
-const P_STUB: SQL = sql`(${A.createdAt} is null)`;
-
-/** W := P OR (REST has not advanced the row AND the incoming webhook fact is
- * not older than the last one applied). Clock-domain skew between Postgres
- * now() and Node new Date() in the >= is accepted and recorded (v8). */
-const W_WEBHOOK: SQL = sql`(${P_STUB} or (${A.restObsId} is null and ${X.sourceReceivedAt} >= ${A.sourceReceivedAt}))`;
-
-/** advance_opened: TRUE if either TRUE; else FALSE if either FALSE; else NULL. */
-function advanceOpened(oldValue: SQL, incoming: SQL): SQL {
-  return sql`(case
-    when ${oldValue} is true or ${incoming} is true then true
-    when ${oldValue} is false or ${incoming} is false then false
-    else null
-  end)`;
-}
-
-/** media_metadata compare normalization: object keys already compare
- * canonically in jsonb, but ARRAY ORDER is significant — sort items by id
- * on both sides before the distinctness check (v8 SQL nits). */
-function sortedMedia(expr: SQL): SQL {
-  return sql`(select coalesce(jsonb_agg(elem order by elem->>'id'), '[]'::jsonb)
-    from jsonb_array_elements(${expr}) elem)`;
-}
-
-/** The 13-field material tuple (M3) as next-value expressions vs current —
- * the change guard: no material change → NO row write (provenance and
- * updated_at live outside the tuple and only apply inside the guard). */
-function materialChangeGuard(next: {
-  senderId: SQL;
-  senderRole: SQL;
-  isSentByMe: SQL;
-  createdAt: SQL;
-  text: SQL;
-  price: SQL;
-  isOpened: SQL;
-  isTip: SQL;
-  tipAmount: SQL;
-  replyTo: SQL;
-  conversationId: SQL;
-  fanId: SQL;
-  media: SQL;
-}): SQL {
-  return sql`row(
-      ${next.senderId}, ${next.senderRole}, ${next.isSentByMe}, ${next.createdAt},
-      ${next.text}, ${next.price}, ${next.isOpened}, ${next.isTip},
-      ${next.tipAmount}, ${next.replyTo}, ${next.conversationId}, ${next.fanId},
-      ${sortedMedia(next.media)}
-    ) is distinct from row(
-      ${A.senderId}, ${A.senderRole}, ${A.isSentByMe}, ${A.createdAt},
-      ${A.text}, ${A.price}, ${A.isOpened}, ${A.isTip},
-      ${A.tipAmount}, ${A.replyTo}, ${A.conversationId}, ${A.fanId},
-      ${sortedMedia(A.media)}
-    )`;
-}
-
-function preferIncomingWhen(condition: SQL, incoming: SQL, oldValue: SQL): SQL {
-  return sql`(case when ${condition} then coalesce(${incoming}, ${oldValue}) else coalesce(${oldValue}, ${incoming}) end)`;
-}
+// ── Wave 2: candidates replace the Wave-1 SQL merges ───────────────────────
+// The amendment-3 per-field precedence lives in ONE place now — the candidate
+// reducer (dm-message-candidate.ts, "no competing writers", v7 amendment 8).
+// These writers keep their Wave-1 signatures and adapt inputs into
+// MessageFactCandidate; the erasure fence and all merge/no-op semantics are
+// enforced inside the reducer.
 
 function earliest(...dates: Array<Date | null | undefined>): Date {
   const known = dates.filter((value): value is Date => value != null);
@@ -193,144 +99,45 @@ function earliest(...dates: Array<Date | null | undefined>): Date {
 }
 
 /**
- * Webhook material writer, amendment-3 shapes (v8 C2: the main body's
- * "fill-absent dumb merge" is SUPERSEDED history, not a fallback). deleted_at
- * and rest_* are untouched; provenance (source_*) applies only inside the
- * material-change guard. Erasure-fenced and lock-deferred writes never touch
- * the table.
+ * Webhook material writer (Wave-2 candidate adapter). A late/retried webhook
+ * is fill-only once REST advanced the row (W predicate, inside the reducer);
+ * deleted_at and rest_* are never touched by webhook candidates.
  */
 export async function upsertDmMessageArchive(
   db: Database,
   input: UpsertDmMessageArchiveInput,
 ): Promise<DmMessageArchiveWriteResult> {
-  const now = new Date();
-  const mediaMetadata = input.mediaMetadata as unknown as Array<Record<string, unknown>>;
-
-  const next = {
-    conversationId: preferIncomingWhen(W_WEBHOOK, X.conversationId, A.conversationId),
-    fanId: preferIncomingWhen(W_WEBHOOK, X.fanId, A.fanId),
-    senderId: preferIncomingWhen(W_WEBHOOK, X.senderId, A.senderId),
-    createdAt: preferIncomingWhen(W_WEBHOOK, X.createdAt, A.createdAt),
-    replyTo: preferIncomingWhen(W_WEBHOOK, X.replyTo, A.replyTo),
-    price: preferIncomingWhen(W_WEBHOOK, X.price, A.price),
-    senderRole: sql`(case
-      when ${W_WEBHOOK} then ${X.senderRole}
-      when ${A.senderRole} = 'unknown' then ${X.senderRole}
-      else ${A.senderRole}
-    end)`,
-    isSentByMe: sql`(case when ${P_STUB} then ${X.isSentByMe} else ${A.isSentByMe} end)`,
-    text: sql`(case
-      when ${W_WEBHOOK} and ${X.text} <> '' then ${X.text}
-      when ${A.text} = '' and ${X.text} <> '' then ${X.text}
-      else ${A.text}
-    end)`,
-    media: sql`(case
-      when ${W_WEBHOOK} and ${X.media} <> '[]'::jsonb then ${X.media}
-      when ${A.media} = '[]'::jsonb and ${X.media} <> '[]'::jsonb then ${X.media}
-      else ${A.media}
-    end)`,
-    isOpened: advanceOpened(A.isOpened, X.isOpened),
-    isTip: sql`(${A.isTip} or ${X.isTip})`,
-    tipAmount: sql`greatest(${A.tipAmount}, ${X.tipAmount})`,
-  };
-
-  return db.transaction(async (tx) => {
-    const database = tx as unknown as Database;
-    if (!(await tryAcquireDmArchiveWriterFenceLock(database, input.platformAccountId))) {
-      return { status: "deferred" as const };
-    }
-    if (
-      await isDmArchiveScopeFenced(database, {
-        pageId: input.platformAccountId,
-        refs: [input.fanPlatformUserId, input.platformConversationId, input.senderPlatformUserId],
-        materialAt: earliest(input.messageCreatedAt, input.sourceReceivedAt),
-      })
-    ) {
-      return { status: "fenced" as const };
-    }
-
-    const [row] = await database
-      .insert(dmMessageArchive)
-      .values({
-        platform: input.platform,
-        platformAccountId: input.platformAccountId,
-        ofapiAccountId: input.ofapiAccountId,
-        platformConversationId: input.platformConversationId,
-        fanPlatformUserId: input.fanPlatformUserId,
-        platformMessageId: input.platformMessageId,
-        senderPlatformUserId: input.senderPlatformUserId ?? null,
-        senderRole: input.senderRole,
-        isSentByMe: input.isSentByMe,
-        messageCreatedAt: input.messageCreatedAt,
-        textPlain: input.textPlain,
-        priceMills: input.priceMills ?? null,
-        isOpened: input.isOpened ?? null,
-        isTip: input.isTip,
-        tipAmountMills: input.tipAmountMills,
-        inReplyToMessageId: input.inReplyToMessageId ?? null,
-        source: input.source,
-        sourceEventType: input.sourceEventType,
-        sourceIdempotencyKey: input.sourceIdempotencyKey,
-        sourceJournalId: input.sourceJournalId,
-        sourceFanoutSeq: input.sourceFanoutSeq ?? null,
-        sourceReceivedAt: input.sourceReceivedAt,
-        rawShapeVersion: input.rawShapeVersion,
-        mediaMetadata,
-        retentionPolicy: input.retentionPolicy,
-        retainUntil: input.retainUntil,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [
-          dmMessageArchive.platform,
-          dmMessageArchive.ofapiAccountId,
-          dmMessageArchive.platformMessageId,
-        ],
-        set: {
-          platformAccountId: input.platformAccountId,
-          platformConversationId: next.conversationId,
-          fanPlatformUserId: next.fanId,
-          senderPlatformUserId: next.senderId,
-          senderRole: next.senderRole,
-          isSentByMe: next.isSentByMe,
-          messageCreatedAt: next.createdAt,
-          textPlain: next.text,
-          priceMills: next.price,
-          isOpened: next.isOpened,
-          isTip: next.isTip,
-          tipAmountMills: next.tipAmount,
-          inReplyToMessageId: next.replyTo,
-          mediaMetadata: next.media,
-          // Provenance — applies only when the guard admits a material change.
-          source: input.source,
-          sourceEventType: input.sourceEventType,
-          sourceIdempotencyKey: input.sourceIdempotencyKey,
-          sourceJournalId: input.sourceJournalId,
-          sourceFanoutSeq: input.sourceFanoutSeq ?? null,
-          sourceReceivedAt: input.sourceReceivedAt,
-          rawShapeVersion: input.rawShapeVersion,
-          retentionPolicy: input.retentionPolicy,
-          retainUntil: input.retainUntil,
-          updatedAt: now,
-        },
-        setWhere: materialChangeGuard(next),
-      })
-      .returning();
-
-    // No-row RETURNING under the guard = a true material NO-OP, not a failure.
-    return row ? { status: "written" as const, row } : { status: "noop" as const };
+  const result = await reduceDmMessageCandidate(db, {
+    source: "webhook",
+    platform: input.platform,
+    platformAccountId: input.platformAccountId,
+    ofapiAccountId: input.ofapiAccountId,
+    platformMessageId: input.platformMessageId,
+    platformConversationId: input.platformConversationId,
+    fanPlatformUserId: input.fanPlatformUserId,
+    senderPlatformUserId: input.senderPlatformUserId ?? null,
+    senderRole: input.senderRole,
+    isSentByMe: input.isSentByMe,
+    messageCreatedAt: input.messageCreatedAt,
+    textPlain: input.textPlain,
+    priceMills: input.priceMills ?? null,
+    isOpened: input.isOpened ?? null,
+    isTip: input.isTip,
+    tipAmountMills: input.tipAmountMills,
+    inReplyToMessageId: input.inReplyToMessageId ?? null,
+    mediaMetadata: input.mediaMetadata,
+    sourceEventType: input.sourceEventType,
+    sourceIdempotencyKey: input.sourceIdempotencyKey,
+    sourceJournalId: input.sourceJournalId,
+    sourceFanoutSeq: input.sourceFanoutSeq ?? null,
+    sourceReceivedAt: input.sourceReceivedAt,
+    rawShapeVersion: input.rawShapeVersion,
+    retentionPolicy: input.retentionPolicy,
+    retainUntil: input.retainUntil,
   });
+  return { status: result.status, ...(result.row ? { row: result.row } : {}) };
 }
 
-/**
- * Tombstone writer. deleted_at is sticky (first deletion time wins) and a
- * repeat delivery is a guarded NO-OP: WHERE deleted_at IS NULL stops the
- * provenance rewrite AND the retain_until refresh on every repeat (intended
- * — v8 SQL nits). Delete webhooks carry no fan/conversation refs, so a
- * fan-scope erasure cannot fence a stub by ref: the post-erasure stub is the
- * DOCUMENTED CONTENTLESS SURVIVOR (message id only, no content) — the
- * waiver stands only WITH the page-scope fence below.
- */
 export async function tombstoneDmMessageArchive(
   db: Database,
   input: TombstoneDmMessageArchiveInput,
@@ -394,7 +201,7 @@ export async function tombstoneDmMessageArchive(
           retainUntil: input.retainUntil,
           updatedAt: now,
         },
-        setWhere: sql`${A.deletedAt} is null`,
+        setWhere: sql`${dmMessageArchive.deletedAt} is null`,
       })
       .returning();
 
@@ -425,126 +232,51 @@ export interface UpsertDmMessageArchiveFromReadthroughInput {
   /** The observation's received_at — becomes source_received_at on INSERT and
    * rest_material_observed_at (observation time, NOT platform edit time). */
   observationReceivedAt: Date;
+  /** The platform's own edit time (REST changedAt) — Wave-2 ordering input,
+   * stored as rest_platform_changed_at, never mixed with observation time. */
+  platformChangedAt?: Date | null;
   retentionPolicy: string;
   retainUntil: Date;
 }
 
 /**
- * REST readthrough writer (amendment 3 + v7.1 + M7). INSERT arm: a row the
- * webhook lane missed — source='rest_reconcile', source_journal_id NULL
- * (never fake journal ids), idempotency key "readthrough:<obsId>:<msgId>".
- * UPDATE arm: fill-absent + sentinel-aware (the exact tombstone-stub shape,
- * so REST completing a stub falls out free) + is_opened monotone advance;
- * NEVER touches source_* columns or deleted_at; rest_material_* provenance
- * applies only inside the material-change guard (a chat-open replaying 100
- * known messages rewrites 0 rows).
+ * REST readthrough writer (Wave-2 candidate adapter; M7 INSERT columns).
+ * Fill-absent + sentinel-aware + is_opened monotone via the reducer's
+ * precedence table; the UPDATE arm never touches source_* or deleted_at.
  */
 export async function upsertDmMessageArchiveFromReadthrough(
   db: Database,
   input: UpsertDmMessageArchiveFromReadthroughInput,
 ): Promise<DmMessageArchiveWriteResult> {
-  const now = new Date();
-  const mediaMetadata = input.mediaMetadata as unknown as Array<Record<string, unknown>>;
-
-  const next = {
-    // ids / createdAt / price / reply / scope refs: COALESCE(old, incoming).
-    conversationId: sql`coalesce(${A.conversationId}, ${X.conversationId})`,
-    fanId: sql`coalesce(${A.fanId}, ${X.fanId})`,
-    senderId: sql`coalesce(${A.senderId}, ${X.senderId})`,
-    createdAt: sql`coalesce(${A.createdAt}, ${X.createdAt})`,
-    price: sql`coalesce(${A.price}, ${X.price})`,
-    replyTo: sql`coalesce(${A.replyTo}, ${X.replyTo})`,
-    senderRole: sql`(case when ${A.senderRole} = 'unknown' then ${X.senderRole} else ${A.senderRole} end)`,
-    isSentByMe: sql`(case when ${P_STUB} then ${X.isSentByMe} else ${A.isSentByMe} end)`,
-    text: sql`(case when ${A.text} = '' and ${X.text} <> '' then ${X.text} else ${A.text} end)`,
-    media: sql`(case
-      when ${A.media} = '[]'::jsonb and ${X.media} <> '[]'::jsonb then ${X.media}
-      else ${A.media}
-    end)`,
-    isOpened: advanceOpened(A.isOpened, X.isOpened),
-    isTip: sql`(${A.isTip} or ${X.isTip})`,
-    tipAmount: sql`greatest(${A.tipAmount}, ${X.tipAmount})`,
-  };
-
-  return db.transaction(async (tx) => {
-    const database = tx as unknown as Database;
-    if (!(await tryAcquireDmArchiveWriterFenceLock(database, input.platformAccountId))) {
-      return { status: "deferred" as const };
-    }
-    if (
-      await isDmArchiveScopeFenced(database, {
-        pageId: input.platformAccountId,
-        refs: [input.fanPlatformUserId, input.platformConversationId, input.senderPlatformUserId],
-        materialAt: earliest(input.messageCreatedAt, input.observationReceivedAt),
-      })
-    ) {
-      return { status: "fenced" as const };
-    }
-
-    const [row] = await database
-      .insert(dmMessageArchive)
-      .values({
-        platform: input.platform,
-        platformAccountId: input.platformAccountId,
-        ofapiAccountId: input.ofapiAccountId,
-        platformConversationId: input.platformConversationId,
-        fanPlatformUserId: input.fanPlatformUserId,
-        platformMessageId: input.platformMessageId,
-        senderPlatformUserId: input.senderPlatformUserId ?? null,
-        senderRole: input.senderRole,
-        isSentByMe: input.isSentByMe,
-        messageCreatedAt: input.messageCreatedAt,
-        textPlain: input.textPlain,
-        priceMills: input.priceMills ?? null,
-        isOpened: input.isOpened ?? null,
-        isTip: input.isTip,
-        tipAmountMills: input.tipAmountMills,
-        inReplyToMessageId: input.inReplyToMessageId ?? null,
-        source: "rest_reconcile",
-        sourceEventType: input.isSentByMe ? "messages.sent" : "messages.received",
-        sourceIdempotencyKey: `readthrough:${input.observationId}:${input.platformMessageId}`,
-        sourceJournalId: null,
-        sourceFanoutSeq: null,
-        sourceReceivedAt: input.observationReceivedAt,
-        rawShapeVersion: "ofapi-message-v1",
-        mediaMetadata,
-        retentionPolicy: input.retentionPolicy,
-        retainUntil: input.retainUntil,
-        restMaterialObservationId: input.observationId,
-        restMaterialObservedAt: input.observationReceivedAt,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [
-          dmMessageArchive.platform,
-          dmMessageArchive.ofapiAccountId,
-          dmMessageArchive.platformMessageId,
-        ],
-        set: {
-          platformConversationId: next.conversationId,
-          fanPlatformUserId: next.fanId,
-          senderPlatformUserId: next.senderId,
-          senderRole: next.senderRole,
-          isSentByMe: next.isSentByMe,
-          messageCreatedAt: next.createdAt,
-          textPlain: next.text,
-          priceMills: next.price,
-          isOpened: next.isOpened,
-          isTip: next.isTip,
-          tipAmountMills: next.tipAmount,
-          inReplyToMessageId: next.replyTo,
-          mediaMetadata: next.media,
-          // REST provenance only — the UPDATE arm never touches source_*.
-          restMaterialObservationId: input.observationId,
-          restMaterialObservedAt: input.observationReceivedAt,
-          updatedAt: now,
-        },
-        setWhere: materialChangeGuard(next),
-      })
-      .returning();
-
-    return row ? { status: "written" as const, row } : { status: "noop" as const };
+  const result = await reduceDmMessageCandidate(db, {
+    source: "rest_reconcile",
+    platform: input.platform,
+    platformAccountId: input.platformAccountId,
+    ofapiAccountId: input.ofapiAccountId,
+    platformMessageId: input.platformMessageId,
+    platformConversationId: input.platformConversationId,
+    fanPlatformUserId: input.fanPlatformUserId,
+    senderPlatformUserId: input.senderPlatformUserId ?? null,
+    senderRole: input.senderRole,
+    isSentByMe: input.isSentByMe,
+    messageCreatedAt: input.messageCreatedAt,
+    textPlain: input.textPlain,
+    priceMills: input.priceMills ?? null,
+    isOpened: input.isOpened ?? null,
+    isTip: input.isTip,
+    tipAmountMills: input.tipAmountMills,
+    inReplyToMessageId: input.inReplyToMessageId ?? null,
+    mediaMetadata: input.mediaMetadata,
+    sourceEventType: input.isSentByMe ? "messages.sent" : "messages.received",
+    sourceIdempotencyKey: `readthrough:${input.observationId}:${input.platformMessageId}`,
+    sourceJournalId: null,
+    sourceReceivedAt: input.observationReceivedAt,
+    restMaterialObservationId: input.observationId,
+    restPlatformChangedAt: input.platformChangedAt ?? null,
+    retentionPolicy: input.retentionPolicy,
+    retainUntil: input.retainUntil,
   });
+  return { status: result.status, ...(result.row ? { row: result.row } : {}) };
 }
 
 export async function findDmMessageArchiveByPlatformMessageId(

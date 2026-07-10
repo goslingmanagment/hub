@@ -7,6 +7,7 @@ export * from "./repositories/catalog.ts";
 export * from "./repositories/config-settings.ts";
 export * from "./repositories/dm-analytics.ts";
 export * from "./repositories/dm-material-fingerprint.ts";
+export * from "./repositories/dm-message-candidate.ts";
 export * from "./repositories/dm-message-archive.ts";
 export * from "./repositories/fans.ts";
 export * from "./repositories/auth.ts";

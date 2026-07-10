@@ -695,10 +695,12 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(reconcile.drops).toBe(1);
     expect(reconcile.stamped).toBe(1);
     expect(await count(`dm_message_archive where platform_message_id = '40004'`)).toBe(0);
+    const { OFAPI_READTHROUGH_HEALTH_FLOOR } =
+      await import("../apps/runtime/src/services/health-floors.ts");
     const stampedObs = await one<{ parse_version: number }>(
       `select parse_version from observations where id = ${postObs.observationId}`,
     );
-    expect(stampedObs.parse_version).toBe(1);
+    expect(stampedObs.parse_version).toBe(OFAPI_READTHROUGH_HEALTH_FLOOR.version);
 
     // Tombstone-first-then-REST: the delete webhook carries no fan refs, so
     // the stub is UNREACHABLE by fan-scope predicates in both stores — the

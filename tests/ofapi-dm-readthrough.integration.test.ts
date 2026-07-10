@@ -194,12 +194,15 @@ describe("readthrough reconcile (fastreply-freshness PR4)", () => {
     const sent = await archiveRow("502");
     expect(sent).toMatchObject({ sender_role: "model", is_sent_by_me: true, source_event_type: "messages.sent" });
 
-    // PROJECT THEN STAMP: the observation sits at the floor version now.
+    // PROJECT THEN STAMP: the observation sits at the floor version now
+    // (the shared descriptor's version — bumped to 2 at the Wave-2 reducer
+    // cutover so v1-stamped rows replay through the real reducer).
+    const { OFAPI_READTHROUGH_HEALTH_FLOOR } = await import("../apps/runtime/src/services/health-floors.ts");
     const { rows } = await testDb.pool.query(
       "select parse_version from observations where id = $1",
       [seeded.observationId],
     );
-    expect(rows[0].parse_version).toBe(1);
+    expect(rows[0].parse_version).toBe(OFAPI_READTHROUGH_HEALTH_FLOOR.version);
 
     // Idempotent replay: a second sweep scans nothing (stamped).
     const again = await runOfapiDmReadthroughReconcile(appStub());
@@ -388,9 +391,10 @@ describe("readthrough reconcile (fastreply-freshness PR4)", () => {
       items: [{ id: 950, text: "settled", isSentByMe: false, createdAt: "2026-07-01T10:00:00+00:00" }],
       key: "rt-rolling",
     });
-    // The v2 worker already consumed this observation (future reducer).
+    // A FUTURE-version worker already consumed this observation (rolling
+    // deploy): one version above the current floor.
     await testDb.pool.query(
-      "update observations set parse_version = 2 where id = $1",
+      "update observations set parse_version = 3 where id = $1",
       [seeded.observationId],
     );
     const row = await upsertDmMessageArchive(testDb.db, webhookRowInput({
@@ -420,7 +424,7 @@ describe("readthrough reconcile (fastreply-freshness PR4)", () => {
       "select parse_version from observations where id = $1",
       [seeded.observationId],
     );
-    expect(rows[0].parse_version).toBe(2);
+    expect(rows[0].parse_version).toBe(3);
     expect((await archiveRow("950"))!.text_plain).toBe("reduced head");
   });
 

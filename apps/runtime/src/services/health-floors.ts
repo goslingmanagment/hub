@@ -41,10 +41,14 @@ export function healthFloorName(source: string, version: number): string {
 export const OFAPI_READTHROUGH_OBSERVATION_KIND = "ofapi_gateway_chat_messages_v2";
 
 export const OFAPI_READTHROUGH_HEALTH_FLOOR: HealthFloorDescriptor = {
-  name: healthFloorName("readthrough", 1),
+  name: healthFloorName("readthrough", 2),
   source: "readthrough",
   kinds: [OFAPI_READTHROUGH_OBSERVATION_KIND],
-  version: 1,
+  // v2 = the Wave-2 candidate-reducer cutover (v7 amendment 8): v1-stamped
+  // observations fall below the floor and replay through the real reducer
+  // (material no-ops for already-merged rows). Bumped in the SAME commit as
+  // the reducer, so the sampler and the runner cannot drift.
+  version: 2,
 };
 
 /** Registry-driven by construction: a version-0 family (nothing consumes its

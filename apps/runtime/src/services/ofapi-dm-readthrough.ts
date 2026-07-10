@@ -117,6 +117,8 @@ interface ParsedReadthroughMessage {
   tipAmountMills: bigint;
   inReplyToMessageId: string | null;
   mediaMetadata: DmMessageArchiveMediaItem[];
+  /** The platform's own edit time (changedAt) — Wave-2 ordering input. */
+  platformChangedAt: Date | null;
 }
 
 function parseTimestamp(value: unknown): Date | null {
@@ -165,6 +167,7 @@ export function parseReadthroughChatMessage(value: unknown): ParsedReadthroughMe
     mediaMetadata: media
       .map((entry) => normalizeArchiveMediaItem(entry))
       .filter((entry): entry is DmMessageArchiveMediaItem => entry !== null),
+    platformChangedAt: parseTimestamp(item.changedAt),
   };
 }
 
@@ -329,6 +332,7 @@ export async function projectReadthroughObservation(
       mediaMetadata: message.mediaMetadata,
       observationId: observation.id,
       observationReceivedAt: observation.receivedAt,
+      platformChangedAt: message.platformChangedAt,
       retentionPolicy: "default",
       retainUntil,
     });
