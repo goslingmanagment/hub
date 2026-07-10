@@ -1028,9 +1028,16 @@ export const dmMessageArchive = pgTable(
       "messages.received" | "messages.sent" | "messages.deleted"
     >().notNull(),
     sourceIdempotencyKey: text("source_idempotency_key").notNull(),
-    sourceJournalId: bigint("source_journal_id", { mode: "number" }).notNull(),
+    // NULL for REST-readthrough-inserted rows (PR4) — those have no webhook
+    // journal row; the webhook writers keep it required in their input types.
+    sourceJournalId: bigint("source_journal_id", { mode: "number" }),
     sourceFanoutSeq: bigint("source_fanout_seq", { mode: "number" }),
     sourceReceivedAt: timestamp("source_received_at", { withTimezone: true }).notNull(),
+    // PR4 REST provenance: the last readthrough observation that materially
+    // advanced this row. Observation time, NOT platform edit time (Wave 2's
+    // rest_platform_changed_at is a separate input). No FK to observations.
+    restMaterialObservationId: bigint("rest_material_observation_id", { mode: "number" }),
+    restMaterialObservedAt: timestamp("rest_material_observed_at", { withTimezone: true }),
     rawShapeVersion: text("raw_shape_version").default("ofapi-message-v1").notNull(),
     mediaMetadata: jsonb("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
     retentionPolicy: text("retention_policy").default("default").notNull(),

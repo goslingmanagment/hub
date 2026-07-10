@@ -11,7 +11,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { insertObservation } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { OFAPI_READTHROUGH_OBSERVATION_KIND } from "./health-floors.ts";
 import { notifyOfapiGlobalIncident } from "./notification-incidents.ts";
+import {
+  isOfapiDmReadthroughReconcileEnabled,
+  projectReadthroughObservation,
+  type ReadthroughReconcileRunResult,
+} from "./ofapi-dm-readthrough.ts";
 
 type TeeApp = Pick<AppContext, "db" | "logger" | "config">;
 
@@ -23,6 +29,18 @@ export interface ReadGatewayCaptureEntry {
   operation: string;
   status: number;
   body: unknown;
+  /** PR4: chat-messages readthroughs journal the WIDENED v2 kind — the
+   * envelope carries chat id, pagination cursors, and conversationRef (the
+   * ref-match erasure reaches unprojected v2 rows through it). Old-kind
+   * rows stay untouched forever (no chat id → never swept). Only set when
+   * the readthrough reconcile flag is ON, so the backlog floor measures a
+   * lane something actually consumes. */
+  chat?: {
+    ofapiAccountId: string;
+    chatId: string;
+    conversationRef: string;
+    cursors: Record<string, string>;
+  };
 }
 
 const DEFAULT_QUEUE_CAP = 500;
@@ -92,14 +110,23 @@ export function drainReadGatewayCaptureQueue(): Promise<void> {
         while (queue.length > 0) {
           const entry = queue.shift()!;
           try {
-            await insertObservation(entry.app.db, {
+            const payload = entry.chat
+              ? {
+                ofapiAccountId: entry.chat.ofapiAccountId,
+                chatId: entry.chat.chatId,
+                conversationRef: entry.chat.conversationRef,
+                cursors: entry.chat.cursors,
+                // The response body verbatim — the fact a credit was spent on.
+                body: entry.body ?? null,
+              }
+              : entry.body ?? null;
+            const inserted = await insertObservation(entry.app.db, {
               source: "readthrough",
               producer: "read-gateway",
               platform: "onlyfans",
               accountId: entry.pageId,
-              kind: entry.operation,
-              // The response body verbatim — the fact a credit was spent on.
-              payload: entry.body ?? null,
+              kind: entry.chat ? OFAPI_READTHROUGH_OBSERVATION_KIND : entry.operation,
+              payload,
               payloadHash: createHash("sha256")
                 .update(JSON.stringify(entry.body ?? null))
                 .digest(),
@@ -108,6 +135,35 @@ export function drainReadGatewayCaptureQueue(): Promise<void> {
               idempotencyKey: `rg:${randomUUID()}`,
               actorPrincipalId: entry.principalUserId,
             });
+            // PR4: immediate best-effort projection after capture — the
+            // minutely sweep is the retry. Stamps with the EXACT
+            // (id, received_at) pair insertObservation returned.
+            if (entry.chat && isOfapiDmReadthroughReconcileEnabled(entry.app.config)) {
+              try {
+                const totals = {
+                  scanned: 0, stamped: 0, upserts: 0, noops: 0, drops: 0,
+                  parseSkips: 0, deferred: 0, errored: 0,
+                  conflicts: { text: 0, price: 0, direction: 0, timestamp: 0, reply: 0, media: 0 },
+                } satisfies ReadthroughReconcileRunResult;
+                await projectReadthroughObservation(entry.app, {
+                  id: inserted.observationId,
+                  receivedAt: inserted.receivedAt,
+                  accountId: entry.pageId,
+                  payload,
+                }, totals);
+                if (totals.upserts > 0 || totals.drops > 0) {
+                  entry.app.logger.info(
+                    { observationId: inserted.observationId, ...totals },
+                    "Readthrough immediate reconcile applied",
+                  );
+                }
+              } catch (error) {
+                entry.app.logger.warn(
+                  { err: error, observationId: inserted.observationId },
+                  "Readthrough immediate reconcile failed; sweep will retry",
+                );
+              }
+            }
           } catch (error) {
             entry.app.logger.warn(
               { err: error, operation: entry.operation, pageId: entry.pageId },

@@ -100,7 +100,13 @@ describe("observations insert protocol", () => {
     const second = await insertObservation(testDb.db, webhookObservation("evt-dup", { event: "retry-delivery" }));
 
     expect(first.inserted).toBe(true);
-    expect(second).toEqual({ inserted: false, observationId: first.observationId });
+    // PR4: the duplicate path surfaces the EXISTING key's received_at so an
+    // immediate projector can stamp partition-exact — never new Date().
+    expect(second).toEqual({
+      inserted: false,
+      observationId: first.observationId,
+      receivedAt: first.receivedAt,
+    });
 
     const count = await testDb.pool.query<{ n: string }>("select count(*)::text as n from observations");
     expect(count.rows[0]!.n).toBe("1");

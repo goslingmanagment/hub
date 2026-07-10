@@ -507,6 +507,434 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`fan_earnings_stats`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("non-resurrection fence (PR4): swept journal rows and readthrough observations cannot recreate erased rows; new facts still flow", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { setPageOfapiAccountId, insertObservation, tombstoneDmMessageArchive } =
+      await import("@agency_hub_core/db");
+    const { sweepOfapiDmColdArchives, runOfapiDmColdArchiveForSettledRow } =
+      await import("../apps/runtime/src/services/ofapi-dm-archive.ts");
+    const { sweepOfapiDmProjections } =
+      await import("../apps/runtime/src/services/ofapi-dm-projection.ts");
+    const { runOfapiDmReadthroughReconcile } =
+      await import("../apps/runtime/src/services/ofapi-dm-readthrough.ts");
+    const { OFAPI_READTHROUGH_OBSERVATION_KIND } =
+      await import("../apps/runtime/src/services/health-floors.ts");
+
+    const FAN_F = "444000444";
+    const model = await createModel(testDb.db, { slug: "fence", name: "Fence" });
+    const page = model
+      ? await createOnlyFansPage(testDb.db, { modelId: model.id, label: "fence-of" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed fence page");
+    }
+    await setPageOfapiAccountId(testDb.db, { pageId: page.id, ofapiAccountId: "acct_fence" });
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('fence-owner', 'owner') returning id::text as id`,
+    );
+
+    const fenceStub = () => ({
+      db: testDb!.db,
+      config: {
+        lakeDir,
+        ofapiDmColdArchiveEnabled: true,
+        ofapiDmColdArchiveRetentionDays: 36500,
+        ofapiDmProjectionEnabled: true,
+        ofapiDmReadthroughReconcileEnabled: true,
+      },
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    }) as never;
+
+    const messagePayload = (id: number, createdAt: string) => ({
+      event: "messages.received",
+      account_id: "acct_fence",
+      payload: {
+        id,
+        text: `<p>msg ${id}</p>`,
+        createdAt,
+        fromUser: { id: Number(FAN_F), username: "fencefan", name: "Fence Fan" },
+      },
+    });
+    const seedJournalRow = async (input: {
+      key: string;
+      messageId: number;
+      createdAt: string;
+      archiveStatus: string;
+      projectionStatus: string;
+      archiveAttempts?: number;
+    }) => {
+      const row = await one<{ id: string }>(
+        `insert into ofapi_webhook_events
+           (idempotency_key, event_type, ofapi_account_id, platform_account_id, payload,
+            status, archive_status, archive_attempts, projection_status, received_at, processed_at)
+         values ($1, 'messages.received', 'acct_fence', $2, $3::jsonb,
+                 'processed', $4, $5, $6, now(), now())
+         returning id::text as id`,
+        [
+          input.key,
+          page.id,
+          JSON.stringify(messagePayload(input.messageId, input.createdAt)),
+          input.archiveStatus,
+          input.archiveAttempts ?? 0,
+          input.projectionStatus,
+        ],
+      );
+      return Number(row.id);
+    };
+
+    // Pre-erasure facts across all three journal states the spec names:
+    // settle-path 'none' (claimed pending then run), sweep-retryable
+    // 'failed', and 'already-claimed' pending — all retained (the journal is
+    // never an erasure target) and all replayable.
+    const settleId = await seedJournalRow({
+      key: "fence-settle", messageId: 40001, createdAt: "2026-07-01T10:00:00+00:00",
+      archiveStatus: "none", projectionStatus: "pending",
+    });
+    const failedId = await seedJournalRow({
+      key: "fence-failed", messageId: 40002, createdAt: "2026-07-01T10:01:00+00:00",
+      archiveStatus: "failed", projectionStatus: "failed", archiveAttempts: 1,
+    });
+    const claimedId = await seedJournalRow({
+      key: "fence-claimed", messageId: 40007, createdAt: "2026-07-01T10:05:00+00:00",
+      archiveStatus: "pending", projectionStatus: "pending",
+    });
+    // An unprojected v2 readthrough observation seeded BEFORE the erasure —
+    // the envelope's conversationRef is the load-bearing ref-match handle.
+    const preObs = await insertObservation(testDb.db, {
+      source: "readthrough",
+      producer: "read-gateway",
+      platform: "onlyfans",
+      accountId: page.id,
+      kind: OFAPI_READTHROUGH_OBSERVATION_KIND,
+      payload: {
+        ofapiAccountId: "acct_fence",
+        chatId: FAN_F,
+        conversationRef: FAN_F,
+        cursors: {},
+        body: { data: [{ id: 40003, text: "old rest", isSentByMe: false, createdAt: "2026-07-01T10:02:00+00:00" }] },
+      },
+      payloadHash: Buffer.alloc(32),
+      idempotencyKey: "fence-rt-pre",
+    });
+
+    const erased = await executeErasure(
+      appStub(),
+      { scopeType: "fan", platform: "onlyfans", fanRef: FAN_F },
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(erased.plan.resolvedPageIds).toContain(page.id);
+    // The pre-erasure v2 observation was reached via the payload ref-match.
+    expect(await count(`observations where id = ${preObs.observationId}`)).toBe(0);
+    // WAIVER (pre-existing, owner decision pending — not silently inherited):
+    // ofapi_webhook_events.payload is NOT an erasure target anywhere.
+    expect(await count(`ofapi_webhook_events where id in (${settleId}, ${failedId}, ${claimedId})`)).toBe(3);
+
+    // Settle path replays the 'none' row; the sweeps replay the rest —
+    // the fence terminates all of them.
+    await runOfapiDmColdArchiveForSettledRow(fenceStub(), {
+      id: settleId,
+      idempotencyKey: "fence-settle",
+      eventType: "messages.received",
+      ofapiAccountId: "acct_fence",
+      payload: messagePayload(40001, "2026-07-01T10:00:00+00:00") as never,
+      fanoutSeq: null,
+      receivedAt: new Date(),
+      archiveStatus: "none",
+      archiveAttempts: 0,
+    });
+    await sweepOfapiDmColdArchives(fenceStub());
+    await sweepOfapiDmProjections(fenceStub());
+    expect(await count(
+      `dm_message_archive where fan_platform_user_id = '${FAN_F}' or platform_conversation_id = '${FAN_F}'`,
+    )).toBe(0);
+    expect(await count(`page_dm_threads t where t.platform_conversation_id = '${FAN_F}'`)).toBe(0);
+    const settleRow = await one<{ archive_status: string; archive_error: string; projection_status: string; projection_error: string }>(
+      `select archive_status, archive_error, projection_status, projection_error
+       from ofapi_webhook_events where id = ${settleId}`,
+    );
+    expect(settleRow).toMatchObject({
+      archive_status: "skipped",
+      archive_error: "erasure_fenced",
+      projection_status: "skipped",
+      projection_error: "erasure_fenced",
+    });
+    const failedRow = await one<{ archive_status: string; archive_error: string }>(
+      `select archive_status, archive_error from ofapi_webhook_events where id = ${failedId}`,
+    );
+    expect(failedRow).toMatchObject({ archive_status: "skipped", archive_error: "erasure_fenced" });
+    // Already-claimed rows are another worker's business: untouched, and
+    // still nothing resurrected.
+    const claimedRow = await one<{ archive_status: string }>(
+      `select archive_status from ofapi_webhook_events where id = ${claimedId}`,
+    );
+    expect(claimedRow).toMatchObject({ archive_status: "pending" });
+
+    // A v2 readthrough RE-capture of pre-erasure material (post-erasure
+    // observation, old createdAt) drops fenced items but still stamps —
+    // the backlog floor never latches over rows that can never project.
+    const postObs = await insertObservation(testDb.db, {
+      source: "readthrough",
+      producer: "read-gateway",
+      platform: "onlyfans",
+      accountId: page.id,
+      kind: OFAPI_READTHROUGH_OBSERVATION_KIND,
+      payload: {
+        ofapiAccountId: "acct_fence",
+        chatId: FAN_F,
+        conversationRef: FAN_F,
+        cursors: {},
+        body: { data: [{ id: 40004, text: "old rest again", isSentByMe: false, createdAt: "2026-07-01T10:03:00+00:00" }] },
+      },
+      payloadHash: Buffer.alloc(32),
+      idempotencyKey: "fence-rt-post",
+    });
+    const reconcile = await runOfapiDmReadthroughReconcile(fenceStub());
+    expect(reconcile.drops).toBe(1);
+    expect(reconcile.stamped).toBe(1);
+    expect(await count(`dm_message_archive where platform_message_id = '40004'`)).toBe(0);
+    const stampedObs = await one<{ parse_version: number }>(
+      `select parse_version from observations where id = ${postObs.observationId}`,
+    );
+    expect(stampedObs.parse_version).toBe(1);
+
+    // Tombstone-first-then-REST: the delete webhook carries no fan refs, so
+    // the stub is UNREACHABLE by fan-scope predicates in both stores — the
+    // DOCUMENTED CONTENTLESS SURVIVOR (message id only, no content). The
+    // waiver stands only WITH the fence: the REST hydration that would give
+    // it content is blocked.
+    const stub = await tombstoneDmMessageArchive(testDb.db, {
+      platform: "onlyfans",
+      platformAccountId: page.id,
+      ofapiAccountId: "acct_fence",
+      platformMessageId: "40005",
+      deletedAt: new Date(),
+      source: "webhook",
+      sourceEventType: "messages.deleted",
+      sourceIdempotencyKey: "fence-del-40005",
+      sourceJournalId: settleId,
+      sourceReceivedAt: new Date(),
+      retentionPolicy: "default",
+      retainUntil: new Date("2126-01-01T00:00:00Z"),
+    });
+    expect(stub.status).toBe("written");
+    await insertObservation(testDb.db, {
+      source: "readthrough",
+      producer: "read-gateway",
+      platform: "onlyfans",
+      accountId: page.id,
+      kind: OFAPI_READTHROUGH_OBSERVATION_KIND,
+      payload: {
+        ofapiAccountId: "acct_fence",
+        chatId: FAN_F,
+        conversationRef: FAN_F,
+        cursors: {},
+        body: { data: [{ id: 40005, text: "content for the stub", isSentByMe: true, createdAt: "2026-07-01T10:04:00+00:00" }] },
+      },
+      payloadHash: Buffer.alloc(32),
+      idempotencyKey: "fence-rt-stub",
+    });
+    const hydrate = await runOfapiDmReadthroughReconcile(fenceStub());
+    expect(hydrate.drops).toBe(1);
+    const survivor = await one<{ text_plain: string; created_null: boolean; deleted: boolean }>(
+      `select text_plain, message_created_at is null as created_null, deleted_at is not null as deleted
+       from dm_message_archive where platform_message_id = '40005'`,
+    );
+    expect(survivor).toMatchObject({ text_plain: "", created_null: true, deleted: true });
+
+    // MATERIAL-TIME-BOUNDED (owner 2026-07-10): a NEW message from the
+    // still-active erased fan — createdAt AFTER the erasure — flows
+    // normally (DP-7 preserved; the fence cleans the PAST, not the fan).
+    const freshCreatedAt = new Date(Date.now() + 1000).toISOString();
+    await seedJournalRow({
+      key: "fence-fresh", messageId: 40006, createdAt: freshCreatedAt,
+      archiveStatus: "failed", projectionStatus: "none",
+    });
+    await sweepOfapiDmColdArchives(fenceStub());
+    expect(await count(`dm_message_archive where platform_message_id = '40006' and deleted_at is null`)).toBe(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("fence survives a page rename, and fan erasure reaches REST-only/command-only/webhook-then-REST rows", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const {
+      setPageOfapiAccountId,
+      upsertDmMessageArchive,
+      upsertDmMessageArchiveFromReadthrough,
+    } = await import("@agency_hub_core/db");
+    const { sweepOfapiDmColdArchives } =
+      await import("../apps/runtime/src/services/ofapi-dm-archive.ts");
+
+    const FAN_R = "555000555";
+    const model = await createModel(testDb.db, { slug: "fence2", name: "Fence 2" });
+    const page = model
+      ? await createOnlyFansPage(testDb.db, { modelId: model.id, label: "fence-of-2" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed fence page 2");
+    }
+    await setPageOfapiAccountId(testDb.db, { pageId: page.id, ofapiAccountId: "acct_fence2" });
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('fence-owner-2', 'owner') returning id::text as id`,
+    );
+    const fenceStub = () => ({
+      db: testDb!.db,
+      config: {
+        lakeDir,
+        ofapiDmColdArchiveEnabled: true,
+        ofapiDmColdArchiveRetentionDays: 36500,
+      },
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    }) as never;
+
+    // Rows sourced three ways: REST-only (source_journal_id NULL, refs
+    // filled by the upsert — that fill is what makes fan-scope erasure
+    // reach them), command-only, and webhook-then-REST.
+    const restOnly = await upsertDmMessageArchiveFromReadthrough(testDb.db, {
+      platform: "onlyfans",
+      platformAccountId: page.id,
+      ofapiAccountId: "acct_fence2",
+      platformConversationId: FAN_R,
+      fanPlatformUserId: FAN_R,
+      platformMessageId: "50001",
+      senderPlatformUserId: FAN_R,
+      senderRole: "fan",
+      isSentByMe: false,
+      messageCreatedAt: new Date("2026-07-01T09:00:00Z"),
+      textPlain: "rest only",
+      isTip: false,
+      tipAmountMills: 0n,
+      mediaMetadata: [],
+      observationId: 424242,
+      observationReceivedAt: new Date("2026-07-01T09:00:01Z"),
+      retentionPolicy: "default",
+      retainUntil: new Date("2126-01-01T00:00:00Z"),
+    });
+    expect(restOnly.status).toBe("written");
+    const commandOnly = await upsertDmMessageArchive(testDb.db, {
+      platform: "onlyfans",
+      platformAccountId: page.id,
+      ofapiAccountId: "acct_fence2",
+      platformConversationId: FAN_R,
+      fanPlatformUserId: FAN_R,
+      platformMessageId: "50002",
+      senderPlatformUserId: null,
+      senderRole: "model",
+      isSentByMe: true,
+      messageCreatedAt: new Date("2026-07-01T09:01:00Z"),
+      textPlain: "command send",
+      isTip: false,
+      tipAmountMills: 0n,
+      source: "command",
+      sourceEventType: "messages.sent",
+      sourceIdempotencyKey: "fence2-cmd-50002",
+      sourceJournalId: 1,
+      sourceReceivedAt: new Date("2026-07-01T09:01:01Z"),
+      rawShapeVersion: "ofapi-message-v1",
+      mediaMetadata: [],
+      retentionPolicy: "default",
+      retainUntil: new Date("2126-01-01T00:00:00Z"),
+    });
+    expect(commandOnly.status).toBe("written");
+    const webhookRow = await upsertDmMessageArchive(testDb.db, {
+      platform: "onlyfans",
+      platformAccountId: page.id,
+      ofapiAccountId: "acct_fence2",
+      platformConversationId: FAN_R,
+      fanPlatformUserId: FAN_R,
+      platformMessageId: "50003",
+      senderPlatformUserId: FAN_R,
+      senderRole: "fan",
+      isSentByMe: false,
+      messageCreatedAt: new Date("2026-07-01T09:02:00Z"),
+      textPlain: "webhook then rest",
+      isTip: false,
+      tipAmountMills: 0n,
+      source: "webhook",
+      sourceEventType: "messages.received",
+      sourceIdempotencyKey: "fence2-wh-50003",
+      sourceJournalId: 1,
+      sourceReceivedAt: new Date("2026-07-01T09:02:01Z"),
+      rawShapeVersion: "ofapi-message-v1",
+      mediaMetadata: [],
+      retentionPolicy: "default",
+      retainUntil: new Date("2126-01-01T00:00:00Z"),
+    });
+    expect(webhookRow.status).toBe("written");
+    const restAdvance = await upsertDmMessageArchiveFromReadthrough(testDb.db, {
+      platform: "onlyfans",
+      platformAccountId: page.id,
+      ofapiAccountId: "acct_fence2",
+      platformConversationId: FAN_R,
+      fanPlatformUserId: FAN_R,
+      platformMessageId: "50003",
+      senderPlatformUserId: FAN_R,
+      senderRole: "fan",
+      isSentByMe: false,
+      messageCreatedAt: new Date("2026-07-01T09:02:00Z"),
+      textPlain: "webhook then rest",
+      priceMills: 2000n,
+      isTip: false,
+      tipAmountMills: 0n,
+      mediaMetadata: [],
+      observationId: 424243,
+      observationReceivedAt: new Date("2026-07-01T09:02:30Z"),
+      retentionPolicy: "default",
+      retainUntil: new Date("2126-01-01T00:00:00Z"),
+    });
+    expect(restAdvance.status).toBe("written");
+
+    // Fan-scope erasure reaches all three sourcing shapes.
+    await executeErasure(
+      appStub(),
+      { scopeType: "fan", platform: "onlyfans", fanRef: FAN_R },
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(await count(
+      `dm_message_archive where fan_platform_user_id = '${FAN_R}' or platform_conversation_id = '${FAN_R}'`,
+    )).toBe(0);
+
+    // PAGE-scope erasure, then a rename: scope_ref is label-based and now
+    // stale, but the fence matches the RESOLVED page ids in the plan.
+    await one<{ id: string }>(
+      `insert into ofapi_webhook_events
+         (idempotency_key, event_type, ofapi_account_id, platform_account_id, payload,
+          status, archive_status, projection_status, received_at, processed_at)
+       values ('fence2-replay', 'messages.received', 'acct_fence2', $1, $2::jsonb,
+               'processed', 'failed', 'none', now(), now())
+       returning id::text as id`,
+      [
+        page.id,
+        JSON.stringify({
+          event: "messages.received",
+          account_id: "acct_fence2",
+          payload: {
+            id: 50009,
+            text: "<p>pre-erasure fact</p>",
+            createdAt: "2026-07-01T09:03:00+00:00",
+            fromUser: { id: Number(FAN_R) },
+          },
+        }),
+      ],
+    );
+    await executeErasure(
+      appStub(),
+      { scopeType: "page", pageLabel: "fence-of-2" },
+      { initiatedBy: Number(operator.id) },
+    );
+    await testDb.pool.query("update pages set label = 'fence-renamed' where id = $1", [page.id]);
+    await sweepOfapiDmColdArchives(fenceStub());
+    expect(await count(`dm_message_archive where platform_message_id = '50009'`)).toBe(0);
+    const replayed = await one<{ archive_status: string; archive_error: string }>(
+      `select archive_status, archive_error from ofapi_webhook_events where idempotency_key = 'fence2-replay'`,
+    );
+    expect(replayed).toMatchObject({ archive_status: "skipped", archive_error: "erasure_fenced" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("page-scope erasure purges the page's secret/config rows (decision #118)", async (context) => {
     if (!testDb) {
       context.skip();

@@ -119,7 +119,7 @@ function mediaDimension(item: Record<string, unknown>, key: "width" | "height") 
   return null;
 }
 
-function normalizeArchiveMediaItem(value: unknown): DmMessageArchiveMediaItem | null {
+export function normalizeArchiveMediaItem(value: unknown): DmMessageArchiveMediaItem | null {
   const media = asRecord(value);
   const id = idToString(media?.id);
   if (!media || !id) {
@@ -210,7 +210,7 @@ export async function archiveOfapiDmEvent(
     if (!messageId) {
       return { status: "skipped" as const, reason: "delete_without_message_id" };
     }
-    await tombstoneDmMessageArchive(app.db, {
+    const tombstoned = await tombstoneDmMessageArchive(app.db, {
       platform: "onlyfans",
       platformAccountId: page.id,
       ofapiAccountId: row.ofapiAccountId,
@@ -225,6 +225,12 @@ export async function archiveOfapiDmEvent(
       retentionPolicy: "default",
       retainUntil,
     });
+    if (tombstoned.status === "deferred") {
+      return { status: "deferred" as const };
+    }
+    if (tombstoned.status === "fenced") {
+      return { status: "skipped" as const, reason: "erasure_fenced" };
+    }
     return { status: "archived" as const };
   }
 
@@ -233,7 +239,7 @@ export async function archiveOfapiDmEvent(
     return { status: "skipped" as const, reason: "message_missing_required_fields" };
   }
 
-  await upsertDmMessageArchive(app.db, {
+  const written = await upsertDmMessageArchive(app.db, {
     platform: "onlyfans",
     platformAccountId: page.id,
     ofapiAccountId: row.ofapiAccountId,
@@ -261,6 +267,12 @@ export async function archiveOfapiDmEvent(
     retentionPolicy: "default",
     retainUntil,
   });
+  if (written.status === "deferred") {
+    return { status: "deferred" as const };
+  }
+  if (written.status === "fenced") {
+    return { status: "skipped" as const, reason: "erasure_fenced" };
+  }
 
   return { status: "archived" as const };
 }
@@ -304,6 +316,14 @@ export async function runOfapiDmColdArchiveForSettledRow(
       app.logger.info(
         { eventId: row.id, eventType: row.eventType },
         "OFAPI DM cold archive stored webhook event",
+      );
+    } else if (outcome.status === "deferred") {
+      // An erasure holds the fence lock (PR4): leave the row PENDING (the
+      // claim above set it) — the minutely sweep retries after the erasure
+      // commits, with no attempt burned. NO memoization by design.
+      app.logger.info(
+        { eventId: row.id, eventType: row.eventType },
+        "OFAPI DM cold archive deferred behind an erasure fence lock; sweep retries",
       );
     } else {
       await markOfapiWebhookEventArchive(app.db, {

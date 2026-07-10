@@ -3259,3 +3259,46 @@ CG-HUB-03 was already taken by the legacy family); and the desktop dock
 pre-warns from the meta quota frame (amber strip at ≤25 requests left,
 `quotaRemainingRequests` on operation:complete). Deployed/released separately
 per gate.
+
+## Fast-Reply Freshness Wave 1 — Erasure Fence Semantics + Readthrough Reconcile (2026-07-10)
+
+**Decision #121 (2026-07-10, owner):** the PR4 erasure non-resurrection fence
+is **MATERIAL-TIME-BOUNDED**, not permanent. Retained `ofapi_webhook_events`
+payloads and REST readthrough observations can recreate erased
+`dm_message_archive` / `page_dm_messages` rows when a sweep replays them
+after an erasure; every archive material writer (webhook, REST readthrough,
+tombstone) and the page_dm projection writer now checks the executed-erasure
+tombstones before writing, serialized against a running erasure through a
+dedicated two-int advisory-lock namespace (writers take a shared try-lock
+and DEFER on miss; erasure takes exclusive locks per resolved page id,
+sorted, at the top of its delete transaction). The fence blocks only
+material with `source_received_at` / `message_created_at` **at or before
+the erasure's `started_at`** — erasure cleans the PAST; a still-active
+erased fan's new messages are captured normally (DP-7 preserved). PERMANENT
+fencing (erasure as a de-facto fan block) was considered and NOT chosen.
+The predicate matches `dry_run = false` regardless of `completed_at`
+(mid-flight-died runs stay fenced fail-closed); page/model scopes match by
+the RESOLVED page ids stored in the plan jsonb (`plan.resolvedPageIds` —
+`pages.label` is mutable, so a rename must not disarm the fence); fan
+scopes match by immutable fan ref. Fence hits stamp the journal row
+`skipped` / `erasure_fenced`; fenced readthrough items are dropped and the
+observation still stamps (the backlog gauge must not latch over rows that
+can never project). Recorded waivers: (1) the null-ref tombstone stub is
+the DOCUMENTED CONTENTLESS SURVIVOR — delete webhooks carry no fan refs, so
+a fan-scope fence cannot reach the stub; it survives with message id only
+and the fence blocks any later hydration; (2) `ofapi_webhook_events.payload`
+is not an erasure target anywhere (pre-existing; owner decision pending);
+(3) the subscription/presence/spend projections replay the same retained
+journal but are OUT of the Wave-1 fence scope (aggregate/status rows, not
+fan transcripts) — owner-acknowledged.
+
+*Same wave, an implementation choice worth recording:* the widened
+readthrough capture (`ofapi_gateway_chat_messages_v2`, envelope with
+chatId/conversationRef/cursors) is emitted only while
+`OFAPI_DM_READTHROUGH_RECONCILE_ENABLED` is on; with the flag off the
+capture keeps today's v1 shape. Capture-first is preserved either way (both
+kinds journal the response verbatim); the gate keeps the
+`obs_backlog_readthrough_v1` health floor honest — v2 rows only accumulate
+while something consumes them, so the golden-signal latch never fires over
+a lane that is deliberately dark, and a rollback stops v2 accumulation
+instead of latching a permanent incident.

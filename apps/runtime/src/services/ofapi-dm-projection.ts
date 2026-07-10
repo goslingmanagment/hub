@@ -11,6 +11,8 @@ import {
   findPageByOfapiAccountId,
   deletePageDmMessageByPlatformMessageId,
   getExistingPageDmMessageIds,
+  isDmArchiveScopeFenced,
+  tryAcquireDmArchiveWriterFenceLock,
   listOfapiWebhookEventsForDmProjection,
   listPageDmConversationsByPlatformConversationIds,
   markOfapiWebhookEventProjection,
@@ -65,7 +67,10 @@ export interface OfapiDmProjectableRow {
 
 export type OfapiDmProjectionOutcome =
   | { status: "projected" }
-  | { status: "skipped"; reason: string };
+  | { status: "skipped"; reason: string }
+  /** PR4: an erasure holds the fence lock — the caller leaves the journal
+   * row pending (no attempt burned); the sweep retries post-erasure. */
+  | { status: "deferred" };
 
 export function isOfapiDmProjectionEnabled(
   config?: Pick<AppContext["config"], "ofapiDmProjectionEnabled">,
@@ -199,9 +204,28 @@ async function projectDmMessageEvent(
   app: AppContext,
   page: { id: number },
   message: OfapiProjectedDmMessage,
+  sourceReceivedAt: Date,
 ): Promise<OfapiDmProjectionOutcome> {
   return app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
+    // PR4 non-resurrection fence: this writer recreates fans +
+    // page_dm_threads + page_dm_messages — the CHATTER-VISIBLE store and the
+    // union read's tombstone/PPV arms — from the retained journal, so it
+    // must honor executed erasures exactly like the cold-archive writers
+    // (same helper, same lock; material-time-bounded, owner 2026-07-10).
+    if (!(await tryAcquireDmArchiveWriterFenceLock(db, page.id))) {
+      return { status: "deferred" } satisfies OfapiDmProjectionOutcome;
+    }
+    const materialAt = message.createdAt < sourceReceivedAt ? message.createdAt : sourceReceivedAt;
+    if (
+      await isDmArchiveScopeFenced(db, {
+        pageId: page.id,
+        refs: [message.fanId, message.senderPlatformUserId],
+        materialAt,
+      })
+    ) {
+      return { status: "skipped", reason: "erasure_fenced" } satisfies OfapiDmProjectionOutcome;
+    }
     // B11: lock the conversation row for the whole read-compute-upsert cycle
     // so the REST reconcile's full-row upsert and this projection serialize
     // instead of racing (lost update on the head/unread fields). Lock order —
@@ -447,7 +471,7 @@ export async function projectOfapiDmEvent(
           reason: "Message payload is missing ids, fan identity, or a valid createdAt",
         };
       }
-      return projectDmMessageEvent(app, page, message);
+      return projectDmMessageEvent(app, page, message, row.receivedAt);
     }
     case "messages.deleted":
       return projectDmMessageDeleted(app, page, payload);
@@ -482,6 +506,15 @@ export async function runOfapiDmProjectionForSettledRow(
 
   try {
     const outcome = await projectOfapiDmEvent(app, row);
+    if (outcome.status === "deferred") {
+      // Erasure fence lock held: leave the row pending/failed unchanged —
+      // the sweep retries after the erasure commits, no attempt burned.
+      app.logger.info(
+        { eventId: row.id, eventType: row.eventType },
+        "OFAPI DM projection deferred behind an erasure fence lock; sweep retries",
+      );
+      return;
+    }
     await markOfapiWebhookEventProjection(app.db, {
       id: row.id,
       status: outcome.status,

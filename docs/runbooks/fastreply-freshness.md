@@ -3,6 +3,10 @@
 Build spec: `docs/fastreply-freshness-build-spec.md` (frozen). This runbook collects
 the operational notes each Wave-1 PR ships; deploy preconditions live at the end.
 
+Desktop: NOTHING to build (0.1.33 is live) — at deploy, only verify the feed serves
+0.1.33. **0.1.29 is manual-reinstall-only**: the updater has no allowDowngrade
+(verified), so a machine rolled back to 0.1.29 can only move forward by reinstalling.
+
 ## PR1 — capture path
 
 - **Cold-archive upsert failure is self-healing, no alarm.** If the post-settle
@@ -41,3 +45,36 @@ the operational notes each Wave-1 PR ships; deploy preconditions live at the end
   for MINUTES (one smoke pass: several live generations, manifests show union additions
   and zero errors) → serve immediately, same day. The off→shadow→serve order stays
   (it is ordering, not duration).
+
+## PR4 — readthrough reconcile (`ofapiDmReadthroughReconcileEnabled`)
+
+- **Flag lane:** boolean, STAGED (boot-applied) — flips via the staged endpoint +
+  restart, own verification window (same day per the rollout override). Deploy
+  precondition (owner-verified): `ofapiDmColdArchiveEnabled` effectively ON.
+- **What it does when ON:** chat-open readthroughs journal the widened v2 observation
+  (`ofapi_gateway_chat_messages_v2`) + immediate best-effort projection; the minutely
+  readthrough sweep (rides canonicalize.sweep) is the retry. When OFF, capture keeps
+  the v1 shape — v2 rows never accumulate unconsumed, so `obs_backlog_readthrough_v1`
+  stays honest. NOTE: after a rollback (flag off), any v2 rows captured while it was on
+  that remain unprojected keep the backlog gauge latched — expected; re-enable or the
+  Wave-2 replay clears it.
+- **Monitor:** the sweep log line `Readthrough reconcile sweep complete` — `upserts` is
+  the MEASURED webhook-loss rate; `conflicts.*` (text/price/direction/timestamp/reply/
+  media) are the non-sentinel divergences Wave 1 deliberately keeps for the Wave-2
+  reducer; `drops` = erasure-fenced items; `deferred` = writes parked behind a running
+  erasure (retried next sweep).
+- **Erasure fence (decision #121):** material-time-bounded — pre-erasure facts stay
+  dead, an erased-but-active fan's NEW messages flow. Fence hits stamp journal rows
+  `skipped`/`erasure_fenced` (terminal). Null-ref tombstone stubs post-erasure are the
+  documented contentless survivor. Do not "fix" a latched backlog by deleting
+  observations — find the wedged consumer.
+- **Deploy-time EXPLAIN (owner, prod psql):** the readthrough listing filters
+  `parse_version < 1 and source = 'readthrough' and kind = 'ofapi_gateway_chat_messages_v2'`
+  over `observations_parse_idx`; undeclared version-0 kinds share that index range, so
+  verify on prod-size data before trusting the sweep cadence:
+  `EXPLAIN select o.id from observations o where o.parse_version < 1 and o.source = 'readthrough' and o.kind = 'ofapi_gateway_chat_messages_v2' order by o.id asc limit 100;`
+  A misbehaving plan is grounds to revisit (no new observations index without this
+  EXPLAIN — spec rule).
+- **Migration 0075** (single tx, forward-only): `dm_message_archive` gains
+  `rest_material_observation_id` / `rest_material_observed_at`; `source_journal_id`
+  drops NOT NULL (REST-inserted rows have no webhook journal row — never fake ids).

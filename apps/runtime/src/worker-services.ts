@@ -30,6 +30,7 @@ import {
   ensureMessageArchiveQueues,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
+import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
@@ -214,6 +215,12 @@ export async function startWorkerServices(
     const result = await runCanonicalization(app);
     if (result.scanned > 0) {
       app.logger.info(result, "Canonicalization sweep complete");
+    }
+    // PR4: the readthrough reconcile projector rides the same minutely
+    // handler (it is NOT a canonicalizer family — see ofapi-dm-readthrough).
+    const readthrough = await runOfapiDmReadthroughReconcile(app);
+    if (readthrough.scanned > 0) {
+      app.logger.info(readthrough, "Readthrough reconcile sweep complete");
     }
   });
 

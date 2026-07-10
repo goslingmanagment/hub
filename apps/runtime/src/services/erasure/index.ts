@@ -67,6 +67,12 @@ export interface ErasurePlan {
   /** Observations shared with other fans' lineage — reported, never touched. */
   sharedObservations: number;
   totalRows: number;
+  /** PR4 fence: the RESOLVED page ids at execution time. pages.label is
+   * mutable, so the non-resurrection fence must never resolve a page scope
+   * through scope_ref — a post-erasure rename would disarm it. The fence
+   * check (isDmArchiveScopeFenced) matches page/model scopes against this
+   * list in the stored plan jsonb; fan scopes match by immutable fan ref. */
+  resolvedPageIds: number[];
 }
 
 interface ResolvedScope {
@@ -957,6 +963,7 @@ function workToPlan(work: ErasureWork): ErasurePlan {
     targets,
     sharedObservations: work.lineage?.sharedObsIds.length ?? 0,
     totalRows: targets.reduce((sum, target) => sum + target.rows, 0),
+    resolvedPageIds: work.scope.pageIds,
   };
 }
 
@@ -983,10 +990,14 @@ export async function executeErasure(
   input: ErasureScopeInput,
   options: { initiatedBy: number; auditSource?: string },
 ): Promise<ErasureExecutionResult> {
-  const { insertErasureLog, completeErasureLog } = await import("@agency_hub_core/db");
+  const { insertErasureLog, completeErasureLog, acquireErasureFenceExclusiveLocks } =
+    await import("@agency_hub_core/db");
   const work = await buildWork(app, input);
   const plan = workToPlan(work);
 
+  // The tombstone (with the resolved page ids in its plan) commits BEFORE
+  // the delete transaction: writers that lose the lock race below re-check
+  // the fence after we release and see this row.
   const logRow = await insertErasureLog(app.db, {
     scopeType: input.scopeType,
     scopeRef: plan.scopeRef,
@@ -1002,6 +1013,14 @@ export async function executeErasure(
   };
 
   await app.db.transaction(async (tx) => {
+    // PR4 non-resurrection fence: exclusive advisory locks over every
+    // resolved page id, sorted, BEFORE any deletion — in-flight archive/
+    // projection writers finish first; later writers fail their shared
+    // try-lock and defer, then re-check the fence post-commit. WAIVER
+    // (owner-acknowledged): the subscription/presence/spend projections
+    // replay the same retained journal but are OUT of the Wave-1 fence
+    // scope — they rebuild aggregate/status rows, not fan transcripts.
+    await acquireErasureFenceExclusiveLocks(tx as unknown as Db["db"], work.scope.pageIds);
     for (const target of [...work.hot, ...work.ledger]) {
       if (target.run) {
         record(target, await target.run(tx as unknown as Db["db"]));

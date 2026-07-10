@@ -32,16 +32,33 @@ export function healthFloorName(source: string, version: number): string {
   return `obs_backlog_${source}_v${version}`;
 }
 
+/** PR4: the readthrough reconcile projector's observation kind + floor. The
+ *  kind constant lives HERE so the capture tee, the runner, and the sampler
+ *  all import one definition; the runner's version floor IS this descriptor's
+ *  version — the sampler and the consumer cannot drift (v7 amendment 5).
+ *  Wave 2 bumps the version to 2 at reducer cutover, in the same commit as
+ *  the reducer, so v1-stamped observations replay through the real reducer. */
+export const OFAPI_READTHROUGH_OBSERVATION_KIND = "ofapi_gateway_chat_messages_v2";
+
+export const OFAPI_READTHROUGH_HEALTH_FLOOR: HealthFloorDescriptor = {
+  name: healthFloorName("readthrough", 1),
+  source: "readthrough",
+  kinds: [OFAPI_READTHROUGH_OBSERVATION_KIND],
+  version: 1,
+};
+
 /** Registry-driven by construction: a version-0 family (nothing consumes its
  *  kinds yet) measures parse_version < 0 — an empty set, so its gauge is a
  *  constant zero rather than a false backlog. */
-export const HEALTH_FLOOR_REGISTRY: readonly HealthFloorDescriptor[] =
-  CANONICALIZER_FAMILIES.map((family) => ({
+export const HEALTH_FLOOR_REGISTRY: readonly HealthFloorDescriptor[] = [
+  ...CANONICALIZER_FAMILIES.map((family) => ({
     name: healthFloorName(family.source, family.version),
     source: family.source,
     kinds: family.kinds,
     version: family.version,
-  }));
+  })),
+  OFAPI_READTHROUGH_HEALTH_FLOOR,
+];
 
 /**
  * Backlog age (ms) for one family: per-KIND MIN(received_at) over the

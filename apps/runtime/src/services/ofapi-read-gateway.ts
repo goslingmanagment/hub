@@ -4,6 +4,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { AuthPrincipal } from "./auth.ts";
 import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
+import { isOfapiDmReadthroughReconcileEnabled } from "./ofapi-dm-readthrough.ts";
 import { enqueueReadGatewayCapture } from "./ofapi-read-gateway-capture.ts";
 import { OfapiApiError } from "./ofapi.ts";
 import {
@@ -26,6 +27,9 @@ interface ProxyRequest {
   operation: string;
   fallbackCredits: number;
   fallbackEstimated: boolean;
+  /** PR4: set for the chat-messages readthrough — the chat id (== the fan id
+   * on OnlyFans) that the widened v2 capture envelope carries. */
+  chatId?: string;
 }
 
 export type OfapiReadGatewayRequest =
@@ -197,7 +201,10 @@ export function resolveOfapiReadGatewayRequest(
     if (query.last_id && query.order !== undefined && query.order !== "asc") {
       invalid("last_id requires order=asc");
     }
-    return proxy(accountId, segments, query, "ofapi_gateway_chat_messages");
+    return {
+      ...proxy(accountId, segments, query, "ofapi_gateway_chat_messages"),
+      chatId: segments[2]!,
+    };
   }
 
   if (
@@ -440,6 +447,20 @@ export async function executeOfapiReadGatewayRequest(
         operation: request.operation,
         status: response.status,
         body: response.body,
+        // PR4: chat-messages readthroughs journal the widened v2 envelope
+        // (chat id == conversation ref == the fan id on OnlyFans) once the
+        // reconcile flag is on; the flag off keeps today's v1 capture shape.
+        ...(request.chatId !== undefined
+            && isOfapiDmReadthroughReconcileEnabled(app.config)
+          ? {
+            chat: {
+              ofapiAccountId: request.accountId,
+              chatId: request.chatId,
+              conversationRef: request.chatId,
+              cursors: request.query,
+            },
+          }
+          : {}),
       });
     }
     return response;

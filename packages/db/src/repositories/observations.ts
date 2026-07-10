@@ -35,8 +35,11 @@ export interface ObservationInsertInput {
 }
 
 export type ObservationInsertResult =
-  | { inserted: true; observationId: number }
-  | { inserted: false; observationId: number };
+  /** receivedAt is the journal row's received_at — on the duplicate path it
+   * is the EXISTING key's received_at (partition-exact), so an immediate
+   * projector can stamp with the (id, received_at) pair, never new Date(). */
+  | { inserted: true; observationId: number; receivedAt: Date }
+  | { inserted: false; observationId: number; receivedAt: Date };
 
 export async function insertObservation(
   db: Database,
@@ -59,12 +62,16 @@ export async function insertObservation(
   `);
 
   if (claimed.rows.length === 0) {
-    const existing = await db.execute<{ observation_id: string }>(sql`
-      select observation_id::text
+    const existing = await db.execute<{ observation_id: string; received_at: Date | string }>(sql`
+      select observation_id::text, received_at
       from observation_keys
       where source = ${input.source} and idempotency_key = ${input.idempotencyKey}
     `);
-    return { inserted: false, observationId: Number(existing.rows[0]!.observation_id) };
+    return {
+      inserted: false,
+      observationId: Number(existing.rows[0]!.observation_id),
+      receivedAt: new Date(existing.rows[0]!.received_at),
+    };
   }
 
   try {
@@ -111,7 +118,7 @@ export async function insertObservation(
     throw error;
   }
 
-  return { inserted: true, observationId };
+  return { inserted: true, observationId, receivedAt };
 }
 
 /** Sequential batch insert; observations are small and producers batch lightly. */
