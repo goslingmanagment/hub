@@ -209,10 +209,15 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
   const pending = update.isPending || clear.isPending;
   const error = update.error ?? clear.error;
   const isConflict = error instanceof KernelApiError && error.status === 409;
+  const isString = item.kind === "string";
 
   function save() {
     update.mutate({
-      patches: [{ key: item.key, value: Number(input), expectedVersion: item.overrideVersion ?? 0 }],
+      patches: [{
+        key: item.key,
+        value: isString ? input.trim() : Number(input),
+        expectedVersion: item.overrideVersion ?? 0,
+      }],
     });
     setConfirm(null);
   }
@@ -247,7 +252,7 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-center gap-1.5">
         <input
-          type="number"
+          type={isString ? "text" : "number"}
           aria-label={`${item.label} value`}
           value={input}
           disabled={pending}
@@ -255,7 +260,7 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
             setInput(e.target.value);
             setConfirm(null);
           }}
-          className="w-24 rounded border border-border bg-card px-1.5 py-0.5 text-xs font-mono text-text-primary disabled:opacity-50"
+          className={`${isString ? "w-56" : "w-24"} rounded border border-border bg-card px-1.5 py-0.5 text-xs font-mono text-text-primary disabled:opacity-50`}
         />
         <button
           type="button"
@@ -318,16 +323,16 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
   );
 }
 
-// Which live keys get an inline editor: numbers get the numeric input, booleans get the
+// Which live keys get an inline editor: numbers and strings get a scalar input, booleans get the
 // on/off switch (added after a prod incident where a live boolean flag showed «можно
-// менять» but had no editor and had to be flipped via psql). Any other kind (string/enum
-// etc.) stays read-only until it gets a proper editor — which keeps each editor honest
+// менять» but had no editor and had to be flipped via psql). Other kinds stay read-only
+// until they get a proper editor — which keeps each editor honest
 // about the value type it sends. Exported for tests.
 export function liveEditorKind(
   item: Pick<ConfigItem, "runtimeApply" | "kind">,
-): "number" | "boolean" | null {
+): "number" | "boolean" | "string" | null {
   if (item.runtimeApply !== "live") return null;
-  if (item.kind === "number" || item.kind === "boolean") return item.kind;
+  if (item.kind === "number" || item.kind === "boolean" || item.kind === "string") return item.kind;
   return null;
 }
 
@@ -535,9 +540,8 @@ function SettingLabel({ item }: { item: ConfigItem }) {
 }
 
 function SettingRow({ item }: { item: ConfigItem }) {
-  // Numeric live keys get the inline number editor; boolean live keys get the on/off
-  // switch (BooleanConfigEditor). Other live kinds (string/enum) stay read-only until
-  // they get a proper editor — see liveEditorKind.
+  // Number/string live keys get the scalar editor; boolean live keys get the
+  // on/off switch. Other kinds stay read-only — see liveEditorKind.
   const editorKind = liveEditorKind(item);
   const runningDiffersFromDefault =
     item.running.length > 0
@@ -593,6 +597,9 @@ function SettingRow({ item }: { item: ConfigItem }) {
           )}
         </div>
         {editorKind === "number" && (
+          <ConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
+        )}
+        {editorKind === "string" && (
           <ConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
         )}
         {editorKind === "boolean" && (

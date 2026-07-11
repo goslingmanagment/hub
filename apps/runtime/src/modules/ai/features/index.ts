@@ -1,4 +1,8 @@
-import type { AiGatewayReasoningEffort, AiGatewayStreamBody } from "@agency_hub_core/contracts";
+import type {
+  AiFeatureDebugInputFrame,
+  AiGatewayReasoningEffort,
+  AiGatewayStreamBody,
+} from "@agency_hub_core/contracts";
 import { findAiPersonaByKey, findPageByLabel } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
@@ -9,6 +13,7 @@ import {
 import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
 import { BadRequestError, NotFoundError, ProductGateError } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
+import { isPromptDebugEchoAllowed } from "../prompt-debug-echo.ts";
 import {
   isFanProfileFeatureEnabled,
   loadFanBio,
@@ -102,6 +107,7 @@ export async function prepareAiFeatureStream(
   principal: AuthPrincipal,
   featureKey: string,
   body: AiFeatureRequestBody,
+  options?: { debugPromptEcho?: boolean },
 ): Promise<PreparedAiGatewayStream> {
   if (!(featureKey in FEATURE_POLICIES) || !isOperationFeature(featureKey as never)) {
     throw new NotFoundError(`Unknown AI feature: ${featureKey}`);
@@ -314,10 +320,42 @@ export async function prepareAiFeatureStream(
       userBlocks: prompt.userBlocks,
     },
   };
+  let debugFrame: AiFeatureDebugInputFrame | undefined;
+  if (options?.debugPromptEcho) {
+    try {
+      const effective = await loadEffectiveConfig(app.db, app.config);
+      if (isPromptDebugEchoAllowed(
+        effective.chatMuseAiPromptDebugEchoUsers,
+        effective.chatMuseAiPromptDebugEchoUntil,
+        principal.user.username,
+      )) {
+        debugFrame = {
+          type: "debug_input_v1",
+          systemBlocks: prompt.systemBlocks,
+          userBlocks: prompt.userBlocks,
+          contextManifest: contextManifest ?? null,
+        };
+        app.logger.info({
+          feature,
+          pageId,
+          userId: principal.user.id,
+          username: principal.user.username,
+        }, "ai prompt debug echo emitted");
+      }
+    } catch {
+      // Time-bounded declassification always fails closed. Config lookup
+      // failures must not affect the generation itself.
+    }
+  }
   return prepareAiGatewayStream(
     app,
     principal,
     gatewayBody,
-    contextManifest !== undefined ? { contextManifest } : undefined,
+    contextManifest !== undefined || debugFrame !== undefined
+      ? {
+        ...(contextManifest !== undefined ? { contextManifest } : {}),
+        ...(debugFrame !== undefined ? { debugFrame } : {}),
+      }
+      : undefined,
   );
 }

@@ -325,11 +325,13 @@ export function createKernelClient(
 // --- Stream helpers (Stage 20 Task 2) ---
 
 import {
+  aiFeatureStreamFrameSchema,
   aiGatewayStreamFrameSchema,
   domainEventFrameSchema,
   domainEventsSnapshotRequiredResponseSchema,
   syncEventSchema,
   syncSnapshotRequiredResponseSchema,
+  type AiFeatureStreamFrame,
   type AiGatewayStreamFrame,
   type DomainEventFrame,
   type DomainEventsSnapshotRequired,
@@ -514,7 +516,8 @@ export function subscribeSyncEvents(options: KernelClientOptions, input: {
 export function streamAiFeature(options: KernelClientOptions, input: {
   feature: string;
   body: zod.input<(typeof routeSchemas)["aiFeatureStream"]["body"]>;
-  onFrame: (frame: AiGatewayStreamFrame) => void;
+  onFrame: (frame: AiFeatureStreamFrame) => void;
+  debugPromptEcho?: boolean;
   signal?: AbortSignal;
 }): KernelStreamHandle {
   const abort = new AbortController();
@@ -525,6 +528,9 @@ export function streamAiFeature(options: KernelClientOptions, input: {
       options,
       method: "POST",
       path: `/api/v1/ai/features/${encodeURIComponent(input.feature)}`,
+      headers: input.debugPromptEcho
+        ? { "x-kernel-ai-capabilities": "debug-input-v1" }
+        : undefined,
       body: input.body,
       signal: abort.signal,
     });
@@ -553,7 +559,7 @@ export function streamAiFeature(options: KernelClientOptions, input: {
       if (frame.event !== "ai" || frame.data === "") {
         continue;
       }
-      const parsed = aiGatewayStreamFrameSchema.safeParse(JSON.parse(frame.data));
+      const parsed = aiFeatureStreamFrameSchema.safeParse(JSON.parse(frame.data));
       if (!parsed.success) {
         throw new KernelApiError(
           `ai frame failed contract validation: ${parsed.error.message}`,

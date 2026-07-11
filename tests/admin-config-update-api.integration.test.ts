@@ -471,4 +471,57 @@ describe("admin config update api (Stage B1)", () => {
     expect(`${body.message ?? ""}${body.error ?? ""}`).toContain("boot-applied");
     expect((await getConfigOverrides(testDb.db)).has("ofapiChargebacksReconcileEnabled")).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("atomically accepts a bounded prompt-echo window and rejects >24h", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const tooFar = new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString();
+    const rejected = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config",
+      headers: { cookie },
+      payload: {
+        patches: [
+          { key: "chatMuseAiPromptDebugEchoUsers", value: "dima" },
+          { key: "chatMuseAiPromptDebugEchoUntil", value: tooFar },
+        ],
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect((await getConfigOverrides(testDb.db)).has("chatMuseAiPromptDebugEchoUsers")).toBe(false);
+
+    const wildcard = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config",
+      headers: { cookie },
+      payload: {
+        patches: [
+          { key: "chatMuseAiPromptDebugEchoUsers", value: "all" },
+          { key: "chatMuseAiPromptDebugEchoUntil", value: "none" },
+        ],
+      },
+    });
+    expect(wildcard.statusCode).toBe(400);
+    expect((await getConfigOverrides(testDb.db)).has("chatMuseAiPromptDebugEchoUsers")).toBe(false);
+
+    const accepted = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config",
+      headers: { cookie },
+      payload: {
+        patches: [
+          { key: "chatMuseAiPromptDebugEchoUsers", value: "dima" },
+          { key: "chatMuseAiPromptDebugEchoUntil", value: "none" },
+        ],
+        note: "prompt echo test",
+      },
+    });
+    expect(accepted.statusCode).toBe(200);
+    const overrides = await getConfigOverrides(testDb.db);
+    expect(overrides.get("chatMuseAiPromptDebugEchoUsers")?.value).toBe("dima");
+    expect(overrides.get("chatMuseAiPromptDebugEchoUntil")?.value).toBe("none");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -199,6 +199,19 @@ const envSchema = z.object({
   // fast-reply,ping → all). LIVE-wired: read per generation.
   CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES: z.string().default("none"),
   CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS: z.coerce.number().int().min(0).default(21),
+  // DP 6-A time-bounded prompt declassification. Both values are required at
+  // runtime; "none" is the fail-closed sentinel because empty live strings
+  // are rejected by the generic override validator.
+  CHATMUSE_AI_PROMPT_DEBUG_ECHO_USERS: z.string().trim().toLowerCase()
+    .refine((value) => value === "none", {
+      message: "prompt debug echo may be enabled only through the audited live-config API",
+    })
+    .default("none"),
+  CHATMUSE_AI_PROMPT_DEBUG_ECHO_UNTIL: z.string().trim().toLowerCase()
+    .refine((value) => value === "none", {
+      message: "prompt debug echo may be enabled only through the audited live-config API",
+    })
+    .default("none"),
   OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
@@ -316,6 +329,10 @@ export interface AppConfig {
   chatMuseAiFanProfileContextFeatures?: string;
   /** Dossier volatile-section age cutoff in days (live-wired). */
   chatMuseAiFanProfileVolatileMaxAgeDays?: number;
+  /** CSV chatter usernames allowed to receive feature-lane prompt echoes. */
+  chatMuseAiPromptDebugEchoUsers?: string;
+  /** Mandatory ISO expiry for prompt echo; "none" disables. */
+  chatMuseAiPromptDebugEchoUntil?: string;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   openrouterApiKey?: string | null;
@@ -486,6 +503,8 @@ export function loadConfig(
     aiTranscriptFreshUnionMode: parsed.AI_TRANSCRIPT_FRESH_UNION_MODE,
     chatMuseAiFanProfileContextFeatures: parsed.CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES,
     chatMuseAiFanProfileVolatileMaxAgeDays: parsed.CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS,
+    chatMuseAiPromptDebugEchoUsers: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO_USERS,
+    chatMuseAiPromptDebugEchoUntil: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO_UNTIL,
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,

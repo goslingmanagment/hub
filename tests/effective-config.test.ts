@@ -111,9 +111,10 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
   });
 
-  it("covers exactly the sixteen wired keys", () => {
+  it("covers exactly the eighteen wired keys", () => {
     // W3.2 added ofapiQueuedCommandTtlMs (read live by the command sweep);
     // Decision #136 added the two fan-dossier keys (read per generation).
-    expect(LIVE_CONFIG_KEYS.size).toBe(16);
+    // Decision #140 added the two time-bounded prompt-echo gates.
+    expect(LIVE_CONFIG_KEYS.size).toBe(18);
   });
 });

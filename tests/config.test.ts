@@ -33,6 +33,15 @@ afterAll(async () => {
 });
 
 describe("config", () => {
+  it("keeps prompt debug echo disabled in env so enablement must use audited live config", () => {
+    expect(loadConfig(baseEnv).chatMuseAiPromptDebugEchoUsers).toBe("none");
+    expect(() => loadConfig({
+      ...baseEnv,
+      CHATMUSE_AI_PROMPT_DEBUG_ECHO_USERS: "dima",
+      CHATMUSE_AI_PROMPT_DEBUG_ECHO_UNTIL: new Date(Date.now() + 60_000).toISOString(),
+    })).toThrow(/audited live-config API/);
+  });
+
   it("defaults Fansly and OnlyFans delays and executor concurrency", () => {
     const config = loadConfig(baseEnv);
 

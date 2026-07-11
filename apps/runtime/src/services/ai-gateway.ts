@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  AiFeatureDebugInputFrame,
   AiGatewayQuota,
   AiGatewayStreamBody,
   AiGatewayStreamFrame,
@@ -60,6 +61,7 @@ export interface AiGatewayProvider {
 export interface PreparedAiGatewayStream {
   requestId: string;
   meta: AiGatewayStreamFrame;
+  debugFrame?: AiFeatureDebugInputFrame;
   stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
   recordTerminal(input: AiGatewayTerminalRecordInput): Promise<boolean>;
 }
@@ -176,6 +178,10 @@ export interface AiGatewayStreamInternalOptions {
    * quota-denied / pre-stream throws never reach recordTerminal and thus
    * never manifest, by design. */
   contextManifest?: Record<string, unknown>;
+  /** Feature-lane-only, capability-gated prompt echo. Never set by the raw
+   * gateway route and never persisted separately from the existing restricted
+   * generation record. */
+  debugFrame?: AiFeatureDebugInputFrame;
 }
 
 export async function prepareAiGatewayStream(
@@ -311,6 +317,7 @@ export async function prepareAiGatewayStream(
       providerResponseId: null,
       quota: quotaFrame,
     },
+    ...(internal?.debugFrame ? { debugFrame: internal.debugFrame } : {}),
     stream(signal) {
       return provider.stream({
         requestId,
@@ -389,6 +396,6 @@ export async function prepareAiGatewayStream(
   };
 }
 
-export function serializeAiGatewaySseFrame(frame: AiGatewayStreamFrame) {
+export function serializeAiGatewaySseFrame(frame: AiGatewayStreamFrame | AiFeatureDebugInputFrame) {
   return `event: ai\ndata: ${JSON.stringify(frame)}\n\n`;
 }

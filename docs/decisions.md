@@ -3828,3 +3828,24 @@ every currently-eligible candidate is drained); full-coverage proof =
 succeeded_at stamped AND zero failing breaker rows AND zero conversation
 head/archive gaps. retry_wedged stays for streams with no breaker
 (Fansly), where the streak still carries the wedge.
+
+**Decision #140 (2026-07-11, LLM-input observability v3 — capability-gated,
+time-bounded declassification):** The kernel feature lane may echo the exact
+assembled prompt in an additive `debug_input_v1` SSE frame so the two ChatMuse
+clients can inspect what the model actually received, including kernel-loaded
+transcript, persona, templates, and fan dossier. This is an explicit DP 6-A
+declassification, not a general logging path. Emission requires all three:
+the caller advertises the exact `debug-input-v1` capability token, the
+authenticated chatter username is in the live CSV allowlist (there is no
+`all` wildcard), and a mandatory ISO expiry is still live. The owner-only
+atomic config PATCH rejects enable windows beyond 24 hours; both live keys
+default to `none`, and boot rejects non-`none` env values so enablement cannot
+bypass the audited owner API; deploy and rollback are inert. The frame is feature-lane
+only: the raw gateway contract remains strict, old clients never receive an
+unknown frame, and new clients tolerate an old kernel. The pump writes the
+frame immediately after `meta` with `Cache-Control: no-store`; the audit log
+records feature/page/user metadata only, never prompt text. Clients must keep
+the body in memory only. The desktop app-origin renderer may show it inline;
+the extension may show it only on its own token-gated extension page. Fansly
+DOM is restricted to a typed allowlist projection of `contextManifest` and
+must never receive prompt blocks or a raw-manifest fallback.

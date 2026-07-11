@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -177,7 +177,106 @@ function capturingProvider(capture: { input?: AiGatewayProviderInput }): AiGatew
   };
 }
 
+function aiFrames(body: string): Array<Record<string, unknown>> {
+  return body
+    .split("\n")
+    .filter((line) => line.startsWith("data: "))
+    .map((line) => JSON.parse(line.slice("data: ".length)) as Record<string, unknown>);
+}
+
 describe("AI feature service pilot (Stage 30)", () => {
+  it("echoes the exact restricted prompt only for the capability plus live gate", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    appContext.config.chatMuseAiPromptDebugEchoUsers = "other, SVC-CHATTER";
+    appContext.config.chatMuseAiPromptDebugEchoUntil = new Date(
+      Date.now() + 60 * 60 * 1000,
+    ).toISOString();
+    const info = vi.spyOn(appContext.logger, "info");
+    const transcript = "x".repeat(300_000);
+    const payload = {
+      clientRequestId: randomUUID(),
+      pageLabel: "svc-fs",
+      platform: "fansly",
+      conversationRef: FAN,
+      clientContext: {
+        transcript,
+        messageCount: 12,
+        fanDisplayName: "Large Context Fan",
+        fanSpendingData: "",
+        fanSubscriptionData: "",
+      },
+    };
+
+    const withoutCapability = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload,
+    });
+    expect(withoutCapability.statusCode, withoutCapability.body).toBe(200);
+    expect(aiFrames(withoutCapability.body).some((frame) => frame.type === "debug_input_v1")).toBe(false);
+
+    const echoed = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+        "x-kernel-ai-capabilities": "other, debug-input-v1",
+      },
+      payload: { ...payload, clientRequestId: randomUUID() },
+    });
+    expect(echoed.statusCode, echoed.body).toBe(200);
+    expect(echoed.headers["cache-control"]).toContain("no-store");
+    const frames = aiFrames(echoed.body);
+    expect(frames[0]?.type).toBe("meta");
+    expect(frames[1]?.type).toBe("debug_input_v1");
+    const debug = frames[1] as {
+      systemBlocks: unknown[];
+      userBlocks: Array<{ text: string }>;
+      contextManifest: unknown;
+    };
+    expect(debug.userBlocks.some((block) => block.text.includes(transcript))).toBe(true);
+    expect(debug.contextManifest).toBeNull();
+
+    const { rows } = await testDb.pool.query<{
+      prompt_blocks: Array<{ role: string; blocks: unknown[] }>;
+    }>(
+      `select prompt_blocks from ai_generation_content order by id desc limit 1`,
+    );
+    expect(rows[0]!.prompt_blocks).toEqual([
+      { role: "system", blocks: debug.systemBlocks },
+      { role: "user", blocks: debug.userBlocks },
+    ]);
+    const emission = info.mock.calls.find((call) => call[1] === "ai prompt debug echo emitted");
+    expect(emission?.[0]).toEqual({
+      feature: "fast-reply",
+      pageId: expect.any(Number),
+      userId: expect.any(Number),
+      username: "svc-chatter",
+    });
+    expect(JSON.stringify(emission)).not.toContain(transcript.slice(0, 100));
+
+    appContext.config.chatMuseAiPromptDebugEchoUntil = new Date(
+      Date.now() - 60 * 1000,
+    ).toISOString();
+    const expired = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+        "x-kernel-ai-capabilities": "debug-input-v1",
+      },
+      payload: { ...payload, clientRequestId: randomUUID() },
+    });
+    expect(expired.statusCode, expired.body).toBe(200);
+    expect(aiFrames(expired.body).some((frame) => frame.type === "debug_input_v1")).toBe(false);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("assembles fast-reply kernel-side and streams through the gateway", async (context) => {
     if (!testDb) {
       context.skip();
@@ -691,13 +790,20 @@ describe("fan-dossier context (Decision #136)", () => {
     );
     await seedFanProfile({ platform: "fansly", targetPageId: Number(fanslyPage.rows[0]!.id) });
     appContext.config.chatMuseAiFanProfileContextFeatures = "all";
+    appContext.config.chatMuseAiPromptDebugEchoUsers = "svc-chatter";
+    appContext.config.chatMuseAiPromptDebugEchoUntil = new Date(
+      Date.now() + 60 * 60 * 1000,
+    ).toISOString();
     const capture: { input?: AiGatewayProviderInput } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
 
     const response = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/features/fast-reply",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+        "x-kernel-ai-capabilities": "debug-input-v1",
+      },
       payload: {
         clientRequestId: randomUUID(),
         pageLabel: "svc-fs",
@@ -717,6 +823,10 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(text).toContain("fresh client-side message about the beach");
     expect(text).toContain("## Fan Dossier");
     expect(text).toContain("красном Ducati");
+    const debug = aiFrames(response.body).find((frame) => frame.type === "debug_input_v1");
+    expect(debug?.contextManifest).toMatchObject({
+      fanProfile: { version: 1, ageDays: 0, truncated: false },
+    });
 
     // The dossier audit rides params.contextManifest on the clientContext
     // path too (it has no transcript manifest of its own).

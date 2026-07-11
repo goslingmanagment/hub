@@ -91,6 +91,8 @@ describe("config registry", () => {
     // Decision #136: fan-dossier context, read per generation.
     "chatMuseAiFanProfileContextFeatures",
     "chatMuseAiFanProfileVolatileMaxAgeDays",
+    "chatMuseAiPromptDebugEchoUsers",
+    "chatMuseAiPromptDebugEchoUntil",
     // W3.2 (decision #125): queued-command TTL, read live per sweep.
     "ofapiQueuedCommandTtlMs",
   ];
@@ -119,7 +121,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the sixteen live keys, the nineteen boot keys, and nothing else", () => {
+  it("wires exactly the eighteen live keys, the nineteen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

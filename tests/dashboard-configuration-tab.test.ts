@@ -119,7 +119,7 @@ describe("ConfigurationTab boolean live editor rendering", () => {
     expect(html).toContain("Сбросить");
   });
 
-  it("keeps string live keys read-only (no switch, no numeric input)", () => {
+  it("renders a text input for string live keys", () => {
     const html = renderTab([
       configItem({
         key: "fanslyNewStreamPageAllowlist",
@@ -141,7 +141,8 @@ describe("ConfigurationTab boolean live editor rendering", () => {
       }),
     ]);
     expect(html).not.toContain('role="switch"');
-    expect(html).not.toContain('type="number"');
+    expect(html).toContain('type="text"');
+    expect(html).toContain('aria-label="Fansly new-stream page allowlist value"');
   });
 
   it("still renders the numeric input for number live keys", () => {
@@ -249,10 +250,10 @@ describe("booleanPatchBody", () => {
 });
 
 describe("liveEditorKind", () => {
-  it("routes number and boolean live keys to their editors and leaves the rest read-only", () => {
+  it("routes scalar and boolean live keys to their editors and leaves the rest read-only", () => {
     expect(liveEditorKind({ runtimeApply: "live", kind: "number" })).toBe("number");
     expect(liveEditorKind({ runtimeApply: "live", kind: "boolean" })).toBe("boolean");
-    expect(liveEditorKind({ runtimeApply: "live", kind: "string" })).toBeNull();
+    expect(liveEditorKind({ runtimeApply: "live", kind: "string" })).toBe("string");
     // Boot-applied booleans belong to the staged ritual, never the inline editor.
     expect(liveEditorKind({ runtimeApply: "boot", kind: "boolean" })).toBeNull();
     expect(liveEditorKind({ runtimeApply: "none", kind: "number" })).toBeNull();

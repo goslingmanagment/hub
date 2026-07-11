@@ -157,7 +157,7 @@ describe("kernel SDK runtime", () => {
   });
 });
 
-import { streamAiGateway, subscribeSyncEvents } from "@agency_hub_core/contracts";
+import { streamAiFeature, streamAiGateway, subscribeSyncEvents } from "@agency_hub_core/contracts";
 
 function sseFetch(chunks: string[], init?: { status?: number }) {
   const stream = new ReadableStream<Uint8Array>({
@@ -177,6 +177,39 @@ function sseFetch(chunks: string[], init?: { status?: number }) {
 }
 
 describe("AI gateway stream helper (protocol conformance on a fake stream)", () => {
+  it("feature stream advertises capability and accepts debug_input_v1", async () => {
+    const frames: unknown[] = [];
+    let requestInit: RequestInit | undefined;
+    const impl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      requestInit = init;
+      return sseFetch([
+        'event: ai\ndata: {"type":"debug_input_v1","systemBlocks":[{"text":"system","cache":"1h"}],"userBlocks":[{"text":"user","cache":"5m"}],"contextManifest":null}\n\n',
+      ])("http://unused");
+    }) as unknown as typeof fetch;
+    const handle = streamAiFeature(
+      { baseUrl: "http://hub", fetch: impl },
+      {
+        feature: "fast-reply",
+        body: {} as never,
+        debugPromptEcho: true,
+        onFrame: (frame) => frames.push(frame),
+      },
+    );
+    await handle.done;
+    expect(new Headers(requestInit?.headers).get("x-kernel-ai-capabilities")).toBe("debug-input-v1");
+    expect(frames).toEqual([expect.objectContaining({ type: "debug_input_v1" })]);
+  });
+
+  it("raw gateway remains strict against debug_input_v1", async () => {
+    const handle = streamAiGateway(
+      { baseUrl: "http://hub", fetch: sseFetch([
+        'event: ai\ndata: {"type":"debug_input_v1","systemBlocks":[{"text":"system","cache":"1h"}],"userBlocks":[{"text":"user","cache":"5m"}],"contextManifest":null}\n\n',
+      ]) },
+      { body: {} as never, onFrame: () => undefined },
+    );
+    await expect(handle.done).rejects.toMatchObject({ code: "frame_validation_failed" });
+  });
+
   it("parses and validates event:ai frames, tolerating split chunks and heartbeats", async () => {
     const frames: unknown[] = [];
     const handle = streamAiGateway(

@@ -1763,6 +1763,22 @@ export const aiGatewayPromptBlockSchema = z.object({
   cache: aiGatewayPromptCacheTtlSchema,
 }).strict();
 
+// Feature-lane-only debug echo. This is deliberately separate from the raw
+// gateway prompt-block schema: clientContext can carry a 300k transcript and
+// the builder places it in one dynamic block. It is an echo contract only,
+// never accepted in an AI request body.
+export const aiFeatureDebugPromptBlockSchema = z.object({
+  text: z.string().min(1).max(500_000),
+  cache: aiGatewayPromptCacheTtlSchema,
+}).strict();
+
+export const aiFeatureDebugInputFrameSchema = z.object({
+  type: z.literal("debug_input_v1"),
+  systemBlocks: z.array(aiFeatureDebugPromptBlockSchema).min(1).max(64),
+  userBlocks: z.array(aiFeatureDebugPromptBlockSchema).min(1).max(64),
+  contextManifest: z.record(z.string(), z.unknown()).nullable(),
+}).strict();
+
 export const aiGatewayStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
   feature: aiUsageFeatureEnum,
@@ -1832,6 +1848,14 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
     type: z.literal("done"),
     stopReason: z.string().nullable(),
   }).strict(),
+]);
+
+// Unknown frames remain fatal for the raw gateway. Only streamAiFeature uses
+// this additive union, and the server emits debug_input_v1 only when the
+// caller advertised the matching capability header.
+export const aiFeatureStreamFrameSchema = z.union([
+  aiGatewayStreamFrameSchema,
+  aiFeatureDebugInputFrameSchema,
 ]);
 
 // Stage 29 restricted capture class (DP 6-A): owner-only reads.
@@ -5923,10 +5947,13 @@ export type IngestObservationsResponse = z.infer<typeof ingestObservationsRespon
 export type AiGatewayPromptCacheTtl = z.infer<typeof aiGatewayPromptCacheTtlSchema>;
 export type AiGatewayReasoningEffort = z.infer<typeof aiGatewayReasoningEffortSchema>;
 export type AiGatewayPromptBlock = z.infer<typeof aiGatewayPromptBlockSchema>;
+export type AiFeatureDebugPromptBlock = z.infer<typeof aiFeatureDebugPromptBlockSchema>;
+export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSchema>;
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
 export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
 export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;
 export type AiGatewayStreamFrame = z.infer<typeof aiGatewayStreamFrameSchema>;
+export type AiFeatureStreamFrame = z.infer<typeof aiFeatureStreamFrameSchema>;
 export type SyncEvent = z.infer<typeof syncEventSchema>;
 export type NormalizedSyncMessage = z.infer<typeof normalizedSyncMessageSchema>;
 export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSchema>;

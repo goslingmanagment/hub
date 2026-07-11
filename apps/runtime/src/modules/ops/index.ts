@@ -28,6 +28,10 @@ import {
 import { sql } from "drizzle-orm";
 
 import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
+import {
+  validatePromptDebugEchoUntil,
+  validatePromptDebugEchoUsers,
+} from "../ai/index.ts";
 import { buildConfigView } from "../../services/app-config-service.ts";
 import { LIVE_CONFIG_KEYS } from "../../services/effective-config.ts";
 import { commitStagedConfigChange } from "../../services/staged-config.ts";
@@ -842,6 +846,10 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       const validateTransition = patch.key === "aiTranscriptFreshUnionMode"
         ? (current: ConfigOverrideValue | null) =>
           validateAiTranscriptFreshUnionModeTransition(current, String(validated.value))
+        : patch.key === "chatMuseAiPromptDebugEchoUsers"
+        ? () => validatePromptDebugEchoUsers(String(validated.value))
+        : patch.key === "chatMuseAiPromptDebugEchoUntil"
+        ? () => validatePromptDebugEchoUntil(String(validated.value))
         : undefined;
       return {
         key: patch.key,

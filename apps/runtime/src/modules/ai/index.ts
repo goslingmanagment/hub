@@ -22,6 +22,14 @@ import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/a
 import { requireApiKeyUser, requireOwner } from "../../services/auth.ts";
 import { NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+import { hasDebugInputCapability } from "./prompt-debug-echo.ts";
+
+export {
+  hasDebugInputCapability,
+  isPromptDebugEchoAllowed,
+  validatePromptDebugEchoUntil,
+  validatePromptDebugEchoUsers,
+} from "./prompt-debug-echo.ts";
 
 // AI module (target §6.1): gateway stream, usage ledger intake, usage
 // reporting. Handlers relocated verbatim from server.ts (Stage 19 Task 3).
@@ -106,6 +114,11 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
       principal,
       request.params.feature,
       request.body,
+      {
+        debugPromptEcho: hasDebugInputCapability(
+          request.headers["x-kernel-ai-capabilities"],
+        ),
+      },
     );
     await pipeAiGatewaySse(request, reply, stream);
   });
@@ -132,7 +145,7 @@ export async function pipeAiGatewaySse(
     let terminalDoneFrame: Parameters<typeof serializeAiGatewaySseFrame>[0] | null = null;
     raw.writeHead(200, {
       "content-type": "text/event-stream",
-      "cache-control": "no-cache, no-transform",
+      "cache-control": "no-store, no-cache, no-transform",
       connection: "keep-alive",
       "x-accel-buffering": "no",
     });
@@ -150,6 +163,9 @@ export async function pipeAiGatewaySse(
     raw.on("close", abortProvider);
     try {
       writeFrame(stream.meta);
+      if (stream.debugFrame) {
+        writeFrame(stream.debugFrame);
+      }
       for await (const frame of stream.stream(abort.signal)) {
         if (frame.type === "usage") {
           terminalUsage = frame.usage;

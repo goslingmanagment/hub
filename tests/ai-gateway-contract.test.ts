@@ -4,6 +4,7 @@ import { aiUsageFeatures } from "@agency_hub_core/shared";
 import { describe, expect, it } from "vitest";
 
 import {
+  aiFeatureStreamFrameSchema,
   aiGatewayStreamBodySchema,
   aiGatewayStreamFrameSchema,
 } from "../packages/contracts/src/routes.ts";
@@ -109,5 +110,17 @@ describe("AI gateway contract", () => {
         costApproximate: false,
       },
     }).success).toBe(false);
+  });
+
+  it("accepts debug_input_v1 only on the feature-lane frame union", () => {
+    const frame = {
+      type: "debug_input_v1",
+      systemBlocks: [{ text: "system", cache: "1h" }],
+      userBlocks: [{ text: "x".repeat(300_000), cache: "5m" }],
+      contextManifest: { fanProfile: { version: 2, ageDays: 1 } },
+    };
+    expect(aiFeatureStreamFrameSchema.safeParse(frame).success).toBe(true);
+    expect(aiGatewayStreamFrameSchema.safeParse(frame).success).toBe(false);
+    expect(aiFeatureStreamFrameSchema.safeParse({ ...frame, extra: true }).success).toBe(false);
   });
 });
