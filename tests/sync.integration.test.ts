@@ -17,12 +17,18 @@ import {
   updatePageMetadata,
 } from "@agency_hub_core/db";
 import { buildProxyEgressKey, buildSyncPageExecuteGroupId, encryptJson } from "@agency_hub_core/shared";
-import { PgBoss } from "pg-boss";
+import { PgBoss, type Db as PgBossDb } from "pg-boss";
 
 import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
 import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
 import { requestPageSync, waitForRequestedSyncRequests } from "../apps/runtime/src/services/sync-control.ts";
-import { ensureSyncQueues, sendSyncPageWakeup, SYNC_PAGE_EXECUTE_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
+import {
+  ensureSyncQueues,
+  sendSyncPageWakeup,
+  SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
+  SYNC_PAGE_EXECUTE_QUEUE,
+  SYNC_PAGE_EXECUTE_RETRY_LIMIT,
+} from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
   seedFanslyPage,
@@ -393,6 +399,184 @@ describe("sync integration", () => {
     // PgBoss owns transient state in pgboss; resetIntegrationDatabase clears it between tests.
   });
 
+  it("reconciles a pre-existing execute queue and pins new job options", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = new PgBoss({ connectionString: testDb.connectionString });
+    await boss.start();
+    try {
+      await boss.createQueue(SYNC_PAGE_EXECUTE_QUEUE, {
+        policy: "exclusive",
+        expireInSeconds: 180,
+        heartbeatSeconds: 30,
+        retryLimit: 2,
+      });
+
+      await ensureSyncQueues(boss);
+
+      expect(await boss.getQueue(SYNC_PAGE_EXECUTE_QUEUE)).toMatchObject({
+        policy: "exclusive",
+        expireInSeconds: SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
+        heartbeatSeconds: 30,
+        retryLimit: SYNC_PAGE_EXECUTE_RETRY_LIMIT,
+      });
+
+      const jobId = await sendSyncPageWakeup(boss, {
+        platformAccountId: 55,
+        priority: 25,
+        provider: "onlyfans",
+        egressKey: "direct",
+      });
+      if (!jobId) {
+        throw new Error("Expected a queued wakeup id");
+      }
+      const jobs = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: jobId });
+      expect(jobs[0]).toMatchObject({
+        singletonKey: "55",
+        expireInSeconds: SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
+        retryLimit: SYNC_PAGE_EXECUTE_RETRY_LIMIT,
+      });
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
+  it("hands a fixed singleton from parent to child in one pg transaction", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = new PgBoss({ connectionString: testDb.connectionString });
+    await boss.start();
+    try {
+      await ensureSyncQueues(boss);
+      const parentId = await sendSyncPageWakeup(boss, {
+        platformAccountId: 55,
+        priority: 25,
+        provider: "onlyfans",
+        egressKey: "direct",
+      });
+      expect(parentId).toEqual(expect.any(String));
+      const [parent] = await boss.fetch<{ platformAccountId: number }>(SYNC_PAGE_EXECUTE_QUEUE, {
+        includeMetadata: true,
+      });
+      if (!parent) {
+        throw new Error("Expected to fetch the parent wakeup");
+      }
+
+      await expect(sendSyncPageWakeup(boss, {
+        platformAccountId: 55,
+        priority: 25,
+        provider: "onlyfans",
+        egressKey: "direct",
+      })).resolves.toBeNull();
+
+      const client = await testDb.pool.connect();
+      let committed = false;
+      try {
+        await client.query("begin");
+        const db: PgBossDb = {
+          executeSql: (text, values) => client.query(text, values),
+        };
+        const completed = await boss.complete(SYNC_PAGE_EXECUTE_QUEUE, parent.id, null, { db }) as unknown as {
+          affected: number;
+        };
+        expect(completed.affected).toBe(1);
+        const childId = await sendSyncPageWakeup(boss, {
+          platformAccountId: 55,
+          priority: 25,
+          provider: "onlyfans",
+          egressKey: "direct",
+          db,
+        });
+        if (!childId) {
+          throw new Error("Expected an atomic child wakeup id");
+        }
+        await client.query("commit");
+        committed = true;
+
+        const parentRows = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: parent.id });
+        const childRows = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: childId });
+        expect(parentRows[0]?.state).toBe("completed");
+        expect(childRows[0]).toMatchObject({ state: "created", singletonKey: "55" });
+      } finally {
+        if (!committed) {
+          await client.query("rollback").catch(() => undefined);
+        }
+        client.release();
+      }
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
+  it("rolls both parent completion and child insertion back together", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = new PgBoss({ connectionString: testDb.connectionString });
+    await boss.start();
+    try {
+      await ensureSyncQueues(boss);
+      await sendSyncPageWakeup(boss, {
+        platformAccountId: 55,
+        priority: 25,
+        provider: "onlyfans",
+        egressKey: "direct",
+      });
+      const [parent] = await boss.fetch<{ platformAccountId: number }>(SYNC_PAGE_EXECUTE_QUEUE, {
+        includeMetadata: true,
+      });
+      if (!parent) {
+        throw new Error("Expected to fetch the parent wakeup");
+      }
+
+      const client = await testDb.pool.connect();
+      let childId: string | null = null;
+      try {
+        await client.query("begin");
+        const db: PgBossDb = {
+          executeSql: (text, values) => client.query(text, values),
+        };
+        const completed = await boss.complete(SYNC_PAGE_EXECUTE_QUEUE, parent.id, null, { db }) as unknown as {
+          affected: number;
+        };
+        expect(completed.affected).toBe(1);
+        const sent = await sendSyncPageWakeup(boss, {
+          platformAccountId: 55,
+          priority: 25,
+          provider: "onlyfans",
+          egressKey: "direct",
+          db,
+        });
+        if (!sent) {
+          throw new Error("Expected a transactional child wakeup id");
+        }
+        childId = sent;
+        await client.query("rollback");
+      } finally {
+        await client.query("rollback").catch(() => undefined);
+        client.release();
+      }
+
+      if (!childId) {
+        throw new Error("Expected the rolled-back child id to be captured");
+      }
+      const parentRows = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: parent.id });
+      const childRows = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: childId });
+      expect(parentRows[0]?.state).toBe("active");
+      expect(childRows).toHaveLength(0);
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
   it("queues sync revisions when the page already has a follower sync timestamp", async (context) => {
     if (!testDb) {
       context.skip();
@@ -485,13 +669,15 @@ describe("sync integration", () => {
     expect(boss.send).toHaveBeenCalledWith(
       SYNC_PAGE_EXECUTE_QUEUE,
       { platformAccountId: page.id },
-      {
+      expect.objectContaining({
         singletonKey: String(page.id),
         priority: resolvePageSyncPriority("light", "manual"),
+        expireInSeconds: SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
+        retryLimit: SYNC_PAGE_EXECUTE_RETRY_LIMIT,
         group: {
           id: buildSyncPageExecuteGroupId("fansly", egressKey),
         },
-      },
+      }),
     );
 
     const stateRows = await listPageSyncStates(app.db, {

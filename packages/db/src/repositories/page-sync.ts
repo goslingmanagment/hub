@@ -76,6 +76,11 @@ export interface PageSyncRetryResult {
   retried: boolean;
 }
 
+export interface PageSyncYieldResult {
+  updated: boolean;
+  superseded: boolean;
+}
+
 export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
   light: {
     stream: "light",
@@ -1399,8 +1404,8 @@ export async function acquirePageSyncLease(
           leased_seq = candidate."requestSeq",
           lease_owner = ${input.workerId},
           lease_token = ${input.leaseToken},
-          lease_heartbeat_at = ${now},
-          lease_expires_at = ${new Date(now.getTime() + input.leaseTtlMs)},
+          lease_heartbeat_at = clock_timestamp(),
+          lease_expires_at = clock_timestamp() + (${input.leaseTtlMs} * interval '1 millisecond'),
           started_at = ${now},
           updated_at = ${now}
       from candidate
@@ -1474,13 +1479,15 @@ export async function heartbeatPageSyncLease(
   const now = input.now ?? new Date();
   const result = await db.execute(sql`
     update ${pageSyncStates}
-    set lease_heartbeat_at = ${now},
-        lease_expires_at = ${new Date(now.getTime() + input.leaseTtlMs)},
+    set lease_heartbeat_at = clock_timestamp(),
+        lease_expires_at = clock_timestamp() + (${input.leaseTtlMs} * interval '1 millisecond'),
         updated_at = ${now}
     where page_id = ${input.pageId}
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq is not null
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
   `);
 
   return (result.rowCount ?? 0) > 0;
@@ -1514,6 +1521,7 @@ export async function recordRunningPageSyncProgress(
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
       and status = 'running'
+      and lease_expires_at > clock_timestamp()
   `);
 
   return (result.rowCount ?? 0) > 0;
@@ -1542,6 +1550,9 @@ export async function clearPageSyncLease(
     where page_id = ${input.pageId}
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
+      and leased_seq is not null
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
   `);
 
   return (result.rowCount ?? 0) > 0;
@@ -1595,6 +1606,8 @@ export async function completePageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
   `);
 
   const applied = (result.rowCount ?? 0) > 0;
@@ -1624,11 +1637,11 @@ export async function yieldPageSync(
     requestSource?: SyncRequestSource | null;
     now?: Date;
   },
-) {
+): Promise<PageSyncYieldResult> {
   const now = input.now ?? new Date();
   const retryAt = input.retryAt ?? null;
   const requestSource = input.requestSource ?? null;
-  const result = await db.execute(sql`
+  const result = await db.execute(sql<{ requestSeq: number }>`
     update ${pageSyncStates}
     set status = 'pending',
         leased_seq = null,
@@ -1637,12 +1650,18 @@ export async function yieldPageSync(
         phase = ${input.phase ?? null},
         work_class = ${input.workClass ?? null},
         progress = ${input.progress ?? {}},
-        request_source = coalesce(${requestSource}::sync_request_source, request_source),
+        request_source = case
+                           when request_seq > ${input.requestSeq} then request_source
+                           else coalesce(${requestSource}::sync_request_source, request_source)
+                         end,
         consecutive_failures = 0,
         last_error_code = null,
         last_error_summary = null,
         retry_kind = null,
-        retry_at = ${retryAt},
+        retry_at = case
+                     when request_seq > ${input.requestSeq} then null::timestamptz
+                     else ${retryAt}
+                   end,
         lease_owner = null,
         lease_token = null,
         lease_heartbeat_at = null,
@@ -1652,9 +1671,19 @@ export async function yieldPageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
+    returning request_seq as "requestSeq"
   `);
 
-  return (result.rowCount ?? 0) > 0;
+  const updated = result.rows[0] ?? null;
+  const updatedRequestSeq = updated
+    ? normalizeNumber(updated.requestSeq as NumericValue, "requestSeq")
+    : null;
+  return {
+    updated: updated !== null,
+    superseded: updatedRequestSeq !== null && updatedRequestSeq > input.requestSeq,
+  };
 }
 
 function resolveRetryDelayMs(consecutiveFailures: number) {
@@ -1714,6 +1743,8 @@ export async function retryPageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
     returning status,
               retry_kind as "retryKind"
   `);
@@ -1778,6 +1809,8 @@ export async function blockPageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
     returning status,
               blocker_kind as "blockerKind"
   `);

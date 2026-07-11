@@ -67,6 +67,7 @@ export async function assertOwnedPageSyncLease(
       and lease_token = ${executionContext.leaseToken}
       and leased_seq = ${executionContext.requestSeq}
       and status = 'running'
+      and lease_expires_at > clock_timestamp()
     limit 1
     ${input?.lock ? sql`for update` : sql``}
   `);
