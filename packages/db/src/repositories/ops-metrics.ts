@@ -35,6 +35,16 @@ export async function pruneOpsMetricSamples(db: Database, retentionDays: number)
   return result.rowCount ?? 0;
 }
 
+/** W5.2 (A53): the ops watchdog's sampler deadman — newest sample timestamp
+ * across every series; null when the table is empty. */
+export async function getLatestOpsMetricSampleAt(db: Database): Promise<Date | null> {
+  const result = await db.execute<{ latest: Date | string | null }>(sql`
+    select max(sampled_at) as latest from ops_metric_samples
+  `);
+  const latest = result.rows[0]?.latest;
+  return latest ? new Date(latest) : null;
+}
+
 export interface OpsMetricSampleRow {
   metric: string;
   quantile: string;

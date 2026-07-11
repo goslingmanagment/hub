@@ -2638,6 +2638,8 @@ const notificationIncidentKindEnum = z.enum([
   "wrong_transactions_writer",
   "read_gateway_capture",
   "golden_signal_lag",
+  "scheduler_silent",
+  "ops_sampler_silent",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const deliveryKindEnum = z.enum([

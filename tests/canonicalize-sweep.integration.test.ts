@@ -9,7 +9,10 @@ import {
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 
-import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import {
+  resetCanonicalizeSweepCursors,
+  runCanonicalization,
+} from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -30,6 +33,8 @@ beforeEach(async () => {
   if (testDb) {
     await resetIntegrationDatabase(testDb.pool);
   }
+  // W5.3: the sweep cursor is module-level state; isolate tests.
+  resetCanonicalizeSweepCursors();
 });
 
 function sha256(payload: unknown): Buffer {
@@ -327,5 +332,76 @@ describe("canonicalization sweep (Stage 8)", () => {
     // never spreading to already-stamped work.
     const second = await runCanonicalization(appStub(), { families: [throwingFamily] });
     expect(second).toMatchObject({ scanned: 1, errored: 1, stamped: 0, appended: 0 });
+  });
+
+  // W5.3 (B3, decision #123 semantics): the minutely sweep resumes from a
+  // per-family cursor, so permanently-unstampable rows at the scan head can
+  // no longer starve fresh rows behind them; a wrap retries skipped rows
+  // once per full cycle; CLI/replay runs ignore the cursor entirely.
+  it("sweep cursor: stuck rows stop starving fresh rows; wrap retries them; CLI runs bypass (W5.3)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const db = testDb.db;
+    const bounds = { pageSize: 2, maxPagesPerFamily: 2 };
+
+    // Five permanently-stuck rows at the head (unmapped account: canonicalize
+    // yields a draft but no account resolves — skippedUnmapped every pass)...
+    for (let i = 1; i <= 5; i += 1) {
+      await insertObservation(db, {
+        source: "webhook",
+        producer: "ofapi:webhook",
+        platform: "onlyfans",
+        accountId: null,
+        kind: "messages.received",
+        payload: {
+          event: "messages.received",
+          account_id: "acct_stuck",
+          payload: { id: 9200 + i, createdAt: "2026-07-01T10:00:00+00:00", fromUser: { id: 900 + i }, text: `stuck-${i}`, price: 0, isFree: true, mediaCount: 0 },
+        },
+        payloadHash: sha256(`stuck-${i}`),
+        idempotencyKey: `cursor-stuck-${i}`,
+      });
+    }
+    // ...and two fresh mappable rows BEHIND them.
+    for (let i = 1; i <= 2; i += 1) {
+      await insertObservation(db, {
+        source: "webhook",
+        producer: "ofapi:webhook",
+        platform: "onlyfans",
+        accountId: 4,
+        kind: "messages.received",
+        payload: {
+          event: "messages.received",
+          account_id: "acct_x",
+          payload: { id: 9300 + i, createdAt: "2026-07-01T11:00:00+00:00", fromUser: { id: 950 + i }, text: `fresh-${i}`, price: 0, isFree: true, mediaCount: 0 },
+        },
+        payloadHash: sha256(`fresh-${i}`),
+        idempotencyKey: `cursor-fresh-${i}`,
+      });
+    }
+
+    // Run 1 (sweep): the paging budget is eaten entirely by the stuck head —
+    // this is the pre-fix starvation shape, bounded to one run now.
+    const first = await runCanonicalization(appStub(), { useSweepCursor: true, ...bounds });
+    expect(first).toMatchObject({ scanned: 4, skippedUnmapped: 4, appended: 0, stamped: 0 });
+
+    // A CLI-style run (no cursor) rescans from the head — deterministic —
+    // and does NOT move the sweep cursor.
+    const cli = await runCanonicalization(appStub(), { ...bounds });
+    expect(cli).toMatchObject({ scanned: 4, skippedUnmapped: 4, appended: 0 });
+
+    // Run 2 (sweep): resumes past the stuck head — the fresh rows finally
+    // process. Pre-fix, this run would have rescanned the same head forever.
+    const second = await runCanonicalization(appStub(), { useSweepCursor: true, ...bounds });
+    expect(second).toMatchObject({ scanned: 3, skippedUnmapped: 1, appended: 2, stamped: 2 });
+    const events = await listEventsSince(db, { accountId: 4, afterSeq: 0 });
+    expect(events.map((event) => event.type)).toEqual(["message.received", "message.received"]);
+
+    // Run 3 (sweep): end-of-signal wrapped the cursor to the head — the
+    // stuck rows get their once-per-cycle retry.
+    const third = await runCanonicalization(appStub(), { useSweepCursor: true, ...bounds });
+    expect(third).toMatchObject({ scanned: 4, skippedUnmapped: 4, appended: 0 });
   });
 });

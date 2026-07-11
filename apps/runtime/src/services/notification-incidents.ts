@@ -26,11 +26,17 @@ function incidentKey(
     kind: NotificationIncidentKind;
     platformAccountId: number | null;
     stream?: SyncStream | null;
+    subKey?: string | null;
   },
 ) {
   if (input.platformAccountId === null) {
     // Account-global OFAPI incidents (low credit, webhook silence).
-    return `${input.kind}:global`;
+    // W5.1 (A25): an optional subKey splits the latch per condition —
+    // golden_signal_lag:global:<metric> — so a standing breach on one
+    // signal can no longer mask every other signal behind one shared key.
+    return input.subKey
+      ? `${input.kind}:global:${input.subKey}`
+      : `${input.kind}:global`;
   }
   return input.kind === "stream_failed_threshold" && input.stream
     ? `${input.kind}:${input.platformAccountId}:${input.stream}`
@@ -74,6 +80,10 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 Read-gateway capture tee dropping";
     case "golden_signal_lag":
       return "🚨 Golden-signal lag over threshold";
+    case "scheduler_silent":
+      return "🚨 Scheduler heartbeat silent — cron is not firing";
+    case "ops_sampler_silent":
+      return "🚨 Golden-signal sampler silent — ops telemetry is blind";
   }
 }
 
@@ -127,6 +137,10 @@ function resolveDetailForIncident(
       return "Read-gateway capture tee healthy again";
     case "golden_signal_lag":
       return "Golden-signal lag back under threshold";
+    case "scheduler_silent":
+      return "Scheduler heartbeat back; cron firing again";
+    case "ops_sampler_silent":
+      return "Golden-signal sampler emitting again";
   }
 }
 
@@ -169,6 +183,7 @@ async function openIncidentAndNotify(
     pageLabel: string | null;
     platform: "fansly" | "onlyfans" | null;
     stream?: SyncStream | null;
+    subKey?: string | null;
     errorCode?: string | null;
     errorSummary?: string | null;
     occurredAt?: Date;
@@ -323,6 +338,7 @@ async function resolveIncidentAndNotify(
     platform: "fansly" | "onlyfans" | null;
     recoveredAt?: Date;
     stream?: SyncStream | null;
+    subKey?: string | null;
   },
 ) {
   const recoveredAt = input.recoveredAt ?? new Date();
@@ -549,12 +565,26 @@ export async function resolveOfapiAuthIncident(
   });
 }
 
-/** Process-global conditions (low credit balance, webhook silence, burn rate, disk usage, partition lead). */
+type GlobalIncidentKind =
+  | "ofapi_low_credit"
+  | "ofapi_webhook_silence"
+  | "ofapi_burn_rate"
+  | "db_disk_usage"
+  | "observations_partitions"
+  | "read_gateway_capture"
+  | "golden_signal_lag"
+  | "scheduler_silent"
+  | "ops_sampler_silent";
+
+/** Process-global conditions (low credit balance, webhook silence, burn rate,
+ * disk usage, partition lead, watchdog deadmen). W5.1 (A25): `subKey` splits
+ * the latch per condition within a kind (golden_signal_lag per metric). */
 export async function notifyOfapiGlobalIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
-    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions" | "read_gateway_capture" | "golden_signal_lag";
+    kind: GlobalIncidentKind;
     errorSummary: string;
+    subKey?: string | null;
     occurredAt?: Date;
   },
 ): Promise<boolean> {
@@ -563,6 +593,7 @@ export async function notifyOfapiGlobalIncident(
     platformAccountId: null,
     pageLabel: null,
     platform: null,
+    subKey: input.subKey ?? null,
     errorSummary: input.errorSummary,
     occurredAt: input.occurredAt,
   });
@@ -571,7 +602,8 @@ export async function notifyOfapiGlobalIncident(
 export async function resolveOfapiGlobalIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
-    kind: "ofapi_low_credit" | "ofapi_webhook_silence" | "ofapi_burn_rate" | "db_disk_usage" | "observations_partitions" | "read_gateway_capture" | "golden_signal_lag";
+    kind: GlobalIncidentKind;
+    subKey?: string | null;
     recoveredAt?: Date;
   },
 ) {
@@ -580,6 +612,7 @@ export async function resolveOfapiGlobalIncident(
     platformAccountId: null,
     pageLabel: null,
     platform: null,
+    subKey: input.subKey ?? null,
     recoveredAt: input.recoveredAt,
   });
 }

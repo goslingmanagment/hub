@@ -213,7 +213,9 @@ export async function startWorkerServices(
   });
 
   await boss.work(CANONICALIZE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
-    const result = await runCanonicalization(app);
+    // W5.3 (B3): the minutely sweep is the ONLY caller that resumes from the
+    // per-family cursor; CLI/replay runs stay cursor-free.
+    const result = await runCanonicalization(app, { useSweepCursor: true });
     if (result.scanned > 0) {
       app.logger.info(result, "Canonicalization sweep complete");
     }

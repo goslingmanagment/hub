@@ -162,6 +162,8 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "wrong_transactions_writer",
   "read_gateway_capture",
   "golden_signal_lag",
+  "scheduler_silent",
+  "ops_sampler_silent",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",

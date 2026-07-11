@@ -21,7 +21,9 @@ export type NotificationIncidentKind =
   | "observations_partitions"
   | "wrong_transactions_writer"
   | "read_gateway_capture"
-  | "golden_signal_lag";
+  | "golden_signal_lag"
+  | "scheduler_silent"
+  | "ops_sampler_silent";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";

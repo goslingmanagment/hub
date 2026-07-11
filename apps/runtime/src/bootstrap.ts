@@ -159,26 +159,32 @@ export async function createAppContext(): Promise<AppContext> {
     const db = createDb(pool);
 
     // Apply the staged ('boot') DB overrides onto the env config exactly once, before
-    // anything reads config (adapters/OFAPI client/sink). A read or apply failure is
-    // non-fatal: log and fall back to the env config so a DB hiccup can't wedge boot.
-    // With no boot overrides in the DB this is a no-op and config === rawConfig.
-    let bootSkipped: SkippedOverride[] = [];
-    let config = rawConfig;
-    try {
-      const overrides = await getConfigOverrides(db);
-      const applied = applyBootOverrides(rawConfig, overrides);
-      config = applied.config;
-      bootSkipped = applied.skipped;
-    } catch (err) {
-      // A DB read failure must not wedge boot — but it also must not skip the staged
-      // requires-graph normalization. applyBootOverrides with NO overrides is pure (no I/O)
-      // and still forces any invalid env-only dependent=on/prereq=off graph OFF, so boot can
-      // never start an invalid graph even when the override read fails (e.g. a transient blip).
-      logger.warn({ err }, "boot override read failed; normalizing env config without overrides");
-      const applied = applyBootOverrides(rawConfig, new Map());
-      config = applied.config;
-      bootSkipped = applied.skipped;
-    }
+    // anything reads config (adapters/OFAPI client/sink). With no boot overrides in
+    // the DB this is a no-op and config === rawConfig.
+    //
+    // W5.5 (A31): a read failure used to fall back to env config — i.e. boot
+    // with EVERY staged cutover flag silently off. A crash-looping container
+    // is visible; a "healthy" api running pre-cutover code paths is not.
+    // Retry the read (schema is already proven ready above, so failures here
+    // are transient), then rethrow: fail closed, never fail open.
+    const overrides = await (async () => {
+      const attempts = 3;
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await getConfigOverrides(db);
+        } catch (err) {
+          if (attempt >= attempts) {
+            logger.error({ err, attempts }, "boot override read failed after retries; refusing fail-open boot");
+            throw err;
+          }
+          logger.warn({ err, attempt }, "boot override read failed; retrying");
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+        }
+      }
+    })();
+    const applied = applyBootOverrides(rawConfig, overrides);
+    const config = applied.config;
+    const bootSkipped: SkippedOverride[] = applied.skipped;
 
     const adapter = new FanslyAdapter({
       baseUrl: config.fanslyBaseUrl,

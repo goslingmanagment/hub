@@ -41,4 +41,13 @@ describe("resolveMessageForIncident", () => {
     expect(message).toContain("Proxy assigned");
     expect(message).toContain("egress restored");
   });
+
+  it("watchdog kinds resolve with their own texts (W5.2)", () => {
+    expect(
+      resolveMessageForIncident({ kind: "scheduler_silent", pageLabel: null, platform: null }),
+    ).toContain("cron firing again");
+    expect(
+      resolveMessageForIncident({ kind: "ops_sampler_silent", pageLabel: null, platform: null }),
+    ).toContain("sampler emitting again");
+  });
 });

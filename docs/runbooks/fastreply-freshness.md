@@ -3,6 +3,15 @@
 Build spec: `docs/fastreply-freshness-build-spec.md` (frozen). This runbook collects
 the operational notes each Wave-1 PR ships; deploy preconditions live at the end.
 
+**Standard prod psql invocation** (W5 hygiene; compose interpolation needs the env
+file, so exec the container directly — wrap ad-hoc reads in a read-only envelope):
+
+```bash
+ssh root@45.8.230.111
+docker exec -it agency-hub-postgres-1 psql -X -v ON_ERROR_STOP=1 -U postgres -d agency_hub_core
+# BEGIN READ ONLY; SET LOCAL statement_timeout='30s'; …; ROLLBACK;
+```
+
 Desktop: NOTHING to build (0.1.33 is live) — at deploy, only verify the feed serves
 0.1.33. **0.1.29 is manual-reinstall-only**: the updater has no allowDowngrade
 (verified), so a machine rolled back to 0.1.29 can only move forward by reinstalling.
@@ -109,6 +118,9 @@ mass-appends redundant superseding events for the whole history (preamble 1).
    correction reaching the ledger); `lineageSkips`/`stubSkips` nonzero-but-stable
    is fine, growing is not.
 4. **Fansly 1970 repair** (owner CLI, one-shot campaign):
+   > **[Annotation, W5 2026-07-11]** The 1970 campaign COMPLETED 2026-07-10
+   > (B11: 50,848/50,848 repaired + archive heal verified); both counts below
+   > now read 0 on prod. Steps kept for provenance/re-runs only.
    - size first (prod psql): `SELECT count(*) FROM domain_events_pre_2024 WHERE
      occurred_at < '2000-01-01' AND type IN ('message.received','message.sent');`
    - `events:repair-fansly-1970 --dry-run` (add `--account <id>` to pilot one page)

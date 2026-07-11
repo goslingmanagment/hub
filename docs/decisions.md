@@ -3443,3 +3443,57 @@ deactivated, nor can the caller deactivate itself. Sibling change, same
 motivation (honest admin surface): `adminListUsers` now carries
 `lastActiveAt = max(api-key last_used, device-token last_used)` — the key-only
 column showed "Never" for every #116 password+device-token chatter.
+
+**Decision #128 (2026-07-11, B5 — recurring DB backups declined, risk accepted):**
+The 2026-07-08 audit's B5 finding (decision #41 "nightly off-box Postgres backups +
+restore drills" never implemented) was resolved by the owner as ACCEPTED RISK, not
+implementation — same call as 2026-07-04, re-confirmed after the 2026-07-10 reboot
+purged the only ad-hoc dump from /private/tmp. Consequence, stated plainly: loss of the
+VPS (disk failure, provider incident, compromise) = permanent loss of ALL platform
+history since the last manual dump, for a system whose own invariants promise 100-year
+retention; Stage-28 tiering is on the same volume and provides zero protection. No
+recurring cron/timer/provider-snapshot job exists on prod (verified 2026-07-11: root
+crontab none, no backup timers/containers). The only restore point is a manual
+`pg_dump -Fc` (latest: ~/backups/agency-hub/, 2026-07-11, 4.8 GB, taken from prod rev
+ea9ac13). Owner may reverse this by implementing #41 at any time; until then B5 is
+CLOSED as accepted-risk. Supersedes the "P1-if-absent" open state in the audit addendum.
+
+**Decision #129 (2026-07-11, B7 — erasure completeness moot: erasures will not be executed):**
+Owner ruling on the audit's B7 (erasure module misses sync_raw_payloads /
+ofapi_webhook_events / ofapi_spend_projection_events + the W2.1 snapshot table) and the
+pending #121 waiver: the agency does not intend to execute data-erasure requests at all
+— "такого не будет никогда, мы не будем это исполнять". Verified prod fact 2026-07-11:
+erasure_log has ZERO non-dry-run rows; the gap has never fired and stays latent. The
+erasure module remains in the tree untouched (capture-first: nothing is deleted), but no
+W6 remediation wave will be built; the three surviving stores are sanctioned as-is. If
+this policy ever reverses (a real deletion request arrives), the fix recipe is preserved
+in fix-plan-FINAL-2026-07-10.md §W6 (variant b) and MUST ship before executing that
+request — an erasure run under today's module would falsely report completeness.
+Resolves the #121 pending waiver. B7 CLOSED (policy), not fixed (code).
+
+**Decision #130 (2026-07-11, W5 — observability truthfulness: per-signal latch,
+wedge gauges, ops deadman, sweep cursor):** four related semantics changes from
+the audit's B8/A25/A53/B3, one deploy (migration 0080). (1) Golden-signal
+incidents split per metric — incident key `golden_signal_lag:global:<metric>`
+(kind unchanged); a standing breach on one signal no longer masks or falsely
+resolves the others; the legacy shared key is resolved once at the first
+post-deploy sampler run. Absence semantics: a metric that emits NO sample this
+run keeps its latch exactly as-is — the old code resolved the shared latch on
+"no breaches", so a completely dead pipeline sent "✅ Resolved". (2) Always-emit
+wedge gauges `capture_pending_age` (oldest unprocessed webhook, 10-min
+threshold) and `command_queued_age` (oldest queued+unattempted command, 15-min
+threshold — the W3.2 TTL sweep cancels at 10, so a breach means the sweep
+itself is dead); a missing SSE smoke-checkpoint row latches as a failed probe
+instead of disappearing. `acceptance_events_1h` rides along as a
+threshold-free liveness gauge (D9). (3) New api-side ops watchdog
+(`ops-watchdog.ts`, kinds `scheduler_silent`/`ops_sampler_silent`): pages when
+the scheduler heartbeat or the sampler goes >3 min silent, 5-min boot grace
+for deploy restarts — a dead scheduler used to stop ALL cron with zero pages.
+(4) The canonicalize sweep resumes from a per-family in-memory cursor with
+wrap-to-head (#123 semantics; CLI/replay runs bypass it), so a stuck cohort at
+the scan head can no longer starve fresh observations; the 4000/min ceiling
+stays (throughput bound, not a starvation trap). Ride-alongs: boot-override
+read is now retry-3-then-RETHROW (A31 — a crash-looping container is visible,
+a silently flags-off "healthy" api is not); sampler indexes per the Stage-0
+EXPLAIN (BRIN on the append tables, partial btree on the bounded lookups);
+metric-sample prune moved from every minute to hourly.

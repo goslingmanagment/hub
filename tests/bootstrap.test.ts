@@ -181,9 +181,9 @@ describe("bootstrap", () => {
     expect(bootstrapMocks.createPool).not.toHaveBeenCalled();
   });
 
-  it("normalizes an invalid env-only staged graph when the override read fails at boot", async () => {
+  it("retries a transient override read failure, then boots with the graph normalized (A31)", async () => {
     bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
-    // The override read throws (a transient DB blip) → the fallback path runs.
+    // The override read throws ONCE (a transient DB blip) → the retry succeeds.
     bootstrapMocks.getConfigOverrides.mockRejectedValueOnce(new Error("db blip"));
     // Env itself is an invalid staged graph: dmSync ON while its prerequisite dmProjection is OFF.
     bootstrapMocks.loadConfig.mockReturnValueOnce({
@@ -195,17 +195,32 @@ describe("bootstrap", () => {
 
     const app = await createAppContext();
 
-    // The fallback still normalizes: dmSync is forced OFF because its prerequisite is off, and
-    // the skip is surfaced — boot never starts the invalid graph even though the read failed.
+    // The retried read supplies the overrides; normalization still forces
+    // dmSync OFF (prerequisite off) and surfaces the skip.
     expect(app.config.ofapiDmSyncEnabled).toBe(false);
     expect(app.bootSkipped?.map((s) => s.key)).toContain("ofapiDmSyncEnabled");
     expect(bootstrapMocks.logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(Error) }),
-      "boot override read failed; normalizing env config without overrides",
+      expect.objectContaining({ err: expect.any(Error), attempt: 1 }),
+      "boot override read failed; retrying",
     );
 
     await app.close();
-  });
+  }, 15_000);
+
+  it("refuses to boot fail-open when the override read keeps failing (A31)", async () => {
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
+    // Every attempt fails → boot must THROW, never continue with all staged
+    // flags silently off (a crash-looping container is visible; a "healthy"
+    // api running pre-cutover code paths is not).
+    bootstrapMocks.getConfigOverrides.mockRejectedValue(new Error("db down"));
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+
+    await expect(createAppContext()).rejects.toThrow("db down");
+    expect(bootstrapMocks.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error), attempts: 3 }),
+      "boot override read failed after retries; refusing fail-open boot",
+    );
+  }, 15_000);
 });
 
 afterEach(() => {

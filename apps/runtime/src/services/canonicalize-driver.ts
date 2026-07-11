@@ -72,6 +72,31 @@ export interface CanonicalizationRunOptions {
   now?: Date;
   /** Family registry override (fault-isolation tests); default = all. */
   families?: readonly CanonicalizerFamily[];
+  /** W5.3 (B3, decision #123 semantics): resume each family from where the
+   * last sweep stopped instead of restarting at the head every minute.
+   * Permanently-unstampable rows (poison, skippedUnmapped) used to occupy
+   * the scan head forever — ≥4000 stuck rows starved the whole family. Only
+   * the minutely sweep worker sets this; CLI/replay paths (kinds/account/
+   * from/to filters) stay cursor-free so narrowed replays are deterministic. */
+  useSweepCursor?: boolean;
+  /** Paging-bound overrides (tests; mirrors the corrections reconciler). */
+  pageSize?: number;
+  maxPagesPerFamily?: number;
+}
+
+/** Where each family's NEXT sweep resumes (see useSweepCursor). Module-level
+ * on purpose, mirroring the corrections reconciler (#123): a wrap resets to
+ * the head, so skipped rows are retried once per full cycle, not once per
+ * minute. In-memory is enough — a worker restart costs one head pass. */
+const sweepCursors = new Map<string, number | null>();
+
+function sweepCursorKey(family: CanonicalizerFamily): string {
+  return `${family.source}:v${family.version}`;
+}
+
+/** Test hook: start every family's next sweep from the signal head. */
+export function resetCanonicalizeSweepCursors() {
+  sweepCursors.clear();
 }
 
 async function runFamily(
@@ -95,8 +120,14 @@ async function runFamily(
   const belowParseVersion = options.belowParseVersion ?? family.version;
   const now = options.now ?? new Date();
 
-  let afterId: number | null = null;
-  for (let pageIndex = 0; pageIndex < SWEEP_MAX_PAGES_PER_FAMILY; pageIndex += 1) {
+  const useCursor = options.useSweepCursor === true;
+  const pageSize = options.pageSize ?? SWEEP_PAGE_SIZE;
+  const maxPages = options.maxPagesPerFamily ?? SWEEP_MAX_PAGES_PER_FAMILY;
+  let afterId: number | null = useCursor
+    ? sweepCursors.get(sweepCursorKey(family)) ?? null
+    : null;
+  let reachedEnd = false;
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     const rows: ReplayObservationRow[] = await listObservationsForReplay(app.db, {
       belowParseVersion,
       source: family.source,
@@ -105,9 +136,10 @@ async function runFamily(
       from: options.from ?? null,
       to: options.to ?? null,
       afterId,
-      limit: SWEEP_PAGE_SIZE,
+      limit: pageSize,
     });
     if (rows.length === 0) {
+      reachedEnd = true;
       break;
     }
     afterId = rows[rows.length - 1]!.id;
@@ -167,9 +199,15 @@ async function runFamily(
       }
     }
 
-    if (rows.length < SWEEP_PAGE_SIZE) {
+    if (rows.length < pageSize) {
+      reachedEnd = true;
       break;
     }
+  }
+  if (useCursor) {
+    // End of signal → wrap to the head next run (skipped rows get their
+    // once-per-cycle retry); mid-signal → resume where this run stopped.
+    sweepCursors.set(sweepCursorKey(family), reachedEnd ? null : afterId);
   }
 }
 

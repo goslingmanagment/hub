@@ -64,6 +64,23 @@ export async function listActiveInstances(
   });
 }
 
+/** W5.2 (A53): the ops watchdog's scheduler deadman — is any instance of this
+ *  role fresh within the stale TTL? A read, not a listing: the watchdog runs
+ *  minutely from the api process. */
+export async function hasFreshInstanceHeartbeat(
+  db: Database,
+  input: { role: string; ttlMs?: number },
+): Promise<boolean> {
+  const cutoff = new Date(Date.now() - (input.ttlMs ?? INSTANCE_STALE_TTL_MS));
+  const row = await db.query.runtimeInstances.findFirst({
+    where: and(
+      eq(runtimeInstances.role, input.role),
+      gte(runtimeInstances.lastSeenAt, cutoff),
+    ),
+  });
+  return row !== undefined;
+}
+
 /** Every instance row (active and stale), ordered by role then instance id. The
  *  view classifies each by last_seen_at so a stopped process is surfaced as stale
  *  rather than hidden. */
