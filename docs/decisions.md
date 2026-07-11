@@ -3889,6 +3889,14 @@ import, and the lie was invisible because the manifest looked honest. The export
 now lives in the generator (`generate-sdk.ts`), and a dirty vendor can no longer
 pass as a snapshot.
 
+The guard checks the WHOLE tree, not just `packages/{sdk,contracts,shared}`. The
+first cut scoped it to the copied sources — and missed that the vendor script
+itself decides which files are copied, how their imports are rewritten and which
+compiler options emit the bytes, while package.json / pnpm-lock.yaml / tsconfig
+pin the tsc and zod that do the emitting. A guard that tolerates an uncommitted
+edit to its own definition of "these bytes" is the same provenance bug one level
+up.
+
 **Decision #140 (2026-07-11, executor fair scheduling — the group-wedge
 zombie):** three interacting defects let ONE page monopolize its egress
 group for hours while a sibling page's top-priority job starved 3.5h

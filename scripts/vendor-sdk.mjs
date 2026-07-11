@@ -36,21 +36,24 @@ const target = resolve(process.cwd(), targetArg);
 
 // The vendor manifest's sourceCommit is a PROVENANCE claim: "re-run the vendor
 // at this commit and you get these bytes back". The script reads the WORKING
-// TREE, so an uncommitted source edit would otherwise ship inside an artifact
-// stamped with a clean sha — a lie that only surfaces when the next clean
-// re-vendor silently drops an export the clients import (#140 near-miss).
-// Refuse by default; --allow-dirty is for local experiments and stamps the
-// commit "<sha>-dirty" so the artifact can never pass as a snapshot.
-const VENDORED_SOURCE_PATHS = ["packages/sdk", "packages/contracts", "packages/shared"];
-const dirtyPaths = execSync(
-  `git status --porcelain -- ${VENDORED_SOURCE_PATHS.join(" ")}`,
-  { cwd: coreRoot },
-).toString().trim();
-if (dirtyPaths && !allowDirty) {
+// TREE, so an uncommitted edit would otherwise ship inside an artifact stamped
+// with a clean sha — a lie that only surfaces when the next clean re-vendor
+// silently drops an export the clients import (#140 near-miss).
+//
+// The check covers the WHOLE tree, not just the staged sources: this script
+// itself decides which files are copied, how their imports are rewritten and
+// which compiler options produce the bytes, and package.json / pnpm-lock.yaml /
+// tsconfig pin the tsc + zod that emit them. An uncommitted edit to ANY of those
+// makes the artifact unreproducible from the sha, so "sources are clean" is too
+// narrow a promise to keep. Refuse by default; --allow-dirty is for local
+// experiments and stamps "<sha>-dirty" so the artifact can never pass as a
+// snapshot.
+const dirtyTree = execSync("git status --porcelain", { cwd: coreRoot }).toString().trim();
+if (dirtyTree && !allowDirty) {
   console.error(
     "vendor-sdk: refusing to vendor from a dirty tree — the manifest's sourceCommit would not reproduce these bytes.\n" +
-      "Commit the SDK/contracts/shared changes first, or pass --allow-dirty to stamp the artifact as dirty.\n" +
-      dirtyPaths,
+      "Commit (or stash) the working tree first, or pass --allow-dirty to stamp the artifact as dirty.\n" +
+      dirtyTree,
   );
   process.exit(1);
 }
@@ -75,7 +78,7 @@ if (!hashMatch) {
 }
 const contractHash = hashMatch[1];
 const headCommit = execSync("git rev-parse HEAD", { cwd: coreRoot }).toString().trim();
-const sourceCommit = dirtyPaths ? `${headCommit}-dirty` : headCommit;
+const sourceCommit = dirtyTree ? `${headCommit}-dirty` : headCommit;
 
 // ── Stage the source subset inside core ──
 const staging = mkdtempSync(join(tmpdir(), "kernel-sdk-vendor-"));
