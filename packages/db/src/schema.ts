@@ -2784,3 +2784,31 @@ export const erasureLog = pgTable(
     ),
   }),
 );
+
+// Per-conversation circuit breaker for the OFAPI dm_messages sync (0086):
+// failure backoff / quarantine windows so one poison chat (vendor-side scrape
+// timeout) cannot wedge a page's whole dm_messages stream. Operational sync
+// state, not captured facts — cleared on successful sync, cascades with its
+// thread.
+export const pageDmMessageSyncHealth = pgTable(
+  "page_dm_message_sync_health",
+  {
+    conversationId: bigint("conversation_id", { mode: "number" })
+      .primaryKey()
+      .references(() => pageDmThreads.id, { onDelete: "cascade" }),
+    platformAccountId: bigint("platform_account_id", { mode: "number" }).notNull(),
+    failureCount: integer("failure_count").default(0).notNull(),
+    errorClass: text("error_class"),
+    lastError: text("last_error"),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
+    quarantineUntil: timestamp("quarantine_until", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    accountQuarantineIdx: index("page_dm_message_sync_health_account_quarantine_idx").on(
+      table.platformAccountId,
+      table.quarantineUntil,
+    ),
+  }),
+);

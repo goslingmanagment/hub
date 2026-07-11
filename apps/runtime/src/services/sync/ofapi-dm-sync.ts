@@ -9,13 +9,18 @@
 
 import {
   assertOwnedPageSyncLease,
+  clearConversationSyncHealth,
+  countExcludedConversationSyncHealth,
   finalizePageDmConversationMessageSync,
   getCheckpoint,
+  getConversationSyncHealth,
   getExistingPageDmMessageIds,
   getOfapiCreditState,
   getPageDmConversationById,
   getPageDmMessageRetentionLimit,
+  isConversationSyncHealthExcluded,
   listPageDmConversationsByPlatformConversationIds,
+  recordConversationSyncFailure,
   requestPageSync,
   reserveOfapiDayCredits,
   selectNextPageDmMessageSyncCandidate,
@@ -40,7 +45,7 @@ import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { isOfapiCreditLedgerEnabled } from "../ofapi-credits.ts";
 import { asRecord, idToString } from "../ofapi-payloads.ts";
-import type { OfapiClient, OfapiListPage, OfapiRequestContext } from "../ofapi.ts";
+import { OfapiApiError, type OfapiClient, type OfapiListPage, type OfapiRequestContext } from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
 import {
@@ -55,6 +60,14 @@ import { dmRetentionDate, persistRawPayload } from "./shared.ts";
 
 const OFAPI_CHATS_PAGE_LIMIT = 100;
 const OFAPI_MESSAGES_PAGE_LIMIT = 100;
+// Circuit breaker: adaptive probe limits tried (single attempt each, in
+// order) when the FIRST message page of a conversation times out at the
+// default limit — the vendor's server-side scrape may survive a smaller page.
+const OFAPI_MESSAGES_PROBE_LIMITS = [20, 5] as const;
+// 3+ DISTINCT conversations failing with timeout/5xx in one run reads as a
+// vendor/page-level outage, not poison chats — rethrow instead of
+// mass-quarantining.
+const OFAPI_PROVIDER_BREAKER_DISTINCT_FAILURES = 3;
 // Versions the parseOfapiRestMessage mapping for raw-payload provenance.
 const OFAPI_DM_MAPPER_VERSION = "ofapi-dm-rest-v1";
 const DM_PREVIEW_MAX_LENGTH = 280;
@@ -817,6 +830,36 @@ export async function executeOfapiDmConversationsChunk(
   return result;
 }
 
+export type OfapiConversationSyncErrorClass = "vendor_opaque_timeout" | "vendor_5xx";
+
+/**
+ * Circuit-breaker classification for a failed per-conversation message fetch.
+ * Returns the error class for faults that are isolatable to the ONE chat, and
+ * null for everything that must stay page-level:
+ *   - 401/403: account/page auth — the vendor contract has not proven a
+ *     chat-local 403, so never quarantine a chat for it;
+ *   - 429: page-level backoff owns rate limiting;
+ *   - any other HTTP 4xx, non-OFAPI errors, opaque transport errors that are
+ *     not abort/timeout shaped: conservative rethrow.
+ * Isolatable: status=null with an abort/timeout message (the 60s slow-lane
+ * abort surfaces as OfapiApiError(status=null, "…The operation was aborted…"))
+ * → vendor_opaque_timeout; a single 5xx → vendor_5xx.
+ */
+export function classifyOfapiConversationSyncError(
+  error: unknown,
+): OfapiConversationSyncErrorClass | null {
+  if (!(error instanceof OfapiApiError)) {
+    return null;
+  }
+  if (error.status === null) {
+    return /abort|timed?\s*out|timeout/i.test(error.message) ? "vendor_opaque_timeout" : null;
+  }
+  if (error.status >= 500 && error.status < 600) {
+    return "vendor_5xx";
+  }
+  return null;
+}
+
 /**
  * dm_messages for OFAPI-fed OnlyFans pages: per-conversation message pages
  * (order=desc, first_id cursor) straight down to the retention tier — 200
@@ -824,6 +867,13 @@ export async function executeOfapiDmConversationsChunk(
  * coverage transitions (history exhausted/overlap → complete, retention cap →
  * partial_window). first_id is inclusive at OFAPI, so the cursor row is dropped
  * when it reappears.
+ *
+ * Per-conversation circuit breaker (0086): a fetch failure that classifies as
+ * chat-isolatable (opaque timeout / single 5xx) records a failure row with
+ * exponential backoff (quarantine from the 4th), clears the pin, and moves to
+ * the next candidate — one poison chat can no longer wedge the stream and the
+ * exhaustion stamp. A first-page timeout at the default limit is probed once
+ * at limit 20, then once at limit 5 (single attempts) before giving up.
  */
 export async function executeOfapiDmMessagesChunk(
   app: AppContext,
@@ -852,11 +902,36 @@ export async function executeOfapiDmMessagesChunk(
   let exhaustedEligibleConversations = false;
   let budgetBlock: OfapiBudgetBlock | null = null;
 
+  // Circuit-breaker run state: failures recorded this run (stats + the
+  // provider-level breaker) and per-conversation page sizing for probes.
+  const perChatFailures: Array<{
+    conversationId: number;
+    errorClass: OfapiConversationSyncErrorClass;
+    failureCount: number;
+  }> = [];
+  const failedConversationIds = new Set<number>();
+  const runConversationPageLimits = new Map<number, number>();
+  const runConversationPagesFetched = new Map<number, number>();
+
   conversationLoop: while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
     let conversation = state.currentConversationId
       ? await getPageDmConversationById(app.db, state.currentConversationId)
       : null;
+
+    // Circuit breaker: a pinned conversation currently inside its failure
+    // backoff / quarantine window must not be retried first every run (the
+    // pin used to make the poison chat the FIRST fetch of every run). Clear
+    // the pin and fall through to candidate selection — which excludes it
+    // too. This also unwedges pages whose checkpoint pinned a poison chat
+    // before this breaker deployed.
+    if (conversation && state.currentConversationId !== null) {
+      const pinnedHealth = await getConversationSyncHealth(app.db, conversation.id);
+      if (isConversationSyncHealthExcluded(pinnedHealth)) {
+        conversation = null;
+        state = emptyDmMessagesCursorState();
+      }
+    }
 
     if (!conversation || !conversation.isVisible || conversation.fanId === null) {
       const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
@@ -914,16 +989,121 @@ export async function executeOfapiDmMessagesChunk(
       await assertOwnedPageSyncLease(app.db);
 
       const cursor = state.currentBeforeMessageId;
-      const page = await client.listChatMessages(
-        requestContext,
-        ofapiAccountId,
-        currentConversation.platformConversationId,
-        {
-          limit: OFAPI_MESSAGES_PAGE_LIMIT,
-          firstId: cursor,
-        },
-      );
+      const pageLimit = runConversationPageLimits.get(currentConversation.id) ??
+        OFAPI_MESSAGES_PAGE_LIMIT;
+      let page: OfapiListPage;
+      try {
+        page = await client.listChatMessages(
+          requestContext,
+          ofapiAccountId,
+          currentConversation.platformConversationId,
+          {
+            limit: pageLimit,
+            firstId: cursor,
+          },
+        );
+      } catch (error) {
+        const errorClass = classifyOfapiConversationSyncError(error);
+        if (errorClass === null) {
+          // Auth (401/403), 429, other 4xx, and anything unrecognized stay
+          // page-level: the executor's classification owns them.
+          throw error;
+        }
+
+        // Adaptive probe: a timeout on the FIRST page of a conversation at
+        // the default limit may just be a chat too large for the vendor's
+        // server-side scrape window — try limit 20, then limit 5, each as a
+        // SINGLE attempt. A success keeps the smaller limit for this chat for
+        // the rest of the run.
+        let recovered: OfapiListPage | null = null;
+        if (
+          errorClass === "vendor_opaque_timeout" &&
+          (runConversationPagesFetched.get(currentConversation.id) ?? 0) === 0 &&
+          pageLimit === OFAPI_MESSAGES_PAGE_LIMIT
+        ) {
+          for (const probeLimit of OFAPI_MESSAGES_PROBE_LIMITS) {
+            budgetBlock = await guard.resolveBlock();
+            if (budgetBlock) {
+              break conversationLoop;
+            }
+            try {
+              recovered = await client.listChatMessages(
+                requestContext,
+                ofapiAccountId,
+                currentConversation.platformConversationId,
+                {
+                  limit: probeLimit,
+                  firstId: cursor,
+                  retries: 0,
+                },
+              );
+              runConversationPageLimits.set(currentConversation.id, probeLimit);
+              break;
+            } catch (probeError) {
+              if (classifyOfapiConversationSyncError(probeError) === null) {
+                throw probeError;
+              }
+            }
+          }
+        }
+
+        if (!recovered) {
+          // Per-chat circuit breaker: record the failure (backoff /
+          // quarantine), clear the pin so the next run does not lead with
+          // this chat, and continue with the next candidate.
+          const health = await recordConversationSyncFailure(app.db, {
+            conversationId: currentConversation.id,
+            platformAccountId: input.pageContext.page.id,
+            errorClass,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+          perChatFailures.push({
+            conversationId: currentConversation.id,
+            errorClass,
+            failureCount: health.failureCount,
+          });
+          failedConversationIds.add(currentConversation.id);
+          app.logger.warn(
+            {
+              platformAccountId: input.pageContext.page.id,
+              conversationId: currentConversation.id,
+              platformConversationId: currentConversation.platformConversationId,
+              errorClass,
+              failureCount: health.failureCount,
+              nextRetryAt: health.nextRetryAt?.toISOString() ?? null,
+              quarantineUntil: health.quarantineUntil?.toISOString() ?? null,
+            },
+            health.quarantineUntil !== null
+              ? "OFAPI DM conversation quarantined after repeated sync failures"
+              : "OFAPI DM conversation sync failure recorded, backing off",
+          );
+
+          state = emptyDmMessagesCursorState();
+          const failureCheckpoint = await upsertCheckpointProgress(app.db, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "dm_messages",
+            state,
+          });
+          await input.telemetry.recordCheckpointAdvanced(
+            "dm_messages",
+            summarizeCheckpoint(failureCheckpoint),
+          );
+
+          if (failedConversationIds.size >= OFAPI_PROVIDER_BREAKER_DISTINCT_FAILURES) {
+            // Provider/page-level breaker: this many distinct chats failing
+            // in one run is a vendor outage, not poison chats.
+            throw error;
+          }
+          continue conversationLoop;
+        }
+        page = recovered;
+      }
       await guard.recordResponse(page);
+      runConversationPagesFetched.set(
+        currentConversation.id,
+        (runConversationPagesFetched.get(currentConversation.id) ?? 0) + 1,
+      );
+      const effectivePageLimit = runConversationPageLimits.get(currentConversation.id) ?? pageLimit;
 
       // Stage 1: DM message pages are captured raw (previously zero raw
       // persistence on this path). The OFAPI client exposes no raw response
@@ -934,7 +1114,7 @@ export async function executeOfapiDmMessagesChunk(
         endpoint: "dm_messages",
         requestParams: {
           conversationId: currentConversation.platformConversationId,
-          limit: OFAPI_MESSAGES_PAGE_LIMIT,
+          limit: effectivePageLimit,
           firstId: cursor ?? null,
         },
         responsePayload: { items: page.items },
@@ -1022,6 +1202,9 @@ export async function executeOfapiDmMessagesChunk(
             messageCoverageStatus,
             enforceRetention: await isPageDmPruneAllowed(app),
           });
+          // Circuit breaker: a completed conversation resets its failure
+          // bookkeeping (no-op when it never failed).
+          await clearConversationSyncHealth(dbTx, currentConversation.id);
           const progressCheckpoint = await upsertCheckpointProgress(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "dm_messages",
@@ -1061,6 +1244,14 @@ export async function executeOfapiDmMessagesChunk(
     }
   }
 
+  // Circuit-breaker honesty counter: how many of the page's conversations are
+  // currently sitting out a backoff/quarantine window. Counted at chunk END so
+  // same-run failures show up — an exhaustion stamp with this > 0 means "done
+  // except the quarantined ones".
+  const skippedQuarantined = await countExcludedConversationSyncHealth(app.db, {
+    platformAccountId: input.pageContext.page.id,
+  });
+
   const stats = {
     currentConversationId: state.currentConversationId,
     currentBeforeMessageId: state.currentBeforeMessageId,
@@ -1069,6 +1260,20 @@ export async function executeOfapiDmMessagesChunk(
     completedConversations,
     overlapHits,
     ofapiRequests: guard.requestsUsed,
+    skippedQuarantined,
+    perChatFailures: perChatFailures.length,
+    // Object (not array) so the executor's progress sanitizer keeps it;
+    // capped at 8 entries for the same reason.
+    ...(perChatFailures.length > 0
+      ? {
+        perChatFailureDetails: Object.fromEntries(
+          perChatFailures.slice(0, 8).map((failure) => [
+            String(failure.conversationId),
+            `${failure.errorClass}#${failure.failureCount}`,
+          ]),
+        ),
+      }
+      : {}),
   };
 
   if (budgetBlock) {
