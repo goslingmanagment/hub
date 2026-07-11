@@ -1,4 +1,5 @@
 import { syncEventSchema, type SyncEvent } from "@agency_hub_core/contracts";
+import { sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
 import {
   deleteExpiredOfapiWebhookEvents,
   findPageByOfapiAccountId,
@@ -331,7 +332,9 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
       id: row.id,
       status: "processed",
       platformAccountId: page.id,
-      syncEvent: frame.data,
+      // Belt for the truncation fix: vendor strings can carry their own
+      // unpaired surrogates — never let a derived frame wedge the settle.
+      syncEvent: sanitizeLoneSurrogatesDeep(frame.data),
       processedAt,
     });
     if (!settled) {

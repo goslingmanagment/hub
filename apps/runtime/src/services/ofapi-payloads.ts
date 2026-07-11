@@ -4,7 +4,7 @@
 // circular import through the event processor.
 
 import { z } from "zod";
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import { normalizeDmMessageText, truncateUtf16Safe } from "@agency_hub_core/shared";
 
 // The wire envelope, live-verified 2026-06-10: the event id is NOT in the body
 // (dedupe runs on the x-ofapi-idempotency-key header before this is parsed).
@@ -168,7 +168,9 @@ function normalizeReplyTo(
   return {
     ...(idToString(reply.id) ? { messageId: idToString(reply.id)! } : {}),
     ...(senderId ? { sender: senderId === chatId ? "fan" as const : "model" as const } : {}),
-    textPreview: text.slice(0, REPLY_TEXT_PREVIEW_MAX),
+    // Surrogate-safe: a raw slice cut emoji in half and the lone surrogate
+    // wedged the settle write for 7 days (event 152584, 2026-07-11).
+    textPreview: truncateUtf16Safe(text, REPLY_TEXT_PREVIEW_MAX),
   };
 }
 

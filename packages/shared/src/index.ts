@@ -14,4 +14,5 @@ export * from "./snowflake.ts";
 export * from "./spender-buckets.ts";
 export * from "./spender-retention.ts";
 export * from "./time.ts";
+export * from "./unicode.ts";
 export * from "./types.ts";
