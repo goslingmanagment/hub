@@ -667,6 +667,105 @@ describe("sync integration", () => {
     }
   }, 30_000);
 
+  it("converges multiple grandfathered parent keys into one fixed child", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = new PgBoss({ connectionString: testDb.connectionString });
+    await boss.start();
+    try {
+      await ensureSyncQueues(boss);
+      const legacyOptions = (singletonKey: string) => ({
+        singletonKey,
+        priority: 25,
+        expireInSeconds: 180,
+        retryLimit: 2,
+        group: { id: buildSyncPageExecuteGroupId("onlyfans", "direct") },
+      });
+      const firstLegacyId = await boss.send(
+        SYNC_PAGE_EXECUTE_QUEUE,
+        { platformAccountId: 55 },
+        legacyOptions("55:continuation:first"),
+      );
+      const secondLegacyId = await boss.send(
+        SYNC_PAGE_EXECUTE_QUEUE,
+        { platformAccountId: 55 },
+        legacyOptions("55:continuation:second"),
+      );
+      expect(firstLegacyId).toEqual(expect.any(String));
+      expect(secondLegacyId).toEqual(expect.any(String));
+
+      const fetchOptions = {
+        batchSize: 1,
+        includeMetadata: true,
+        priority: false,
+        orderByCreatedOn: true,
+        groupConcurrency: 1,
+      } as const;
+      const rollForward = async (expectedParentId: string | null) => {
+        const [parent] = await boss.fetch<SyncPageExecutePayload>(SYNC_PAGE_EXECUTE_QUEUE, fetchOptions);
+        expect(parent?.id).toBe(expectedParentId);
+        if (!parent) {
+          throw new Error("Expected a grandfathered parent wakeup");
+        }
+
+        const client = await testDb!.pool.connect();
+        let committed = false;
+        try {
+          await client.query("begin");
+          const db: PgBossDb = {
+            executeSql: (text, values) => client.query(text, values),
+          };
+          const completed = await boss.complete(
+            SYNC_PAGE_EXECUTE_QUEUE,
+            parent.id,
+            null,
+            { db },
+          ) as unknown as { affected: number };
+          expect(completed.affected).toBe(1);
+          const childId = await sendSyncPageWakeup(boss, {
+            platformAccountId: 55,
+            priority: 25,
+            provider: "onlyfans",
+            egressKey: "direct",
+            db,
+          });
+          await client.query("commit");
+          committed = true;
+          return childId;
+        } finally {
+          if (!committed) {
+            await client.query("rollback").catch(() => undefined);
+          }
+          client.release();
+        }
+      };
+
+      const fixedChildId = await rollForward(firstLegacyId);
+      expect(fixedChildId).toEqual(expect.any(String));
+      await expect(rollForward(secondLegacyId)).resolves.toBeNull();
+
+      if (!fixedChildId) {
+        throw new Error("Expected one fixed child id");
+      }
+      const fixedRows = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: fixedChildId });
+      expect(fixedRows[0]).toMatchObject({
+        state: "created",
+        singletonKey: "55",
+        expireInSeconds: 900,
+        retryLimit: 0,
+      });
+      const firstRows = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: firstLegacyId ?? "" });
+      const secondRows = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: secondLegacyId ?? "" });
+      expect(firstRows[0]?.state).toBe("completed");
+      expect(secondRows[0]?.state).toBe("completed");
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
   it("rolls both parent completion and child insertion back together", async (context) => {
     if (!testDb) {
       context.skip();

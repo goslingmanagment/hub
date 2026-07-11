@@ -150,13 +150,20 @@ describe("sync executor", () => {
     return { app, client, logger };
   }
 
-  function buildQueueJob(input?: { startedOn?: Date; expireInSeconds?: number }) {
+  function buildQueueJob(input?: {
+    startedOn?: Date;
+    expireInSeconds?: number;
+    retryLimit?: number;
+    singletonKey?: string | null;
+  }) {
     return {
       id: "job-1",
       data: { platformAccountId: 55 },
       groupId: "fansly:direct",
       startedOn: input?.startedOn ?? new Date(),
       expireInSeconds: input?.expireInSeconds ?? 900,
+      retryLimit: input?.retryLimit ?? 0,
+      singletonKey: input?.singletonKey ?? "55",
     };
   }
 
@@ -245,7 +252,7 @@ describe("sync executor", () => {
       // deliberately ancient metadata value.
       job: buildQueueJob({
         startedOn: new Date("2000-01-01T00:00:00.000Z"),
-        expireInSeconds: 180,
+        expireInSeconds: 900,
       }),
     });
 
@@ -280,6 +287,118 @@ describe("sync executor", () => {
     expect(statements[0]).toContain("select clock_timestamp()");
     expect(statements.slice(1)).toEqual(["begin", "commit"]);
     expect(client.release).toHaveBeenCalledWith(undefined);
+  });
+
+  it("rolls a grandfathered queue attempt forward before vendor work", async () => {
+    const { app, client, logger } = createQueueHandoffApp();
+    const boss = {
+      complete: vi.fn(async () => completionResult()),
+      send: vi.fn(async () => "job-current-contract"),
+    } as unknown as {
+      complete: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 25,
+      requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+
+    const result = await processSyncPageExecuteJob(app, boss as never, {
+      job: buildQueueJob({
+        expireInSeconds: 180,
+        retryLimit: 2,
+        singletonKey: "55:continuation:old-parent",
+      }),
+    });
+
+    expect(handlerMocks.executeStreamChunk).not.toHaveBeenCalled();
+    expect(dbMocks.ensurePageSyncStates).not.toHaveBeenCalled();
+    expect(dbMocks.acquirePageSyncLease).not.toHaveBeenCalled();
+    expect(dbMocks.startSyncRun).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "idle",
+      platformAccountId: 55,
+      needsContinuation: true,
+      continuationPriority: 25,
+    });
+    expect(boss.complete).toHaveBeenCalledTimes(1);
+    expect(boss.send).toHaveBeenCalledWith(
+      "sync.page.execute",
+      { platformAccountId: 55 },
+      expect.objectContaining({
+        singletonKey: "55",
+        priority: 25,
+        expireInSeconds: 900,
+        retryLimit: 0,
+        group: { id: "fansly:shared-proxy-pool" },
+      }),
+    );
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "commit"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: "job-1",
+        expireInSeconds: 180,
+        retryLimit: 2,
+        singletonKey: "55:continuation:old-parent",
+      }),
+      "Detected grandfathered sync page wakeup; attempting atomic rollover before vendor work",
+    );
+  });
+
+  it("replaces a grandfathered wakeup even when the durable snapshot is not runnable", async () => {
+    const { app } = createQueueHandoffApp();
+    const boss = {
+      complete: vi.fn(async () => completionResult()),
+      send: vi.fn(async () => "unexpected-child"),
+    } as unknown as {
+      complete: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
+
+    const result = await processSyncPageExecuteJob(app, boss as never, {
+      job: buildQueueJob({
+        singletonKey: "55:continuation:old-parent",
+      }),
+    });
+
+    expect(result).toMatchObject({ needsContinuation: true, continuationPriority: 0 });
+    expect(handlerMocks.executeStreamChunk).not.toHaveBeenCalled();
+    expect(dbMocks.acquirePageSyncLease).not.toHaveBeenCalled();
+    expect(boss.complete).toHaveBeenCalledTimes(1);
+    expect(boss.send).toHaveBeenCalledWith(
+      "sync.page.execute",
+      { platformAccountId: 55 },
+      expect.objectContaining({ singletonKey: "55", expireInSeconds: 900, retryLimit: 0 }),
+    );
+  });
+
+  it("completes a grandfathered wakeup without replacement for a missing page", async () => {
+    const { app } = createQueueHandoffApp();
+    const boss = {
+      complete: vi.fn(async () => completionResult()),
+      send: vi.fn(async () => "unexpected-child"),
+    } as unknown as {
+      complete: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
+    dbMocks.findPageById.mockResolvedValueOnce(null);
+
+    const result = await processSyncPageExecuteJob(app, boss as never, {
+      job: buildQueueJob({ singletonKey: "55:continuation:old-parent" }),
+    });
+
+    expect(result).toMatchObject({ needsContinuation: false });
+    expect(handlerMocks.executeStreamChunk).not.toHaveBeenCalled();
+    expect(dbMocks.listRunnablePageSync).not.toHaveBeenCalled();
+    expect(boss.complete).toHaveBeenCalledTimes(1);
+    expect(boss.send).not.toHaveBeenCalled();
   });
 
   it("consumes a manual priority boost after one generic partial chunk", async () => {
@@ -657,9 +776,13 @@ describe("sync executor", () => {
     const result = await processSyncPageExecuteJob(app, boss as never, {
       // A process-clock comparison would consider this far-future job safe;
       // the database answer is authoritative.
-      job: buildQueueJob({ startedOn: new Date(Date.now() + 86_400_000) }),
+      job: buildQueueJob({
+        startedOn: new Date(Date.now() + 86_400_000),
+        singletonKey: "55:continuation:unsafe-parent",
+      }),
     });
 
+    expect(handlerMocks.executeStreamChunk).not.toHaveBeenCalled();
     expect(boss.send).not.toHaveBeenCalled();
     expect(boss.complete).not.toHaveBeenCalled();
     expect(client.query.mock.calls[0]?.[0]).toContain("select clock_timestamp()");
@@ -690,9 +813,10 @@ describe("sync executor", () => {
     });
 
     await processSyncPageExecuteJob(app, boss as never, {
-      job: buildQueueJob(),
+      job: buildQueueJob({ singletonKey: "55:continuation:lost-owner" }),
     });
 
+    expect(handlerMocks.executeStreamChunk).not.toHaveBeenCalled();
     expect(boss.send).not.toHaveBeenCalled();
     const statements = client.query.mock.calls.map(([statement]) => statement);
     expect(statements[0]).toContain("select clock_timestamp()");
@@ -1222,6 +1346,8 @@ describe("sync executor", () => {
             groupId: "fansly:direct",
             startedOn: new Date(),
             expireInSeconds: 900,
+            retryLimit: 0,
+            singletonKey: "55",
           }];
         }
 
