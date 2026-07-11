@@ -5,11 +5,29 @@
 // OFAPI-only dm_message_archive and the hot table are idempotent via the
 // (account_id, platform, message_ref) unique key.
 
+import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
 export const MESSAGE_ARCHIVE_PROJECTION = "message_archive";
+export const MESSAGE_ARCHIVE_SHADOW_PROJECTION = "message_archive_shadow";
+
+/** W10 (decision #134): serializes the shadow builder and the atomic switch
+ * against each other (pg_advisory_xact_lock — both run in one transaction). */
+export const MESSAGE_ARCHIVE_REBUILD_LOCK_KEY = 831_010_083;
+
+/** The only two tables archive writers may target (W10 shadow rebuild). The
+ * whitelist keeps sql.raw honest — a table name never comes from input. */
+export type ArchiveTargetTable = "message_archive" | "message_archive_shadow";
+
+function archiveTable(target: ArchiveTargetTable | undefined) {
+  const table = target ?? "message_archive";
+  if (table !== "message_archive" && table !== "message_archive_shadow") {
+    throw new Error(`Unknown archive target table: ${String(table)}`);
+  }
+  return sql.raw(table);
+}
 
 export interface MessageArchiveEventRow {
   id: number;
@@ -98,6 +116,12 @@ function headDate(value: unknown): Date | null {
  * data.supersedesEventId + data.head) REPLACES the row's material — the
  * same-message superseding merge; account_seq ordering keeps replays
  * monotone, and deleted_at stays sticky. Returns rows written/tombstoned.
+ *
+ * W10 additions: `targetTable` routes the same writer into the shadow table
+ * during a rebuild (whitelisted — never caller data), and text_plain is
+ * derived through normalizeDmMessageText (A51): the event ledger stays
+ * verbatim, the PROJECTION strips HTML — so a shadow replay heals rows that
+ * were projected before the strip existed.
  */
 export async function applyMessageEventsToArchive(
   db: Database,
@@ -105,8 +129,10 @@ export async function applyMessageEventsToArchive(
     accountId: number;
     platform: string;
     events: readonly MessageArchiveEventRow[];
+    targetTable?: ArchiveTargetTable;
   },
 ): Promise<{ inserted: number; tombstoned: number }> {
+  const target = archiveTable(input.targetTable);
   let inserted = 0;
   let tombstoned = 0;
 
@@ -122,7 +148,7 @@ export async function applyMessageEventsToArchive(
         // deleted_at is deliberately NOT in the SET list (sticky), and the
         // stub flag clears (the head is complete by construction).
         const result = await db.execute(sql`
-          insert into message_archive (
+          insert into ${target} (
             account_id, platform, conversation_ref, message_ref, fan_native_id,
             sender_role, is_sent_by_me, occurred_at, text_plain, price_mills,
             is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
@@ -136,7 +162,7 @@ export async function applyMessageEventsToArchive(
             ${typeof head.senderRole === "string" ? head.senderRole : "unknown"},
             ${head.isSentByMe === true},
             ${headDate(head.createdAt) ?? event.occurredAt},
-            ${typeof head.text === "string" ? head.text : ""},
+            ${normalizeDmMessageText(typeof head.text === "string" ? head.text : "")},
             ${headMills(head.priceMills)},
             ${head.isTip === true},
             ${headMills(head.tipAmountMills) ?? 0n},
@@ -145,8 +171,8 @@ export async function applyMessageEventsToArchive(
             ${event.id}
           )
           on conflict (account_id, platform, message_ref) do update set
-            conversation_ref = coalesce(excluded.conversation_ref, message_archive.conversation_ref),
-            fan_native_id = coalesce(excluded.fan_native_id, message_archive.fan_native_id),
+            conversation_ref = coalesce(excluded.conversation_ref, ${target}.conversation_ref),
+            fan_native_id = coalesce(excluded.fan_native_id, ${target}.fan_native_id),
             sender_role = excluded.sender_role,
             is_sent_by_me = excluded.is_sent_by_me,
             occurred_at = excluded.occurred_at,
@@ -173,7 +199,7 @@ export async function applyMessageEventsToArchive(
       // stub's deleted_at is deliberately NOT in the SET list — hydration
       // keeps the tombstone.
       const result = await db.execute(sql`
-        insert into message_archive (
+        insert into ${target} (
           account_id, platform, conversation_ref, message_ref, fan_native_id,
           sender_role, is_sent_by_me, occurred_at, text_plain, price_mills,
           is_tip, tip_amount_mills, source_event_id
@@ -186,7 +212,7 @@ export async function applyMessageEventsToArchive(
           ${event.type === "message.received" ? "fan" : "model"},
           ${event.type === "message.sent"},
           ${event.occurredAt},
-          ${typeof text === "string" ? text : ""},
+          ${normalizeDmMessageText(typeof text === "string" ? text : "")},
           ${price},
           ${isTip},
           ${tipMills},
@@ -205,7 +231,7 @@ export async function applyMessageEventsToArchive(
           source_event_id = excluded.source_event_id,
           content_pending = false,
           updated_at = now()
-        where message_archive.content_pending
+        where ${target}.content_pending
         returning id
       `);
       inserted += result.rows.length;
@@ -218,7 +244,7 @@ export async function applyMessageEventsToArchive(
       // event hydrates it); live row → set deleted_at; already tombstoned →
       // no-op (idempotent replay).
       const result = await db.execute(sql`
-        insert into message_archive (
+        insert into ${target} (
           account_id, platform, message_ref, occurred_at, content_pending,
           deleted_at, source_event_id
         ) values (
@@ -232,7 +258,7 @@ export async function applyMessageEventsToArchive(
         )
         on conflict (account_id, platform, message_ref) do update
           set deleted_at = excluded.deleted_at, updated_at = now()
-          where message_archive.deleted_at is null
+          where ${target}.deleted_at is null
         returning id
       `);
       tombstoned += result.rows.length;
@@ -301,25 +327,586 @@ export async function resetMessageArchiveProjection(
   });
 }
 
+// ── W10 (decision #134): shadow rebuild machinery ──────────────────────────
+// The old rebuild above is lossy by construction (attached-partition replay +
+// legacy-seed destruction); everything below serves the staged shadow flow:
+// preflight census → lift + replay + backfill into message_archive_shadow →
+// set-difference fidelity proof → one-transaction atomic switch.
+
+/** Accounts holding archive rows — legacy seeds can exist for accounts with
+ * no domain events, so the rebuild scope is this ∪ listEventAccounts. */
+export async function listArchiveAccounts(db: Database): Promise<number[]> {
+  const result = await db.execute<{ account_id: string }>(sql`
+    select distinct account_id::text from message_archive order by 1
+  `);
+  return result.rows.map((row) => Number(row.account_id));
+}
+
+/** Restartable per-account shadow build: clear the account's shadow scope
+ * (and its shadow watermark) so a re-run starts from a clean slate. */
+export async function clearMessageArchiveShadowAccount(
+  db: Database,
+  accountId: number,
+): Promise<void> {
+  await db.execute(sql`delete from message_archive_shadow where account_id = ${accountId}`);
+  await db.execute(sql`
+    delete from projection_seq_watermarks
+    where projection = ${MESSAGE_ARCHIVE_SHADOW_PROJECTION} and account_id = ${accountId}
+  `);
+}
+
+/**
+ * Legacy-seed LIFT: rows the event ledger cannot re-derive
+ * (source_event_id IS NULL, backfill_source IN ('dm_message_archive',
+ * 'hot_table')) are copied VERBATIM into the shadow — provenance
+ * (backfill_source, archived_at, updated_at) preserved. For pruned hot
+ * originals these rows are the ONLY copy; re-derivation is not an option.
+ * Runs FIRST so the replay's first-real-writer-wins conflict arm cannot
+ * overwrite them — reproducing exactly the precedence the old table has.
+ */
+export async function liftLegacySeedRowsToShadow(
+  db: Database,
+  input: { accountId: number },
+): Promise<number> {
+  const result = await db.execute(sql`
+    insert into message_archive_shadow (
+      account_id, platform, native_account_ref, conversation_ref, message_ref,
+      fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
+      price_mills, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
+      content_pending, deleted_at, source_event_id, backfill_source,
+      archived_at, updated_at
+    )
+    select
+      account_id, platform, native_account_ref, conversation_ref, message_ref,
+      fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
+      price_mills, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
+      content_pending, deleted_at, source_event_id, backfill_source,
+      archived_at, updated_at
+    from message_archive
+    where account_id = ${input.accountId}
+      and source_event_id is null
+      and backfill_source in ('dm_message_archive', 'hot_table')
+    on conflict (account_id, platform, message_ref) do nothing
+    returning id
+  `);
+  return result.rows.length;
+}
+
+export interface ArchiveRebuildAccountCensus {
+  accountId: number;
+  totalRows: number;
+  eventSourcedRows: number;
+  legacySeedsBySource: Record<string, number>;
+  /** Legacy seeds with NO surviving origin row in dm_message_archive OR the
+   * hot table — the corrected query INCLUDES dm_message_archive as a source
+   * (the audit's version omitted it). These rows exist ONLY here. */
+  unrecoverableIfDropped: number;
+}
+
+export async function getArchiveRebuildAccountCensus(
+  db: Database,
+  accountId: number,
+): Promise<ArchiveRebuildAccountCensus> {
+  const totals = await db.execute<{ total: string; event_sourced: string }>(sql`
+    select count(*)::text as total,
+           count(*) filter (where a.source_event_id is not null)::text as event_sourced
+    from message_archive a
+    where a.account_id = ${accountId}
+  `);
+  const seeds = await db.execute<{ backfill_source: string; n: string }>(sql`
+    select a.backfill_source, count(*)::text as n
+    from message_archive a
+    where a.account_id = ${accountId}
+      and a.source_event_id is null
+      and a.backfill_source in ('dm_message_archive', 'hot_table')
+    group by a.backfill_source
+    order by a.backfill_source
+  `);
+  const unrecoverable = await db.execute<{ n: string }>(sql`
+    select count(*)::text as n
+    from message_archive a
+    where a.account_id = ${accountId}
+      and a.source_event_id is null
+      and a.backfill_source in ('dm_message_archive', 'hot_table')
+      and not exists (
+        select 1 from dm_message_archive d
+        where d.platform_account_id = a.account_id
+          and d.platform::text = a.platform
+          and d.platform_message_id = a.message_ref
+      )
+      and not exists (
+        select 1 from page_dm_messages m
+        where m.platform_account_id = a.account_id
+          and m.platform_message_id = a.message_ref
+      )
+  `);
+  const legacySeedsBySource: Record<string, number> = {};
+  for (const row of seeds.rows) {
+    legacySeedsBySource[row.backfill_source] = Number(row.n);
+  }
+  return {
+    accountId,
+    totalRows: Number(totals.rows[0]?.total ?? 0),
+    eventSourcedRows: Number(totals.rows[0]?.event_sourced ?? 0),
+    legacySeedsBySource,
+    unrecoverableIfDropped: Number(unrecoverable.rows[0]?.n ?? 0),
+  };
+}
+
+export interface DetachedDomainEventPartition {
+  schema: string;
+  name: string;
+  totalRows: number;
+}
+
+function quotedRelation(schema: string, name: string) {
+  return sql.raw(`"${schema.replaceAll("\"", "\"\"")}"."${name.replaceAll("\"", "\"\"")}"`);
+}
+
+/**
+ * Detached-partition census (pg_inherits vs the tiering bookkeeping): every
+ * domain_events partition that listEventsSince can NOT see — parked in
+ * tiered_pending_drop by Stage 28 tiering, or detached-in-public (the 0077
+ * leftovers). The replay watermark advances past their seqs silently, which
+ * is exactly why the shadow replay hard-refuses when one holds account rows.
+ */
+export async function listDomainEventPartitionCensus(db: Database): Promise<{
+  attached: string[];
+  detached: DetachedDomainEventPartition[];
+}> {
+  const attached = await db.execute<{ name: string }>(sql`
+    select c.relname as name
+    from pg_inherits i
+    join pg_class c on c.oid = i.inhrelid
+    join pg_class p on p.oid = i.inhparent
+    join pg_namespace n on n.oid = c.relnamespace
+    where p.relname = 'domain_events' and n.nspname = 'public'
+    order by c.relname
+  `);
+  const detachedRelations = await db.execute<{ schema: string; name: string }>(sql`
+    select n.nspname as schema, c.relname as name
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind in ('r', 'p')
+      and c.relname ~ '^domain_events_(pre_2024|[0-9]{4}(_[0-9]{2})?)$'
+      and (
+        n.nspname = 'tiered_pending_drop'
+        or (
+          n.nspname = 'public'
+          and not exists (select 1 from pg_inherits i where i.inhrelid = c.oid)
+        )
+      )
+    order by n.nspname, c.relname
+  `);
+  const detached: DetachedDomainEventPartition[] = [];
+  for (const relation of detachedRelations.rows) {
+    const count = await db.execute<{ n: string }>(sql`
+      select count(*)::text as n from ${quotedRelation(relation.schema, relation.name)}
+    `);
+    detached.push({
+      schema: relation.schema,
+      name: relation.name,
+      totalRows: Number(count.rows[0]?.n ?? 0),
+    });
+  }
+  return { attached: attached.rows.map((row) => row.name), detached };
+}
+
+/** The HARD gate's question: which detached partitions hold events for THIS
+ * account (their seqs are invisible to the replay). Nonzero = refuse. */
+export async function listDetachedPartitionsHoldingAccount(
+  db: Database,
+  accountId: number,
+): Promise<Array<{ schema: string; name: string; rows: number }>> {
+  const census = await listDomainEventPartitionCensus(db);
+  const holding: Array<{ schema: string; name: string; rows: number }> = [];
+  for (const partition of census.detached) {
+    if (partition.totalRows === 0) {
+      continue;
+    }
+    const count = await db.execute<{ n: string }>(sql`
+      select count(*)::text as n
+      from ${quotedRelation(partition.schema, partition.name)}
+      where account_id = ${accountId}
+    `);
+    const rows = Number(count.rows[0]?.n ?? 0);
+    if (rows > 0) {
+      holding.push({ schema: partition.schema, name: partition.name, rows });
+    }
+  }
+  return holding;
+}
+
+const SHADOW_JOIN = sql`
+  on s.account_id = o.account_id
+  and s.platform = o.platform
+  and s.message_ref = o.message_ref
+`;
+
+export interface ArchiveShadowVerifyCounts {
+  oldRows: number;
+  shadowRows: number;
+  /** Rows in message_archive with NO shadow counterpart — nonzero FAILS. */
+  missing: number;
+  /** Shadow rows with no old counterpart (new coverage) — informational. */
+  extra: number;
+  compared: number;
+  mismatches: {
+    textPlain: number;
+    occurredAt: number;
+    priceMills: number;
+    tipAmountMills: number;
+    deletedAt: number;
+    conversationRef: number;
+    fanNativeId: number;
+  };
+}
+
+/** R2 set-difference proof: shadow ⊇ old on (account_id, platform,
+ * message_ref) plus per-column material mismatch counts. */
+export async function getArchiveShadowVerifyCounts(
+  db: Database,
+  input?: { accountId?: number | null },
+): Promise<ArchiveShadowVerifyCounts> {
+  const oldFilter = input?.accountId != null ? sql`where o.account_id = ${input.accountId}` : sql``;
+  const shadowScope = input?.accountId != null ? sql`where s.account_id = ${input.accountId}` : sql``;
+  const sizes = await db.execute<{ old_rows: string; shadow_rows: string }>(sql`
+    select
+      (select count(*) from message_archive o ${oldFilter})::text as old_rows,
+      (select count(*) from message_archive_shadow s ${shadowScope})::text as shadow_rows
+  `);
+  const missing = await db.execute<{ n: string }>(sql`
+    select count(*)::text as n
+    from message_archive o
+    left join message_archive_shadow s ${SHADOW_JOIN}
+    ${input?.accountId != null ? sql`where o.account_id = ${input.accountId} and s.id is null` : sql`where s.id is null`}
+  `);
+  const extra = await db.execute<{ n: string }>(sql`
+    select count(*)::text as n
+    from message_archive_shadow s
+    left join message_archive o
+      on o.account_id = s.account_id
+      and o.platform = s.platform
+      and o.message_ref = s.message_ref
+    ${input?.accountId != null ? sql`where s.account_id = ${input.accountId} and o.id is null` : sql`where o.id is null`}
+  `);
+  const material = await db.execute<Record<string, string>>(sql`
+    select
+      count(*)::text as compared,
+      count(*) filter (where o.text_plain is distinct from s.text_plain)::text as text_plain,
+      count(*) filter (where o.occurred_at is distinct from s.occurred_at)::text as occurred_at,
+      count(*) filter (where o.price_mills is distinct from s.price_mills)::text as price_mills,
+      count(*) filter (where o.tip_amount_mills is distinct from s.tip_amount_mills)::text as tip_amount_mills,
+      count(*) filter (where o.deleted_at is distinct from s.deleted_at)::text as deleted_at,
+      count(*) filter (where o.conversation_ref is distinct from s.conversation_ref)::text as conversation_ref,
+      count(*) filter (where o.fan_native_id is distinct from s.fan_native_id)::text as fan_native_id
+    from message_archive o
+    join message_archive_shadow s ${SHADOW_JOIN}
+    ${oldFilter}
+  `);
+  const row = material.rows[0] ?? {};
+  return {
+    oldRows: Number(sizes.rows[0]?.old_rows ?? 0),
+    shadowRows: Number(sizes.rows[0]?.shadow_rows ?? 0),
+    missing: Number(missing.rows[0]?.n ?? 0),
+    extra: Number(extra.rows[0]?.n ?? 0),
+    compared: Number(row.compared ?? 0),
+    mismatches: {
+      textPlain: Number(row.text_plain ?? 0),
+      occurredAt: Number(row.occurred_at ?? 0),
+      priceMills: Number(row.price_mills ?? 0),
+      tipAmountMills: Number(row.tip_amount_mills ?? 0),
+      deletedAt: Number(row.deleted_at ?? 0),
+      conversationRef: Number(row.conversation_ref ?? 0),
+      fanNativeId: Number(row.fan_native_id ?? 0),
+    },
+  };
+}
+
+export interface ArchiveShadowMissingKey {
+  accountId: number;
+  platform: string;
+  messageRef: string;
+  backfillSource: string | null;
+  sourceEventId: number | null;
+}
+
+/** Bounded sample of the FAILING set (old rows the shadow lacks). */
+export async function listArchiveShadowMissingSample(
+  db: Database,
+  input: { accountId?: number | null; limit: number },
+): Promise<ArchiveShadowMissingKey[]> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select o.account_id, o.platform, o.message_ref, o.backfill_source,
+           o.source_event_id::text as source_event_id
+    from message_archive o
+    left join message_archive_shadow s ${SHADOW_JOIN}
+    ${input.accountId != null ? sql`where o.account_id = ${input.accountId} and s.id is null` : sql`where s.id is null`}
+    order by o.account_id, o.message_ref
+    limit ${input.limit}
+  `);
+  return result.rows.map((row) => ({
+    accountId: Number(row.account_id),
+    platform: String(row.platform),
+    messageRef: String(row.message_ref),
+    backfillSource: (row.backfill_source as string | null) ?? null,
+    sourceEventId: row.source_event_id == null ? null : Number(row.source_event_id),
+  }));
+}
+
+export interface ArchiveShadowDiffRow {
+  accountId: number;
+  platform: string;
+  messageRef: string;
+  old: {
+    textPlain: string;
+    occurredAt: Date | null;
+    priceMills: string | null;
+    tipAmountMills: string;
+    deletedAt: Date | null;
+    conversationRef: string | null;
+    fanNativeId: string | null;
+  };
+  shadow: {
+    textPlain: string;
+    occurredAt: Date | null;
+    priceMills: string | null;
+    tipAmountMills: string;
+    deletedAt: Date | null;
+    conversationRef: string | null;
+    fanNativeId: string | null;
+  };
+}
+
+/** Bounded material-diff sample across the compared columns. */
+export async function listArchiveShadowDiffSample(
+  db: Database,
+  input: { accountId?: number | null; limit: number },
+): Promise<ArchiveShadowDiffRow[]> {
+  const accountFilter = input.accountId != null
+    ? sql`and o.account_id = ${input.accountId}`
+    : sql``;
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select o.account_id, o.platform, o.message_ref,
+           o.text_plain as old_text_plain, s.text_plain as shadow_text_plain,
+           o.occurred_at as old_occurred_at, s.occurred_at as shadow_occurred_at,
+           o.price_mills::text as old_price_mills, s.price_mills::text as shadow_price_mills,
+           o.tip_amount_mills::text as old_tip_mills, s.tip_amount_mills::text as shadow_tip_mills,
+           o.deleted_at as old_deleted_at, s.deleted_at as shadow_deleted_at,
+           o.conversation_ref as old_conversation_ref, s.conversation_ref as shadow_conversation_ref,
+           o.fan_native_id as old_fan_native_id, s.fan_native_id as shadow_fan_native_id
+    from message_archive o
+    join message_archive_shadow s ${SHADOW_JOIN}
+    where (
+      o.text_plain is distinct from s.text_plain
+      or o.occurred_at is distinct from s.occurred_at
+      or o.price_mills is distinct from s.price_mills
+      or o.tip_amount_mills is distinct from s.tip_amount_mills
+      or o.deleted_at is distinct from s.deleted_at
+      or o.conversation_ref is distinct from s.conversation_ref
+      or o.fan_native_id is distinct from s.fan_native_id
+    ) ${accountFilter}
+    order by o.account_id, o.message_ref
+    limit ${input.limit}
+  `);
+  const toDate = (value: unknown) => (value == null ? null : new Date(value as string | Date));
+  return result.rows.map((row) => ({
+    accountId: Number(row.account_id),
+    platform: String(row.platform),
+    messageRef: String(row.message_ref),
+    old: {
+      textPlain: String(row.old_text_plain ?? ""),
+      occurredAt: toDate(row.old_occurred_at),
+      priceMills: (row.old_price_mills as string | null) ?? null,
+      tipAmountMills: String(row.old_tip_mills ?? "0"),
+      deletedAt: toDate(row.old_deleted_at),
+      conversationRef: (row.old_conversation_ref as string | null) ?? null,
+      fanNativeId: (row.old_fan_native_id as string | null) ?? null,
+    },
+    shadow: {
+      textPlain: String(row.shadow_text_plain ?? ""),
+      occurredAt: toDate(row.shadow_occurred_at),
+      priceMills: (row.shadow_price_mills as string | null) ?? null,
+      tipAmountMills: String(row.shadow_tip_mills ?? "0"),
+      deletedAt: toDate(row.shadow_deleted_at),
+      conversationRef: (row.shadow_conversation_ref as string | null) ?? null,
+      fanNativeId: (row.shadow_fan_native_id as string | null) ?? null,
+    },
+  }));
+}
+
+export interface ArchiveShadowSwitchResult {
+  retiredTable: string;
+  liveRows: number;
+  retiredRows: number;
+  watermarksReset: number;
+}
+
+/**
+ * R3 — the atomic switch, ONE transaction: rename message_archive →
+ * message_archive_retired_<ts> (KEPT — capture-first; its drop is a separate
+ * owner decision), message_archive_shadow → message_archive, rename
+ * indexes/constraints/sequences so canonical names follow the live table,
+ * and force-reset the projection watermark to the shadow's replay high-seq
+ * (the guarded upsert would keep a HIGHER stale watermark and silently skip
+ * events — so the swap deletes + reinserts). Refuses inside the transaction
+ * when the set-difference proof shows missing rows. Serialized against the
+ * shadow builder by the same advisory lock. The archive sweep worker must be
+ * PAUSED for the window — docs/runbooks/message-archive-rebuild.md.
+ */
+export async function switchMessageArchiveShadowTables(
+  db: Database,
+  input?: { now?: Date },
+): Promise<ArchiveShadowSwitchResult> {
+  const now = input?.now ?? new Date();
+  const stamp = now.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  const retired = `message_archive_retired_${stamp}`;
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${MESSAGE_ARCHIVE_REBUILD_LOCK_KEY})`);
+
+    const missing = await tx.execute<{ n: string }>(sql`
+      select count(*)::text as n
+      from message_archive o
+      left join message_archive_shadow s ${SHADOW_JOIN}
+      where s.id is null
+    `);
+    const missingRows = Number(missing.rows[0]?.n ?? 0);
+    if (missingRows > 0) {
+      throw new Error(
+        `archive shadow switch REFUSED: ${missingRows} message_archive row(s) have no shadow `
+          + "counterpart — the switch would lose them. Re-run the shadow build "
+          + "(projection:rebuild message_archive), then archive:rebuild-verify.",
+      );
+    }
+
+    const counts = await tx.execute<{ old_rows: string; shadow_rows: string }>(sql`
+      select
+        (select count(*) from message_archive)::text as old_rows,
+        (select count(*) from message_archive_shadow)::text as shadow_rows
+    `);
+
+    // Old table out of the way first — its canonical index/constraint names
+    // must be freed before the shadow's are renamed onto them.
+    await tx.execute(sql.raw(`alter table message_archive rename to "${retired}"`));
+    const oldIndexes = await tx.execute<{ index_name: string; constraint_name: string | null }>(sql`
+      select c.relname as index_name, con.conname as constraint_name
+      from pg_index x
+      join pg_class c on c.oid = x.indexrelid
+      left join pg_constraint con on con.conindid = x.indexrelid
+      where x.indrelid = ${retired}::regclass
+      order by c.relname
+    `);
+    let ordinal = 0;
+    for (const index of oldIndexes.rows) {
+      ordinal += 1;
+      if (index.constraint_name !== null) {
+        await tx.execute(sql.raw(
+          `alter table "${retired}" rename constraint "${index.constraint_name}" to "${retired}_c${ordinal}"`,
+        ));
+      } else {
+        await tx.execute(sql.raw(
+          `alter index "${index.index_name}" rename to "${retired}_i${ordinal}"`,
+        ));
+      }
+    }
+    const oldSequence = await tx.execute<{ seq: string | null }>(sql`
+      select pg_get_serial_sequence(${retired}, 'id') as seq
+    `);
+    if (oldSequence.rows[0]?.seq) {
+      await tx.execute(sql.raw(
+        `alter sequence ${oldSequence.rows[0].seq} rename to "${retired}_id_seq"`,
+      ));
+    }
+
+    // Shadow takes the canonical name + the canonical index/constraint names.
+    await tx.execute(sql`alter table message_archive_shadow rename to message_archive`);
+    await tx.execute(sql`
+      alter table message_archive
+        rename constraint message_archive_shadow_pkey to message_archive_pkey
+    `);
+    await tx.execute(sql`
+      alter table message_archive
+        rename constraint message_archive_shadow_account_platform_message_ref_key
+        to message_archive_account_id_platform_message_ref_key
+    `);
+    await tx.execute(sql`
+      alter table message_archive
+        rename constraint message_archive_shadow_account_id_fkey
+        to message_archive_account_id_fkey
+    `);
+    await tx.execute(sql`
+      alter index message_archive_shadow_account_conv_idx rename to message_archive_account_conv_idx
+    `);
+    await tx.execute(sql`
+      alter index message_archive_shadow_account_occurred_idx rename to message_archive_account_occurred_idx
+    `);
+    await tx.execute(sql`
+      alter index message_archive_shadow_text_search_idx rename to message_archive_text_search_idx
+    `);
+    const newSequence = await tx.execute<{ seq: string | null }>(sql`
+      select pg_get_serial_sequence('message_archive', 'id') as seq
+    `);
+    if (newSequence.rows[0]?.seq) {
+      await tx.execute(sql.raw(
+        `alter sequence ${newSequence.rows[0].seq} rename to "message_archive_id_seq"`,
+      ));
+    }
+
+    // Watermark force-reset: the live projection resumes exactly where the
+    // shadow's replay stopped.
+    await tx.execute(sql`
+      delete from projection_seq_watermarks where projection = ${MESSAGE_ARCHIVE_PROJECTION}
+    `);
+    const carried = await tx.execute(sql`
+      insert into projection_seq_watermarks (projection, account_id, high_seq, updated_at)
+      select ${MESSAGE_ARCHIVE_PROJECTION}, account_id, high_seq, now()
+      from projection_seq_watermarks
+      where projection = ${MESSAGE_ARCHIVE_SHADOW_PROJECTION}
+      returning account_id
+    `);
+    await tx.execute(sql`
+      delete from projection_seq_watermarks where projection = ${MESSAGE_ARCHIVE_SHADOW_PROJECTION}
+    `);
+
+    return {
+      retiredTable: retired,
+      liveRows: Number(counts.rows[0]?.shadow_rows ?? 0),
+      retiredRows: Number(counts.rows[0]?.old_rows ?? 0),
+      watermarksReset: carried.rows.length,
+    };
+  });
+}
+
 /**
  * Backfill source 1: the frozen OFAPI-only dm_message_archive. Direct column
  * copy, idempotent, batched by id checkpoint. Returns rows copied + the new
- * checkpoint (null when exhausted).
+ * checkpoint (null when exhausted). W10: `targetTable` routes the same copy
+ * into the shadow table, `accountId` scopes a per-account shadow build.
  */
 export async function backfillArchiveFromDmMessageArchive(
   db: Database,
-  input: { afterId?: number | null; batchSize?: number },
+  input: {
+    afterId?: number | null;
+    batchSize?: number;
+    accountId?: number | null;
+    targetTable?: ArchiveTargetTable;
+  },
 ): Promise<{ lastId: number | null }> {
+  const target = archiveTable(input.targetTable);
   const batchSize = input.batchSize ?? 10_000;
   const afterId = input.afterId ?? 0;
+  const accountFilter = input.accountId != null
+    ? sql`and platform_account_id = ${input.accountId}`
+    : sql``;
   const result = await db.execute<{ id: string }>(sql`
     with batch as (
       select * from dm_message_archive
-      where id > ${afterId}
+      where id > ${afterId} ${accountFilter}
       order by id
       limit ${batchSize}
     ), copied as (
-      insert into message_archive (
+      insert into ${target} (
         account_id, platform, native_account_ref, conversation_ref, message_ref,
         fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
         price_mills, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
@@ -344,11 +931,11 @@ export async function backfillArchiveFromDmMessageArchive(
         tip_amount_mills = excluded.tip_amount_mills,
         in_reply_to_ref = excluded.in_reply_to_ref,
         media_metadata = excluded.media_metadata,
-        deleted_at = coalesce(message_archive.deleted_at, excluded.deleted_at),
+        deleted_at = coalesce(${target}.deleted_at, excluded.deleted_at),
         backfill_source = excluded.backfill_source,
         content_pending = false,
         updated_at = now()
-      where message_archive.content_pending
+      where ${target}.content_pending
       returning 1
     )
     select max(batch.id)::text as id from batch
@@ -361,25 +948,35 @@ export async function backfillArchiveFromDmMessageArchive(
  * Backfill source 2: the hot table (both platforms — the Fansly-critical
  * copy). total_tip_amount_cents is CENTS; the ×10 below is the cents→mills
  * conversion (shared money codec semantics — Stage 27 later bans the bare
- * arithmetic form outside backfill SQL).
+ * arithmetic form outside backfill SQL). W10: `targetTable` routes the same
+ * copy into the shadow table, `accountId` scopes a per-account shadow build.
  */
 export async function backfillArchiveFromHotTable(
   db: Database,
-  input: { afterId?: number | null; batchSize?: number },
+  input: {
+    afterId?: number | null;
+    batchSize?: number;
+    accountId?: number | null;
+    targetTable?: ArchiveTargetTable;
+  },
 ): Promise<{ lastId: number | null }> {
+  const target = archiveTable(input.targetTable);
   const batchSize = input.batchSize ?? 10_000;
   const afterId = input.afterId ?? 0;
+  const accountFilter = input.accountId != null
+    ? sql`and m.platform_account_id = ${input.accountId}`
+    : sql``;
   const result = await db.execute<{ id: string }>(sql`
     with batch as (
       select m.*, t.platform_conversation_id, t.partner_platform_user_id, p.platform as page_platform
       from page_dm_messages m
       join page_dm_threads t on t.id = m.conversation_id
       join pages p on p.id = m.platform_account_id
-      where m.id > ${afterId}
+      where m.id > ${afterId} ${accountFilter}
       order by m.id
       limit ${batchSize}
     ), copied as (
-      insert into message_archive (
+      insert into ${target} (
         account_id, platform, conversation_ref, message_ref, fan_native_id,
         sender_role, is_sent_by_me, occurred_at, text_plain, tip_amount_mills,
         is_tip, in_reply_to_ref, deleted_at, backfill_source
@@ -401,11 +998,11 @@ export async function backfillArchiveFromHotTable(
         tip_amount_mills = excluded.tip_amount_mills,
         is_tip = excluded.is_tip,
         in_reply_to_ref = excluded.in_reply_to_ref,
-        deleted_at = coalesce(message_archive.deleted_at, excluded.deleted_at),
+        deleted_at = coalesce(${target}.deleted_at, excluded.deleted_at),
         backfill_source = excluded.backfill_source,
         content_pending = false,
         updated_at = now()
-      where message_archive.content_pending
+      where ${target}.content_pending
       returning 1
     )
     select max(batch.id)::text as id from batch
@@ -454,15 +1051,19 @@ function mapArchiveRow(row: Record<string, unknown>): ArchiveMessageRow {
  * Kernel Stage 28 prune gate: the hot page_dm_messages prune may only run
  * while the archive provably holds every hot message (archive >= hot, per
  * conversation). Returns the number of conversations with uncovered
- * messages — 0 means pruning is safe.
+ * messages — 0 means pruning is safe. W10: `targetTable` lets the rebuild
+ * verify run the same coverage proof against the shadow table.
  */
-export async function countArchiveCoverageGaps(db: Database): Promise<number> {
+export async function countArchiveCoverageGaps(
+  db: Database,
+  targetTable?: ArchiveTargetTable,
+): Promise<number> {
   const result = await db.execute<{ gaps: string }>(sql`
     select count(*)::text as gaps from (
       select m.conversation_id
       from page_dm_messages m
       join pages p on p.id = m.platform_account_id
-      left join message_archive a
+      left join ${archiveTable(targetTable)} a
         on a.account_id = m.platform_account_id
         and a.platform = p.platform::text
         and a.message_ref = m.platform_message_id

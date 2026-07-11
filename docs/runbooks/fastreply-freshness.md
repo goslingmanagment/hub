@@ -26,9 +26,12 @@ Desktop: NOTHING to build (0.1.33 is live) — at deploy, only verify the feed s
   delivery after OFAPI's 5 retries. If a limiter is ever reintroduced it must sit AFTER
   the journal write. Prod-host check at deploy: no upstream nginx 429 remains on
   `/api/v1/ofapi/webhook`.
-- **`projection:rebuild message_archive` is disabled.** The replay sees only attached
-  `domain_events` partitions and destroys `backfill_source` rows. `archive:backfill`
-  (idempotent, additive) remains the recovery tool.
+- **`projection:rebuild message_archive` no longer replays in place.** The old rebuild
+  saw only attached `domain_events` partitions and destroyed `backfill_source` rows —
+  the Wave-1 guard threw unconditionally. W10 (decision #134) replaced the throw with
+  the staged SHADOW rebuild (build → verify → owner-gated switch):
+  `docs/runbooks/message-archive-rebuild.md`. `archive:backfill` (idempotent, additive)
+  remains the light-touch recovery tool.
 - **Deploy env condition:** `PAGE_DM_PRUNE_ENABLED=false` (also the new schema default);
   verify api+worker+scheduler heartbeats post-deploy.
 

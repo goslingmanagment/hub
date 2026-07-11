@@ -21,7 +21,8 @@ import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 export const MESSAGE_ARCHIVE_SWEEP_QUEUE = "projections.message-archive.sweep";
 
 const EVENT_PAGE_SIZE = 500;
-const MESSAGE_EVENT_TYPES = new Set([
+/** Exported for the W10 shadow rebuild — one filter, two replay paths. */
+export const MESSAGE_EVENT_TYPES = new Set([
   "message.received",
   "message.sent",
   "message.deleted",
@@ -126,7 +127,13 @@ export async function runMessageArchiveProjection(
   return totals;
 }
 
-/** One-command rebuild: truncate scope + replay from the event ledger. */
+/** One-command rebuild: truncate scope + replay from the event ledger.
+ *
+ * W10 (decision #134): LOSSY by construction — the replay sees only attached
+ * domain_events partitions and the reset destroys legacy-seed rows that have
+ * no event counterpart. No CLI dispatches here anymore; the sanctioned path
+ * is the staged shadow rebuild (message-archive-rebuild.ts). Kept because
+ * the replay-convergence property it exercises is still pinned by tests. */
 export async function rebuildMessageArchiveProjection(
   app: Pick<AppContext, "db" | "logger">,
   input?: { accountId?: number | null },
