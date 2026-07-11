@@ -30,6 +30,11 @@ import {
   ensureMessageArchiveQueues,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
+import {
+  PROJECTION_DEBT_SWEEP_QUEUE,
+  ensureProjectionDebtQueue,
+  runProjectionDebtSweep,
+} from "./services/projection-debt-sweep.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
@@ -165,6 +170,7 @@ export async function startWorkerServices(
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
+  await ensureProjectionDebtQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   // Stage 25: cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
@@ -250,6 +256,15 @@ export async function startWorkerServices(
     const acceptance = await runAiAcceptanceProjection(app);
     if (acceptance.projected > 0) {
       app.logger.info(acceptance, "AI acceptance projection sweep complete");
+    }
+  });
+
+  await boss.work(PROJECTION_DEBT_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    // #135 A2b: re-run wedged rebuildable-projection recomputes (thread
+    // summaries) recorded by the dm_messages executor; quiet when idle.
+    const result = await runProjectionDebtSweep(app);
+    if (result.scanned > 0) {
+      app.logger.info(result, "Projection debt sweep complete");
     }
   });
 

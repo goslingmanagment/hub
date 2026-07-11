@@ -32,6 +32,7 @@ export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/runtime-instances.ts";
 export * from "./repositories/page-dm.ts";
+export * from "./repositories/projection-debt.ts";
 export * from "./repositories/spenders.ts";
 export * from "./repositories/sync-context.ts";
 export * from "./repositories/sync.ts";

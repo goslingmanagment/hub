@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
+import type { ConfigItem, ConfigUpdateBody, ConfigViewResponse } from "@agency_hub_core/contracts";
 import {
   useAdminConfig,
   useClearConfig,
@@ -218,7 +218,12 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
   }
 
   function revert() {
-    clear.mutate({ key: item.key, expectedVersion: item.overrideVersion ?? undefined });
+    // exactOptionalPropertyTypes: omit expectedVersion entirely when there is no
+    // override row (rather than passing an explicit undefined).
+    clear.mutate({
+      key: item.key,
+      ...(item.overrideVersion !== null ? { expectedVersion: item.overrideVersion } : {}),
+    });
     setConfirm(null);
   }
 
@@ -313,6 +318,180 @@ function ConfigEditor({ item }: { item: ConfigItem }) {
   );
 }
 
+// Which live keys get an inline editor: numbers get the numeric input, booleans get the
+// on/off switch (added after a prod incident where a live boolean flag showed «можно
+// менять» but had no editor and had to be flipped via psql). Any other kind (string/enum
+// etc.) stays read-only until it gets a proper editor — which keeps each editor honest
+// about the value type it sends. Exported for tests.
+export function liveEditorKind(
+  item: Pick<ConfigItem, "runtimeApply" | "kind">,
+): "number" | "boolean" | null {
+  if (item.runtimeApply !== "live") return null;
+  if (item.kind === "number" || item.kind === "boolean") return item.kind;
+  return null;
+}
+
+// The literal live-PATCH body a boolean flip sends: a REAL boolean value (the server's
+// validateConfigOverride rejects strings for kind "boolean") with the row's version as
+// expectedVersion (0 = "no override row yet", same convention as the numeric editor).
+// Exported for tests.
+export function booleanPatchBody(
+  item: Pick<ConfigItem, "key" | "overrideVersion">,
+  target: boolean,
+): ConfigUpdateBody {
+  return {
+    patches: [{ key: item.key, value: target, expectedVersion: item.overrideVersion ?? 0 }],
+  };
+}
+
+type BooleanConfirm = { action: "save"; target: boolean } | { action: "revert" };
+
+// What one switch click does. Keys with a costWarning (or destructive) go through the
+// same two-click confirm gate as the numeric editor: the first click only ARMS the
+// confirm (remembering the requested target), and only a second click for the SAME
+// target produces the real patch. Keys without a warning save on the first click — an
+// incident flip must be one action. Exported for tests (static render can't click).
+export function resolveBooleanToggle(opts: {
+  item: Pick<ConfigItem, "key" | "overrideVersion" | "costWarning" | "destructive">;
+  target: boolean;
+  confirm: BooleanConfirm | null;
+}): { kind: "arm" } | { kind: "save"; body: ConfigUpdateBody } {
+  const needsConfirm = Boolean(opts.item.costWarning) || opts.item.destructive;
+  const armed = opts.confirm?.action === "save" && opts.confirm.target === opts.target;
+  if (needsConfirm && !armed) {
+    return { kind: "arm" };
+  }
+  return { kind: "save", body: booleanPatchBody(opts.item, opts.target) };
+}
+
+// Inline editor for boolean live keys (the Stage 16/17 Fansly stream gates). Mirrors
+// ConfigEditor's plumbing exactly: same PATCH mutation, same optimistic concurrency
+// (overrideVersion → expectedVersion), same two-click confirm for cost/destructive keys
+// (with the costWarning text shown while armed), same revert-to-env button.
+function BooleanConfigEditor({ item }: { item: ConfigItem }) {
+  const update = useUpdateConfig();
+  const clear = useClearConfig();
+  const [confirm, setConfirm] = useState<BooleanConfirm | null>(null);
+
+  const needsConfirm = Boolean(item.costWarning) || item.destructive;
+  // Same seeding as the numeric editor: desired override, else running value, else default.
+  const current = seedValue(item) === "true";
+  const pending = update.isPending || clear.isPending;
+  const error = update.error ?? clear.error;
+  const isConflict = error instanceof KernelApiError && error.status === 409;
+
+  // Both the switch and the armed «Подтвердить» button land here: the target is always
+  // the opposite of the current effective value (SettingRow remounts this editor when
+  // the server value changes, so an armed confirm can't outlive the value it was for).
+  function onToggle() {
+    const target = !current;
+    const action = resolveBooleanToggle({ item, target, confirm });
+    if (action.kind === "arm") {
+      setConfirm({ action: "save", target });
+      return;
+    }
+    update.mutate(action.body);
+    setConfirm(null);
+  }
+
+  function onRevertClick() {
+    if (needsConfirm && confirm?.action !== "revert") {
+      setConfirm({ action: "revert" });
+      return;
+    }
+    // exactOptionalPropertyTypes: omit expectedVersion entirely when there is no
+    // override row (rather than passing an explicit undefined).
+    clear.mutate({
+      key: item.key,
+      ...(item.overrideVersion !== null ? { expectedVersion: item.overrideVersion } : {}),
+    });
+    setConfirm(null);
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={current}
+          aria-label={`${item.label} value`}
+          onClick={onToggle}
+          disabled={pending}
+          className={`relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+            current ? "bg-accent" : "bg-border"
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+              current ? "translate-x-[15px]" : "translate-x-[2px]"
+            }`}
+          />
+        </button>
+        <span className="font-mono text-xs text-text-primary">{formatScalar(current)}</span>
+        {confirm?.action === "save" && (
+          <button
+            type="button"
+            onClick={onToggle}
+            disabled={pending}
+            className="rounded bg-danger px-2 py-0.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+          >
+            {confirm.target ? "Подтвердить включение" : "Подтвердить выключение"}
+          </button>
+        )}
+        {item.source === "override" && (
+          <button
+            type="button"
+            onClick={onRevertClick}
+            disabled={pending}
+            className={`rounded px-2 py-0.5 text-xs disabled:opacity-40 ${
+              confirm?.action === "revert"
+                ? "bg-danger text-white hover:opacity-90"
+                : "border border-border bg-card text-text-secondary hover:bg-hover"
+            }`}
+          >
+            {confirm?.action === "revert" ? "Подтвердить сброс" : "Сбросить"}
+          </button>
+        )}
+        {confirm !== null && (
+          <button
+            type="button"
+            onClick={() => setConfirm(null)}
+            disabled={pending}
+            className="rounded border border-border bg-card px-2 py-0.5 text-xs text-text-secondary hover:bg-hover disabled:opacity-40"
+          >
+            Отмена
+          </button>
+        )}
+        {item.pendingApply && (
+          <Badge
+            tone="bg-amber-500/15 text-amber-600"
+            title="Сохранено — может занять до ~60с (один сигнал), чтобы примениться во всех процессах"
+          >
+            применяется…
+          </Badge>
+        )}
+      </div>
+      {confirm !== null && needsConfirm && (
+        <div className="text-[11px] text-amber-600">
+          {item.destructive ? "Необратимо: снижение или очистка безвозвратно удалит данные. " : ""}
+          {item.costWarning ?? ""}{" "}
+          {confirm.action === "revert"
+            ? "Сбросить к значению по умолчанию?"
+            : `Нажмите «Подтвердить», чтобы ${confirm.target ? "включить" : "выключить"}.`}
+        </div>
+      )}
+      {error && (
+        <div className="text-[11px] text-red-600">
+          {isConflict
+            ? "Изменено в другом месте — значения обновлены, проверьте и повторите."
+            : errorMessage(error)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InfoIcon() {
   return (
     <svg
@@ -356,10 +535,10 @@ function SettingLabel({ item }: { item: ConfigItem }) {
 }
 
 function SettingRow({ item }: { item: ConfigItem }) {
-  // Only numeric live keys get an inline editor today (all 8 live keys are numbers).
-  // A future non-numeric live key stays read-only until it gets a proper editor,
-  // which keeps the Number()-based editor honest.
-  const isEditable = item.runtimeApply === "live" && item.kind === "number";
+  // Numeric live keys get the inline number editor; boolean live keys get the on/off
+  // switch (BooleanConfigEditor). Other live kinds (string/enum) stay read-only until
+  // they get a proper editor — see liveEditorKind.
+  const editorKind = liveEditorKind(item);
   const runningDiffersFromDefault =
     item.running.length > 0
     && !item.secret
@@ -413,8 +592,11 @@ function SettingRow({ item }: { item: ConfigItem }) {
             </Badge>
           )}
         </div>
-        {isEditable && (
+        {editorKind === "number" && (
           <ConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
+        )}
+        {editorKind === "boolean" && (
+          <BooleanConfigEditor key={`${item.overrideVersion ?? "env"}:${seedValue(item)}`} item={item} />
         )}
       </div>
     </div>
@@ -639,7 +821,7 @@ function StagedFlagRow({
   // The staged confirm modal carries the target (enable=true / disable=false / revert=null)
   // and the full set of keys to flip in one atomic patch (this key plus, for a disable, its
   // still-on dependents). Revert-to-env goes through the SAME staged endpoint (desired:null
-  // + ack), never the generic DELETE (useClearConfig stays for live numeric keys only), so
+  // + ack), never the generic DELETE (useClearConfig stays for live editable keys only), so
   // the order rules + version check still apply.
   const [modal, setModal] = useState<
     null | { target: boolean | null; keys: Array<{ key: string; desired: boolean | null }> }
@@ -916,7 +1098,7 @@ export function ConfigurationTab() {
     <div className="space-y-6">
       <p className="max-w-3xl text-sm leading-relaxed text-text-muted">
         Текущие рабочие настройки приложения — как их сообщает каждый запущенный процесс. Те, что
-        можно менять прямо здесь, снабжены полем ввода и применяются без перезапуска (до ~60 секунд на
+        можно менять прямо здесь, снабжены полем ввода или переключателем и применяются без перезапуска (до ~60 секунд на
         распространение между процессами). Остальные задаёт администратор через переменные окружения,
         и они вступают в силу после развёртывания. Секреты показывают только состояние: «задан» или
         «не задан». Наведите на значок&nbsp;ⓘ у названия, чтобы увидеть подробное объяснение настройки.

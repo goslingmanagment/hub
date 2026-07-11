@@ -201,6 +201,10 @@ export interface OfapiClient {
       // callers must drop the cursor row if it reappears.
       firstId?: string | null;
       pageIndex?: number;
+      // Per-request retry override (0 = single attempt). The DM circuit
+      // breaker's adaptive limit probes must not multiply a 60s vendor
+      // timeout by the default retry budget.
+      retries?: number;
     },
   ): Promise<OfapiListPage>;
   // GET /api/{account}/fans/active — the audience sweep (docs/ofapi-parity-plan.md
@@ -649,6 +653,8 @@ export function createOfapiClient(input: {
     requestMetadata: Record<string, unknown>;
     mapResponse?: (body: unknown) => OfapiListPage;
     timeoutMs?: number;
+    // Caller override of the transport/HTTP retry budget (0 = single attempt).
+    retries?: number;
   }): Promise<OfapiListPage> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(options.query)) {
@@ -670,7 +676,7 @@ export function createOfapiClient(input: {
         cursorPresent: options.cursorPresent,
       },
       requestMetadata: options.requestMetadata,
-      retries: OFAPI_OBSERVED_RETRIES,
+      retries: options.retries ?? OFAPI_OBSERVED_RETRIES,
       waitForRateLimit: () => waitForRequestSlot("bulk"),
       execute: async () => {
         const response = await fetch(url, {
@@ -1392,6 +1398,7 @@ export function createOfapiClient(input: {
         // Chat history reads are scraped server-side and scale with chat size;
         // the default 15 s abort starved the largest chats forever.
         timeoutMs: OFAPI_SLOW_READ_TIMEOUT_MS,
+        ...(params.retries !== undefined ? { retries: params.retries } : {}),
       });
     },
     async listActiveFans(context, accountId, params) {

@@ -12,6 +12,7 @@ import { ensureOfapiCreditQueues, ensureOfapiCreditSchedules } from "./ofapi-cre
 import { ensureOfapiDmAnalyticsQueues, ensureOfapiDmAnalyticsSchedules } from "./ofapi-dm-analytics.ts";
 import { ensureOfapiQueues, ensureOfapiSchedules } from "./ofapi-events.ts";
 import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./projections/message-archive.ts";
+import { ensureProjectionDebtQueue, ensureProjectionDebtSchedule } from "./projection-debt-sweep.ts";
 import {
   RAW_PAYLOAD_CLEANUP_QUEUE,
   ensurePlannerSchedule,
@@ -42,6 +43,7 @@ export async function registerAllSchedules(boss: Pick<PgBoss, "schedule" | "crea
   await ensureObservationsPartitionQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
+  await ensureProjectionDebtQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureTieringQueue(boss, createdQueues);
   await Promise.all([
@@ -59,6 +61,7 @@ export async function registerAllSchedules(boss: Pick<PgBoss, "schedule" | "crea
     ensureObservationsPartitionSchedule(boss),
     ensureCanonicalizeSchedule(boss),
     ensureMessageArchiveSchedule(boss),
+    ensureProjectionDebtSchedule(boss),
     ensureOpsMetricsSchedule(boss),
     ensureTieringSchedule(boss),
   ]);

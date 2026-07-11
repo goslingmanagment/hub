@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const healthMocks = vi.hoisted(() => ({
   getSyncStatusSnapshot: vi.fn(),
   listConnectionStatuses: vi.fn(),
+  countUnresolvedProjectionDebtByAccount: vi.fn(
+    async (): Promise<Array<{ platformAccountId: number; unresolvedCount: number }>> => [],
+  ),
 }));
 
 vi.mock("../apps/runtime/src/services/connections.ts", () => ({
@@ -11,6 +14,13 @@ vi.mock("../apps/runtime/src/services/connections.ts", () => ({
 
 vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
   getSyncStatusSnapshot: healthMocks.getSyncStatusSnapshot,
+}));
+
+// The unit-level app context carries no db; stub the projection-debt count
+// (#135 A2b) the way the other health data sources are stubbed.
+vi.mock("@agency_hub_core/db", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  countUnresolvedProjectionDebtByAccount: healthMocks.countUnresolvedProjectionDebtByAccount,
 }));
 
 // getPublicSyncHealth now resolves live effective config; with no db overlay here it
@@ -351,6 +361,205 @@ describe("health service", () => {
           connectionStatus: "unverified",
           issues: [],
           lastErrorSummary: null,
+        },
+      ],
+    });
+  });
+
+  it("degrades a page whose retrying stream is wedged on a long failure streak (#135)", async () => {
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 7,
+        label: "lora-1",
+        platform: "fansly",
+        modelSlug: "lora",
+        modelName: "Lora",
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 7,
+        pageLabel: "lora-1",
+        platform: "fansly",
+        modelSlug: "lora",
+        modelName: "Lora",
+        blocks: {
+          connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          // The incident shape: 251 consecutive 23514s, state "retrying" —
+          // previously counted into pendingStreams and reported 200/ok.
+          messages_history: {
+            block: "messages_history",
+            state: "retrying",
+            statusReason: null,
+            error: {
+              stream: "dm_messages",
+              code: "23514",
+              summary: "stored_message_count check violated",
+              failedAt: "2026-03-23T11:59:00.000Z",
+              consecutiveFailures: 251,
+            },
+            metrics: {},
+          },
+        },
+      }],
+    });
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(503);
+    expect(result.body).toMatchObject({
+      status: "degraded",
+      overall: {
+        unhealthyPageCount: 1,
+      },
+      pages: [
+        {
+          pageId: 7,
+          status: "degraded",
+          pendingStreams: 1,
+          issues: ["dm_messages:retry_wedged"],
+        },
+      ],
+    });
+  });
+
+  it("keeps a short retry streak pending instead of wedged", async () => {
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 7,
+        label: "lora-1",
+        platform: "fansly",
+        modelSlug: "lora",
+        modelName: "Lora",
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 7,
+        pageLabel: "lora-1",
+        platform: "fansly",
+        modelSlug: "lora",
+        modelName: "Lora",
+        blocks: {
+          connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_history: {
+            block: "messages_history",
+            state: "retrying",
+            statusReason: null,
+            error: {
+              stream: "dm_messages",
+              code: "http_5xx",
+              summary: "upstream flake",
+              failedAt: "2026-03-23T11:59:00.000Z",
+              consecutiveFailures: 3,
+            },
+            metrics: {},
+          },
+        },
+      }],
+    });
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "ok",
+      pages: [
+        {
+          pageId: 7,
+          status: "ok",
+          pendingStreams: 1,
+          issues: [],
+        },
+      ],
+    });
+  });
+
+  it("degrades a page with unresolved projection debt (#135)", async () => {
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 7,
+        label: "lora-1",
+        platform: "fansly",
+        modelSlug: "lora",
+        modelName: "Lora",
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 7,
+        pageLabel: "lora-1",
+        platform: "fansly",
+        modelSlug: "lora",
+        modelName: "Lora",
+        blocks: {
+          connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_history: { block: "messages_history", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+        },
+      }],
+    });
+    healthMocks.countUnresolvedProjectionDebtByAccount.mockResolvedValueOnce([
+      { platformAccountId: 7, unresolvedCount: 2 },
+    ]);
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(503);
+    expect(result.body).toMatchObject({
+      status: "degraded",
+      pages: [
+        {
+          pageId: 7,
+          status: "degraded",
+          issues: ["projection_debt"],
         },
       ],
     });
