@@ -112,10 +112,14 @@ beforeEach(async (context) => {
 
 async function seedConversation() {
   // Archive rows: fan message + our reply + a tip, all in the fan's thread.
+  // Seeded relative to now: the ping-active assertion needs fan messages
+  // inside the 5-day window, so fixed dates here are a time bomb.
+  const seedAt = (minutes: number) =>
+    new Date(Date.now() - 60 * 60 * 1000 + minutes * 60 * 1000).toISOString();
   const rows = [
-    { ref: "9001", text: "hey babe", mine: false, at: "2026-07-06T10:00:00.000Z", tip: 0 },
-    { ref: "9002", text: "hey you", mine: true, at: "2026-07-06T10:05:00.000Z", tip: 0 },
-    { ref: "9003", text: "sent you something", mine: false, at: "2026-07-06T10:10:00.000Z", tip: 5000 },
+    { ref: "9001", text: "hey babe", mine: false, at: seedAt(0), tip: 0 },
+    { ref: "9002", text: "hey you", mine: true, at: seedAt(5), tip: 0 },
+    { ref: "9003", text: "sent you something", mine: false, at: seedAt(10), tip: 5000 },
   ];
   for (const row of rows) {
     await testDb!.pool.query(
@@ -144,8 +148,8 @@ async function seedConversation() {
        canonical_type, transaction_state, raw_status, gross_amount_mills,
        source_destination_amount_mills, creator_net_amount_mills, occurred_at, source)
      values ($1, $2, 'svc-tip-1', 'tip', 'tip', 'posted', 'done', 5000, 5000, 4000,
-             '2026-07-06T10:10:00Z', 'ofapi:webhook')`,
-    [pageId, Number(fan.rows[0]!.id)],
+             $3, 'ofapi:webhook')`,
+    [pageId, Number(fan.rows[0]!.id), seedAt(10)],
   );
 }
 
@@ -207,8 +211,8 @@ describe("AI feature service pilot (Stage 30)", () => {
     const lora = createBundledPersonalities()[0]!;
     expect(body.prompt.systemBlocks[1]).toMatchObject({ text: lora.content, cache: "1h" });
     const userText = body.prompt.userBlocks.map((block) => block.text).join("\n");
-    expect(userText).toContain("[10:00] Fan: hey babe");
-    expect(userText).toContain("[10:05] Model: hey you");
+    expect(userText).toMatch(/\[\d{2}:\d{2}\] Fan: hey babe/);
+    expect(userText).toMatch(/\[\d{2}:\d{2}\] Model: hey you/);
     expect(userText).toContain("[Tip: $5.00]");
     expect(userText).toContain("<fan_spending_data>");
     expect(userText).toContain("<fan_subscription_data>");
