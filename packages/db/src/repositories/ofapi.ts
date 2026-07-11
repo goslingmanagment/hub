@@ -534,6 +534,20 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
         "other",
       ]),
       inArray(ofapiSpendProjectionEvents.eventStatus, ["pending", "settled", "reversed"]),
+      // W7.4 follow-up (2026-07-11, resurrection loop): a 'pending' event
+      // whose transaction has since SETTLED (state posted, any raw_status)
+      // must count as PRESENT — the old exact-shape match treated the
+      // settled row as missing and the minutely ingest re-applied the stale
+      // pending event, flipping REST-settled rows back to pending forever
+      // (the A47 rescan could never stick).
+      sql`not exists (
+        select 1 from ${transactions} tx
+        where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}
+          and tx.transaction_id = ${ofapiSpendProjectionEvents.transactionId}
+          and tx.sender_id is not distinct from ${ofapiSpendProjectionEvents.fanPlatformUserId}
+          and ${ofapiSpendProjectionEvents.eventStatus} = 'pending'
+          and tx.transaction_state::text = 'posted'
+      )`,
       sql`not exists (
         select 1 from ${transactions} tx
         where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}

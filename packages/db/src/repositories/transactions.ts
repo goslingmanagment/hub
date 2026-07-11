@@ -273,6 +273,25 @@ export async function retireStalePendingTransactionsById(
   return retired.length;
 }
 
+/** W7.4: how many of these rows are STILL active+pending (post-reconcile
+ * honesty check — nonzero after a write pass means something is re-asserting
+ * pending, e.g. the pre-fix ingest resurrection loop). */
+export async function countActivePendingTransactionsByIds(
+  db: Database,
+  ids: number[],
+): Promise<number> {
+  if (ids.length === 0) {
+    return 0;
+  }
+  const rows = await db.select({ id: transactions.id }).from(transactions)
+    .where(and(
+      inArray(transactions.id, ids),
+      eq(transactions.isActive, true),
+      eq(transactions.transactionState, "pending"),
+    ));
+  return rows.length;
+}
+
 /** W7.3 repair (E6 census): active negation anomalies — double-negative
  * pairs and orphan negatives — for the owner-gated repair CLI. */
 export async function listActiveNegationAnomalies(db: Database) {

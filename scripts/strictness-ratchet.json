@@ -114,7 +114,6 @@
   "tests/ofapi-read-gateway.integration.test.ts": 8,
   "tests/ofapi-spend-comparison.integration.test.ts": 15,
   "tests/ofapi-spend-projection.integration.test.ts": 4,
-  "tests/ofapi-spend-transaction-ingest.integration.test.ts": 47,
   "tests/ofapi-sse.integration.test.ts": 6,
   "tests/ofapi-sync-snapshot.integration.test.ts": 4,
   "tests/ofapi-webhook.integration.test.ts": 5,

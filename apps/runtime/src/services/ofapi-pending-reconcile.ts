@@ -18,6 +18,7 @@
 // fresh scan evidence.
 
 import {
+  countActivePendingTransactionsByIds,
   listStalePendingOfapiTransactions,
   rebuildRevenueRollups,
   rebuildSpenderProjections,
@@ -42,6 +43,9 @@ export interface OfapiPendingReconcileResult {
   expired: number;
   /** Stale rows no longer pending after the rescan (settled or negated). */
   settledByRescan: number;
+  /** Rows STILL active+pending after rescan+retire — must be 0; nonzero
+   * means something re-asserts pending (see the ingest supersession fix). */
+  unresolved: number;
   blockedPages: string[];
   skipped: "disabled" | null;
 }
@@ -55,6 +59,7 @@ export async function runOfapiPendingReconcile(
     pagesTouched: 0,
     expired: 0,
     settledByRescan: 0,
+    unresolved: 0,
     blockedPages: [],
     skipped: null,
   };
@@ -122,13 +127,21 @@ export async function runOfapiPendingReconcile(
     }
   }
 
+  // Honest accounting: re-read the original rows instead of arithmetic —
+  // the first prod run "reported" 156 settled while an ingest loop was
+  // quietly re-asserting pending underneath.
+  const unresolved = mode === "write"
+    ? await countActivePendingTransactionsByIds(app.db, stale.map((row) => row.id))
+    : 0;
+  const blockedRows = stale.filter((row) => blockedPageIds.has(row.platformAccountId)).length;
   const result: OfapiPendingReconcileResult = {
     stalePendings: stale.length,
     pagesTouched,
     expired,
     settledByRescan: mode === "write"
-      ? stale.length - expired - stale.filter((row) => blockedPageIds.has(row.platformAccountId)).length
+      ? Math.max(0, stale.length - expired - unresolved - blockedRows)
       : 0,
+    unresolved,
     blockedPages,
     skipped: null,
   };

@@ -31,7 +31,13 @@ async function seedPage(label = "lora-of") {
     slug: `model-${label}`,
     name: `Model ${label}`,
   });
+  if (!model) {
+    throw new Error("model seed failed");
+  }
   const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label });
+  if (!page) {
+    throw new Error("page seed failed");
+  }
   // Stage 13: pages holding OFAPI projection events are OFAPI-mapped in
   // reality; the mapping assigns transactions_writer='ofapi', which the
   // single-writer gate requires before the ingest may touch the page.
@@ -158,6 +164,54 @@ afterAll(async () => {
 });
 
 describe("OFAPI spend transaction ingest", () => {
+  it("a pending event is SATISFIED by an already-settled row — the ingest never resurrects pending over posted (W7.4 fix)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const occurredAt = new Date("2026-06-19T10:30:00.000Z");
+    // The projection's newest word on this transaction is 'pending'...
+    await seedProjectedTransaction({
+      pageId: page.id,
+      transactionId: "tx-superseded",
+      fanPlatformUserId: "1000003",
+      grossAmountMills: 9_000n,
+      creatorNetAmountMills: 7_200n,
+      eventStatus: "pending",
+      occurredAt,
+    });
+    // ...ingest writes it as pending truth.
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(1);
+
+    // A REST rescan settles the SAME transaction in place (the A47 path).
+    const { upsertTransaction } = await import("@agency_hub_core/db");
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      source: "ofapi:rest",
+      transactionId: "tx-superseded",
+      rawType: "ofapi:message",
+      canonicalType: "message_purchase",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 9_000n,
+      sourceDestinationAmountMills: 9_000n,
+      creatorNetAmountMills: 7_200n,
+      senderId: "1000003",
+      occurredAt,
+    });
+
+    // Pre-fix, the stale pending event no longer matched the settled row's
+    // exact shape, listed as "missing", and the minutely ingest flipped the
+    // row BACK to pending — the rescan could never stick.
+    expect(await applyOfapiSpendProjectionTransactions(appContext)).toBe(0);
+    const { rows } = await testDb.pool.query<{ transaction_state: string }>(
+      "select transaction_state::text from transactions where platform_account_id = $1 and transaction_id = 'tx-superseded'",
+      [page.id],
+    );
+    expect(rows).toEqual([{ transaction_state: "posted" }]);
+  });
+
   it("applies missing transactions.new shadow rows into core transaction truth", async (context) => {
     if (!testDb) {
       context.skip();
