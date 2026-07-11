@@ -8,7 +8,7 @@
 // worker, the API handlers, and tests resolve the effective config identically.
 
 import type { AppConfig } from "./config.ts";
-import { checkPublicProfileResolutionInvariant, checkSyncConcurrencyInvariant } from "./config.ts";
+import { checkSyncConcurrencyInvariant } from "./config.ts";
 import type { ConfigOverrideValue, SkippedOverride } from "./config-registry.ts";
 import { CONFIG_DESCRIPTORS, getDescriptor, transitiveRequires } from "./config-registry.ts";
 
@@ -221,16 +221,10 @@ export interface ApplyBootOverridesResult {
 }
 
 /** Read the boot-applied invariants off a (candidate) merged config and return the
- *  first violation message, or null. Generic/defensive: none of today's 8 boot keys
- *  participate, but a future boot flag that feeds one of these fields would. */
+ *  first violation message, or null. Generic/defensive: none of today's boot keys
+ *  participate, but a future boot flag that feeds these fields would. (The
+ *  public-profile OR-invariant died with its flags — W8.2 / A30, #133.) */
 function checkBootInvariants(config: AppConfig): string | null {
-  const publicProfileError = checkPublicProfileResolutionInvariant({
-    resolutionEnabled: config.onlyFansPublicProfileResolutionEnabled === true,
-    allowDirect: config.onlyFansPublicProfileAllowDirect === true,
-    hasProxy: config.onlyFansPublicProfileProxy != null,
-  });
-  if (publicProfileError) return publicProfileError;
-
   return checkSyncConcurrencyInvariant({
     pageExecutorConcurrency: config.syncPageExecutorConcurrency,
     sharedRateLimitEnabled: config.syncSharedRateLimitEnabled,

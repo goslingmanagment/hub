@@ -218,7 +218,6 @@ describe("config registry", () => {
       "telegramChatId",
       "ofapiApiKey",
       "anthropicApiKey",
-      "onlyFansPublicProfileProxy",
     ];
     for (const key of SENSITIVE_KEYS) {
       const descriptor = getDescriptor(key);

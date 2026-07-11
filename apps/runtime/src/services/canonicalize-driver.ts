@@ -19,12 +19,57 @@ import {
   CANONICALIZER_FAMILIES,
   type CanonicalizerFamily,
 } from "./canonicalize/index.ts";
+import type { CanonicalEventDraft } from "./canonicalize/types.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const CANONICALIZE_SWEEP_QUEUE = "canonicalize.sweep";
 
 const SWEEP_PAGE_SIZE = 200;
 const SWEEP_MAX_PAGES_PER_FAMILY = 20;
+
+/** W8.2 (A13 remainder, decision #133): the plausibility window for
+ * occurred_at at canonicalize time. Provider timestamps are untrusted input —
+ * a garbage year (1970 epoch-zero, 20326 fat-finger) used to aim the insert
+ * at a partition that may not exist (ExecFindPartition 23514 → the
+ * observation retries every sweep, forever). Real platform facts start 2024;
+ * the future edge allows provider clock skew, nothing more. */
+export const OCCURRED_AT_CLAMP_MIN = new Date("2024-01-01T00:00:00Z");
+export const OCCURRED_AT_CLAMP_FUTURE_MONTHS = 2;
+
+export function occurredAtClampMax(now: Date): Date {
+  const max = new Date(now.getTime());
+  max.setUTCMonth(max.getUTCMonth() + OCCURRED_AT_CLAMP_FUTURE_MONTHS);
+  return max;
+}
+
+/** Out-of-window occurred_at falls back to the observation's receipt time —
+ * NEVER a guessed boundary date — and the raw provider value is preserved
+ * verbatim in event data (occurredAtRaw) so a later repair campaign (the
+ * 1970-repair precedent) can re-date honestly. Dedup keys are built by the
+ * canonicalizers BEFORE this clamp, so replays stay key-stable. */
+export function clampDraftOccurredAt(
+  draft: CanonicalEventDraft,
+  receivedAt: Date,
+  now: Date,
+): CanonicalEventDraft {
+  const time = draft.occurredAt.getTime();
+  if (
+    !Number.isNaN(time)
+    && time >= OCCURRED_AT_CLAMP_MIN.getTime()
+    && time <= occurredAtClampMax(now).getTime()
+  ) {
+    return draft;
+  }
+  return {
+    ...draft,
+    occurredAt: receivedAt,
+    data: {
+      ...draft.data,
+      occurredAtClamped: true,
+      occurredAtRaw: Number.isNaN(time) ? null : draft.occurredAt.toISOString(),
+    },
+  };
+}
 
 export async function ensureCanonicalizeQueues(
   boss: QueueCreationClient,
@@ -155,7 +200,8 @@ async function runFamily(
       // the version floor and is retried next run; everything after it in
       // this run still processes (afterId already advanced past the page).
       try {
-        const drafts = family.canonicalize(row, runContext);
+        const drafts = family.canonicalize(row, runContext)
+          .map((draft) => clampDraftOccurredAt(draft, row.receivedAt, now));
         // Capture-first rows (webhook) carry only the vendor account ref;
         // resolve it against the page map before the unmapped check.
         const accountId = row.accountId

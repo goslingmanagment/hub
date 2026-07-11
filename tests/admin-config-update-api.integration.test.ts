@@ -445,4 +445,30 @@ describe("admin config update api (Stage B1)", () => {
     expect(response.statusCode).toBe(400);
     expect((await getConfigOverrides(testDb.db)).has("ofapiDmProjectionEnabled")).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects DELETE for an EDITABLE boot key with 400 (W8.2 / A32)", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    // ofapiChargebacksReconcileEnabled is editability 'editable' BUT
+    // runtimeApply 'boot' — pre-A32 the generic DELETE would clear it,
+    // silently bypassing the staged endpoint's expectedVersion + ack ritual.
+    await setConfigOverride(testDb.db, {
+      key: "ofapiChargebacksReconcileEnabled",
+      value: true,
+      userId: null,
+      groupId: randomUUID(),
+    });
+    const response = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/config/ofapiChargebacksReconcileEnabled",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { message?: string; error?: string };
+    expect(`${body.message ?? ""}${body.error ?? ""}`).toContain("boot-applied");
+    expect((await getConfigOverrides(testDb.db)).has("ofapiChargebacksReconcileEnabled")).toBe(true);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

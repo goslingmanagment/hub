@@ -3,6 +3,7 @@ import {
   createFanNote,
   findPlatformFan,
   getFanEarningsSnapshotMeta,
+  getPageSyncState,
   listFanPageContexts,
   listTopFanEarnings,
   setFanFlags,
@@ -28,6 +29,8 @@ import {
   getPageSummary,
 } from "../../services/reporting.ts";
 import { searchVisibleFans } from "../../services/spenders.ts";
+import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import { resolveFanslyNewStreamState } from "../../services/sync/fansly-stream-gate.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Audience module (target §6.1): fans, subscriptions, follows, growth, fan
@@ -128,14 +131,31 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       throw new ForbiddenError("Page access denied");
     }
     const { window, limit } = request.query;
-    const [meta, entries] = await Promise.all([
+    const [meta, entries, effective, syncState] = await Promise.all([
       getFanEarningsSnapshotMeta(appContext.db, { accountId: page.id, window }),
       listTopFanEarnings(appContext.db, { accountId: page.id, window, limit }),
+      loadEffectiveConfig(appContext.db, appContext.config),
+      getPageSyncState(appContext.db, page.id, "fan_earnings"),
     ]);
+    // W8.1 (A12/A20, decision #133): `builtAt:null / entries:[]` used to be
+    // indistinguishable from "no spenders" — the source block says WHY the
+    // projection is empty. streamState comes from the SAME gate helper the
+    // executor uses (resolveFanslyNewStreamState), so it cannot drift.
+    const streamState = resolveFanslyNewStreamState({
+      platform: page.platform,
+      pageLabel: page.label,
+      streamEnabled: effective.fanslyFanEarningsSyncEnabled === true,
+      allowlistCsv: effective.fanslyNewStreamPageAllowlist,
+    });
     return {
       window,
       builtAt: meta.builtAt === null ? null : meta.builtAt.toISOString(),
       fanCount: meta.fanCount,
+      source: {
+        streamState,
+        lastSyncedAt: syncState?.succeededAt?.toISOString() ?? null,
+        consecutiveFailures: syncState?.consecutiveFailures ?? null,
+      },
       entries: entries.map((entry) => ({
         platformUserId: entry.platformUserId,
         username: entry.username,

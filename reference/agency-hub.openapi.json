@@ -36024,6 +36024,48 @@
                       "minimum": 0,
                       "maximum": 9007199254740991
                     },
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "streamState": {
+                          "type": "string",
+                          "enum": [
+                            "ramped",
+                            "flag_off",
+                            "not_allowlisted",
+                            "unsupported_platform"
+                          ]
+                        },
+                        "lastSyncedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "consecutiveFailures": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "streamState",
+                        "lastSyncedAt",
+                        "consecutiveFailures"
+                      ],
+                      "additionalProperties": false
+                    },
                     "entries": {
                       "type": "array",
                       "items": {
@@ -36093,6 +36135,7 @@
                     "window",
                     "builtAt",
                     "fanCount",
+                    "source",
                     "entries"
                   ],
                   "additionalProperties": false

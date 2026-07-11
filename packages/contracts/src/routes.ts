@@ -4484,6 +4484,16 @@ export const routeSchemas = {
         builtAt: z.string().nullable(),
         /** Spenders with gross > 0 in this window (entries may be a bounded subset). */
         fanCount: z.number().int().nonnegative(),
+        /** W8.1 (A12/A20): why the projection is (or is not) being fed — a
+         * `builtAt: null` response is no longer ambiguous between "no
+         * spenders" and "stream not ramped for this page". Additive. */
+        source: z.object({
+          streamState: z.enum(["ramped", "flag_off", "not_allowlisted", "unsupported_platform"]),
+          /** fan_earnings stream's last successful sync for this page. */
+          lastSyncedAt: z.string().nullable(),
+          /** null = the page has no fan_earnings sync state row yet. */
+          consecutiveFailures: z.number().int().nullable(),
+        }),
         entries: z.array(z.object({
           platformUserId: z.string(),
           username: z.string().nullable(),

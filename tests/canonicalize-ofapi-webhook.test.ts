@@ -86,7 +86,9 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
       transactionRef: "e940b5fb905ba0815d5842a7bde1118c",
       dedupKey: "txn:e940b5fb905ba0815d5842a7bde1118c",
     });
-    expect(events[0]!.data).toMatchObject({ amount: 17, currency: "USD" });
+    // A46 (W8.2): OFAPI amounts are dollars-float; new events say so — the
+    // Fansly transaction.posted twin declares "mills" (see the sync-pull suite).
+    expect(events[0]!.data).toMatchObject({ amount: 17, currency: "USD", amountUnit: "dollars" });
   });
 
   it("canonicalizes subscriptions.new into subscription.started", () => {
@@ -97,6 +99,24 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
       fanIdentityRef: "518588958",
       dedupKey: `sub:started:518588958:${new Date("2026-06-10T18:40:00+00:00").toISOString()}`,
     });
+  });
+
+  it("canonicalizes subscriptions.renewed into subscription.renewed (v3 / A48)", () => {
+    // Documented-example fixture (docs.onlyfansapi.com; the event never fired
+    // in the Phase-0 capture window) — same notification envelope as
+    // subscriptions.new, which is exactly the consistency A48 rides on.
+    const events = canonicalizeOfapiWebhookObservation(observation("unverified_subscriptions_renewed"));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "subscription.renewed",
+      fanIdentityRef: "34547118",
+      dedupKey: `sub:renewed:34547118:${new Date("2025-05-05T21:27:00+00:00").toISOString()}`,
+    });
+    expect(events[0]!.data).toMatchObject({
+      subType: "returning_subscriber",
+      notificationId: "123",
+    });
+    expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has("subscriptions.renewed")).toBe(true);
   });
 
   it("canonicalizes presence as a never-collapsing time series", () => {

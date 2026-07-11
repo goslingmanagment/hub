@@ -121,6 +121,7 @@ import {
   isOfapiFanIdentitiesEligiblePage,
   syncOfapiFanIdentities,
 } from "./ofapi-fan-identities.ts";
+import { fanslyNewStreamAllowed } from "./fansly-stream-gate.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
   dmRetentionDate,
@@ -3471,18 +3472,6 @@ export async function resolveExecutorPageContext(
   return resolvePageContextById(app, platformAccountId);
 }
 
-/** Stage 16 ramp gate: flags gate platform egress, never capture. */
-function fanslyNewStreamAllowed(
-  allowlistCsv: string | undefined,
-  pageLabel: string,
-) {
-  const entries = (allowlistCsv ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-  return entries.length === 0 || entries.includes(pageLabel);
-}
-
 function fanslyNewStreamSkip(reason: string): StreamChunkResult {
   return {
     satisfied: true,
@@ -3526,6 +3515,12 @@ export async function executeFanEarningsChunk(
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "fan_earnings");
   const state = checkpoint?.state as { cursorFanId?: number } | null;
   let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
+  // A43 (W8.2): the PERSISTED cursor advances only past successful fans —
+  // the purchase_history hold-back-on-skip discipline. The local cursor
+  // (`cursorFanId`) still moves past skipped fans so this run keeps walking,
+  // but a run that ends on skips resumes from its last success (and the
+  // mass-skip breaker can refire) instead of sealing the skips in.
+  let persistableCursorFanId = cursorFanId;
   let fansFetched = 0;
   let fansSkipped = 0;
   let walkCompleted = false;
@@ -3592,11 +3587,13 @@ export async function executeFanEarningsChunk(
         },
       });
       fansSkipped += 1;
+      // LOCAL advance only (A43): the persisted cursor stays behind on skips.
       cursorFanId = fan.fanId;
       continue;
     }
 
     cursorFanId = fan.fanId;
+    persistableCursorFanId = fan.fanId;
     fansFetched += 1;
   }
 
@@ -3629,16 +3626,30 @@ export async function executeFanEarningsChunk(
     }, { action: "inserting fan_earnings_monthly raw payload", platform: "fansly" });
   }
 
-  await upsertCheckpoint(app.db, {
-    platformAccountId: input.pageContext.page.id,
-    stream: "fan_earnings",
-    cursorTimestamp: new Date(),
-    // A completed walk resets the cursor so the next cadence refreshes.
-    state: walkCompleted
-      ? { cursorFanId: 0, completedAt: new Date().toISOString() }
-      : { cursorFanId },
-    lastSuccessfulRunId: input.syncRunId,
-  });
+  // A43 (W8.2): persist only walk completion or real progress. A chunk that
+  // fetched nothing (every touched fan skipped, budget ran out) leaves the
+  // checkpoint UNTOUCHED — purchase_history's discipline — so the next run
+  // retries the same fans instead of stamping a zero-capture advance.
+  if (walkCompleted) {
+    await upsertCheckpoint(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "fan_earnings",
+      cursorTimestamp: new Date(),
+      // A completed walk resets the cursor so the next cadence refreshes.
+      state: { cursorFanId: 0, completedAt: new Date().toISOString() },
+      lastSuccessfulRunId: input.syncRunId,
+    });
+  } else if (fansFetched > 0) {
+    await upsertCheckpoint(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "fan_earnings",
+      cursorTimestamp: new Date(),
+      // Hold-back on skips: resume from the last SUCCESSFUL fan, not from
+      // wherever the local walk skipped to.
+      state: { cursorFanId: persistableCursorFanId },
+      lastSuccessfulRunId: input.syncRunId,
+    });
+  }
 
   if (walkCompleted) {
     return {

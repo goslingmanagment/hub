@@ -799,6 +799,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // 'staged' and 'never' keys: a staged (boot) flag is reverted to env exclusively via the
   // staged endpoint (`desired: null`), which enforces the mandatory expectedVersion + ack
   // and the order/disable rules — the generic DELETE would bypass all of that.
+  // W8.2 (A32, #133): every `runtimeApply === 'boot'` key is excluded too — a couple of
+  // boot flags are `editable` (ofapiChargebacksReconcileEnabled, ofapiFanIdentitiesSyncEnabled),
+  // and clearing one here would bypass the same staged ritual the editability check protects.
   function assertClearableKey(key: string) {
     const descriptor = getDescriptor(key);
     if (!descriptor) {
@@ -806,6 +809,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     }
     if (descriptor.editability !== "editable") {
       throw new BadRequestError(`Config key is not editable: ${key}`);
+    }
+    if (descriptor.runtimeApply === "boot") {
+      throw new BadRequestError(`Config key is boot-applied; revert it via the staged endpoint: ${key}`);
     }
   }
 

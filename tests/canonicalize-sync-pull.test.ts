@@ -64,7 +64,14 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
       transactionRef: "ftx-1",
       dedupKey: "txn:ftx-1",
     });
-    expect(events[0]!.data).toMatchObject({ rawType: 2110, amount: 1000, destinationAmount: 800 });
+    // A46 (W8.2): Fansly amounts are MILLS; new events say so — the OFAPI
+    // transaction.posted twin declares "dollars" (see the webhook suite).
+    expect(events[0]!.data).toMatchObject({
+      rawType: 2110,
+      amount: 1000,
+      amountUnit: "mills",
+      destinationAmount: 800,
+    });
     expect(events[1]!.fanIdentityRef).toBe("fan-acct-3");
   });
 
@@ -158,6 +165,46 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
       kind: "dm_messages",
       payload: { messages: [{ id: "fm-12" }] },
     }))).toEqual([]);
+  });
+
+  // W8.2 / A49 gate (cross-review): the proposed workboard-recompute fallback
+  // (message.* with null fanIdentityRef → use conversationRef as the fan)
+  // is only sound if a Fansly message.sent event's conversationRef IS the
+  // thread partner's platform account id. IT IS NOT: Fansly DMs are keyed by
+  // the messaging GROUP id (`item.groupId`) — a separate id space from
+  // account ids (the messaging-groups payload carries `partnerAccountId`
+  // alongside `groupId`; see trimFanslyMessagingGroupsPayload). Feeding a
+  // groupId into findPlatformFan can never resolve (or worse, could collide) —
+  // so the fallback stays DISABLED and this pin documents the refutation.
+  // If Fansly conversationRef semantics ever change to the partner account,
+  // this test fails and A49 can be revisited.
+  it("A49 refutation pin: Fansly message.sent conversationRef is the GROUP id, not the thread partner", () => {
+    const context = { nativeAccountRefByAccountId: new Map([[3, "fansly-own-1"]]) };
+    // Live-shape Fansly DM item (fixture-proven fields: id/groupId/senderId/
+    // content/createdAt): the model (own ref) writes to fan "fansly-fan-7"
+    // inside messaging group "grp-777".
+    const events = canonicalizeSyncPullObservation(observation({
+      platform: "fansly",
+      kind: "dm_messages",
+      payload: {
+        messages: [{
+          id: "fm-sent-1",
+          groupId: "grp-777",
+          senderId: "fansly-own-1",
+          content: "model reply",
+          createdAt: Math.floor(Date.parse("2026-06-21T09:05:00Z") / 1000),
+        }],
+      },
+    }), context);
+
+    expect(events).toHaveLength(1);
+    const sent = events[0]!;
+    expect(sent.type).toBe("message.sent");
+    // The honest nulls/refs the A49 fallback would have misused:
+    expect(sent.fanIdentityRef).toBeNull();
+    expect(sent.conversationRef).toBe("grp-777");
+    expect(sent.conversationRef).not.toBe("fansly-fan-7");
+    expect(sent.conversationRef).not.toBe("fansly-own-1");
   });
 
   it("declares nothing for OM pages or unknown kinds", () => {

@@ -76,6 +76,14 @@ function fanslyEarningsTransactions(
       data: {
         rawType: asNumber(item.type),
         amount: asNumber(item.amount),
+        // A46 (W8.2, forward-only): Fansly amounts are MILLS; the OFAPI
+        // transaction.posted twin carries DOLLARS (float). Declared on
+        // newly-emitted events only — pre-fix events are immutable facts,
+        // so consumers reading historical rows must keep branching on
+        // platform (fansly → mills, onlyfans → dollars) when amountUnit is
+        // absent. No family version bump: a replay would only dedupe
+        // (txn:<id> keys), never rewrite the existing rows.
+        amountUnit: "mills",
         destinationAmount: asNumber(item.destinationAmount),
         destinationTax: asNumber(item.destinationTax),
         status: asNumber(item.status),

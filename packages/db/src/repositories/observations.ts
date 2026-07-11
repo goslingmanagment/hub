@@ -280,10 +280,21 @@ function addMonths(year: number, month: number, delta: number): { year: number; 
   return { year: Math.floor(zero / 12), month: (zero % 12) + 1 };
 }
 
+/** Exclusive upper bound for monthly pre-creation: migration 0082's
+ * `*_future` catch-alls own [2031-01-01, MAXVALUE) — a monthly CREATE inside
+ * that range would fail on overlap. The shrinking monthly lead pages the
+ * owner through the observations_partitions incident before 2031 arrives
+ * (the designed hand-off; see 0082). */
+export const PARTITION_PRECREATE_HORIZON_YEAR = 2031;
+
+function beyondPrecreateHorizon(year: number, month: number) {
+  return year * 12 + (month - 1) >= PARTITION_PRECREATE_HORIZON_YEAR * 12;
+}
+
 /**
  * Pre-creates monthly partitions from the current month through
- * `monthsAhead` months out. Idempotent (IF NOT EXISTS). Returns the names it
- * ensured, newest last.
+ * `monthsAhead` months out (stopping at the 0082 catch-all bound).
+ * Idempotent (IF NOT EXISTS). Returns the names it ensured, newest last.
  */
 export async function ensureObservationPartitions(
   db: Database,
@@ -294,6 +305,9 @@ export async function ensureObservationPartitions(
   const ensured: string[] = [];
   for (let delta = 0; delta <= monthsAhead; delta += 1) {
     const { year, month } = addMonths(now.getUTCFullYear(), now.getUTCMonth() + 1, delta);
+    if (beyondPrecreateHorizon(year, month)) {
+      break;
+    }
     const next = addMonths(year, month, 1);
     const name = partitionName(year, month);
     await db.execute(sql.raw(`

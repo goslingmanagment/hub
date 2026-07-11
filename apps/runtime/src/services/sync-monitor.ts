@@ -39,6 +39,14 @@ const MONITORED_SYNC_STREAMS = [
   "dm_conversations",
   "dm_messages",
   "followers_reconcile",
+  // W8.1 (A12/A20): the Stage 16/32 ramp-gated streams become VISIBLE in the
+  // monitor snapshot/CLI (a wedged fan_earnings walk was previously
+  // unobservable). Deliberately still OUT of block health (BLOCK_TASKS /
+  // SYNC_DOMAIN_POLICY): a flag-gated stream must not degrade a page's
+  // block UX to "catching up" while its ramp gate is off.
+  "top_spenders",
+  "fan_earnings",
+  "purchase_history",
 ] as const satisfies readonly SyncStream[];
 const REQUEST_STREAMS = [
   ...MONITORED_SYNC_STREAMS,
