@@ -3868,3 +3868,27 @@ token-gated extension page, never in the Fansly DOM — that DOM is a hostile,
 shared document and gets only a typed allowlist projection of `contextManifest`
 (counts and dossier metadata), never prompt blocks and never a raw-manifest
 fallback.
+
+**Decision #140 (2026-07-11, executor fair scheduling — the group-wedge
+zombie):** three interacting defects let ONE page monopolize its egress
+group for hours while a sibling page's top-priority job starved 3.5h
+unfetched (prod: lora-of vs lora-vip-of after the #138 deploy).
+(1) The continuation wakeup was sent with NO singleton key, and the
+exclusive queue's uniqueness is `(name, COALESCE(singleton_key, ''))` over
+queued jobs — one lingering NULL-key job anywhere in the queue made every
+subsequent NULL-key send return null. (2) The executor read that null as
+"keep draining locally" (up to 500 chunks ≈ 25h at poison-chat pace),
+holding the group in localActiveGroups the whole time. (3) pg-boss
+expiration is a HARD wall clock (`started_on + expire_seconds`, 180s
+here); touch feeds only the heartbeat monitor — so the monopolizing job
+had long been handed to retry while its process kept driving chunks
+(zombie). Fixes: continuation sends always carry a PARENT-scoped singleton
+(`page:continuation:<jobId>` — a fixed per-page key would collide with the
+running continuation itself, the index covers active jobs) and a null send
+now means "handoff exists, stop"; a 120s local-execution budget (under the
+180s expiry) bounds the loop; an ownership check (getJobById) after each
+locally-continued chunk stops a job the queue no longer owns WITHOUT
+completing it. The 500-chunk backstop remains for the no-wakeup-target
+path. Non-goal, accepted: the provider-level breaker (#138's 3-distinct
+rule) stays per-run even though runs are now shorter — quarantine
+accumulation across runs already covers the cross-run case.
