@@ -578,6 +578,31 @@ export const syncRateLimits = pgTable(
   }),
 );
 
+// A2b (decision #135): repair ledger for rebuildable projections — a
+// dm_messages finalize/checkpoint failure records a row here instead of
+// wedging the stream; the 5-minute sweep re-runs the recompute and resolves.
+// Resolved rows are kept (DP 7 audit trail); the partial unique index keeps
+// one LIVE row per (kind, conversation).
+export const projectionDebt = pgTable(
+  "projection_debt",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    kind: text("kind").notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" }).notNull(),
+    conversationId: bigint("conversation_id", { mode: "number" }).notNull(),
+    errorSummary: text("error_summary"),
+    attempts: integer("attempts").default(1).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => ({
+    unresolvedUniq: uniqueIndex("projection_debt_unresolved_uniq")
+      .on(table.kind, table.conversationId)
+      .where(sql`${table.resolvedAt} is null`),
+  }),
+);
+
 export const syncRawPayloads = pgTable(
   "sync_raw_payloads",
   {

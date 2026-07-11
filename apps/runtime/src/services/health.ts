@@ -1,3 +1,5 @@
+import { countUnresolvedProjectionDebtByAccount } from "@agency_hub_core/db";
+
 import type { AppContext } from "../bootstrap.ts";
 import { listConnectionStatuses } from "./connections.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
@@ -7,6 +9,12 @@ type ServiceHealthStatus = "ok" | "degraded";
 type SystemCheckStatus = "ok" | "error";
 
 const PUBLIC_DATABASE_CHECK_ERROR = "Database check failed";
+
+// #135 A2b: a stream stuck in a retry loop used to hide inside pendingStreams —
+// dm_messages sat at 251-270 consecutive 23514 failures while /health/sync
+// said 200/ok. At this streak the retry loop is a wedge, not a transient,
+// and the page must degrade exactly like a "failed" stream does.
+const RETRY_WEDGED_MIN_CONSECUTIVE_FAILURES = 10;
 
 function ageMinutes(timestamp: string | null, now: Date) {
   if (!timestamp) {
@@ -60,6 +68,28 @@ function isOfapiMappedConnectionUsable(block: SyncDomainBlockStatus | undefined)
   }
 
   return block.connectionStatus !== "error" && block.statusReason?.code !== "ofapi_auth";
+}
+
+/** Streams inside a retrying/scheduled block whose failure streak crossed the
+ * wedge threshold. Uses only data the snapshot already carries: the block's
+ * own error (populated for retrying blocks) plus the per-task errors (which
+ * survive into scheduled states). */
+function retryWedgedStreamNames(block: SyncDomainBlockStatus) {
+  if (block.state !== "retrying" && block.state !== "scheduled") {
+    return [];
+  }
+
+  const names = new Set<string>();
+  if ((block.error?.consecutiveFailures ?? 0) >= RETRY_WEDGED_MIN_CONSECUTIVE_FAILURES) {
+    names.add(block.error?.stream ?? block.block);
+  }
+  for (const task of block.tasks ?? []) {
+    if ((task.error?.consecutiveFailures ?? 0) >= RETRY_WEDGED_MIN_CONSECUTIVE_FAILURES) {
+      names.add(task.stream);
+    }
+  }
+
+  return [...names];
 }
 
 function recentCountersFromSnapshot(snapshot: Awaited<ReturnType<typeof getSyncStatusSnapshot>>) {
@@ -129,7 +159,7 @@ export async function getPublicSyncHealth(
   const now = input?.now ?? new Date();
   // One effective-config snapshot for both live health thresholds read below, so the
   // reported `running` values match exactly what this check consumes (no field skew).
-  const [connections, snapshot, effective] = await Promise.all([
+  const [connections, snapshot, effective, projectionDebtCounts] = await Promise.all([
     listConnectionStatuses(app, {
       pageIds: input?.pageIds,
     }),
@@ -138,10 +168,19 @@ export async function getPublicSyncHealth(
       pageIds: input?.pageIds,
     }),
     loadEffectiveConfig(app.db, app.config),
+    // #135 A2b: unresolved projection debt is deferred repair work the sweep
+    // has not cleared yet — surfaced per page so it cannot rot silently.
+    countUnresolvedProjectionDebtByAccount(
+      app.db,
+      input?.pageIds ? { platformAccountIds: input.pageIds } : undefined,
+    ),
   ]);
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
   const snapshotPagesById = new Map(snapshot.pages.map((page) => [page.pageId, page]));
+  const projectionDebtByPageId = new Map(
+    projectionDebtCounts.map((row) => [row.platformAccountId, row.unresolvedCount]),
+  );
   const recentCounters = recentCountersFromSnapshot(snapshot);
   const allPageIds = new Set([
     ...connectionsById.keys(),
@@ -205,6 +244,17 @@ export async function getPublicSyncHealth(
 
     if (stalledStreams > 0) {
       issues.push("stalled_streams");
+    }
+
+    // #135 A2b: retrying/scheduled streams with a wedge-length failure streak
+    // degrade the page the same way failed streams do.
+    const wedgedStreams = new Set(healthBlocks.flatMap(retryWedgedStreamNames));
+    for (const stream of wedgedStreams) {
+      issues.push(`${stream}:retry_wedged`);
+    }
+
+    if ((projectionDebtByPageId.get(pageId) ?? 0) > 0) {
+      issues.push("projection_debt");
     }
 
     const status: ServiceHealthStatus = issues.length > 0 ? "degraded" : "ok";

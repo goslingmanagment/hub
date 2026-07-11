@@ -14,6 +14,9 @@ import {
   listPageDmConversationsByPlatformConversationIds,
   markPageDmConversationsInvisibleByGeneration,
   PAGE_DM_LIVE_BACKFILL_CAP,
+  PageSyncLeaseLostError,
+  PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+  recordProjectionDebt,
   requestPageSync,
   rebuildFollowerRollups,
   rebuildSubscriberRollups,
@@ -2935,6 +2938,9 @@ export async function fanslyDmMessagesChunk(
   let processedMessages = 0;
   let completedConversations = 0;
   let overlapHits = 0;
+  // #135 A2b: finalize/checkpoint failures deferred into projection_debt
+  // (repaired by the sweep) instead of failing the chunk.
+  let projectionDebtRecorded = 0;
   let exhaustedEligibleConversations = false;
   const deepBackfillMaxRequests = app.config.fanslyDmDeepBackfillEnabled === true
     ? Math.max(0, app.config.fanslyDmDeepBackfillMaxRequestsPerRun ?? 1)
@@ -3295,28 +3301,92 @@ export async function fanslyDmMessagesChunk(
             providerHistoryExhausted,
             hitWindowCap,
           });
-          const finalized = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+          // #135 A2b: the message upsert commits on its own; the thread-summary
+          // recompute + checkpoint advance ride a SECOND transaction. The
+          // summary is a rebuildable projection (facts were journaled at fetch
+          // time via persistRawPayload), so when only that second step fails
+          // the failure becomes projection_debt for the 5-minute repair sweep
+          // instead of re-wedging the whole dm_messages stream the way the
+          // 0026 CHECK constraint did (251-270 consecutive 23514s, 05..11.07).
+          // Capture, lease, and message-upsert failures keep today's fatal
+          // behavior — only finalize/checkpoint gets the debt treatment.
+          await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
             await upsertPageDmMessages(dbTx, normalizedMessages);
-            const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
-              conversationId: currentConversation.id,
-              messageCoverageStatus,
-              enforceRetention: await isPageDmPruneAllowed(app),
-            });
-            const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
-              emptyDmMessagesCursorState(),
-              getDmMessagesLiveRequestsSinceDeepBackfill(nextLiveRequestState),
-            );
-            const progressCheckpoint = await upsertCheckpointProgress(dbTx, {
-              platformAccountId: input.pageContext.page.id,
-              stream: "dm_messages",
-              state: nextState,
-            });
-            return {
-              finalizedConversation,
-              state: nextState,
-              progressCheckpoint,
-            };
           });
+          let finalized: {
+            finalizedConversation: Awaited<ReturnType<typeof finalizePageDmConversationMessageSync>>;
+            state: DmMessagesCursorState;
+            progressCheckpoint: Awaited<ReturnType<typeof upsertCheckpointProgress>>;
+          };
+          try {
+            finalized = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+              const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
+                conversationId: currentConversation.id,
+                messageCoverageStatus,
+                enforceRetention: await isPageDmPruneAllowed(app),
+              });
+              const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
+                emptyDmMessagesCursorState(),
+                getDmMessagesLiveRequestsSinceDeepBackfill(nextLiveRequestState),
+              );
+              const progressCheckpoint = await upsertCheckpointProgress(dbTx, {
+                platformAccountId: input.pageContext.page.id,
+                stream: "dm_messages",
+                state: nextState,
+              });
+              return {
+                finalizedConversation,
+                state: nextState,
+                progressCheckpoint,
+              };
+            });
+          } catch (error) {
+            if (error instanceof PageSyncLeaseLostError) {
+              // Fencing stays fatal: another owner may already be running.
+              throw error;
+            }
+
+            // Drizzle wraps the pg error in "Failed query: <full SQL>" — the
+            // actionable part (constraint name, pg detail) lives in cause.
+            const causeMessage = error instanceof Error &&
+                error.cause instanceof Error
+              ? error.cause.message
+              : null;
+            const debtSummary = causeMessage !== null
+              ? causeMessage
+              : error instanceof Error
+                ? error.message
+                : String(error);
+            await recordProjectionDebt(app.db, {
+              kind: PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+              platformAccountId: input.pageContext.page.id,
+              conversationId: currentConversation.id,
+              errorSummary: debtSummary.slice(0, 500),
+            });
+            app.logger.warn({
+              err: error,
+              conversationId: currentConversation.id,
+              platformAccountId: input.pageContext.page.id,
+              currentMode,
+            }, "DM thread summary finalize failed; recorded projection debt and continuing");
+
+            // Clear the cursor pin (mirrors the excluded-conversation reset
+            // above) so the stream moves on instead of replaying this
+            // conversation's wedge from the checkpoint.
+            state = emptyDmMessagesCursorState();
+            const debtCheckpoint = await withOwnedPageSyncTransaction(app.db, (dbTx) =>
+              upsertCheckpointProgress(dbTx, {
+                platformAccountId: input.pageContext.page.id,
+                stream: "dm_messages",
+                state,
+              }));
+            await input.telemetry.recordCheckpointAdvanced(
+              "dm_messages",
+              summarizeCheckpoint(debtCheckpoint),
+            );
+            projectionDebtRecorded += 1;
+            continue conversationLoop;
+          }
           conversation = finalized.finalizedConversation.conversation;
           completedConversations += 1;
           state = finalized.state;
@@ -3370,6 +3440,7 @@ export async function fanslyDmMessagesChunk(
           processedMessages,
           completedConversations,
           overlapHits,
+          projectionDebtRecorded,
           deepBackfillRequests,
           dmMessagesChunk,
         },
@@ -3393,6 +3464,7 @@ export async function fanslyDmMessagesChunk(
             processedMessages,
             completedConversations,
             overlapHits,
+            projectionDebtRecorded,
             deepBackfillRequests,
             deepBackfillPaused,
             deepBackfillSelectionReason,
@@ -3417,6 +3489,7 @@ export async function fanslyDmMessagesChunk(
           processedMessages,
           completedConversations,
           overlapHits,
+          projectionDebtRecorded,
           deepBackfillRequests,
           deepBackfillPaused,
           deepBackfillSelectionReason,
@@ -3449,6 +3522,7 @@ export async function fanslyDmMessagesChunk(
         processedMessages,
         completedConversations,
         overlapHits,
+        projectionDebtRecorded,
         deepBackfillRequests,
         deepBackfillPaused,
         deepBackfillSelectionReason,

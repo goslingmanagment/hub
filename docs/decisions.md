@@ -3669,3 +3669,64 @@ separate owner gate: pause those two dm_messages streams → lease drain →
 row-locked recount → resume (no shared advisory-lock contract exists with
 the executor — leases own that path; a repair racing a live finalize would
 just lose its recount).
+
+**Decision #136 — RESERVED for the in-flight AUTH_POLICY_ENFORCEMENT ruling
+(authored in the ai/ping-silence session, uncommitted at the time of this
+write; renumbered there from its original #135 which this repo's A2a took
+first). If that session lands its entry under a different number, this
+placeholder is released.**
+
+**Decision #137 (2026-07-11, A2b / #135 follow-through — projection debt,
+health truthfulness):** the two systemic gaps behind the #135 wedge close.
+(1) A finalize/checkpoint failure in the Fansly dm_messages chunk no longer
+fails the chunk: the message upsert commits in its own owned transaction,
+the thread-summary recompute + checkpoint ride a second one, and when only
+that second step fails (and it is NOT a PageSyncLeaseLostError — fencing
+stays fatal, as do capture and message-upsert failures) the failure is
+recorded as a `projection_debt` row (0085: kind + platform_account_id +
+conversation_id + attempts, one live row per target via a partial unique
+index, resolution = resolved_at, never deleted per DP 7), the cursor pin is
+cleared, and the loop continues. A 5-minute sweep re-runs the recompute
+(enforceRetention via the same isPageDmPruneAllowed gate the executor uses)
+and resolves; conversations whose thread vanished resolve trivially.
+(2) /health/sync stops lying: a stream in `retrying`/`scheduled` with
+consecutive_failures >= 10 now pushes `${stream}:retry_wedged` and degrades
+the page exactly like a failed stream (the #135 incident ran 251-270
+consecutive failures while health said ok), and any page with unresolved
+projection debt pushes `projection_debt`. New issue strings only — the
+response schema is already z.array(z.string()), no contract regen. Known
+residual, accepted: a conversation with open debt is re-selected first each
+chunk and burns ~1 request per pass until the sweep repairs it — visible
+via the issue + the projectionDebtRecorded chunk stat; skipping open-debt
+conversations in candidate selection is a possible follow-up, deliberately
+NOT taken now (the failure mode it would guard against is speculative, the
+extra join is not).
+
+**Decision #138 (2026-07-11, OF poison-chat wedge — per-conversation
+circuit breaker):** OFAPI dm_messages gets chat-level fault isolation
+(0086: page_dm_message_sync_health — failure_count, error_class,
+next_retry_at = now + min(5min·2^(n-1), 6h), quarantine_until = now+6h from
+the 4th failure; PK = conversation_id, cascades with the thread; rows clear
+on a successful sync of the conversation, re-admission is implicit when the
+windows lapse). Candidate selection LEFT JOINs the table and skips open
+windows; the pinned-conversation path (which used to make the poison chat
+the FIRST fetch of every run, forever — three successive poison chats on
+one page, ~3350 attempts / ~35h of 60s aborts over 9 days, last_ok never
+stamped) now checks the pin's health row and clears the pin, which also
+unwedges the two wedged pages on deploy with no manual cursor surgery.
+Error taxonomy is deliberately conservative — chat-isolatable is ONLY
+status=null+abort/timeout (`vendor_opaque_timeout`) and a single 5xx
+(`vendor_5xx`); 401/403 stay page-level (vendor contract has not proven a
+chat-local 403), 429 stays with the page-level backoff, any other 4xx or
+non-OFAPI error rethrows, and 3+ DISTINCT conversations failing
+timeout/5xx in one run rethrows (vendor outage, not poison — no
+mass-quarantine). A first-page timeout at the default limit probes limit 20
+then 5 as SINGLE attempts (retries=0 plumbed through the client) before
+recording the failure — a giant chat may survive a smaller vendor scrape
+window; a probed-down limit sticks for that chat for the run. The
+exhaustion stamp (last_ok) stays reachable and honest: skippedQuarantined
+(counted at chunk END) and perChatFailures ride the run stats. Ride-along:
+the dashboard ConfigurationTab gained a boolean live-flag editor (toggle +
+the same costWarning confirm gate; the #135 containment flip had to be done
+via psql because boolean live keys rendered an editable-looking chip with
+no editor). The string live keys still have no editor — known, follow-up.
