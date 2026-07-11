@@ -2808,6 +2808,9 @@ export const pageDmMessageSyncHealth = pgTable(
     lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
     nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
     quarantineUntil: timestamp("quarantine_until", { withTimezone: true }),
+    // 0087: sticky working page limit learned by a successful adaptive probe
+    // (giant chats time out at the default limit but serve smaller pages).
+    preferredPageLimit: integer("preferred_page_limit"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({

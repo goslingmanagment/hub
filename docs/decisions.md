@@ -3778,3 +3778,24 @@ the dashboard ConfigurationTab gained a boolean live-flag editor (toggle +
 the same costWarning confirm gate; the #135 containment flip had to be done
 via psql because boolean live keys rendered an editable-looking chip with
 no editor). The string live keys still have no editor — known, follow-up.
+
+**Addendum to #137/#138 (2026-07-11, same-day live findings):** (1) #137's
+retry_wedged check was scoped to retrying/scheduled — prod immediately
+demonstrated the gap: a 425-streak dm_messages flipped to
+pending/backfilling between failures and /health/sync went back to 200/ok.
+The streak only resets on a real success, so the check now fires in every
+state except paused (deliberate operator state) and failed (already
+degrades via failedStreams). (2) #138's adaptive-probe result was
+remembered only per-run: every new run re-paid up to 4x60s default-limit
+timeouts before re-probing down (observed live: ~5-6 min per run for a
+5-20 message page). Migration 0088 adds
+page_dm_message_sync_health.preferred_page_limit — probe success records
+the working limit, conversation starts seed from it, and
+clearConversationSyncHealth preserves it (a giant chat's incremental head
+fetches need the small limit too; the row is dropped only when nothing
+sticky remains). (3) The probe-eligible first fetch (default limit, no page
+stored this run) is now a SINGLE attempt: a 60s hang is the giant-chat
+signature, fast transport blips rethrow into the executor's stream retry.
+(4) 0087 was taken by the scan-dossier session's fan_profiles migration
+while this one was in flight — the sticky-limit migration shipped as 0088;
+#139 stays free for the dossier ruling.

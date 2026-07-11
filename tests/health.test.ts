@@ -439,6 +439,80 @@ describe("health service", () => {
     });
   });
 
+  it("keeps degrading when the wedged stream's state leaves retrying (#137 addendum: false-green)", async () => {
+    // Prod 2026-07-11: a 425-streak dm_messages flipped retrying → pending
+    // between failures and /health/sync went back to 200/ok. The streak only
+    // resets on a real success, so the state transition must not clear it.
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 9,
+        label: "lora-vip-of",
+        platform: "onlyfans",
+        modelSlug: "lora",
+        modelName: "Lora",
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: null,
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 9,
+        pageLabel: "lora-vip-of",
+        platform: "onlyfans",
+        modelSlug: "lora",
+        modelName: "Lora",
+        blocks: {
+          connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_history: {
+            block: "messages_history",
+            state: "backfilling",
+            statusReason: null,
+            error: null,
+            tasks: [{
+              stream: "dm_messages",
+              error: {
+                stream: "dm_messages",
+                code: null,
+                summary: "OFAPI request failed: GET .../chats/292065372/messages",
+                failedAt: "2026-03-23T11:59:00.000Z",
+                consecutiveFailures: 425,
+              },
+            }],
+            metrics: {},
+          },
+        },
+      }],
+    });
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(503);
+    expect(result.body).toMatchObject({
+      status: "degraded",
+      pages: [
+        {
+          pageId: 9,
+          status: "degraded",
+          issues: ["dm_messages:retry_wedged"],
+        },
+      ],
+    });
+  });
+
   it("keeps a short retry streak pending instead of wedged", async () => {
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
