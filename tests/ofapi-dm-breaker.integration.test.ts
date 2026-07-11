@@ -276,8 +276,9 @@ async function getHealthRow(conversationId: number) {
     last_error: string | null;
     next_retry_at: Date | null;
     quarantine_until: Date | null;
+    preferred_page_limit: number | null;
   }>(
-    `select failure_count, error_class, last_error, next_retry_at, quarantine_until
+    `select failure_count, error_class, last_error, next_retry_at, quarantine_until, preferred_page_limit
      from page_dm_message_sync_health
      where conversation_id = $1`,
     [conversationId],
@@ -346,11 +347,11 @@ describe("OFAPI DM messages per-conversation circuit breaker", () => {
     expect(result.stats?.skippedQuarantined).toBe(1);
     expect(result.stats?.perChatFailures).toBe(1);
 
-    // Probe ladder on the poison chat: 100 (default retries) → 20 → 5, the
+    // Probe ladder on the poison chat: 100 (single attempt) → 20 → 5, the
     // probes as single attempts.
     const fanACalls = messageCalls.filter((call) => call.chatId === FAN_A);
     expect(fanACalls.map((call) => call.limit)).toEqual([100, 20, 5]);
-    expect(fanACalls.map((call) => call.retries)).toEqual([undefined, 0, 0]);
+    expect(fanACalls.map((call) => call.retries)).toEqual([0, 0, 0]);
 
     // The healthy chat proceeded and completed.
     const conversationB = await getConversation(page.id, FAN_B);
@@ -516,14 +517,47 @@ describe("OFAPI DM messages per-conversation circuit breaker", () => {
     // Exact plumb-through: 100 (default retry budget) → 20 (single attempt)
     // → 5 (single attempt) → 5 (back on the default retry budget).
     expect(messageCalls.map((call) => call.limit)).toEqual([100, 20, 5, 5]);
-    expect(messageCalls.map((call) => call.retries)).toEqual([undefined, 0, 0, undefined]);
+    expect(messageCalls.map((call) => call.retries)).toEqual([0, 0, 0, undefined]);
     expect(messageCalls.map((call) => call.firstId)).toEqual([null, null, null, "2000299"]);
 
-    // The conversation completed normally — no breaker row.
+    // The conversation completed normally — failure bookkeeping is clean but
+    // the learned working limit is sticky (0087).
     const conversationA = await getConversation(page.id, FAN_A);
     expect(conversationA!.messageCoverageStatus).toBe("complete");
     expect(conversationA!.storedMessageCount).toBe(3);
-    expect(await getHealthRow(conversationA!.id)).toBeNull();
+    const healthRow = await getHealthRow(conversationA!.id);
+    expect(healthRow).toMatchObject({ failure_count: 0, preferred_page_limit: 5 });
+    expect(healthRow!.next_retry_at).toBeNull();
+    expect(healthRow!.quarantine_until).toBeNull();
+
+    // A later run starts the chat AT the learned limit — no 100-limit
+    // timeout tax, no re-probe.
+    await testDb.pool.query(
+      `update page_dm_threads
+         set last_message_id = '2000301', unread_count = 1,
+             last_message_at = now()
+       where id = $1`,
+      [conversationA!.id],
+    );
+    const secondRun = scriptedOfapiClient({
+      messagesByChat: {
+        [FAN_A]: [
+          {
+            page: listPage([
+              messageItem({ id: "2000301", fanId: FAN_A, createdAt: "2026-06-11T10:01:00+00:00" }),
+              messageItem({ id: "2000300", fanId: FAN_A, createdAt: "2026-06-11T10:00:00+00:00" }),
+            ], false),
+          },
+        ],
+      },
+    });
+    appContext = { ...appContext, ofapi: secondRun.client };
+    const secondResult = await executeOfapiDmMessagesChunk(
+      appContext,
+      await buildChunkInput(page, "dm_messages"),
+    );
+    expect(secondResult.satisfied).toBe(true);
+    expect(secondRun.messageCalls.map((call) => call.limit)).toEqual([5]);
   });
 
   it("clears a pinned conversation that is inside its breaker window (deploy unwedge)", async (context) => {

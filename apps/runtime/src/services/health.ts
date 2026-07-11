@@ -70,12 +70,16 @@ function isOfapiMappedConnectionUsable(block: SyncDomainBlockStatus | undefined)
   return block.connectionStatus !== "error" && block.statusReason?.code !== "ofapi_auth";
 }
 
-/** Streams inside a retrying/scheduled block whose failure streak crossed the
- * wedge threshold. Uses only data the snapshot already carries: the block's
- * own error (populated for retrying blocks) plus the per-task errors (which
- * survive into scheduled states). */
+/** Streams whose failure streak crossed the wedge threshold. The streak only
+ * resets on a real success (completePageSync), so it must degrade health in
+ * EVERY active state — a wedged stream that flips retrying → pending/
+ * backfilling/syncing between failures is still wedged (prod 2026-07-11:
+ * 425-streak dm_messages read as ok the moment its state left retrying).
+ * paused is a deliberate operator state and failed already degrades via
+ * failedStreams. Uses only data the snapshot already carries: the block's
+ * own error plus the per-task errors. */
 function retryWedgedStreamNames(block: SyncDomainBlockStatus) {
-  if (block.state !== "retrying" && block.state !== "scheduled") {
+  if (block.state === "paused" || block.state === "failed") {
     return [];
   }
 
@@ -246,8 +250,8 @@ export async function getPublicSyncHealth(
       issues.push("stalled_streams");
     }
 
-    // #135 A2b: retrying/scheduled streams with a wedge-length failure streak
-    // degrade the page the same way failed streams do.
+    // #135 A2b (widened by the #137 addendum): any active stream with a wedge-length
+    // failure streak degrades the page the same way failed streams do.
     const wedgedStreams = new Set(healthBlocks.flatMap(retryWedgedStreamNames));
     for (const stream of wedgedStreams) {
       issues.push(`${stream}:retry_wedged`);

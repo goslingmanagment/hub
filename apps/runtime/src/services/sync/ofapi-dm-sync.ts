@@ -20,6 +20,7 @@ import {
   getPageDmMessageRetentionLimit,
   isConversationSyncHealthExcluded,
   listPageDmConversationsByPlatformConversationIds,
+  recordConversationPreferredPageLimit,
   recordConversationSyncFailure,
   requestPageSync,
   reserveOfapiDayCredits,
@@ -930,6 +931,13 @@ export async function executeOfapiDmMessagesChunk(
       if (isConversationSyncHealthExcluded(pinnedHealth)) {
         conversation = null;
         state = emptyDmMessagesCursorState();
+      } else if (
+        pinnedHealth?.preferredPageLimit != null &&
+        !runConversationPageLimits.has(conversation.id)
+      ) {
+        // 0087: start a giant chat at its learned working limit instead of
+        // re-paying the default-limit timeouts every run.
+        runConversationPageLimits.set(conversation.id, pinnedHealth.preferredPageLimit);
       }
     }
 
@@ -946,6 +954,13 @@ export async function executeOfapiDmMessagesChunk(
       if (!conversation) {
         exhaustedEligibleConversations = true;
         break;
+      }
+      if (!runConversationPageLimits.has(conversation.id)) {
+        const candidateHealth = await getConversationSyncHealth(app.db, conversation.id);
+        if (candidateHealth?.preferredPageLimit != null) {
+          // 0087: sticky working limit learned by an earlier probe.
+          runConversationPageLimits.set(conversation.id, candidateHealth.preferredPageLimit);
+        }
       }
 
       const currentMode = conversation.storedMessageCount === 0
@@ -991,6 +1006,13 @@ export async function executeOfapiDmMessagesChunk(
       const cursor = state.currentBeforeMessageId;
       const pageLimit = runConversationPageLimits.get(currentConversation.id) ??
         OFAPI_MESSAGES_PAGE_LIMIT;
+      // Probe-eligible first fetch (default limit, no page stored yet this
+      // run): a single attempt. A 60s hang here is the giant-chat signature,
+      // and paying the full retry budget (4x60s) before the adaptive probe
+      // was the dominant per-run cost of a poison chat; a fast transport
+      // blip rethrows and the executor's stream retry covers it.
+      const probeEligible = pageLimit === OFAPI_MESSAGES_PAGE_LIMIT &&
+        (runConversationPagesFetched.get(currentConversation.id) ?? 0) === 0;
       let page: OfapiListPage;
       try {
         page = await client.listChatMessages(
@@ -1000,6 +1022,7 @@ export async function executeOfapiDmMessagesChunk(
           {
             limit: pageLimit,
             firstId: cursor,
+            ...(probeEligible ? { retries: 0 } : {}),
           },
         );
       } catch (error) {
@@ -1038,6 +1061,12 @@ export async function executeOfapiDmMessagesChunk(
                 },
               );
               runConversationPageLimits.set(currentConversation.id, probeLimit);
+              // 0087: make the working limit sticky across runs.
+              await recordConversationPreferredPageLimit(app.db, {
+                conversationId: currentConversation.id,
+                platformAccountId: input.pageContext.page.id,
+                pageLimit: probeLimit,
+              });
               break;
             } catch (probeError) {
               if (classifyOfapiConversationSyncError(probeError) === null) {

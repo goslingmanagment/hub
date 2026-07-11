@@ -1470,6 +1470,7 @@ export interface PageDmConversationSyncHealth {
   lastAttemptAt: Date | null;
   nextRetryAt: Date | null;
   quarantineUntil: Date | null;
+  preferredPageLimit: number | null;
 }
 
 export function isConversationSyncHealthExcluded(
@@ -1504,6 +1505,7 @@ export async function getConversationSyncHealth(
     lastAttemptAt: row.lastAttemptAt,
     nextRetryAt: row.nextRetryAt,
     quarantineUntil: row.quarantineUntil,
+    preferredPageLimit: row.preferredPageLimit,
   };
 }
 
@@ -1581,10 +1583,43 @@ export async function recordConversationSyncFailure(
   };
 }
 
-/** Successful sync of the conversation resets its breaker entirely. */
+/** Successful sync of the conversation resets its failure bookkeeping. The
+ * learned preferred_page_limit survives (0087) — a giant chat's incremental
+ * head fetches need the small limit too; the row is dropped only when there
+ * is nothing sticky to keep. */
 export async function clearConversationSyncHealth(db: Database, conversationId: number) {
-  await db.delete(pageDmMessageSyncHealth)
-    .where(eq(pageDmMessageSyncHealth.conversationId, conversationId));
+  await db.execute(sql`
+    with kept as (
+      update page_dm_message_sync_health
+      set failure_count = 0,
+          error_class = null,
+          last_error = null,
+          next_retry_at = null,
+          quarantine_until = null,
+          updated_at = now()
+      where conversation_id = ${conversationId}
+        and preferred_page_limit is not null
+      returning conversation_id
+    )
+    delete from page_dm_message_sync_health
+    where conversation_id = ${conversationId}
+      and not exists (select 1 from kept)
+  `);
+}
+
+/** 0087: a successful adaptive probe records the working page limit so later
+ * runs start there instead of re-paying the default-limit timeouts. Never
+ * touches failure bookkeeping. */
+export async function recordConversationPreferredPageLimit(
+  db: Database,
+  input: { conversationId: number; platformAccountId: number; pageLimit: number },
+) {
+  await db.execute(sql`
+    insert into page_dm_message_sync_health (conversation_id, platform_account_id, preferred_page_limit)
+    values (${input.conversationId}, ${input.platformAccountId}, ${input.pageLimit})
+    on conflict (conversation_id)
+    do update set preferred_page_limit = excluded.preferred_page_limit, updated_at = now()
+  `);
 }
 
 /**
