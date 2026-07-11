@@ -7,7 +7,6 @@
   "apps/dashboard/src/pages/FanProfilePage.tsx": 1,
   "apps/dashboard/src/pages/OfapiCreditsPage.tsx": 6,
   "apps/dashboard/src/pages/PageDetailPage.tsx": 2,
-  "apps/dashboard/src/pages/settings/ConfigurationTab.tsx": 1,
   "apps/dashboard/src/pages/settings/ModelsTab.tsx": 6,
   "apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts": 5,
   "apps/dashboard/src/pages/TopSupportersPage.tsx": 1,
