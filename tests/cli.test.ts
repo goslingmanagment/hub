@@ -15,15 +15,25 @@ const cliMocks = vi.hoisted(() => {
   };
   const bossInstances: Array<{
     createQueue: ReturnType<typeof vi.fn>;
+    getQueue: ReturnType<typeof vi.fn>;
     send: ReturnType<typeof vi.fn>;
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
+    updateQueue: ReturnType<typeof vi.fn>;
   }> = [];
 
   class PgBossMock {
     start = vi.fn(async (): Promise<this> => this);
     on = vi.fn((_event: string, _listener: (...args: unknown[]) => void): this => this);
     createQueue = vi.fn(async (_name: string, _options?: Omit<Queue, "name">) => {});
+    updateQueue = vi.fn(async (_name: string, _options?: Omit<Queue, "name" | "partition" | "policy">) => {});
+    getQueue = vi.fn(async (name: string) => ({
+      name,
+      policy: "exclusive" as const,
+      expireInSeconds: 15 * 60,
+      heartbeatSeconds: 30,
+      retryLimit: 0,
+    }));
     send = vi.fn(async (_name: string, _data?: object | null, _options?: SendOptions) => {
       if (bossBehavior.sendError) {
         throw bossBehavior.sendError;

@@ -29,7 +29,9 @@ import {
 // Queue creation runs first (also idempotent) so a scheduler booting into a
 // fresh environment never schedules into a queue no worker has created yet.
 
-export async function registerAllSchedules(boss: Pick<PgBoss, "schedule" | "createQueue">): Promise<void> {
+export async function registerAllSchedules(
+  boss: Pick<PgBoss, "schedule" | "createQueue" | "getQueue" | "updateQueue">,
+): Promise<void> {
   const createdQueues = new Set<string>();
   await ensureSyncQueues(boss, createdQueues);
   await ensureWorkboardQueues(boss, createdQueues);

@@ -76,6 +76,11 @@ export interface PageSyncRetryResult {
   retried: boolean;
 }
 
+export interface PageSyncYieldResult {
+  updated: boolean;
+  superseded: boolean;
+}
+
 export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
   light: {
     stream: "light",
@@ -341,6 +346,7 @@ export interface PageSyncState {
   leasedSeq: number | null;
   appliedSeq: number;
   requestSource: SyncRequestSource | null;
+  dispatchSource: SyncRequestSource;
   requestPayload: Record<string, unknown>;
   cadenceSeconds: number;
   slotOffsetSeconds: number;
@@ -533,6 +539,9 @@ function normalizePageSyncState(row: Record<string, unknown>): PageSyncState {
     requestSource: typeof row.requestSource === "string"
       ? row.requestSource as SyncRequestSource
       : null,
+    dispatchSource: typeof row.dispatchSource === "string"
+      ? row.dispatchSource as SyncRequestSource
+      : "scheduled",
     requestPayload: normalizeRecord(row.requestPayload, "requestPayload"),
     cadenceSeconds: normalizeNumber(row.cadenceSeconds as NumericValue, "cadenceSeconds"),
     slotOffsetSeconds: normalizeNumber(row.slotOffsetSeconds as NumericValue, "slotOffsetSeconds"),
@@ -678,6 +687,7 @@ function buildSeedPageSyncState(
     requestSeq: shouldRecover ? 1 : 0,
     appliedSeq: 0,
     requestSource,
+    dispatchSource: requestSource ?? "scheduled",
     requestPayload: {},
     requestedAt: shouldRecover ? now : null,
     finishedAt: shouldRecover ? null : trustedAt,
@@ -701,6 +711,7 @@ async function listPageSyncStatesInternal(
   },
   options?: {
     lock?: boolean;
+    expiredLeaseOnly?: boolean;
   },
 ) {
   const clauses = [sql`true`];
@@ -713,6 +724,14 @@ async function listPageSyncStatesInternal(
     clauses.push(sql`stream = any(${streamArraySql(input.streams)})`);
   }
 
+  if (options?.expiredLeaseOnly) {
+    clauses.push(sql`
+      leased_seq is not null
+      and lease_token is not null
+      and lease_expires_at <= clock_timestamp()
+    `);
+  }
+
   const result = await db.execute<Record<string, unknown>>(sql`
     select page_id as "pageId",
            stream as "stream",
@@ -721,6 +740,7 @@ async function listPageSyncStatesInternal(
            leased_seq as "leasedSeq",
            applied_seq as "appliedSeq",
            request_source as "requestSource",
+           dispatch_source as "dispatchSource",
            request_payload as "requestPayload",
            cadence_seconds as "cadenceSeconds",
            slot_offset_seconds as "slotOffsetSeconds",
@@ -798,6 +818,7 @@ async function repairLegacyLightTrustedPageSyncStates(
     set status = 'pending'::page_sync_status,
         request_seq = 1,
         request_source = 'recovery'::sync_request_source,
+        dispatch_source = 'recovery'::sync_request_source,
         request_payload = '{}'::jsonb,
         requested_at = ${input.now},
         enqueued_at = null,
@@ -1161,27 +1182,23 @@ async function refreshLockedPageSyncDependencies(
 
 export async function reclaimExpiredPageSync(
   db: Database,
-  now = new Date(),
+  _legacyProcessNow?: Date,
 ) {
-  const rows = await listPageSyncStates(db);
-  const reclaimable = rows.filter((row) =>
-    row.leasedSeq !== null &&
-    row.leaseExpiresAt !== null &&
-    row.leaseExpiresAt.getTime() < now.getTime()
-  );
-
-  if (reclaimable.length === 0) {
-    return [] as PageSyncState[];
-  }
-
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
+    const reclaimable = await listPageSyncStatesInternal(
+      database,
+      undefined,
+      { expiredLeaseOnly: true, lock: true },
+    );
+    const reclaimed: PageSyncState[] = [];
+
     for (const row of reclaimable) {
-      await database.execute(sql`
+      const result = await database.execute(sql`
         update ${pageSyncStates}
         set status = case
                        when blocker_kind is not null then 'blocked'::page_sync_status
-                       when retry_at is not null and retry_at > ${now} then 'retrying'::page_sync_status
+                       when retry_at is not null and retry_at > clock_timestamp() then 'retrying'::page_sync_status
                        when request_seq > applied_seq then 'pending'::page_sync_status
                        else 'idle'::page_sync_status
                      end,
@@ -1190,17 +1207,21 @@ export async function reclaimExpiredPageSync(
             lease_token = null,
             lease_heartbeat_at = null,
             lease_expires_at = null,
-            updated_at = ${now}
+            updated_at = clock_timestamp()
         where page_id = ${row.pageId}
           and stream = ${row.stream}
-          and leased_seq is not null
-          and lease_token is not null
-          and lease_expires_at < ${now}
+          and leased_seq = ${row.leasedSeq}
+          and lease_token = ${row.leaseToken}
+          and lease_expires_at <= clock_timestamp()
       `);
-    }
-  });
 
-  return reclaimable;
+      if ((result.rowCount ?? 0) > 0) {
+        reclaimed.push(row);
+      }
+    }
+
+    return reclaimed;
+  });
 }
 
 export async function scheduleDuePageSync(
@@ -1236,7 +1257,9 @@ export async function scheduleDuePageSync(
         continue;
       }
 
-      if (row.status === "running" && row.leaseExpiresAt && row.leaseExpiresAt.getTime() >= now.getTime()) {
+      // The DB-clock reclaim above is the only lease-expiry authority. A row
+      // that remains running here still owns a live lease.
+      if (row.status === "running") {
         continue;
       }
 
@@ -1273,6 +1296,7 @@ export async function scheduleDuePageSync(
         update ${pageSyncStates}
         set request_seq = ${nextRequestSeq},
             request_source = 'scheduled',
+            dispatch_source = 'scheduled',
             request_payload = '{}'::jsonb,
             requested_at = ${now},
             last_scheduled_slot = ${currentSlot},
@@ -1310,7 +1334,7 @@ export async function listRunnablePageSync(
              ${egressKeySql(sql`ee.rate_limit_scope_key`, sql`ee.url`)} as "egressKey",
              st.stream as "stream",
              st.requested_at as "requestedAt",
-             st.request_source as "requestSource"
+             st.dispatch_source as "dispatchSource"
       from ${pageSyncStates} st
       inner join ${pages} p on p.id = st.page_id and p.status = 'active'
       left join ${egressEndpoints} ee on ee.platform_account_id = st.page_id
@@ -1322,13 +1346,13 @@ export async function listRunnablePageSync(
     )
     select rs."pageId" as "pageId",
            rs."platform" as "platform",
-           max(${streamPriorityBySourceSql('rs."stream"', 'rs."requestSource"')})::int as "priority",
+           max(${streamPriorityBySourceSql('rs."stream"', 'rs."dispatchSource"')})::int as "priority",
            min(rs."requestedAt") as "requestedAt",
            rs."proxyUrl" as "proxyUrl",
            rs."egressKey" as "egressKey"
     from runnable_streams rs
     group by rs."pageId", rs."platform", rs."proxyUrl", rs."egressKey"
-    order by max(${streamPriorityBySourceSql('rs."stream"', 'rs."requestSource"')}) desc,
+    order by max(${streamPriorityBySourceSql('rs."stream"', 'rs."dispatchSource"')}) desc,
              min(rs."requestedAt") asc nulls last,
              rs."pageId" asc
   `);
@@ -1388,7 +1412,7 @@ export async function acquirePageSyncLease(
           select 1 from ${pages} p
           where p.id = st.page_id and p.status = 'active'
         )
-      order by ${streamPriorityBySourceSql("st.stream", "st.request_source")} desc,
+      order by ${streamPriorityBySourceSql("st.stream", "st.dispatch_source")} desc,
                st.requested_at asc nulls last,
                ${streamOrderSql("st.stream")} asc
       limit 1
@@ -1399,8 +1423,8 @@ export async function acquirePageSyncLease(
           leased_seq = candidate."requestSeq",
           lease_owner = ${input.workerId},
           lease_token = ${input.leaseToken},
-          lease_heartbeat_at = ${now},
-          lease_expires_at = ${new Date(now.getTime() + input.leaseTtlMs)},
+          lease_heartbeat_at = clock_timestamp(),
+          lease_expires_at = clock_timestamp() + (${input.leaseTtlMs} * interval '1 millisecond'),
           started_at = ${now},
           updated_at = ${now}
       from candidate
@@ -1418,6 +1442,7 @@ export async function acquirePageSyncLease(
                 st.leased_seq as "leasedSeq",
                 st.applied_seq as "appliedSeq",
                 st.request_source as "requestSource",
+                st.dispatch_source as "dispatchSource",
                 st.request_payload as "requestPayload",
                 st.cadence_seconds as "cadenceSeconds",
                 st.slot_offset_seconds as "slotOffsetSeconds",
@@ -1474,13 +1499,15 @@ export async function heartbeatPageSyncLease(
   const now = input.now ?? new Date();
   const result = await db.execute(sql`
     update ${pageSyncStates}
-    set lease_heartbeat_at = ${now},
-        lease_expires_at = ${new Date(now.getTime() + input.leaseTtlMs)},
+    set lease_heartbeat_at = clock_timestamp(),
+        lease_expires_at = clock_timestamp() + (${input.leaseTtlMs} * interval '1 millisecond'),
         updated_at = ${now}
     where page_id = ${input.pageId}
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq is not null
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
   `);
 
   return (result.rowCount ?? 0) > 0;
@@ -1514,6 +1541,7 @@ export async function recordRunningPageSyncProgress(
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
       and status = 'running'
+      and lease_expires_at > clock_timestamp()
   `);
 
   return (result.rowCount ?? 0) > 0;
@@ -1542,6 +1570,9 @@ export async function clearPageSyncLease(
     where page_id = ${input.pageId}
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
+      and leased_seq is not null
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
   `);
 
   return (result.rowCount ?? 0) > 0;
@@ -1595,6 +1626,8 @@ export async function completePageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
   `);
 
   const applied = (result.rowCount ?? 0) > 0;
@@ -1621,14 +1654,14 @@ export async function yieldPageSync(
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
     retryAt?: Date | null;
-    requestSource?: SyncRequestSource | null;
+    dispatchSource?: SyncRequestSource | null;
     now?: Date;
   },
-) {
+): Promise<PageSyncYieldResult> {
   const now = input.now ?? new Date();
   const retryAt = input.retryAt ?? null;
-  const requestSource = input.requestSource ?? null;
-  const result = await db.execute(sql`
+  const dispatchSource = input.dispatchSource ?? null;
+  const result = await db.execute(sql<{ requestSeq: number }>`
     update ${pageSyncStates}
     set status = 'pending',
         leased_seq = null,
@@ -1637,12 +1670,18 @@ export async function yieldPageSync(
         phase = ${input.phase ?? null},
         work_class = ${input.workClass ?? null},
         progress = ${input.progress ?? {}},
-        request_source = coalesce(${requestSource}::sync_request_source, request_source),
+        dispatch_source = case
+                            when request_seq > ${input.requestSeq} then dispatch_source
+                            else coalesce(${dispatchSource}::sync_request_source, dispatch_source)
+                          end,
         consecutive_failures = 0,
         last_error_code = null,
         last_error_summary = null,
         retry_kind = null,
-        retry_at = ${retryAt},
+        retry_at = case
+                     when request_seq > ${input.requestSeq} then null::timestamptz
+                     else ${retryAt}
+                   end,
         lease_owner = null,
         lease_token = null,
         lease_heartbeat_at = null,
@@ -1652,9 +1691,19 @@ export async function yieldPageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
+    returning request_seq as "requestSeq"
   `);
 
-  return (result.rowCount ?? 0) > 0;
+  const updated = result.rows[0] ?? null;
+  const updatedRequestSeq = updated
+    ? normalizeNumber(updated.requestSeq as NumericValue, "requestSeq")
+    : null;
+  return {
+    updated: updated !== null,
+    superseded: updatedRequestSeq !== null && updatedRequestSeq > input.requestSeq,
+  };
 }
 
 function resolveRetryDelayMs(consecutiveFailures: number) {
@@ -1695,6 +1744,10 @@ export async function retryPageSync(
         failed_at = case when request_seq > ${input.requestSeq} then failed_at else ${now} end,
         retry_kind = case when request_seq > ${input.requestSeq} then null else ${input.retryKind} end,
         retry_at = case when request_seq > ${input.requestSeq} then null::timestamptz else ${retryAt} end,
+        dispatch_source = case
+                            when request_seq > ${input.requestSeq} then dispatch_source
+                            else 'scheduled'::sync_request_source
+                          end,
         blocker_kind = null,
         blocker_code = null,
         blocker_message = null,
@@ -1714,6 +1767,8 @@ export async function retryPageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
     returning status,
               retry_kind as "retryKind"
   `);
@@ -1759,6 +1814,10 @@ export async function blockPageSync(
         failed_at = case when request_seq > ${input.requestSeq} then failed_at else ${now} end,
         retry_kind = null,
         retry_at = null,
+        dispatch_source = case
+                            when request_seq > ${input.requestSeq} then dispatch_source
+                            else 'scheduled'::sync_request_source
+                          end,
         blocker_kind = case when request_seq > ${input.requestSeq} then null else ${input.blockerKind} end,
         blocker_code = case when request_seq > ${input.requestSeq} then null else ${input.blockerCode} end,
         blocker_message = case when request_seq > ${input.requestSeq} then null else ${input.blockerMessage} end,
@@ -1778,6 +1837,8 @@ export async function blockPageSync(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
     returning status,
               blocker_kind as "blockerKind"
   `);
@@ -2048,6 +2109,21 @@ export async function requestPageSync(
     const lockedRows = await listPageSyncStatesInternal(database, { pageId: input.pageId }, { lock: true });
     const lockedRowsByStream = new Map(lockedRows.map((row) => [row.stream, row] as const));
 
+    const leaseExpiryResult = await database.execute<{ stream: SyncStream; leaseExpired: boolean }>(sql`
+      select stream as "stream",
+             (
+               leased_seq is not null
+               and lease_token is not null
+               and lease_expires_at <= clock_timestamp()
+             ) as "leaseExpired"
+      from ${pageSyncStates}
+      where page_id = ${input.pageId}
+        and stream = any(${streamArraySql(requestedStreams)})
+    `);
+    const leaseExpiredByStream = new Map(
+      leaseExpiryResult.rows.map((row) => [row.stream, row.leaseExpired] as const),
+    );
+
     for (const stream of requestedStreams) {
       const current = lockedRowsByStream.get(stream);
       if (!current) {
@@ -2059,9 +2135,10 @@ export async function requestPageSync(
       const requestPayload = Object.keys(rawRequestPayload).length > 0
         ? { ...rawRequestPayload, revision: nextRequestSeq }
         : rawRequestPayload;
-      const leaseExpired = current.leasedSeq !== null &&
-        current.leaseExpiresAt !== null &&
-        current.leaseExpiresAt.getTime() <= now.getTime();
+      const leaseExpired = leaseExpiredByStream.get(stream);
+      if (leaseExpired === undefined) {
+        throw new Error(`Sync stream "${stream}" disappeared while requesting page ${input.pageId}`);
+      }
       const nextStatus: PageSyncStatus = current.status === "paused"
         ? "paused"
         : current.status === "blocked"
@@ -2075,6 +2152,7 @@ export async function requestPageSync(
         update ${pageSyncStates}
         set request_seq = ${nextRequestSeq},
             request_source = ${input.source},
+            dispatch_source = ${input.source},
             request_payload = ${requestPayload},
             requested_at = ${now},
             status = ${nextStatus}::page_sync_status,
@@ -2093,6 +2171,7 @@ export async function requestPageSync(
         ...current,
         requestSeq: nextRequestSeq,
         requestSource: input.source,
+        dispatchSource: input.source,
         requestPayload,
         requestedAt: now,
         status: nextStatus,

@@ -56,6 +56,7 @@ function buildTaskRow(overrides: Record<string, unknown> = {}) {
     leasedSeq: null,
     appliedSeq: 1,
     requestSource: null,
+    dispatchSource: "scheduled",
     requestPayload: {},
     cadenceSeconds: 3600,
     slotOffsetSeconds: 0,

@@ -1618,6 +1618,7 @@ export async function getSyncStatusSnapshot(
               leasedSeq: null,
               appliedSeq: 0,
               requestSource: null,
+              dispatchSource: "scheduled",
               requestPayload: {},
               cadenceSeconds: SYNC_STREAM_POLICY[stream].cadenceSeconds,
               slotOffsetSeconds: 0,

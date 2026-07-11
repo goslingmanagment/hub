@@ -1,10 +1,20 @@
-import type { PgBoss, Queue } from "pg-boss";
+import type { Db as PgBossDb, PgBoss, Queue } from "pg-boss";
 import { buildSyncPageExecuteGroupId } from "@agency_hub_core/shared";
 
 export const SYNC_PLANNER_QUEUE = "sync.planner";
 export const SYNC_PLANNER_DLQ_QUEUE = "sync.planner.dlq";
 export const SYNC_PAGE_EXECUTE_QUEUE = "sync.page.execute";
 export const SYNC_PAGE_EXECUTE_DLQ_QUEUE = "sync.page.execute.dlq";
+// The old 180s hard expiry exactly overlapped the observed OFAPI poison-chat
+// path (three 60s single-attempt reads). pg-boss expiry is not extended by
+// touch, so use conservative operational headroom above today's observed
+// 3x60s / 4x60s paths. This is not a mathematical request deadline: the
+// one-chunk/job contract and safe-handoff guard contain an overrun.
+export const SYNC_PAGE_EXECUTE_EXPIRE_SECONDS = 15 * 60;
+// page_sync_states is the durable retry/reconciliation authority. Queue jobs
+// are disposable wakeups, so pg-boss must never retry the same job id: doing
+// so creates an ABA window where a late attempt can complete a newer retry.
+export const SYNC_PAGE_EXECUTE_RETRY_LIMIT = 0;
 export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
 export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 export const WORKBOARD_RECOMPUTE_QUEUE = "workboard.recompute";
@@ -20,6 +30,11 @@ export interface SyncPageExecutePayload {
 
 export interface QueueCreationClient {
   createQueue(name: string, options?: Omit<Queue, "name">): Promise<unknown>;
+  updateQueue?(
+    name: string,
+    options: Omit<Queue, "name" | "partition" | "policy">,
+  ): Promise<unknown>;
+  getQueue?(name: string): Promise<Queue | null>;
   schedule?(
     name: string,
     cron: string,
@@ -39,8 +54,63 @@ export interface QueueCreationClient {
       group?: {
         id: string;
       };
+      expireInSeconds?: number;
+      retryLimit?: number;
+      db?: PgBossDb;
     },
   ): Promise<string | null | unknown>;
+}
+
+export interface SyncQueueLifecycleClient extends QueueCreationClient {
+  updateQueue(
+    name: string,
+    options: Omit<Queue, "name" | "partition" | "policy">,
+  ): Promise<unknown>;
+  getQueue(name: string): Promise<Queue | null>;
+}
+
+const syncPageExecuteQueueOptions = {
+  policy: "exclusive",
+  expireInSeconds: SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
+  heartbeatSeconds: 30,
+  retryLimit: SYNC_PAGE_EXECUTE_RETRY_LIMIT,
+  retryDelay: 30,
+  retryBackoff: true,
+  deadLetter: SYNC_PAGE_EXECUTE_DLQ_QUEUE,
+} satisfies Omit<Queue, "name">;
+
+async function reconcileSyncPageExecuteQueue(boss: SyncQueueLifecycleClient) {
+  // pg-boss createQueue is INSERT ... ON CONFLICT DO NOTHING. Without this
+  // explicit update, production keeps whatever mutable values existed when
+  // the queue was first created (the incident queue remained at 180s/2).
+  await boss.updateQueue(SYNC_PAGE_EXECUTE_QUEUE, {
+    expireInSeconds: syncPageExecuteQueueOptions.expireInSeconds,
+    heartbeatSeconds: syncPageExecuteQueueOptions.heartbeatSeconds,
+    retryLimit: syncPageExecuteQueueOptions.retryLimit,
+    retryDelay: syncPageExecuteQueueOptions.retryDelay,
+    retryBackoff: syncPageExecuteQueueOptions.retryBackoff,
+    deadLetter: syncPageExecuteQueueOptions.deadLetter,
+  });
+
+  const queue = await boss.getQueue(SYNC_PAGE_EXECUTE_QUEUE);
+  if (!queue) {
+    throw new Error(`Queue ${SYNC_PAGE_EXECUTE_QUEUE} was not readable after reconciliation`);
+  }
+
+  if (
+    queue.policy !== syncPageExecuteQueueOptions.policy ||
+    queue.expireInSeconds !== syncPageExecuteQueueOptions.expireInSeconds ||
+    queue.heartbeatSeconds !== syncPageExecuteQueueOptions.heartbeatSeconds ||
+    queue.retryLimit !== syncPageExecuteQueueOptions.retryLimit
+  ) {
+    throw new Error(
+      `Queue ${SYNC_PAGE_EXECUTE_QUEUE} configuration drift: expected ` +
+      `policy=${syncPageExecuteQueueOptions.policy}, ` +
+      `expireInSeconds=${syncPageExecuteQueueOptions.expireInSeconds}, ` +
+      `heartbeatSeconds=${syncPageExecuteQueueOptions.heartbeatSeconds}, ` +
+      `retryLimit=${syncPageExecuteQueueOptions.retryLimit}`,
+    );
+  }
 }
 
 export async function ensureQueueCreated(
@@ -58,7 +128,7 @@ export async function ensureQueueCreated(
 }
 
 export async function ensureSyncQueues(
-  boss: QueueCreationClient,
+  boss: SyncQueueLifecycleClient,
   createdQueues?: Set<string>,
 ) {
   await Promise.all([
@@ -82,15 +152,7 @@ export async function ensureSyncQueues(
       retryBackoff: true,
       deadLetter: SYNC_PLANNER_DLQ_QUEUE,
     }, createdQueues),
-    ensureQueueCreated(boss, SYNC_PAGE_EXECUTE_QUEUE, {
-      policy: "exclusive",
-      expireInSeconds: 180,
-      heartbeatSeconds: 30,
-      retryLimit: 2,
-      retryDelay: 30,
-      retryBackoff: true,
-      deadLetter: SYNC_PAGE_EXECUTE_DLQ_QUEUE,
-    }, createdQueues),
+    ensureQueueCreated(boss, SYNC_PAGE_EXECUTE_QUEUE, syncPageExecuteQueueOptions, createdQueues),
     ensureQueueCreated(boss, RAW_PAYLOAD_CLEANUP_QUEUE, {
       policy: "standard",
     }, createdQueues),
@@ -101,6 +163,8 @@ export async function ensureSyncQueues(
       retryBackoff: true,
     }, createdQueues),
   ]);
+
+  await reconcileSyncPageExecuteQueue(boss);
 }
 
 export async function ensurePlannerSchedule(
@@ -172,21 +236,24 @@ export async function sendSyncPageWakeup(
     priority: number;
     provider: "fansly" | "onlyfans";
     egressKey: string;
-    dedupe?: boolean;
-    singletonKey?: string;
-    startAfter?: Date | null;
+    db?: PgBossDb;
   },
-): Promise<string | null | unknown> {
+): Promise<string | null> {
   return boss.send(
     SYNC_PAGE_EXECUTE_QUEUE,
     { platformAccountId: input.platformAccountId } satisfies SyncPageExecutePayload,
     {
-      singletonKey: input.singletonKey ?? (input.dedupe === false ? undefined : String(input.platformAccountId)),
+      // Exactly one wakeup lane per page. Delays live durably in
+      // page_sync_states.retry_at and are materialized by the planner only
+      // when due; a deferred queue singleton must never block urgent work.
+      singletonKey: String(input.platformAccountId),
       priority: input.priority,
-      startAfter: input.startAfter ?? undefined,
+      expireInSeconds: SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
+      retryLimit: SYNC_PAGE_EXECUTE_RETRY_LIMIT,
       group: {
         id: buildSyncPageExecuteGroupId(input.provider, input.egressKey),
       },
+      ...(input.db ? { db: input.db } : {}),
     },
   );
 }

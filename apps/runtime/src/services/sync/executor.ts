@@ -24,7 +24,7 @@ import {
   pausePageSyncForAuth,
 } from "@agency_hub_core/db";
 import { FanslyApiError, FanslyProxyMissingError } from "@agency_hub_core/fansly";
-import type { JobWithMetadata, PgBoss } from "pg-boss";
+import type { Db as PgBossDb, JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { ProxyMissingError } from "../errors.ts";
@@ -48,6 +48,7 @@ const PAGE_EXECUTOR_HEARTBEAT_MS = 15_000;
 const SYNC_RUN_HEARTBEAT_MS = 30_000;
 const SYNC_TASK_LEASE_TTL_MS = 120_000;
 const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
+const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
 
 export interface SyncPageChunkResult {
   kind: "idle" | "success" | "yielded" | "failed" | "blocked";
@@ -59,7 +60,7 @@ export interface SyncPageChunkResult {
   continuationRetryAt?: Date | null;
 }
 
-type PageExecuteBoss = Pick<PgBoss, "complete" | "fail" | "fetch" | "getJobById" | "send" | "touch">;
+type PageExecuteBoss = Pick<PgBoss, "complete" | "fail" | "fetch" | "send" | "touch">;
 
 interface ExecutorCoordinator {
   fetchLock: Promise<void>;
@@ -471,7 +472,13 @@ export async function executeNextSyncPageChunk(
       return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "success", continuationPriority);
     }
 
-    const yielded = await yieldPageSync(app.db, {
+    // Request priority is an admission boost, not a lease on the queue. A
+    // generic partial run consumes that boost in one chunk and re-enters as
+    // scheduled work; otherwise a long manual/onboarding backfill can create
+    // an endless chain of high-priority successors and starve its egress
+    // peers. Handlers may still choose an explicit continuation source.
+    const continuationRequestSource = result.continuationRequestSource ?? "scheduled";
+    const yieldResult = await yieldPageSync(app.db, {
       pageId: platformAccountId,
       stream: taskLease.stream,
       requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
@@ -481,9 +488,9 @@ export async function executeNextSyncPageChunk(
       workClass,
       progress,
       retryAt: result.continuationRetryAt ?? null,
-      requestSource: result.continuationRequestSource ?? null,
+      dispatchSource: continuationRequestSource,
     });
-    if (!yielded) {
+    if (!yieldResult.updated) {
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
     }
 
@@ -503,11 +510,16 @@ export async function executeNextSyncPageChunk(
       recoveredAt,
       stream: taskLease.stream,
     });
-    const continuationRetryAt = result.continuationRetryAt ?? null;
-    const continuationRequestSource = result.continuationRequestSource ?? normalizeRunSource(taskLease.requestSource);
-    const continuationPriority = continuationRetryAt
+    // A newer request OR another stream on this page may already be runnable.
+    // Immediate page work wins over this stream's delayed yield; otherwise a
+    // deferred retry stays only in page_sync_states for the planner to wake.
+    const immediateContinuationPriority = await resolveContinuationPriority(app, platformAccountId);
+    const continuationRetryAt = yieldResult.superseded || immediateContinuationPriority !== null
+      ? null
+      : result.continuationRetryAt ?? null;
+    const continuationPriority = immediateContinuationPriority ?? (continuationRetryAt
       ? resolvePageSyncPriority(taskLease.stream, continuationRequestSource)
-      : await resolveContinuationPriority(app, platformAccountId);
+      : null);
     return buildContinuationResult(
       platformAccountId,
       taskLease.stream,
@@ -691,85 +703,140 @@ export async function executeNextSyncPageChunk(
   }
 }
 
-// A pgboss job expires on a HARD wall clock (started_on + expire_seconds;
-// touch only feeds the heartbeat monitor), so local processing must hand the
-// group back well before the queue's 180s expiry. One poison-chat chunk can
-// eat ~180s by itself — the budget bounds the LOOP, not a single chunk, and
-// the ownership check below catches the mid-chunk expiry.
-const LOCAL_EXECUTION_BUDGET_MS = 120_000;
+function readPgBossAffected(response: unknown): number {
+  if (
+    typeof response === "object" &&
+    response !== null &&
+    "affected" in response &&
+    typeof response.affected === "number" &&
+    Number.isInteger(response.affected)
+  ) {
+    return response.affected;
+  }
+
+  // pg-boss 12.14 returns { jobs, requested, affected } at runtime, but its
+  // published CommandResponse type is empty. Fail closed if that runtime
+  // contract changes; otherwise ownership would silently become ambiguous.
+  throw new Error("pg-boss completion response did not contain an integer affected count");
+}
 
 export async function processSyncPageExecuteJob(
   app: AppContext,
-  boss: Pick<PgBoss, "complete" | "send" | "getJobById">,
+  boss: Pick<PgBoss, "complete" | "send">,
   input: {
-    job: Pick<JobWithMetadata<SyncPageExecutePayload>, "id" | "data" | "groupId">;
+    job: Pick<
+      JobWithMetadata<SyncPageExecutePayload>,
+      "id" | "data" | "groupId" | "startedOn" | "expireInSeconds"
+    >;
   },
 ) {
-  const startedAt = Date.now();
-  let result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
-  let localChunks = 1;
+  // One queue job owns exactly one chunk. Continuations always return to
+  // pg-boss, which is the sole fairness arbiter for pages sharing an egress
+  // group. Never drain locally: doing so bypasses queue priority/group
+  // scheduling and turns one slow page into a group-wide wedge.
+  const result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
 
-  while (result.needsContinuation && result.continuationPriority !== null) {
-    if (localChunks >= MAX_LOCAL_EXECUTOR_CHUNKS) {
-      throw new Error(
-        `Sync page executor exceeded ${MAX_LOCAL_EXECUTOR_CHUNKS} local chunks for page ${result.platformAccountId}`,
-      );
-    }
+  let wakeupTarget: Awaited<ReturnType<typeof resolveSyncPageWakeupTarget>> = null;
+  if (
+    result.needsContinuation &&
+    result.continuationPriority !== null &&
+    !result.continuationRetryAt
+  ) {
+    wakeupTarget = await resolveSyncPageWakeupTarget(app, result.platformAccountId);
+  }
 
-    const wakeupTarget = await resolveSyncPageWakeupTarget(app, result.platformAccountId);
-    if (wakeupTarget) {
-      const delayedContinuation = result.continuationRetryAt !== null && result.continuationRetryAt !== undefined;
-      // ALWAYS a per-page singleton. The exclusive queue's unique index is
-      // (name, COALESCE(singleton_key, '')) over queued jobs, so a NULL-key
-      // send collides with ANY other queued NULL-key job and returns null —
-      // which the old dedupe:false path misread as "keep going locally",
-      // wedging the whole egress group inside one (long-expired) job for up
-      // to 500 chunks while sibling pages starved (prod 2026-07-11: 3.5h).
-      // With a real key, null cleanly means "this continuation is already
-      // queued" — hand off and exit either way. The key is scoped to the
-      // PARENT job id because the index also covers active jobs: a fixed
-      // per-page key would collide with the currently-running continuation
-      // itself and kill the chain; the parent-scoped key only dedupes a
-      // retry of THIS job re-enqueueing the same child.
-      const wakeupId = await sendSyncPageWakeup(boss, {
-        platformAccountId: result.platformAccountId,
-        priority: result.continuationPriority,
-        provider: wakeupTarget.provider,
-        egressKey: wakeupTarget.egressKey,
-        singletonKey: delayedContinuation
-          ? `${result.platformAccountId}:dm-messages-deep-continuation`
-          : `${result.platformAccountId}:continuation:${input.job.id}`,
-        startAfter: result.continuationRetryAt ?? null,
-      });
-
-      if (wakeupId !== null && wakeupId !== undefined) {
-        break;
-      }
-      // null = a queued continuation (or delayed singleton) already exists
-      // for this page — the queue owns the follow-up.
-      break;
-    }
-
-    // Fairness/zombie guards: past the local budget the group must go back
-    // to the queue, and a job the queue no longer considers ours (expired →
-    // retry) must stop driving chunks — its retry job will take over.
-    if (Date.now() - startedAt > LOCAL_EXECUTION_BUDGET_MS) {
-      break;
-    }
-    const ownJob = await boss.getJobById(SYNC_PAGE_EXECUTE_QUEUE, input.job.id);
-    if (ownJob?.state !== "active") {
+  // complete -> send must be atomic. Sending first self-collides with the
+  // active parent in an exclusive queue; completing first without a shared
+  // transaction creates a crash gap. pg-boss explicitly supports a caller-
+  // supplied DB wrapper for both commands, so the active row leaves the
+  // partial unique index and its stable-lane child enters it in one commit.
+  const client = await app.pool.connect();
+  let transactionOpen = false;
+  let releaseError: Error | undefined;
+  try {
+    // started_on and the expiry transition are owned by PostgreSQL. Compare
+    // them to the same clock here: process time can be skewed enough to either
+    // abandon a live job or mutate one after pg-boss has expired it.
+    const deadlineCheck = await client.query<{ safe: boolean }>(
+      `
+        select clock_timestamp() <
+               $1::timestamptz
+               + ($2::double precision * interval '1 second')
+               - ($3::double precision * interval '1 millisecond') as "safe"
+      `,
+      [
+        input.job.startedOn,
+        input.job.expireInSeconds,
+        SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS,
+      ],
+    );
+    if (deadlineCheck.rows[0]?.safe !== true) {
       app.logger.warn(
-        { jobId: input.job.id, jobState: ownJob?.state ?? "missing", platformAccountId: result.platformAccountId },
-        "Sync page execute job lost ownership mid-run; stopping local chunk loop",
+        {
+          jobId: input.job.id,
+          platformAccountId: result.platformAccountId,
+          startedOn: input.job.startedOn,
+          expireInSeconds: input.job.expireInSeconds,
+        },
+        "Sync page execute job crossed its safe handoff deadline; planner will reconcile durable page state",
       );
       return result;
     }
 
-    result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
-    localChunks += 1;
-  }
+    await client.query("begin");
+    transactionOpen = true;
+    const queueDb: PgBossDb = {
+      executeSql: (text, values) => client.query(text, values),
+    };
+    const completion = await boss.complete(
+      SYNC_PAGE_EXECUTE_QUEUE,
+      input.job.id,
+      null,
+      { db: queueDb },
+    );
+    if (readPgBossAffected(completion) !== 1) {
+      await client.query("rollback");
+      transactionOpen = false;
+      app.logger.warn(
+        { jobId: input.job.id, platformAccountId: result.platformAccountId },
+        "Sync page execute job no longer owns its queue attempt; skipping handoff",
+      );
+      return result;
+    }
 
-  await boss.complete(SYNC_PAGE_EXECUTE_QUEUE, input.job.id);
+    if (wakeupTarget && result.continuationPriority !== null) {
+      await sendSyncPageWakeup(boss, {
+        platformAccountId: result.platformAccountId,
+        priority: result.continuationPriority,
+        provider: wakeupTarget.provider,
+        egressKey: wakeupTarget.egressKey,
+        db: queueDb,
+      });
+    }
+
+    await client.query("commit");
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) {
+      try {
+        await client.query("rollback");
+      } catch (rollbackError) {
+        releaseError = rollbackError instanceof Error
+          ? rollbackError
+          : new Error(String(rollbackError));
+        throw new AggregateError(
+          [error, releaseError],
+          "Sync page queue handoff failed and its transaction could not be rolled back",
+          { cause: rollbackError },
+        );
+      }
+    }
+    throw error;
+  } finally {
+    // A client whose rollback failed must be destroyed, never returned to the
+    // shared pool with an unknown/open transaction state.
+    client.release(releaseError);
+  }
 
   return result;
 }
@@ -799,7 +866,14 @@ async function runSyncPageExecutorWorker(
         const jobs = await boss.fetch<SyncPageExecutePayload>(SYNC_PAGE_EXECUTE_QUEUE, {
           batchSize: 1,
           includeMetadata: true,
-          priority: true,
+          // Page jobs are FIFO within the available groups. Strict numeric
+          // priority has no aging in pg-boss: a continuously replaced
+          // priority-30 page can starve an older priority-25 singleton
+          // forever, including after that page receives a manual request.
+          // Stream priority remains durable inside page_sync_states; the
+          // fixed page singleton and tail-inserted successor provide the
+          // cross-page fairness quantum.
+          priority: false,
           orderByCreatedOn: true,
           groupConcurrency: 1,
           ignoreGroups: activeGroupIds.length > 0 ? activeGroupIds : null,

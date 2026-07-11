@@ -3897,7 +3897,7 @@ pin the tsc and zod that do the emitting. A guard that tolerates an uncommitted
 edit to its own definition of "these bytes" is the same provenance bug one level
 up.
 
-**Decision #140 (2026-07-11, executor fair scheduling — the group-wedge
+**Decision #141 (2026-07-11, executor fair scheduling — the group-wedge
 zombie):** three interacting defects let ONE page monopolize its egress
 group for hours while a sibling page's top-priority job starved 3.5h
 unfetched (prod: lora-of vs lora-vip-of after the #138 deploy).
@@ -3910,13 +3910,77 @@ holding the group in localActiveGroups the whole time. (3) pg-boss
 expiration is a HARD wall clock (`started_on + expire_seconds`, 180s
 here); touch feeds only the heartbeat monitor — so the monopolizing job
 had long been handed to retry while its process kept driving chunks
-(zombie). Fixes: continuation sends always carry a PARENT-scoped singleton
-(`page:continuation:<jobId>` — a fixed per-page key would collide with the
-running continuation itself, the index covers active jobs) and a null send
-now means "handoff exists, stop"; a 120s local-execution budget (under the
-180s expiry) bounds the loop; an ownership check (getJobById) after each
-locally-continued chunk stops a job the queue no longer owns WITHOUT
-completing it. The 500-chunk backstop remains for the no-wakeup-target
-path. Non-goal, accepted: the provider-level breaker (#138's 3-distinct
+(zombie). The first hotfix (`c1ef205`) removed local draining, but its
+parent-scoped keys allowed multiple queued jobs per page; production promptly
+showed three lora-vip-of continuations and stale priority-30 work taking extra
+DM turns ahead of lora-of. It also used `getJobById` as an ownership snapshot
+and changed `createQueue` options that pg-boss ignores for an existing queue.
+
+The final contract makes a pg-boss row a disposable wakeup, never the durable
+work or retry authority. One queue job owns exactly ONE chunk. Every immediate
+wakeup uses the ONE fixed singleton `String(pageId)`. A delayed yield is stored
+only in `page_sync_states.retry_at`; the minutely planner materializes it when
+due, so a future queue singleton cannot block an urgent manual request. Parent
+completion and fixed-key child insertion happen in ONE PostgreSQL transaction
+through pg-boss's caller-supplied `db` option (`complete → send`): the active
+parent leaves the exclusive partial index before the child enters it, while a
+crash/send failure rolls both back. `complete.affected !== 1` is ownership loss
+and forbids the send; `send === null` after a successful completion means the
+same page wakeup already exists and the transaction commits.
+
+`sync.page.execute` has `retryLimit=0`: durable `page_sync_states`, lease
+reclaim, and the planner are the single retry/reconciliation authority, so a
+same-id pg-boss retry cannot create attempt ABA. Queue startup is declarative:
+`createQueue → updateQueue → getQueue` must read back exclusive / 900s expiry /
+30s heartbeat / zero retries or startup fails, and every new job pins 900/0
+itself. Fifteen minutes is conservative operational headroom above the observed
+3×60s and 4×60s OFAPI paths, not a formal request deadline; a 60s pre-expiry
+handoff guard prevents a grandfathered/overrunning attempt from mutating queue
+state. Local multi-chunk draining is removed, restoring pg-boss as the sole
+page-order/group arbiter.
+
+Two FSM fences close adjacent races exposed by the same investigation. An old
+generation's delayed `yieldPageSync` may not overwrite a newer manual request:
+the newer request source wins, `retry_at` is cleared, and the page remains
+immediately runnable. A page lease is terminal once expired: heartbeat,
+progress, yield/complete/retry/block/clear, and transactional ownership checks
+all require an unexpired lease, so a stalled worker cannot resurrect or settle
+an expired generation.
+Non-goal, accepted: the provider-level breaker (#138's 3-distinct
 rule) stays per-run even though runs are now shorter — quarantine
 accumulation across runs already covers the cross-run case.
+
+**Addendum to #141 (2026-07-12, bounded priority and one clock domain):**
+fixed page singletons bound queue cardinality but do not by themselves bound
+priority ownership: a long manual/onboarding/reset/anomaly generation could
+replace every completed job with another boosted successor and starve a
+scheduled page forever. Migration 0089 separates immutable request/audit origin
+(`request_source`, still used as the `sync_runs.source` trigger) from mutable
+queue admission class (`dispatch_source`). A new generation seeds both from its
+request source. Its first attempted chunk consumes the dispatch boost: generic
+yield, transient retry, and same-generation block re-enter as `scheduled`, while
+an explicit handler continuation class is honored. The existing generation CAS
+preserves both fields of a newer concurrent request, so an old chunk cannot
+demote fresh manual work.
+
+Cross-page scheduling is deliberately FIFO, not strict pg-boss numeric
+priority. pg-boss priority has no aging: a continuously replaced scheduled
+priority-30 page can starve an older priority-25 singleton forever, including
+after durable state promotes that page to manual while its fixed queue row
+retains 25. With one queued/active row per page, FIFO plus atomic successor
+insertion at the tail is the fairness quantum: every older page in the egress
+group gets a turn before that successor. `dispatch_source` still ranks streams
+inside a page and orders the planner's initial materialization, but cannot grant
+repeated cross-page ownership. We deliberately do not cancel/reinsert or reach
+into pg-boss's private table to promote a colliding row; both alternatives add
+a second ownership protocol and fetch/promotion races where FIFO needs none.
+
+All ownership expiry decisions use PostgreSQL time. Expired lease reclaim
+selects locked rows and CAS-updates them against `clock_timestamp()`; manual
+requests test lease expiry under the same row lock; the pg-boss handoff guard
+compares its database `started_on` to database time before `complete → send`.
+Process `Date` remains a planner/cadence timestamp, never authority for whether
+a worker or queue attempt still owns work. Real PostgreSQL tests pin both clock
+skew directions, the shared-egress ordering `A → waiting B → A successor`, and
+the inverse stale-priority case (`queued B@25`, durable manual promotion,
+repeating `A@30`: B still runs first).

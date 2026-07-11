@@ -122,12 +122,47 @@ describe("sync executor", () => {
     lastErrorSummary: null,
     operationId: 99,
     requestSource: "manual",
+    dispatchSource: "manual",
     platform: "fansly",
     proxyUrl: "socks5://proxy.example",
     egressKey: "shared-proxy-pool",
     createdAt: new Date("2026-03-14T12:00:00.000Z"),
     updatedAt: new Date("2026-03-14T12:00:00.000Z"),
   } as const;
+
+  function createQueueHandoffApp(input?: { handoffSafe?: boolean }) {
+    const client = {
+      query: vi.fn(async (statement: string, _values?: unknown[]) => (
+        statement.includes("select clock_timestamp()")
+          ? { rows: [{ safe: input?.handoffSafe ?? true }] }
+          : { rows: [] }
+      )),
+      release: vi.fn(),
+    };
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const app = {
+      db: {},
+      logger,
+      pool: {
+        connect: vi.fn(async () => client),
+      },
+    } as never;
+    return { app, client, logger };
+  }
+
+  function buildQueueJob(input?: { startedOn?: Date; expireInSeconds?: number }) {
+    return {
+      id: "job-1",
+      data: { platformAccountId: 55 },
+      groupId: "fansly:direct",
+      startedOn: input?.startedOn ?? new Date(),
+      expireInSeconds: input?.expireInSeconds ?? 900,
+    };
+  }
+
+  function completionResult(affected = 1) {
+    return { jobs: ["job-1"], requested: 1, affected };
+  }
 
   afterEach(() => {
     vi.useRealTimers();
@@ -166,7 +201,7 @@ describe("sync executor", () => {
     dbMocks.heartbeatPageSyncLease.mockResolvedValue(true);
     dbMocks.clearPageSyncLease.mockResolvedValue(true);
     dbMocks.listRunnablePageSync.mockResolvedValue([]);
-    dbMocks.yieldPageSync.mockResolvedValue(true);
+    dbMocks.yieldPageSync.mockResolvedValue({ updated: true, superseded: false });
     handlerMocks.resolveExecutorPageContext.mockResolvedValue({
       platform: "fansly",
       page: {
@@ -178,13 +213,10 @@ describe("sync executor", () => {
     });
   });
 
-  it("queues the continuation wakeup before completing the current job", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
+  it("atomically completes the parent before enqueueing one fixed-key continuation", async () => {
+    const { app, client } = createQueueHandoffApp();
     const boss = {
-      complete: vi.fn(async () => {}),
+      complete: vi.fn(async () => completionResult()),
       send: vi.fn(async () => "job-next"),
     } as unknown as {
       complete: ReturnType<typeof vi.fn>;
@@ -209,11 +241,12 @@ describe("sync executor", () => {
     });
 
     await processSyncPageExecuteJob(app, boss as never, {
-      job: {
-        id: "job-1",
-        data: { platformAccountId: 55 },
-        groupId: "fansly:direct",
-      },
+      // DB says the attempt is live; a process-clock check would reject this
+      // deliberately ancient metadata value.
+      job: buildQueueJob({
+        startedOn: new Date("2000-01-01T00:00:00.000Z"),
+        expireInSeconds: 180,
+      }),
     });
 
     expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { pageId: 55 });
@@ -223,19 +256,103 @@ describe("sync executor", () => {
       requestSeq: 3,
       leaseToken: "lease-1",
     }));
-    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
+    expect(boss.complete).toHaveBeenCalledWith(
+      "sync.page.execute",
+      "job-1",
+      null,
+      { db: expect.objectContaining({ executeSql: expect.any(Function) }) },
+    );
     expect(boss.send).toHaveBeenCalledWith(
       "sync.page.execute",
       { platformAccountId: 55 },
       expect.objectContaining({
-        singletonKey: "55:continuation:job-1",
+        singletonKey: "55",
         priority: 45,
+        expireInSeconds: 900,
+        retryLimit: 0,
         group: {
           id: "fansly:shared-proxy-pool",
         },
       }),
     );
-    expect(boss.send.mock.invocationCallOrder[0]).toBeLessThan(boss.complete.mock.invocationCallOrder[0]);
+    expect(boss.complete.mock.invocationCallOrder[0]!).toBeLessThan(boss.send.mock.invocationCallOrder[0]!);
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "commit"]);
+    expect(client.release).toHaveBeenCalledWith(undefined);
+  });
+
+  it("consumes a manual priority boost after one generic partial chunk", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "dm_messages" as const,
+      requestSource: "manual" as const,
+    });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 25,
+      requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: { processedMessages: 100 },
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "dm_messages",
+      dispatchSource: "scheduled",
+    }));
+    expect(result).toMatchObject({
+      kind: "yielded",
+      continuationPriority: 25,
+    });
+  });
+
+  it("honors an explicit continuation dispatch source", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "dm_messages" as const,
+      requestSource: "manual" as const,
+      dispatchSource: "manual" as const,
+    });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 35,
+      requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: "request_budget",
+      continuationRequestSource: "recovery",
+      stats: { processedMessages: 100 },
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      dispatchSource: "recovery",
+    }));
+    expect(result).toMatchObject({ continuationPriority: 35 });
   });
 
   it("passes handler continuation retry time into yielded page sync state", async () => {
@@ -267,17 +384,87 @@ describe("sync executor", () => {
       requestSeq: 3,
       leaseToken: "lease-1",
       retryAt,
-      requestSource: "scheduled",
+      dispatchSource: "scheduled",
     }));
   });
 
-  it("queues delayed continuation wakeup for paced deep backfill", async () => {
+  it("keeps a newer manual generation immediately runnable when an old chunk yields", async () => {
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
+    const retryAt = new Date("2026-03-14T13:00:00.000Z");
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "dm_messages" as const,
+    });
+    dbMocks.yieldPageSync.mockResolvedValueOnce({ updated: true, superseded: true });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 65,
+      requestedAt: new Date("2026-03-14T12:00:01.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: null,
+      continuationRetryAt: retryAt,
+      continuationRequestSource: "scheduled",
+      stats: { processedMessages: 1 },
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(result).toMatchObject({
+      kind: "yielded",
+      continuationPriority: 65,
+      continuationRetryAt: null,
+    });
+  });
+
+  it("continues another runnable stream instead of parking the whole page behind a delayed yield", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    const retryAt = new Date("2026-03-14T13:00:00.000Z");
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "dm_messages" as const,
+    });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 60,
+      requestedAt: new Date("2026-03-14T12:00:01.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: null,
+      continuationRetryAt: retryAt,
+      continuationRequestSource: "scheduled",
+      stats: { processedMessages: 1 },
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(result).toMatchObject({
+      kind: "yielded",
+      continuationPriority: 60,
+      continuationRetryAt: null,
+    });
+  });
+
+  it("persists delayed continuation in page state without queue-blocking urgent work", async () => {
+    const { app } = createQueueHandoffApp();
     const boss = {
-      complete: vi.fn(async () => {}),
+      complete: vi.fn(async () => completionResult()),
       send: vi.fn(async () => "job-next"),
     } as unknown as {
       complete: ReturnType<typeof vi.fn>;
@@ -299,11 +486,7 @@ describe("sync executor", () => {
     });
 
     const result = await processSyncPageExecuteJob(app, boss as never, {
-      job: {
-        id: "job-1",
-        data: { platformAccountId: 55 },
-        groupId: "fansly:direct",
-      },
+      job: buildQueueJob(),
     });
 
     expect(result).toMatchObject({
@@ -312,28 +495,20 @@ describe("sync executor", () => {
       continuationPriority: 25,
       continuationRetryAt: retryAt,
     });
-    expect(boss.send).toHaveBeenCalledWith(
+    expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({ retryAt }));
+    expect(boss.send).not.toHaveBeenCalled();
+    expect(boss.complete).toHaveBeenCalledWith(
       "sync.page.execute",
-      { platformAccountId: 55 },
-      expect.objectContaining({
-        singletonKey: "55:dm-messages-deep-continuation",
-        priority: 25,
-        startAfter: retryAt,
-        group: {
-          id: "fansly:shared-proxy-pool",
-        },
-      }),
+      "job-1",
+      null,
+      { db: expect.objectContaining({ executeSql: expect.any(Function) }) },
     );
-    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
   });
 
-  it("does not drain locally when paced deep continuation is already queued", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
+  it("executes only one chunk when continuation is delayed", async () => {
+    const { app } = createQueueHandoffApp();
     const boss = {
-      complete: vi.fn(async () => {}),
+      complete: vi.fn(async () => completionResult()),
       send: vi.fn(async () => null),
     } as unknown as {
       complete: ReturnType<typeof vi.fn>;
@@ -355,26 +530,19 @@ describe("sync executor", () => {
     });
 
     await processSyncPageExecuteJob(app, boss as never, {
-      job: {
-        id: "job-1",
-        data: { platformAccountId: 55 },
-        groupId: "fansly:direct",
-      },
+      job: buildQueueJob(),
     });
 
-    expect(boss.send).toHaveBeenCalledTimes(1);
+    expect(boss.send).not.toHaveBeenCalled();
     expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(1);
     expect(dbMocks.acquirePageSyncLease).toHaveBeenCalledTimes(1);
-    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
+    expect(boss.complete).toHaveBeenCalledTimes(1);
   });
 
-  it("does not complete the current job when the continuation wakeup fails", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
+  it("rolls parent completion back when continuation enqueue fails", async () => {
+    const { app, client } = createQueueHandoffApp();
     const boss = {
-      complete: vi.fn(async () => {}),
+      complete: vi.fn(async () => completionResult()),
       send: vi.fn(async () => {
         throw new Error("queue unavailable");
       }),
@@ -401,34 +569,28 @@ describe("sync executor", () => {
     });
 
     await expect(processSyncPageExecuteJob(app, boss as never, {
-      job: {
-        id: "job-1",
-        data: { platformAccountId: 55 },
-        groupId: "fansly:direct",
-      },
+      job: buildQueueJob(),
     })).rejects.toThrow("queue unavailable");
 
     expect(boss.send).toHaveBeenCalledTimes(1);
-    expect(boss.complete).not.toHaveBeenCalled();
+    expect(boss.complete).toHaveBeenCalledTimes(1);
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "rollback"]);
+    expect(client.release).toHaveBeenCalledWith(undefined);
   });
 
   it("hands off instead of draining locally when the continuation is already queued (null send)", async () => {
-    // The exclusive queue's unique index made a NULL-key send collide with
-    // any queued NULL-key job; the old code read null as "keep going
-    // locally" and one job wedged its whole egress group for hours (prod
-    // 2026-07-11). null now means "a queued continuation exists" — stop.
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
+    // The old code read a NULL-key collision as "keep going locally" and
+    // wedged the whole egress group. The fixed page key makes null mean that
+    // this page already has its one wakeup; parent completion still commits.
+    const { app, client } = createQueueHandoffApp();
     const boss = {
-      complete: vi.fn(async () => {}),
+      complete: vi.fn(async () => completionResult()),
       send: vi.fn(async () => null),
-      getJobById: vi.fn(async () => ({ state: "active" })),
     } as unknown as {
       complete: ReturnType<typeof vi.fn>;
       send: ReturnType<typeof vi.fn>;
-      getJobById: ReturnType<typeof vi.fn>;
     };
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
@@ -447,16 +609,15 @@ describe("sync executor", () => {
     });
 
     const result = await processSyncPageExecuteJob(app, boss as never, {
-      job: {
-        id: "job-1",
-        data: { platformAccountId: 55 },
-        groupId: "fansly:direct",
-      },
+      job: buildQueueJob(),
     });
 
     expect(boss.send).toHaveBeenCalledTimes(1);
     expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(1);
-    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
+    expect(boss.complete).toHaveBeenCalledTimes(1);
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "commit"]);
     expect(result).toMatchObject({
       kind: "yielded",
       platformAccountId: 55,
@@ -464,35 +625,21 @@ describe("sync executor", () => {
     });
   });
 
-  it("stops the local loop without completing when the job lost ownership (expired -> retry)", async () => {
+  it("does not send or complete after the safe handoff deadline", async () => {
     // pg-boss expiration is a hard wall clock from job start (touch feeds
     // only the heartbeat monitor), so a long chunk can outlive its job. The
     // executor must notice and stop instead of zombie-driving chunks under
     // a job the queue already handed to retry.
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
+    const { app, client } = createQueueHandoffApp({ handoffSafe: false });
     const boss = {
-      complete: vi.fn(async () => {}),
+      complete: vi.fn(async () => completionResult()),
       send: vi.fn(async () => null),
-      getJobById: vi.fn(async () => ({ state: "retry" })),
     } as unknown as {
       complete: ReturnType<typeof vi.fn>;
       send: ReturnType<typeof vi.fn>;
-      getJobById: ReturnType<typeof vi.fn>;
     };
 
     dbMocks.acquirePageSyncLease.mockImplementation(async () => taskLease);
-    // First lookup (inside the chunk) sees the page; the wakeup-target lookup
-    // right after sees it gone — that forces the local-continue path, where
-    // the ownership guard lives.
-    dbMocks.findPageById
-      .mockResolvedValueOnce({
-        page: { id: 55, label: "page-55", platform: "fansly" },
-        proxy: { url: "socks5://proxy.example", rateLimitScopeKey: "shared-proxy-pool" },
-      })
-      .mockResolvedValueOnce(null);
     dbMocks.listRunnablePageSync.mockResolvedValue([{
       pageId: 55,
       platform: "fansly",
@@ -508,16 +655,52 @@ describe("sync executor", () => {
     });
 
     const result = await processSyncPageExecuteJob(app, boss as never, {
-      job: {
-        id: "job-1",
-        data: { platformAccountId: 55 },
-        groupId: "fansly:direct",
-      },
+      // A process-clock comparison would consider this far-future job safe;
+      // the database answer is authoritative.
+      job: buildQueueJob({ startedOn: new Date(Date.now() + 86_400_000) }),
     });
 
-    expect(boss.getJobById).toHaveBeenCalledWith("sync.page.execute", "job-1");
+    expect(boss.send).not.toHaveBeenCalled();
     expect(boss.complete).not.toHaveBeenCalled();
+    expect(client.query.mock.calls[0]?.[0]).toContain("select clock_timestamp()");
+    expect(client.release).toHaveBeenCalledWith(undefined);
     expect(result).toMatchObject({ platformAccountId: 55, needsContinuation: true });
+  });
+
+  it("does not enqueue when atomic completion reports lost ownership", async () => {
+    const { app, client, logger } = createQueueHandoffApp();
+    const boss = {
+      complete: vi.fn(async () => completionResult(0)),
+      send: vi.fn(async () => "job-next"),
+    };
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 45,
+      requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockResolvedValueOnce({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: { processedThisChunk: 1 },
+    });
+
+    await processSyncPageExecuteJob(app, boss as never, {
+      job: buildQueueJob(),
+    });
+
+    expect(boss.send).not.toHaveBeenCalled();
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "rollback"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "job-1", platformAccountId: 55 }),
+      "Sync page execute job no longer owns its queue attempt; skipping handoff",
+    );
   });
 
   it("releases the lease and goes idle when the leased page is missing or tombstoned", async () => {
@@ -1005,13 +1188,22 @@ describe("sync executor", () => {
       releaseChunk = resolve;
     });
 
+    const queueClient = {
+      query: vi.fn(async (statement: string, _values?: unknown[]) => (
+        statement.includes("select clock_timestamp()")
+          ? { rows: [{ safe: true }] }
+          : { rows: [] }
+      )),
+      release: vi.fn(),
+    };
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
       config: { syncPageExecutorConcurrency: 2 },
+      pool: { connect: vi.fn(async () => queueClient) },
     } as never;
     const boss = {
-      complete: vi.fn(async () => {}),
+      complete: vi.fn(async () => completionResult()),
       fail: vi.fn(async () => {}),
       fetch: vi.fn(async (_queueName: string, options: Record<string, unknown>) => {
         const callNumber = boss.fetch.mock.calls.length;
@@ -1019,7 +1211,7 @@ describe("sync executor", () => {
           expect(options).toMatchObject({
             batchSize: 1,
             includeMetadata: true,
-            priority: true,
+            priority: false,
             orderByCreatedOn: true,
             groupConcurrency: 1,
             ignoreGroups: null,
@@ -1028,13 +1220,15 @@ describe("sync executor", () => {
             id: "job-1",
             data: { platformAccountId: 55 },
             groupId: "fansly:direct",
+            startedOn: new Date(),
+            expireInSeconds: 900,
           }];
         }
 
         expect(options).toMatchObject({
           batchSize: 1,
           includeMetadata: true,
-          priority: true,
+          priority: false,
           orderByCreatedOn: true,
           groupConcurrency: 1,
           ignoreGroups: ["fansly:direct"],
@@ -1066,7 +1260,12 @@ describe("sync executor", () => {
     await executorPromise;
 
     expect(boss.fetch.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
+    expect(boss.complete).toHaveBeenCalledWith(
+      "sync.page.execute",
+      "job-1",
+      null,
+      { db: expect.objectContaining({ executeSql: expect.any(Function) }) },
+    );
     expect(boss.fail).not.toHaveBeenCalled();
   });
 });
