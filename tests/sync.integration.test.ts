@@ -28,6 +28,7 @@ import {
   SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
   SYNC_PAGE_EXECUTE_QUEUE,
   SYNC_PAGE_EXECUTE_RETRY_LIMIT,
+  type SyncPageExecutePayload,
 } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
@@ -509,6 +510,158 @@ describe("sync integration", () => {
         }
         client.release();
       }
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
+  it("bounds a boosted page to one chunk before a queued egress peer runs", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = new PgBoss({ connectionString: testDb.connectionString });
+    await boss.start();
+    try {
+      await ensureSyncQueues(boss);
+      const boostedParentId = await sendSyncPageWakeup(boss, {
+        platformAccountId: 55,
+        priority: resolvePageSyncPriority("dm_messages", "manual"),
+        provider: "onlyfans",
+        egressKey: "direct",
+      });
+      const waitingPeerId = await sendSyncPageWakeup(boss, {
+        platformAccountId: 56,
+        priority: resolvePageSyncPriority("dm_conversations", "scheduled"),
+        provider: "onlyfans",
+        egressKey: "direct",
+      });
+      expect(boostedParentId).toEqual(expect.any(String));
+      expect(waitingPeerId).toEqual(expect.any(String));
+
+      const fetchOptions = {
+        batchSize: 1,
+        includeMetadata: true,
+        priority: false,
+        orderByCreatedOn: true,
+        groupConcurrency: 1,
+      } as const;
+      const [boostedParent] = await boss.fetch<SyncPageExecutePayload>(
+        SYNC_PAGE_EXECUTE_QUEUE,
+        fetchOptions,
+      );
+      expect(boostedParent).toMatchObject({
+        id: boostedParentId,
+        data: { platformAccountId: 55 },
+        priority: resolvePageSyncPriority("dm_messages", "manual"),
+      });
+      if (!boostedParent) {
+        throw new Error("Expected to fetch the boosted parent wakeup");
+      }
+
+      const client = await testDb.pool.connect();
+      let committed = false;
+      let continuationId: string | null = null;
+      try {
+        await client.query("begin");
+        const db: PgBossDb = {
+          executeSql: (text, values) => client.query(text, values),
+        };
+        const completed = await boss.complete(
+          SYNC_PAGE_EXECUTE_QUEUE,
+          boostedParent.id,
+          null,
+          { db },
+        ) as unknown as { affected: number };
+        expect(completed.affected).toBe(1);
+        continuationId = await sendSyncPageWakeup(boss, {
+          platformAccountId: 55,
+          priority: resolvePageSyncPriority("dm_messages", "scheduled"),
+          provider: "onlyfans",
+          egressKey: "direct",
+          db,
+        });
+        expect(continuationId).toEqual(expect.any(String));
+        await client.query("commit");
+        committed = true;
+      } finally {
+        if (!committed) {
+          await client.query("rollback").catch(() => undefined);
+        }
+        client.release();
+      }
+
+      const [next] = await boss.fetch<SyncPageExecutePayload>(
+        SYNC_PAGE_EXECUTE_QUEUE,
+        fetchOptions,
+      );
+      expect(next).toMatchObject({
+        id: waitingPeerId,
+        data: { platformAccountId: 56 },
+        priority: resolvePageSyncPriority("dm_conversations", "scheduled"),
+      });
+      if (!continuationId) {
+        throw new Error("Expected a demoted continuation id");
+      }
+      const continuationRows = await boss.findJobs(SYNC_PAGE_EXECUTE_QUEUE, { id: continuationId });
+      expect(continuationRows[0]).toMatchObject({
+        state: "created",
+        singletonKey: "55",
+        priority: resolvePageSyncPriority("dm_messages", "scheduled"),
+      });
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
+  it("keeps an older fixed singleton runnable when its durable priority is promoted", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = new PgBoss({ connectionString: testDb.connectionString });
+    await boss.start();
+    try {
+      await ensureSyncQueues(boss);
+      const stalePriorityId = await sendSyncPageWakeup(boss, {
+        platformAccountId: 55,
+        priority: resolvePageSyncPriority("dm_messages", "scheduled"),
+        provider: "onlyfans",
+        egressKey: "direct",
+      });
+      expect(stalePriorityId).toEqual(expect.any(String));
+
+      // This is the real collision: durable page state may now be manual,
+      // while the one queued pg-boss row still carries its original 25.
+      await expect(sendSyncPageWakeup(boss, {
+        platformAccountId: 55,
+        priority: resolvePageSyncPriority("dm_messages", "manual"),
+        provider: "onlyfans",
+        egressKey: "direct",
+      })).resolves.toBeNull();
+
+      const repeatingLivePageId = await sendSyncPageWakeup(boss, {
+        platformAccountId: 56,
+        priority: resolvePageSyncPriority("dm_conversations", "scheduled"),
+        provider: "onlyfans",
+        egressKey: "direct",
+      });
+      expect(repeatingLivePageId).toEqual(expect.any(String));
+
+      const [next] = await boss.fetch<SyncPageExecutePayload>(SYNC_PAGE_EXECUTE_QUEUE, {
+        batchSize: 1,
+        includeMetadata: true,
+        priority: false,
+        orderByCreatedOn: true,
+        groupConcurrency: 1,
+      });
+      expect(next).toMatchObject({
+        id: stalePriorityId,
+        data: { platformAccountId: 55 },
+        priority: resolvePageSyncPriority("dm_messages", "scheduled"),
+      });
     } finally {
       await boss.stop();
     }

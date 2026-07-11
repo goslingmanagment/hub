@@ -122,6 +122,7 @@ describe("sync executor", () => {
     lastErrorSummary: null,
     operationId: 99,
     requestSource: "manual",
+    dispatchSource: "manual",
     platform: "fansly",
     proxyUrl: "socks5://proxy.example",
     egressKey: "shared-proxy-pool",
@@ -129,9 +130,13 @@ describe("sync executor", () => {
     updatedAt: new Date("2026-03-14T12:00:00.000Z"),
   } as const;
 
-  function createQueueHandoffApp() {
+  function createQueueHandoffApp(input?: { handoffSafe?: boolean }) {
     const client = {
-      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      query: vi.fn(async (statement: string, _values?: unknown[]) => (
+        statement.includes("select clock_timestamp()")
+          ? { rows: [{ safe: input?.handoffSafe ?? true }] }
+          : { rows: [] }
+      )),
       release: vi.fn(),
     };
     const logger = { warn: vi.fn(), error: vi.fn() };
@@ -236,7 +241,12 @@ describe("sync executor", () => {
     });
 
     await processSyncPageExecuteJob(app, boss as never, {
-      job: buildQueueJob(),
+      // DB says the attempt is live; a process-clock check would reject this
+      // deliberately ancient metadata value.
+      job: buildQueueJob({
+        startedOn: new Date("2000-01-01T00:00:00.000Z"),
+        expireInSeconds: 180,
+      }),
     });
 
     expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { pageId: 55 });
@@ -266,8 +276,83 @@ describe("sync executor", () => {
       }),
     );
     expect(boss.complete.mock.invocationCallOrder[0]!).toBeLessThan(boss.send.mock.invocationCallOrder[0]!);
-    expect(client.query.mock.calls.map(([statement]) => statement)).toEqual(["begin", "commit"]);
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "commit"]);
     expect(client.release).toHaveBeenCalledWith(undefined);
+  });
+
+  it("consumes a manual priority boost after one generic partial chunk", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "dm_messages" as const,
+      requestSource: "manual" as const,
+    });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 25,
+      requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: { processedMessages: 100 },
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "dm_messages",
+      dispatchSource: "scheduled",
+    }));
+    expect(result).toMatchObject({
+      kind: "yielded",
+      continuationPriority: 25,
+    });
+  });
+
+  it("honors an explicit continuation dispatch source", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "dm_messages" as const,
+      requestSource: "manual" as const,
+      dispatchSource: "manual" as const,
+    });
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 35,
+      requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false,
+      yieldReason: "request_budget",
+      continuationRequestSource: "recovery",
+      stats: { processedMessages: 100 },
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      dispatchSource: "recovery",
+    }));
+    expect(result).toMatchObject({ continuationPriority: 35 });
   });
 
   it("passes handler continuation retry time into yielded page sync state", async () => {
@@ -299,7 +384,7 @@ describe("sync executor", () => {
       requestSeq: 3,
       leaseToken: "lease-1",
       retryAt,
-      requestSource: "scheduled",
+      dispatchSource: "scheduled",
     }));
   });
 
@@ -489,7 +574,9 @@ describe("sync executor", () => {
 
     expect(boss.send).toHaveBeenCalledTimes(1);
     expect(boss.complete).toHaveBeenCalledTimes(1);
-    expect(client.query.mock.calls.map(([statement]) => statement)).toEqual(["begin", "rollback"]);
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "rollback"]);
     expect(client.release).toHaveBeenCalledWith(undefined);
   });
 
@@ -528,7 +615,9 @@ describe("sync executor", () => {
     expect(boss.send).toHaveBeenCalledTimes(1);
     expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(1);
     expect(boss.complete).toHaveBeenCalledTimes(1);
-    expect(client.query.mock.calls.map(([statement]) => statement)).toEqual(["begin", "commit"]);
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "commit"]);
     expect(result).toMatchObject({
       kind: "yielded",
       platformAccountId: 55,
@@ -541,7 +630,7 @@ describe("sync executor", () => {
     // only the heartbeat monitor), so a long chunk can outlive its job. The
     // executor must notice and stop instead of zombie-driving chunks under
     // a job the queue already handed to retry.
-    const { app } = createQueueHandoffApp();
+    const { app, client } = createQueueHandoffApp({ handoffSafe: false });
     const boss = {
       complete: vi.fn(async () => completionResult()),
       send: vi.fn(async () => null),
@@ -566,14 +655,15 @@ describe("sync executor", () => {
     });
 
     const result = await processSyncPageExecuteJob(app, boss as never, {
-      job: buildQueueJob({
-        startedOn: new Date(Date.now() - 121_000),
-        expireInSeconds: 180,
-      }),
+      // A process-clock comparison would consider this far-future job safe;
+      // the database answer is authoritative.
+      job: buildQueueJob({ startedOn: new Date(Date.now() + 86_400_000) }),
     });
 
     expect(boss.send).not.toHaveBeenCalled();
     expect(boss.complete).not.toHaveBeenCalled();
+    expect(client.query.mock.calls[0]?.[0]).toContain("select clock_timestamp()");
+    expect(client.release).toHaveBeenCalledWith(undefined);
     expect(result).toMatchObject({ platformAccountId: 55, needsContinuation: true });
   });
 
@@ -604,7 +694,9 @@ describe("sync executor", () => {
     });
 
     expect(boss.send).not.toHaveBeenCalled();
-    expect(client.query.mock.calls.map(([statement]) => statement)).toEqual(["begin", "rollback"]);
+    const statements = client.query.mock.calls.map(([statement]) => statement);
+    expect(statements[0]).toContain("select clock_timestamp()");
+    expect(statements.slice(1)).toEqual(["begin", "rollback"]);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ jobId: "job-1", platformAccountId: 55 }),
       "Sync page execute job no longer owns its queue attempt; skipping handoff",
@@ -1097,7 +1189,11 @@ describe("sync executor", () => {
     });
 
     const queueClient = {
-      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      query: vi.fn(async (statement: string, _values?: unknown[]) => (
+        statement.includes("select clock_timestamp()")
+          ? { rows: [{ safe: true }] }
+          : { rows: [] }
+      )),
       release: vi.fn(),
     };
     const app = {
@@ -1115,7 +1211,7 @@ describe("sync executor", () => {
           expect(options).toMatchObject({
             batchSize: 1,
             includeMetadata: true,
-            priority: true,
+            priority: false,
             orderByCreatedOn: true,
             groupConcurrency: 1,
             ignoreGroups: null,
@@ -1132,7 +1228,7 @@ describe("sync executor", () => {
         expect(options).toMatchObject({
           batchSize: 1,
           includeMetadata: true,
-          priority: true,
+          priority: false,
           orderByCreatedOn: true,
           groupConcurrency: 1,
           ignoreGroups: ["fansly:direct"],

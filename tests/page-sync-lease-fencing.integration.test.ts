@@ -9,12 +9,14 @@ import {
   ensurePageSyncStates,
   getPageSyncState,
   heartbeatPageSyncLease,
+  listRunnablePageSync,
   markPageSyncAuthBlocked,
   PageSyncLeaseLostError,
   pausePageSync,
   reclaimExpiredPageSync,
   refreshPageSyncDependencies,
   requestPageSync,
+  resolvePageSyncPriority,
   retryPageSync,
   runWithPageSyncExecutionContext,
   scheduleDuePageSync,
@@ -95,7 +97,9 @@ describe("page sync lease fencing", () => {
       }, async () => withOwnedPageSyncTransaction(testDb.db, async () => undefined)))
         .rejects.toBeInstanceOf(PageSyncLeaseLostError);
 
-      await reclaimExpiredPageSync(testDb.db, new Date());
+      // Process time is deliberately behind the database; reclaim must still
+      // follow lease_expires_at against PostgreSQL time.
+      await reclaimExpiredPageSync(testDb.db, new Date("2000-01-01T00:00:00.000Z"));
       const replacement = await acquirePageSyncLease(testDb.db, {
         pageId: page.id,
         workerId: "new-worker",
@@ -109,6 +113,63 @@ describe("page sync lease fencing", () => {
         requestSeq: leasedSeq,
         leaseToken: "old-token",
       })).resolves.toBe(false);
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("does not expire a live lease when the process clock is far ahead", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "live-db-clock-model",
+        name: "Live DB Clock Model",
+      });
+      if (!model) {
+        throw new Error("Expected to create a model");
+      }
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "live-db-clock-page",
+      });
+      if (!page) {
+        throw new Error("Expected to create a page");
+      }
+      await ensurePageSyncStates(testDb.db, { pageId: page.id });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["light"],
+        source: "manual",
+      });
+      const lease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "live-worker",
+        leaseToken: "live-token",
+        leaseTtlMs: 60_000,
+      });
+      if (!lease) {
+        throw new Error("Expected a live lease");
+      }
+
+      const processFuture = new Date("2100-01-01T00:00:00.000Z");
+      await expect(reclaimExpiredPageSync(testDb.db, processFuture)).resolves.toEqual([]);
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["light"],
+        source: "manual",
+        now: processFuture,
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+        status: "running",
+        requestSeq: lease.requestSeq + 1,
+        leasedSeq: lease.leasedSeq,
+        leaseToken: "live-token",
+      });
     } finally {
       await testDb.stop();
     }
@@ -168,7 +229,7 @@ describe("page sync lease fencing", () => {
         requestSeq: leasedSeq,
         leaseToken: lease.leaseToken ?? "",
         retryAt: new Date(now.getTime() + 60 * 60_000),
-        requestSource: "scheduled",
+        dispatchSource: "scheduled",
         now: new Date(now.getTime() + 2_000),
       });
 
@@ -177,8 +238,100 @@ describe("page sync lease fencing", () => {
         status: "pending",
         requestSeq: leasedSeq + 1,
         requestSource: "manual",
+        dispatchSource: "manual",
         retryAt: null,
         leasedSeq: null,
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("consumes dispatch boosts without rewriting immutable request origin", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "dispatch-source-model",
+        name: "Dispatch Source Model",
+      });
+      if (!model) {
+        throw new Error("Expected to create a model");
+      }
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "dispatch-source-page",
+      });
+      if (!page) {
+        throw new Error("Expected to create a page");
+      }
+      await ensurePageSyncStates(testDb.db, { pageId: page.id });
+      await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["light", "followers"],
+        source: "manual",
+      });
+
+      const lightLease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-light",
+        leaseToken: "lease-light",
+        leaseTtlMs: 60_000,
+      });
+      expect(lightLease).toMatchObject({
+        stream: "light",
+        requestSource: "manual",
+        dispatchSource: "manual",
+      });
+      if (!lightLease) {
+        throw new Error("Expected light lease");
+      }
+      await yieldPageSync(testDb.db, {
+        pageId: page.id,
+        stream: "light",
+        requestSeq: lightLease.leasedSeq ?? lightLease.requestSeq,
+        leaseToken: lightLease.leaseToken ?? "",
+        dispatchSource: "scheduled",
+      });
+      expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+        requestSource: "manual",
+        dispatchSource: "scheduled",
+      });
+
+      const followersLease = await acquirePageSyncLease(testDb.db, {
+        pageId: page.id,
+        workerId: "worker-followers",
+        leaseToken: "lease-followers",
+        leaseTtlMs: 60_000,
+      });
+      expect(followersLease).toMatchObject({
+        stream: "followers",
+        requestSource: "manual",
+        dispatchSource: "manual",
+      });
+      if (!followersLease) {
+        throw new Error("Expected followers lease");
+      }
+      const runnableWhileFollowersIsLeased = await listRunnablePageSync(testDb.db);
+      expect(runnableWhileFollowersIsLeased.find((row) => row.pageId === page.id)).toMatchObject({
+        priority: resolvePageSyncPriority("light", "scheduled"),
+      });
+      await retryPageSync(testDb.db, {
+        pageId: page.id,
+        stream: "followers",
+        requestSeq: followersLease.leasedSeq ?? followersLease.requestSeq,
+        leaseToken: followersLease.leaseToken ?? "",
+        retryKind: "transient_network",
+        errorCode: "timeout",
+        errorSummary: "temporary timeout",
+      });
+      expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
+        requestSource: "manual",
+        dispatchSource: "scheduled",
+        status: "retrying",
       });
     } finally {
       await testDb.stop();
@@ -898,7 +1051,9 @@ describe("page sync lease fencing", () => {
         [page.id],
       );
 
-      const requestedAt = new Date(now.getTime() + 2_000);
+      // Process time is deliberately behind the database; the expired DB
+      // lease must still be cleared by the manual request.
+      const requestedAt = new Date("2000-01-01T00:00:00.000Z");
       await requestPageSync(testDb.db, {
         pageId: page.id,
         streams: ["followers"],
@@ -972,7 +1127,7 @@ describe("page sync lease fencing", () => {
         [now, new Date(now.getTime() - 1_000), page.id],
       );
 
-      await reclaimExpiredPageSync(testDb.db, now);
+      await reclaimExpiredPageSync(testDb.db, new Date("2000-01-01T00:00:00.000Z"));
 
       const state = await getPageSyncState(testDb.db, page.id, "followers_reconcile");
       expect(state).toMatchObject({

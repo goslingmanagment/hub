@@ -472,6 +472,12 @@ export async function executeNextSyncPageChunk(
       return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "success", continuationPriority);
     }
 
+    // Request priority is an admission boost, not a lease on the queue. A
+    // generic partial run consumes that boost in one chunk and re-enters as
+    // scheduled work; otherwise a long manual/onboarding backfill can create
+    // an endless chain of high-priority successors and starve its egress
+    // peers. Handlers may still choose an explicit continuation source.
+    const continuationRequestSource = result.continuationRequestSource ?? "scheduled";
     const yieldResult = await yieldPageSync(app.db, {
       pageId: platformAccountId,
       stream: taskLease.stream,
@@ -482,7 +488,7 @@ export async function executeNextSyncPageChunk(
       workClass,
       progress,
       retryAt: result.continuationRetryAt ?? null,
-      requestSource: result.continuationRequestSource ?? null,
+      dispatchSource: continuationRequestSource,
     });
     if (!yieldResult.updated) {
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -511,7 +517,6 @@ export async function executeNextSyncPageChunk(
     const continuationRetryAt = yieldResult.superseded || immediateContinuationPriority !== null
       ? null
       : result.continuationRetryAt ?? null;
-    const continuationRequestSource = result.continuationRequestSource ?? normalizeRunSource(taskLease.requestSource);
     const continuationPriority = immediateContinuationPriority ?? (continuationRetryAt
       ? resolvePageSyncPriority(taskLease.stream, continuationRequestSource)
       : null);
@@ -731,27 +736,6 @@ export async function processSyncPageExecuteJob(
   // scheduling and turns one slow page into a group-wide wedge.
   const result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
 
-  // pg-boss expiry is a hard wall clock and touch only feeds its heartbeat
-  // monitor. Never mutate queue state close to the attempt deadline: this
-  // also fences grandfathered 180-second jobs from the c1 rollout. New jobs
-  // have retryLimit=0, so the planner creates a fresh id from durable page
-  // state after timeout instead of allowing same-id attempt ABA.
-  const handoffDeadline = input.job.startedOn.getTime()
-    + input.job.expireInSeconds * 1_000
-    - SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS;
-  if (Date.now() >= handoffDeadline) {
-    app.logger.warn(
-      {
-        jobId: input.job.id,
-        platformAccountId: result.platformAccountId,
-        startedOn: input.job.startedOn,
-        expireInSeconds: input.job.expireInSeconds,
-      },
-      "Sync page execute job crossed its safe handoff deadline; planner will reconcile durable page state",
-    );
-    return result;
-  }
-
   let wakeupTarget: Awaited<ReturnType<typeof resolveSyncPageWakeupTarget>> = null;
   if (
     result.needsContinuation &&
@@ -770,6 +754,35 @@ export async function processSyncPageExecuteJob(
   let transactionOpen = false;
   let releaseError: Error | undefined;
   try {
+    // started_on and the expiry transition are owned by PostgreSQL. Compare
+    // them to the same clock here: process time can be skewed enough to either
+    // abandon a live job or mutate one after pg-boss has expired it.
+    const deadlineCheck = await client.query<{ safe: boolean }>(
+      `
+        select clock_timestamp() <
+               $1::timestamptz
+               + ($2::double precision * interval '1 second')
+               - ($3::double precision * interval '1 millisecond') as "safe"
+      `,
+      [
+        input.job.startedOn,
+        input.job.expireInSeconds,
+        SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS,
+      ],
+    );
+    if (deadlineCheck.rows[0]?.safe !== true) {
+      app.logger.warn(
+        {
+          jobId: input.job.id,
+          platformAccountId: result.platformAccountId,
+          startedOn: input.job.startedOn,
+          expireInSeconds: input.job.expireInSeconds,
+        },
+        "Sync page execute job crossed its safe handoff deadline; planner will reconcile durable page state",
+      );
+      return result;
+    }
+
     await client.query("begin");
     transactionOpen = true;
     const queueDb: PgBossDb = {
@@ -853,7 +866,14 @@ async function runSyncPageExecutorWorker(
         const jobs = await boss.fetch<SyncPageExecutePayload>(SYNC_PAGE_EXECUTE_QUEUE, {
           batchSize: 1,
           includeMetadata: true,
-          priority: true,
+          // Page jobs are FIFO within the available groups. Strict numeric
+          // priority has no aging in pg-boss: a continuously replaced
+          // priority-30 page can starve an older priority-25 singleton
+          // forever, including after that page receives a manual request.
+          // Stream priority remains durable inside page_sync_states; the
+          // fixed page singleton and tail-inserted successor provide the
+          // cross-page fairness quantum.
+          priority: false,
           orderByCreatedOn: true,
           groupConcurrency: 1,
           ignoreGroups: activeGroupIds.length > 0 ? activeGroupIds : null,

@@ -49,6 +49,7 @@ function buildPageSyncStateRow(pageId: number, stream: SyncStream, now: Date) {
     leasedSeq: null,
     appliedSeq: 1,
     requestSource: null,
+    dispatchSource: "scheduled",
     requestPayload: {},
     cadenceSeconds: policy.cadenceSeconds,
     slotOffsetSeconds: computePageSyncSlotOffsetSeconds(pageId, stream),
@@ -161,6 +162,12 @@ describe("page-sync repository schema alignment", () => {
       if (rendered.includes('from "page_sync_states"') && rendered.includes("for update")) {
         lockedStatements.push(rendered);
         return { rows: existingRows };
+      }
+
+      if (rendered.includes('as "leaseExpired"')) {
+        return {
+          rows: existingRows.map((row) => ({ stream: row.stream, leaseExpired: false })),
+        };
       }
 
       if (rendered.includes('update "page_sync_states"') && rendered.includes("stream = $")) {

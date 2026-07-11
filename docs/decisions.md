@@ -3909,15 +3909,50 @@ itself. Fifteen minutes is conservative operational headroom above the observed
 3×60s and 4×60s OFAPI paths, not a formal request deadline; a 60s pre-expiry
 handoff guard prevents a grandfathered/overrunning attempt from mutating queue
 state. Local multi-chunk draining is removed, restoring pg-boss as the sole
-priority/group arbiter.
+page-order/group arbiter.
 
 Two FSM fences close adjacent races exposed by the same investigation. An old
 generation's delayed `yieldPageSync` may not overwrite a newer manual request:
-the newer request source wins, `retry_at` is cleared, and the executor schedules
-its current priority. A page lease is terminal once expired: heartbeat,
+the newer request source wins, `retry_at` is cleared, and the page remains
+immediately runnable. A page lease is terminal once expired: heartbeat,
 progress, yield/complete/retry/block/clear, and transactional ownership checks
 all require an unexpired lease, so a stalled worker cannot resurrect or settle
 an expired generation.
 Non-goal, accepted: the provider-level breaker (#138's 3-distinct
 rule) stays per-run even though runs are now shorter — quarantine
 accumulation across runs already covers the cross-run case.
+
+**Addendum to #141 (2026-07-12, bounded priority and one clock domain):**
+fixed page singletons bound queue cardinality but do not by themselves bound
+priority ownership: a long manual/onboarding/reset/anomaly generation could
+replace every completed job with another boosted successor and starve a
+scheduled page forever. Migration 0089 separates immutable request/audit origin
+(`request_source`, still used as the `sync_runs.source` trigger) from mutable
+queue admission class (`dispatch_source`). A new generation seeds both from its
+request source. Its first attempted chunk consumes the dispatch boost: generic
+yield, transient retry, and same-generation block re-enter as `scheduled`, while
+an explicit handler continuation class is honored. The existing generation CAS
+preserves both fields of a newer concurrent request, so an old chunk cannot
+demote fresh manual work.
+
+Cross-page scheduling is deliberately FIFO, not strict pg-boss numeric
+priority. pg-boss priority has no aging: a continuously replaced scheduled
+priority-30 page can starve an older priority-25 singleton forever, including
+after durable state promotes that page to manual while its fixed queue row
+retains 25. With one queued/active row per page, FIFO plus atomic successor
+insertion at the tail is the fairness quantum: every older page in the egress
+group gets a turn before that successor. `dispatch_source` still ranks streams
+inside a page and orders the planner's initial materialization, but cannot grant
+repeated cross-page ownership. We deliberately do not cancel/reinsert or reach
+into pg-boss's private table to promote a colliding row; both alternatives add
+a second ownership protocol and fetch/promotion races where FIFO needs none.
+
+All ownership expiry decisions use PostgreSQL time. Expired lease reclaim
+selects locked rows and CAS-updates them against `clock_timestamp()`; manual
+requests test lease expiry under the same row lock; the pg-boss handoff guard
+compares its database `started_on` to database time before `complete → send`.
+Process `Date` remains a planner/cadence timestamp, never authority for whether
+a worker or queue attempt still owns work. Real PostgreSQL tests pin both clock
+skew directions, the shared-egress ordering `A → waiting B → A successor`, and
+the inverse stale-priority case (`queued B@25`, durable manual promotion,
+repeating `A@30`: B still runs first).
