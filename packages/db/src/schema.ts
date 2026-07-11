@@ -961,7 +961,10 @@ export const pageDmThreads = pgTable(
     ),
     storedMessageCountCheck: check(
       "page_dm_threads_stored_message_count_check",
-      sql`${table.storedMessageCount} between 0 and 1000`,
+      // Floor only: the retention cap is selection policy (decision #135);
+      // an upper bound here wedged whole dm_messages streams once the Stage 1
+      // prune stand-down made per-conversation history nondecreasing.
+      sql`${table.storedMessageCount} >= 0`,
     ),
   }),
 );

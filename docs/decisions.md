@@ -3641,3 +3641,31 @@ free (verify flags those diffs `healedHtml`); (A37)
 `rebuildFanEarningsProjection`'s two autocommit deletes now run in one
 transaction — a crash between them left an empty projection behind a stale
 watermark, permanently and silently.
+
+**Decision #135 (2026-07-11, A2a / dm_messages wedge — the 0026 upper bound
+falls, the floor stays):** `page_dm_threads_stored_message_count_check`
+becomes `>= 0` only (migration 0084). The 0026 cap (`BETWEEN 0 AND 1000`)
+encoded retention POLICY as an integrity constraint, and Stage 1's prune
+stand-down (`PAGE_DM_PRUNE_ENABLED=false`; hot DM history nondecreasing
+until Stage 28) turned it into a time bomb: the moment an at-cap
+conversation receives a new message, the finalize recount
+(`finalizePageDmConversationMessageSync` writes COUNT(*) into the bounded
+column) throws 23514 and the page's ENTIRE dm_messages stream wedges —
+candidate selection re-pins the same conversation (stale-head priority 0)
+every run. lora-1/lora-2 were down 2026-07-05..07-11 exactly this way
+(310/265 failed runs; seven threads at the cap, two already at 1025 physical
+rows via the paging-branch commits that land before the failing finalize).
+NOT the trigger: Stage 17 backscroll and the cap-lift flag — the first
+failure predates the Stage 17 commit by 8 hours; they only widen the blast
+radius, which is why `fanslyDeepBackfillIgnoreRetentionLimit` goes OFF as
+containment while this repair lands (its own gate and window, #70 ritual).
+The upper bound does NOT come back as a number: it returns only WITH the
+bounded-hot-cache protocol (durable PPV home first — `message_archive` has
+no `purchased_at` and the AI union upgrades `is_opened` from the hot row;
+then per-eviction archive coverage and atomic evict/recount/checkpoint),
+because until pruning is a cache policy any DB ceiling re-arms the same
+wedge. Counter repair for the two mismatched threads (1825, 13294712) is a
+separate owner gate: pause those two dm_messages streams → lease drain →
+row-locked recount → resume (no shared advisory-lock contract exists with
+the executor — leases own that path; a repair racing a live finalize would
+just lose its recount).
