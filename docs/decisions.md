@@ -3810,3 +3810,21 @@ signature, fast transport blips rethrow into the executor's stream retry.
 (4) 0087 was taken by the scan-dossier session's fan_profiles migration
 while this one was in flight — the sticky-limit migration shipped as 0088;
 #139 stays free for the dossier ruling.
+
+**Second addendum to #137/#138 (2026-07-11, the streak is not the signal):**
+the retry_wedged widening survived exactly one partial run in production —
+`yieldPageSync` resets `consecutive_failures = 0` (and the last-error
+fields) on EVERY partial yield, so the moment the breaker keeps a stream
+moving, the page-level streak goes quiet while poison chats still sit in
+backoff with `succeeded_at` NULL. Preserving the streak across yields would
+be wrong the other way (the stream genuinely progresses). The durable
+carrier is the breaker table itself: health now pushes
+`dm_messages:coverage_degraded` for any page holding
+`page_dm_message_sync_health` rows with `failure_count > 0` — those rows
+clear only when THEIR conversation actually syncs. Consequence for
+incident semantics: `succeeded_at` alone proves nothing while
+`skippedQuarantined > 0` (the chunk legitimately returns satisfied once
+every currently-eligible candidate is drained); full-coverage proof =
+succeeded_at stamped AND zero failing breaker rows AND zero conversation
+head/archive gaps. retry_wedged stays for streams with no breaker
+(Fansly), where the streak still carries the wedge.

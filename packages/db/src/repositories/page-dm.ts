@@ -1628,6 +1628,30 @@ export async function recordConversationPreferredPageLimit(
  * stamp honest: exhaustion can complete while poison chats sit out, and this
  * count says so in the run stats.
  */
+/** Conversation-level coverage debt per account: breaker rows still carrying
+ * failures. Unlike the page-level failure streak (reset to 0 by every
+ * partial yield), these rows clear only when THEIR conversation actually
+ * syncs — the honest health signal while poison chats sit out. Rows kept
+ * only for preferred_page_limit (failure_count = 0) don't count. */
+export async function countConversationSyncFailuresByAccount(
+  db: Database,
+  input?: { platformAccountIds?: readonly number[] },
+): Promise<Array<{ platformAccountId: number; failingConversationCount: number }>> {
+  const accountFilter = input?.platformAccountIds && input.platformAccountIds.length > 0
+    ? sql`where h.platform_account_id in (${sql.join(input.platformAccountIds.map((id) => sql`${id}`), sql`, `)}) and h.failure_count > 0`
+    : sql`where h.failure_count > 0`;
+  const result = await db.execute<{ platformAccountId: NumericValue; count: NumericValue }>(sql`
+    select h.platform_account_id as "platformAccountId", count(*)::bigint as "count"
+    from page_dm_message_sync_health h
+    ${accountFilter}
+    group by h.platform_account_id
+  `);
+  return result.rows.map((row) => ({
+    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
+    failingConversationCount: normalizeNumber(row.count, "count"),
+  }));
+}
+
 export async function countExcludedConversationSyncHealth(
   db: Database,
   input: { platformAccountId: number; now?: Date },

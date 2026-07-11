@@ -1,4 +1,7 @@
-import { countUnresolvedProjectionDebtByAccount } from "@agency_hub_core/db";
+import {
+  countConversationSyncFailuresByAccount,
+  countUnresolvedProjectionDebtByAccount,
+} from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { listConnectionStatuses } from "./connections.ts";
@@ -163,7 +166,7 @@ export async function getPublicSyncHealth(
   const now = input?.now ?? new Date();
   // One effective-config snapshot for both live health thresholds read below, so the
   // reported `running` values match exactly what this check consumes (no field skew).
-  const [connections, snapshot, effective, projectionDebtCounts] = await Promise.all([
+  const [connections, snapshot, effective, projectionDebtCounts, coverageDebtCounts] = await Promise.all([
     listConnectionStatuses(app, {
       pageIds: input?.pageIds,
     }),
@@ -178,12 +181,24 @@ export async function getPublicSyncHealth(
       app.db,
       input?.pageIds ? { platformAccountIds: input.pageIds } : undefined,
     ),
+    // #138 addendum: conversation-level coverage debt. The page-level failure
+    // streak is reset to 0 by every partial yield, so once the breaker keeps
+    // a stream moving the streak can no longer carry the wedge signal — the
+    // breaker rows themselves can: they clear only when their conversation
+    // actually syncs.
+    countConversationSyncFailuresByAccount(
+      app.db,
+      input?.pageIds ? { platformAccountIds: input.pageIds } : undefined,
+    ),
   ]);
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
   const snapshotPagesById = new Map(snapshot.pages.map((page) => [page.pageId, page]));
   const projectionDebtByPageId = new Map(
     projectionDebtCounts.map((row) => [row.platformAccountId, row.unresolvedCount]),
+  );
+  const coverageDebtByPageId = new Map(
+    coverageDebtCounts.map((row) => [row.platformAccountId, row.failingConversationCount]),
   );
   const recentCounters = recentCountersFromSnapshot(snapshot);
   const allPageIds = new Set([
@@ -259,6 +274,10 @@ export async function getPublicSyncHealth(
 
     if ((projectionDebtByPageId.get(pageId) ?? 0) > 0) {
       issues.push("projection_debt");
+    }
+
+    if ((coverageDebtByPageId.get(pageId) ?? 0) > 0) {
+      issues.push("dm_messages:coverage_degraded");
     }
 
     const status: ServiceHealthStatus = issues.length > 0 ? "degraded" : "ok";

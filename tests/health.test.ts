@@ -6,6 +6,9 @@ const healthMocks = vi.hoisted(() => ({
   countUnresolvedProjectionDebtByAccount: vi.fn(
     async (): Promise<Array<{ platformAccountId: number; unresolvedCount: number }>> => [],
   ),
+  countConversationSyncFailuresByAccount: vi.fn(
+    async (): Promise<Array<{ platformAccountId: number; failingConversationCount: number }>> => [],
+  ),
 }));
 
 vi.mock("../apps/runtime/src/services/connections.ts", () => ({
@@ -21,6 +24,7 @@ vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
 vi.mock("@agency_hub_core/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   countUnresolvedProjectionDebtByAccount: healthMocks.countUnresolvedProjectionDebtByAccount,
+  countConversationSyncFailuresByAccount: healthMocks.countConversationSyncFailuresByAccount,
 }));
 
 // getPublicSyncHealth now resolves live effective config; with no db overlay here it
@@ -576,6 +580,69 @@ describe("health service", () => {
           status: "ok",
           pendingStreams: 1,
           issues: [],
+        },
+      ],
+    });
+  });
+
+  it("degrades a page with conversation-level coverage debt even after a partial yield reset the streak (#138 addendum)", async () => {
+    // Prod 2026-07-11 third layer: yieldPageSync resets consecutive_failures
+    // to 0 on EVERY partial run, so once the breaker keeps the stream moving
+    // the page-level streak goes quiet while poison chats still sit in
+    // backoff. The breaker rows are the durable signal.
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 8,
+        label: "lora-of",
+        platform: "onlyfans",
+        modelSlug: "lora",
+        modelName: "Lora",
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: null,
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 8,
+        pageLabel: "lora-of",
+        platform: "onlyfans",
+        modelSlug: "lora",
+        modelName: "Lora",
+        blocks: {
+          connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
+          // Streak wiped by the yield — nothing wedged-looking left here.
+          messages_history: { block: "messages_history", state: "backfilling", statusReason: null, error: null, metrics: {} },
+        },
+      }],
+    });
+    healthMocks.countConversationSyncFailuresByAccount.mockResolvedValueOnce([
+      { platformAccountId: 8, failingConversationCount: 4 },
+    ]);
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncFollowerMaxAgeMinutes: 1080,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(503);
+    expect(result.body).toMatchObject({
+      status: "degraded",
+      pages: [
+        {
+          pageId: 8,
+          status: "degraded",
+          issues: ["dm_messages:coverage_degraded"],
         },
       ],
     });
