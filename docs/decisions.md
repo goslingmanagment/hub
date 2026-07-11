@@ -3850,6 +3850,14 @@ validates the shape and caps one window at 24 hours; a forgotten window expires 
 itself. The env schema accepts only `"none"`, so enablement cannot bypass the
 audited owner API, and deploy/rollback are inert.
 
+The runtime gate fails closed on the WHOLE value, not per token: an empty entry,
+an `all`/`none` smuggled into the list, or a window longer than 24 hours disables
+echo entirely rather than dropping the bad part and honouring the rest — and the
+24h bound is re-checked at READ time, not only at write time, because a row can
+also arrive from a restored dump, a hand-run UPDATE, or an older kernel's rules.
+For a legitimately written window the remaining time only shrinks, so the runtime
+check never fights the write path.
+
 The frame is feature-lane only: the raw gateway frame union stays strict
 (`streamAiGateway` still rejects an unknown frame), old clients never advertise
 the capability and so never receive it, and a new client against an old kernel
@@ -3868,3 +3876,15 @@ token-gated extension page, never in the Fansly DOM — that DOM is a hostile,
 shared document and gets only a typed allowlist projection of `contextManifest`
 (counts and dossier metadata), never prompt blocks and never a raw-manifest
 fallback.
+
+**Addendum to #140 (2026-07-11, review round 5).** `scripts/vendor-sdk.mjs` now
+REFUSES to vendor from a dirty tree (`--allow-dirty` stamps `<sha>-dirty`). The
+vendored manifest's `sourceCommit` is a provenance claim — "re-run the vendor at
+this commit and you get these bytes" — but the script reads the working tree, so
+an uncommitted source edit shipped inside an artifact stamped with a clean sha.
+That is exactly how this decision nearly went out: the feature-lane frame types
+were exported by hand-editing `packages/sdk/src/index.ts` — a GENERATED file —
+so the next clean `contracts:generate` would have dropped an export both clients
+import, and the lie was invisible because the manifest looked honest. The export
+now lives in the generator (`generate-sdk.ts`), and a dirty vendor can no longer
+pass as a snapshot.

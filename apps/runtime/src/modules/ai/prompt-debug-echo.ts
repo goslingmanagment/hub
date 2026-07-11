@@ -26,6 +26,14 @@ export function hasDebugInputCapability(
 // a still-live deadline left over from a previous window can never re-open
 // echo when only a user list is edited. The deadline is split on the LAST "@"
 // so usernames containing "@" cannot shift the boundary.
+//
+// This is a declassification gate, so it fails CLOSED on the whole value, not
+// per token: a malformed entry (empty token, an "all"/"none" smuggled into the
+// list, a window longer than the 24h the write path allows) disables echo
+// entirely rather than quietly dropping the bad part and honouring the rest.
+// The 24h bound is re-checked HERE and not only at write time — a row can also
+// arrive from a restored dump, a hand-run UPDATE, or an older kernel's rules,
+// and remaining-time can only shrink for a legitimately written window.
 function parsePromptDebugEcho(
   valueRaw: string | null | undefined,
   now: Date,
@@ -46,15 +54,15 @@ function parsePromptDebugEcho(
     return null;
   }
   const deadlineMs = Date.parse(deadline);
-  if (!Number.isFinite(deadlineMs) || deadlineMs <= now.getTime()) {
+  if (!Number.isFinite(deadlineMs)) {
     return null;
   }
-  const users = trimmed
-    .slice(0, at)
-    .split(",")
-    .map(normalizedUsername)
-    .filter((candidate) => candidate.length > 0 && candidate !== "none" && candidate !== "all");
-  if (users.length === 0) {
+  const remainingMs = deadlineMs - now.getTime();
+  if (remainingMs <= 0 || remainingMs > MAX_DEBUG_ECHO_WINDOW_MS) {
+    return null;
+  }
+  const users = trimmed.slice(0, at).split(",").map(normalizedUsername);
+  if (users.some((user) => user.length === 0 || user === "none" || user === "all")) {
     return null;
   }
   return { users };

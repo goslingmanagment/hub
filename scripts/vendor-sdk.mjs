@@ -25,12 +25,35 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const coreRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const targetArg = process.argv[2];
+const args = process.argv.slice(2);
+const allowDirty = args.includes("--allow-dirty");
+const targetArg = args.find((arg) => !arg.startsWith("--"));
 if (!targetArg) {
-  console.error("Usage: node scripts/vendor-sdk.mjs <target-dir>");
+  console.error("Usage: node scripts/vendor-sdk.mjs <target-dir> [--allow-dirty]");
   process.exit(1);
 }
 const target = resolve(process.cwd(), targetArg);
+
+// The vendor manifest's sourceCommit is a PROVENANCE claim: "re-run the vendor
+// at this commit and you get these bytes back". The script reads the WORKING
+// TREE, so an uncommitted source edit would otherwise ship inside an artifact
+// stamped with a clean sha — a lie that only surfaces when the next clean
+// re-vendor silently drops an export the clients import (#140 near-miss).
+// Refuse by default; --allow-dirty is for local experiments and stamps the
+// commit "<sha>-dirty" so the artifact can never pass as a snapshot.
+const VENDORED_SOURCE_PATHS = ["packages/sdk", "packages/contracts", "packages/shared"];
+const dirtyPaths = execSync(
+  `git status --porcelain -- ${VENDORED_SOURCE_PATHS.join(" ")}`,
+  { cwd: coreRoot },
+).toString().trim();
+if (dirtyPaths && !allowDirty) {
+  console.error(
+    "vendor-sdk: refusing to vendor from a dirty tree — the manifest's sourceCommit would not reproduce these bytes.\n" +
+      "Commit the SDK/contracts/shared changes first, or pass --allow-dirty to stamp the artifact as dirty.\n" +
+      dirtyPaths,
+  );
+  process.exit(1);
+}
 
 /** Stage a source file with import rewrites: workspace package specifiers to
  * relative paths, and `.ts` extensions dropped (the emitted js/d.ts must use
@@ -51,7 +74,8 @@ if (!hashMatch) {
   process.exit(1);
 }
 const contractHash = hashMatch[1];
-const sourceCommit = execSync("git rev-parse HEAD", { cwd: coreRoot }).toString().trim();
+const headCommit = execSync("git rev-parse HEAD", { cwd: coreRoot }).toString().trim();
+const sourceCommit = dirtyPaths ? `${headCommit}-dirty` : headCommit;
 
 // ── Stage the source subset inside core ──
 const staging = mkdtempSync(join(tmpdir(), "kernel-sdk-vendor-"));

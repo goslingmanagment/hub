@@ -27,6 +27,11 @@ export {
   streamAiGateway,
   subscribeDomainEvents,
   subscribeSyncEvents,
+  // The feature lane's frames are a SUPERSET of the raw gateway's (#140
+  // debug echo): a client handling streamAiFeature must widen to
+  // AiFeatureStreamFrame, not AiGatewayStreamFrame.
+  type AiFeatureDebugInputFrame,
+  type AiFeatureStreamFrame,
   type AiGatewayStreamFrame,
   type DomainEventFrame,
   type DomainEventsSnapshotRequired,
