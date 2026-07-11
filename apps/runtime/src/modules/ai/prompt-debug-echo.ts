@@ -21,48 +21,62 @@ export function hasDebugInputCapability(
     .some((token) => token === DEBUG_INPUT_CAPABILITY);
 }
 
+// The single echo key carries the allowlist AND the deadline in one value
+// ("user1,user2@<ISO>"), so enabling or disabling is always one atomic write:
+// a still-live deadline left over from a previous window can never re-open
+// echo when only a user list is edited. The deadline is split on the LAST "@"
+// so usernames containing "@" cannot shift the boundary.
+function parsePromptDebugEcho(
+  valueRaw: string | null | undefined,
+  now: Date,
+): { users: string[] } | null {
+  if (!valueRaw) {
+    return null;
+  }
+  const trimmed = valueRaw.trim();
+  if (trimmed.toLowerCase() === "none") {
+    return null;
+  }
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0 || at === trimmed.length - 1) {
+    return null;
+  }
+  const deadline = trimmed.slice(at + 1).trim();
+  if (!ISO_TIMESTAMP_WITH_OFFSET.safeParse(deadline).success) {
+    return null;
+  }
+  const deadlineMs = Date.parse(deadline);
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= now.getTime()) {
+    return null;
+  }
+  const users = trimmed
+    .slice(0, at)
+    .split(",")
+    .map(normalizedUsername)
+    .filter((candidate) => candidate.length > 0 && candidate !== "none" && candidate !== "all");
+  if (users.length === 0) {
+    return null;
+  }
+  return { users };
+}
+
 export function isPromptDebugEchoAllowed(
-  usersRaw: string | null | undefined,
-  untilRaw: string | null | undefined,
+  valueRaw: string | null | undefined,
   username: string,
   now: Date = new Date(),
 ): boolean {
-  if (!usersRaw || !untilRaw || usersRaw.trim().toLowerCase() === "none" || untilRaw.trim().toLowerCase() === "none") {
+  const parsed = parsePromptDebugEcho(valueRaw, now);
+  if (!parsed) {
     return false;
   }
-
-  const trimmedUntil = untilRaw.trim();
-  if (!ISO_TIMESTAMP_WITH_OFFSET.safeParse(trimmedUntil).success) {
-    return false;
-  }
-  const untilMs = Date.parse(trimmedUntil);
-  if (!Number.isFinite(untilMs) || untilMs <= now.getTime()) {
-    return false;
-  }
-
   const wanted = normalizedUsername(username);
   if (wanted.length === 0) {
     return false;
   }
-  return usersRaw
-    .split(",")
-    .map(normalizedUsername)
-    .filter((candidate) => candidate.length > 0 && candidate !== "none" && candidate !== "all")
-    .includes(wanted);
+  return parsed.users.includes(wanted);
 }
 
-export function validatePromptDebugEchoUsers(value: string): string | null {
-  const tokens = value.split(",").map(normalizedUsername);
-  if (tokens.length === 1 && tokens[0] === "none") {
-    return null;
-  }
-  if (tokens.some((token) => token.length === 0 || token === "none" || token === "all")) {
-    return "chatMuseAiPromptDebugEchoUsers must be a CSV of usernames or none; all is forbidden";
-  }
-  return null;
-}
-
-export function validatePromptDebugEchoUntil(
+export function validatePromptDebugEcho(
   value: string,
   now: Date = new Date(),
 ): string | null {
@@ -70,15 +84,27 @@ export function validatePromptDebugEchoUntil(
   if (trimmed.toLowerCase() === "none") {
     return null;
   }
-  if (!ISO_TIMESTAMP_WITH_OFFSET.safeParse(trimmed).success) {
-    return "chatMuseAiPromptDebugEchoUntil must be an ISO timestamp with timezone or none";
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0 || at === trimmed.length - 1) {
+    return 'chatMuseAiPromptDebugEcho must be "none" or "user1,user2@<ISO deadline>"';
   }
-  const parsed = Date.parse(trimmed);
-  if (!Number.isFinite(parsed)) {
-    return "chatMuseAiPromptDebugEchoUntil must be an ISO timestamp or none";
+  const deadline = trimmed.slice(at + 1).trim();
+  if (!ISO_TIMESTAMP_WITH_OFFSET.safeParse(deadline).success) {
+    return "chatMuseAiPromptDebugEcho deadline must be an ISO timestamp with timezone";
   }
-  if (parsed > now.getTime() + MAX_DEBUG_ECHO_WINDOW_MS) {
-    return "chatMuseAiPromptDebugEchoUntil may be at most 24 hours in the future";
+  const deadlineMs = Date.parse(deadline);
+  if (!Number.isFinite(deadlineMs)) {
+    return "chatMuseAiPromptDebugEcho deadline must be an ISO timestamp";
+  }
+  if (deadlineMs <= now.getTime()) {
+    return 'chatMuseAiPromptDebugEcho deadline is already in the past; use "none" to disable';
+  }
+  if (deadlineMs > now.getTime() + MAX_DEBUG_ECHO_WINDOW_MS) {
+    return "chatMuseAiPromptDebugEcho deadline may be at most 24 hours in the future";
+  }
+  const tokens = trimmed.slice(0, at).split(",").map(normalizedUsername);
+  if (tokens.some((token) => token.length === 0 || token === "none" || token === "all")) {
+    return "chatMuseAiPromptDebugEcho users must be a CSV of usernames; all is forbidden";
   }
   return null;
 }

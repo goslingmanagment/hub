@@ -199,15 +199,13 @@ const envSchema = z.object({
   // fast-reply,ping → all). LIVE-wired: read per generation.
   CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES: z.string().default("none"),
   CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS: z.coerce.number().int().min(0).default(21),
-  // DP 6-A time-bounded prompt declassification. Both values are required at
-  // runtime; "none" is the fail-closed sentinel because empty live strings
-  // are rejected by the generic override validator.
-  CHATMUSE_AI_PROMPT_DEBUG_ECHO_USERS: z.string().trim().toLowerCase()
-    .refine((value) => value === "none", {
-      message: "prompt debug echo may be enabled only through the audited live-config API",
-    })
-    .default("none"),
-  CHATMUSE_AI_PROMPT_DEBUG_ECHO_UNTIL: z.string().trim().toLowerCase()
+  // DP 6-A time-bounded prompt declassification. ONE key carries allowlist AND
+  // deadline ("user1,user2@<ISO>") so every enable/disable is a single atomic
+  // write — a leftover deadline can never re-open echo. "none" is the
+  // fail-closed sentinel (empty live strings are rejected by the generic
+  // override validator). Env can only hold "none": enabling goes exclusively
+  // through the audited owner config API.
+  CHATMUSE_AI_PROMPT_DEBUG_ECHO: z.string().trim().toLowerCase()
     .refine((value) => value === "none", {
       message: "prompt debug echo may be enabled only through the audited live-config API",
     })
@@ -329,10 +327,8 @@ export interface AppConfig {
   chatMuseAiFanProfileContextFeatures?: string;
   /** Dossier volatile-section age cutoff in days (live-wired). */
   chatMuseAiFanProfileVolatileMaxAgeDays?: number;
-  /** CSV chatter usernames allowed to receive feature-lane prompt echoes. */
-  chatMuseAiPromptDebugEchoUsers?: string;
-  /** Mandatory ISO expiry for prompt echo; "none" disables. */
-  chatMuseAiPromptDebugEchoUntil?: string;
+  /** Prompt debug echo window: "none" or "user1,user2@<ISO deadline>" (live-wired). */
+  chatMuseAiPromptDebugEcho?: string;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   openrouterApiKey?: string | null;
@@ -503,8 +499,7 @@ export function loadConfig(
     aiTranscriptFreshUnionMode: parsed.AI_TRANSCRIPT_FRESH_UNION_MODE,
     chatMuseAiFanProfileContextFeatures: parsed.CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES,
     chatMuseAiFanProfileVolatileMaxAgeDays: parsed.CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS,
-    chatMuseAiPromptDebugEchoUsers: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO_USERS,
-    chatMuseAiPromptDebugEchoUntil: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO_UNTIL,
+    chatMuseAiPromptDebugEcho: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO,
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,

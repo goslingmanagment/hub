@@ -1763,12 +1763,17 @@ export const aiGatewayPromptBlockSchema = z.object({
   cache: aiGatewayPromptCacheTtlSchema,
 }).strict();
 
-// Feature-lane-only debug echo. This is deliberately separate from the raw
-// gateway prompt-block schema: clientContext can carry a 300k transcript and
-// the builder places it in one dynamic block. It is an echo contract only,
-// never accepted in an AI request body.
+// Feature-lane-only debug echo. Deliberately separate from the raw gateway
+// prompt-block schema (100k): an assembled block is much larger than the wire
+// values it carries. clientContext admits a 300k transcript, the builder places
+// the WHOLE transcript in one dynamic block, and escapeForPrompt expands the
+// worst case fivefold ("&" → "&amp;"). Bound = (transcript 300k + spending 20k
+// + subscription 20k + draft 20k) × 5 + dossier 20k + template framing, rounded
+// up. Echo contract only — never accepted in an AI request body.
+export const AI_FEATURE_DEBUG_PROMPT_BLOCK_MAX_CHARS = 2_500_000;
+
 export const aiFeatureDebugPromptBlockSchema = z.object({
-  text: z.string().min(1).max(500_000),
+  text: z.string().min(1).max(AI_FEATURE_DEBUG_PROMPT_BLOCK_MAX_CHARS),
   cache: aiGatewayPromptCacheTtlSchema,
 }).strict();
 

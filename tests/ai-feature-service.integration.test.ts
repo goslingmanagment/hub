@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { aiFeatureStreamFrameSchema } from "@agency_hub_core/contracts";
 import {
   createFanslyPage,
   createModel,
@@ -192,12 +193,15 @@ describe("AI feature service pilot (Stage 30)", () => {
     }
     const capture: { input?: AiGatewayProviderInput } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
-    appContext.config.chatMuseAiPromptDebugEchoUsers = "other, SVC-CHATTER";
-    appContext.config.chatMuseAiPromptDebugEchoUntil = new Date(
-      Date.now() + 60 * 60 * 1000,
-    ).toISOString();
+    appContext.config.chatMuseAiPromptDebugEcho = `other, SVC-CHATTER@${
+      new Date(Date.now() + 60 * 60 * 1000).toISOString()
+    }`;
     const info = vi.spyOn(appContext.logger, "info");
-    const transcript = "x".repeat(300_000);
+    // Worst case on purpose: the wire cap is 300k chars, but every "&" escapes
+    // to "&amp;" (×5) INTO ONE dynamic block — the echo frame must still fit the
+    // feature-lane block bound and survive the real SDK parser.
+    const transcript = "&".repeat(300_000);
+    const escapedTranscript = "&amp;".repeat(300_000);
     const payload = {
       clientRequestId: randomUUID(),
       pageLabel: "svc-fs",
@@ -235,12 +239,16 @@ describe("AI feature service pilot (Stage 30)", () => {
     const frames = aiFrames(echoed.body);
     expect(frames[0]?.type).toBe("meta");
     expect(frames[1]?.type).toBe("debug_input_v1");
-    const debug = frames[1] as {
-      systemBlocks: unknown[];
-      userBlocks: Array<{ text: string }>;
+    // Parse through the SAME schema the vendored SDK uses: a frame the kernel
+    // can emit but the client rejects is a broken stream, not an echo.
+    const debug = aiFeatureStreamFrameSchema.parse(frames[1]) as {
+      systemBlocks: Array<{ text: string; cache: string }>;
+      userBlocks: Array<{ text: string; cache: string }>;
       contextManifest: unknown;
     };
-    expect(debug.userBlocks.some((block) => block.text.includes(transcript))).toBe(true);
+    const dynamicBlock = debug.userBlocks.find((block) => block.text.includes(escapedTranscript));
+    expect(dynamicBlock).toBeDefined();
+    expect(dynamicBlock!.text.length).toBeGreaterThan(1_500_000);
     expect(debug.contextManifest).toBeNull();
 
     const { rows } = await testDb.pool.query<{
@@ -259,11 +267,11 @@ describe("AI feature service pilot (Stage 30)", () => {
       userId: expect.any(Number),
       username: "svc-chatter",
     });
-    expect(JSON.stringify(emission)).not.toContain(transcript.slice(0, 100));
+    expect(JSON.stringify(emission)).not.toContain(escapedTranscript.slice(0, 100));
 
-    appContext.config.chatMuseAiPromptDebugEchoUntil = new Date(
-      Date.now() - 60 * 1000,
-    ).toISOString();
+    appContext.config.chatMuseAiPromptDebugEcho = `svc-chatter@${
+      new Date(Date.now() - 60 * 1000).toISOString()
+    }`;
     const expired = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/features/fast-reply",
@@ -790,10 +798,9 @@ describe("fan-dossier context (Decision #136)", () => {
     );
     await seedFanProfile({ platform: "fansly", targetPageId: Number(fanslyPage.rows[0]!.id) });
     appContext.config.chatMuseAiFanProfileContextFeatures = "all";
-    appContext.config.chatMuseAiPromptDebugEchoUsers = "svc-chatter";
-    appContext.config.chatMuseAiPromptDebugEchoUntil = new Date(
-      Date.now() + 60 * 60 * 1000,
-    ).toISOString();
+    appContext.config.chatMuseAiPromptDebugEcho = `svc-chatter@${
+      new Date(Date.now() + 60 * 60 * 1000).toISOString()
+    }`;
     const capture: { input?: AiGatewayProviderInput } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
 

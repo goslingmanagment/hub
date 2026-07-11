@@ -3829,23 +3829,42 @@ succeeded_at stamped AND zero failing breaker rows AND zero conversation
 head/archive gaps. retry_wedged stays for streams with no breaker
 (Fansly), where the streak still carries the wedge.
 
-**Decision #140 (2026-07-11, LLM-input observability v3 — capability-gated,
-time-bounded declassification):** The kernel feature lane may echo the exact
-assembled prompt in an additive `debug_input_v1` SSE frame so the two ChatMuse
-clients can inspect what the model actually received, including kernel-loaded
-transcript, persona, templates, and fan dossier. This is an explicit DP 6-A
-declassification, not a general logging path. Emission requires all three:
-the caller advertises the exact `debug-input-v1` capability token, the
-authenticated chatter username is in the live CSV allowlist (there is no
-`all` wildcard), and a mandatory ISO expiry is still live. The owner-only
-atomic config PATCH rejects enable windows beyond 24 hours; both live keys
-default to `none`, and boot rejects non-`none` env values so enablement cannot
-bypass the audited owner API; deploy and rollback are inert. The frame is feature-lane
-only: the raw gateway contract remains strict, old clients never receive an
-unknown frame, and new clients tolerate an old kernel. The pump writes the
-frame immediately after `meta` with `Cache-Control: no-store`; the audit log
-records feature/page/user metadata only, never prompt text. Clients must keep
-the body in memory only. The desktop app-origin renderer may show it inline;
-the extension may show it only on its own token-gated extension page. Fansly
-DOM is restricted to a typed allowlist projection of `contextManifest` and
-must never receive prompt blocks or a raw-manifest fallback.
+**Decision #140 (2026-07-11, LLM-input observability — capability-gated,
+time-bounded prompt declassification):** The kernel feature lane may echo the
+exact assembled prompt in an additive `debug_input_v1` SSE frame so the two
+ChatMuse clients can inspect what the model actually received, including
+kernel-loaded transcript, persona, templates, and fan dossier. This is an
+explicit DP 6-A declassification — a new chatter-scoped read channel onto
+content that is otherwise owner-only — not a general logging path, and not
+"the client's own request echoed back" (the desktop sends refs only; persona,
+templates and the dossier originate here). Emission requires BOTH: the caller
+advertises the exact `debug-input-v1` capability token, and the authenticated
+chatter's username sits inside a live window.
+
+The window is ONE live key, `chatMuseAiPromptDebugEcho`, holding the allowlist
+AND the deadline in one value (`"user1,user2@<ISO>"`, deadline split on the last
+`@`; `"none"` disables; no `all` wildcard). One key, not two, so every enable or
+disable is a single atomic write: a deadline left over from a previous window can
+never re-open echo when only the user list is edited. The owner-only config PATCH
+validates the shape and caps one window at 24 hours; a forgotten window expires by
+itself. The env schema accepts only `"none"`, so enablement cannot bypass the
+audited owner API, and deploy/rollback are inert.
+
+The frame is feature-lane only: the raw gateway frame union stays strict
+(`streamAiGateway` still rejects an unknown frame), old clients never advertise
+the capability and so never receive it, and a new client against an old kernel
+simply gets no frame — the capability rides a HEADER, not the strict request
+body, so a kernel rollback after a client release cannot break generations. The
+echo block schema is separate from the request-side block schema and bounded at
+2.5M chars: a 300k `clientContext` transcript escapes fivefold (`&` → `&amp;`)
+into ONE dynamic block, so the request-side 100k bound would have made the echo
+unparseable for the very requests that most need inspecting. The pump writes the
+frame immediately after `meta` under `Cache-Control: no-store`; the audit log
+records feature/page/user metadata only, never prompt text.
+
+Clients keep the body in memory only (never storage, never logs). The desktop
+app-origin renderer may show it inline; the extension may show it only on its own
+token-gated extension page, never in the Fansly DOM — that DOM is a hostile,
+shared document and gets only a typed allowlist projection of `contextManifest`
+(counts and dossier metadata), never prompt blocks and never a raw-manifest
+fallback.

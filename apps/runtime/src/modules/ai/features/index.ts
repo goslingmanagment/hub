@@ -325,8 +325,7 @@ export async function prepareAiFeatureStream(
     try {
       const effective = await loadEffectiveConfig(app.db, app.config);
       if (isPromptDebugEchoAllowed(
-        effective.chatMuseAiPromptDebugEchoUsers,
-        effective.chatMuseAiPromptDebugEchoUntil,
+        effective.chatMuseAiPromptDebugEcho,
         principal.user.username,
       )) {
         debugFrame = {
