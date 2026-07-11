@@ -493,7 +493,7 @@ describe("CLI status flows", () => {
     ])).join("\n");
 
     expect(fullOutput).toContain("Sync Monitor 2026-03-20T12:00:00.000Z");
-    expect(fullOutput).toContain("Pages=2 Streams=14");
+    expect(fullOutput).toContain("Pages=2 Streams=20");
     expect(fullOutput).toContain("Providers: fansly:limited");
     expect(fullOutput).toContain("lana");
     expect(fullOutput).toContain("nova");
@@ -502,7 +502,7 @@ describe("CLI status flows", () => {
     expect(fullOutput).toContain("9 items backfilled");
 
     expect(filteredOutput).toContain("lana");
-    expect(filteredOutput).toContain("Pages=1 Streams=7");
+    expect(filteredOutput).toContain("Pages=1 Streams=10");
     expect(filteredOutput).toContain("Retrying=1");
   });
 });
