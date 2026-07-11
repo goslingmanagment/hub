@@ -3947,6 +3947,17 @@ repeated cross-page ownership. We deliberately do not cancel/reinsert or reach
 into pg-boss's private table to promote a colliding row; both alternatives add
 a second ownership protocol and fetch/promotion races where FIFO needs none.
 
+Rollout compatibility is part of the worker protocol, not a one-off queue
+cleanup. A fetched wakeup whose key/options are not the canonical fixed
+`String(pageId)` / 900s / retry0 contract is grandfathered: before any page
+lease, sync run, or vendor request, the worker atomically completes it and
+inserts the canonical child through the same `complete → send` transaction.
+For an existing page it always attempts that child even when the preflight
+durable snapshot is not runnable; otherwise a concurrent manual request could
+collide with the active legacy fixed key and lose its only wakeup until the
+planner. A genuinely missing/tombstoned page is complete-only. Multiple old
+parent-scoped rows converge onto the one fixed child by singleton collision.
+
 All ownership expiry decisions use PostgreSQL time. Expired lease reclaim
 selects locked rows and CAS-updates them against `clock_timestamp()`; manual
 requests test lease expiry under the same row lock; the pg-boss handoff guard

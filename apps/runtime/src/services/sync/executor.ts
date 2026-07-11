@@ -34,7 +34,13 @@ import {
   resolveSyncChunkRecoveryIncidents,
 } from "../notification-incidents.ts";
 import { resolveStoredProxyEgressKey } from "../page-context.ts";
-import { SYNC_PAGE_EXECUTE_QUEUE, sendSyncPageWakeup, type SyncPageExecutePayload } from "../sync-queue.ts";
+import {
+  sendSyncPageWakeup,
+  SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
+  SYNC_PAGE_EXECUTE_QUEUE,
+  SYNC_PAGE_EXECUTE_RETRY_LIMIT,
+  type SyncPageExecutePayload,
+} from "../sync-queue.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import { normalizeSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
@@ -726,7 +732,7 @@ export async function processSyncPageExecuteJob(
   input: {
     job: Pick<
       JobWithMetadata<SyncPageExecutePayload>,
-      "id" | "data" | "groupId" | "startedOn" | "expireInSeconds"
+      "id" | "data" | "groupId" | "startedOn" | "expireInSeconds" | "retryLimit" | "singletonKey"
     >;
   },
 ) {
@@ -734,10 +740,42 @@ export async function processSyncPageExecuteJob(
   // pg-boss, which is the sole fairness arbiter for pages sharing an egress
   // group. Never drain locally: doing so bypasses queue priority/group
   // scheduling and turns one slow page into a group-wide wedge.
-  const result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
+  const isGrandfatheredAttempt =
+    input.job.expireInSeconds !== SYNC_PAGE_EXECUTE_EXPIRE_SECONDS ||
+    input.job.retryLimit !== SYNC_PAGE_EXECUTE_RETRY_LIMIT ||
+    input.job.singletonKey !== String(input.job.data.platformAccountId);
+  const grandfatheredWakeupTarget = isGrandfatheredAttempt
+    ? await resolveSyncPageWakeupTarget(app, input.job.data.platformAccountId)
+    : null;
+  const grandfatheredPriority = grandfatheredWakeupTarget
+    ? await resolveContinuationPriority(app, input.job.data.platformAccountId) ?? 0
+    : null;
+  const result = isGrandfatheredAttempt
+    ? buildContinuationResult(
+      input.job.data.platformAccountId,
+      null,
+      null,
+      "idle",
+      grandfatheredPriority,
+    )
+    : await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
 
-  let wakeupTarget: Awaited<ReturnType<typeof resolveSyncPageWakeupTarget>> = null;
+  if (isGrandfatheredAttempt) {
+    app.logger.warn(
+      {
+        jobId: input.job.id,
+        platformAccountId: input.job.data.platformAccountId,
+        expireInSeconds: input.job.expireInSeconds,
+        retryLimit: input.job.retryLimit,
+        singletonKey: input.job.singletonKey,
+      },
+      "Detected grandfathered sync page wakeup; attempting atomic rollover before vendor work",
+    );
+  }
+
+  let wakeupTarget: Awaited<ReturnType<typeof resolveSyncPageWakeupTarget>> = grandfatheredWakeupTarget;
   if (
+    !wakeupTarget &&
     result.needsContinuation &&
     result.continuationPriority !== null &&
     !result.continuationRetryAt
