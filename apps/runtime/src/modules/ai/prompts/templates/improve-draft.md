@@ -12,6 +12,7 @@ You are improving a draft reply for a OnlyFans DM conversation. Rewrite it as th
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanProfileSection}
 
 ## Rules
 

@@ -192,6 +192,12 @@ const envSchema = z.object({
   // Keep the env at the default; the PATCH lane owns transitions (stepwise
   // up, any rollback), and clearing the override must resolve to off.
   AI_TRANSCRIPT_FRESH_UNION_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
+  // Fan-dossier context: which AI features read the stored fan profile into
+  // their prompt. "all" = trust the per-feature policy flag; "none" = off
+  // (runtime rollback); otherwise a CSV of feature keys narrows the policy
+  // set (staged rollout). LIVE-wired: read per generation.
+  CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES: z.string().default("all"),
+  CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS: z.coerce.number().int().min(0).default(21),
   OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
@@ -305,6 +311,10 @@ export interface AppConfig {
   chatMuseAiGatewayFeatureDailyMicroUsdLimits?: string;
   /** Fast-reply freshness PR3: AI transcript union-read mode (live-wired). */
   aiTranscriptFreshUnionMode?: "off" | "shadow" | "serve";
+  /** Fan-dossier context allowlist: "all" (policy decides) | "none" | CSV of features (live-wired). */
+  chatMuseAiFanProfileContextFeatures?: string;
+  /** Dossier volatile-section age cutoff in days (live-wired). */
+  chatMuseAiFanProfileVolatileMaxAgeDays?: number;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   openrouterApiKey?: string | null;
@@ -473,6 +483,8 @@ export function loadConfig(
     chatMuseAiGatewayRequestMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT,
     chatMuseAiGatewayFeatureDailyMicroUsdLimits: parsed.CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS,
     aiTranscriptFreshUnionMode: parsed.AI_TRANSCRIPT_FRESH_UNION_MODE,
+    chatMuseAiFanProfileContextFeatures: parsed.CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES,
+    chatMuseAiFanProfileVolatileMaxAgeDays: parsed.CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS,
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,

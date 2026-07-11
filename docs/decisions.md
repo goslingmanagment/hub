@@ -3669,3 +3669,42 @@ separate owner gate: pause those two dm_messages streams → lease drain →
 row-locked recount → resume (no shared advisory-lock contract exists with
 the executor — leases own that path; a repair racing a live finalize would
 just lose its recount).
+
+**Decision #136 (2026-07-11, AI features read the stored fan dossier —
+kernel-side, fail-open, staged):** Every feature-lane prompt whose policy
+says so now injects the latest `fan_profiles` body (the Scan dossier the
+extension pushes via `upsertFanProfile`) — the kernel looks up its OWN
+store; zero wire-contract change, so the Fansly extension and the desktop
+get the behavior without an SDK re-vendor. New `FeaturePolicy.usesFanProfile`
+gates it per feature: ON for fast-reply (compare inherits — its cards ride
+the fast-reply feature), improve-draft, help-me, ping; OFF for fan-summary
+(it GENERATES the dossier — feeding it back is circular), chat-review (must
+judge the chatter independently of a stored opinion) and hi-greeting (a cold
+opener must not show unexplained familiarity — revisit after observation).
+Runtime rollout/rollback rides `chatMuseAiFanProfileContextFeatures`
+("all" | "none" | CSV, live-wired like the union mode): stage as
+`fast-reply` → `fast-reply,ping` → policy set, roll back with "none" — no
+deploy. The lookup is STRICTLY fail-open (on the Fansly clientContext path
+it is the generation's only fans-table read, so a fan_profiles hiccup must
+degrade to "no section", never a failed Reply) and resolves the fan exactly
+like the spend/name loaders (`fans` by platform + platform_user_id, R3-2),
+plus a `deleted_detected_at IS NULL` guard; Fansly group chats
+(conversationRef = groupId) get no dossier — accepted. The dossier is
+COMPILED, not pasted (`context/fan-profile.ts`): parsed into the
+fan-summary template's sections; FINANCIAL PROFILE always dropped (fresh
+spend/subscription data rides its own blocks); volatile sections (STAGE AND
+TRAJECTORY, OPEN LOOPS, STRATEGY) dropped once the dossier is older than
+`chatMuseAiFanProfileVolatileMaxAgeDays` (default 21 — stable facts age
+well, stale open loops mislead); whole sections shed by keep-priority
+against the 10k-char target; hard mid-text cut only at 20k; unrecognized
+shapes get a bounded 10k head. The prompt section ("## Fan Dossier", dated,
+"the transcript is authoritative" framing, escaped `<fan_dossier>` body)
+rides the dynamic 5m block after the subscription section — the 1h static
+prefix stays fan-agnostic and no cache anchor moved, so live caches survive
+the deploy. Second post-freeze template change after #127: fast-reply /
+improve-draft / help-me / ping (+ templates.ts, builder.ts,
+feature-policies.ts) re-pinned in prompt-manifest.json with this decision's
+note; fan-summary.md untouched. Observability: debug-level "ai feature
+dossier injected" (version/age/chars/truncated/droppedSections — never the
+body), warn on lookup failure, and a `fanProfile` entry in the kernel-path
+contextManifest.

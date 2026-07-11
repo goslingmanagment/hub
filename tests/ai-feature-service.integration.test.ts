@@ -345,8 +345,15 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     const review = await call("chat-review");
     expect(review.statusCode).toBe(400);
 
-    // ping derives its segment kernel-side; an ACTIVE conversation (fresh
-    // fan messages in the seed) is blocked — desktop CG-FLOW-05 parity.
+    // ping derives its segment kernel-side; an ACTIVE conversation is
+    // blocked — desktop CG-FLOW-05 parity. The seed's fixed 2026-07-06
+    // timestamps age out of the 5-day active window by calendar, so pin
+    // recency explicitly to keep the gate deterministic.
+    await testDb.pool.query(
+      `update message_archive set occurred_at = now()
+       where account_id = $1 and is_sent_by_me = false`,
+      [pageId],
+    );
     const pingActive = await call("ping");
     expect(pingActive.statusCode, pingActive.body).toBe(400);
     expect(pingActive.json().message).toContain("active");
@@ -475,6 +482,200 @@ describe("client-context path (Stage 32)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("fan-dossier context (Decision #136)", () => {
+  const DOSSIER_BODY = [
+    "1. DOSSIER",
+    "- Rides a red Ducati, lives in Austin",
+    "5. FINANCIAL PROFILE",
+    "- Whale spender, tips nightly",
+    "6. OPEN LOOPS",
+    "- Promised him beach photos",
+  ].join("\n");
+
+  async function seedFanProfile(input: {
+    platform: "onlyfans" | "fansly";
+    targetPageId: number;
+    body?: string;
+    createdAt?: string;
+  }): Promise<void> {
+    const existing = await testDb!.pool.query<{ id: string }>(
+      `select id::text as id from fans where platform = $1 and platform_user_id = $2`,
+      [input.platform, FAN],
+    );
+    let fanId: number;
+    if (existing.rows.length > 0) {
+      fanId = Number(existing.rows[0]!.id);
+    } else {
+      const inserted = await testDb!.pool.query<{ id: string }>(
+        `insert into fans (platform, platform_user_id, username, display_name)
+         values ($1, $2, 'dossier-fan', 'Dossier Fan') returning id::text as id`,
+        [input.platform, FAN],
+      );
+      fanId = Number(inserted.rows[0]!.id);
+    }
+    await testDb!.pool.query(
+      `insert into fan_profiles (fan_id, platform_account_id, version, body, source, created_at)
+       values ($1, $2, 1, $3, 'chatmuse', $4)`,
+      [fanId, input.targetPageId, input.body ?? DOSSIER_BODY, input.createdAt ?? new Date().toISOString()],
+    );
+  }
+
+  function makeCall(capture: { input?: AiGatewayProviderInput }) {
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    return (feature: string, extra: Record<string, unknown> = {}) =>
+      apiServer!.inject({
+        method: "POST",
+        url: `/api/v1/ai/features/${feature}`,
+        headers: { authorization: `Bearer ${chatterKey}` },
+        payload: {
+          clientRequestId: randomUUID(),
+          pageLabel: "svc-of",
+          platform: "onlyfans",
+          conversationRef: FAN,
+          ...extra,
+        },
+      });
+  }
+
+  const userText = (capture: { input?: AiGatewayProviderInput }) =>
+    capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
+
+  it("injects the dossier into policy features (kernel path) and keeps excluded features clean", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    await seedFanProfile({ platform: "onlyfans", targetPageId: pageId });
+    const capture: { input?: AiGatewayProviderInput } = {};
+    const call = makeCall(capture);
+
+    const reply = await call("fast-reply");
+    expect(reply.statusCode, reply.body).toBe(200);
+    const text = userText(capture);
+    expect(text).toContain("## Fan Dossier");
+    expect(text).toContain("Rides a red Ducati");
+    expect(text).toContain("generated on");
+    expect(text).toContain("the transcript is authoritative");
+    // The financial section never rides along — fresh spend data has its own block.
+    expect(text).not.toContain("Whale spender");
+    // The dossier lives in the ephemeral dynamic block, not the 1h static prefix.
+    const dynamicBlock = capture.input!.body.prompt.userBlocks.find((block) => block.cache === "5m");
+    expect(dynamicBlock?.text).toContain("## Fan Dossier");
+    const staticBlock = capture.input!.body.prompt.userBlocks.find((block) => block.cache === "1h");
+    expect(staticBlock?.text).not.toContain("## Fan Dossier");
+
+    // hi-greeting is policy-excluded (a cold opener must not show familiarity).
+    const hi = await call("hi-greeting");
+    expect(hi.statusCode, hi.body).toBe(200);
+    expect(userText(capture)).not.toContain("## Fan Dossier");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("degrades silently when no profile exists or the fan is marked deleted", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const capture: { input?: AiGatewayProviderInput } = {};
+    const call = makeCall(capture);
+
+    const noProfile = await call("fast-reply");
+    expect(noProfile.statusCode, noProfile.body).toBe(200);
+    expect(userText(capture)).not.toContain("## Fan Dossier");
+
+    await seedFanProfile({ platform: "onlyfans", targetPageId: pageId });
+    await testDb.pool.query(
+      `update fans set deleted_detected_at = now() where platform_user_id = $1`,
+      [FAN],
+    );
+    const deletedFan = await call("fast-reply");
+    expect(deletedFan.statusCode, deletedFan.body).toBe(200);
+    expect(userText(capture)).not.toContain("## Fan Dossier");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("honors the runtime allowlist (staged rollout and no-deploy rollback)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    await seedFanProfile({ platform: "onlyfans", targetPageId: pageId });
+    const capture: { input?: AiGatewayProviderInput } = {};
+    const call = makeCall(capture);
+
+    appContext.config.chatMuseAiFanProfileContextFeatures = "none";
+    const rolledBack = await call("fast-reply");
+    expect(rolledBack.statusCode, rolledBack.body).toBe(200);
+    expect(userText(capture)).not.toContain("## Fan Dossier");
+
+    appContext.config.chatMuseAiFanProfileContextFeatures = "ping";
+    const notListed = await call("fast-reply");
+    expect(notListed.statusCode, notListed.body).toBe(200);
+    expect(userText(capture)).not.toContain("## Fan Dossier");
+
+    appContext.config.chatMuseAiFanProfileContextFeatures = "fast-reply";
+    const listed = await call("fast-reply");
+    expect(listed.statusCode, listed.body).toBe(200);
+    expect(userText(capture)).toContain("## Fan Dossier");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps only stable sections for an old dossier (volatile age policy)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    await seedFanProfile({ platform: "onlyfans", targetPageId: pageId, createdAt: sixtyDaysAgo });
+    const capture: { input?: AiGatewayProviderInput } = {};
+    const call = makeCall(capture);
+
+    const reply = await call("fast-reply");
+    expect(reply.statusCode, reply.body).toBe(200);
+    const text = userText(capture);
+    expect(text).toContain("Rides a red Ducati");
+    expect(text).not.toContain("Promised him beach photos");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("injects on the fansly clientContext path alongside the client transcript", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const fanslyPage = await testDb.pool.query<{ id: string }>(
+      `select id::text as id from pages where label = 'svc-fs'`,
+    );
+    await seedFanProfile({ platform: "fansly", targetPageId: Number(fanslyPage.rows[0]!.id) });
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+
+    const response = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-fs",
+        platform: "fansly",
+        conversationRef: FAN,
+        clientContext: {
+          transcript: "[10:00] Fan: fresh client-side message about the beach",
+          messageCount: 12,
+          fanDisplayName: "Charles",
+          fanSpendingData: "Total: $42.00",
+          fanSubscriptionData: "Subscribed: yes",
+        },
+      },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    const text = userText(capture);
+    expect(text).toContain("fresh client-side message about the beach");
+    expect(text).toContain("## Fan Dossier");
+    expect(text).toContain("Rides a red Ducati");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("fan context platform scoping (review R3-2)", () => {
   it("fan name/bio lookups are platform-scoped (native ids can collide across platforms)", async (context) => {
     if (!testDb) {
@@ -498,7 +699,7 @@ describe("fan context platform scoping (review R3-2)", () => {
 describe("prompt migration manifest (Stage 30)", () => {
   const root = join(__dirname, "..", "apps", "runtime", "src", "modules", "ai", "prompts");
   const manifest = JSON.parse(readFileSync(join(root, "prompt-manifest.json"), "utf8")) as {
-    files: Record<string, { coreSha256: string; byteIdenticalToSource: boolean }>;
+    files: Record<string, { coreSha256: string; byteIdenticalToSource: boolean; note?: string }>;
   };
 
   it("every migrated file matches its recorded hash (drift pin)", () => {
@@ -508,11 +709,20 @@ describe("prompt migration manifest (Stage 30)", () => {
     }
   });
 
-  it("prompt templates are byte-identical to their desktop sources", () => {
+  it("prompt templates match the frozen sources or carry a documented post-freeze note", () => {
     const templates = Object.entries(manifest.files).filter(([rel]) => rel.startsWith("templates/"));
     expect(templates.length).toBeGreaterThanOrEqual(7);
     for (const [rel, entry] of templates) {
-      expect(entry.byteIdenticalToSource, rel).toBe(true);
+      // Stage 30 froze templates byte-identical to the desktop snapshot. The
+      // desktop twin is deleted (kernel files are the living copy), so
+      // post-freeze evolution is allowed — but ONLY with a note naming the
+      // decision that changed the template (first use: #127, ping fanSilenceDays).
+      if (!entry.byteIdenticalToSource) {
+        expect(
+          entry.note,
+          `${rel}: template diverged from the frozen source without a documenting note`,
+        ).toBeTruthy();
+      }
     }
     // And no template exists outside the manifest.
     for (const file of readdirSync(join(root, "templates"))) {

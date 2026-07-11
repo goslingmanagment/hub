@@ -10,12 +10,15 @@ import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
 import { BadRequestError, NotFoundError, ProductGateError } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import {
+  isFanProfileFeatureEnabled,
   loadFanBio,
   loadFanDisplayName,
+  loadFanProfileContext,
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
   type AiTranscriptUnionMode,
+  type FanProfilePromptContext,
 } from "../context/index.ts";
 import {
   DEFAULT_FEATURE_MODELS,
@@ -228,6 +231,54 @@ export async function prepareAiFeatureStream(
     throw new ProductGateError("ping is blocked while the conversation is active", "gate_ping_active");
   }
 
+  // Decision #136: policy-enabled features read the stored fan dossier (the
+  // Scan profile the clients push to fan_profiles) into their prompt. The
+  // dossier is optional enrichment and STRICTLY fail-open — on the Fansly
+  // clientContext path this is the only fans-table read of the generation, so
+  // a fan_profiles hiccup must degrade to "no section", never to a failed
+  // Reply/Ping. The runtime allowlist is the no-deploy rollback switch.
+  let fanProfile: FanProfilePromptContext | undefined;
+  if (policy.usesFanProfile) {
+    try {
+      const effective = await loadEffectiveConfig(app.db, app.config);
+      if (isFanProfileFeatureEnabled(effective.chatMuseAiFanProfileContextFeatures, feature)) {
+        fanProfile = await loadFanProfileContext(app, {
+          pageId,
+          fanRef,
+          platform: stored.page.platform,
+          volatileMaxAgeDays: effective.chatMuseAiFanProfileVolatileMaxAgeDays ?? 21,
+          now: Date.now(),
+        });
+      }
+    } catch (error) {
+      app.logger.warn({ feature, pageId, error }, "ai feature dossier lookup failed");
+    }
+  }
+  if (fanProfile) {
+    // debug, not info — fast-reply is high-frequency; never log the body.
+    app.logger.debug({
+      feature,
+      pageId,
+      profileVersion: fanProfile.version,
+      profileAgeDays: fanProfile.ageDays,
+      profileChars: fanProfile.body.length,
+      truncated: fanProfile.truncated,
+      droppedSections: fanProfile.droppedSections,
+    }, "ai feature dossier injected");
+    if (contextManifest !== undefined) {
+      contextManifest = {
+        ...contextManifest,
+        fanProfile: {
+          version: fanProfile.version,
+          generatedAt: fanProfile.generatedAt.toISOString(),
+          chars: fanProfile.body.length,
+          truncated: fanProfile.truncated,
+          droppedSections: fanProfile.droppedSections,
+        },
+      };
+    }
+  }
+
   const prompt = buildPrompt({
     feature,
     personality: persona,
@@ -237,6 +288,9 @@ export async function prepareAiFeatureStream(
     fanSubscriptionData: contextValues.fanSubscriptionData,
     fanDisplayName: contextValues.fanDisplayName,
     fanBio: contextValues.fanBio,
+    fanProfile: fanProfile
+      ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
+      : undefined,
     draftText: body.draftText,
     pingSegment: contextValues.pingSegment,
     replyTone: policy.supportsReplyTone ? body.replyTone : undefined,

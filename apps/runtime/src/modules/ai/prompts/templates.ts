@@ -85,6 +85,7 @@ GOOD: "stop 🥺 ok that's sweet"
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanProfileSection}
 {splitReplyInstructions}
 
 ## Your Task
@@ -107,6 +108,7 @@ export const IMPROVE_DRAFT_TEMPLATE = `You are improving a draft reply for a Onl
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanProfileSection}
 
 ## Rules
 
@@ -187,6 +189,7 @@ The flirty message suggestion here. Written in the model's voice.
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanProfileSection}
 
 ## Your Task
 
@@ -374,6 +377,7 @@ Pick a strategy that fits the transcript:
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanProfileSection}
 
 ## Your Task
 

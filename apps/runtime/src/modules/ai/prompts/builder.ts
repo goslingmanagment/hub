@@ -61,6 +61,9 @@ export interface PromptBuildInput {
   fanSubscriptionData: string;
   fanDisplayName: string;
   fanBio?: string | undefined;
+  /** Pre-compiled stored fan dossier (see context/fan-profile.ts); templates
+   * without a {fanProfileSection} placeholder ignore it. */
+  fanProfile?: { body: string; generatedAt: Date } | undefined;
   draftText?: string | undefined;
   pingSegment?: PingSegment | undefined;
   replyMode?: ReplyMode | undefined;
@@ -235,6 +238,27 @@ function fanBioSection(fanBio: string | undefined): string {
   return `Fan bio: ${escapeForPrompt(trimmed)}`;
 }
 
+/** "Fan Dossier", not "Fan Profile" — hi-greeting already owns a "## Fan
+ * Profile" heading. The date is the dossier's generation day; the framing
+ * subordinates it to the transcript so a stale dossier can't override live
+ * conversation facts. */
+function fanProfileSection(
+  fanProfile: { body: string; generatedAt: Date } | undefined,
+): string {
+  const trimmed = fanProfile?.body.trim() ?? '';
+  if (!trimmed) {
+    return '';
+  }
+  const date = fanProfile!.generatedAt.toISOString().slice(0, 10);
+  return `## Fan Dossier
+
+Stored dossier about this fan, generated on ${date} from earlier conversation history. It may be out of date — if anything here conflicts with the live transcript above, the transcript is authoritative.
+
+<fan_dossier>
+${escapeForPrompt(trimmed)}
+</fan_dossier>`;
+}
+
 function toneInstructions(policy: PromptFeaturePolicy, replyTone: ReplyTone | undefined): string {
   const tone = policy.supportsReplyTone ? (replyTone ?? 'none') : 'none';
   if (tone === 'none') {
@@ -282,6 +306,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     ),
     fanDisplayName: escapeForPrompt(input.fanDisplayName),
     fanBioSection: fanBioSection(input.fanBio),
+    fanProfileSection: fanProfileSection(input.fanProfile),
     draftSection: draftSection(policy.requiresDraft ? input.draftText : undefined),
     splitReplyInstructions: splitReplyInstructions(policy, input.replyMode),
     toneInstructions: toneInstructions(policy, input.replyTone),

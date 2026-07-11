@@ -39,6 +39,12 @@ export interface FeaturePolicy {
   supportsReplyTone: boolean;
   requiresDraft: boolean;
   usesPingSegment: boolean;
+  /** Inject the stored fan dossier (fan_profiles) into the prompt. False for
+   * fan-summary (it GENERATES the dossier — feeding it back is circular),
+   * chat-review (must judge the chatter independently of a stored opinion)
+   * and hi-greeting (a cold opener must not show unexplained familiarity).
+   * Runtime allowlist chatMuseAiFanProfileContextFeatures narrows this set. */
+  usesFanProfile: boolean;
 }
 
 // ─── Message counts (research §5.1; desktop defaults carried) ───────────
@@ -112,6 +118,7 @@ export const FEATURE_POLICIES = {
     supportsReplyTone: true,
     requiresDraft: false,
     usesPingSegment: false,
+    usesFanProfile: true,
   },
   'improve-draft': {
     surface: 'ai-dock',
@@ -127,6 +134,7 @@ export const FEATURE_POLICIES = {
     supportsReplyTone: false,
     requiresDraft: true,
     usesPingSegment: false,
+    usesFanProfile: true,
   },
   'help-me': {
     surface: 'panel-tab',
@@ -142,6 +150,7 @@ export const FEATURE_POLICIES = {
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
+    usesFanProfile: true,
   },
   'fan-summary': {
     surface: 'panel-tab',
@@ -157,6 +166,7 @@ export const FEATURE_POLICIES = {
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
+    usesFanProfile: false,
   },
   'chat-review': {
     surface: 'panel-tab',
@@ -172,6 +182,7 @@ export const FEATURE_POLICIES = {
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
+    usesFanProfile: false,
   },
   'ping': {
     surface: 'ai-dock',
@@ -187,6 +198,7 @@ export const FEATURE_POLICIES = {
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: true,
+    usesFanProfile: true,
   },
   'hi-greeting': {
     surface: 'ai-dock',
@@ -202,6 +214,7 @@ export const FEATURE_POLICIES = {
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
+    usesFanProfile: false,
   },
 } as const satisfies Record<OperationFeature, FeaturePolicy>;
 

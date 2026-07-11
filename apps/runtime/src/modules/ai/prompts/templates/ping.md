@@ -47,6 +47,7 @@ Pick a strategy that fits the transcript:
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanProfileSection}
 
 ## Your Task
 

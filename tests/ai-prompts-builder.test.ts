@@ -163,6 +163,17 @@ function buildFanBioSection(fanBio: string | undefined): string {
   return `Fan bio: ${escapeForPrompt(trimmed)}`;
 }
 
+function buildFanProfileSectionOracle(
+  fanProfile: { body: string; generatedAt: Date } | undefined,
+): string {
+  const trimmed = fanProfile?.body.trim() ?? '';
+  if (!trimmed) {
+    return '';
+  }
+  const date = fanProfile!.generatedAt.toISOString().slice(0, 10);
+  return `## Fan Dossier\n\nStored dossier about this fan, generated on ${date} from earlier conversation history. It may be out of date — if anything here conflicts with the live transcript above, the transcript is authoritative.\n\n<fan_dossier>\n${escapeForPrompt(trimmed)}\n</fan_dossier>`;
+}
+
 function applyTemplate(template: string, replacements: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (match, key: string) => replacements[key] ?? match);
 }
@@ -185,6 +196,7 @@ function buildExpectedFlatUser(input: PromptBuildInput): string {
     fanSubscriptionSection: buildFanSubscriptionSection(input.fanSubscriptionData),
     fanDisplayName: escapeForPrompt(input.fanDisplayName),
     fanBioSection: buildFanBioSection(input.fanBio),
+    fanProfileSection: buildFanProfileSectionOracle(input.fanProfile),
     draftSection: buildDraftSection(input.draftText),
     splitReplyInstructions: buildSplitReplyInstructions(input.feature, input.replyMode),
     toneInstructions: buildToneInstructions(input.feature, input.replyTone),
@@ -510,6 +522,70 @@ describe('fan subscription section', () => {
       }),
     );
     expect(result.user).toContain('Tier: &lt;VIP &amp; promo&gt;');
+  });
+});
+
+// ─── Fan dossier section (Decision #136) ────────────────────────────────
+
+describe('fan dossier section', () => {
+  const DOSSIER = {
+    body: '1. DOSSIER\n- Name: Charles, 34, Boston\n- Loves hiking',
+    generatedAt: new Date('2026-07-01T12:00:00Z'),
+  };
+
+  it('renders the section with the generation date and the transcript-is-authoritative framing', () => {
+    const result = buildPrompt(buildTestInput({ fanProfile: DOSSIER }));
+    expect(result.user).toContain('## Fan Dossier');
+    expect(result.user).toContain('generated on 2026-07-01');
+    expect(result.user).toContain('the transcript is authoritative');
+    expect(result.user).toContain('<fan_dossier>');
+    expect(result.user).toContain('Loves hiking');
+    expect(result.user).not.toContain('{fanProfileSection}');
+  });
+
+  it('omits the section when no dossier is provided or the body is blank', () => {
+    expect(buildPrompt(buildTestInput()).user).not.toContain('## Fan Dossier');
+    const blank = buildPrompt(
+      buildTestInput({ fanProfile: { body: '   ', generatedAt: DOSSIER.generatedAt } }),
+    );
+    expect(blank.user).not.toContain('## Fan Dossier');
+    expect(blank.user).not.toContain('{fanProfileSection}');
+  });
+
+  it('escapes the dossier body (fan-derived content)', () => {
+    const result = buildPrompt(
+      buildTestInput({
+        fanProfile: { body: '<script>alert("x")</script>', generatedAt: DOSSIER.generatedAt },
+      }),
+    );
+    expect(result.user).toContain('&lt;script&gt;');
+    expect(result.user).not.toContain('<script>alert');
+  });
+
+  it('rides the ephemeral dynamic block, never the 1h static prefix or the task block', () => {
+    for (const feature of ['fast-reply', 'improve-draft', 'help-me', 'ping'] as const) {
+      const result = buildPrompt(
+        buildTestInput({
+          feature,
+          fanProfile: DOSSIER,
+          ...(feature === 'ping' ? { pingSegment: 'segment-a' as const } : {}),
+        }),
+      );
+      expect(result.userBlocks).toHaveLength(3);
+      expect(result.userBlocks[0]?.cache).toBe('1h');
+      expect(result.userBlocks[0]?.text, feature).not.toContain('## Fan Dossier');
+      expect(result.userBlocks[1]?.cache).toBe('5m');
+      expect(result.userBlocks[1]?.text, feature).toContain('## Fan Dossier');
+      expect(result.userBlocks[2]?.text, feature).not.toContain('## Fan Dossier');
+    }
+  });
+
+  it('features without the placeholder ignore a passed dossier (fan-summary, chat-review, hi-greeting)', () => {
+    for (const feature of ['fan-summary', 'chat-review', 'hi-greeting'] as const) {
+      const result = buildPrompt(buildTestInput({ feature, fanProfile: DOSSIER }));
+      expect(result.user, feature).not.toContain('## Fan Dossier');
+      expect(result.user, feature).not.toContain('{fanProfileSection}');
+    }
   });
 });
 

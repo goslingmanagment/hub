@@ -77,6 +77,7 @@ GOOD: "stop 🥺 ok that's sweet"
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanProfileSection}
 {splitReplyInstructions}
 
 ## Your Task
