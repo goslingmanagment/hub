@@ -1267,6 +1267,48 @@ export function buildProgram() {
     });
 
   program
+    .command("observations:rejournal-collisions")
+    .description(
+      "W8 / E5 (A22): re-journal the pull observations swallowed by the pre-f8c4409 "
+        + "chunk-constant idempotency key (2026-07-05..07-07 window) — verbatim from "
+        + "sync_raw_payloads, producer 'rejournal:a22', append-only, idempotent. "
+        + "Run --dry-run first; the canonicalize sweep then consumes the rows "
+        + "(domain_event_keys dedup makes repeats no-ops)",
+    )
+    .option("--dry-run", "census only, no writes", false)
+    .option("--from <iso>", "captured_at lower bound (default: the E5 window start)")
+    .option("--to <iso>", "captured_at upper bound (default: the E5 window end)")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { runObservationsRejournal } = await import("./services/observations-rejournal.ts");
+        const result = await runObservationsRejournal(app, {
+          dryRun: Boolean(options.dryRun),
+          ...(options.from ? { from: new Date(options.from) } : {}),
+          ...(options.to ? { to: new Date(options.to) } : {}),
+        });
+        console.log(JSON.stringify(result));
+        for (const [stream, counts] of Object.entries(result.perStream)) {
+          console.log(
+            `${stream}: raw ${counts.rawFetches}, observed ${counts.observed}, `
+              + `missing ${counts.missing}, rejournaled ${counts.rejournaled}, `
+              + `already ${counts.alreadyRejournaled}`,
+          );
+        }
+        console.log(
+          `${result.dryRun ? "[dry-run] would re-journal" : "re-journaled"} `
+            + `${result.dryRun
+              ? result.totals.missing - result.totals.alreadyRejournaled
+              : result.totals.rejournaled} `
+            + `(missing ${result.totals.missing}, already ${result.totals.alreadyRejournaled}) `
+            + `across ${result.groupsScanned} chunk groups`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("ofapi:pending-reconcile")
     .description(
       "W7.4 (A47): settle-or-expire stale OFAPI pending transactions — REST rescan "

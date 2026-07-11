@@ -144,10 +144,14 @@ describe("observations insert protocol", () => {
       return;
     }
 
+    // 2029 sits in the gap between the pre-created monthlies and 0082's
+    // `observations_future` catch-all (FROM '2031-01-01') — still uncovered.
+    // (2031 was this drill's date before W8.2; the catch-all absorbs it now —
+    // pinned below.)
     await expect(
       insertObservation(testDb.db, {
         ...webhookObservation("evt-far-future"),
-        receivedAt: new Date("2031-01-15T00:00:00.000Z"),
+        receivedAt: new Date("2029-01-15T00:00:00.000Z"),
       }),
     ).rejects.toThrow(/no partition|Failed query/);
 
@@ -166,6 +170,19 @@ describe("observations insert protocol", () => {
     // And the retry (with a partition present) succeeds cleanly.
     const retried = await insertObservation(testDb.db, webhookObservation("evt-far-future"));
     expect(retried.inserted).toBe(true);
+
+    // W8.2 (0082): beyond 2031 the future catch-all is the structural
+    // backstop — a stray far-future insert degrades to a hot catch-all row,
+    // never an ExecFindPartition failure.
+    const caught = await insertObservation(testDb.db, {
+      ...webhookObservation("evt-catchall-2031"),
+      receivedAt: new Date("2031-01-15T00:00:00.000Z"),
+    });
+    expect(caught.inserted).toBe(true);
+    const landed = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observations_future",
+    );
+    expect(landed.rows[0]!.n).toBe("1");
   });
 });
 

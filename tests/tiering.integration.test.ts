@@ -108,6 +108,15 @@ describe("retention tiering (Stage 28)", () => {
     expect(names).toContain("observations_2026_01");
     // The current-window partitions never qualify.
     expect(names).not.toContain("observations_2026_09");
+    // W8.2 (0082): the future catch-alls are named OUTSIDE the _YYYY_MM
+    // detachment regex — structurally undetachable, even under a horizon
+    // where their whole range would be "old".
+    const farFuture = await listTierablePartitions(appStub(), new Date("2099-01-01T00:00:00Z"));
+    const farNames = farFuture.map((partition) => partition.partition);
+    expect(farNames.length).toBeGreaterThan(0); // the monthlies DO qualify there
+    expect(farNames).not.toContain("observations_future");
+    expect(farNames).not.toContain("domain_events_future");
+    expect(farNames).not.toContain("domain_events_pre_2024");
 
     // ── Phase 1: a poisoned manifest fails verification; nothing detaches.
     const dir = path.join(lakeDir, "capture", "observations", "2026");

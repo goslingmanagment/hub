@@ -1,0 +1,22 @@
+-- 0082: W8.2 (A13 remainder, decision #133) — future catch-all partitions.
+--
+-- occurred_at / received_at now clamp at canonicalize time to
+-- [2024-01-01, now + 2 months] (out-of-window values fall back to the
+-- observation's receipt time, raw value preserved in event data). These
+-- catch-alls are the structural backstop UNDER the clamp: even if a clamp
+-- bug lets a far-future timestamp through, the insert degrades to a
+-- hot-catch-all row instead of failing ExecFindPartition (23514) and
+-- retrying on every sweep forever (the 0077 failure shape, far-future edge).
+--
+-- Named OUTSIDE the tiering detachment regex on purpose (0077 precedent):
+-- listTierablePartitions matches only `<table>_YYYY_MM`, so `*_future` stays
+-- hot like `domain_events_pre_2024` — the tiering job structurally cannot
+-- detach them.
+--
+-- FROM '2031-01-01': the monthly pre-creation job (ensure*Partitions) runs
+-- 3 months ahead and now stops BEFORE this bound — by 2030-10 the shrinking
+-- monthly lead pages the owner through the existing observations_partitions
+-- incident, which is the designed hand-off point for deciding the next
+-- partition scheme.
+CREATE TABLE "domain_events_future" PARTITION OF "domain_events" FOR VALUES FROM ('2031-01-01') TO (MAXVALUE);
+CREATE TABLE "observations_future" PARTITION OF "observations" FOR VALUES FROM ('2031-01-01') TO (MAXVALUE);

@@ -9172,7 +9172,9 @@ describe("api integration", () => {
     const leadBody = leadResponse.json();
     expect(leadBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
     expect(leadBody.overall.pages).toBe(1);
-    expect(leadBody.overall.streams).toBe(7);
+    // 7 legacy streams + the three ramp-gated Stage 16/32 streams that W8.1
+    // made monitor-visible (top_spenders, fan_earnings, purchase_history).
+    expect(leadBody.overall.streams).toBe(10);
   }, 15_000);
 
   it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {

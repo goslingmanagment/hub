@@ -24,10 +24,9 @@ function baseConfig(): AppConfig {
     ofapiSpendProjectionShadowEnabled: false,
     ofapiSpendTransactionIngestEnabled: false,
     onlyFansTopSpendersEnabled: false,
+    // A STAGED key with runtimeApply 'none' (must never boot-apply).
+    onlyFansDmPollingEnabled: false,
     // Invariant inputs (generic/defensive; no current boot key touches these).
-    onlyFansPublicProfileResolutionEnabled: false,
-    onlyFansPublicProfileAllowDirect: false,
-    onlyFansPublicProfileProxy: null,
     syncPageExecutorConcurrency: 1,
     syncSharedRateLimitEnabled: true,
     // A runtimeApply:'none' editable key that must never be boot-applied.
@@ -61,8 +60,8 @@ describe("validateStagedOverride", () => {
     expect(validateStagedOverride("databaseUrl", true).ok).toBe(false);
     // transactionLookbackDays: editable but runtimeApply 'live' (not boot)
     expect(validateStagedOverride("transactionLookbackDays", true).ok).toBe(false);
-    // onlyFansPublicProfileResolutionEnabled: staged editability but runtimeApply 'none'
-    expect(validateStagedOverride("onlyFansPublicProfileResolutionEnabled", true).ok).toBe(false);
+    // onlyFansDmPollingEnabled: staged editability but runtimeApply 'none'
+    expect(validateStagedOverride("onlyFansDmPollingEnabled", true).ok).toBe(false);
     // logLevel: editable runtimeApply 'none'
     expect(validateStagedOverride("logLevel", "debug").ok).toBe(false);
   });
@@ -85,16 +84,17 @@ describe("applyBootOverrides", () => {
     expect(config.ofapiDmProjectionEnabled).toBe(false);
   });
 
-  it("ignores a non-boot staged flag (onlyFansPublicProfileResolutionEnabled) with a reason", () => {
+  it("ignores a non-boot staged flag (onlyFansDmPollingEnabled) with a reason", () => {
+    // (Was onlyFansPublicProfileResolutionEnabled until W8.2/A30 deleted it.)
     const config = baseConfig();
     const result = applyBootOverrides(
       config,
-      overrides([["onlyFansPublicProfileResolutionEnabled", true]]),
+      overrides([["onlyFansDmPollingEnabled", true]]),
     );
     // Not a boot key → never applied; config identity unchanged; recorded as skipped.
     expect(result.config).toBe(config);
-    expect(result.config.onlyFansPublicProfileResolutionEnabled).toBe(false);
-    expect(result.skipped.map((s) => s.key)).toContain("onlyFansPublicProfileResolutionEnabled");
+    expect(result.config.onlyFansDmPollingEnabled).toBe(false);
+    expect(result.skipped.map((s) => s.key)).toContain("onlyFansDmPollingEnabled");
   });
 
   it("ignores a runtimeApply:'none' editable key (logLevel) with a reason", () => {

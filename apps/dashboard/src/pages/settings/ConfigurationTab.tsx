@@ -369,10 +369,13 @@ function SettingRow({ item }: { item: ConfigItem }) {
 
   return (
     <div
-      // Staged flags also render an actionable StagedFlagRow below, which owns the
-      // canonical `config-<key>` anchor; this read-only readout must not duplicate
-      // the id (getElementById would otherwise land deep-links on this row).
-      id={item.editability === "staged" ? undefined : `config-${item.key}`}
+      // BOOT keys also render an actionable StagedFlagRow below (the staged-flags
+      // section filters on runtimeApply === "boot", NOT editability), and that row
+      // owns the canonical `config-<key>` anchor; this read-only readout must not
+      // duplicate the id (getElementById would land deep-links on this row). The
+      // old `editability === "staged"` condition left the two EDITABLE boot keys
+      // with duplicate ids and staged non-boot keys with none (W8.2 / A32, #133).
+      id={item.runtimeApply === "boot" ? undefined : `config-${item.key}`}
       className={`scroll-mt-24 grid grid-cols-1 gap-y-2 border-l-2 ${status.rail} py-3.5 pl-4 pr-3 sm:grid-cols-[minmax(0,1fr)_104px_minmax(168px,auto)] sm:items-start sm:gap-x-5`}
     >
       <div className="min-w-0">

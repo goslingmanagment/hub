@@ -43,11 +43,6 @@ describe("config", () => {
     expect(config.fanslyDmDeepBackfillContinuationDelayMs).toBe(0);
     expect(config.fanslyDmDeepBackfillContinuationJitterMs).toBe(0);
     expect(config.onlyFansDefaultDelayMs).toBe(1000);
-    expect(config.onlyFansPublicProfileResolutionEnabled).toBe(false);
-    expect(config.onlyFansPublicProfileAllowDirect).toBe(false);
-    expect(config.onlyFansPublicProfileProxy).toBeNull();
-    expect(config.onlyFansPublicProfileMaxPerRun).toBe(5);
-    expect(config.onlyFansPublicProfileDelayMs).toBe(30_000);
     expect(config.onlyFansDmPollingEnabled).toBe(false);
     expect(config.syncSharedRateLimitEnabled).toBe(true);
     expect(config.syncPageExecutorConcurrency).toBe(4);
@@ -138,52 +133,10 @@ describe("config", () => {
     expect(config.fanslyDefaultDelayMs).toBe(3000);
   });
 
-  it("requires a dedicated public OnlyFans profile proxy or explicit direct egress when that fallback is enabled", () => {
-    expect(() => loadConfig({
-      ...baseEnv,
-      ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: "true",
-    })).toThrow("ONLYFANS_PUBLIC_PROFILE_PROXY_URL or ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT=true is required");
-  });
-
-  it("allows direct public OnlyFans profile egress only when explicitly requested", () => {
-    const config = loadConfig({
-      ...baseEnv,
-      ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: "true",
-      ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT: "true",
-    });
-
-    expect(config.onlyFansPublicProfileResolutionEnabled).toBe(true);
-    expect(config.onlyFansPublicProfileAllowDirect).toBe(true);
-    expect(config.onlyFansPublicProfileProxy).toBeNull();
-  });
-
-  it("parses the dedicated public OnlyFans profile proxy separately from account proxies", () => {
-    const config = loadConfig({
-      ...baseEnv,
-      ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: "true",
-      ONLYFANS_PUBLIC_PROFILE_PROXY_URL: "user:pass@203.0.113.10:1080",
-      ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN: "2",
-      ONLYFANS_PUBLIC_PROFILE_DELAY_MS: "45000",
-    });
-
-    expect(config.onlyFansPublicProfileResolutionEnabled).toBe(true);
-    expect(config.onlyFansPublicProfileAllowDirect).toBe(false);
-    expect(config.onlyFansPublicProfileProxy).toEqual({
-      url: "socks5://203.0.113.10:1080",
-      username: "user",
-      password: "pass",
-    });
-    expect(config.onlyFansPublicProfileMaxPerRun).toBe(2);
-    expect(config.onlyFansPublicProfileDelayMs).toBe(45_000);
-  });
-
-  it("rejects private hosts for the dedicated public OnlyFans profile proxy", () => {
-    expect(() => loadConfig({
-      ...baseEnv,
-      ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: "true",
-      ONLYFANS_PUBLIC_PROFILE_PROXY_URL: "socks5://127.0.0.1:1080",
-    })).toThrow("Proxy host must not be loopback");
-  });
+  // The ONLYFANS_PUBLIC_PROFILE_* flags and their boot OR-invariant were
+  // deleted in W8.2 (A30, decision #133): the resolver had zero callers, so
+  // the flags could only crash boot, never enable anything. An unknown env
+  // var is simply ignored by the schema — nothing left to pin here.
 
   it("falls back to the deprecated account lookup delay alias when the global var is unset", () => {
     const config = loadConfig({

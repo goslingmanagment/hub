@@ -3547,3 +3547,55 @@ cache-write breakdown from message_start when a usage delta lacks it — the
 1h component was priced at the 5m rate (37.5% under-recorded); historical
 rows are identifiable (`cache_write_tokens>0 AND cost_approximate=true`) and
 stay unmutated (append-only ledger).
+
+**Decision #133 (2026-07-11, W8 — stream-state visibility, canonicalizer
+tail, E5 re-journal):** (1) A12/A20 kernel side: `pageTopSpenders` gains an
+additive `source` block `{streamState: ramped|flag_off|not_allowlisted|
+unsupported_platform, lastSyncedAt, consecutiveFailures}` — `builtAt:null/
+entries:[]` was indistinguishable from "no spenders" for a non-ramped page.
+The Stage 16 allowlist gate is EXTRACTED to `sync/fansly-stream-gate.ts` and
+shared by the executor and the reporter (one function, no drift; empty CSV =
+all pages allowed). `top_spenders`/`fan_earnings`/`purchase_history` join
+`MONITORED_SYNC_STREAMS` (snapshot/CLI visibility) but stay OUT of block
+health (BLOCK_TASKS / SYNC_DOMAIN_POLICY unchanged — a flag-gated stream must
+not degrade block UX). Response-schema-only contract change; no client
+re-vendor (W9 takes the field only if it ships the richer copy). (2) A48:
+`subscriptions.renewed` joins the OFAPI webhook family (same notification
+envelope as subscriptions.new → `subscription.renewed`), canonicalizer v2→3 —
+the bump DELIBERATELY replays webhook history so pre-fix renewals backfill;
+safe because W5.3's sweep cursor (#130) is live and dedup keys are stable.
+(3) A49 REFUTED, fallback NOT enabled: the proposed workboard-recompute
+fallback (message.* with null fanIdentityRef → conversationRef) required
+Fansly conversationRef to be the thread partner; it is the messaging GROUP id
+(`item.groupId` — a different id space; the groups payload carries
+`partnerAccountId` separately). A fixture pin in canonicalize-sync-pull.test
+documents the refutation; revisit only if that pin ever fails. (4) A43:
+the fan_earnings walk now persists its cursor with purchase_history's
+hold-back discipline — persisted cursor advances only past SUCCESSFUL fans, a
+zero-success chunk leaves the checkpoint untouched, the mass-skip breaker
+stays armed. (5) A46 (forward-only): `transaction.posted` event data gains
+`amountUnit` — `"mills"` (Fansly) / `"dollars"` (OFAPI float) — on
+NEWLY-emitted events only; pre-fix events are immutable facts, consumers
+branch on platform where the field is absent. No sync-pull version bump (a
+replay would only dedupe). (6) Partitions (A13 remainder): occurred_at clamps
+at canonicalize time to [2024-01-01, now+2mo]; out-of-window values fall back
+to observation.receivedAt (never a guessed boundary) with the raw value
+preserved as `occurredAtRaw` in event data; migration 0082 adds
+`domain_events_future`/`observations_future` FROM '2031-01-01' TO MAXVALUE —
+named outside the tiering `_YYYY_MM` regex (0077 precedent) so they are
+structurally undetachable, and monthly pre-creation stops before 2031 (the
+shrinking lead pages the owner ahead of the hand-off). (7) A30+A32: the dead
+`ONLYFANS_PUBLIC_PROFILE_*` flags and their boot-crash OR-invariant are
+DELETED (zero callers — they could only crash boot, never enable anything;
+the resolver module and its capture tables remain untouched);
+`assertClearableKey` now also rejects `runtimeApply==='boot'` keys (the two
+EDITABLE boot flags could bypass the staged ritual via generic DELETE); the
+ConfigurationTab `config-<key>` anchor is keyed on `runtimeApply==='boot'`
+(kills the duplicate ids on editable boot keys AND gives staged non-boot keys
+an anchor). (8) E5/A22: one-shot CLI `observations:rejournal-collisions`
+re-journals the ~40k pull observations swallowed by the pre-f8c4409
+chunk-constant idempotency key (window 2026-07-05T01:50Z..07-07T18:00Z) —
+verbatim from `sync_raw_payloads`, producer `rejournal:a22`, per-raw-row keys
+(idempotent), append-only; the sweep consumes the rows and domain_event_keys
+dedup makes re-canonicalization of already-seen facts a no-op. Dry-run first,
+counts per stream.

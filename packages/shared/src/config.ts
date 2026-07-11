@@ -1,10 +1,6 @@
 import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
 
-import { assertProxyTargetAllowed, normalizeProxyConfig } from "./proxy.ts";
-import { parseProxyString } from "./proxy-string.ts";
-import type { ProxyConfig } from "./types.ts";
-
 const MIN_FANSLY_DM_DELAY_MS = 5000;
 
 const optionalTrimmedStringSchema = z.preprocess((value) => {
@@ -81,11 +77,6 @@ const envSchema = z.object({
   TRUST_PROXY: trustProxySchema,
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
-  ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED: booleanSchema.default(false),
-  ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT: booleanSchema.default(false),
-  ONLYFANS_PUBLIC_PROFILE_PROXY_URL: optionalTrimmedStringSchema,
-  ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN: z.coerce.number().int().positive().default(5),
-  ONLYFANS_PUBLIC_PROFILE_DELAY_MS: z.coerce.number().int().positive().default(30_000),
   ONLYFANS_DM_POLLING_ENABLED: booleanSchema.default(false),
   SYNC_HTTP_TRACE_FILE: optionalTrimmedStringSchema,
   FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
@@ -229,11 +220,6 @@ export interface AppConfig {
   trustProxy: boolean | number | string;
   sessionTtlDays: number;
   fanslyBaseUrl: string;
-  onlyFansPublicProfileResolutionEnabled?: boolean;
-  onlyFansPublicProfileAllowDirect?: boolean;
-  onlyFansPublicProfileProxy?: ProxyConfig | null;
-  onlyFansPublicProfileMaxPerRun?: number;
-  onlyFansPublicProfileDelayMs?: number;
   onlyFansDmPollingEnabled?: boolean;
   syncHttpTraceFile: string | null;
   fanslyDefaultDelayMs: number;
@@ -352,22 +338,6 @@ export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = proc
   return null;
 }
 
-/** Public-profile resolution may only be enabled when there is a way to reach
- *  OnlyFans safely: a configured proxy OR an explicit allow-direct. This is an OR
- *  the registry's simple `requires` AND-list can't express, so it lives here as a
- *  pure precondition shared by boot (loadConfig) and, in Stage B/C, the editing
- *  PATCH. Returns the exact boot error message when violated, else null. */
-export function checkPublicProfileResolutionInvariant(input: {
-  resolutionEnabled: boolean;
-  allowDirect: boolean;
-  hasProxy: boolean;
-}): string | null {
-  if (input.resolutionEnabled && !input.allowDirect && !input.hasProxy) {
-    return "ONLYFANS_PUBLIC_PROFILE_PROXY_URL or ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT=true is required when ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED=true";
-  }
-  return null;
-}
-
 /** Concurrency > 1 is only safe when the shared rate limiter is on (the limiter is
  *  what keeps simultaneous workers from hammering an upstream past its budget). The
  *  boot check in bootstrap.ts throws on this; exposed here as a pure validator so the
@@ -409,17 +379,6 @@ export function loadConfig(
     parsed.FANSLY_GLOBAL_DELAY_MS ??
     parsed.FANSLY_ACCOUNT_LOOKUP_DELAY_MS ??
     2500;
-  const onlyFansPublicProfileProxy = parseOnlyFansPublicProfileProxy(
-    parsed.ONLYFANS_PUBLIC_PROFILE_PROXY_URL,
-  );
-  const publicProfileInvariantError = checkPublicProfileResolutionInvariant({
-    resolutionEnabled: parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED,
-    allowDirect: parsed.ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT,
-    hasProxy: Boolean(onlyFansPublicProfileProxy),
-  });
-  if (publicProfileInvariantError) {
-    throw new Error(publicProfileInvariantError);
-  }
   const telegramBotToken = parsed.TELEGRAM_BOT_TOKEN ?? null;
   const telegramChatId = parsed.TELEGRAM_CHAT_ID ?? null;
   const telegramEnabled = telegramBotToken !== null && telegramChatId !== null;
@@ -436,11 +395,6 @@ export function loadConfig(
     trustProxy: parsed.TRUST_PROXY,
     sessionTtlDays: parsed.SESSION_TTL_DAYS,
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,
-    onlyFansPublicProfileResolutionEnabled: parsed.ONLYFANS_PUBLIC_PROFILE_RESOLUTION_ENABLED,
-    onlyFansPublicProfileAllowDirect: parsed.ONLYFANS_PUBLIC_PROFILE_ALLOW_DIRECT,
-    onlyFansPublicProfileProxy,
-    onlyFansPublicProfileMaxPerRun: parsed.ONLYFANS_PUBLIC_PROFILE_MAX_PER_RUN,
-    onlyFansPublicProfileDelayMs: parsed.ONLYFANS_PUBLIC_PROFILE_DELAY_MS,
     onlyFansDmPollingEnabled: parsed.ONLYFANS_DM_POLLING_ENABLED,
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     fanslyDefaultDelayMs,
@@ -528,21 +482,6 @@ export function loadConfig(
     wbClosingLlmDailyCapMin: parsed.WB_CLOSING_LLM_DAILY_CAP_MIN,
     wbClosingLlmDailyCapMax: parsed.WB_CLOSING_LLM_DAILY_CAP_MAX,
   };
-}
-
-function parseOnlyFansPublicProfileProxy(rawValue: string | undefined) {
-  if (!rawValue) {
-    return null;
-  }
-
-  const parsed = parseProxyString(rawValue);
-  if (!parsed) {
-    return null;
-  }
-
-  const normalized = normalizeProxyConfig(parsed);
-  assertProxyTargetAllowed(normalized);
-  return normalized;
 }
 
 function parseEncryptionKey(value: string, envVar: string): Buffer {

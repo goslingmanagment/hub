@@ -379,7 +379,9 @@ function addMonths(year: number, month: number, delta: number): { year: number; 
   return { year: Math.floor(zero / 12), month: (zero % 12) + 1 };
 }
 
-/** Same contract as ensureObservationPartitions, for the events ledger. */
+/** Same contract as ensureObservationPartitions, for the events ledger
+ * (incl. the 0082 pre-create horizon — see PARTITION_PRECREATE_HORIZON_YEAR
+ * in observations.ts: [2031-01-01, MAXVALUE) belongs to the catch-all). */
 export async function ensureDomainEventPartitions(
   db: Database,
   input?: { monthsAhead?: number; now?: Date },
@@ -389,6 +391,9 @@ export async function ensureDomainEventPartitions(
   const ensured: string[] = [];
   for (let delta = 0; delta <= monthsAhead; delta += 1) {
     const { year, month } = addMonths(now.getUTCFullYear(), now.getUTCMonth() + 1, delta);
+    if (year >= 2031) {
+      break;
+    }
     const next = addMonths(year, month, 1);
     const name = partitionName(year, month);
     await db.execute(sql.raw(`

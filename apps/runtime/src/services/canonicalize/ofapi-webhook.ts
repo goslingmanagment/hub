@@ -15,7 +15,13 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-export const OFAPI_WEBHOOK_CANONICALIZER_VERSION = 2;
+// v3 (W8.2 / A48, decision #133): subscriptions.renewed joins the family —
+// journaled renewals produced ZERO events through v2. The version bump makes
+// the sweep replay webhook history (deliberate, capture-first payoff: pre-fix
+// renewal observations backfill as subscription.renewed; everything already
+// canonicalized dedupes via domain_event_keys). W5.3's sweep cursor must be
+// live before this deploys (it is — #130) so the replay can't starve the head.
+export const OFAPI_WEBHOOK_CANONICALIZER_VERSION = 3;
 
 export const OFAPI_WEBHOOK_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "messages.received",
@@ -25,6 +31,7 @@ export const OFAPI_WEBHOOK_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "tips.received",
   "transactions.new",
   "subscriptions.new",
+  "subscriptions.renewed",
   "users.online",
   "users.offline",
   "accounts.connected",
@@ -72,6 +79,35 @@ function messageEvent(
     },
     schemaVersion: 1,
     dedupKey: `msg:${direction}:${messageId}`,
+  }];
+}
+
+/** subscriptions.new / subscriptions.renewed share one notification shape;
+ *  the event type and dedup-key family carry the phase. */
+function subscriptionEvent(
+  observation: CanonicalizableObservation,
+  phase: "started" | "renewed",
+): CanonicalEventDraft[] {
+  const payload = envelopePayload(observation);
+  if (!payload) {
+    return [];
+  }
+  const user = isRecord(payload.user) ? payload.user : {};
+  const fanId = asString(payload.user_id) ?? asString(user.id);
+  if (!fanId) {
+    return [];
+  }
+  const occurredAt = asDate(payload.createdAt, observation.receivedAt);
+  return [{
+    type: `subscription.${phase}`,
+    occurredAt,
+    fanIdentityRef: fanId,
+    data: {
+      subType: asString(payload.subType),
+      notificationId: asString(payload.id),
+    },
+    schemaVersion: 1,
+    dedupKey: `sub:${phase}:${fanId}:${occurredAt.toISOString()}`,
   }];
 }
 
@@ -184,6 +220,13 @@ export function canonicalizeOfapiWebhookObservation(
           feeAmount: asNumber(payload.fee_amount),
           vatAmount: asNumber(payload.vat_amount),
           taxAmount: asNumber(payload.tax_amount),
+          // A46 (W8.2, forward-only): OFAPI amounts are DOLLARS (float);
+          // Fansly's transaction.posted twin carries MILLS. Declared on
+          // newly-emitted events only — events written before this field
+          // existed are immutable facts, so consumers reading historical
+          // rows must keep branching on platform (onlyfans → dollars,
+          // fansly → mills) when amountUnit is absent.
+          amountUnit: "dollars",
           currency: asString(payload.currency),
           status: asString(payload.status),
           description: asString(payload.description),
@@ -193,29 +236,15 @@ export function canonicalizeOfapiWebhookObservation(
       }];
     }
 
-    case "subscriptions.new": {
-      const payload = envelopePayload(observation);
-      if (!payload) {
-        return [];
-      }
-      const user = isRecord(payload.user) ? payload.user : {};
-      const fanId = asString(payload.user_id) ?? asString(user.id);
-      if (!fanId) {
-        return [];
-      }
-      const occurredAt = asDate(payload.createdAt, observation.receivedAt);
-      return [{
-        type: "subscription.started",
-        occurredAt,
-        fanIdentityRef: fanId,
-        data: {
-          subType: asString(payload.subType),
-          notificationId: asString(payload.id),
-        },
-        schemaVersion: 1,
-        dedupKey: `sub:started:${fanId}:${occurredAt.toISOString()}`,
-      }];
-    }
+    case "subscriptions.new":
+      return subscriptionEvent(observation, "started");
+
+    // v3 (A48): same notification envelope shape as subscriptions.new
+    // (docs.onlyfansapi.com example, tests/fixtures/ofapi-webhooks/
+    // unverified_subscriptions_renewed.json) — payload.user_id is the fan,
+    // payload.id the notification, subType e.g. "returning_subscriber".
+    case "subscriptions.renewed":
+      return subscriptionEvent(observation, "renewed");
 
     case "users.online":
     case "users.offline": {

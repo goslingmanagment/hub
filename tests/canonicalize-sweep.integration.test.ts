@@ -6,6 +6,7 @@ import {
   createOnlyFansPage,
   insertObservation,
   listEventsSince,
+  markObservationParsed,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 
@@ -332,6 +333,117 @@ describe("canonicalization sweep (Stage 8)", () => {
     // never spreading to already-stamped work.
     const second = await runCanonicalization(appStub(), { families: [throwingFamily] });
     expect(second).toMatchObject({ scanned: 1, errored: 1, stamped: 0, appended: 0 });
+  });
+
+  // W8.2 / A48 (decision #133): the v2→v3 webhook version bump makes the
+  // sweep REPLAY already-stamped history — pre-fix subscriptions.renewed
+  // observations (journaled, zero events through v2) backfill as
+  // subscription.renewed; everything already canonicalized dedupes.
+  it("v3 replay backfills subscription.renewed from a v2-stamped observation (A48)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const db = testDb.db;
+    const inserted = await insertObservation(db, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      accountId: 4,
+      kind: "subscriptions.renewed",
+      payload: {
+        event: "subscriptions.renewed",
+        account_id: "acct_x",
+        payload: {
+          id: "n-renew-1",
+          type: "subscribed",
+          createdAt: "2026-07-01T10:00:00+00:00",
+          subType: "returning_subscriber",
+          user_id: "778001",
+        },
+      },
+      payloadHash: sha256("renewed-1"),
+      idempotencyKey: "evt-renewed-1",
+    });
+    if (!inserted.inserted) {
+      throw new Error("seed insert deduped unexpectedly");
+    }
+    // Simulate prod history: the row was already CONSUMED by webhook family
+    // v2 (which produced zero events for this kind).
+    await markObservationParsed(db, {
+      observationId: inserted.observationId,
+      receivedAt: inserted.receivedAt,
+      parseVersion: 2,
+    });
+
+    // A v2-floor sweep must NOT touch it (proves it was settled pre-bump)...
+    const settled = await runCanonicalization(appStub(), { belowParseVersion: 2 });
+    expect(settled).toMatchObject({ scanned: 0, appended: 0 });
+
+    // ...and the CURRENT sweep (family now v3) replays it into the event.
+    const replay = await runCanonicalization(appStub());
+    expect(replay).toMatchObject({ appended: 1, errored: 0 });
+    const events = await listEventsSince(db, { accountId: 4, afterSeq: 0 });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "subscription.renewed",
+      fanIdentityRef: "778001",
+      dedupKey: `sub:renewed:778001:${new Date("2026-07-01T10:00:00+00:00").toISOString()}`,
+    });
+
+    // Second sweep: stamped at 3 now — nothing rescans, nothing duplicates.
+    const second = await runCanonicalization(appStub());
+    expect(second).toMatchObject({ scanned: 0, appended: 0 });
+  });
+
+  // W8.2 (A13 remainder, decision #133): garbage provider timestamps clamp to
+  // the observation's receipt time AT CANONICALIZE TIME — the event lands in
+  // a live partition with the raw value preserved in data, instead of aiming
+  // the insert at a partition that may not exist (23514 retry-forever).
+  it("clamps out-of-window occurred_at to receivedAt and preserves the raw value (W8.2)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const db = testDb.db;
+    const receivedAt = new Date("2026-07-08T12:00:00Z");
+    await insertObservation(db, {
+      source: "pull",
+      producer: "sync:fansly:transactions",
+      platform: "fansly",
+      accountId: 3,
+      kind: "earnings_transactions",
+      payload: {
+        total: 2,
+        data: [
+          // Pre-2024 (1999) and far-future (2035) — both out of window.
+          { transactionId: "ftx-clamp-old", correlationAccountId: "fan-9", type: 2110, amount: 100, destinationAmount: 80, status: 2, createdAt: Date.parse("1999-12-31T23:59:59Z") },
+          { transactionId: "ftx-clamp-future", correlationAccountId: "fan-9", type: 2110, amount: 200, destinationAmount: 160, status: 2, createdAt: Date.parse("2035-06-01T00:00:00Z") },
+        ],
+      },
+      payloadHash: sha256("clamp-pull-1"),
+      idempotencyKey: "3:transactions:9:9",
+      receivedAt,
+    });
+
+    const run = await runCanonicalization(appStub());
+    expect(run).toMatchObject({ appended: 2, errored: 0 });
+
+    const events = await listEventsSince(db, { accountId: 3, afterSeq: 0 });
+    expect(events).toHaveLength(2);
+    for (const event of events) {
+      expect(event.occurredAt.toISOString()).toBe(receivedAt.toISOString());
+    }
+    const byRef = new Map(events.map((event) => [event.transactionRef, event]));
+    expect((byRef.get("ftx-clamp-old")!.data as Record<string, unknown>)).toMatchObject({
+      occurredAtClamped: true,
+      occurredAtRaw: "1999-12-31T23:59:59.000Z",
+      amountUnit: "mills",
+    });
+    expect((byRef.get("ftx-clamp-future")!.data as Record<string, unknown>)).toMatchObject({
+      occurredAtClamped: true,
+      occurredAtRaw: "2035-06-01T00:00:00.000Z",
+    });
   });
 
   // W5.3 (B3, decision #123 semantics): the minutely sweep resumes from a
