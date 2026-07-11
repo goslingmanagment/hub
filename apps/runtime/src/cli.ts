@@ -1405,29 +1405,125 @@ export function buildProgram() {
 
   program
     .command("projection:rebuild")
-    .description("Stage 10: rebuild a projection from the domain-event ledger (truncate scope + replay)")
-    .argument("<projection>", "projection name (fan_earnings_stats; message_archive rebuild is disabled)")
+    .description("Stage 10/W10: rebuild a projection from the domain-event ledger "
+      + "(fan_earnings_stats = truncate scope + replay; message_archive = shadow build, never in-place)")
+    .argument("<projection>", "projection name (fan_earnings_stats | message_archive)")
     .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
     .action(async (projection, options) => {
       if (projection !== "message_archive" && projection !== "fan_earnings_stats") {
         throw new Error(`Unknown projection: ${projection}`);
       }
-      if (projection === "message_archive") {
-        // Fast-reply freshness Wave 1 (PR1): the rebuild replays only the
-        // ATTACHED domain_events parent — detached/tiered partitions are
-        // invisible to it — and the reset destroys backfill_source rows that
-        // have no event-ledger counterpart. Running it would silently shrink
-        // the archive. Disabled until a partition-complete rebuild exists.
-        throw new Error(
-          "projection:rebuild message_archive is disabled: the replay only sees attached "
-            + "domain_events partitions and destroys backfill_source rows (fastreply-freshness PR1)",
-        );
-      }
       const app = await createAppContext();
       try {
         const scope = options.account !== undefined ? { accountId: options.account } : {};
+        if (projection === "message_archive") {
+          // W10 (decision #134): the old delete+replay rebuild was lossy —
+          // the replay sees only attached domain_events partitions and the
+          // reset destroyed legacy-seed rows (fastreply-freshness PR1 threw
+          // here unconditionally). Dispatch to the shadow build instead: it
+          // lifts legacy seeds verbatim, replays behind the detached-partition
+          // hard gate, and NEVER touches the live table — the swap is a
+          // separate, owner-gated command.
+          const { buildMessageArchiveShadow } = await import(
+            "./services/projections/message-archive-rebuild.ts"
+          );
+          const result = await buildMessageArchiveShadow(app, scope);
+          console.log(JSON.stringify(result, null, 2));
+          console.log(
+            "Shadow build complete. Next: `archive:rebuild-verify` (must report ok), "
+              + "then the owner-gated `archive:rebuild-switch --execute` "
+              + "(docs/runbooks/message-archive-rebuild.md).",
+          );
+          return;
+        }
         const result = await rebuildFanEarningsProjection(app, scope);
         console.log(JSON.stringify(result));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("archive:rebuild-preflight")
+    .description("W10 R0: message-archive rebuild census — per-account event-sourced rows, "
+      + "legacy seeds by source, unrecoverable-if-dropped rows, detached-partition census")
+    .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { runArchiveRebuildPreflight } = await import(
+          "./services/projections/message-archive-rebuild.ts"
+        );
+        const scope = options.account !== undefined ? { accountId: options.account } : {};
+        const result = await runArchiveRebuildPreflight(app, scope);
+        console.log(JSON.stringify(result, null, 2));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("archive:rebuild-verify")
+    .description("W10 R2: fidelity proof — shadow ⊇ message_archive set difference plus "
+      + "per-row material comparison; nonzero missing rows exits 1 and forbids the switch")
+    .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
+    .option("--sample <n>", "max diff/missing sample rows (default 20)", (v) => Number.parseInt(v, 10))
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { verifyMessageArchiveShadow } = await import(
+          "./services/projections/message-archive-rebuild.ts"
+        );
+        const result = await verifyMessageArchiveShadow(app, {
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+          ...(options.sample !== undefined ? { sampleLimit: options.sample } : {}),
+        });
+        console.log(JSON.stringify(result, null, 2));
+        if (!result.ok) {
+          console.error(
+            `VERIFICATION FAILED: ${result.missing} message_archive row(s) missing from the shadow.`,
+          );
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("archive:rebuild-switch")
+    .description("W10 R3 (OWNER-GATED — ask the owner before running with --execute): atomically "
+      + "swap message_archive_shadow into place in ONE transaction (old table kept as "
+      + "message_archive_retired_<ts>, watermark reset to the shadow's replay high-seq). "
+      + "PAUSE the archive sweep worker for the window: docs/runbooks/message-archive-rebuild.md")
+    .option("--execute", "actually switch (default is a dry-run report)")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { planMessageArchiveShadowSwitch, switchMessageArchiveShadow } = await import(
+          "./services/projections/message-archive-rebuild.ts"
+        );
+        if (!options.execute) {
+          const plan = await planMessageArchiveShadowSwitch(app);
+          console.log(JSON.stringify({ dryRun: true, ...plan }, null, 2));
+          console.log(
+            plan.wouldSwitch
+              ? "Dry run only. Before --execute: (1) owner confirmation, (2) PAUSE the archive "
+                + "sweep worker (`docker compose stop worker` on the VPS), (3) fresh "
+                + "archive:rebuild-verify. Runbook: docs/runbooks/message-archive-rebuild.md"
+              : "Switch would be REFUSED (missing rows) — re-run the shadow build, then verify.",
+          );
+          if (!plan.wouldSwitch) {
+            process.exitCode = 1;
+          }
+          return;
+        }
+        const result = await switchMessageArchiveShadow(app);
+        console.log(JSON.stringify(result, null, 2));
+        console.log(
+          `Switched. Old table kept as ${result.retiredTable} (its drop is a separate owner `
+            + "decision). Resume the archive sweep worker now (`docker compose start worker`).",
+        );
       } finally {
         await app.close();
       }

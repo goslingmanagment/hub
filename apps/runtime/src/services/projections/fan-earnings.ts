@@ -83,22 +83,28 @@ export async function runFanEarningsProjection(
   return totals;
 }
 
-/** One-command rebuild: truncate scope + reset watermark + replay. */
+/** One-command rebuild: truncate scope + reset watermark + replay.
+ * The two deletes run in ONE transaction (A37, decision #134): a crash
+ * between them would otherwise leave an empty projection behind a stale
+ * high watermark — permanently and silently empty, the same failure the
+ * sibling resetMessageArchiveProjection already guards against. */
 export async function rebuildFanEarningsProjection(
   app: Pick<AppContext, "db" | "logger">,
   input?: { accountId?: number | null },
 ): Promise<FanEarningsProjectionResult> {
-  if (input?.accountId != null) {
-    await app.db.execute(sql`delete from fan_earnings_stats where account_id = ${input.accountId}`);
-    await app.db.execute(sql`
-      delete from projection_seq_watermarks
-      where projection = ${FAN_EARNINGS_PROJECTION} and account_id = ${input.accountId}
-    `);
-  } else {
-    await app.db.execute(sql`delete from fan_earnings_stats`);
-    await app.db.execute(sql`
-      delete from projection_seq_watermarks where projection = ${FAN_EARNINGS_PROJECTION}
-    `);
-  }
+  await app.db.transaction(async (tx) => {
+    if (input?.accountId != null) {
+      await tx.execute(sql`delete from fan_earnings_stats where account_id = ${input.accountId}`);
+      await tx.execute(sql`
+        delete from projection_seq_watermarks
+        where projection = ${FAN_EARNINGS_PROJECTION} and account_id = ${input.accountId}
+      `);
+    } else {
+      await tx.execute(sql`delete from fan_earnings_stats`);
+      await tx.execute(sql`
+        delete from projection_seq_watermarks where projection = ${FAN_EARNINGS_PROJECTION}
+      `);
+    }
+  });
   return runFanEarningsProjection(app, input);
 }

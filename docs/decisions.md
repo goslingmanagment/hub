@@ -3547,3 +3547,45 @@ cache-write breakdown from message_start when a usage delta lacks it — the
 1h component was priced at the 5m rate (37.5% under-recorded); historical
 rows are identifiable (`cache_write_tokens>0 AND cost_approximate=true`) and
 stay unmutated (append-only ledger).
+
+**Decision #134 (2026-07-11, W10 / B10+A37+A51 — message-archive shadow
+rebuild machinery):** the Stage-10 one-command rebuild (delete + event
+replay) is retired as structurally lossy: the replay reads only ATTACHED
+domain_events partitions (tiering detaches months >6mo; the watermark
+advances past missing seqs silently) and the reset destroys legacy-seed rows
+(`source_event_id IS NULL AND backfill_source IN
+('dm_message_archive','hot_table')`) — for pruned hot originals those rows
+are the ONLY copy. The build spec had already rejected in-place rebuild and
+hash-equality-as-proof; the shipped replacement is a staged SHADOW build
+(migration 0083, `message_archive_shadow`, same shape, distinct index
+names). R0 `archive:rebuild-preflight`: per-account census — event-sourced
+rows, legacy seeds by source, unrecoverable-if-dropped (the corrected query
+INCLUDING dm_message_archive as an origin — the audit's version omitted it),
+detached-partition census (pg_inherits vs tiered_pending_drop AND
+detached-in-public 0077 leftovers). R1 (dispatched from `projection:rebuild
+message_archive`, replacing the W1 unconditional throw, --account kept): per
+account, ONE restartable transaction — legacy-seed LIFT first (verbatim
+copy, provenance preserved; lift-before-replay reproduces the live table's
+first-writer precedence exactly), then event replay from seq 0 behind a HARD
+detached-partition gate (checked at start AND end of the transaction — a
+tiering detach mid-build aborts instead of shipping a short replay), then
+account-scoped backfill re-run; the existing writers were parameterized with
+a two-value whitelisted target table. R2 `archive:rebuild-verify`:
+set-difference proof (shadow ⊇ old on the archive key) + per-column material
+comparison with bounded samples; NONZERO MISSING ROWS FAILS (exit 1) and the
+switch re-checks the same condition inside its transaction. R3
+`archive:rebuild-switch` (owner-gated, dry-run default, sweep worker paused
+for the window — runbook `docs/runbooks/message-archive-rebuild.md`): one
+transaction under the rebuild advisory lock — old → message_archive_retired_
+<ts> (KEPT; capture-first — its drop is a separate owner decision), shadow →
+message_archive, canonical index/constraint/sequence names follow the live
+table, and the projection watermark is FORCE-reset (delete+reinsert — the
+guarded upsert would keep a higher stale watermark and skip events) to the
+shadow's replay high-seq. No erasure during a rebuild window (W6 ⟂ W10); E5
+re-journal runs before any prod run. Ride-alongs: (A51) `text_plain` is now
+derived through `normalizeDmMessageText` in the projection writer — the
+event ledger stays verbatim, and the shadow replay heals pre-strip rows for
+free (verify flags those diffs `healedHtml`); (A37)
+`rebuildFanEarningsProjection`'s two autocommit deletes now run in one
+transaction — a crash between them left an empty projection behind a stale
+watermark, permanently and silently.
