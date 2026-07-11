@@ -4271,6 +4271,59 @@ describe("api integration", () => {
     expect(ownerFan.json().pages).toHaveLength(2);
   });
 
+  it("fan profile writes honor generatedAtMs: round-trip, skew clamp, bounds, atomic no-ops (#136)", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    const appContext = createTestAppContext(testDb);
+    const { key } = await issueChatterApiKey(appContext, {
+      username: "anton",
+      pageLabel: "lana",
+    }, { source: "cli" });
+    const put = (payload: Record<string, unknown>) =>
+      server!.inject({
+        method: "PUT",
+        url: "/api/v1/pages/lana/fans/fan-001/profile",
+        headers: { authorization: `Bearer ${key}` },
+        payload,
+      });
+
+    // generatedAtMs round-trips as sourceGeneratedAt.
+    const sourcedAtMs = Date.parse("2026-07-01T00:00:00Z");
+    const first = await put({ body: "## Sourced", generatedAtMs: sourcedAtMs });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toMatchObject({
+      version: 1,
+      sourceGeneratedAt: "2026-07-01T00:00:00.000Z",
+    });
+
+    // Identical body re-push: no duplicate version (atomic kernel dedupe).
+    const duplicate = await put({ body: "## Sourced", generatedAtMs: sourcedAtMs });
+    expect(duplicate.statusCode, duplicate.body).toBe(200);
+    expect(duplicate.json().version).toBe(1);
+
+    // A different body with a non-newer source never supersedes the latest.
+    const stale = await put({ body: "## Stale", generatedAtMs: sourcedAtMs - 60_000 });
+    expect(stale.statusCode, stale.body).toBe(200);
+    expect(stale.json()).toMatchObject({ version: 1, body: "## Sourced" });
+
+    // A far-future stamp is a broken clock: clamped to server now, not stored.
+    const future = await put({
+      body: "## Future clock",
+      generatedAtMs: Date.now() + 24 * 60 * 60 * 1000,
+    });
+    expect(future.statusCode, future.body).toBe(200);
+    expect(future.json().version).toBe(2);
+    const storedMs = Date.parse(future.json().sourceGeneratedAt);
+    expect(storedMs).toBeLessThanOrEqual(Date.now() + 60_000);
+
+    // Out of the representable/sane range: rejected at the contract.
+    const absurd = await put({ body: "## Absurd", generatedAtMs: 8_640_000_000_000_000 });
+    expect(absurd.statusCode).toBe(400);
+  });
+
   it("stores fan profile versions via chatter API key and exposes latest plus history with page scoping", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

@@ -25,7 +25,7 @@ export async function appendFanProfile(
     `);
 
     const [latest] = await tx
-      .select({ version: fanProfiles.version })
+      .select()
       .from(fanProfiles)
       .where(and(
         eq(fanProfiles.fanId, input.fanId),
@@ -33,6 +33,28 @@ export async function appendFanProfile(
       ))
       .orderBy(desc(fanProfiles.version))
       .limit(1);
+
+    // #136 hardening: the dedupe/ordering rules live HERE, inside the same
+    // advisory-locked transaction that assigns the version — a client-side
+    // preflight GET can always race another writer between its read and this
+    // write, so the client check is only an optimization.
+    if (latest) {
+      // Identical body: already stored (a re-push whose ack was lost) — never
+      // append a duplicate version.
+      if (latest.body === input.body) {
+        return latest;
+      }
+      // Stale write: an incoming dossier with a KNOWN source time never
+      // supersedes a latest whose (source ?? append) time is not older —
+      // another client re-scanned meanwhile. Legacy writes without a source
+      // time keep the historical always-append semantics.
+      if (input.sourceGeneratedAt) {
+        const latestGeneratedAt = latest.sourceGeneratedAt ?? latest.createdAt;
+        if (latestGeneratedAt.getTime() >= input.sourceGeneratedAt.getTime()) {
+          return latest;
+        }
+      }
+    }
 
     const [created] = await tx
       .insert(fanProfiles)

@@ -3674,8 +3674,11 @@ just lose its recount).
 kernel-side, fail-open, staged):** Every feature-lane prompt whose policy
 says so now injects the latest `fan_profiles` body (the Scan dossier the
 extension pushes via `upsertFanProfile`) — the kernel looks up its OWN
-store; zero wire-contract change, so the Fansly extension and the desktop
-get the behavior without an SDK re-vendor. New `FeaturePolicy.usesFanProfile`
+store; the INJECTION needs no wire-contract change, so the Fansly extension
+and the desktop get the behavior without an SDK re-vendor. (The same-day
+review fixes below did extend the upsert/profile contract with OPTIONAL
+generatedAtMs/sourceGeneratedAt fields — non-strict schemas, compatible in
+either deploy order.) New `FeaturePolicy.usesFanProfile`
 gates it per feature: ON for fast-reply (compare inherits — its cards ride
 the fast-reply feature), improve-draft, help-me, ping; OFF for fan-summary
 (it GENERATES the dossier — feeding it back is circular), chat-review (must
@@ -3717,12 +3720,20 @@ note; fan-summary.md untouched. Observability: debug-level "ai feature
 dossier injected" (version/age/chars/truncated/droppedSections — never the
 body), warn on lookup failure, and a `fanProfile` entry in
 params.contextManifest on BOTH context paths (the Fansly clientContext lane
-has no transcript manifest, but the dossier audit still lands).
-**Decision #136 — RESERVED for the in-flight AUTH_POLICY_ENFORCEMENT ruling
+has no transcript manifest, but the dossier audit still lands). Same-day P1
+hardening: the write-side dedupe/ordering is ATOMIC in the kernel —
+appendFanProfile's advisory-locked transaction no-ops an identical body
+(lost-ack re-push) and rejects a sourced write that is not newer than the
+stored latest (client preflight GETs remain an optimization; legacy writes
+without generatedAtMs keep append semantics); generatedAtMs is
+contract-bounded to 2100-01-01 and future skew past 5 minutes clamps to
+server "now" so a broken client clock can't pin volatile sections fresh.
+**Decision #139 — RESERVED for the in-flight AUTH_POLICY_ENFORCEMENT ruling
 (authored in the ai/ping-silence session, uncommitted at the time of this
-write; renumbered there from its original #135 which this repo's A2a took
-first). If that session lands its entry under a different number, this
-placeholder is released.**
+write; renumbered twice: its original #135 was taken by A2a, and its #136
+reservation was taken by the fan-dossier decision above before this merge
+landed — #137/#138 are also taken below). If that session lands its entry
+under a different number, this placeholder is released.**
 
 **Decision #137 (2026-07-11, A2b / #135 follow-through — projection debt,
 health truthfulness):** the two systemic gaps behind the #135 wedge close.

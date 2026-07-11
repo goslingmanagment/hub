@@ -1676,8 +1676,12 @@ export const upsertFanProfileBodySchema = z.object({
   body: z.string().min(1).max(50_000),
   /** Epoch ms of the client's Scan generation (#136): created_at is only the
    * hub APPEND time and must not stand in for the dossier's age when a
-   * client re-pushes an old cached summary. Optional — legacy clients omit. */
-  generatedAtMs: z.number().int().positive().optional(),
+   * client re-pushes an old cached summary. Optional — legacy clients omit.
+   * Bounded to 2100-01-01: int().positive() alone admits values past the
+   * JS Date range (Invalid Date at insert) and absurd-future stamps that
+   * would keep volatile dossier sections "fresh" forever. Small NEAR-future
+   * clock skew is clamped server-side, not rejected here. */
+  generatedAtMs: z.number().int().positive().max(4_102_444_800_000).optional(),
 });
 
 export const createFanNoteBodySchema = z.object({

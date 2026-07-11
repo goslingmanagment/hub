@@ -25,6 +25,10 @@ import {
 import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { getPageSummary } from "./reporting.ts";
 
+/** How far into the future a client's generatedAtMs may point before it is
+ * treated as a broken clock and clamped to server "now" (#136). */
+const FAN_PROFILE_CLOCK_SKEW_ALLOWANCE_MS = 5 * 60_000;
+
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
     return null;
@@ -171,6 +175,16 @@ export async function upsertPageFanProfile(
 ): Promise<FanProfileDocument> {
   requireApiKeyUser(principal);
 
+  // A generation stamp from the future is a broken client clock, not a fact:
+  // clamp anything past a small skew allowance to "now" so the dossier can
+  // never be permanently "fresh" for the age policy (#136). Contract-side the
+  // value is already bounded to the representable Date range.
+  const nowMs = Date.now();
+  const clampedGeneratedAtMs =
+    generatedAtMs !== undefined && generatedAtMs > nowMs + FAN_PROFILE_CLOCK_SKEW_ALLOWANCE_MS
+      ? nowMs
+      : generatedAtMs;
+
   const { page, fan } = await resolveOrCreatePageFan(app, principal, pageLabel, platformUserId);
   const profile = await appendFanProfile(app.db, {
     fanId: fan.fanId,
@@ -178,7 +192,7 @@ export async function upsertPageFanProfile(
     body,
     source: "chatmuse",
     createdByUserId: principal.user.id,
-    sourceGeneratedAt: generatedAtMs ? new Date(generatedAtMs) : null,
+    sourceGeneratedAt: clampedGeneratedAtMs ? new Date(clampedGeneratedAtMs) : null,
   });
 
   return serializeProfile(profile);

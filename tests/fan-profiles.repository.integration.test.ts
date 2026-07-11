@@ -102,6 +102,83 @@ describe("fan profile repository integration", () => {
     expect(historical?.body).toContain("First read.");
   });
 
+  it("dedupes identical bodies and rejects stale sourced writes atomically (#136)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createProfilePage(testDb, "fan-profile-atomic");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-profile-002",
+      username: "fan_profile_002",
+      displayName: "Fan Profile 002",
+    }]);
+    if (!page || !fan) {
+      throw new Error("test setup: page/fan creation failed");
+    }
+    const base = { fanId: fan.id, platformAccountId: page.id, source: "chatmuse" };
+
+    const first = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "## Sourced v1",
+      sourceGeneratedAt: new Date("2026-07-01T00:00:00Z"),
+    });
+    expect(first?.version).toBe(1);
+
+    // Identical body (lost-ack re-push) — no duplicate version, even with an
+    // older source stamp.
+    const duplicate = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "## Sourced v1",
+      sourceGeneratedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    expect(duplicate?.version).toBe(1);
+
+    // A DIFFERENT body whose source time is not newer than the stored latest
+    // never supersedes it (another device re-scanned meanwhile).
+    const stale = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "## Stale scan from an offline device",
+      sourceGeneratedAt: new Date("2026-06-15T00:00:00Z"),
+    });
+    expect(stale?.version).toBe(1);
+    expect(stale?.body).toBe("## Sourced v1");
+
+    // A genuinely newer source appends.
+    const newer = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "## Sourced v2",
+      sourceGeneratedAt: new Date("2026-07-02T00:00:00Z"),
+    });
+    expect(newer?.version).toBe(2);
+
+    // Legacy writes without a source time keep the historical append
+    // semantics (old clients must not lose their pushes).
+    const legacy = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "## Legacy write",
+    });
+    expect(legacy?.version).toBe(3);
+
+    // Against a legacy latest, ordering falls back to its APPEND time — a
+    // sourced write from before that moment is stale.
+    const staleVsLegacy = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "## Old scan racing a legacy row",
+      sourceGeneratedAt: new Date("2026-07-01T00:00:00Z"),
+    });
+    expect(staleVsLegacy?.version).toBe(3);
+    expect(staleVsLegacy?.body).toBe("## Legacy write");
+
+    const latest = await getLatestFanProfile(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+    });
+    expect(latest?.version).toBe(3);
+  });
+
   it("resolves the latest profile by visible conversation mapping", async (context) => {
     if (!testDb) {
       context.skip();
