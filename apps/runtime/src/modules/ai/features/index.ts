@@ -265,18 +265,20 @@ export async function prepareAiFeatureStream(
       truncated: fanProfile.truncated,
       droppedSections: fanProfile.droppedSections,
     }, "ai feature dossier injected");
-    if (contextManifest !== undefined) {
-      contextManifest = {
-        ...contextManifest,
-        fanProfile: {
-          version: fanProfile.version,
-          generatedAt: fanProfile.generatedAt.toISOString(),
-          chars: fanProfile.body.length,
-          truncated: fanProfile.truncated,
-          droppedSections: fanProfile.droppedSections,
-        },
-      };
-    }
+    // Rides the restricted generation record's params.contextManifest on BOTH
+    // context paths — the Fansly clientContext lane has no transcript manifest,
+    // but the dossier injection still needs a per-generation audit trail.
+    contextManifest = {
+      ...(contextManifest ?? {}),
+      fanProfile: {
+        version: fanProfile.version,
+        generatedAt: fanProfile.generatedAt.toISOString(),
+        ageDays: fanProfile.ageDays,
+        chars: fanProfile.body.length,
+        truncated: fanProfile.truncated,
+        droppedSections: fanProfile.droppedSections,
+      },
+    };
   }
 
   const prompt = buildPrompt({

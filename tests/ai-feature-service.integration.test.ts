@@ -483,13 +483,18 @@ describe("client-context path (Stage 32)", () => {
 });
 
 describe("fan-dossier context (Decision #136)", () => {
+  // Production shape: fan-summary writes RUSSIAN markdown (## N. ЗАГОЛОВОК).
   const DOSSIER_BODY = [
-    "1. DOSSIER",
-    "- Rides a red Ducati, lives in Austin",
-    "5. FINANCIAL PROFILE",
-    "- Whale spender, tips nightly",
-    "6. OPEN LOOPS",
-    "- Promised him beach photos",
+    "# ПРОФИЛЬ ФАНАТА: Charles",
+    "",
+    "## 1. ДОСЬЕ",
+    "- Ездит на красном Ducati, живёт в Остине",
+    "",
+    "## 5. ФИНАНСОВЫЙ ПРОФИЛЬ",
+    "- Кит, типсует каждый вечер",
+    "",
+    "## 6. ОТКРЫТЫЕ ПЕТЛИ",
+    "- Обещала фото с пляжа",
   ].join("\n");
 
   async function seedFanProfile(input: {
@@ -497,6 +502,7 @@ describe("fan-dossier context (Decision #136)", () => {
     targetPageId: number;
     body?: string;
     createdAt?: string;
+    sourceGeneratedAt?: string | null;
   }): Promise<void> {
     const existing = await testDb!.pool.query<{ id: string }>(
       `select id::text as id from fans where platform = $1 and platform_user_id = $2`,
@@ -514,13 +520,21 @@ describe("fan-dossier context (Decision #136)", () => {
       fanId = Number(inserted.rows[0]!.id);
     }
     await testDb!.pool.query(
-      `insert into fan_profiles (fan_id, platform_account_id, version, body, source, created_at)
-       values ($1, $2, 1, $3, 'chatmuse', $4)`,
-      [fanId, input.targetPageId, input.body ?? DOSSIER_BODY, input.createdAt ?? new Date().toISOString()],
+      `insert into fan_profiles (fan_id, platform_account_id, version, body, source, created_at, source_generated_at)
+       values ($1, $2, 1, $3, 'chatmuse', $4, $5)`,
+      [
+        fanId,
+        input.targetPageId,
+        input.body ?? DOSSIER_BODY,
+        input.createdAt ?? new Date().toISOString(),
+        input.sourceGeneratedAt ?? null,
+      ],
     );
   }
 
   function makeCall(capture: { input?: AiGatewayProviderInput }) {
+    // Default rollout flag is "none" — these tests exercise the injection.
+    appContext.config.chatMuseAiFanProfileContextFeatures = "all";
     appContext.aiGatewayProvider = capturingProvider(capture);
     return (feature: string, extra: Record<string, unknown> = {}) =>
       apiServer!.inject({
@@ -554,11 +568,11 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(reply.statusCode, reply.body).toBe(200);
     const text = userText(capture);
     expect(text).toContain("## Fan Dossier");
-    expect(text).toContain("Rides a red Ducati");
+    expect(text).toContain("красном Ducati");
     expect(text).toContain("generated on");
     expect(text).toContain("the transcript is authoritative");
     // The financial section never rides along — fresh spend data has its own block.
-    expect(text).not.toContain("Whale spender");
+    expect(text).not.toContain("типсует");
     // The dossier lives in the ephemeral dynamic block, not the 1h static prefix.
     const dynamicBlock = capture.input!.body.prompt.userBlocks.find((block) => block.cache === "5m");
     expect(dynamicBlock?.text).toContain("## Fan Dossier");
@@ -620,7 +634,32 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(userText(capture)).toContain("## Fan Dossier");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("keeps only stable sections for an old dossier (volatile age policy)", async (context) => {
+  it("ages the dossier by its SOURCE generation time, not the hub append time", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    // Delayed re-push scenario: the row was APPENDED just now, but the Scan
+    // itself ran 60 days ago — volatile sections must still drop.
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    await seedFanProfile({
+      platform: "onlyfans",
+      targetPageId: pageId,
+      createdAt: new Date().toISOString(),
+      sourceGeneratedAt: sixtyDaysAgo,
+    });
+    const capture: { input?: AiGatewayProviderInput } = {};
+    const call = makeCall(capture);
+
+    const reply = await call("fast-reply");
+    expect(reply.statusCode, reply.body).toBe(200);
+    const text = userText(capture);
+    expect(text).toContain("красном Ducati");
+    expect(text).not.toContain("Обещала фото с пляжа");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("falls back to created_at for legacy rows without a source time", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -634,8 +673,8 @@ describe("fan-dossier context (Decision #136)", () => {
     const reply = await call("fast-reply");
     expect(reply.statusCode, reply.body).toBe(200);
     const text = userText(capture);
-    expect(text).toContain("Rides a red Ducati");
-    expect(text).not.toContain("Promised him beach photos");
+    expect(text).toContain("красном Ducati");
+    expect(text).not.toContain("Обещала фото с пляжа");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("injects on the fansly clientContext path alongside the client transcript", async (context) => {
@@ -647,6 +686,7 @@ describe("fan-dossier context (Decision #136)", () => {
       `select id::text as id from pages where label = 'svc-fs'`,
     );
     await seedFanProfile({ platform: "fansly", targetPageId: Number(fanslyPage.rows[0]!.id) });
+    appContext.config.chatMuseAiFanProfileContextFeatures = "all";
     const capture: { input?: AiGatewayProviderInput } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
 
@@ -672,7 +712,17 @@ describe("fan-dossier context (Decision #136)", () => {
     const text = userText(capture);
     expect(text).toContain("fresh client-side message about the beach");
     expect(text).toContain("## Fan Dossier");
-    expect(text).toContain("Rides a red Ducati");
+    expect(text).toContain("красном Ducati");
+
+    // The dossier audit rides params.contextManifest on the clientContext
+    // path too (it has no transcript manifest of its own).
+    const { rows } = await testDb.pool.query(
+      `select params from ai_generation_content order by id desc limit 1`,
+    );
+    expect(rows[0]?.params?.contextManifest?.fanProfile).toMatchObject({
+      version: 1,
+      truncated: false,
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

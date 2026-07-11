@@ -19,35 +19,90 @@ export const FAN_PROFILE_HARD_CAP_CHARS = 20_000;
 const TRUNCATION_MARKER = "\n\n[dossier truncated]";
 
 /** The section vocabulary of the fan-summary template (templates/fan-summary.md
- * "## Sections"). `keepPriority` orders size-pressure drops (higher = dropped
- * first); `kind` drives the age policy — volatile sections (stage, open loops,
- * strategy) mislead once the dossier is old, stable ones (facts, psych
- * portrait, communication style/boundaries) age well. FINANCIAL PROFILE is
+ * "## Sections"). The template instructs "Write in Russian", so PRODUCTION
+ * dossiers carry Russian headings in the dashboard-pinned markdown shape
+ * (`## 1. ДОСЬЕ` — see apps/dashboard/src/lib/parseFanProfile.ts and
+ * tests/parseFanProfile.test.ts); English names cover the template's own
+ * vocabulary and legacy bodies. `stems` catch translation variance, but only
+ * on markdown `#` heading lines — prose or list bullets never stem-match.
+ * `keepPriority` orders size-pressure drops (higher = dropped first); `kind`
+ * drives the age policy — volatile sections (stage, open loops, strategy)
+ * mislead once the dossier is old, stable ones age well. FINANCIAL PROFILE is
  * always dropped: fresh spending/subscription data rides its own prompt
  * sections. */
 const DOSSIER_SECTIONS = [
-  { label: "DOSSIER", kind: "stable", keepPriority: 0 },
-  { label: "PSYCHOLOGICAL PORTRAIT", kind: "stable", keepPriority: 4 },
-  { label: "STAGE AND TRAJECTORY", kind: "volatile", keepPriority: 5 },
-  { label: "COMMUNICATION DYNAMICS", kind: "stable", keepPriority: 1 },
-  { label: "FINANCIAL PROFILE", kind: "dropped", keepPriority: 6 },
-  { label: "OPEN LOOPS", kind: "volatile", keepPriority: 2 },
-  { label: "STRATEGY", kind: "volatile", keepPriority: 3 },
+  {
+    label: "DOSSIER",
+    kind: "stable",
+    keepPriority: 0,
+    aliases: ["DOSSIER", "ДОСЬЕ"],
+    stems: ["DOSSIER", "ДОСЬЕ"],
+  },
+  {
+    label: "PSYCHOLOGICAL PORTRAIT",
+    kind: "stable",
+    keepPriority: 4,
+    aliases: ["PSYCHOLOGICAL PORTRAIT", "ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ", "ПОРТРЕТ"],
+    stems: ["PORTRAIT", "ПОРТРЕТ"],
+  },
+  {
+    label: "STAGE AND TRAJECTORY",
+    kind: "volatile",
+    keepPriority: 5,
+    aliases: ["STAGE AND TRAJECTORY", "СТАДИЯ И ТРАЕКТОРИЯ", "ЭТАП И ТРАЕКТОРИЯ"],
+    stems: ["STAGE", "TRAJECTOR", "СТАДИ", "ЭТАП", "ТРАЕКТОР"],
+  },
+  {
+    label: "COMMUNICATION DYNAMICS",
+    kind: "stable",
+    keepPriority: 1,
+    aliases: ["COMMUNICATION DYNAMICS", "ДИНАМИКА ОБЩЕНИЯ", "КОММУНИКАЦИОННАЯ ДИНАМИКА"],
+    stems: ["COMMUNICATION", "DYNAMIC", "КОММУНИК", "ОБЩЕНИ", "ДИНАМИК"],
+  },
+  {
+    label: "FINANCIAL PROFILE",
+    kind: "dropped",
+    keepPriority: 6,
+    aliases: ["FINANCIAL PROFILE", "ФИНАНСОВЫЙ ПРОФИЛЬ"],
+    stems: ["FINANC", "ФИНАНС"],
+  },
+  {
+    label: "OPEN LOOPS",
+    kind: "volatile",
+    keepPriority: 2,
+    aliases: ["OPEN LOOPS", "ОТКРЫТЫЕ ПЕТЛИ", "НЕЗАКРЫТЫЕ ТЕМЫ", "ОТКРЫТЫЕ ВОПРОСЫ"],
+    stems: ["LOOP", "ПЕТЛ", "НЕЗАКРЫТ"],
+  },
+  {
+    label: "STRATEGY",
+    kind: "volatile",
+    keepPriority: 3,
+    aliases: ["STRATEGY", "СТРАТЕГИЯ"],
+    stems: ["STRATEG", "СТРАТЕГ"],
+  },
 ] as const;
 
 type DossierSectionDef = (typeof DOSSIER_SECTIONS)[number];
 
 /** Reduce a candidate heading line to the bare section name: markdown heading
- * marks, list markers, "1." / "1)" numbering, bold/underscore wrappers and a
- * trailing colon are stripped; the remainder must EQUAL a known name (so prose
- * that merely mentions "strategy" never splits a section). */
+ * marks, list markers, "1." / "1)" numbering, bold/underscore wrappers,
+ * a trailing colon and ATX closing hashes are stripped. The remainder must
+ * EQUAL a known alias — except on markdown `#` heading lines, where a stem
+ * CONTAINS match is allowed too (production headings are model-translated
+ * Russian and vary in wording). Prose that merely mentions "strategy" and
+ * list bullets like "- Финансы: …" never split a section. */
 function matchSectionHeading(line: string): DossierSectionDef | undefined {
   const trimmed = line.trim();
   if (trimmed.length === 0 || trimmed.length > 64) {
     return undefined;
   }
+  // Stem matching is limited to H1/H2 — production sections are H2 and an
+  // H3+ is a SUBHEADING inside a section (e.g. "### Финансовые заметки"
+  // under ДОСЬЕ must not split off and get dropped as financial).
+  const isMarkdownHeading = /^#{1,2}\s/.test(trimmed);
   const normalized = trimmed
     .replace(/^#{1,6}\s*/, "")
+    .replace(/\s*#+\s*$/, "")
     .replace(/^[-*]\s+/, "")
     .replace(/^\d{1,2}\s*[.)]\s*/, "")
     .replace(/^[*_]{1,3}|[*_]{1,3}$/g, "")
@@ -55,7 +110,18 @@ function matchSectionHeading(line: string): DossierSectionDef | undefined {
     .trim()
     .replace(/\s+/g, " ")
     .toUpperCase();
-  return DOSSIER_SECTIONS.find((section) => section.label === normalized);
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  const exact = DOSSIER_SECTIONS.find((section) =>
+    (section.aliases as readonly string[]).includes(normalized),
+  );
+  if (exact || !isMarkdownHeading) {
+    return exact;
+  }
+  return DOSSIER_SECTIONS.find((section) =>
+    section.stems.some((stem) => normalized.includes(stem)),
+  );
 }
 
 export interface CompiledDossier {
@@ -157,13 +223,15 @@ export function compileDossierForPrompt(
 }
 
 /** Runtime allowlist (chatMuseAiFanProfileContextFeatures): "all" trusts the
- * per-feature policy flag, "none"/empty is the rollback switch, anything else
- * is a CSV of feature keys for staged rollout. */
+ * per-feature policy flag, "none"/empty is the off/rollback switch, anything
+ * else is a CSV of feature keys for staged rollout. An absent value means OFF
+ * — matching the registry default, so a config path that loses the field can
+ * never silently enable the feature. */
 export function isFanProfileFeatureEnabled(
   allowlist: string | undefined,
   feature: string,
 ): boolean {
-  const normalized = (allowlist ?? "all").trim().toLowerCase();
+  const normalized = (allowlist ?? "none").trim().toLowerCase();
   if (normalized === "all") {
     return true;
   }
@@ -217,7 +285,9 @@ export async function loadFanProfileContext(
     return undefined;
   }
 
-  const generatedAt = profile.createdAt;
+  // sourceGeneratedAt is when the Scan actually RAN; createdAt is only the
+  // hub append time (a delayed client re-push must not zero the age).
+  const generatedAt = profile.sourceGeneratedAt ?? profile.createdAt;
   const ageDays = Math.max(0, Math.floor((input.now - generatedAt.getTime()) / DAY_MS));
   const compiled = compileDossierForPrompt(profile.body, {
     ageDays,

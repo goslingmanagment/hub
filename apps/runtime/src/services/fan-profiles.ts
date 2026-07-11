@@ -57,6 +57,7 @@ function serializeProfile(
     body: string;
     source: string;
     createdAt: Date | string;
+    sourceGeneratedAt?: Date | string | null;
     createdByUserId: number | null;
   },
 ): FanProfileDocument {
@@ -65,6 +66,9 @@ function serializeProfile(
     body: input.body,
     source: input.source as FanProfileDocument["source"],
     createdAt: new Date(input.createdAt).toISOString(),
+    sourceGeneratedAt: input.sourceGeneratedAt
+      ? new Date(input.sourceGeneratedAt).toISOString()
+      : null,
     createdByUserId: input.createdByUserId ?? null,
   };
 }
@@ -163,6 +167,7 @@ export async function upsertPageFanProfile(
   pageLabel: string,
   platformUserId: string,
   body: string,
+  generatedAtMs?: number,
 ): Promise<FanProfileDocument> {
   requireApiKeyUser(principal);
 
@@ -173,6 +178,7 @@ export async function upsertPageFanProfile(
     body,
     source: "chatmuse",
     createdByUserId: principal.user.id,
+    sourceGeneratedAt: generatedAtMs ? new Date(generatedAtMs) : null,
   });
 
   return serializeProfile(profile);

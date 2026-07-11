@@ -10,6 +10,8 @@ export interface AppendFanProfileInput {
   body: string;
   source: string;
   createdByUserId?: number | null;
+  /** Scan generation time (#136) — null when the writing client predates it. */
+  sourceGeneratedAt?: Date | null;
 }
 
 export async function appendFanProfile(
@@ -41,6 +43,7 @@ export async function appendFanProfile(
         body: input.body,
         source: input.source,
         createdByUserId: input.createdByUserId ?? null,
+        sourceGeneratedAt: input.sourceGeneratedAt ?? null,
       })
       .returning();
 

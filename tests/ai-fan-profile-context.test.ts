@@ -36,6 +36,106 @@ const FULL_DOSSIER = `1. DOSSIER
 7. STRATEGY
 - Lean into travel talk, avoid hard sells`;
 
+// Production shape: the fan-summary template says "Write in Russian" and the
+// dashboard pins the markdown form (## N. ЗАГОЛОВОК, optional H3 subheadings,
+// H1 preamble) — see apps/dashboard/src/lib/parseFanProfile.ts.
+const RUSSIAN_DOSSIER = [
+  '# ПРОФИЛЬ ФАНАТА: Michael',
+  '',
+  '## 1. ДОСЬЕ',
+  '',
+  'Имя: Michael (Майкл), 34, Бостон',
+  '',
+  '### Детали',
+  '',
+  '- Ездит на красном Ducati',
+  '',
+  '## 2. ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ',
+  '',
+  '- Тревожная привязанность',
+  '',
+  '## 3. СТАДИЯ И ТРАЕКТОРИЯ',
+  '',
+  '- Лояльный, стабильный',
+  '',
+  '## 4. ДИНАМИКА ОБЩЕНИЯ',
+  '',
+  '- Короткие сообщения, не любит спешку',
+  '',
+  '## 5. ФИНАНСОВЫЙ ПРОФИЛЬ',
+  '',
+  '- Кит, типсует каждый вечер',
+  '',
+  '## 6. ОТКРЫТЫЕ ПЕТЛИ',
+  '',
+  '- Обещала фото с пляжа',
+  '',
+  '## 7. СТРАТЕГИЯ',
+  '',
+  '- Давить на тему путешествий',
+].join('\n');
+
+describe('compileDossierForPrompt — production Russian dossiers', () => {
+  it('parses the dashboard-pinned Russian markdown shape and applies the financial rule', () => {
+    const result = compileDossierForPrompt(RUSSIAN_DOSSIER, FRESH);
+    expect(result.sectioned).toBe(true);
+    expect(result.body).toContain('ПРОФИЛЬ ФАНАТА: Michael');
+    expect(result.body).toContain('красном Ducati');
+    expect(result.body).toContain('### Детали');
+    expect(result.body).toContain('Тревожная привязанность');
+    expect(result.body).toContain('Обещала фото с пляжа');
+    expect(result.body).toContain('Давить на тему путешествий');
+    expect(result.body).not.toContain('Кит, типсует');
+    expect(result.droppedSections).toEqual(['FINANCIAL PROFILE']);
+  });
+
+  it('applies the volatile age policy to Russian sections', () => {
+    const result = compileDossierForPrompt(RUSSIAN_DOSSIER, STALE);
+    expect(result.body).toContain('красном Ducati');
+    expect(result.body).toContain('не любит спешку');
+    expect(result.body).not.toContain('Лояльный, стабильный');
+    expect(result.body).not.toContain('Обещала фото с пляжа');
+    expect(result.body).not.toContain('Давить на тему путешествий');
+  });
+
+  it('stem-matches translated H2 variants but never bullets or prose', () => {
+    const varied = [
+      '## Психологический портрет фаната',
+      '- Ищет валидацию',
+      '## Финансовое поведение ##',
+      '- Кит',
+      '## Открытые вопросы и петли',
+      '- Ждёт голосовое',
+    ].join('\n');
+    const result = compileDossierForPrompt(varied, FRESH);
+    expect(result.sectioned).toBe(true);
+    expect(result.body).toContain('Ищет валидацию');
+    expect(result.body).toContain('Ждёт голосовое');
+    expect(result.body).not.toContain('Кит');
+
+    const bullets = [
+      '## 1. ДОСЬЕ',
+      '- Финансы: жалуется на работу',
+      '- Стратегия его команды по покеру плохая',
+    ].join('\n');
+    const bulletResult = compileDossierForPrompt(bullets, FRESH);
+    expect(bulletResult.body).toContain('жалуется на работу');
+    expect(bulletResult.body).toContain('по покеру');
+  });
+
+  it('keeps H3 subheadings inside their parent section (no stem split)', () => {
+    const nested = [
+      '## 1. ДОСЬЕ',
+      '- Имя: Vlad',
+      '### Финансовые заметки',
+      '- Упоминал бонус на работе',
+    ].join('\n');
+    const result = compileDossierForPrompt(nested, FRESH);
+    expect(result.body).toContain('Упоминал бонус на работе');
+    expect(result.droppedSections).toEqual([]);
+  });
+});
+
 describe('compileDossierForPrompt — sections and age policy', () => {
   it('keeps all sections except FINANCIAL PROFILE for a fresh dossier', () => {
     const result = compileDossierForPrompt(FULL_DOSSIER, FRESH);
@@ -143,14 +243,14 @@ describe('compileDossierForPrompt — size pressure', () => {
 });
 
 describe('isFanProfileFeatureEnabled — runtime allowlist', () => {
-  it('trusts the policy on "all" (and on an unset value)', () => {
+  it('trusts the policy on "all"', () => {
     expect(isFanProfileFeatureEnabled('all', 'fast-reply')).toBe(true);
-    expect(isFanProfileFeatureEnabled(undefined, 'ping')).toBe(true);
     expect(isFanProfileFeatureEnabled(' ALL ', 'help-me')).toBe(true);
   });
 
-  it('"none" and empty are the rollback switch', () => {
+  it('"none", empty and ABSENT are all off — a deploy alone never enables it', () => {
     expect(isFanProfileFeatureEnabled('none', 'fast-reply')).toBe(false);
+    expect(isFanProfileFeatureEnabled(undefined, 'ping')).toBe(false);
     expect(isFanProfileFeatureEnabled('', 'fast-reply')).toBe(false);
     expect(isFanProfileFeatureEnabled('   ', 'fast-reply')).toBe(false);
   });

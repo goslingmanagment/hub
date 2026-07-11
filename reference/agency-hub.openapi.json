@@ -25520,6 +25520,16 @@
                             "createdAt": {
                               "type": "string"
                             },
+                            "sourceGeneratedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "createdByUserId": {
                               "anyOf": [
                                 {
@@ -27842,6 +27852,16 @@
                             "createdAt": {
                               "type": "string"
                             },
+                            "sourceGeneratedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "createdByUserId": {
                               "anyOf": [
                                 {
@@ -27984,6 +28004,11 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 50000
+                  },
+                  "generatedAtMs": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
                   }
                 },
                 "required": [
@@ -28045,6 +28070,16 @@
                     },
                     "createdAt": {
                       "type": "string"
+                    },
+                    "sourceGeneratedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "createdByUserId": {
                       "anyOf": [
@@ -28395,6 +28430,16 @@
                     },
                     "createdAt": {
                       "type": "string"
+                    },
+                    "sourceGeneratedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "createdByUserId": {
                       "anyOf": [

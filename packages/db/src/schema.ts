@@ -1863,6 +1863,11 @@ export const fanProfiles = pgTable(
       onDelete: "set null",
     }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    /** When the client's Scan actually RAN — created_at is only the hub
+     * append time, and a delayed re-push (extension E22) must not reset the
+     * dossier's age for the volatile-section policy (#136). Null on rows
+     * written by clients that predate the field. */
+    sourceGeneratedAt: timestamp("source_generated_at", { withTimezone: true }),
   },
   (table) => ({
     versionCheck: check("fan_profiles_version_check", sql`${table.version} > 0`),

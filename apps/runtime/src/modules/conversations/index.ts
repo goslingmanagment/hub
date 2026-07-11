@@ -49,6 +49,7 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
       request.params.pageLabel,
       request.params.platformUserId,
       request.body.body,
+      request.body.generatedAtMs,
     );
   });
 

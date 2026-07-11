@@ -3682,22 +3682,31 @@ the fast-reply feature), improve-draft, help-me, ping; OFF for fan-summary
 judge the chatter independently of a stored opinion) and hi-greeting (a cold
 opener must not show unexplained familiarity — revisit after observation).
 Runtime rollout/rollback rides `chatMuseAiFanProfileContextFeatures`
-("all" | "none" | CSV, live-wired like the union mode): stage as
-`fast-reply` → `fast-reply,ping` → policy set, roll back with "none" — no
-deploy. The lookup is STRICTLY fail-open (on the Fansly clientContext path
+("none" | "all" | CSV, live-wired like the union mode). DEFAULT IS "none":
+a deploy alone never activates the feature — ramp with deliberate flips
+`fast-reply` → `fast-reply,ping` → `all`; rollback is "none", no deploy. The lookup is STRICTLY fail-open (on the Fansly clientContext path
 it is the generation's only fans-table read, so a fan_profiles hiccup must
 degrade to "no section", never a failed Reply) and resolves the fan exactly
 like the spend/name loaders (`fans` by platform + platform_user_id, R3-2),
 plus a `deleted_detected_at IS NULL` guard; Fansly group chats
 (conversationRef = groupId) get no dossier — accepted. The dossier is
 COMPILED, not pasted (`context/fan-profile.ts`): parsed into the
-fan-summary template's sections; FINANCIAL PROFILE always dropped (fresh
+fan-summary template's sections — production dossiers are RUSSIAN markdown
+(`## N. ДОСЬЕ/ПОРТРЕТ/…`; the template says "Write in Russian" and the
+dashboard's parseFanProfile pins the shape), so the matcher carries RU+EN
+aliases plus stem matching on H1/H2 lines only (H3 subheadings and list
+bullets never split). FINANCIAL PROFILE always dropped (fresh
 spend/subscription data rides its own blocks); volatile sections (STAGE AND
 TRAJECTORY, OPEN LOOPS, STRATEGY) dropped once the dossier is older than
 `chatMuseAiFanProfileVolatileMaxAgeDays` (default 21 — stable facts age
 well, stale open loops mislead); whole sections shed by keep-priority
 against the 10k-char target; hard mid-text cut only at 20k; unrecognized
-shapes get a bounded 10k head. The prompt section ("## Fan Dossier", dated,
+shapes get a bounded 10k head. Age is measured from the SOURCE generation
+time: `fan_profiles.source_generated_at` (migration 0085; upsert contract
+gains optional `generatedAtMs`, profile responses gain optional
+`sourceGeneratedAt` — both non-strict-safe in either deploy order) with
+`created_at` fallback for legacy rows — `created_at` alone is the hub
+APPEND time, and a delayed client re-push must not zero the dossier's age. The prompt section ("## Fan Dossier", dated,
 "the transcript is authoritative" framing, escaped `<fan_dossier>` body)
 rides the dynamic 5m block after the subscription section — the 1h static
 prefix stays fan-agnostic and no cache anchor moved, so live caches survive
@@ -3706,5 +3715,6 @@ improve-draft / help-me / ping (+ templates.ts, builder.ts,
 feature-policies.ts) re-pinned in prompt-manifest.json with this decision's
 note; fan-summary.md untouched. Observability: debug-level "ai feature
 dossier injected" (version/age/chars/truncated/droppedSections — never the
-body), warn on lookup failure, and a `fanProfile` entry in the kernel-path
-contextManifest.
+body), warn on lookup failure, and a `fanProfile` entry in
+params.contextManifest on BOTH context paths (the Fansly clientContext lane
+has no transcript manifest, but the dossier audit still lands).

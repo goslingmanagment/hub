@@ -1460,6 +1460,9 @@ export const fanProfileDocumentSchema = z.object({
   body: z.string(),
   source: fanProfileSourceEnum,
   createdAt: isoTimestamp,
+  /** Scan generation time (#136); null for rows written before the field
+   * existed. Optional so a newer SDK tolerates an older kernel. */
+  sourceGeneratedAt: isoTimestamp.nullable().optional(),
   createdByUserId: intId.nullable(),
 });
 
@@ -1671,6 +1674,10 @@ export const crossPageFanTransactionListResponseSchema = z.object({
 
 export const upsertFanProfileBodySchema = z.object({
   body: z.string().min(1).max(50_000),
+  /** Epoch ms of the client's Scan generation (#136): created_at is only the
+   * hub APPEND time and must not stand in for the dossier's age when a
+   * client re-pushes an old cached summary. Optional — legacy clients omit. */
+  generatedAtMs: z.number().int().positive().optional(),
 });
 
 export const createFanNoteBodySchema = z.object({
