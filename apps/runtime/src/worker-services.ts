@@ -92,7 +92,7 @@ const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
 
 type WorkerBoss = Pick<
   PgBoss,
-  "complete" | "createQueue" | "fail" | "fetch" | "schedule" | "send" | "start" | "stop" | "touch" | "work"
+  "complete" | "createQueue" | "fail" | "fetch" | "getJobById" | "schedule" | "send" | "start" | "stop" | "touch" | "work"
 >;
 
 function resolveDueTelegramReportDate(

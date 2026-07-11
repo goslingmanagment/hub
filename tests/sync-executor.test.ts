@@ -228,7 +228,7 @@ describe("sync executor", () => {
       "sync.page.execute",
       { platformAccountId: 55 },
       expect.objectContaining({
-        singletonKey: undefined,
+        singletonKey: "55:continuation:job-1",
         priority: 45,
         group: {
           id: "fansly:shared-proxy-pool",
@@ -412,7 +412,11 @@ describe("sync executor", () => {
     expect(boss.complete).not.toHaveBeenCalled();
   });
 
-  it("continues draining locally when PgBoss cannot enqueue a duplicate continuation", async () => {
+  it("hands off instead of draining locally when the continuation is already queued (null send)", async () => {
+    // The exclusive queue's unique index made a NULL-key send collide with
+    // any queued NULL-key job; the old code read null as "keep going
+    // locally" and one job wedged its whole egress group for hours (prod
+    // 2026-07-11). null now means "a queued continuation exists" — stop.
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -420,34 +424,27 @@ describe("sync executor", () => {
     const boss = {
       complete: vi.fn(async () => {}),
       send: vi.fn(async () => null),
+      getJobById: vi.fn(async () => ({ state: "active" })),
     } as unknown as {
       complete: ReturnType<typeof vi.fn>;
       send: ReturnType<typeof vi.fn>;
+      getJobById: ReturnType<typeof vi.fn>;
     };
 
-    dbMocks.acquirePageSyncLease
-      .mockResolvedValueOnce(taskLease)
-      .mockResolvedValueOnce(taskLease);
-    dbMocks.listRunnablePageSync
-      .mockResolvedValueOnce([{
-        pageId: 55,
-        platform: "fansly",
-        priority: 45,
-        requestedAt: new Date("2026-03-14T12:00:00.000Z"),
-        proxyUrl: "socks5://proxy.example",
-        egressKey: "shared-proxy-pool",
-      }])
-      .mockResolvedValueOnce([]);
-    handlerMocks.executeStreamChunk
-      .mockResolvedValueOnce({
-        satisfied: false,
-        yieldReason: "request_budget",
-        stats: { processedThisChunk: 100 },
-      })
-      .mockResolvedValueOnce({
-        satisfied: true,
-        stats: { processedThisChunk: 1 },
-      });
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
+      pageId: 55,
+      platform: "fansly",
+      priority: 45,
+      requestedAt: new Date("2026-03-14T12:00:00.000Z"),
+      proxyUrl: "socks5://proxy.example",
+      egressKey: "shared-proxy-pool",
+    }]);
+    handlerMocks.executeStreamChunk.mockResolvedValueOnce({
+      satisfied: false,
+      yieldReason: "request_budget",
+      stats: { processedThisChunk: 100 },
+    });
 
     const result = await processSyncPageExecuteJob(app, boss as never, {
       job: {
@@ -458,18 +455,20 @@ describe("sync executor", () => {
     });
 
     expect(boss.send).toHaveBeenCalledTimes(1);
-    expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(2);
-    expect(dbMocks.yieldPageSync).toHaveBeenCalledTimes(1);
-    expect(dbMocks.completePageSync).toHaveBeenCalledTimes(1);
+    expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(1);
     expect(boss.complete).toHaveBeenCalledWith("sync.page.execute", "job-1");
     expect(result).toMatchObject({
-      kind: "success",
+      kind: "yielded",
       platformAccountId: 55,
-      needsContinuation: false,
+      needsContinuation: true,
     });
   });
 
-  it("fails instead of draining forever when continuation wakeups keep getting skipped", async () => {
+  it("stops the local loop without completing when the job lost ownership (expired -> retry)", async () => {
+    // pg-boss expiration is a hard wall clock from job start (touch feeds
+    // only the heartbeat monitor), so a long chunk can outlive its job. The
+    // executor must notice and stop instead of zombie-driving chunks under
+    // a job the queue already handed to retry.
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -477,12 +476,23 @@ describe("sync executor", () => {
     const boss = {
       complete: vi.fn(async () => {}),
       send: vi.fn(async () => null),
+      getJobById: vi.fn(async () => ({ state: "retry" })),
     } as unknown as {
       complete: ReturnType<typeof vi.fn>;
       send: ReturnType<typeof vi.fn>;
+      getJobById: ReturnType<typeof vi.fn>;
     };
 
     dbMocks.acquirePageSyncLease.mockImplementation(async () => taskLease);
+    // First lookup (inside the chunk) sees the page; the wakeup-target lookup
+    // right after sees it gone — that forces the local-continue path, where
+    // the ownership guard lives.
+    dbMocks.findPageById
+      .mockResolvedValueOnce({
+        page: { id: 55, label: "page-55", platform: "fansly" },
+        proxy: { url: "socks5://proxy.example", rateLimitScopeKey: "shared-proxy-pool" },
+      })
+      .mockResolvedValueOnce(null);
     dbMocks.listRunnablePageSync.mockResolvedValue([{
       pageId: 55,
       platform: "fansly",
@@ -497,16 +507,17 @@ describe("sync executor", () => {
       stats: { processedThisChunk: 1 },
     });
 
-    await expect(processSyncPageExecuteJob(app, boss as never, {
+    const result = await processSyncPageExecuteJob(app, boss as never, {
       job: {
         id: "job-1",
         data: { platformAccountId: 55 },
         groupId: "fansly:direct",
       },
-    })).rejects.toThrow("Sync page executor exceeded 500 local chunks for page 55");
+    });
 
-    expect(handlerMocks.executeStreamChunk).toHaveBeenCalledTimes(500);
+    expect(boss.getJobById).toHaveBeenCalledWith("sync.page.execute", "job-1");
     expect(boss.complete).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ platformAccountId: 55, needsContinuation: true });
   });
 
   it("releases the lease and goes idle when the leased page is missing or tombstoned", async () => {

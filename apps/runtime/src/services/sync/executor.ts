@@ -59,7 +59,7 @@ export interface SyncPageChunkResult {
   continuationRetryAt?: Date | null;
 }
 
-type PageExecuteBoss = Pick<PgBoss, "complete" | "fail" | "fetch" | "send" | "touch">;
+type PageExecuteBoss = Pick<PgBoss, "complete" | "fail" | "fetch" | "getJobById" | "send" | "touch">;
 
 interface ExecutorCoordinator {
   fetchLock: Promise<void>;
@@ -691,13 +691,21 @@ export async function executeNextSyncPageChunk(
   }
 }
 
+// A pgboss job expires on a HARD wall clock (started_on + expire_seconds;
+// touch only feeds the heartbeat monitor), so local processing must hand the
+// group back well before the queue's 180s expiry. One poison-chat chunk can
+// eat ~180s by itself — the budget bounds the LOOP, not a single chunk, and
+// the ownership check below catches the mid-chunk expiry.
+const LOCAL_EXECUTION_BUDGET_MS = 120_000;
+
 export async function processSyncPageExecuteJob(
   app: AppContext,
-  boss: Pick<PgBoss, "complete" | "send">,
+  boss: Pick<PgBoss, "complete" | "send" | "getJobById">,
   input: {
     job: Pick<JobWithMetadata<SyncPageExecutePayload>, "id" | "data" | "groupId">;
   },
 ) {
+  const startedAt = Date.now();
   let result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
   let localChunks = 1;
 
@@ -711,21 +719,50 @@ export async function processSyncPageExecuteJob(
     const wakeupTarget = await resolveSyncPageWakeupTarget(app, result.platformAccountId);
     if (wakeupTarget) {
       const delayedContinuation = result.continuationRetryAt !== null && result.continuationRetryAt !== undefined;
+      // ALWAYS a per-page singleton. The exclusive queue's unique index is
+      // (name, COALESCE(singleton_key, '')) over queued jobs, so a NULL-key
+      // send collides with ANY other queued NULL-key job and returns null —
+      // which the old dedupe:false path misread as "keep going locally",
+      // wedging the whole egress group inside one (long-expired) job for up
+      // to 500 chunks while sibling pages starved (prod 2026-07-11: 3.5h).
+      // With a real key, null cleanly means "this continuation is already
+      // queued" — hand off and exit either way. The key is scoped to the
+      // PARENT job id because the index also covers active jobs: a fixed
+      // per-page key would collide with the currently-running continuation
+      // itself and kill the chain; the parent-scoped key only dedupes a
+      // retry of THIS job re-enqueueing the same child.
       const wakeupId = await sendSyncPageWakeup(boss, {
         platformAccountId: result.platformAccountId,
         priority: result.continuationPriority,
         provider: wakeupTarget.provider,
         egressKey: wakeupTarget.egressKey,
-        dedupe: delayedContinuation ? true : false,
         singletonKey: delayedContinuation
           ? `${result.platformAccountId}:dm-messages-deep-continuation`
-          : undefined,
+          : `${result.platformAccountId}:continuation:${input.job.id}`,
         startAfter: result.continuationRetryAt ?? null,
       });
 
-      if ((wakeupId !== null && wakeupId !== undefined) || delayedContinuation) {
+      if (wakeupId !== null && wakeupId !== undefined) {
         break;
       }
+      // null = a queued continuation (or delayed singleton) already exists
+      // for this page — the queue owns the follow-up.
+      break;
+    }
+
+    // Fairness/zombie guards: past the local budget the group must go back
+    // to the queue, and a job the queue no longer considers ours (expired →
+    // retry) must stop driving chunks — its retry job will take over.
+    if (Date.now() - startedAt > LOCAL_EXECUTION_BUDGET_MS) {
+      break;
+    }
+    const ownJob = await boss.getJobById(SYNC_PAGE_EXECUTE_QUEUE, input.job.id);
+    if (ownJob?.state !== "active") {
+      app.logger.warn(
+        { jobId: input.job.id, jobState: ownJob?.state ?? "missing", platformAccountId: result.platformAccountId },
+        "Sync page execute job lost ownership mid-run; stopping local chunk loop",
+      );
+      return result;
     }
 
     result = await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
