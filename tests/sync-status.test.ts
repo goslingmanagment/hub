@@ -262,6 +262,81 @@ describe("sync status service", () => {
     expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
   });
 
+  it("keeps a live failure streak visible on a running task (#137 addendum: false-green)", async () => {
+    // Prod 2026-07-11: a 425-streak dm_messages task flipped retrying →
+    // running between failures and the snapshot nulled its error, so
+    // /health/sync read 200/ok mid-wedge. The streak resets only on a real
+    // success — the task error must survive every state until then.
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([{
+      id: 9,
+      label: "lora-vip-of",
+      platform: "onlyfans",
+      username: "lora_vip",
+      displayName: "Lora VIP",
+      followerCount: 9,
+      subscriberCount: 4,
+      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+      lastFollowerSyncAt: null,
+      modelSlug: "lora",
+      modelName: "Lora",
+      hasCredentials: true,
+      proxyUrl: null,
+      egressKey: "direct",
+      proxyHasAuth: false,
+    }]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ pageId: 9, stream: "light" }),
+      buildTaskRow({ pageId: 9, stream: "dm_conversations", cadenceSeconds: 1800 }),
+      buildTaskRow({
+        pageId: 9,
+        stream: "dm_messages",
+        cadenceSeconds: 86400,
+        workClass: "history",
+        status: "running",
+        succeededAt: null,
+        startedAt: new Date("2026-03-24T11:58:00.000Z"),
+        progressedAt: new Date("2026-03-24T11:59:30.000Z"),
+        finishedAt: null,
+        failedAt: new Date("2026-03-24T11:55:00.000Z"),
+        consecutiveFailures: 425,
+        lastErrorCode: null,
+        lastErrorSummary: "OFAPI request failed: GET .../chats/292065372/messages",
+        leaseOwner: "worker-1",
+        leaseToken: "token",
+        leaseHeartbeatAt: new Date("2026-03-24T11:59:30.000Z"),
+        leaseExpiresAt: new Date("2026-03-24T12:05:00.000Z"),
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-of", stream: "light" }),
+      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-of", stream: "dm_conversations", cadenceSeconds: 1800 }),
+      buildMonitorRow({
+        pageId: 9,
+        pageLabel: "lora-vip-of",
+        stream: "dm_messages",
+        cadenceSeconds: 86400,
+        status: "running",
+        succeededAt: null,
+        failedAt: new Date("2026-03-24T11:55:00.000Z"),
+        consecutiveFailures: 425,
+        lastErrorSummary: "OFAPI request failed: GET .../chats/292065372/messages",
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [9],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    const historyBlock = snapshot.pages[0]?.blocks.messages_history;
+    const dmTask = historyBlock?.tasks?.find((task) => task.stream === "dm_messages");
+    expect(dmTask?.error).toMatchObject({
+      consecutiveFailures: 425,
+      summary: "OFAPI request failed: GET .../chats/292065372/messages",
+    });
+  });
+
   it("keeps message history catching up while deep backfill pages remain", async () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);

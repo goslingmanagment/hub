@@ -1034,7 +1034,12 @@ function deriveTaskState(
   const isFresh = policy.freshnessSlaSeconds === null
     ? task.succeededAt !== null
     : freshnessAgeSeconds !== null && freshnessAgeSeconds <= policy.freshnessSlaSeconds;
-  const error = state === "failed" || state === "retrying"
+  // The failure streak resets only on a real success, so a task that flips
+  // retrying -> running/pending/backfilling between failures is still carrying
+  // its wedge — keep the error visible until the streak actually clears
+  // (prod 2026-07-11: a 425-streak dm_messages read as healthy the moment its
+  // state left retrying). failed/retrying keep their statusReason fallback.
+  const error = state === "failed" || state === "retrying" || task.consecutiveFailures > 0
     ? buildTaskError(task, statusReason)
     : null;
 
