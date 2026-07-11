@@ -63,7 +63,20 @@ export interface UpsertTransactionInput {
   occurredAt: Date;
   sourceUpdatedAt?: Date | null;
   scanToken?: string | null;
+  /** W7.3 (A21+B4): write this row deactivated with the given negation-guard
+   *  reason. Set by the negation-guard wrapper only. */
+  suppressAs?: "superseded_duplicate_negation" | "reversal_without_settled_original" | null;
 }
+
+/** W7.3 (Guard 0): suppression reasons the conflict-set must PRESERVE — any
+ * webhook redelivery / REST backfill re-upsert would otherwise resurrect a
+ * deactivated twin and silently undo the guards and the repair. Only the
+ * explicit late-original fixup (reactivateSuppressedNegations) clears them.
+ * `missing_from_sync_window` deliberately stays out: a re-appearing row IS
+ * its designed reactivation path. */
+const STICKY_INACTIVE_REASONS_SQL = sql.raw(
+  "('superseded_duplicate_negation'::transaction_inactive_reason, 'reversal_without_settled_original'::transaction_inactive_reason)",
+);
 
 export async function upsertTransaction(db: Database, input: UpsertTransactionInput) {
   const insertValues = {
@@ -92,12 +105,28 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     occurredAt: input.occurredAt,
     sourceUpdatedAt: input.sourceUpdatedAt ?? null,
     scanToken: input.scanToken ?? null,
-    isActive: true,
-    inactiveReason: null,
-    inactivatedAt: null,
+    isActive: input.suppressAs ? false : true,
+    inactiveReason: input.suppressAs ?? null,
+    inactivatedAt: input.suppressAs ? new Date() : null,
   };
   const updateSet = {
     ...insertValues,
+    // W7.3 (Guard 0): sticky suppression survives every re-upsert.
+    isActive: sql<boolean>`case
+      when ${transactions.inactiveReason} in ${STICKY_INACTIVE_REASONS_SQL}
+        then ${transactions.isActive}
+      else excluded.is_active
+    end`,
+    inactiveReason: sql`case
+      when ${transactions.inactiveReason} in ${STICKY_INACTIVE_REASONS_SQL}
+        then ${transactions.inactiveReason}
+      else excluded.inactive_reason
+    end`,
+    inactivatedAt: sql`case
+      when ${transactions.inactiveReason} in ${STICKY_INACTIVE_REASONS_SQL}
+        then ${transactions.inactivatedAt}
+      else excluded.inactivated_at
+    end`,
     fanId: sql<number | null>`coalesce(excluded.fan_id, ${transactions.fanId})`,
     platformFeeMills: sql<bigint | null>`coalesce(excluded.platform_fee_mills, ${transactions.platformFeeMills})`,
     vatAmountMills: sql<bigint | null>`coalesce(excluded.vat_amount_mills, ${transactions.vatAmountMills})`,
@@ -130,6 +159,169 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     })
     .returning();
   return transaction;
+}
+
+/** W7.3: point lookup for the negation guards (twin / settled-original). */
+export async function getTransactionByTransactionId(
+  db: Database,
+  input: { platformAccountId: number; transactionId: string },
+) {
+  const [row] = await db.select({
+    id: transactions.id,
+    transactionId: transactions.transactionId,
+    transactionState: transactions.transactionState,
+    isActive: transactions.isActive,
+    inactiveReason: transactions.inactiveReason,
+    occurredAt: transactions.occurredAt,
+    grossAmountMills: transactions.grossAmountMills,
+  }).from(transactions)
+    .where(and(
+      eq(transactions.platformAccountId, input.platformAccountId),
+      eq(transactions.transactionId, input.transactionId),
+    ));
+  return row ?? null;
+}
+
+/** W7.3 (A21 fixup — the ONLY reactivation path for guard-suppressed rows):
+ * a settled positive original just landed; reactivate AT MOST ONE suppressed
+ * orphan negative under its id (earliest-created wins — the canonical twin),
+ * and re-mark any remaining suppressed sibling as a duplicate negation (its
+ * truthful state now that an original AND an active negative both exist).
+ * Returns the earliest reactivated occurred_at for rollup dirtying. */
+export async function reactivateSuppressedNegations(
+  db: Database,
+  input: { platformAccountId: number; baseTransactionId: string },
+): Promise<{ reactivatedFrom: Date | null }> {
+  const negativeIds = [
+    `${input.baseTransactionId}:reversal`,
+    `${input.baseTransactionId}:chargeback`,
+  ];
+  const suppressed = await db.select({
+    id: transactions.id,
+    occurredAt: transactions.occurredAt,
+  }).from(transactions)
+    .where(and(
+      eq(transactions.platformAccountId, input.platformAccountId),
+      inArray(transactions.transactionId, negativeIds),
+      eq(transactions.isActive, false),
+      eq(transactions.inactiveReason, "reversal_without_settled_original"),
+    ))
+    .orderBy(transactions.id);
+  if (suppressed.length === 0) {
+    return { reactivatedFrom: null };
+  }
+
+  const [canonical, ...rest] = suppressed;
+  await db.update(transactions)
+    .set({ isActive: true, inactiveReason: null, inactivatedAt: null })
+    .where(eq(transactions.id, canonical!.id));
+  if (rest.length > 0) {
+    await db.update(transactions)
+      .set({ inactiveReason: "superseded_duplicate_negation" })
+      .where(inArray(transactions.id, rest.map((row) => row.id)));
+  }
+  return { reactivatedFrom: canonical!.occurredAt };
+}
+
+/** W7.4 (A47): stale ACTIVE PENDING OFAPI rows — candidates for the
+ * settle-or-expire reconciliation. */
+export async function listStalePendingOfapiTransactions(
+  db: Database,
+  input: { olderThan: Date },
+) {
+  return db.select({
+    id: transactions.id,
+    platformAccountId: transactions.platformAccountId,
+    transactionId: transactions.transactionId,
+    occurredAt: transactions.occurredAt,
+    creatorNetAmountMills: transactions.creatorNetAmountMills,
+    pageLabel: pages.label,
+  }).from(transactions)
+    .innerJoin(pages, eq(pages.id, transactions.platformAccountId))
+    .where(and(
+      inArray(transactions.source, ["ofapi:webhook", "ofapi:rest"]),
+      eq(transactions.transactionState, "pending"),
+      eq(transactions.isActive, true),
+      lt(transactions.occurredAt, input.olderThan),
+    ))
+    .orderBy(transactions.platformAccountId, transactions.occurredAt);
+}
+
+/** W7.4 (A47): expire the pendings a fresh REST rescan did NOT settle —
+ * targeted by row id, re-checked still active+pending (never a blind sweep).
+ * Same reason as the Fansly anchor: a re-appearing row reactivates normally. */
+export async function retireStalePendingTransactionsById(
+  db: Database,
+  input: { platformAccountId: number; ids: number[] },
+): Promise<number> {
+  if (input.ids.length === 0) {
+    return 0;
+  }
+  const retired = await db.update(transactions)
+    .set({
+      isActive: false,
+      inactiveReason: "missing_from_sync_window",
+      inactivatedAt: new Date(),
+    })
+    .where(and(
+      eq(transactions.platformAccountId, input.platformAccountId),
+      inArray(transactions.id, input.ids),
+      eq(transactions.isActive, true),
+      eq(transactions.transactionState, "pending"),
+    ))
+    .returning({ id: transactions.id });
+  return retired.length;
+}
+
+/** W7.3 repair (E6 census): active negation anomalies — double-negative
+ * pairs and orphan negatives — for the owner-gated repair CLI. */
+export async function listActiveNegationAnomalies(db: Database) {
+  const pairs = await db.execute<{
+    platform_account_id: number;
+    reversal_id: number;
+    chargeback_id: number;
+    base_transaction_id: string;
+    reversal_occurred_at: Date;
+    chargeback_occurred_at: Date;
+  }>(sql`
+    select r.platform_account_id,
+           r.id as reversal_id, c.id as chargeback_id,
+           regexp_replace(r.transaction_id, ':reversal$', '') as base_transaction_id,
+           r.occurred_at as reversal_occurred_at, c.occurred_at as chargeback_occurred_at
+    from transactions r
+    join transactions c on c.platform_account_id = r.platform_account_id
+     and c.transaction_id = regexp_replace(r.transaction_id, ':reversal$', '') || ':chargeback'
+    where r.transaction_id like '%:reversal' and r.is_active and c.is_active
+  `);
+  const orphans = await db.execute<{
+    id: number;
+    platform_account_id: number;
+    transaction_id: string;
+    occurred_at: Date;
+    gross_amount_mills: string;
+  }>(sql`
+    select t.id, t.platform_account_id, t.transaction_id, t.occurred_at, t.gross_amount_mills::text
+    from transactions t
+    left join transactions o on o.platform_account_id = t.platform_account_id
+     and o.transaction_id = regexp_replace(t.transaction_id, ':(reversal|chargeback)$', '')
+     and o.is_active and o.transaction_state = 'posted'
+    where (t.transaction_id like '%:reversal' or t.transaction_id like '%:chargeback')
+      and t.is_active and o.id is null
+  `);
+  return { pairs: pairs.rows, orphans: orphans.rows };
+}
+
+/** W7.3 repair: deactivate a specific anomaly row (never delete). */
+export async function deactivateTransactionById(
+  db: Database,
+  input: {
+    id: number;
+    reason: "superseded_duplicate_negation" | "reversal_without_settled_original";
+  },
+): Promise<void> {
+  await db.update(transactions)
+    .set({ isActive: false, inactiveReason: input.reason, inactivatedAt: new Date() })
+    .where(and(eq(transactions.id, input.id), eq(transactions.isActive, true)));
 }
 
 export async function markTransactionsScanToken(

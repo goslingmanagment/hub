@@ -9537,10 +9537,16 @@ describe("api integration", () => {
       slug: "stage13-model",
       name: "Stage 13 Model",
     });
+    if (!spareModel) {
+      throw new Error("model seed failed");
+    }
     const factPage = await createFanslyPage(testDb.db, {
       modelId: spareModel.id,
       label: "stage13-facts",
     });
+    if (!factPage) {
+      throw new Error("page seed failed");
+    }
     await upsertTransaction(testDb.db, {
       platformAccountId: factPage.id,
       source: "fansly:rest",
@@ -9554,6 +9560,8 @@ describe("api integration", () => {
       creatorNetAmountMills: 8_000n,
       occurredAt: new Date("2026-06-01T00:00:00Z"),
     });
+    // Rollups are what the revenue report reads (W7.2 assertions below).
+    await rebuildRevenueRollups(testDb.db, factPage.id);
 
     // DELETE route on a fact-bearing page tombstones — no 409, no data loss.
     const softDelete = await server.inject({
@@ -9632,6 +9640,40 @@ describe("api integration", () => {
       headers: { cookie: ownerCookie },
     });
     expect(JSON.stringify(adminModels.json())).toContain("stage13-model");
+
+    // W7.2 (A33, decision #131): revenue ROLLUPS keep the tombstoned page's
+    // history — the facts never left `transactions`, so the totals must not
+    // lie by the page's lifetime net.
+    const overviewRevenue = await server.inject({
+      method: "GET",
+      url: "/api/v1/overview/revenue?period=all",
+      headers: { cookie: ownerCookie },
+    });
+    expect(overviewRevenue.statusCode, overviewRevenue.body).toBe(200);
+    const revenueBody = overviewRevenue.json() as {
+      pages: Array<{ pageLabel: string; netEarningsMills: number; status?: string }>;
+      models: Array<{ modelSlug: string; netEarningsMills: number; status?: string }>;
+    };
+    const retiredPage = revenueBody.pages.find((row) => row.pageLabel === "stage13-facts");
+    expect(retiredPage).toMatchObject({ netEarningsMills: 8_000, status: "deleted" });
+    const retiredModel = revenueBody.models.find((row) => row.modelSlug === "stage13-model");
+    expect(retiredModel).toMatchObject({ netEarningsMills: 8_000, status: "retired" });
+
+    // The model revenue report stays reachable for a fully-retired model...
+    const modelRevenue = await server.inject({
+      method: "GET",
+      url: "/api/v1/models/stage13-model/revenue?period=all",
+      headers: { cookie: ownerCookie },
+    });
+    expect(modelRevenue.statusCode, modelRevenue.body).toBe(200);
+    // ...while the PAGE-scoped detail route still 404s (retired pages stay
+    // hidden as pages; only rollups keep history).
+    const pageRevenue = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/stage13-facts/revenue?period=all",
+      headers: { cookie: ownerCookie },
+    });
+    expect(pageRevenue.statusCode).toBe(404);
   });
 
   it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering [sync-critical]", async (context) => {

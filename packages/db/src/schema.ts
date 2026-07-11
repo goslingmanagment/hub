@@ -147,6 +147,11 @@ export const dmMessageCoverageStatusEnum = pgEnum("dm_message_coverage_status", 
 ]);
 export const transactionInactiveReasonEnum = pgEnum("transaction_inactive_reason", [
   "missing_from_sync_window",
+  // W7.3 (A21+B4, decision #132): negation guards. Unlike
+  // missing_from_sync_window (which a re-appearing row reactivates), these
+  // two are STICKY — only the explicit late-original fixup may clear them.
+  "superseded_duplicate_negation",
+  "reversal_without_settled_original",
 ]);
 export const notificationIncidentKindEnum = pgEnum("notification_incident_kind", [
   "auth_blocked",

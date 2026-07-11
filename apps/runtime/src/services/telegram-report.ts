@@ -2,7 +2,7 @@ import {
   getRevenuePageTotalsForExactPeriod,
   getTelegramSettings,
   insertDeliveryAttempt,
-  listVisiblePages,
+  listRevenuePages,
 } from "@agency_hub_core/db";
 import { millsToRoundedDollars,
   addUtcDays,
@@ -352,7 +352,9 @@ export async function buildDailyRevenueTelegramReport(
 ): Promise<DailyRevenueTelegramReport> {
   const currentBusinessDayStart = startOfReportBusinessDay(now);
   const previousBusinessDayStart = addUtcDays(currentBusinessDayStart, -1);
-  const pageRows = await listVisiblePages(app.db);
+  // W7.2 (A33): the digest is a revenue aggregate — tombstoned pages keep
+  // contributing their in-window revenue (they read 0 once long retired).
+  const pageRows = await listRevenuePages(app.db);
   const pageIds = pageRows.map((page) => page.id);
 
   // The daily Telegram report closes the agency business day at 02:00 Moscow

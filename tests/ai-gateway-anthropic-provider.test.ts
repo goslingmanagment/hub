@@ -105,15 +105,14 @@ describe("Anthropic AI gateway provider", () => {
       yield {
         type: "message_delta",
         delta: { stop_reason: "end_turn" },
+        // W7.1 (B1): the REAL wire shape — the delta carries scalars only;
+        // the 5m/1h breakdown exists solely on message_start. The old
+        // fixture put cache_creation here too, masking the overwrite bug.
         usage: {
           input_tokens: 100,
           output_tokens: 8,
           cache_creation_input_tokens: 15,
           cache_read_input_tokens: 20,
-          cache_creation: {
-            ephemeral_5m_input_tokens: 10,
-            ephemeral_1h_input_tokens: 5,
-          },
         },
       };
       yield { type: "message_stop" };

@@ -1243,6 +1243,51 @@ export function buildProgram() {
     });
 
   program
+    .command("money:repair-negations")
+    .description(
+      "W7.3 (A21+B4): deactivate double-negative twins and orphan negatives "
+        + "(no active settled original), then rebuild spender/revenue rollups per page. "
+        + "Never deletes. Run --dry-run first",
+    )
+    .option("--dry-run", "census only, no writes", false)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { repairNegationAnomalies } = await import("./services/money-negation-guards.ts");
+        const result = await repairNegationAnomalies(app, { dryRun: Boolean(options.dryRun) });
+        console.log(JSON.stringify(result));
+        console.log(
+          `${result.dryRun ? "[dry-run] would deactivate" : "deactivated"} `
+            + `${result.dryRun ? result.pairs + result.orphans : result.deactivated} `
+            + `(pairs ${result.pairs}, orphans ${result.orphans}); pages rebuilt ${result.pagesRebuilt}`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("ofapi:pending-reconcile")
+    .description(
+      "W7.4 (A47): settle-or-expire stale OFAPI pending transactions — REST rescan "
+        + "(spends credits) settles what completed; whatever stays pending after a fresh "
+        + "scan is retired like the Fansly anchor. Also runs daily at 03:25 UTC",
+    )
+    .option("--dry-run", "rescan in dry-run and report; expire nothing", false)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { runOfapiPendingReconcile } = await import("./services/ofapi-pending-reconcile.ts");
+        const result = await runOfapiPendingReconcile(app, {
+          mode: options.dryRun ? "dry-run" : "write",
+        });
+        console.log(JSON.stringify(result));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("fansly:backscroll-report")
     .description("Stage 17 manifest: per-conversation hot vs archive coverage + cursor state")
     .action(async () => {

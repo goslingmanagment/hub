@@ -5,7 +5,6 @@ import {
   rebuildSpenderProjections,
   upsertFanPages,
   upsertFans,
-  upsertTransaction,
   withOfapiSpendTransactionPageLock,
   type OfapiSpendProjectionTransactionIngestRow,
 } from "@agency_hub_core/db";
@@ -16,6 +15,7 @@ import {
   mapOfapiSpendStatusToTransactionState,
   normalizeOfapiSpendAmountMills,
 } from "./ofapi-spend-transaction-mapping.ts";
+import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
 import {
   assertPageTransactionsWriter,
   WrongTransactionsWriterError,
@@ -90,7 +90,9 @@ async function applyPageRows(
       // Stage 7 observation key; deliveries older than the journal deploy
       // resolve to null (legacy rows carry source only, per the passport).
       const observation = await findObservationByKey(db, "webhook", row.sourceIdempotencyKey);
-      await upsertTransaction(db, {
+      // W7.3: negative rows are guard-evaluated; settled positives may
+      // reactivate a suppressed orphan negative (extend dirtyFrom for it).
+      const guarded = await upsertTransactionWithNegationGuards(db, {
         platformAccountId: pageId,
         source: "ofapi:webhook",
         sourceObservationId: observation?.id ?? null,
@@ -115,6 +117,9 @@ async function applyPageRows(
       dirtyFrom = dirtyFrom === null || row.occurredAt.getTime() < dirtyFrom.getTime()
         ? row.occurredAt
         : dirtyFrom;
+      if (guarded.reactivatedFrom && (dirtyFrom === null || guarded.reactivatedFrom.getTime() < dirtyFrom.getTime())) {
+        dirtyFrom = guarded.reactivatedFrom;
+      }
       applied += 1;
     }
 

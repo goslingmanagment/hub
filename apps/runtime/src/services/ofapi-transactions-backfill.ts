@@ -10,7 +10,6 @@ import {
   transactions,
   upsertFanPages,
   upsertFans,
-  upsertTransaction,
   withOfapiSpendTransactionPageLock,
   type Database,
 } from "@agency_hub_core/db";
@@ -21,6 +20,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import type { OfapiRequestContext } from "./ofapi.ts";
+import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
 import { createOfapiRestGuard, type OfapiBudgetBlock } from "./sync/ofapi-dm-sync.ts";
 import {
   mapOfapiTransactionStatusForSpendProjection,
@@ -742,7 +742,9 @@ async function writeBackfillRows(
       // in a divergent rawType.) The shared transactionId carries the
       // settled/pending/reversed distinction, so a pending REST row transitions
       // in place when the terminal projection later arrives, and vice versa.
-      await upsertTransaction(db, {
+      // W7.3: same guard wrapper as the webhook ingest — negatives are
+      // suppressed when twinned/orphaned; settled positives run the fixup.
+      const guarded = await upsertTransactionWithNegationGuards(db, {
         platformAccountId: input.pageId,
         source: "ofapi:rest",
         fanId: fanIdByPlatformUserId.get(row.fanPlatformUserId) ?? null,
@@ -766,6 +768,9 @@ async function writeBackfillRows(
       dirtyFrom = dirtyFrom === null || row.occurredAt.getTime() < dirtyFrom.getTime()
         ? row.occurredAt
         : dirtyFrom;
+      if (guarded.reactivatedFrom && (dirtyFrom === null || guarded.reactivatedFrom.getTime() < dirtyFrom.getTime())) {
+        dirtyFrom = guarded.reactivatedFrom;
+      }
       written += 1;
     }
 

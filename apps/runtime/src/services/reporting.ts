@@ -24,7 +24,7 @@ import {
   findFanOnPage,
   findPageSummaryByLabel,
   findPlatformFan,
-  findVisibleModel,
+  findRevenueModel,
   getFanSpendByIdentifier,
   getPlatformTotalSpendForFan,
   getRevenueBreakdown,
@@ -40,6 +40,8 @@ import {
   listSubscriberDailyForPage,
   listSubscriberTotalsForPages,
   listTransactionsForPage,
+  listRevenueModels,
+  listRevenuePages,
   listVisibleModels,
   listVisiblePages,
   listFanFlags,
@@ -511,8 +513,10 @@ export async function getOverviewRevenueReport(
   app: AppContext,
   input: PeriodInput & { pageIds?: number[] },
 ): Promise<OverviewRevenueResponse> {
-  const pageRows = await listVisiblePages(app.db, input.pageIds);
-  const modelRows = await listVisibleModels(app.db, input.pageIds);
+  // W7.2 (A33, decision #131): revenue attribution reads ALL pages —
+  // tombstoned pages keep their history in the rollups.
+  const pageRows = await listRevenuePages(app.db, input.pageIds);
+  const modelRows = await listRevenueModels(app.db, input.pageIds);
   const groupedPageIds = groupPageIdsByPlatform(pageRows);
   const totals = await getRevenuePageTotalsByPlatform(app, groupedPageIds, input);
   const totalsByPageId = new Map(totals.map((row) => [row.pageId, row.netEarningsMills]));
@@ -528,6 +532,7 @@ export async function getOverviewRevenueReport(
     modelName: page.modelName,
     netEarningsMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
     totalNetMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
+    status: page.status as "active" | "deleted",
   }));
 
   const totalsByModelSlug = new Map<string, bigint>();
@@ -561,6 +566,7 @@ export async function getOverviewRevenueReport(
       pageCount: model.pageCount,
       netEarningsMills: millsToNumber(totalsByModelSlug.get(model.slug) ?? 0n),
       totalNetMills: millsToNumber(totalsByModelSlug.get(model.slug) ?? 0n),
+      status: (model.activePageCount > 0 ? "active" : "retired") as "active" | "retired",
     })),
     pages,
   };
@@ -571,12 +577,14 @@ export async function getModelRevenueReport(
   modelSlug: string,
   input: PeriodInput & { pageIds?: number[] },
 ): Promise<ModelRevenueResponse> {
-  const model = await findVisibleModel(app.db, modelSlug, input.pageIds);
+  // W7.2 (A33): the model report is a historical rollup — reachable and
+  // complete even when some (or all) of its pages are tombstoned.
+  const model = await findRevenueModel(app.db, modelSlug, input.pageIds);
   if (!model) {
     throw new NotFoundError(`Model "${modelSlug}" not found`);
   }
 
-  const pageRows = (await listVisiblePages(app.db, input.pageIds))
+  const pageRows = (await listRevenuePages(app.db, input.pageIds))
     .filter((page) => page.modelSlug === modelSlug);
   const groupedPageIds = groupPageIdsByPlatform(pageRows);
   const totals = await getRevenuePageTotalsByPlatform(app, groupedPageIds, {
@@ -618,6 +626,7 @@ export async function getModelRevenueReport(
       modelName: page.modelName,
       netEarningsMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
       totalNetMills: millsToNumber(totalsByPageId.get(page.id) ?? 0n),
+      status: page.status as "active" | "deleted",
     })),
   };
 }

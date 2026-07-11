@@ -45,6 +45,10 @@ import {
   startOfapiChargebacksWorker,
 } from "./services/ofapi-chargebacks-sync.ts";
 import {
+  ensureOfapiPendingReconcileQueue,
+  startOfapiPendingReconcileWorker,
+} from "./services/ofapi-pending-reconcile.ts";
+import {
   ensureOfapiCreditQueues,
   startOfapiCreditWorker,
 } from "./services/ofapi-credits.ts";
@@ -154,6 +158,7 @@ export async function startWorkerServices(
   await ensureOfapiQueues(boss, createdQueues);
   await ensureOfapiCreditQueues(boss, createdQueues);
   await ensureOfapiChargebacksQueue(boss, createdQueues);
+  await ensureOfapiPendingReconcileQueue(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
@@ -270,6 +275,7 @@ export async function startWorkerServices(
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);
   await startOfapiChargebacksWorker(app, boss);
+  await startOfapiPendingReconcileWorker(app, boss);
   await startOfapiCommandWorker(app, boss);
   await startOfapiDmAnalyticsWorker(app, boss);
 

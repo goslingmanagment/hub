@@ -3497,3 +3497,53 @@ read is now retry-3-then-RETHROW (A31 — a crash-looping container is visible,
 a silently flags-off "healthy" api is not); sampler indexes per the Stage-0
 EXPLAIN (BRIN on the append tables, partial btree on the bounded lookups);
 metric-sample prune moved from every minute to hourly.
+
+**Decision #131 (2026-07-11, W7.2 / A33 — tombstoned pages keep their revenue
+history):** consciously revises the Stage-13 "active-only" reader choice FOR
+HISTORICAL AGGREGATES. Every revenue surface (overview/model reports, finance
+module series, Top Spenders scopes, Telegram digest) previously derived its
+page set from active-only readers, so tombstoning a page silently dropped its
+ENTIRE revenue history from every rollup while the facts stayed in
+`transactions` — totals lied by the page's lifetime net. New split:
+navigation/status surfaces stay on the active-only readers; revenue
+attribution goes through `listRevenuePages` / `listRevenueModels` /
+`findRevenueModel` / `listRevenueScopePages` (no status filter, status
+exposed). Page-scoped detail routes still 404 on tombstones — retired pages
+stay hidden as PAGES; only rollups keep their history. Contract: additive
+optional `status` on `pageRevenueItemSchema` ('active'|'deleted') and
+`modelRevenueItemSchema` ('active'|'retired' — retired = zero active pages);
+dashboard badges render them. Growth reports deliberately stay active-only (a
+tombstoned page's frozen follower counts are not current growth). Expected
+visible effect at deploy: all-time totals jump UP by retired pages' lifetime
+revenue — that jump IS the fix.
+
+**Decision #132 (2026-07-11, W7.3+W7.4 / A21+B4+A47 — negation guards, sticky
+suppression, pending settle-or-expire):** three writers mint negative money
+rows (`<id>:reversal` from the webhook truth ingest and the REST backfill,
+`<id>:chargeback` from the chargebacks reconcile) with per-suffix dedup and
+no settled-original check — structurally double-countable (both flags are ON
+in prod; Stage-0 census 2026-07-11: 0 double pairs, 9 orphan reversals
+≈ −$114.95). Guards now run inside the existing per-page spend lock:
+(Guard 1/B4) an active other-suffix twin ⇒ the new negative writes INACTIVE
+as `superseded_duplicate_negation` (first negative wins; repair pin: the
+:reversal is canonical, the :chargeback twin deactivates); (Guard 2/A21) no
+active POSTED original under the base id ⇒ inactive as
+`reversal_without_settled_original`; a late-arriving settled original
+reactivates AT MOST ONE suppressed negative (earliest row) via the explicit
+fixup — the ONLY reactivation path. (Guard 0, mandatory) `upsertTransaction`'s
+conflict-set used to reset `is_active=true` on every re-upsert — any webhook
+redelivery would resurrect a deactivated twin; the two guard reasons are now
+STICKY through the conflict-set (`missing_from_sync_window` deliberately
+stays re-activatable — re-appearance is its designed recovery). Repair CLI
+`money:repair-negations` (dry-run first) deactivates the census anomalies and
+rebuilds rollups. (W7.4/A47) OFAPI pending rows now settle-or-expire like the
+Fansly anchor: daily 03:25 UTC `ofapi.pending.reconcile` (+ CLI
+`ofapi:pending-reconcile`) rescans stale (>7d) pendings through the existing
+credit-guarded REST backfill, then retires what a fresh scan of the window no
+longer reports — displayed revenue stops carrying dead pendings (census: 156
+stale rows, ≈$2,804 net). Migration 0081 (two enum values). Also in this
+wave (W7.1/B1, forward-only): the Anthropic provider preserves the 5m/1h
+cache-write breakdown from message_start when a usage delta lacks it — the
+1h component was priced at the 5m rate (37.5% under-recorded); historical
+rows are identifiable (`cache_write_tokens>0 AND cost_approximate=true`) and
+stay unmutated (append-only ledger).

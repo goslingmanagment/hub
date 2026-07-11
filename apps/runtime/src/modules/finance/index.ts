@@ -14,6 +14,7 @@ import {
   listRevenueDailyForPages,
   listSubscriberTotalsForPages,
   listTransactionsForScope,
+  listRevenuePages,
   listVisiblePages,
 } from "@agency_hub_core/db";
 import {
@@ -486,7 +487,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
-    const pages = await listVisiblePages(appContext.db, pageScopeFor(principal));
+    const pages = await listRevenuePages(appContext.db, pageScopeFor(principal));
     return getRevenueDailySeries(
       pages.map((p) => p.id),
       pages,
@@ -511,7 +512,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
-    const pages = await listVisiblePages(appContext.db, pageScopeFor(principal));
+    const pages = await listRevenuePages(appContext.db, pageScopeFor(principal));
 
     const byModel = new Map<string, { modelName: string; pages: typeof pages }>();
     for (const page of pages) {
@@ -559,7 +560,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
-    const pages = (await listVisiblePages(appContext.db, pageScopeFor(principal)))
+    const pages = (await listRevenuePages(appContext.db, pageScopeFor(principal)))
       .filter((p) => p.modelSlug === request.params.modelSlug);
     if (pages.length === 0) {
       throw new NotFoundError(`Model "${request.params.modelSlug}" not found`);
@@ -575,7 +576,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     requireDashboardUser(principal);
     const query = request.query;
     const pageScope = pageScopeFor(principal);
-    const allPages = await listVisiblePages(appContext.db, pageScope);
+    const allPages = await listRevenuePages(appContext.db, pageScope);
     const pageIds = pageScope ?? allPages.map((p) => p.id);
 
     const result = await listTransactionsForScope(appContext.db, {

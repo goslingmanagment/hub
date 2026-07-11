@@ -208,9 +208,24 @@ export function createAnthropicAiGatewayProvider(
           if (rawEvent.type === "message_delta") {
             stopReason = extractStopReason(rawEvent) ?? stopReason;
             if (isRecord(rawEvent.usage)) {
-              lastUsage = rawEvent.usage;
+              // W7.1 (B1): on the real wire the 5m/1h cache-write breakdown
+              // (`cache_creation`) arrives ONLY on message_start; the delta
+              // carries scalars. A plain overwrite dropped the breakdown, so
+              // pricing's no-breakdown branch priced every cache write at the
+              // 5m rate (the 1h component under-recorded 37.5%). Delta
+              // scalars win; the breakdown is preserved from message_start
+              // when the incoming frame lacks it.
+              const merged: AnthropicGatewayUsageLike = { ...rawEvent.usage };
+              if (
+                merged.cache_creation == null
+                && lastUsage
+                && isRecord(lastUsage.cache_creation)
+              ) {
+                merged.cache_creation = lastUsage.cache_creation;
+              }
+              lastUsage = merged;
               usageEmitted = true;
-              yield usageFrame(input, rawEvent.usage, providerResponseId);
+              yield usageFrame(input, merged, providerResponseId);
             }
           }
         }

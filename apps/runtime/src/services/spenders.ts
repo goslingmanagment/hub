@@ -31,7 +31,7 @@ import {
   listPageFansByLifetimeGrossBucket,
   listPageFansByWindowGrossBucket,
   listRankedSpenders,
-  listVisibleScopePages,
+  listRevenueScopePages,
   searchFansInScope,
   type RankedSpenderRow,
   type SpenderSortBy,
@@ -334,7 +334,7 @@ async function resolveSpenderScope(
       throw new ForbiddenError("Page access denied");
     }
 
-    const visiblePlatformPages = await listVisibleScopePages(app.db, {
+    const visiblePlatformPages = await listRevenueScopePages(app.db, {
       platform: page.platform,
       pageIds: scopedPageIds,
     });
@@ -361,7 +361,7 @@ async function resolveSpenderScope(
 
   if (input.scope === "model") {
     const platform = input.platform!;
-    const pages = await listVisibleScopePages(app.db, {
+    const pages = await listRevenueScopePages(app.db, {
       platform,
       pageIds: scopedPageIds,
       modelSlug: input.modelSlug,
@@ -373,7 +373,7 @@ async function resolveSpenderScope(
       );
     }
 
-    const visiblePlatformPages = await listVisibleScopePages(app.db, {
+    const visiblePlatformPages = await listRevenueScopePages(app.db, {
       platform,
       pageIds: scopedPageIds,
     });
@@ -396,7 +396,7 @@ async function resolveSpenderScope(
   }
 
   const platform = input.platform!;
-  const visiblePlatformPages = await listVisibleScopePages(app.db, {
+  const visiblePlatformPages = await listRevenueScopePages(app.db, {
     platform,
     pageIds: scopedPageIds,
   });

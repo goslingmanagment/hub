@@ -377,6 +377,44 @@ export async function listVisibleScopePages(
     .orderBy(models.slug, pages.label);
 }
 
+/** W7.2 (A33, decision #131): spender/revenue scope resolution reads ALL
+ * pages — a retired page's fans keep their lifetime spend in Top Spenders
+ * and the agency rollups. Navigation keeps listVisibleScopePages. */
+export async function listRevenueScopePages(
+  db: Database,
+  input: {
+    platform: Platform;
+    pageIds?: number[];
+    modelSlug?: string;
+  },
+) {
+  if (input.pageIds !== undefined && input.pageIds.length === 0) {
+    return [];
+  }
+
+  const clauses = [eq(pages.platform, input.platform)];
+  if (input.pageIds !== undefined) {
+    clauses.push(inArray(pages.id, input.pageIds));
+  }
+  if (input.modelSlug) {
+    clauses.push(eq(models.slug, input.modelSlug));
+  }
+
+  return db.select({
+    id: pages.id,
+    label: pages.label,
+    platform: pages.platform,
+    status: pages.status,
+    modelSlug: models.slug,
+    modelName: models.name,
+    username: pages.username,
+    displayName: pages.displayName,
+  }).from(pages)
+    .innerJoin(models, eq(models.id, pages.modelId))
+    .where(and(...clauses))
+    .orderBy(models.slug, pages.label);
+}
+
 export async function findVisibleFanByIdentity(
   db: Database,
   input: {

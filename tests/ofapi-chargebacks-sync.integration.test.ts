@@ -8,9 +8,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createModel,
   createOnlyFansPage,
+  listStalePendingOfapiTransactions,
+  retireStalePendingTransactionsById,
   setPageOfapiAccountId,
   upsertTransaction,
 } from "@agency_hub_core/db";
+import {
+  repairNegationAnomalies,
+  upsertTransactionWithNegationGuards,
+} from "../apps/runtime/src/services/money-negation-guards.ts";
+import { runOfapiPendingReconcile } from "../apps/runtime/src/services/ofapi-pending-reconcile.ts";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { runOfapiChargebacksReconcile } from "../apps/runtime/src/services/ofapi-chargebacks-sync.ts";
@@ -50,7 +57,13 @@ async function seedOfapiPage(label: string, ofapiAccountId: string) {
     slug: `model-${label}`,
     name: `Model ${label}`,
   });
+  if (!model) {
+    throw new Error("model seed failed");
+  }
   const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label });
+  if (!page) {
+    throw new Error("page seed failed");
+  }
   await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId });
   return page;
 }
@@ -271,6 +284,330 @@ describe("OFAPI chargebacks reconcile", () => {
       [page.id],
     );
     expect(afterCompletion).toEqual([{ n: "101" }]);
+  });
+
+  // ——— W7.3 (A21+B4, decision #132): negation guards ———
+
+  function settledOriginal(pageId: number, transactionId: string) {
+    return upsertTransactionWithNegationGuards(appContext.db, {
+      platformAccountId: pageId,
+      source: "ofapi:webhook",
+      transactionId,
+      rawType: "ofapi:tip",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "settled",
+      grossAmountMills: 12_340n,
+      sourceDestinationAmountMills: 12_340n,
+      creatorNetAmountMills: 9_870n,
+      senderId: "555001",
+      occurredAt: new Date("2026-06-15T10:00:00.000Z"),
+    });
+  }
+
+  function reversalRow(pageId: number, baseId: string) {
+    return upsertTransactionWithNegationGuards(appContext.db, {
+      platformAccountId: pageId,
+      source: "ofapi:webhook",
+      transactionId: `${baseId}:reversal`,
+      rawType: "ofapi:tip",
+      canonicalType: "refund",
+      transactionState: "posted",
+      rawStatus: "refunded",
+      grossAmountMills: -12_340n,
+      sourceDestinationAmountMills: -12_340n,
+      creatorNetAmountMills: -9_870n,
+      senderId: "555001",
+      occurredAt: new Date("2026-06-20T10:00:00.000Z"),
+    });
+  }
+
+  async function rowState(pageId: number, transactionId: string) {
+    const { rows } = await testDb!.pool.query<{
+      is_active: boolean;
+      inactive_reason: string | null;
+    }>(
+      "select is_active, inactive_reason::text from transactions where platform_account_id = $1 and transaction_id = $2",
+      [pageId, transactionId],
+    );
+    return rows[0] ?? null;
+  }
+
+  async function activeNetMills(pageId: number) {
+    const { rows } = await testDb!.pool.query<{ net: string }>(
+      "select coalesce(sum(creator_net_amount_mills), 0)::text as net from transactions where platform_account_id = $1 and is_active",
+      [pageId],
+    );
+    return rows[0]!.net;
+  }
+
+  it("guard 1 (B4): a chargeback with an active reversal twin writes INACTIVE — never double-negate", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfapiPage("cb-twin", "acct_twin");
+    await settledOriginal(page.id, "pay-1");
+    const reversal = await reversalRow(page.id, "pay-1");
+    expect(reversal.suppressedAs).toBeNull();
+
+    appContext = {
+      ...appContext,
+      ofapi: chargebacksClient({
+        calls: [],
+        itemsByAccount: new Map([["acct_twin", [chargebackItem("pay-1", "555001")]]]),
+      }),
+    };
+    await runOfapiChargebacksReconcile(appContext);
+
+    expect(await rowState(page.id, "pay-1:reversal")).toEqual({
+      is_active: true,
+      inactive_reason: null,
+    });
+    expect(await rowState(page.id, "pay-1:chargeback")).toEqual({
+      is_active: false,
+      inactive_reason: "superseded_duplicate_negation",
+    });
+    // Net over ACTIVE rows = settled + one negation = 0.
+    expect(await activeNetMills(page.id)).toBe("0");
+  });
+
+  it("guard 1 symmetric: a reversal landing after an active chargeback is the suppressed twin", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfapiPage("cb-sym", "acct_sym");
+    await settledOriginal(page.id, "pay-2");
+    appContext = {
+      ...appContext,
+      ofapi: chargebacksClient({
+        calls: [],
+        itemsByAccount: new Map([["acct_sym", [chargebackItem("pay-2", "555001")]]]),
+      }),
+    };
+    await runOfapiChargebacksReconcile(appContext);
+
+    const reversal = await reversalRow(page.id, "pay-2");
+    expect(reversal.suppressedAs).toBe("superseded_duplicate_negation");
+    expect(await rowState(page.id, "pay-2:reversal")).toEqual({
+      is_active: false,
+      inactive_reason: "superseded_duplicate_negation",
+    });
+    expect(await activeNetMills(page.id)).toBe("0");
+  });
+
+  it("guard 2 (A21): a negative with no settled original writes INACTIVE; a late original reactivates it (net 0)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfapiPage("cb-orphan", "acct_orphan");
+    // Chargeback for a payment we never saw settle.
+    appContext = {
+      ...appContext,
+      ofapi: chargebacksClient({
+        calls: [],
+        itemsByAccount: new Map([["acct_orphan", [chargebackItem("pay-3", "555001")]]]),
+      }),
+    };
+    await runOfapiChargebacksReconcile(appContext);
+    expect(await rowState(page.id, "pay-3:chargeback")).toEqual({
+      is_active: false,
+      inactive_reason: "reversal_without_settled_original",
+    });
+    expect(await activeNetMills(page.id)).toBe("0");
+
+    // The original settles late → the fixup reactivates the negation.
+    const original = await settledOriginal(page.id, "pay-3");
+    expect(original.reactivatedFrom).not.toBeNull();
+    expect(await rowState(page.id, "pay-3:chargeback")).toEqual({
+      is_active: true,
+      inactive_reason: null,
+    });
+    expect(await activeNetMills(page.id)).toBe("0");
+  });
+
+  it("guard 0: a redelivery re-upsert NEVER resurrects a suppressed negation (sticky)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfapiPage("cb-sticky", "acct_sticky");
+    appContext = {
+      ...appContext,
+      ofapi: chargebacksClient({
+        calls: [],
+        itemsByAccount: new Map([["acct_sticky", [chargebackItem("pay-4", "555001")]]]),
+      }),
+    };
+    await runOfapiChargebacksReconcile(appContext);
+    expect((await rowState(page.id, "pay-4:chargeback"))!.is_active).toBe(false);
+
+    // Redelivery through the PLAIN upsert (the pre-guard writer shape) —
+    // the conflict-set itself must preserve the suppression.
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      source: "ofapi:rest",
+      transactionId: "pay-4:chargeback",
+      rawType: "ofapi:chargeback",
+      canonicalType: "chargeback",
+      transactionState: "posted",
+      rawStatus: "undo",
+      grossAmountMills: -12_340n,
+      sourceDestinationAmountMills: -12_340n,
+      creatorNetAmountMills: -9_870n,
+      senderId: "555001",
+      occurredAt: new Date("2026-06-20T10:00:00.000Z"),
+    });
+    expect(await rowState(page.id, "pay-4:chargeback")).toEqual({
+      is_active: false,
+      inactive_reason: "reversal_without_settled_original",
+    });
+  });
+
+  it("repair CLI: deactivates census anomalies (orphans + duplicate twins, reversal canonical) and rebuilds", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfapiPage("cb-repair", "acct_repair");
+    // Pre-guard world: seed an ACTIVE orphan reversal and an ACTIVE
+    // double-negative pair via the plain upsert.
+    const plain = (transactionId: string, net: bigint, canonicalType: "tip" | "refund" | "chargeback", state: "posted" | "pending" = "posted") =>
+      upsertTransaction(appContext.db, {
+        platformAccountId: page.id,
+        source: "ofapi:webhook",
+        transactionId,
+        rawType: "ofapi:tip",
+        canonicalType,
+        transactionState: state,
+        rawStatus: "x",
+        grossAmountMills: net,
+        sourceDestinationAmountMills: net,
+        creatorNetAmountMills: net,
+        senderId: "555001",
+        occurredAt: new Date("2026-06-18T10:00:00.000Z"),
+      });
+    await plain("orphan-1:reversal", -5_000n, "refund");
+    await plain("dup-1", 8_000n, "tip");
+    await plain("dup-1:reversal", -8_000n, "refund");
+    await plain("dup-1:chargeback", -8_000n, "chargeback");
+
+    const dry = await repairNegationAnomalies(appContext, { dryRun: true });
+    expect(dry).toMatchObject({ pairs: 1, deactivated: 0, dryRun: true });
+    expect((await rowState(page.id, "orphan-1:reversal"))!.is_active).toBe(true);
+
+    const real = await repairNegationAnomalies(appContext, { dryRun: false });
+    expect(real.pairs).toBe(1);
+    expect(real.deactivated).toBeGreaterThanOrEqual(2);
+    // Canonical-twin pin: the :reversal stays, the :chargeback deactivates.
+    expect((await rowState(page.id, "dup-1:reversal"))!.is_active).toBe(true);
+    expect(await rowState(page.id, "dup-1:chargeback")).toEqual({
+      is_active: false,
+      inactive_reason: "superseded_duplicate_negation",
+    });
+    expect(await rowState(page.id, "orphan-1:reversal")).toEqual({
+      is_active: false,
+      inactive_reason: "reversal_without_settled_original",
+    });
+    // dup pair nets 0 over active rows; orphan no longer subtracts.
+    expect(await activeNetMills(page.id)).toBe("0");
+  });
+
+  // ——— W7.4 (A47): pending settle-or-expire ———
+
+  it("stale-pending listing + targeted retire: only still-pending rows expire", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfapiPage("cb-pending", "acct_pending");
+    const pendingAt = new Date(Date.now() - 10 * 86_400_000);
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      source: "ofapi:webhook",
+      transactionId: "pend-1",
+      rawType: "ofapi:tip",
+      canonicalType: "tip",
+      transactionState: "pending",
+      rawStatus: "pending",
+      grossAmountMills: 4_000n,
+      sourceDestinationAmountMills: 4_000n,
+      creatorNetAmountMills: 3_200n,
+      senderId: "555001",
+      occurredAt: pendingAt,
+    });
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      source: "ofapi:webhook",
+      transactionId: "pend-2",
+      rawType: "ofapi:tip",
+      canonicalType: "tip",
+      transactionState: "pending",
+      rawStatus: "pending",
+      grossAmountMills: 1_000n,
+      sourceDestinationAmountMills: 1_000n,
+      creatorNetAmountMills: 800n,
+      senderId: "555001",
+      occurredAt: new Date(), // fresh — not stale
+    });
+
+    const stale = await listStalePendingOfapiTransactions(appContext.db, {
+      olderThan: new Date(Date.now() - 7 * 86_400_000),
+    });
+    const staleIds = stale.filter((row) => row.platformAccountId === page.id);
+    expect(staleIds.map((row) => row.transactionId)).toEqual(["pend-1"]);
+
+    // Simulate the rescan settling pend-1 BEFORE the retire pass: the
+    // targeted retire re-checks state and must not touch it.
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      source: "ofapi:rest",
+      transactionId: "pend-1",
+      rawType: "ofapi:tip",
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: "done",
+      grossAmountMills: 4_000n,
+      sourceDestinationAmountMills: 4_000n,
+      creatorNetAmountMills: 3_200n,
+      senderId: "555001",
+      occurredAt: pendingAt,
+    });
+    const retired = await retireStalePendingTransactionsById(appContext.db, {
+      platformAccountId: page.id,
+      ids: staleIds.map((row) => row.id),
+    });
+    expect(retired).toBe(0);
+    expect((await rowState(page.id, "pend-1"))!.is_active).toBe(true);
+
+    // And a row the rescan did NOT settle retires.
+    const { rows } = await testDb.pool.query<{ id: number }>(
+      "update transactions set transaction_state = 'pending' where platform_account_id = $1 and transaction_id = 'pend-1' returning id",
+      [page.id],
+    );
+    const retired2 = await retireStalePendingTransactionsById(appContext.db, {
+      platformAccountId: page.id,
+      ids: [rows[0]!.id],
+    });
+    expect(retired2).toBe(1);
+    expect(await rowState(page.id, "pend-1")).toEqual({
+      is_active: false,
+      inactive_reason: "missing_from_sync_window",
+    });
+  });
+
+  it("pending reconcile is a no-op with truth ingest disabled", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext = createTestAppContext(testDb, {
+      ofapiSpendTransactionIngestEnabled: false,
+    });
+    const result = await runOfapiPendingReconcile(appContext);
+    expect(result).toMatchObject({ skipped: "disabled", stalePendings: 0, expired: 0 });
   });
 
   it("does nothing with the flag off", async (context) => {

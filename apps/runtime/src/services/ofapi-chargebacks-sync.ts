@@ -16,7 +16,6 @@ import {
   transactions,
   upsertFanPages,
   upsertFans,
-  upsertTransaction,
   withOfapiSpendTransactionPageLock,
   type Database,
 } from "@agency_hub_core/db";
@@ -27,6 +26,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
+import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
 import type { OfapiRequestContext } from "./ofapi.ts";
 import {
   resolveStoredProxyConfig,
@@ -341,7 +341,9 @@ async function reconcilePage(
       let dirtyFrom: Date | null = null;
       let count = 0;
       for (const row of normalized) {
-        await upsertTransaction(db, {
+        // W7.3 Guard 1/2: an active :reversal twin or a missing settled
+        // original writes this chargeback INACTIVE (never double-negate).
+        await upsertTransactionWithNegationGuards(db, {
           platformAccountId: input.pageId,
           source: "ofapi:rest",
           fanId: fanIdByPlatformUserId.get(row.fanPlatformUserId) ?? null,

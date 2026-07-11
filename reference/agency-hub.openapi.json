@@ -20691,6 +20691,13 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "deleted"
+                            ]
                           }
                         },
                         "required": [
@@ -24249,6 +24256,13 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "retired"
+                            ]
                           }
                         },
                         "required": [
@@ -24290,6 +24304,13 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "deleted"
+                            ]
                           }
                         },
                         "required": [

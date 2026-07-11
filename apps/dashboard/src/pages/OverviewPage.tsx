@@ -211,6 +211,19 @@ export function OverviewPage() {
     ? describeMixedRevenueWindows(revenueData?.platformWindows, periodLabel)
     : null;
 
+  // W7.2 (A33, decision #131): rollups include tombstoned pages; they carry
+  // no row in the (active-only) navigation table, so annotate the totals.
+  const retiredRevenuePages = revenueReady
+    ? (revenueData?.pages ?? []).filter(
+      (rp) => rp.status === "deleted" && rp.netEarningsMills !== 0,
+    )
+    : [];
+  const retiredRevenueNote = retiredRevenuePages.length > 0
+    ? `Totals include ${retiredRevenuePages.length} retired ${
+      retiredRevenuePages.length === 1 ? "page" : "pages"
+    } (${retiredRevenuePages.map((rp) => rp.pageLabel).join(", ")}) — history is kept after deletion.`
+    : null;
+
   return (
     <div>
       <table className="w-full border-collapse overflow-hidden rounded-xl border border-border bg-card">
@@ -287,6 +300,9 @@ export function OverviewPage() {
 
       {mixedWindowsNote && (
         <p className="mt-2 px-1 text-xs text-text-muted">{mixedWindowsNote}</p>
+      )}
+      {retiredRevenueNote && (
+        <p className="mt-2 px-1 text-xs text-text-muted">{retiredRevenueNote}</p>
       )}
 
       <Suspense

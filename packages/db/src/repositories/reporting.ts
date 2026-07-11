@@ -103,6 +103,94 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
     .orderBy(models.sortOrder, models.slug, pages.label);
 }
 
+/** W7.2 (A33, decision #131): revenue ATTRIBUTION reads all pages — a
+ * tombstoned page keeps its historical revenue in every rollup. Navigation
+ * surfaces stay on listVisiblePages (active-only, Stage 13). Same shape as
+ * listVisiblePages plus `status` (minus the proxy columns no revenue caller
+ * reads), so call sites can swap without reshaping. */
+export async function listRevenuePages(db: Database, pageIds?: number[]) {
+  const clauses: Array<SQL> = [];
+  const { scoped } = applyPageScope(clauses, pageIds);
+  if (scoped && pageIds?.length === 0) {
+    return [];
+  }
+
+  return db.select({
+    id: pages.id,
+    label: pages.label,
+    platform: pages.platform,
+    status: pages.status,
+    username: pages.username,
+    displayName: pages.displayName,
+    followerCount: pages.followerCount,
+    subscriberCount: pages.subscriberCount,
+    lastLightSyncAt: pages.lastLightSyncAt,
+    lastFollowerSyncAt: pages.lastFollowerSyncAt,
+    ofapiAccountId: pages.ofapiAccountId,
+    ofapiAuthStatus: pages.ofapiAuthStatus,
+    ofapiAuthChangedAt: pages.ofapiAuthChangedAt,
+    modelSlug: models.slug,
+    modelName: models.name,
+    hasCredentials: sql<boolean>`${pageCredentials.id} is not null`,
+  }).from(pages)
+    .innerJoin(models, eq(models.id, pages.modelId))
+    .leftJoin(pageCredentials, eq(pageCredentials.platformAccountId, pages.id))
+    .where(clauses.length > 0 ? and(...clauses) : undefined)
+    .orderBy(models.sortOrder, models.slug, pages.label);
+}
+
+/** W7.2 (A33): revenue-model listing — a model keeps appearing in rollups
+ * even when every page is tombstoned; `activePageCount` lets callers surface
+ * a "retired" badge. */
+export async function listRevenueModels(db: Database, pageIds?: number[]) {
+  if (pageIds !== undefined && pageIds.length === 0) {
+    return [];
+  }
+
+  const clauses: Array<SQL> = [];
+  if (pageIds !== undefined) {
+    clauses.push(inArray(pages.id, pageIds));
+  }
+
+  return db.select({
+    id: models.id,
+    slug: models.slug,
+    name: models.name,
+    pageCount: sql<number>`count(${pages.id})::int`,
+    activePageCount: sql<number>`(count(${pages.id}) filter (where ${pages.status} = 'active'))::int`,
+  }).from(models)
+    .innerJoin(pages, eq(pages.modelId, models.id))
+    .where(clauses.length > 0 ? and(...clauses) : undefined)
+    .groupBy(models.id, models.slug, models.name)
+    .orderBy(models.sortOrder, models.slug);
+}
+
+/** W7.2 (A33): model lookup for the revenue report — reachable even when all
+ * its pages are tombstoned (the overview rollup still lists it). */
+export async function findRevenueModel(db: Database, modelSlug: string, pageIds?: number[]) {
+  if (pageIds !== undefined && pageIds.length === 0) {
+    return null;
+  }
+
+  const clauses = [eq(models.slug, modelSlug)];
+  if (pageIds !== undefined) {
+    clauses.push(inArray(pages.id, pageIds));
+  }
+
+  const [row] = await db.select({
+    id: models.id,
+    slug: models.slug,
+    name: models.name,
+    pageCount: sql<number>`count(${pages.id})::int`,
+    activePageCount: sql<number>`(count(${pages.id}) filter (where ${pages.status} = 'active'))::int`,
+  }).from(models)
+    .innerJoin(pages, eq(pages.modelId, models.id))
+    .where(and(...clauses))
+    .groupBy(models.id, models.slug, models.name);
+
+  return row ?? null;
+}
+
 export async function listVisibleModels(db: Database, pageIds?: number[]) {
   if (pageIds !== undefined && pageIds.length === 0) {
     return [];
