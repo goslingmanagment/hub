@@ -4062,3 +4062,20 @@ evolution does not churn the vendored SDK without a new operation. The extension
 must version its session cache (so a warm top-500 entry cannot survive the
 upgrade), prove a 1000-row DOM/search/cursor path, and keep its existing honest
 `top N of M` fallback.
+
+**Decision #143 (2026-07-11, A8/B2 — AUTH_POLICY_ENFORCEMENT flipped
+log → enforce):** The final owner-gated audit item is closed. Its precondition
+was met: the trailing 48 hours contained zero `auth-policy would-*` divergence
+lines, so log-mode shadow verdicts matched the legacy in-handler guards.
+Production `AUTH_POLICY_ENFORCEMENT` was changed from `log` to `enforce` and the
+API container alone was force-recreated because the flag is API-owned. The
+environment file was backed up before the flip. Verification showed HTTP 200,
+the running configuration at `enforce`, and zero post-restart auth-policy errors
+or chatter lockout. Rollback is to restore `log` and recreate the API container.
+`REVENUE_ROUTE_ROLE_ENFORCEMENT` was already enforced under #68. Removing the
+now-redundant in-handler guards remains deferred work, not part of this ruling.
+
+This uses #143 because #128 and #129 already contain the accepted backup and
+erasure-policy rulings, #136 is the fan-dossier decision, #139 remains reserved,
+and #140–#142 are assigned. The stale duplicate numbers from the original
+in-flight branch must not be merged.
