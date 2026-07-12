@@ -2369,7 +2369,8 @@ export const ofapiSpendProjectionEvents = pgTable(
 // filled in by the async pg-boss processor. fanout_seq (assigned in settle order from
 // ofapi_webhook_events_fanout_seq) is the SSE event id for Last-Event-ID replay —
 // receive-time ids would make late settles (retries, sweep) invisible to advanced
-// cursors. Rows are pruned after OFAPI_EVENT_RETENTION_DAYS (~7d).
+// cursors. Retention is controlled by OFAPI_EVENT_RETENTION_DAYS; the production
+// safety default is effectively-forever (36500d) because these rows are business facts.
 // status: 'pending' (acked, awaiting processing) | 'processed' (frame derived) |
 // 'skipped' (no fanout: unmapped account or journal-only event type) | 'failed'.
 export const ofapiWebhookEvents = pgTable(

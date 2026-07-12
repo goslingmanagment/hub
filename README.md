@@ -5,7 +5,7 @@ Agency Hub is a single-origin dashboard + API for syncing Fansly and OnlyFans pa
 For v1.0 production:
 - the dashboard and API are served from the same origin; production internet exposure should be behind TLS
 - the production container runs compiled Node.js output, not `tsx`
-- migrations run automatically on API and worker startup under a Postgres advisory lock
+- migrations run automatically on API, scheduler, and worker startup under a Postgres advisory lock
 - crashed services restart automatically through Docker restart policies
 - public process/database health is available at `/api/v1/health`
 - detailed sync health at `/api/v1/health/sync` requires an owner or dashboard session, or a configured `HEALTH_SYNC_MONITORING_TOKEN` sent as `x-monitoring-token`
@@ -20,12 +20,12 @@ Backups are intentionally deferred in this release hardening pass. Do not assume
 - A reachable public IP or hostname
 - TLS termination through a reverse proxy or load balancer for public dashboard access
 - One 32-byte base64 encryption key for stored credentials
-- Valid Fansly sessions and/or OnlyMonster tokens for the pages you will onboard
+- Valid Fansly sessions and/or an `OFAPI_API_KEY` for the pages you will onboard
 
 ## Production Files
 
 - `.env.production.example`: canonical production environment template
-- `docker-compose.production.yml`: production stack with `postgres`, `api`, and `worker`
+- `docker-compose.production.yml`: production stack with `postgres`, `api`, `scheduler`, and `worker`
 - `scripts/deploy-production.sh`: local build + remote ship + remote verify helper
 
 ## First Production Deploy
@@ -57,7 +57,7 @@ openssl rand -base64 32
 - `TRUST_PROXY=1` when the app is behind the production TLS reverse proxy (one trusted hop; the proxy must append the client address to `X-Forwarded-For` — see `.env.production.example`)
 - any optional Telegram values you want enabled
 
-The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port. Compose reads interpolation values from `.env.production`, while only the API and worker receive the full app environment; Postgres receives only `POSTGRES_*`.
+The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port. Compose reads interpolation values from `.env.production`; the API, scheduler, and worker receive the application environment, while Postgres receives only `POSTGRES_*`.
 
 5. Build and start the stack:
 
@@ -73,15 +73,18 @@ curl http://127.0.0.1:3000/api/v1/health
 
 `/api/v1/health` should return HTTP `200`. If external monitoring needs detailed per-page sync state, set `HEALTH_SYNC_MONITORING_TOKEN` in the runtime environment and call `/api/v1/health/sync` with that value in the `x-monitoring-token` header. That endpoint may return HTTP `200` or `503`, because it reports real per-page sync state rather than simple process liveness.
 
-7. Create the first owner account. Pass the password through an environment variable or a file so it does not appear in shell history:
+7. Create the first owner account. Read the password without echoing or embedding it in the command line, then export the already-populated variable:
 
 ```bash
-export INITIAL_OWNER_PASSWORD='change-me-now'
+read -r -s -p 'Initial owner password: ' INITIAL_OWNER_PASSWORD
+printf '\n'
+export INITIAL_OWNER_PASSWORD
 docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js user add \
   --username owner \
   --role owner \
   --password-env INITIAL_OWNER_PASSWORD
+unset INITIAL_OWNER_PASSWORD
 ```
 
 8. Open the dashboard from the same origin as the API:
@@ -94,7 +97,7 @@ Sign in with the owner account you just created. The dashboard onboarding flow c
 
 ## First Run Notes
 
-- The API and worker both start through `apps/runtime/dist/startup.js`, which runs migrations before handing off to the role-specific process.
+- The API, scheduler, and worker start through `apps/runtime/dist/startup.js`, which runs migrations before handing off to the role-specific process.
 - Restarting the stack or re-running `docker compose ... up -d --build` is safe. Applied migrations are skipped automatically.
 - The worker is a separate service using the same image, so background sync work does not share the API process.
 
@@ -123,18 +126,17 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
 
 The session file must already exist inside the container if you use the CLI this way. For most first-time production setups, the dashboard onboarding flow is simpler.
 
-OnlyFans via OnlyMonster:
+OnlyFans via OFAPI:
 
 ```bash
 docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js page add onlyfans \
   --model lora \
   --label lora-of \
-  --username lora_onlyfans \
-  --token-file /run/secrets/lora-of.token.json
+  --username lora_onlyfans
 ```
 
-The token file must already exist inside the container if you use the CLI this way.
+`OFAPI_API_KEY` must already be configured in `.env.production`. The CLI resolves the connected OFAPI account and stores the page mapping; it does not accept a per-page OnlyMonster token.
 
 ### Trigger a manual sync
 
@@ -154,14 +156,16 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
 
 ## Updating An Existing Deployment
 
-When the server already has the repo checked out:
+Production updates must go through the deploy helper in the next section. It provides migration preflight checks, local and remote locks, immutable image labels, health verification, and rollback. Do not use `git pull && docker compose up -d --build` as the normal production update path; that bypasses those safeguards.
+
+For a disposable local environment only, rebuilding an existing checkout remains:
 
 ```bash
 git pull
 docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
 ```
 
-This is the intended update path. It rebuilds the production image, recreates the containers, and lets startup handle migrations automatically. No separate migration command is required.
+This local-development command rebuilds the image and lets startup handle migrations automatically. It is not the production deployment procedure.
 
 ## Remote Deployment From Your Workstation
 
@@ -180,7 +184,7 @@ By default the script uses `--mode full`:
 - it performs a full Docker image build and does not fall back to dist-only unless `--mode auto` is explicitly requested
 - the Node base image is read through a stable local cache tag, `agency_hub_core/node:22-bookworm-slim`, to avoid re-resolving Docker Hub metadata on every deploy
 - every built runtime image is labeled with the dependency checksum and source revision
-- after health checks, the running API and worker images must have labels matching the source revision and dependency checksum for this deploy
+- after health checks, the running API, scheduler, and worker images must have labels matching the source revision and dependency checksum for this deploy
 
 `--mode auto` is available only as an explicit opt-in. In auto mode, if the full build fails before the remote release is modified, the script can fall back to a dist-only overlay build from the currently running production image. Dist-only fallback is allowed only when the current production image carries the same dependency checksum label.
 
@@ -200,7 +204,7 @@ What the script does:
 - syncs release files into `/opt/agency-hub` by default
 - runs `docker compose --env-file .env.production -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`
 - verifies `/api/v1/health`, worker health, running image labels, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
-- if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured and `schema_migrations` did not change during the failed deploy, then prints `docker compose ps` plus recent `postgres`, `api`, and `worker` logs automatically
+- if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured and `schema_migrations` did not change during the failed deploy, then prints `docker compose ps` plus recent `postgres`, `api`, `scheduler`, and `worker` logs automatically
 
 The script assumes the remote server already has `/opt/agency-hub/.env.production` populated.
 
@@ -267,7 +271,11 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
 
 ## Configuration
 
-Use `.env.production.example` for production. It documents every supported runtime variable, the expected format, and the default behavior.
+Use `.env.production.example` as the reviewed production baseline. The runtime
+schema and `packages/shared/src/config-registry.ts` remain authoritative for the
+complete variable set and defaults; do not assume an older copied template is
+complete. Destructive retention settings must match the registry before every
+deploy.
 
 For local development:
 
