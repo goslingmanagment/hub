@@ -4515,7 +4515,7 @@ export const routeSchemas = {
     querystring: z.object({
       // 'lifetime' or a month window ('2026-06') — the projection's window values.
       window: z.string().regex(/^(lifetime|\d{4}-\d{2})$/).default("lifetime"),
-      limit: z.coerce.number().int().min(1).max(500).default(150),
+      limit: z.coerce.number().int().min(1).max(1000).default(150),
     }),
     response: {
       200: z.object({

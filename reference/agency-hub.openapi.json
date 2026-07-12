@@ -36019,7 +36019,7 @@
               "default": 150,
               "type": "integer",
               "minimum": 1,
-              "maximum": 500
+              "maximum": 1000
             },
             "in": "query",
             "name": "limit",

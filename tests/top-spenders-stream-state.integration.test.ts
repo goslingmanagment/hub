@@ -11,6 +11,7 @@ import {
   createModel,
   createOnlyFansPage,
   ensurePageSyncStates,
+  upsertFans,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -182,5 +183,75 @@ describe("pageTopSpenders source.streamState (W8.1)", () => {
     const { cookie } = await startServer({ fanslyFanEarningsSyncEnabled: true });
     const body = await fetchTopSpenders(cookie, "tss-of");
     expect(body.source.streamState).toBe("unsupported_platform");
+  });
+
+  it("returns the bounded top 1000 while keeping the full fanCount", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { cookie, fansly } = await startServer({
+      fanslyFanEarningsSyncEnabled: true,
+      fanslyNewStreamPageAllowlist: "",
+    });
+    const fanRows = await upsertFans(appContext.db, Array.from({ length: 1001 }, (_, index) => ({
+      platform: "fansly" as const,
+      platformUserId: `cap-fan-${String(index).padStart(4, "0")}`,
+      username: null,
+      displayName: null,
+    })));
+    await testDb.pool.query(
+      `insert into fan_earnings_stats (
+         account_id, fan_id, "window", gross_mills, net_mills,
+         currency, observed_at, source_event_id
+       )
+       select $1, seeded.fan_id, 'lifetime', 1000, 800,
+              'USD', $3::timestamptz, seeded.ordinality
+         from unnest($2::bigint[]) with ordinality as seeded(fan_id, ordinality)`,
+      [fansly.id, fanRows.map((fan) => fan.id), "2026-07-12T00:00:00.000Z"],
+    );
+
+    const response = await server!.inject({
+      method: "GET",
+      url: "/api/v1/pages/tss-fansly/top-spenders?window=lifetime&limit=1000",
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      fanCount: number;
+      entries: Array<{ platformUserId: string }>;
+    };
+    expect(body.fanCount).toBe(1001);
+    expect(body.entries).toHaveLength(1000);
+    expect(new Set(body.entries.map((entry) => entry.platformUserId)).size).toBe(1000);
+    expect(body.entries[0]!.platformUserId).toBe("cap-fan-0000");
+    expect(body.entries[999]!.platformUserId).toBe("cap-fan-0999");
+    expect(body.entries.some((entry) => entry.platformUserId === "cap-fan-1000")).toBe(false);
+
+    const legacyLimit = await server!.inject({
+      method: "GET",
+      url: "/api/v1/pages/tss-fansly/top-spenders?window=lifetime&limit=500",
+      headers: { cookie },
+    });
+    expect(legacyLimit.statusCode).toBe(200);
+    const legacyBody = legacyLimit.json() as {
+      fanCount: number;
+      entries: Array<{ platformUserId: string }>;
+    };
+    expect(legacyBody.fanCount).toBe(1001);
+    expect(legacyBody.entries).toHaveLength(500);
+    expect(legacyBody.entries[499]!.platformUserId).toBe("cap-fan-0499");
+
+    const overLimit = await server!.inject({
+      method: "GET",
+      url: "/api/v1/pages/tss-fansly/top-spenders?window=lifetime&limit=1001",
+      headers: { cookie },
+    });
+    expect(overLimit.statusCode).toBe(400);
+    expect(overLimit.json()).toEqual({
+      error: "Bad Request",
+      message: "querystring/limit Too big: expected number to be <=1000",
+      statusCode: 400,
+    });
   });
 });

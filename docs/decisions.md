@@ -4031,3 +4031,34 @@ a worker or queue attempt still owns work. Real PostgreSQL tests pin both clock
 skew directions, the shared-egress ordering `A → waiting B → A successor`, and
 the inverse stale-priority case (`queued B@25`, durable manual promotion,
 repeating `A@30`: B still runs first).
+
+**Decision #142 (2026-07-12, complete current Fansly spender board — bounded
+1000-row read):** `pageTopSpenders` raises only its request ceiling from 500 to
+1000; the default remains 150. The live extension page that triggered this
+decision has `fanCount=694`: the old response could report that total but had no
+cursor/offset and could return only the same top 500, so rows 501–694 were
+unreachable to client-side search and tiers. The tactical answer is one bounded
+query, not pagination: the repository already executes one deterministic
+`gross_mills DESC, platform_user_id ASC LIMIT n` read, and splitting a projection
+that updates in place across independent HTTP requests would introduce
+duplicate/skip races without a snapshot watermark. There is no DB migration,
+handler change, new operation, or response-shape change. Above 1000 the response
+remains deliberately truncated and `fanCount` continues to state the full total;
+a future need beyond that ceiling must add snapshot-bound pagination rather than
+remove the bound.
+
+Compatibility order is load-bearing: deploy Core first, then release the
+extension that requests 1000 for both lifetime and current-month windows. Old
+extensions continue requesting 500 against the expanded server. The inverse
+order reaches the old Core's exact limit-validation 400; for one release the new
+extension recognizes only that exact response and retries once at 500, preserving
+an honestly truncated board during a rollout mistake or urgent Core rollback.
+Extension rollback is always safe; Core-first remains the normal rollout order.
+`pnpm contracts:generate` refreshes OpenAPI/generated SDK/hash. The client does
+not re-vendor for this compatible constraint expansion: it uses the same
+operation and numeric query type, and the SDK runtime validates responses but
+does not pre-parse request queries. This follows the client rule that compatible
+evolution does not churn the vendored SDK without a new operation. The extension
+must version its session cache (so a warm top-500 entry cannot survive the
+upgrade), prove a 1000-row DOM/search/cursor path, and keep its existing honest
+`top N of M` fallback.
