@@ -33,12 +33,15 @@ afterAll(async () => {
 });
 
 describe("config", () => {
-  it("keeps prompt debug echo disabled in env so enablement must use audited live config", () => {
-    expect(loadConfig(baseEnv).chatMuseAiPromptDebugEcho).toBe("none");
-    expect(() => loadConfig({
-      ...baseEnv,
-      CHATMUSE_AI_PROMPT_DEBUG_ECHO: `dima@${new Date(Date.now() + 60_000).toISOString()}`,
-    })).toThrow(/audited live-config API/);
+  it("keeps the prompt-echo kill-switch off in env so enabling needs the audited PATCH", () => {
+    expect(loadConfig(baseEnv).chatMuseAiPromptDebugEchoEnabled).toBe(false);
+    expect(loadConfig({ ...baseEnv, CHATMUSE_AI_PROMPT_DEBUG_ECHO_ENABLED: "false" })
+      .chatMuseAiPromptDebugEchoEnabled).toBe(false);
+    // A deploy must be inert: env cannot turn it on.
+    expect(() => loadConfig({ ...baseEnv, CHATMUSE_AI_PROMPT_DEBUG_ECHO_ENABLED: "true" }))
+      .toThrow(/audited live-config API/);
+    expect(() => loadConfig({ ...baseEnv, CHATMUSE_AI_PROMPT_DEBUG_ECHO_ENABLED: "maybe" }))
+      .toThrow();
   });
 
   it("defaults Fansly and OnlyFans delays and executor concurrency", () => {

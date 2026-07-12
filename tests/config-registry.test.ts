@@ -91,8 +91,8 @@ describe("config registry", () => {
     // Decision #136: fan-dossier context, read per generation.
     "chatMuseAiFanProfileContextFeatures",
     "chatMuseAiFanProfileVolatileMaxAgeDays",
-    // Decision #140: time-bounded prompt-echo window, read per generation.
-    "chatMuseAiPromptDebugEcho",
+    // Decision #140 (+ addendum): fleet-wide prompt-echo kill-switch, read per generation.
+    "chatMuseAiPromptDebugEchoEnabled",
     // W3.2 (decision #125): queued-command TTL, read live per sweep.
     "ofapiQueuedCommandTtlMs",
   ];

@@ -13,7 +13,7 @@ import {
 import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
 import { BadRequestError, NotFoundError, ProductGateError } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
-import { isPromptDebugEchoAllowed } from "../prompt-debug-echo.ts";
+import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import {
   isFanProfileFeatureEnabled,
   loadFanBio,
@@ -324,10 +324,7 @@ export async function prepareAiFeatureStream(
   if (options?.debugPromptEcho) {
     try {
       const effective = await loadEffectiveConfig(app.db, app.config);
-      if (isPromptDebugEchoAllowed(
-        effective.chatMuseAiPromptDebugEcho,
-        principal.user.username,
-      )) {
+      if (isPromptDebugEchoEnabled(effective.chatMuseAiPromptDebugEchoEnabled)) {
         debugFrame = {
           type: "debug_input_v1",
           systemBlocks: prompt.systemBlocks,
@@ -342,8 +339,8 @@ export async function prepareAiFeatureStream(
         }, "ai prompt debug echo emitted");
       }
     } catch {
-      // Time-bounded declassification always fails closed. Config lookup
-      // failures must not affect the generation itself.
+      // The echo is a declassification, so it fails closed: a config-lookup
+      // failure yields no frame and never affects the generation itself.
     }
   }
   return prepareAiGatewayStream(

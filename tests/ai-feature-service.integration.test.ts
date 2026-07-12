@@ -186,16 +186,14 @@ function aiFrames(body: string): Array<Record<string, unknown>> {
 }
 
 describe("AI feature service pilot (Stage 30)", () => {
-  it("echoes the exact restricted prompt only for the capability plus live gate", async (context) => {
+  it("echoes the exact restricted prompt only for the capability plus live kill-switch", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     const capture: { input?: AiGatewayProviderInput } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
-    appContext.config.chatMuseAiPromptDebugEcho = `other, SVC-CHATTER@${
-      new Date(Date.now() + 60 * 60 * 1000).toISOString()
-    }`;
+    appContext.config.chatMuseAiPromptDebugEchoEnabled = true;
     const info = vi.spyOn(appContext.logger, "info");
     // Worst case on purpose: the wire cap is 300k chars, but every "&" escapes
     // to "&amp;" (×5) INTO ONE dynamic block — the echo frame must still fit the
@@ -269,10 +267,9 @@ describe("AI feature service pilot (Stage 30)", () => {
     });
     expect(JSON.stringify(emission)).not.toContain(escapedTranscript.slice(0, 100));
 
-    appContext.config.chatMuseAiPromptDebugEcho = `svc-chatter@${
-      new Date(Date.now() - 60 * 1000).toISOString()
-    }`;
-    const expired = await apiServer!.inject({
+    // Kill-switch off → no frame even with the capability header.
+    appContext.config.chatMuseAiPromptDebugEchoEnabled = false;
+    const disabled = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/features/fast-reply",
       headers: {
@@ -281,8 +278,8 @@ describe("AI feature service pilot (Stage 30)", () => {
       },
       payload: { ...payload, clientRequestId: randomUUID() },
     });
-    expect(expired.statusCode, expired.body).toBe(200);
-    expect(aiFrames(expired.body).some((frame) => frame.type === "debug_input_v1")).toBe(false);
+    expect(disabled.statusCode, disabled.body).toBe(200);
+    expect(aiFrames(disabled.body).some((frame) => frame.type === "debug_input_v1")).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("assembles fast-reply kernel-side and streams through the gateway", async (context) => {
@@ -798,9 +795,7 @@ describe("fan-dossier context (Decision #136)", () => {
     );
     await seedFanProfile({ platform: "fansly", targetPageId: Number(fanslyPage.rows[0]!.id) });
     appContext.config.chatMuseAiFanProfileContextFeatures = "all";
-    appContext.config.chatMuseAiPromptDebugEcho = `svc-chatter@${
-      new Date(Date.now() + 60 * 60 * 1000).toISOString()
-    }`;
+    appContext.config.chatMuseAiPromptDebugEchoEnabled = true;
     const capture: { input?: AiGatewayProviderInput } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
 

@@ -1,14 +1,12 @@
-import { z } from "zod";
-
 const DEBUG_INPUT_CAPABILITY = "debug-input-v1";
 const MAX_CAPABILITIES_HEADER_LENGTH = 256;
-const MAX_DEBUG_ECHO_WINDOW_MS = 24 * 60 * 60 * 1000;
-const ISO_TIMESTAMP_WITH_OFFSET = z.string().datetime({ offset: true });
 
-function normalizedUsername(value: string) {
-  return value.trim().toLowerCase();
-}
-
+// The capability header is client-controlled compatibility NEGOTIATION, not
+// authorization: it says "this client understands and wants the debug_input_v1
+// frame" so an old client never receives an unknown frame. The authorization —
+// whether echo is allowed at all — is the server-side kill-switch
+// `chatMuseAiPromptDebugEchoEnabled` (below), and the data boundary is the
+// unchanged page-authorization the feature lane already enforces (#140).
 export function hasDebugInputCapability(
   header: string | string[] | undefined,
 ): boolean {
@@ -21,98 +19,13 @@ export function hasDebugInputCapability(
     .some((token) => token === DEBUG_INPUT_CAPABILITY);
 }
 
-// The single echo key carries the allowlist AND the deadline in one value
-// ("user1,user2@<ISO>"), so enabling or disabling is always one atomic write:
-// a still-live deadline left over from a previous window can never re-open
-// echo when only a user list is edited. The deadline is split on the LAST "@"
-// so usernames containing "@" cannot shift the boundary.
-//
-// This is a declassification gate, so it fails CLOSED on the whole value, not
-// per token: a malformed entry (empty token, an "all"/"none" smuggled into the
-// list, a window longer than the 24h the write path allows) disables echo
-// entirely rather than quietly dropping the bad part and honouring the rest.
-// The 24h bound is re-checked HERE and not only at write time — a row can also
-// arrive from a restored dump, a hand-run UPDATE, or an older kernel's rules,
-// and remaining-time can only shrink for a legitimately written window.
-function parsePromptDebugEcho(
-  valueRaw: string | null | undefined,
-  now: Date,
-): { users: string[] } | null {
-  if (!valueRaw) {
-    return null;
-  }
-  const trimmed = valueRaw.trim();
-  if (trimmed.toLowerCase() === "none") {
-    return null;
-  }
-  const at = trimmed.lastIndexOf("@");
-  if (at <= 0 || at === trimmed.length - 1) {
-    return null;
-  }
-  const deadline = trimmed.slice(at + 1).trim();
-  if (!ISO_TIMESTAMP_WITH_OFFSET.safeParse(deadline).success) {
-    return null;
-  }
-  const deadlineMs = Date.parse(deadline);
-  if (!Number.isFinite(deadlineMs)) {
-    return null;
-  }
-  const remainingMs = deadlineMs - now.getTime();
-  if (remainingMs <= 0 || remainingMs > MAX_DEBUG_ECHO_WINDOW_MS) {
-    return null;
-  }
-  const users = trimmed.slice(0, at).split(",").map(normalizedUsername);
-  if (users.some((user) => user.length === 0 || user === "none" || user === "all")) {
-    return null;
-  }
-  return { users };
-}
-
-export function isPromptDebugEchoAllowed(
-  valueRaw: string | null | undefined,
-  username: string,
-  now: Date = new Date(),
+// The whole gate. The owner decided the assembled prompt is not withheld from
+// the agency's own chatters, so echo is a plain fleet-wide boolean rather than a
+// timed per-user allowlist (Decision #140 addendum): a live-config kill-switch,
+// audited on flip through the owner PATCH, default off so a deploy is inert.
+// A missing/non-boolean effective value reads as false — fail closed.
+export function isPromptDebugEchoEnabled(
+  enabled: boolean | undefined,
 ): boolean {
-  const parsed = parsePromptDebugEcho(valueRaw, now);
-  if (!parsed) {
-    return false;
-  }
-  const wanted = normalizedUsername(username);
-  if (wanted.length === 0) {
-    return false;
-  }
-  return parsed.users.includes(wanted);
-}
-
-export function validatePromptDebugEcho(
-  value: string,
-  now: Date = new Date(),
-): string | null {
-  const trimmed = value.trim();
-  if (trimmed.toLowerCase() === "none") {
-    return null;
-  }
-  const at = trimmed.lastIndexOf("@");
-  if (at <= 0 || at === trimmed.length - 1) {
-    return 'chatMuseAiPromptDebugEcho must be "none" or "user1,user2@<ISO deadline>"';
-  }
-  const deadline = trimmed.slice(at + 1).trim();
-  if (!ISO_TIMESTAMP_WITH_OFFSET.safeParse(deadline).success) {
-    return "chatMuseAiPromptDebugEcho deadline must be an ISO timestamp with timezone";
-  }
-  const deadlineMs = Date.parse(deadline);
-  if (!Number.isFinite(deadlineMs)) {
-    return "chatMuseAiPromptDebugEcho deadline must be an ISO timestamp";
-  }
-  if (deadlineMs <= now.getTime()) {
-    return 'chatMuseAiPromptDebugEcho deadline is already in the past; use "none" to disable';
-  }
-  if (deadlineMs > now.getTime() + MAX_DEBUG_ECHO_WINDOW_MS) {
-    return "chatMuseAiPromptDebugEcho deadline may be at most 24 hours in the future";
-  }
-  const tokens = trimmed.slice(0, at).split(",").map(normalizedUsername);
-  if (tokens.some((token) => token.length === 0 || token === "none" || token === "all")) {
-    return "chatMuseAiPromptDebugEcho users must be a CSV of usernames; all is forbidden";
-  }
-  return null;
+  return enabled === true;
 }

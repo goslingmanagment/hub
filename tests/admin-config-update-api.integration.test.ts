@@ -472,43 +472,36 @@ describe("admin config update api (Stage B1)", () => {
     expect((await getConfigOverrides(testDb.db)).has("ofapiChargebacksReconcileEnabled")).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  // Decision #140: the echo window is ONE key (users + deadline), so enable and
-  // disable are single atomic writes and a stale deadline can never re-open echo.
-  it("accepts a bounded prompt-echo window and rejects >24h, past, and wildcard", async (context) => {
+  // Decision #140 addendum: the echo gate is a plain boolean kill-switch, so the
+  // owner PATCH accepts true/false and the generic type validator rejects non-booleans.
+  it("toggles the prompt-echo kill-switch and rejects non-boolean values", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
     const cookie = await loginCookie("dima", "owner-secret");
-    async function patch(value: string) {
-      const response = await server!.inject({
+    async function patch(value: unknown) {
+      return server!.inject({
         method: "PATCH",
         url: "/api/v1/admin/config",
         headers: { cookie },
         payload: {
-          patches: [{ key: "chatMuseAiPromptDebugEcho", value }],
+          patches: [{ key: "chatMuseAiPromptDebugEchoEnabled", value }],
           note: "prompt echo test",
         },
       });
-      return response;
     }
 
-    const tooFar = new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString();
-    expect((await patch(`dima@${tooFar}`)).statusCode).toBe(400);
-    const past = new Date(Date.now() - 60_000).toISOString();
-    expect((await patch(`dima@${past}`)).statusCode).toBe(400);
-    const soon = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-    expect((await patch(`all@${soon}`)).statusCode).toBe(400);
-    expect((await patch("dima")).statusCode).toBe(400);
-    expect((await getConfigOverrides(testDb.db)).has("chatMuseAiPromptDebugEcho")).toBe(false);
+    expect((await patch("yes")).statusCode).toBe(400);
+    expect((await patch(1)).statusCode).toBe(400);
+    expect((await getConfigOverrides(testDb.db)).has("chatMuseAiPromptDebugEchoEnabled")).toBe(false);
 
-    const accepted = await patch(`dima,chatter-2@${soon}`);
-    expect(accepted.statusCode, accepted.body).toBe(200);
-    expect((await getConfigOverrides(testDb.db)).get("chatMuseAiPromptDebugEcho")?.value)
-      .toBe(`dima,chatter-2@${soon}`);
+    const enabled = await patch(true);
+    expect(enabled.statusCode, enabled.body).toBe(200);
+    expect((await getConfigOverrides(testDb.db)).get("chatMuseAiPromptDebugEchoEnabled")?.value).toBe(true);
 
-    const disabled = await patch("none");
+    const disabled = await patch(false);
     expect(disabled.statusCode).toBe(200);
-    expect((await getConfigOverrides(testDb.db)).get("chatMuseAiPromptDebugEcho")?.value).toBe("none");
+    expect((await getConfigOverrides(testDb.db)).get("chatMuseAiPromptDebugEchoEnabled")?.value).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

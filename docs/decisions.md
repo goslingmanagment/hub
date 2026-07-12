@@ -3897,6 +3897,42 @@ pin the tsc and zod that do the emitting. A guard that tolerates an uncommitted
 edit to its own definition of "these bytes" is the same provenance bug one level
 up.
 
+**Addendum to #140 (2026-07-12, fleet-wide echo — string window → boolean
+kill-switch).** The owner decided the assembled prompt (safety preamble, persona,
+templates, fan dossier) is NOT withheld from the agency's own chatters and wants
+it shown to everyone in debug mode, always, with no per-use friction. This
+SUPERSEDES the original #140 control-surface specifics: the username-in-a-live-
+window requirement, the "no `all`" rule, the mandatory ISO deadline, the 24-hour
+cap, the forgotten-window auto-expiry, and the "one atomic string" grammar — all
+retired. An architecture review (Codex gpt-5.6-sol) found the string grammar was
+"a boolean disguised as a string DSL"; the control surface is now a plain live
+boolean key `chatMuseAiPromptDebugEchoEnabled` (default false; the old string key
+`chatMuseAiPromptDebugEcho`, its parser/validator, and its PATCH transition hook
+are removed). The dashboard renders it as an on/off switch; validation is the
+registry's generic boolean type-check (no feature-specific parser). The
+declassification/bandwidth warning lives in the descriptor NOTE, deliberately NOT
+as a `costWarning` — that would force two-click confirmation on the DISABLE path
+too, wrong for an emergency kill-switch.
+
+What this addendum PRESERVES unchanged: the frame is feature-lane only and the
+raw gateway stays strict; the capability header is compatibility negotiation, not
+authorization (under a fleet-wide flag any bearer client in debug mode receives
+the frame — that is the accepted intent); the real data boundary is the unchanged
+page-authorization (a chatter sees the assembled prompt only for a generation on
+a page they are authorized to access — this grants NO historical or cross-page
+read of `ai_generation_content`, which stays owner-only); env default is false so
+a deploy is inert, and enabling is a single audited owner PATCH; clients never log
+or persist the body and render the full prompt only on an extension-origin surface.
+
+Rollback runbook (the flag is a persisted DB override, not env): to disable during
+an incident, set `chatMuseAiPromptDebugEchoEnabled` to false (or clear the
+override) FIRST, then roll back code — a code rollback alone makes the override
+temporarily unreadable but a later roll-forward would re-activate it. Follow-up
+(not a blocker for this change): the frame can be very large (blocks bounded at
+2.5M chars) and `raw.write` backpressure is unhandled, and every emission writes
+an info log — add echo count/bytes/latency metrics and sample that log once
+fleet-wide volume is understood.
+
 **Decision #141 (2026-07-11, executor fair scheduling — the group-wedge
 zombie):** three interacting defects let ONE page monopolize its egress
 group for hours while a sibling page's top-priority job starved 3.5h

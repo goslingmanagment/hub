@@ -26,8 +26,7 @@ import { hasDebugInputCapability } from "./prompt-debug-echo.ts";
 
 export {
   hasDebugInputCapability,
-  isPromptDebugEchoAllowed,
-  validatePromptDebugEcho,
+  isPromptDebugEchoEnabled,
 } from "./prompt-debug-echo.ts";
 
 // AI module (target §6.1): gateway stream, usage ledger intake, usage

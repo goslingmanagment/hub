@@ -199,17 +199,17 @@ const envSchema = z.object({
   // fast-reply,ping → all). LIVE-wired: read per generation.
   CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES: z.string().default("none"),
   CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS: z.coerce.number().int().min(0).default(21),
-  // DP 6-A time-bounded prompt declassification. ONE key carries allowlist AND
-  // deadline ("user1,user2@<ISO>") so every enable/disable is a single atomic
-  // write — a leftover deadline can never re-open echo. "none" is the
-  // fail-closed sentinel (empty live strings are rejected by the generic
-  // override validator). Env can only hold "none": enabling goes exclusively
-  // through the audited owner config API.
-  CHATMUSE_AI_PROMPT_DEBUG_ECHO: z.string().trim().toLowerCase()
-    .refine((value) => value === "none", {
+  // DP 6-A prompt declassification, fleet-wide (Decision #140 addendum): the
+  // owner does not withhold the assembled prompt from the agency's own chatters,
+  // so this is a plain live-config kill-switch, not a timed per-user allowlist.
+  // Env may only ever be false: a deploy must be inert, so enabling goes
+  // EXCLUSIVELY through the audited owner PATCH (the dashboard on/off switch),
+  // whose override wins at runtime. A non-boolean effective value fails closed.
+  CHATMUSE_AI_PROMPT_DEBUG_ECHO_ENABLED: booleanSchema
+    .refine((value) => value === false, {
       message: "prompt debug echo may be enabled only through the audited live-config API",
     })
-    .default("none"),
+    .default(false),
   OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
@@ -327,8 +327,8 @@ export interface AppConfig {
   chatMuseAiFanProfileContextFeatures?: string;
   /** Dossier volatile-section age cutoff in days (live-wired). */
   chatMuseAiFanProfileVolatileMaxAgeDays?: number;
-  /** Prompt debug echo window: "none" or "user1,user2@<ISO deadline>" (live-wired). */
-  chatMuseAiPromptDebugEcho?: string;
+  /** Fleet-wide prompt-echo kill-switch (live-wired); default false, audited enable. */
+  chatMuseAiPromptDebugEchoEnabled?: boolean;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   openrouterApiKey?: string | null;
@@ -499,7 +499,7 @@ export function loadConfig(
     aiTranscriptFreshUnionMode: parsed.AI_TRANSCRIPT_FRESH_UNION_MODE,
     chatMuseAiFanProfileContextFeatures: parsed.CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES,
     chatMuseAiFanProfileVolatileMaxAgeDays: parsed.CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS,
-    chatMuseAiPromptDebugEcho: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO,
+    chatMuseAiPromptDebugEchoEnabled: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO_ENABLED,
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
