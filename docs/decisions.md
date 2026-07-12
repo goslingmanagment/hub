@@ -3728,6 +3728,26 @@ stored latest (client preflight GETs remain an optimization; legacy writes
 without generatedAtMs keep append semantics); generatedAtMs is
 contract-bounded to 2100-01-01 and future skew past 5 minutes clamps to
 server "now" so a broken client clock can't pin volatile sections fresh.
+
+**Addendum to #136 (2026-07-12, disclaimer over age-dropping).** The volatile
+age-drop is REMOVED: the compiler no longer drops STAGE AND TRAJECTORY, OPEN
+LOOPS, or STRATEGY when the dossier is old, and the live key
+`chatMuseAiFanProfileVolatileMaxAgeDays` is retired (dead config → tombstoned;
+LIVE key count 17→16). Rationale (owner decision): the prompt ALREADY carries a
+dated disclaimer ("generated on {date}… may be out of date… transcript is
+authoritative"), so also hard-dropping those sections was belt-and-braces that
+discarded useful historical context. The disclaimer in `fanProfileSection`
+(builder.ts) is strengthened to name the date and mark the situational sections
+as possibly-obsolete HISTORY, not current instructions — the original worry was
+that STRATEGY reads like a directive, and a sharpened disclaimer addresses that
+without denying the model the context. UNCHANGED: FINANCIAL PROFILE is still
+always dropped (that is about DUPLICATION with the live spending blocks, not
+age), size-pressure shedding by keep-priority against the 10k target, the 20k
+hard cap, and the bounded-head fallback. builder.ts is manifest-pinned, so
+prompt-manifest.json re-pins builder.ts's coreSha256 with this note. `ageDays`
+is still computed and reported in the contextManifest and stamped on the
+disclaimer; only the age-based DROP decision is gone.
+
 **Decision #139 — RESERVED for the in-flight AUTH_POLICY_ENFORCEMENT ruling
 (authored in the ai/ping-silence session, uncommitted at the time of this
 write; renumbered twice: its original #135 was taken by A2a, and its #136

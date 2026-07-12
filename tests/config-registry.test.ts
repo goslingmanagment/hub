@@ -90,7 +90,6 @@ describe("config registry", () => {
     "aiTranscriptFreshUnionMode",
     // Decision #136: fan-dossier context, read per generation.
     "chatMuseAiFanProfileContextFeatures",
-    "chatMuseAiFanProfileVolatileMaxAgeDays",
     // Decision #140 (+ addendum): fleet-wide prompt-echo kill-switch, read per generation.
     "chatMuseAiPromptDebugEchoEnabled",
     // W3.2 (decision #125): queued-command TTL, read live per sweep.
@@ -121,7 +120,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the seventeen live keys, the nineteen boot keys, and nothing else", () => {
+  it("wires exactly the sixteen live keys, the nineteen boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

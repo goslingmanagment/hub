@@ -25,11 +25,14 @@ const TRUNCATION_MARKER = "\n\n[dossier truncated]";
  * tests/parseFanProfile.test.ts); English names cover the template's own
  * vocabulary and legacy bodies. `stems` catch translation variance, but only
  * on markdown `#` heading lines — prose or list bullets never stem-match.
- * `keepPriority` orders size-pressure drops (higher = dropped first); `kind`
- * drives the age policy — volatile sections (stage, open loops, strategy)
- * mislead once the dossier is old, stable ones age well. FINANCIAL PROFILE is
- * always dropped: fresh spending/subscription data rides its own prompt
- * sections. */
+ * `keepPriority` orders size-pressure drops (higher = dropped first). `kind`
+ * only distinguishes FINANCIAL PROFILE, which is ALWAYS dropped: fresh
+ * spending/subscription data rides its own prompt sections, so an aged
+ * financial snapshot would only duplicate and contradict the live numbers. The
+ * `volatile` label is retained for documentation — those sections (stage, open
+ * loops, strategy) are NOT age-dropped: the prompt already stamps the dossier's
+ * generation date and marks it possibly-stale-history, so the model weighs
+ * their age rather than losing the context outright (Decision #136 addendum). */
 const DOSSIER_SECTIONS = [
   {
     label: "DOSSIER",
@@ -127,22 +130,20 @@ function matchSectionHeading(line: string): DossierSectionDef | undefined {
 export interface CompiledDossier {
   body: string;
   truncated: boolean;
-  /** Section labels omitted (age policy, size pressure, or the financial rule). */
+  /** Section labels omitted (the financial rule or size pressure). */
   droppedSections: string[];
   /** False when the body didn't parse into known sections (head-slice fallback). */
   sectioned: boolean;
 }
 
 export interface CompileDossierOptions {
-  ageDays: number;
-  volatileMaxAgeDays: number;
   targetChars?: number;
   hardCapChars?: number;
 }
 
 export function compileDossierForPrompt(
   raw: string,
-  options: CompileDossierOptions,
+  options: CompileDossierOptions = {},
 ): CompiledDossier {
   const targetChars = options.targetChars ?? FAN_PROFILE_TARGET_CHARS;
   const hardCapChars = options.hardCapChars ?? FAN_PROFILE_HARD_CAP_CHARS;
@@ -177,9 +178,11 @@ export function compileDossierForPrompt(
   }
 
   const dropped = new Set<string>();
-  const volatileStale = options.ageDays > options.volatileMaxAgeDays;
+  // Only FINANCIAL PROFILE is dropped by rule (it duplicates the live spending
+  // blocks); volatile sections are kept and the prompt marks them possibly-stale
+  // by generation date. Everything else is subject only to size pressure below.
   let kept = sections.filter(({ def }) => {
-    const drop = def.kind === "dropped" || (def.kind === "volatile" && volatileStale);
+    const drop = def.kind === "dropped";
     if (drop) {
       dropped.add(def.label);
     }
@@ -268,7 +271,6 @@ export async function loadFanProfileContext(
     pageId: number;
     fanRef: string;
     platform: "fansly" | "onlyfans";
-    volatileMaxAgeDays: number;
     now: number;
   },
 ): Promise<FanProfilePromptContext | undefined> {
@@ -286,13 +288,12 @@ export async function loadFanProfileContext(
   }
 
   // sourceGeneratedAt is when the Scan actually RAN; createdAt is only the
-  // hub append time (a delayed client re-push must not zero the age).
+  // hub append time (a delayed client re-push must not zero the age). ageDays is
+  // reported in the manifest and stamped on the prompt disclaimer; compilation
+  // itself no longer age-drops sections (Decision #136 addendum).
   const generatedAt = profile.sourceGeneratedAt ?? profile.createdAt;
   const ageDays = Math.max(0, Math.floor((input.now - generatedAt.getTime()) / DAY_MS));
-  const compiled = compileDossierForPrompt(profile.body, {
-    ageDays,
-    volatileMaxAgeDays: input.volatileMaxAgeDays,
-  });
+  const compiled = compileDossierForPrompt(profile.body, {});
   if (compiled.body.length === 0) {
     return undefined;
   }

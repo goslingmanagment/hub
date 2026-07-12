@@ -14,9 +14,9 @@
     },
     "builder.ts": {
       "sourceSha256": "3f90eabc80214ac66f25990d2face2ff9456141046c8624f094fd1f935ef8ad5",
-      "coreSha256": "a0e42d4cb80affd6af3c71141bd3bdb4ded651a4fc584a235ce1a92d4931bdc2",
+      "coreSha256": "38738171b3105d5e72e75b0a8c9216b96157a595fa8480f2d59204c638a85f55",
       "byteIdenticalToSource": false,
-      "note": "Stage 32: applyPlatformWording added (named platform substitution; the frozen desktop sourceSha256 stays the historical record). Decision #136: fanProfile input + fanProfileSection substitution (stored fan dossier)."
+      "note": "Stage 32: applyPlatformWording added (named platform substitution; the frozen desktop sourceSha256 stays the historical record). Decision #136: fanProfile input + fanProfileSection substitution (stored fan dossier). Decision #136 addendum: fanProfileSection disclaimer strengthened (volatile sections kept, not age-dropped; framed as possibly-stale history by generation date)."
     },
     "templates.ts": {
       "sourceSha256": "cf40a9ecb86834a4d4c1fa4bd742687244df49eac6a9be6058a8341c5a7bf922",

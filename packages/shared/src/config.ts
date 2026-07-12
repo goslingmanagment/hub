@@ -198,7 +198,6 @@ const envSchema = z.object({
   // CSV of feature keys narrows the policy set (staged rollout: fast-reply →
   // fast-reply,ping → all). LIVE-wired: read per generation.
   CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES: z.string().default("none"),
-  CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS: z.coerce.number().int().min(0).default(21),
   // DP 6-A prompt declassification, fleet-wide (Decision #140 addendum): the
   // owner does not withhold the assembled prompt from the agency's own chatters,
   // so this is a plain live-config kill-switch, not a timed per-user allowlist.
@@ -325,8 +324,6 @@ export interface AppConfig {
   aiTranscriptFreshUnionMode?: "off" | "shadow" | "serve";
   /** Fan-dossier context allowlist: "all" (policy decides) | "none" | CSV of features (live-wired). */
   chatMuseAiFanProfileContextFeatures?: string;
-  /** Dossier volatile-section age cutoff in days (live-wired). */
-  chatMuseAiFanProfileVolatileMaxAgeDays?: number;
   /** Fleet-wide prompt-echo kill-switch (live-wired); default false, audited enable. */
   chatMuseAiPromptDebugEchoEnabled?: boolean;
   onlyFansTopSpendersEnabled?: boolean;
@@ -498,7 +495,6 @@ export function loadConfig(
     chatMuseAiGatewayFeatureDailyMicroUsdLimits: parsed.CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS,
     aiTranscriptFreshUnionMode: parsed.AI_TRANSCRIPT_FRESH_UNION_MODE,
     chatMuseAiFanProfileContextFeatures: parsed.CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES,
-    chatMuseAiFanProfileVolatileMaxAgeDays: parsed.CHATMUSE_AI_FAN_PROFILE_VOLATILE_MAX_AGE_DAYS,
     chatMuseAiPromptDebugEchoEnabled: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO_ENABLED,
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,

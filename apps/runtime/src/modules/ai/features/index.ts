@@ -252,7 +252,6 @@ export async function prepareAiFeatureStream(
           pageId,
           fanRef,
           platform: stored.page.platform,
-          volatileMaxAgeDays: effective.chatMuseAiFanProfileVolatileMaxAgeDays ?? 21,
           now: Date.now(),
         });
       }

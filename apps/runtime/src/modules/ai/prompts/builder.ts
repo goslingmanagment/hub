@@ -252,7 +252,7 @@ function fanProfileSection(
   const date = fanProfile!.generatedAt.toISOString().slice(0, 10);
   return `## Fan Dossier
 
-Stored dossier about this fan, generated on ${date} from earlier conversation history. It may be out of date — if anything here conflicts with the live transcript above, the transcript is authoritative.
+Stored dossier about this fan, generated on ${date} from earlier conversation history. Facts and personality age well, but the situational parts — stage and trajectory, open loops, and strategy — describe where things stood ON ${date} and may now be obsolete: treat them as history and context, not as current instructions. If anything here conflicts with the live transcript above, the transcript is authoritative.
 
 <fan_dossier>
 ${escapeForPrompt(trimmed)}

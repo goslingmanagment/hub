@@ -742,20 +742,23 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(userText(capture)).toContain("## Fan Dossier");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("ages the dossier by its SOURCE generation time, not the hub append time", async (context) => {
+  it("dates the dossier by its SOURCE generation time, not the hub append time", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     await seedConversation();
     // Delayed re-push scenario: the row was APPENDED just now, but the Scan
-    // itself ran 60 days ago — volatile sections must still drop.
-    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    // itself ran 60 days ago. Sections are no longer age-dropped (#136 addendum) —
+    // instead the disclaimer must stamp the SOURCE date, not today's append date.
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    const sourceDate = sixtyDaysAgo.toISOString().slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
     await seedFanProfile({
       platform: "onlyfans",
       targetPageId: pageId,
       createdAt: new Date().toISOString(),
-      sourceGeneratedAt: sixtyDaysAgo,
+      sourceGeneratedAt: sixtyDaysAgo.toISOString(),
     });
     const capture: { input?: AiGatewayProviderInput } = {};
     const call = makeCall(capture);
@@ -764,7 +767,10 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(reply.statusCode, reply.body).toBe(200);
     const text = userText(capture);
     expect(text).toContain("красном Ducati");
-    expect(text).not.toContain("Обещала фото с пляжа");
+    // Volatile sections stay in now; the disclaimer carries the source date.
+    expect(text).toContain("Обещала фото с пляжа");
+    expect(text).toContain(`generated on ${sourceDate}`);
+    expect(text).not.toContain(`generated on ${today}`);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("falls back to created_at for legacy rows without a source time", async (context) => {
@@ -773,8 +779,9 @@ describe("fan-dossier context (Decision #136)", () => {
       return;
     }
     await seedConversation();
-    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
-    await seedFanProfile({ platform: "onlyfans", targetPageId: pageId, createdAt: sixtyDaysAgo });
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    const createdDate = sixtyDaysAgo.toISOString().slice(0, 10);
+    await seedFanProfile({ platform: "onlyfans", targetPageId: pageId, createdAt: sixtyDaysAgo.toISOString() });
     const capture: { input?: AiGatewayProviderInput } = {};
     const call = makeCall(capture);
 
@@ -782,7 +789,8 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(reply.statusCode, reply.body).toBe(200);
     const text = userText(capture);
     expect(text).toContain("красном Ducati");
-    expect(text).not.toContain("Обещала фото с пляжа");
+    expect(text).toContain("Обещала фото с пляжа");
+    expect(text).toContain(`generated on ${createdDate}`);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("injects on the fansly clientContext path alongside the client transcript", async (context) => {

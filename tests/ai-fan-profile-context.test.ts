@@ -1,6 +1,7 @@
-// Decision #136 — the fan-dossier prompt compiler: section parsing, the
-// always-drop financial rule, the volatile age policy, priority-ordered size
-// pressure, and the runtime feature allowlist.
+// Decision #136 (+ addendum) — the fan-dossier prompt compiler: section
+// parsing, the always-drop financial rule, priority-ordered size pressure, and
+// the runtime feature allowlist. Volatile sections are NOT age-dropped; the
+// prompt disclaimer carries their staleness.
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -12,8 +13,6 @@ import {
   isFanProfileFeatureEnabled,
 } from '../apps/runtime/src/modules/ai/index.ts';
 
-const FRESH = { ageDays: 3, volatileMaxAgeDays: 21 };
-const STALE = { ageDays: 45, volatileMaxAgeDays: 21 };
 
 const FULL_DOSSIER = `1. DOSSIER
 - Name: Charles, 34, Boston, works in finance
@@ -77,7 +76,7 @@ const RUSSIAN_DOSSIER = [
 
 describe('compileDossierForPrompt — production Russian dossiers', () => {
   it('parses the dashboard-pinned Russian markdown shape and applies the financial rule', () => {
-    const result = compileDossierForPrompt(RUSSIAN_DOSSIER, FRESH);
+    const result = compileDossierForPrompt(RUSSIAN_DOSSIER);
     expect(result.sectioned).toBe(true);
     expect(result.body).toContain('ПРОФИЛЬ ФАНАТА: Michael');
     expect(result.body).toContain('красном Ducati');
@@ -85,17 +84,11 @@ describe('compileDossierForPrompt — production Russian dossiers', () => {
     expect(result.body).toContain('Тревожная привязанность');
     expect(result.body).toContain('Обещала фото с пляжа');
     expect(result.body).toContain('Давить на тему путешествий');
+    // Stage / open loops / strategy stay in regardless of age (#136 addendum):
+    // the prompt disclaimer marks them possibly-stale rather than dropping them.
+    expect(result.body).toContain('Лояльный, стабильный');
     expect(result.body).not.toContain('Кит, типсует');
     expect(result.droppedSections).toEqual(['FINANCIAL PROFILE']);
-  });
-
-  it('applies the volatile age policy to Russian sections', () => {
-    const result = compileDossierForPrompt(RUSSIAN_DOSSIER, STALE);
-    expect(result.body).toContain('красном Ducati');
-    expect(result.body).toContain('не любит спешку');
-    expect(result.body).not.toContain('Лояльный, стабильный');
-    expect(result.body).not.toContain('Обещала фото с пляжа');
-    expect(result.body).not.toContain('Давить на тему путешествий');
   });
 
   it('stem-matches translated H2 variants but never bullets or prose', () => {
@@ -107,7 +100,7 @@ describe('compileDossierForPrompt — production Russian dossiers', () => {
       '## Открытые вопросы и петли',
       '- Ждёт голосовое',
     ].join('\n');
-    const result = compileDossierForPrompt(varied, FRESH);
+    const result = compileDossierForPrompt(varied);
     expect(result.sectioned).toBe(true);
     expect(result.body).toContain('Ищет валидацию');
     expect(result.body).toContain('Ждёт голосовое');
@@ -118,7 +111,7 @@ describe('compileDossierForPrompt — production Russian dossiers', () => {
       '- Финансы: жалуется на работу',
       '- Стратегия его команды по покеру плохая',
     ].join('\n');
-    const bulletResult = compileDossierForPrompt(bullets, FRESH);
+    const bulletResult = compileDossierForPrompt(bullets);
     expect(bulletResult.body).toContain('жалуется на работу');
     expect(bulletResult.body).toContain('по покеру');
   });
@@ -130,45 +123,31 @@ describe('compileDossierForPrompt — production Russian dossiers', () => {
       '### Финансовые заметки',
       '- Упоминал бонус на работе',
     ].join('\n');
-    const result = compileDossierForPrompt(nested, FRESH);
+    const result = compileDossierForPrompt(nested);
     expect(result.body).toContain('Упоминал бонус на работе');
     expect(result.droppedSections).toEqual([]);
   });
 });
 
-describe('compileDossierForPrompt — sections and age policy', () => {
-  it('keeps all sections except FINANCIAL PROFILE for a fresh dossier', () => {
-    const result = compileDossierForPrompt(FULL_DOSSIER, FRESH);
+describe('compileDossierForPrompt — sections and the financial rule', () => {
+  it('keeps every section except FINANCIAL PROFILE — no age-dropping (#136 addendum)', () => {
+    const result = compileDossierForPrompt(FULL_DOSSIER);
     expect(result.sectioned).toBe(true);
     expect(result.truncated).toBe(false);
     expect(result.body).toContain('Charles, 34, Boston');
     expect(result.body).toContain('Anxious attachment');
-    expect(result.body).toContain('Loyal, trending stable');
     expect(result.body).toContain('hates being rushed');
+    // Volatile sections (stage, open loops, strategy) survive — the prompt
+    // disclaimer carries their possible staleness instead of dropping them.
+    expect(result.body).toContain('Loyal, trending stable');
     expect(result.body).toContain('Promised beach photos');
     expect(result.body).toContain('Lean into travel talk');
-    // Fresh spending/subscription data rides its own prompt sections.
+    // FINANCIAL is still dropped: fresh spend/subscription rides its own sections.
     expect(result.body).not.toContain('Big spender');
     expect(result.droppedSections).toEqual(['FINANCIAL PROFILE']);
   });
 
-  it('drops the volatile sections (stage, open loops, strategy) once the dossier is old', () => {
-    const result = compileDossierForPrompt(FULL_DOSSIER, STALE);
-    expect(result.body).toContain('Charles, 34, Boston');
-    expect(result.body).toContain('Anxious attachment');
-    expect(result.body).toContain('hates being rushed');
-    expect(result.body).not.toContain('Loyal, trending stable');
-    expect(result.body).not.toContain('Promised beach photos');
-    expect(result.body).not.toContain('Lean into travel talk');
-    expect([...result.droppedSections].sort()).toEqual([
-      'FINANCIAL PROFILE',
-      'OPEN LOOPS',
-      'STAGE AND TRAJECTORY',
-      'STRATEGY',
-    ]);
-  });
-
-  it('recognizes decorated headings (markdown, bold, numbering variants)', () => {
+  it('recognizes decorated headings (markdown, bold, numbering variants) and keeps them', () => {
     const decorated = [
       '## 1. DOSSIER',
       '- Name: Vlad',
@@ -177,18 +156,17 @@ describe('compileDossierForPrompt — sections and age policy', () => {
       '3) STAGE AND TRAJECTORY',
       '- Cooling off',
     ].join('\n');
-    const result = compileDossierForPrompt(decorated, FRESH);
+    const result = compileDossierForPrompt(decorated);
     expect(result.sectioned).toBe(true);
+    expect(result.body).toContain('Name: Vlad');
     expect(result.body).toContain('Owes him a voice note');
-    const stale = compileDossierForPrompt(decorated, STALE);
-    expect(stale.body).toContain('Name: Vlad');
-    expect(stale.body).not.toContain('Owes him a voice note');
-    expect(stale.body).not.toContain('Cooling off');
+    expect(result.body).toContain('Cooling off');
+    expect(result.droppedSections).toEqual([]);
   });
 
   it('does not split on prose that merely mentions a section word', () => {
     const prose = 'He said the strategy of the team is bad. '.repeat(20);
-    const result = compileDossierForPrompt(prose, FRESH);
+    const result = compileDossierForPrompt(prose);
     expect(result.sectioned).toBe(false);
     expect(result.body).toBe(prose.trim());
   });
@@ -206,7 +184,7 @@ describe('compileDossierForPrompt — size pressure', () => {
       filler('6. OPEN LOOPS', 4000),
       filler('7. STRATEGY', 4000),
     ].join('\n');
-    const result = compileDossierForPrompt(big, FRESH);
+    const result = compileDossierForPrompt(big);
     expect(result.body.length).toBeLessThanOrEqual(FAN_PROFILE_TARGET_CHARS);
     expect(result.truncated).toBe(false);
     // Highest keep-priority numbers go first: stage, then psych portrait.
@@ -218,11 +196,11 @@ describe('compileDossierForPrompt — size pressure', () => {
   });
 
   it('lets a single oversized section run past the target but never the hard cap', () => {
-    const midsize = compileDossierForPrompt(filler('1. DOSSIER', 14_000), FRESH);
+    const midsize = compileDossierForPrompt(filler('1. DOSSIER', 14_000));
     expect(midsize.truncated).toBe(false);
     expect(midsize.body.length).toBeGreaterThan(FAN_PROFILE_TARGET_CHARS);
 
-    const oversized = compileDossierForPrompt(filler('1. DOSSIER', 30_000), FRESH);
+    const oversized = compileDossierForPrompt(filler('1. DOSSIER', 30_000));
     expect(oversized.truncated).toBe(true);
     expect(oversized.body).toContain('[dossier truncated]');
     expect(oversized.body.length).toBeLessThanOrEqual(
@@ -232,7 +210,7 @@ describe('compileDossierForPrompt — size pressure', () => {
 
   it('falls back to a bounded head for unrecognized shapes', () => {
     const blob = 'freeform notes about the fan without any known headings. '.repeat(400);
-    const result = compileDossierForPrompt(blob, FRESH);
+    const result = compileDossierForPrompt(blob);
     expect(result.sectioned).toBe(false);
     expect(result.truncated).toBe(true);
     expect(result.body).toContain('[dossier truncated]');
