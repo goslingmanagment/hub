@@ -53,10 +53,12 @@ const cliMocks = vi.hoisted(() => {
     backfillFanslyPageAliases: vi.fn(),
     bossBehavior,
     bossInstances,
+    countHarvestObservations: vi.fn(),
     createAppContext: vi.fn(),
     findPageByLabel: vi.fn(),
     handleSuccessfulPageVerificationRecovery: vi.fn(),
     listPages: vi.fn(),
+    listHarvestTransactionResidue: vi.fn(),
     onboardFanslyPage: vi.fn(),
     onboardOnlyFansPage: vi.fn(),
     request: vi.fn(),
@@ -79,7 +81,9 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
 
   return {
     ...actual,
+    countHarvestObservations: cliMocks.countHarvestObservations,
     findPageByLabel: cliMocks.findPageByLabel,
+    listHarvestTransactionResidue: cliMocks.listHarvestTransactionResidue,
   };
 });
 
@@ -189,8 +193,10 @@ describe("CLI parsing", () => {
     cliMocks.bossInstances.length = 0;
     cliMocks.backfillFanslyPageAliases.mockReset();
     cliMocks.createAppContext.mockReset();
+    cliMocks.countHarvestObservations.mockReset();
     cliMocks.findPageByLabel.mockReset();
     cliMocks.listPages.mockReset();
+    cliMocks.listHarvestTransactionResidue.mockReset();
     cliMocks.onboardFanslyPage.mockReset();
     cliMocks.onboardOnlyFansPage.mockReset();
     cliMocks.request.mockReset();
@@ -224,6 +230,8 @@ describe("CLI parsing", () => {
       proxy: null,
     });
     cliMocks.listPages.mockResolvedValue([]);
+    cliMocks.countHarvestObservations.mockResolvedValue(0);
+    cliMocks.listHarvestTransactionResidue.mockResolvedValue({ total: 0, sample: [] });
     cliMocks.request.mockResolvedValue({
       statusCode: 200,
       body: {
@@ -359,6 +367,42 @@ describe("CLI parsing", () => {
     const reportCommand = telegramCommand?.commands.find((command) => command.name() === "report");
     expect(testCommand).toBeDefined();
     expect(reportCommand).toBeDefined();
+  });
+
+  it("returns a failing exit status when harvest reconciliation is incomplete", async () => {
+    const tempFile = await createTempJsonFile("harvest-manifest.json", {
+      machineId: "11111111-1111-4111-8111-111111111111",
+      tables: [{
+        table: "messages",
+        kind: "harvest.messages",
+        walked: 1,
+        uploaded: 1,
+        duplicates: 0,
+      }],
+    });
+    cleanupDirectories.add(tempFile.directory);
+    cliMocks.countHarvestObservations.mockResolvedValue(0);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      const program = buildProgram();
+      await program.parseAsync([
+        "harvest:reconcile",
+        "--manifest",
+        tempFile.filePath,
+      ], { from: "user" });
+
+      expect(process.exitCode).toBe(1);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("INCOMPLETE: 1 kind(s) mismatch"));
+      expect(cliMocks.countHarvestObservations).toHaveBeenCalledWith(expect.anything(), {
+        machineId: "11111111-1111-4111-8111-111111111111",
+        kind: "harvest.messages",
+      });
+    } finally {
+      process.exitCode = previousExitCode;
+    }
   });
 
   it("documents page proxy management commands", () => {

@@ -4099,3 +4099,20 @@ This uses #143 because #128 and #129 already contain the accepted backup and
 erasure-policy rulings, #136 is the fan-dossier decision, #139 remains reserved,
 and #140–#142 are assigned. The stale duplicate numbers from the original
 in-flight branch must not be merged.
+
+**Decision #144 (2026-07-13, revision-aware desktop harvest reconciliation):**
+Desktop harvest manifests are cumulative custody checkpoints, not immutable
+one-shot counts. Schema-v19 clients retain every uploaded natural-key/content
+revision and atomically replace a per-machine
+`chatgoose-harvest-manifest-<machine>-latest.json`; timestamped files remain
+audit snapshots and can become stale after a later local revision. The Core
+`harvest:reconcile` CLI therefore resolves a supplied timestamped v2 snapshot's
+safe `reconcileUsing` basename to that canonical sibling. For compatibility it
+also discovers the canonical sibling beside a legacy v1 timestamp when one
+exists, while falling back to the v1 file when it does not. Canonical and
+requested manifests must carry the same UUID machine id; path traversal is
+rejected. Observation ingestion, producer gates, and wire schemas do not
+change—the capture lane already accepts the revision metadata verbatim and the
+existing machine/kind count remains the reconciliation authority.
+An incomplete reconciliation exits non-zero so shell automation cannot mistake
+the report for a passed custody gate.

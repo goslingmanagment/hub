@@ -29,6 +29,7 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
+import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
   runOfapiTransactionsBackfill,
   type OfapiTransactionsBackfillResult,
@@ -1383,24 +1384,18 @@ export function buildProgram() {
   program
     .command("harvest:reconcile")
     .description("Stage 12: reconcile a machine's harvest manifest against kernel observation counts")
-    .requiredOption("--manifest <path>", "chatgoose-harvest-manifest-<machineId>-<stamp>.json")
+    .requiredOption(
+      "--manifest <path>",
+      "canonical ...-latest.json (timestamped snapshots auto-follow a canonical sibling)",
+    )
     .action(async (options) => {
-      const { readFile } = await import("node:fs/promises");
-      const manifest = JSON.parse(await readFile(options.manifest, "utf8")) as {
-        machineId: string;
-        appVersion?: string;
-        tables: Array<{
-          table: string;
-          kind: string;
-          walked: number;
-          uploaded: number;
-          duplicates: number;
-          minObservedAt?: string | null;
-          maxObservedAt?: string | null;
-        }>;
-      };
-      if (!manifest.machineId || !Array.isArray(manifest.tables)) {
-        throw new Error("Manifest must carry machineId and tables[]");
+      const resolvedManifest = await resolveHarvestManifest(options.manifest);
+      const manifest = resolvedManifest.manifest;
+      if (resolvedManifest.supersededPath !== null) {
+        console.log(
+          `Using canonical harvest manifest ${resolvedManifest.path} `
+            + `(supersedes ${resolvedManifest.supersededPath})`,
+        );
       }
 
       const app = await createAppContext();
@@ -1440,6 +1435,9 @@ export function buildProgram() {
         console.log(mismatches === 0
           ? "RECONCILED: kernel holds every walked row."
           : `INCOMPLETE: ${mismatches} kind(s) mismatch — resume the harvest on this machine.`);
+        if (mismatches > 0) {
+          process.exitCode = 1;
+        }
       } finally {
         await app.close();
       }
