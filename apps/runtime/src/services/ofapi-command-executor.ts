@@ -10,6 +10,7 @@ import {
   listOfapiCommandVerificationCandidates,
   listQueuedOfapiCommandIds,
   markStaleInFlightOfapiCommandsIndeterminate,
+  purgeExpiredTypingCommands,
   reduceDmMessageCandidate,
   type OfapiCommandRow,
 } from "@agency_hub_core/db";
@@ -45,6 +46,10 @@ const STALE_IN_FLIGHT_MS = 2 * 60 * 1000;
 // watching (15 min would leave a 5-min blind execution window). Overridable
 // live via the ofapiQueuedCommandTtlMs registry row (non-staged).
 export const QUEUED_COMMAND_TTL_MS = 10 * 60 * 1000;
+/** Typing lasts about four seconds at the vendor. Executing an older queued
+ * beacon after the chatter stopped typing is actively misleading, so it gets
+ * a separate fail-closed claim/expiry horizon. */
+export const TYPING_COMMAND_TTL_MS = 10 * 1000;
 const WEBHOOK_CORRELATION_WINDOW_MS = 10 * 60 * 1000;
 const WEBHOOK_CLOCK_SKEW_MS = 5 * 1000;
 
@@ -115,12 +120,13 @@ async function resolveQueuedCommandTtlMs(app: Pick<AppContext, "db" | "config">)
 }
 
 /**
- * Stage 7 producer 5: every command settle emits a command_result
- * observation. Best-effort AFTER the finalize commit — the outcome already
- * lives permanently in ofapi_commands (Stage 1 stopped its redaction), so a
- * capture hiccup must not unsettle a settled command or risk a re-send; it is
- * logged at error level instead. The `cmd:<id>:<state>` key dedupes the
- * direct-confirm/webhook-confirm race into one fact.
+ * Stage 7 producer 5: every durable business-command settle emits a
+ * command_result observation. Best-effort AFTER the finalize commit — the
+ * outcome already lives permanently in ofapi_commands (Stage 1 stopped its
+ * redaction), so a capture hiccup must not unsettle a settled command or risk
+ * a re-send; it is logged at error level instead. The
+ * `cmd:<id>:<state>` key dedupes the direct-confirm/webhook-confirm race into
+ * one fact. Cosmetic typing is intentionally excluded below.
  */
 async function recordCommandResultObservation(
   app: Pick<AppContext, "db" | "logger">,
@@ -130,6 +136,12 @@ async function recordCommandResultObservation(
     outcome: Record<string, unknown>;
   },
 ) {
+  // Typing is cosmetic and explicitly lossy. Persisting a canonical result
+  // observation would merely move the permanent-history leak out of the
+  // command table and into the observations ledger.
+  if (input.command.kind === "typing_active_v1") {
+    return;
+  }
   const payload = {
     commandId: input.command.id,
     commandKind: input.command.kind,
@@ -368,7 +380,9 @@ export async function executeOfapiCommand(
   // W3.2 belt (decision #125): a row older than the queued TTL is
   // unclaimable — even if this execute job races the sweep's expiry, the
   // stale send cannot fire.
-  const ttlMs = await resolveQueuedCommandTtlMs(app);
+  const ttlMs = queued.kind === "typing_active_v1"
+    ? TYPING_COMMAND_TTL_MS
+    : await resolveQueuedCommandTtlMs(app);
   const command = await claimQueuedOfapiCommand(app.db, {
     commandId,
     now,
@@ -567,10 +581,16 @@ export async function sweepOfapiCommands(
   // on re-enable). Each expiry is journaled with the same idempotency key a
   // client cancel would use, so the two paths dedupe into one fact.
   const ttlMs = await resolveQueuedCommandTtlMs(app);
-  const expired = await expireStaleQueuedOfapiCommands(app.db, {
+  const expiredTyping = await expireStaleQueuedOfapiCommands(app.db, {
+    createdBefore: new Date(now.getTime() - TYPING_COMMAND_TTL_MS),
+    now,
+    kind: "typing_active_v1",
+  });
+  const expiredGeneral = await expireStaleQueuedOfapiCommands(app.db, {
     createdBefore: new Date(now.getTime() - ttlMs),
     now,
   });
+  const expired = [...expiredTyping, ...expiredGeneral];
   for (const command of expired) {
     await recordCommandResultObservation(app, {
       command,
@@ -596,18 +616,20 @@ export async function sweepOfapiCommands(
     );
   }
 
-  // Stage 28: the Stage 1 redaction kill-switch RETIRED — terminal command
-  // payloads are kept business facts, permanently. The sweep no longer has a
-  // redaction arm (repository fn deleted with it).
+  const purged = await purgeExpiredTypingCommands(app.db, { now });
+
+  // Stage 28: the Stage 1 redaction kill-switch RETIRED — terminal business
+  // command payloads are kept permanently. Typing is not a business fact and
+  // is the explicit short-retention exception above.
   if (!isOfapiCommandExecutionEnabled(app.config) || !app.ofapi) {
-    return { expired: expired.length, stale: stale.length, purged: 0, enqueued: 0 };
+    return { expired: expired.length, stale: stale.length, purged: purged.length, enqueued: 0 };
   }
 
   const queued = await listQueuedOfapiCommandIds(app.db, { limit: COMMAND_SWEEP_LIMIT });
   for (const command of queued) {
     await sendOfapiCommandExecuteJob(boss, command.id);
   }
-  return { expired: expired.length, stale: stale.length, purged: 0, enqueued: queued.length };
+  return { expired: expired.length, stale: stale.length, purged: purged.length, enqueued: queued.length };
 }
 
 type SentWebhookRow = {

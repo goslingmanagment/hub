@@ -27,7 +27,6 @@
   "apps/runtime/src/services/auth.ts": 5,
   "apps/runtime/src/services/connections.ts": 4,
   "apps/runtime/src/services/db-disk-alert.ts": 2,
-  "apps/runtime/src/services/domain-events-stream.ts": 5,
   "apps/runtime/src/services/fan-profiles.ts": 1,
   "apps/runtime/src/services/health.ts": 2,
   "apps/runtime/src/services/ingest-observations.ts": 1,

@@ -134,6 +134,29 @@ export async function insertObservations(
 }
 
 /**
+ * Staged-rollout compatibility for harvest rows written before machine-stable
+ * idempotency keys. Old rows used <principal>:<clientEventId>; new rows use
+ * <machine>:<clientEventId>. The expression index in migration 0090 keeps this
+ * lookup bounded without rewriting or deleting immutable captured facts.
+ */
+export async function hasHarvestObservationClientEvent(
+  db: Database,
+  input: { machineId: string; clientEventId: string },
+): Promise<boolean> {
+  const existing = await db.execute<{ found: number }>(sql`
+    select 1 as found
+    from observations
+    where source = 'client_capture'
+      and producer like 'desktop-harvest@%'
+      and kind like 'harvest.%'
+      and payload->>'machineId' = ${input.machineId}
+      and split_part(idempotency_key, ':', 2) = ${input.clientEventId}
+    limit 1
+  `);
+  return existing.rows.length > 0;
+}
+
+/**
  * Stage 12 reconciliation: kernel-side count for one machine + harvest kind.
  * The harvest payload carries machineId top-level (spec §2), and the lane
  * stamps producer='desktop-harvest@<version>'.

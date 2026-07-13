@@ -17,10 +17,27 @@ describe("domain event cursor codec (Stage 21)", () => {
       const decoded = decodeDomainEventCursor(encoded);
       expect(decoded.ok).toBe(true);
       if (decoded.ok) {
+        expect(decoded.scope).toBeNull();
         expect([...decoded.watermarks.entries()].sort((a, b) => a[0] - b[0]))
           .toEqual([...watermarks.entries()].sort((a, b) => a[0] - b[0]));
       }
     }
+  });
+
+  it("round-trips the full granted-scope binding", () => {
+    const encoded = encodeDomainEventCursor(new Map([[7, 12], [8, 2]]), {
+      scope: "granted",
+    });
+    const decoded = decodeDomainEventCursor(encoded);
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.scope).toBe("granted");
+      expect([...decoded.watermarks.entries()]).toEqual([[7, 12], [8, 2]]);
+    }
+    expect(JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"))).toMatchObject({
+      v: 3,
+      s: "granted",
+    });
   });
 
   it("encoding is deterministic regardless of insertion order", () => {
@@ -30,8 +47,8 @@ describe("domain event cursor codec (Stage 21)", () => {
   });
 
   it("rejects unknown versions and malformed input", () => {
-    const v3 = Buffer.from(JSON.stringify({ v: 3, w: { "1": 5 } })).toString("base64url");
-    expect(decodeDomainEventCursor(v3)).toEqual({ ok: false, reason: "unknown_version" });
+    const v4 = Buffer.from(JSON.stringify({ v: 4, w: { "1": 5 } })).toString("base64url");
+    expect(decodeDomainEventCursor(v4)).toEqual({ ok: false, reason: "unknown_version" });
 
     const noW = Buffer.from(JSON.stringify({ v: 2 })).toString("base64url");
     expect(decodeDomainEventCursor(noW)).toEqual({ ok: false, reason: "missing_watermarks" });
@@ -41,6 +58,12 @@ describe("domain event cursor codec (Stage 21)", () => {
 
     const badSeq = Buffer.from(JSON.stringify({ v: 2, w: { "1": -4 } })).toString("base64url");
     expect(decodeDomainEventCursor(badSeq)).toEqual({ ok: false, reason: "invalid_watermark" });
+
+    const badScope = Buffer.from(JSON.stringify({ v: 2, w: { "1": 4 }, s: "all" })).toString("base64url");
+    expect(decodeDomainEventCursor(badScope)).toEqual({ ok: false, reason: "invalid_scope" });
+
+    const missingV3Scope = Buffer.from(JSON.stringify({ v: 3, w: { "1": 4 } })).toString("base64url");
+    expect(decodeDomainEventCursor(missingV3Scope)).toEqual({ ok: false, reason: "invalid_scope" });
 
     expect(decodeDomainEventCursor("!!!not-base64url!!!").ok).toBe(false);
     expect(decodeDomainEventCursor(Buffer.from("plain text").toString("base64url")).ok).toBe(false);

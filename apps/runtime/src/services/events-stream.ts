@@ -1,5 +1,6 @@
 import {
   getMaxOfapiFanoutSeq,
+  getOfapiSyncReplayFloor,
   listOfapiSyncEventsForReplay,
 } from "@agency_hub_core/db";
 import type { PoolClient } from "pg";
@@ -23,6 +24,8 @@ export interface SyncEventFrame {
 export interface SyncEventSubscriber {
   pageIds: ReadonlySet<number>;
   deliver(frame: SyncEventFrame): void;
+  /** The global replay prefix advanced beyond this connection's cursor. */
+  continuityLost?(replayFloor: number): void;
 }
 
 export interface SyncEventHub {
@@ -50,6 +53,9 @@ export function createMonotonicSeqGuard(lastSeenSeq: number | null) {
       }
       lastWrittenSeq = seq;
       return true;
+    },
+    watermark(): number | null {
+      return lastWrittenSeq;
     },
   };
 }
@@ -97,6 +103,16 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
     }
   }
 
+  function reportContinuityLoss(replayFloor: number) {
+    for (const subscriber of subscribers) {
+      try {
+        subscriber.continuityLost?.(replayFloor);
+      } catch (error) {
+        app.logger.warn({ err: error }, "SSE subscriber continuity callback failed");
+      }
+    }
+  }
+
   // Wake-ups arriving while a drain is in flight coalesce into one follow-up
   // pass, so two drains never interleave (and never broadcast out of order).
   function requestDrain() {
@@ -124,16 +140,36 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
       return;
     }
 
+    let retainedThroughSeq: number;
+    try {
+      // Committed rows only: sequence.last_value can expose an uncommitted
+      // nextval and would let the hub baseline/advance past its later commit.
+      retainedThroughSeq = await getMaxOfapiFanoutSeq(app.db);
+    } catch (error) {
+      app.logger.warn({ err: error }, "OFAPI sync event head read failed; retrying");
+      scheduleDrainRetry();
+      return;
+    }
+
     for (;;) {
       if (closed) {
         return;
       }
+      const afterSeq = deliveredSeq;
       let rows: SyncEventFrame[];
+      let replayFloor: number;
       try {
-        rows = await listOfapiSyncEventsForReplay(app.db, {
-          afterSeq: deliveredSeq,
-          limit: CATCH_UP_BATCH_SIZE,
-        });
+        rows = afterSeq >= retainedThroughSeq
+          ? []
+          : await listOfapiSyncEventsForReplay(app.db, {
+              afterSeq,
+              throughSeq: retainedThroughSeq,
+              limit: CATCH_UP_BATCH_SIZE,
+            });
+        // Read floors after the rows. If cleanup raced the SELECT and removed a
+        // row, its transaction is now visible here; if it commits later, this
+        // batch already holds the row object and can still deliver it safely.
+        replayFloor = await getOfapiSyncReplayFloor(app.db);
       } catch (error) {
         // Watermark untouched — the failed read is retried, not skipped.
         app.logger.warn({ err: error }, "OFAPI sync event journal drain failed; retrying");
@@ -141,11 +177,22 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
         return;
       }
       drainRetryDelayMs = DRAIN_RETRY_MIN_MS;
+      const throughSeq = Math.max(retainedThroughSeq, replayFloor);
+      if (afterSeq >= throughSeq) {
+        return;
+      }
+      if (replayFloor > afterSeq) {
+        reportContinuityLoss(replayFloor);
+      }
       for (const row of rows) {
         broadcast(row);
         deliveredSeq = row.id;
       }
       if (rows.length < CATCH_UP_BATCH_SIZE) {
+        // `fanout_seq` also covers processed rows with no deliverable frame and
+        // cleanup can remove the tail. Every retained deliverable row through
+        // the captured head was read above; floors closed affected consumers.
+        deliveredSeq = throughSeq;
         return;
       }
     }
@@ -262,6 +309,9 @@ export function createSyncEventHub(app: AppContext): SyncEventHub {
     },
     async ready() {
       await ensureListening();
+      if (!listenClient) {
+        throw new Error("OFAPI sync-event LISTEN connection is not ready");
+      }
     },
     async close() {
       closed = true;

@@ -6,8 +6,12 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   getOfapiFanoutReplayWindow,
+  getMaxOfapiFanoutSeq,
+  getOfapiSyncReplayFloor,
+  listOfapiStateSafeDomainEventWatermarks,
   listDomainEventAccountBounds,
   listDomainEventHighWaters,
+  listDomainEventReplayContinuityGaps,
   listEventsSince,
   listOfapiSyncEventsForReplay,
   listPageOfapiAccountRefs,
@@ -29,7 +33,11 @@ import {
   createDomainEventHub,
   type DomainEventHub,
 } from "../../services/domain-events-stream.ts";
-import { BadRequestError, ForbiddenError } from "../../services/errors.ts";
+import {
+  BadRequestError,
+  ForbiddenError,
+  ServiceUnavailableError,
+} from "../../services/errors.ts";
 import {
   createMonotonicSeqGuard,
   createSyncEventHub,
@@ -37,6 +45,12 @@ import {
   type SyncEventHub,
 } from "../../services/events-stream.ts";
 import { getOfapiSyncSnapshot } from "../../services/ofapi-sync-snapshot.ts";
+import {
+  createBoundedSseReplayBuffer,
+  estimatedSseReplayItemBytes,
+  subscribeBeforeReplayBoundary,
+  validateGaplessReplayBatch,
+} from "../../services/sse-replay-buffer.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Events module (target §6.1): the SSE stream + snapshot pair (§6.5). Handlers
@@ -70,6 +84,9 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const SSE_MAX_LIFETIME_MS = 15 * 60 * 1000;
   // A client this far behind is not consuming; drop it and let replay catch it up.
   const SSE_MAX_BUFFERED_BYTES = 1_000_000;
+  // Separate from raw.writableLength: these objects arrive while the durable
+  // replay query is still running and have not reached the socket yet.
+  const SSE_MAX_PRE_REPLAY_BUFFERED_BYTES = 1_000_000;
 
   function sameNumberSet(left: ReadonlySet<number>, right: ReadonlySet<number>) {
     if (left.size !== right.size) {
@@ -134,13 +151,31 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           snapshotPath: "/api/v1/events/snapshot",
         });
       }
+      const replayFloor = await getOfapiSyncReplayFloor(appContext.db);
+      if (lastEventId < replayFloor) {
+        return reply.code(409).send({
+          error: "sync_snapshot_required",
+          message: `Requested event cursor is below replay continuity floor ${replayFloor}`,
+          statusCode: 409,
+          version: 1,
+          requestedSeq: lastEventId,
+          oldestAvailableSeq: replayWindow.oldestRetainedSeq,
+          currentSeq: replayWindow.latestSeq,
+          snapshotPath: "/api/v1/events/snapshot",
+        });
+      }
     }
 
     // Wait for the shared LISTEN connection before the replay query so no frame
     // settles between journal catch-up and live delivery. Failure is tolerable:
     // the hub reconnects with its own journal catch-up.
     syncEventHub ??= createSyncEventHub(appContext);
-    await syncEventHub.ready().catch(() => undefined);
+    try {
+      await syncEventHub.ready();
+    } catch (error) {
+      request.log.warn({ err: error }, "SSE LISTEN lane unavailable; rejecting stream");
+      throw new ServiceUnavailableError("Event stream is temporarily unavailable");
+    }
 
     // Everything below bypasses fastify's serializer; errors must not bubble out.
     reply.hijack();
@@ -160,6 +195,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // replay and a live broadcast goes out exactly once, and ids on the wire are
     // strictly increasing, which the strict `> Last-Event-ID` resume relies on.
     const seqGuard = createMonotonicSeqGuard(lastEventId);
+    let continuityCursor = lastEventId;
 
     function writeFrame(frame: SyncEventFrame) {
       if (raw.writableEnded || raw.destroyed) {
@@ -168,6 +204,9 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       if (!seqGuard.advance(frame.id)) {
         return;
       }
+      continuityCursor = continuityCursor === null
+        ? frame.id
+        : Math.max(continuityCursor, frame.id);
       if (raw.writableLength > SSE_MAX_BUFFERED_BYTES) {
         request.log.warn("SSE client not consuming; dropping connection");
         raw.destroy();
@@ -179,17 +218,79 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // Subscribe before the replay query; live frames buffer until replay
     // finishes, then flush through the seq guard.
     let replayDone = false;
-    const bufferedLive: SyncEventFrame[] = [];
-    const unsubscribe = syncEventHub.subscribe({
-      pageIds,
-      deliver(frame) {
-        if (!replayDone) {
-          bufferedLive.push(frame);
-          return;
-        }
-        writeFrame(frame);
+    const bufferedLive = createBoundedSseReplayBuffer<SyncEventFrame>({
+      maxBytes: SSE_MAX_PRE_REPLAY_BUFFERED_BYTES,
+      sizeOf: (frame) => estimatedSseReplayItemBytes(frame),
+      onOverflow: () => {
+        request.log.warn("SSE pre-replay live buffer exceeded; dropping connection for lossless resume");
+        raw.destroy();
       },
     });
+    let replayCeiling: number | null;
+    let unsubscribe: () => void;
+    try {
+      const captured = await subscribeBeforeReplayBoundary({
+        subscribe: () => syncEventHub!.subscribe({
+          pageIds,
+          continuityLost(replayFloor) {
+            if (continuityCursor === null || continuityCursor >= replayFloor) {
+              return;
+            }
+            request.log.warn(
+              { replayFloor, continuityCursor },
+              "SSE live continuity was lost; closing stream for snapshot recovery",
+            );
+            raw.end();
+          },
+          deliver(frame) {
+            if (!replayDone) {
+              bufferedLive.push(frame);
+              return;
+            }
+            writeFrame(frame);
+          },
+        }),
+        loadBoundary: async () => ({
+          replayWindow: await getOfapiFanoutReplayWindow(appContext.db),
+          // Unlike sequence.last_value, this cannot include an uncommitted
+          // settle. Commits after subscribe are already in the live buffer.
+          committedHighWater: await getMaxOfapiFanoutSeq(appContext.db),
+        }),
+      });
+      unsubscribe = captured.unsubscribe;
+      replayCeiling = lastEventId === null ? null : captured.boundary.committedHighWater;
+      continuityCursor ??= captured.boundary.committedHighWater;
+      const replayFloor = lastEventId === null || replayCeiling === null
+        ? null
+        : await getOfapiSyncReplayFloor(appContext.db);
+      if (
+        lastEventId !== null
+        && (
+          (replayFloor !== null && lastEventId < replayFloor)
+          || (
+            captured.boundary.committedHighWater > lastEventId
+            && (
+              captured.boundary.replayWindow.oldestRetainedSeq === null
+              || lastEventId < captured.boundary.replayWindow.oldestRetainedSeq - 1
+            )
+          )
+        )
+      ) {
+        request.log.warn(
+          { replayFloor },
+          "SSE replay continuity moved after validation; closing stream for snapshot recovery",
+        );
+        unsubscribe();
+        activeSseStreams.delete(raw);
+        raw.destroy();
+        return;
+      }
+    } catch (error) {
+      request.log.warn({ err: error }, "SSE replay boundary capture failed; closing stream");
+      activeSseStreams.delete(raw);
+      raw.destroy();
+      return;
+    }
 
     const heartbeat = setInterval(() => {
       if (!raw.writableEnded && !raw.destroyed) {
@@ -237,22 +338,32 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     }
 
     request.raw.on("close", cleanup);
-    if (request.raw.destroyed) {
+    if (request.raw.destroyed || raw.destroyed || raw.writableEnded) {
       // The client disconnected before the listener was registered.
       cleanup();
-      raw.destroy();
+      if (!raw.destroyed) {
+        raw.destroy();
+      }
       return;
     }
 
     let replayCursor = lastEventId;
-    if (replayCursor !== null && pageIds.size > 0) {
+    if (replayCursor !== null && replayCeiling !== null && pageIds.size > 0) {
       try {
         for (;;) {
+          if (bufferedLive.overflowed || raw.destroyed || raw.writableEnded) {
+            return;
+          }
           const rows = await listOfapiSyncEventsForReplay(appContext.db, {
             afterSeq: replayCursor,
+            throughSeq: replayCeiling,
             pageIds: [...pageIds],
             limit: SSE_REPLAY_BATCH_SIZE,
           });
+          const replayFloor = await getOfapiSyncReplayFloor(appContext.db);
+          if (replayCursor < replayFloor) {
+            throw new Error(`SSE replay cursor is below continuity floor ${replayFloor}`);
+          }
           for (const row of rows) {
             writeFrame(row);
           }
@@ -260,7 +371,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           if (lastRow) {
             replayCursor = lastRow.id;
           }
-          if (rows.length < SSE_REPLAY_BATCH_SIZE) {
+          if (replayCursor >= replayCeiling || rows.length < SSE_REPLAY_BATCH_SIZE) {
             break;
           }
         }
@@ -272,11 +383,25 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
     }
 
+    if (bufferedLive.overflowed || raw.destroyed || raw.writableEnded) {
+      return;
+    }
+    if (replayCursor !== null) {
+      const replayFloor = await getOfapiSyncReplayFloor(appContext.db);
+      if (replayCursor < replayFloor) {
+        request.log.warn(
+          { replayFloor },
+          "SSE replay continuity changed before live flush; closing stream",
+        );
+        cleanup();
+        raw.end();
+        return;
+      }
+    }
     replayDone = true;
-    for (const frame of bufferedLive) {
+    for (const frame of bufferedLive.drain()) {
       writeFrame(frame);
     }
-    bufferedLive.length = 0;
   });
 
   server.get("/api/v1/events/snapshot", {
@@ -288,9 +413,16 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       assignedPageIds: principal.assignedPageIds,
       accountId: request.query.accountId,
       afterSeq: request.query.afterSeq,
-      snapshotCursor: request.query.snapshotCursor,
       pageCursor: request.query.pageCursor,
       limit: request.query.limit,
+      messageLimit: request.query.messageLimit,
+      ...(request.query.snapshotCursor === undefined
+        ? {}
+        : { snapshotCursor: request.query.snapshotCursor }),
+      ...(request.query.pageMode === undefined ? {} : { pageMode: request.query.pageMode }),
+      ...(request.query.stateCursor === undefined
+        ? {}
+        : { stateCursor: request.query.stateCursor }),
     });
   });
 
@@ -328,25 +460,35 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       : granted;
 
     let watermarks: Map<number, number>;
+    let grantScopeBound = false;
     if (cursorText !== null) {
       const decoded = decodeDomainEventCursor(cursorText);
       if (!decoded.ok) {
         throw new BadRequestError(`Invalid v2 cursor (${decoded.reason})`);
       }
       watermarks = decoded.watermarks;
+      grantScopeBound = decoded.scope === "granted";
       for (const accountId of watermarks.keys()) {
         if (granted !== undefined && !granted.has(accountId)) {
           throw new ForbiddenError("Cursor names an account outside the granted scope");
         }
       }
-      // Granted accounts absent from the cursor start at "now" — a consumer
-      // that gains a page mid-stream must not be forced through history.
-      for (const accountId of universe) {
-        if (!watermarks.has(accountId)) {
-          watermarks.set(accountId, heads.get(accountId) ?? 0);
+      if (!grantScopeBound) {
+        // Legacy and explicitly subset-scoped cursors retain the additive
+        // behavior. Fresh full-scope snapshot cursors below are marked and
+        // must never be widened this way: doing so could skip an event between
+        // a consumer's state walk and its reconnect.
+        for (const accountId of universe) {
+          if (!watermarks.has(accountId)) {
+            watermarks.set(accountId, heads.get(accountId) ?? 0);
+          }
         }
       }
     } else {
+      // Cursorless "now" also captures the complete current grant universe.
+      // Mark every cursor subsequently emitted by this connection so a later
+      // auth-driven grant change cannot widen it at a new account's head.
+      grantScopeBound = true;
       watermarks = new Map();
       for (const accountId of universe) {
         watermarks.set(accountId, heads.get(accountId) ?? 0);
@@ -356,10 +498,29 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // Gap rule: a watermark ahead of the head never existed; one below the
     // account's retained floor cannot be replayed (floors become real with
     // Stage 28 tiering; the conformance test makes one synthetically).
-    const bounds = await listDomainEventAccountBounds(appContext.db, [...watermarks.keys()]);
+    const cursorAccounts = new Set(watermarks.keys());
+    const addedGrantAccounts = grantScopeBound
+      ? [...universe].filter((accountId) => !cursorAccounts.has(accountId))
+      : [];
+    const validationBounds = await listDomainEventAccountBounds(
+      appContext.db,
+      [...new Set([...watermarks.keys(), ...addedGrantAccounts])],
+    );
     const gapped: DomainEventsSnapshotRequired["accounts"] = [];
+    // A full-grant snapshot cursor commits its exact account keyset. If a page
+    // was granted after minting, force another state snapshot rather than
+    // manufacturing the missing watermark at the current head.
+    for (const accountId of addedGrantAccounts) {
+      const bound = validationBounds.get(accountId)!;
+      gapped.push({
+        accountId,
+        requestedSeq: 0,
+        oldestAvailableSeq: bound.oldestRetainedSeq,
+        currentSeq: bound.currentSeq,
+      });
+    }
     for (const [accountId, watermark] of watermarks) {
-      const bound = bounds.get(accountId)!;
+      const bound = validationBounds.get(accountId)!;
       const ahead = watermark > bound.currentSeq;
       const floor = bound.oldestRetainedSeq ?? (bound.currentSeq + 1);
       const belowFloor = watermark < bound.currentSeq && watermark + 1 < floor;
@@ -371,6 +532,26 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           currentSeq: bound.currentSeq,
         });
       }
+    }
+    const continuityGaps = await listDomainEventReplayContinuityGaps(
+      appContext.db,
+      [...watermarks].map(([accountId, afterSeq]) => ({
+        accountId,
+        afterSeq,
+        throughSeq: validationBounds.get(accountId)!.currentSeq,
+      })),
+    );
+    for (const accountId of continuityGaps) {
+      if (gapped.some((entry) => entry.accountId === accountId)) {
+        continue;
+      }
+      const bound = validationBounds.get(accountId)!;
+      gapped.push({
+        accountId,
+        requestedSeq: watermarks.get(accountId)!,
+        oldestAvailableSeq: bound.oldestRetainedSeq,
+        currentSeq: bound.currentSeq,
+      });
     }
     if (gapped.length > 0) {
       return reply.code(409).send({
@@ -384,7 +565,12 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     }
 
     domainEventHub ??= createDomainEventHub(appContext);
-    await domainEventHub.ready().catch(() => undefined);
+    try {
+      await domainEventHub.ready();
+    } catch (error) {
+      request.log.warn({ err: error }, "v2 SSE LISTEN lane unavailable; rejecting stream");
+      throw new ServiceUnavailableError("Event stream is temporarily unavailable");
+    }
 
     // Stage 24: OFAPI-keyed clients (the desktop) filter frames by the
     // platform-native account ref; snapshot the mapping per connection (the
@@ -410,16 +596,16 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         return;
       }
       const verdict = guards.advance(event.accountId, event.accountSeq);
-      if (!verdict.deliver) {
-        return;
-      }
       if (verdict.gap) {
-        // Gapless per account by construction (Stage 8) — a jump is a bug
-        // signal, surfaced loudly, never a normal condition.
         request.log.error({
           accountId: event.accountId,
           accountSeq: event.accountSeq,
-        }, "domain-event stream observed an account_seq gap");
+        }, "domain-event stream observed an account_seq gap; closing at safe cursor");
+        raw.end();
+        return;
+      }
+      if (!verdict.deliver) {
+        return;
       }
       if (raw.writableLength > SSE_MAX_BUFFERED_BYTES) {
         request.log.warn("v2 SSE client not consuming; dropping connection");
@@ -439,7 +625,10 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         accountRef: ofapiAccountRefs.get(event.accountId) ?? null,
         ...(payload !== undefined ? { payload } : {}),
       };
-      raw.write(`id: ${encodeDomainEventCursor(guards.watermarks())}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
+      raw.write(`id: ${encodeDomainEventCursor(
+        guards.watermarks(),
+        grantScopeBound ? { scope: "granted" } : {},
+      )}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
     }
 
     /** Live-path frame write: enrich one event, then write. Enrichment
@@ -459,18 +648,80 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // Live enrichment is async — chain deliveries so frames keep per-account
     // order even when observation fetches interleave.
     let replayDone = false;
-    const bufferedLive: DomainEventRow[] = [];
-    let liveChain: Promise<void> = Promise.resolve();
-    const unsubscribe = domainEventHub.subscribe({
-      accountIds: granted,
-      deliver(event) {
-        if (!replayDone) {
-          bufferedLive.push(event);
-          return;
-        }
-        liveChain = liveChain.then(() => writeV2FrameEnriched(event));
+    const bufferedLive = createBoundedSseReplayBuffer<DomainEventRow>({
+      maxBytes: SSE_MAX_PRE_REPLAY_BUFFERED_BYTES,
+      sizeOf: (event) => estimatedSseReplayItemBytes(event),
+      onOverflow: () => {
+        request.log.warn("v2 SSE pre-replay live buffer exceeded; dropping connection for lossless resume");
+        raw.destroy();
       },
     });
+    let liveChain: Promise<void> = Promise.resolve();
+    let replayBounds: Awaited<ReturnType<typeof listDomainEventAccountBounds>>;
+    let unsubscribe: () => void;
+    try {
+      const captured = await subscribeBeforeReplayBoundary({
+        subscribe: () => domainEventHub!.subscribe({
+          accountIds: granted,
+          continuityLost(accountId, _afterSeq, throughSeq) {
+            const watermark = guards.watermarks().get(accountId) ?? 0;
+            if (watermark >= throughSeq) {
+              return;
+            }
+            request.log.warn(
+              { accountId, watermark, throughSeq },
+              "v2 SSE live continuity was lost; closing stream for snapshot recovery",
+            );
+            raw.end();
+          },
+          deliver(event) {
+            if (!replayDone) {
+              bufferedLive.push(event);
+              return;
+            }
+            liveChain = liveChain.then(() => writeV2FrameEnriched(event));
+          },
+        }),
+        loadBoundary: () => listDomainEventAccountBounds(
+          appContext.db,
+          [...watermarks.keys()],
+        ),
+      });
+      unsubscribe = captured.unsubscribe;
+      replayBounds = captured.boundary;
+      const replayContinuityGaps = await listDomainEventReplayContinuityGaps(
+        appContext.db,
+        [...watermarks].map(([accountId, afterSeq]) => ({
+          accountId,
+          afterSeq,
+          throughSeq: replayBounds.get(accountId)?.currentSeq ?? 0,
+        })),
+      );
+      for (const [accountId, watermark] of watermarks) {
+        const bound = replayBounds.get(accountId);
+        const floor = bound?.oldestRetainedSeq ?? ((bound?.currentSeq ?? 0) + 1);
+        if (
+          bound === undefined
+          || watermark > bound.currentSeq
+          || (watermark < bound.currentSeq && watermark + 1 < floor)
+          || replayContinuityGaps.has(accountId)
+        ) {
+          request.log.warn(
+            { accountId },
+            "v2 SSE replay bounds moved after validation; closing stream",
+          );
+          unsubscribe();
+          activeSseStreams.delete(raw);
+          raw.destroy();
+          return;
+        }
+      }
+    } catch (error) {
+      request.log.warn({ err: error }, "v2 SSE replay boundary capture failed; closing stream");
+      activeSseStreams.delete(raw);
+      raw.destroy();
+      return;
+    }
 
     // Stage 24 ephemeral lane: typing indicators are deliberately NOT
     // ledgered (append-only forever is the wrong home for a 5-second UI
@@ -541,9 +792,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     }
 
     request.raw.on("close", cleanup);
-    if (request.raw.destroyed) {
+    if (request.raw.destroyed || raw.destroyed || raw.writableEnded) {
       cleanup();
-      raw.destroy();
+      if (!raw.destroyed) {
+        raw.destroy();
+      }
       return;
     }
 
@@ -551,17 +804,30 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // independent streams multiplexed on one connection).
     try {
       for (const [accountId, watermark] of watermarks) {
-        const bound = bounds.get(accountId)!;
+        const bound = replayBounds.get(accountId)!;
         if (bound.currentSeq <= watermark) {
           continue;
         }
         let afterSeq = watermark;
         for (;;) {
+          if (bufferedLive.overflowed || raw.destroyed || raw.writableEnded) {
+            return;
+          }
           const rows = await listEventsSince(appContext.db, {
             accountId,
             afterSeq,
+            throughSeq: bound.currentSeq,
             limit: SSE_REPLAY_BATCH_SIZE,
           });
+          const continuity = validateGaplessReplayBatch({
+            rows,
+            afterSeq,
+            throughSeq: bound.currentSeq,
+            limit: SSE_REPLAY_BATCH_SIZE,
+          });
+          if (!continuity.ok) {
+            throw new Error(`domain-event replay interval contains a gap for account ${accountId}`);
+          }
           const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
             .catch((error) => {
               request.log.warn({ err: error }, "v2 replay enrichment failed; serving thin frames");
@@ -570,11 +836,8 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           for (const row of rows) {
             writeV2Frame(row, enrichments.get(row.id));
           }
-          const lastRow = rows.at(-1);
-          if (lastRow) {
-            afterSeq = lastRow.accountSeq;
-          }
-          if (rows.length < SSE_REPLAY_BATCH_SIZE) {
+          afterSeq = continuity.nextSeq;
+          if (continuity.done) {
             break;
           }
         }
@@ -586,9 +849,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       return;
     }
 
+    if (bufferedLive.overflowed || raw.destroyed || raw.writableEnded) {
+      return;
+    }
     replayDone = true;
-    const buffered = [...bufferedLive];
-    bufferedLive.length = 0;
+    const buffered = bufferedLive.drain();
     for (const event of buffered) {
       liveChain = liveChain.then(() => writeV2FrameEnriched(event));
     }
@@ -613,17 +878,29 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       accountIds = granted === undefined ? [...heads.keys()] : [...granted];
     }
 
+    const stateSafe = await listOfapiStateSafeDomainEventWatermarks(
+      appContext.db,
+      accountIds,
+    );
     const watermarks = new Map<number, number>();
     const accounts = accountIds
       .sort((left, right) => left - right)
       .map((accountId) => {
-        const currentSeq = heads.get(accountId) ?? 0;
-        watermarks.set(accountId, currentSeq);
-        return { accountId, currentSeq };
+        const accountWatermark = stateSafe.get(accountId);
+        const currentSeq = accountWatermark?.currentSeq ?? 0;
+        watermarks.set(accountId, accountWatermark?.safeSeq ?? currentSeq);
+        return {
+          accountId,
+          accountRef: accountWatermark?.accountRef ?? null,
+          currentSeq,
+        };
       });
 
     return {
-      cursor: encodeDomainEventCursor(watermarks),
+      cursor: encodeDomainEventCursor(
+        watermarks,
+        request.query.accounts === undefined ? { scope: "granted" } : {},
+      ),
       accounts,
     };
   });

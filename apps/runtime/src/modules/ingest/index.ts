@@ -1,9 +1,14 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
-import { requireApiKeyUser, requireOwner } from "../../services/auth.ts";
+import {
+  requireApiKeyUser,
+  requireHarvestDeviceToken,
+  requireOwner,
+} from "../../services/auth.ts";
 import {
   ingestClientObservations,
   InvalidIngestEventError,
+  isHarvestClientVersion,
 } from "../../services/ingest-observations.ts";
 import {
   cancelOfapiCommand,
@@ -56,13 +61,18 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
         statusCode: 400,
       });
     }
+    const normalizedClientVersion = clientVersion.trim();
+    const harvestCapability = isHarvestClientVersion(normalizedClientVersion)
+      ? requireHarvestDeviceToken(principal)
+      : null;
     try {
       return await ingestClientObservations(appContext, {
         principalUserId: principal.user.id,
         // Page scope mirrors canAccessPage: owner keys are unrestricted,
         // everyone else attributes only to their assigned pages.
         allowedPageIds: principal.user.role === "owner" ? null : principal.assignedPageIds,
-        clientVersion: clientVersion.trim(),
+        clientVersion: normalizedClientVersion,
+        authorizedHarvestMachineId: harvestCapability?.machineId ?? null,
         events: request.body.events,
       });
     } catch (error) {

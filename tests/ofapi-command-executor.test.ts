@@ -360,7 +360,7 @@ describe("OFAPI media command client", () => {
 });
 
 describe("OFAPI typing command client", () => {
-  it("makes one paced POST and reports zero fallback spend when _meta is absent", async () => {
+  it("makes one paced POST without journaling a zero-credit ephemeral beacon", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: { success: true },
     }), {
@@ -391,15 +391,46 @@ describe("OFAPI typing command client", () => {
     );
     expect(init.method).toBe("POST");
     expect(init.body).toBeUndefined();
-    expect(observations).toHaveLength(1);
-    expect(observations[0]).toMatchObject({
+    expect(observations).toEqual([]);
+  });
+
+  it("still reports an unexpected provider charge for typing", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { success: true },
+      _meta: {
+        _credits: { used: 1, balance: 998 },
+      },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const observations: OfapiCreditSpendObservation[] = [];
+    const client = createOfapiClient({
+      baseUrl: "https://ofapi.invalid/api",
+      apiKey: "test-key",
+      restDelayMs: 0,
+      onCreditSpend: (observation) => {
+        observations.push(observation);
+      },
+    });
+
+    await expect(client.startTyping!(
+      { pageId: 42 },
+      ACCOUNT,
+      CONVERSATION,
+    )).resolves.toEqual({ success: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(observations).toEqual([expect.objectContaining({
       operation: "ofapi_command_typing_active",
       httpStatus: 200,
-      credits: 0,
-      estimated: true,
+      credits: 1,
+      estimated: false,
+      balanceAfter: 998,
       pageId: 42,
       attemptNumber: 1,
-    });
+    })]);
   });
 
   it("never retries or retains a rejected typing vendor body", async () => {

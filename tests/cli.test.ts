@@ -372,13 +372,21 @@ describe("CLI parsing", () => {
   it("returns a failing exit status when harvest reconciliation is incomplete", async () => {
     const tempFile = await createTempJsonFile("harvest-manifest.json", {
       machineId: "11111111-1111-4111-8111-111111111111",
-      tables: [{
-        table: "messages",
-        kind: "harvest.messages",
-        walked: 1,
-        uploaded: 1,
+      tables: [
+        ["messages", "harvest.messages", 1],
+        ["fan_transactions", "harvest.fan_transactions", 0],
+        ["outbox", "harvest.outbox", 0],
+        ["message_guard_events", "harvest.message_guard_events", 0],
+        ["usage_events", "harvest.usage_events", 0],
+        ["ai_spend_log", "harvest.ai_spend_log", 0],
+        ["credit_log", "harvest.credit_log", 0],
+      ].map(([table, kind, walked]) => ({
+        table,
+        kind,
+        walked,
+        uploaded: walked,
         duplicates: 0,
-      }],
+      })),
     });
     cleanupDirectories.add(tempFile.directory);
     cliMocks.countHarvestObservations.mockResolvedValue(0);

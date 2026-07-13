@@ -132,10 +132,18 @@ describe("event stream v2", () => {
       headers: { authorization: `Bearer ${chatterKey}` },
     });
     expect(chatterSnapshot.status).toBe(200);
-    const chatterBody = await chatterSnapshot.json() as { cursor: string; accounts: Array<{ accountId: number; currentSeq: number }> };
-    expect(chatterBody.accounts).toEqual([{ accountId: lanaId, currentSeq: 2 }]);
+    const chatterBody = await chatterSnapshot.json() as {
+      cursor: string;
+      accounts: Array<{ accountId: number; accountRef: string | null; currentSeq: number }>;
+    };
+    expect(chatterBody.accounts).toEqual([{
+      accountId: lanaId,
+      accountRef: null,
+      currentSeq: 2,
+    }]);
     const decoded = decodeDomainEventCursor(chatterBody.cursor);
     expect(decoded.ok && decoded.watermarks.get(lanaId)).toBe(2);
+    expect(decoded.ok && decoded.scope).toBe("granted");
 
     const foreign = await fetch(`${baseUrl}/api/v1/events/v2/snapshot?accounts=${lilyId}`, {
       headers: { authorization: `Bearer ${chatterKey}` },
@@ -356,6 +364,152 @@ describe("event stream v2", () => {
     await okHandle.done;
     expect(seqs[0]).toBe(101);
     expect(seqs.at(-1)).toBe(522);
+  });
+
+  it("does not widen a grant-bound cursor at the new account head", async (context) => {
+    if (!requireSetup(context)) return;
+
+    const seedContext = createTestAppContext(testDb!);
+    await createUserAccount(seedContext, {
+      username: "scope-race",
+      role: "chatter",
+    }, { source: "cli" });
+    const raceKey = (await issueChatterApiKey(seedContext, {
+      username: "scope-race",
+      pageLabel: "lana",
+    }, { source: "cli" })).key;
+
+    const beforeGrant = await fetch(`${baseUrl}/api/v1/events/v2/snapshot`, {
+      headers: { authorization: `Bearer ${raceKey}` },
+    });
+    expect(beforeGrant.status).toBe(200);
+    const beforeBody = await beforeGrant.json() as {
+      cursor: string;
+      accounts: Array<{ accountId: number; accountRef: string | null; currentSeq: number }>;
+    };
+    expect(beforeBody.accounts.map((account) => account.accountId)).toEqual([lanaId]);
+    const beforeDecoded = decodeDomainEventCursor(beforeBody.cursor);
+    expect(beforeDecoded.ok && beforeDecoded.scope).toBe("granted");
+
+    // B appears after the A-only cursor is minted. Core must reject the stale
+    // grant scope instead of inserting B at its current head.
+    await assignPageToUser(seedContext, {
+      username: "scope-race",
+      pageLabel: "lily1",
+    }, { source: "cli" });
+    const stale = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=${
+      encodeURIComponent(beforeBody.cursor)
+    }`, { headers: { authorization: `Bearer ${raceKey}` } });
+    expect(stale.status).toBe(409);
+    const staleBody = await stale.json() as DomainEventsSnapshotRequired;
+    const lilyGap = staleBody.accounts.find((account) => account.accountId === lilyId);
+    expect(lilyGap).toBeDefined();
+
+    const rebound = await fetch(`${baseUrl}/api/v1/events/v2/snapshot`, {
+      headers: { authorization: `Bearer ${raceKey}` },
+    });
+    expect(rebound.status).toBe(200);
+    const reboundBody = await rebound.json() as {
+      cursor: string;
+      accounts: Array<{ accountId: number; accountRef: string | null; currentSeq: number }>;
+    };
+    expect(reboundBody.accounts.map((account) => account.accountId)).toEqual([lanaId, lilyId]);
+    expect(reboundBody.accounts.every((account) => account.accountRef === null)).toBe(true);
+
+    // This event commits after B's rebound baseline/state snapshot and before
+    // reconnect. It must be replayed from the AB cursor rather than skipped.
+    const appended = await appendDomainEvents(testDb!.db, lilyId, [
+      event("message.received", { scopeRace: "after-b-snapshot" }),
+    ]);
+    expect(appended.highWater).toBe(lilyGap!.currentSeq + 1);
+    const replayed: DomainEventFrame[] = [];
+    const handle = subscribeDomainEvents({
+      baseUrl,
+      auth: { mode: "bearer", token: () => raceKey },
+    }, {
+      cursor: reboundBody.cursor,
+      onFrame: (frame) => replayed.push(frame.event),
+    });
+    await sleep(600);
+    handle.close();
+    await handle.done;
+    expect(replayed).toEqual([
+      expect.objectContaining({
+        accountId: lilyId,
+        accountSeq: appended.highWater,
+        data: { scopeRace: "after-b-snapshot" },
+      }),
+    ]);
+  });
+
+  it("forces snapshot recovery for an internal account-sequence hole", async (context) => {
+    if (!requireSetup(context)) return;
+
+    const model = await createModel(testDb!.db, {
+      slug: "continuity-hole-model",
+      name: "Continuity Hole",
+    });
+    const page = await createFanslyPage(testDb!.db, {
+      modelId: model!.id,
+      label: "continuity-hole",
+    });
+    await appendDomainEvents(testDb!.db, page!.id, [
+      event("message.received", { seq: 1 }),
+      event("message.received", { seq: 2 }),
+      event("message.received", { seq: 3 }),
+    ]);
+    // Same hot-ledger shape produced when occurred_at partition tiering removes
+    // a backfilled old event between two newer retained account sequences.
+    await testDb!.pool.query(
+      "delete from domain_events where account_id = $1 and account_seq = 2",
+      [page!.id],
+    );
+
+    const cookie = await ownerCookie();
+    const response = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=${
+      encodeURIComponent(encodeDomainEventCursor(new Map([[page!.id, 1]])))
+    }`, { headers: { cookie } });
+    expect(response.status).toBe(409);
+    const body = await response.json() as DomainEventsSnapshotRequired;
+    expect(body.accounts).toContainEqual(expect.objectContaining({
+      accountId: page!.id,
+      requestedSeq: 1,
+      currentSeq: 3,
+    }));
+  });
+
+  it("returns 503 before hijacking either stream when its initial LISTEN is unavailable", async (context) => {
+    if (!requireSetup(context)) return;
+
+    const healthyContext = createTestAppContext(testDb!);
+    const brokenContext = {
+      ...healthyContext,
+      pool: {
+        connect: async () => {
+          throw new Error("LISTEN unavailable");
+        },
+      } as unknown as typeof healthyContext.pool,
+    };
+    const brokenServer = await buildApiServer(brokenContext);
+    try {
+      const v1 = await brokenServer.inject({
+        method: "GET",
+        url: "/api/v1/events/stream",
+        headers: { authorization: `Bearer ${chatterKey}` },
+      });
+      expect(v1.statusCode, v1.body).toBe(503);
+      expect(v1.headers["content-type"] ?? "").not.toContain("text/event-stream");
+
+      const v2 = await brokenServer.inject({
+        method: "GET",
+        url: "/api/v1/events/v2/stream",
+        headers: { authorization: `Bearer ${chatterKey}` },
+      });
+      expect(v2.statusCode, v2.body).toBe(503);
+      expect(v2.headers["content-type"] ?? "").not.toContain("text/event-stream");
+    } finally {
+      await brokenServer.close();
+    }
   });
 });
 

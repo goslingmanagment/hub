@@ -1,5 +1,6 @@
 import {
   DOMAIN_EVENTS_APPENDED_CHANNEL,
+  listDomainEventAccountBounds,
   listDomainEventHighWaters,
   listEventsSince,
   type DomainEventRow,
@@ -7,6 +8,7 @@ import {
 import type { PoolClient } from "pg";
 
 import type { AppContext } from "../bootstrap.ts";
+import { validateGaplessReplayBatch } from "./sse-replay-buffer.ts";
 
 // Kernel Stage 21: the domain-event fan-out hub — createSyncEventHub's
 // discipline (one shared LISTEN connection, notify = wake-up only, serialized
@@ -24,6 +26,8 @@ export interface DomainEventSubscriber {
   /** undefined = every account (owner grants / the smoke consumer). */
   accountIds: ReadonlySet<number> | undefined;
   deliver(event: DomainEventRow): void;
+  /** The hub could not read a gapless interval through this captured head. */
+  continuityLost?(accountId: number, afterSeq: number, throughSeq: number): void;
 }
 
 export interface DomainEventHub {
@@ -48,8 +52,13 @@ export function createAccountSeqGuards(initial: ReadonlyMap<number, number>) {
         return { deliver: false, gap: false };
       }
       const gap = last !== undefined && seq > last + 1;
+      if (gap) {
+        // Never advance a connection cursor across a missing account_seq. The
+        // caller closes and reconnects from the unchanged safe watermark.
+        return { deliver: false, gap: true };
+      }
       lastWritten.set(accountId, seq);
-      return { deliver: true, gap };
+      return { deliver: true, gap: false };
     },
     watermarks(): ReadonlyMap<number, number> {
       return lastWritten;
@@ -83,6 +92,19 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
         subscriber.deliver(event);
       } catch (error) {
         app.logger.warn({ err: error }, "domain-event subscriber delivery failed");
+      }
+    }
+  }
+
+  function reportContinuityLoss(accountId: number, afterSeq: number, throughSeq: number) {
+    for (const subscriber of subscribers) {
+      if (subscriber.accountIds !== undefined && !subscriber.accountIds.has(accountId)) {
+        continue;
+      }
+      try {
+        subscriber.continuityLost?.(accountId, afterSeq, throughSeq);
+      } catch (error) {
+        app.logger.warn({ err: error }, "domain-event subscriber continuity callback failed");
       }
     }
   }
@@ -142,9 +164,25 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
       if (closed) {
         return;
       }
-      const [accountId] = dirtyAccounts;
+      const accountId = dirtyAccounts.values().next().value;
+      if (accountId === undefined) {
+        break;
+      }
       dirtyAccounts.delete(accountId);
       const watermark = delivered.get(accountId) ?? 0;
+      let throughSeq: number;
+      try {
+        throughSeq = (await listDomainEventAccountBounds(app.db, [accountId]))
+          .get(accountId)!.currentSeq;
+      } catch (error) {
+        dirtyAccounts.add(accountId);
+        app.logger.warn({ err: error, accountId }, "domain-event head read failed; retrying");
+        scheduleDrainRetry();
+        return;
+      }
+      if (throughSeq <= watermark) {
+        continue;
+      }
       let afterSeq = watermark;
       for (;;) {
         let rows: DomainEventRow[];
@@ -152,6 +190,7 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
           rows = await listEventsSince(app.db, {
             accountId,
             afterSeq,
+            throughSeq,
             limit: CATCH_UP_BATCH_SIZE,
           });
         } catch (error) {
@@ -162,12 +201,26 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
           return;
         }
         drainRetryDelayMs = DRAIN_RETRY_MIN_MS;
+        const continuity = validateGaplessReplayBatch({
+          rows,
+          afterSeq,
+          throughSeq,
+          limit: CATCH_UP_BATCH_SIZE,
+        });
+        if (!continuity.ok) {
+          // All affected connections close at their last safe cursor. Rebase
+          // the shared hub to the captured head so a snapshot-recovered client
+          // can receive later appends instead of wedging this account forever.
+          reportContinuityLoss(accountId, afterSeq, throughSeq);
+          delivered.set(accountId, throughSeq);
+          break;
+        }
         for (const row of rows) {
           broadcast(row);
           delivered.set(accountId, row.accountSeq);
-          afterSeq = row.accountSeq;
         }
-        if (rows.length < CATCH_UP_BATCH_SIZE) {
+        afterSeq = continuity.nextSeq;
+        if (continuity.done) {
           break;
         }
       }
@@ -294,6 +347,9 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
     },
     async ready() {
       await ensureListening();
+      if (!listenClient) {
+        throw new Error("domain-event LISTEN connection is not ready");
+      }
     },
     async close() {
       closed = true;

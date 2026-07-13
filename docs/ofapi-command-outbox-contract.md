@@ -200,17 +200,18 @@ event/snapshot tombstone arrives or a human retries after inspecting the convers
 ## Dedupe and Retention
 
 The dedupe key is `(page_id, chatter_user_id, client_command_id)`. Canonical request hashing includes
-kind, account, conversation, payload, and retry lineage. Rows have a minimum 400-day dedupe horizon.
-Payload text redaction does not shorten that horizon or change the stored `payload_hash`. Retry
-lineage must stay within the same command kind; typing commands are not retryable.
+kind, account, conversation, payload, and retry lineage. Business-command rows have a minimum
+400-day dedupe horizon. Cosmetic `typing_active_v1` is the explicit exception: its horizon is two
+minutes, it is never retryable, and terminal rows are deleted after the horizon. Payload text
+redaction does not shorten the business-command horizon or change the stored `payload_hash`. Retry
+lineage must stay within the same command kind.
 
 ## Payload Retention, Purge, and Export Policy
 
 Text commands store `payload.text` while the command may still execute or need recovery. Typing
-commands store only `{}`. Unsend commands store only the numeric target `messageId`. The worker
-sweep tombstones terminal text command payloads after the recovery window while preserving
-non-text audit and dedupe fields; terminal typing payloads remain empty and terminal unsend
-payloads retain the target message id for audit.
+commands store only `{}` and are deleted after their two-minute dedupe horizon; no permanent
+`command_result` observation is emitted for them. Unsend commands store only the numeric target
+`messageId`. Terminal unsend payloads retain the target message id for audit.
 
 - Retain full payload only while the row may still need execution, webhook repair, explicit human
   recovery, or retry-context inspection.
@@ -318,11 +319,11 @@ POST /api/{accountId}/chats/{conversationId}/typing
 DELETE /api/{accountId}/chats/{conversationId}/messages/{messageId}
 ```
 
-All requests use the core OFAPI client, global pacing, page-attributed credit accounting, a bounded
-timeout, and no automatic retry. Message text and media identifiers are never logged or copied into
-error/verifier metadata. Typing has no text/media payload and records zero fallback credits if a
-successful OFAPI response omits `_meta`; provider `_meta._credits.used` still wins when present.
-Unsend and mark-read have no text/media payload and use normal OFAPI response credit observation.
+All requests use the core OFAPI client, global pacing, a bounded timeout, and no automatic retry.
+Message text and media identifiers are never logged or copied into error/verifier metadata. Typing
+has no text/media payload and suppresses zero-credit observations so a UI beacon cannot grow the
+permanent credit ledger; provider `_meta._credits.used` still wins, and any non-zero charge is
+page-attributed. Other commands use normal OFAPI response credit observation.
 
 ### Outcome Classification
 
@@ -381,7 +382,8 @@ implementation exists, and command status/recovery UI is implemented.
   `ofapi.commands.execute` and `ofapi.commands.sweep`; execute jobs have zero retries.
 - The core OFAPI client implements the versioned text-send request and advisory typing request.
   Text returns only the platform message id and records operation `ofapi_command_send_text`.
-  Typing returns only `{ success: true }` and records operation `ofapi_command_typing_active`.
+  Typing returns only `{ success: true }`; zero-credit beacons do not create permanent ledger rows,
+  while an unexpected provider-reported charge records `ofapi_command_typing_active`.
   Unsend returns only `{ success: true }` and records operation `ofapi_command_unsend_message`.
 - Command status responses expose nullable attempt start/finish timestamps, but no payload text.
 - The minutely command sweep also redacts old terminal command payload text while preserving
@@ -440,17 +442,19 @@ Decision owner: core Decision #58.
 
 ### Contract
 
-- `typing_active_v1` uses the same command outbox, page/chatter ACL, dedupe, state machine,
-  one-attempt executor, and staged rollback as text commands.
+- `typing_active_v1` uses the same command outbox, page/chatter ACL, state machine, one-attempt
+  executor, and staged rollback as text commands, but only a two-minute dedupe horizon.
 - Payload is exactly `{}`. Request/response/log surfaces must not contain message text, media URLs,
   fan names, or arbitrary vendor body fields.
 - `retryOfCommandId` is rejected for typing commands. Re-sending a typing beacon is a fresh
   client command id and has no desktop recovery obligation.
+- A queued typing row older than ten seconds cannot be claimed. The minutely sweep expires it,
+  emits no durable command-result fact, and deletes it once the short dedupe horizon closes.
 - `messages.sent` webhook verification ignores typing commands; only the direct OFAPI typing
   endpoint response can confirm the row.
 - `platform_message_id` remains null on success. Audit evidence is command id, account,
   conversation id, state, payload hash, timestamps, attempt count, bounded error metadata, and
-  credit ledger operation.
+  a credit-ledger operation only if the provider reports a non-zero charge.
 
 ### Implementation
 
@@ -459,10 +463,10 @@ Decision owner: core Decision #58.
 - Core contracts use a discriminated command schema: text commands require non-blank text, typing
   commands require empty payload.
 - The core OFAPI client sends one `POST /api/{accountId}/chats/{conversationId}/typing` request
-  with no body, global pacing, and page-attributed credit observation
-  `ofapi_command_typing_active`.
-- Since the typing endpoint is documented free, a successful response without `_meta` records zero
-  estimated fallback credits. Any `_meta._credits.used` value is authoritative if returned.
+  with no body and global pacing.
+- Since the typing endpoint is documented free, a zero-credit response creates no permanent
+  credit-ledger row. Any non-zero `_meta._credits.used` value is authoritative and is recorded as
+  page-attributed `ofapi_command_typing_active` spend.
 
 ### Production Validation Plan
 
@@ -472,8 +476,8 @@ Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
 2. Create one `typing_active_v1` command through a chatter key assigned only to the owner page.
 3. Command reaches terminal `confirmed` with `attempt_count=1`, null `platform_message_id`, and
    payload `{}`.
-4. `ofapi_credit_ledger` has exactly one matching `ofapi_command_typing_active` row; expected
-   credits are zero unless OFAPI reports otherwise in `_meta`.
+4. `ofapi_credit_ledger` has no matching row when OFAPI reports zero credits; an unexpected
+   non-zero `_meta._credits.used` value creates exactly one `ofapi_command_typing_active` row.
 5. API/worker logs contain command ids and bounded outcome metadata only; no payload text/media
    canary appears.
 6. Stage `OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED=false`, recreate API/worker, prove a new typing

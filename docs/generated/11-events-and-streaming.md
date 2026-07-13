@@ -56,8 +56,11 @@ Registered at `modules/events/index.ts:86`.
 - **Snapshot handshake:** if the cursor is ahead of `latestSeq` or below the
   retained window → HTTP 409 `sync_snapshot_required` (v1) with
   `snapshotPath /api/v1/events/snapshot` (`modules/events/index.ts:106-136`).
-- **Subscribe-before-replay:** live frames buffer until the per-page replay
-  flushes (`modules/events/index.ts:181-192`, `:275-279`).
+- **Subscribe-before-replay:** Core installs the live subscription first, then
+  captures a fresh durable replay ceiling and replays only through that fixed
+  ceiling. Live frames buffer until replay flushes; the pre-replay buffer is
+  capped at 1 MB and overflow destroys the connection without manufacturing a
+  cursor, so reconnect repeats the lossless journal replay.
 - **Limits:** heartbeat `: keep-alive` every 25s
   (`SSE_HEARTBEAT_INTERVAL_MS`, `modules/events/index.ts:65`); auth revalidate
   every 60s (a revoked key or changed page assignment → `raw.end()`); max
@@ -68,6 +71,11 @@ Registered at `modules/events/index.ts:86`.
 Serves `getOfapiSyncSnapshot` (`services/ofapi-sync-snapshot.ts`), which reads
 the hot/archive message tables plus the replay window. This is a serve-time
 snapshot, not sync orchestration.
+
+`pageMode=bounded_v1` signs the initial thread, archive-row, and hot-message
+row high-waters into the opaque `stateCursor`. Every continuation enforces
+those ceilings, so concurrent inserts remain in the post-snapshot event tail
+instead of extending the state walk indefinitely.
 
 ## 2. v2 — domain events, per account
 
@@ -114,8 +122,10 @@ per-account watermark map, not a scalar.**
   `accountRef` (the OFAPI ref via `listPageOfapiAccountRefs`,
   `modules/events/index.ts:392`), and optional `payload` (enrichment).
 - **Ordering:** per-account batched replay (`modules/events/index.ts:552-581`);
-  subscribe-before-replay with a `liveChain` promise that preserves per-account
-  order across async enrichment (`:461-473`).
+  the live subscription is installed before fresh per-account replay
+  high-waters are captured, and a `liveChain` promise preserves per-account
+  order across async enrichment (`:461-473`). The same bounded 1 MB
+  pre-replay-buffer fail-close rule applies.
 - **Ephemeral lane** (Stage 24): typing indicators are forwarded from the v1
   `syncEventHub` as `event: ephemeral` frames — no id line, never advancing the
   cursor, live-only (`modules/events/index.ts:475-490`).
@@ -126,7 +136,35 @@ per-account watermark map, not a scalar.**
 
 Registered at `modules/events/index.ts:597`. Returns
 `{cursor: encodeDomainEventCursor(watermarks), accounts: [{accountId,
-currentSeq}]}` at the current high-waters.
+accountRef, currentSeq}]}`. `accountRef` is the platform-native OFAPI account
+id used by Desktop's durable state endpoint (or `null` for non-OFAPI pages),
+read in the same SQL statement snapshot as the cursor watermark.
+`accounts[].currentSeq` is the committed domain-event
+high-water. The opaque cursor is normally at the same watermark, but remains
+immediately before the earliest retained OFAPI event that is not yet proven
+present in the durable state snapshot. This prevents state recovery followed
+by a v2 resubscribe from skipping a webhook observation canonicalized before
+its independent hot/cold projection completes. `subscriptions.new` and
+`subscriptions.renewed` also remain replayable: the v1 Desktop path maps both
+to an awaited chat-head refresh, and the durable snapshot does not replace
+that behavioral effect. v2 currently maps only canonical
+`subscription.started`; renewed is conservatively over-barriered by the shared
+cross-protocol predicate.
+
+When `accounts` is omitted, the cursor is marked as bound to the exact granted
+numeric account keyset returned in this response. A reconnect after a grant
+widening returns `409 sync_snapshot_required`; Core never fills the missing
+account at its current head. This lets Desktop verify its independent
+read-gateway refresh against `accounts[].accountRef`, walk state for exactly
+those refs, and retry the handshake on drift. Cursor accounts outside the
+current grant still return 403, preserving revocation safety. Explicit
+`?accounts=...` cursors remain subset-scoped and are not marked as full-grant
+cursors.
+
+The binding uses cursor payload version 3 while legacy/subset cursors remain
+version 2. Current Core accepts both. A rollback Core that predates this
+contract rejects the bound cursor instead of ignoring the marker and widening
+it unsafely; Desktop retains its prior checkpoint and retries fail-closed.
 
 ## 3. The v2 cursor contract
 

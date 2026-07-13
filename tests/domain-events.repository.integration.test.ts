@@ -86,6 +86,12 @@ describe("domain events append protocol (Stage 8)", () => {
       "msg:received:m2",
       "msg:received:m3",
     ]);
+    const boundedReplay = await listEventsSince(testDb.db, {
+      accountId: 7,
+      afterSeq: 0,
+      throughSeq: first.highWater,
+    });
+    expect(boundedReplay.map((row) => row.accountSeq)).toEqual([1, 2]);
 
     // Another account's sequence is independent.
     const other = await appendDomainEvents(testDb.db, 8, [event({ dedupKey: "msg:received:m1" })]);

@@ -6,6 +6,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
+  activatePendingDeviceToken,
   changeOwnPassword,
   createUserAccount,
   deactivateUser,
@@ -14,6 +15,7 @@ import {
   issueChatterApiKey,
   issueDeviceToken,
   issueDeviceTokenForUsername,
+  reservePendingDeviceToken,
   listApiKeysForUsers,
   listDeviceTokensForUsername,
   listUserGrants,
@@ -21,12 +23,14 @@ import {
   loginWithPassword,
   logoutSessionToken,
   reactivateUser,
+  revokeCurrentDeviceToken,
   requireOwner,
   requireSessionUser,
   revokeDeviceTokensForUsername,
   revokeModelFromUser,
   revokeUserApiKeys,
   setUserPassword,
+  setDeviceTokenHarvestCapabilityForUsername,
   unassignPageFromUser,
 } from "../../services/auth.ts";
 import { NotFoundError } from "../../services/errors.ts";
@@ -58,7 +62,7 @@ function clearCookie(reply: {
 
 export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
-  const { requirePrincipal } = ctx.auth;
+  const { requirePendingDeviceToken, requirePrincipal } = ctx.auth;
 
   server.post("/api/v1/auth/login", {
     schema: routeSchemas.login,
@@ -242,9 +246,10 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.authIssueDeviceToken,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
+    const authSessionId = requireSessionUser(principal);
     const issued = await issueDeviceToken(appContext, {
       userId: principal.user.id,
+      authSessionId,
       label: request.body.label,
     }, auditCtx(principal));
     return {
@@ -254,6 +259,45 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       keyPrefix: issued.keyPrefix,
       expiresAt: issued.expiresAt.toISOString(),
     };
+  });
+
+  server.post("/api/v1/auth/device-tokens/reservations", {
+    schema: routeSchemas.authReserveDeviceToken,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const authSessionId = requireSessionUser(principal);
+    const reserved = await reservePendingDeviceToken(appContext, {
+      userId: principal.user.id,
+      authSessionId,
+      label: request.body.label,
+    }, auditCtx(principal));
+    return {
+      token: reserved.token,
+      reservationId: reserved.reservationId,
+      label: reserved.label,
+      keyPrefix: reserved.keyPrefix,
+      reservationExpiresAt: reserved.reservationExpiresAt.toISOString(),
+    };
+  });
+
+  server.post("/api/v1/auth/device-tokens/activate", {
+    schema: routeSchemas.authActivateDeviceToken,
+  }, async (request) => {
+    const credential = await requirePendingDeviceToken(request);
+    const activated = await activatePendingDeviceToken(appContext, credential);
+    return {
+      id: activated.id,
+      label: activated.label,
+      keyPrefix: activated.keyPrefix,
+      expiresAt: activated.expiresAt.toISOString(),
+    };
+  });
+
+  server.delete("/api/v1/auth/device-tokens/current", {
+    schema: routeSchemas.authRevokeCurrentDeviceToken,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return revokeCurrentDeviceToken(appContext, principal, auditCtx(principal));
   });
 
   // --- Stage 22: device-token + grant admin (owner) ---
@@ -282,6 +326,18 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       keyPrefix: issued.keyPrefix,
       expiresAt: issued.expiresAt.toISOString(),
     };
+  });
+
+  server.patch("/api/v1/admin/users/:username/device-tokens/:tokenId/harvest-capability", {
+    schema: routeSchemas.adminSetDeviceTokenHarvestCapability,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return setDeviceTokenHarvestCapabilityForUsername(appContext, {
+      username: request.params.username,
+      deviceTokenId: request.params.tokenId,
+      machineId: request.body.machineId,
+    }, auditCtx(principal));
   });
 
   server.delete("/api/v1/admin/users/:username/device-tokens", {

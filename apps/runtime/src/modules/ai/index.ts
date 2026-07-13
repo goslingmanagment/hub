@@ -9,6 +9,8 @@ import {
   getAiGenerationContentByRef,
   listAiGenerationContent,
   archiveAiPersona,
+  AiPersonaVersionConflictError,
+  listAiPersonaStates,
   listAiPersonas,
   upsertAiPersona,
 } from "@agency_hub_core/db";
@@ -20,7 +22,7 @@ import {
 import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { requireApiKeyUser, requireOwner } from "../../services/auth.ts";
-import { NotFoundError } from "../../services/errors.ts";
+import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { hasDebugInputCapability } from "./prompt-debug-echo.ts";
 
@@ -66,7 +68,32 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
         displayName: persona.displayName,
         systemBlock: persona.systemBlock,
         updatedAt: persona.updatedAt.toISOString(),
+        version: persona.revision,
       })),
+    };
+  });
+
+  server.get("/api/v1/ai/personas/state", {
+    schema: routeSchemas.aiPersonaStates,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const states = await listAiPersonaStates(appContext.db);
+    return {
+      states: states.map((persona) => persona.archivedAt === null
+        ? {
+            state: "active" as const,
+            key: persona.key,
+            displayName: persona.displayName,
+            systemBlock: persona.systemBlock,
+            updatedAt: persona.updatedAt.toISOString(),
+            version: persona.revision,
+          }
+        : {
+            state: "archived" as const,
+            key: persona.key,
+            version: persona.revision,
+          }),
     };
   });
 
@@ -75,16 +102,28 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
-    const persona = await upsertAiPersona(appContext.db, {
-      key: request.params.key,
-      displayName: request.body.displayName,
-      systemBlock: request.body.systemBlock,
-    });
+    let persona;
+    try {
+      persona = await upsertAiPersona(appContext.db, {
+        key: request.params.key,
+        displayName: request.body.displayName,
+        systemBlock: request.body.systemBlock,
+        ...(request.body.expectedVersion !== undefined
+          ? { expectedVersion: request.body.expectedVersion }
+          : {}),
+      });
+    } catch (error) {
+      if (error instanceof AiPersonaVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
     return {
       key: persona.key,
       displayName: persona.displayName,
       systemBlock: persona.systemBlock,
       updatedAt: persona.updatedAt.toISOString(),
+      version: persona.revision,
     };
   });
 
@@ -93,11 +132,27 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
-    const archived = await archiveAiPersona(appContext.db, request.params.key);
-    if (!archived) {
+    let archived;
+    try {
+      archived = await archiveAiPersona(
+        appContext.db,
+        request.params.key,
+        request.query.expectedVersion === undefined
+          ? undefined
+          : request.query.expectedVersion === 0
+            ? null
+            : request.query.expectedVersion,
+      );
+    } catch (error) {
+      if (error instanceof AiPersonaVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+    if (archived === null) {
       throw new NotFoundError("Persona not found");
     }
-    return { archived: true };
+    return { archived: true, version: archived.revision };
   });
 
     // Stage 30: kernel-side prompt assembly — same auth, same SSE pump, same

@@ -206,6 +206,46 @@ export async function listDomainEventAccountBounds(
   return bounds;
 }
 
+/** Accounts whose requested gapless replay interval contains an internal hot-
+ * ledger hole. `min(account_seq)` only detects a removed prefix; Stage 28
+ * detaches partitions by occurred_at, so a backfilled old event can disappear
+ * between two retained sequence numbers. */
+export async function listDomainEventReplayContinuityGaps(
+  db: Database,
+  intervals: ReadonlyArray<{
+    accountId: number;
+    afterSeq: number;
+    throughSeq: number;
+  }>,
+): Promise<Set<number>> {
+  if (intervals.length === 0) {
+    return new Set();
+  }
+  const requestedRows = sql.join(
+    intervals.map((interval) => sql`(
+      ${interval.accountId}::bigint,
+      ${interval.afterSeq}::bigint,
+      ${interval.throughSeq}::bigint
+    )`),
+    sql`, `,
+  );
+  const result = await db.execute<{ account_id: string | number }>(sql`
+    with requested(account_id, after_seq, through_seq) as (
+      values ${requestedRows}
+    )
+    select requested.account_id
+    from requested
+    left join domain_events event
+      on event.account_id = requested.account_id
+     and event.account_seq > requested.after_seq
+     and event.account_seq <= requested.through_seq
+    group by requested.account_id, requested.after_seq, requested.through_seq
+    having count(distinct event.account_seq)::bigint
+      <> greatest(requested.through_seq - requested.after_seq, 0)
+  `);
+  return new Set(result.rows.map((row) => Number(row.account_id)));
+}
+
 /** The account's highest assigned account_seq (0 when no events yet). */
 export async function getAccountHighWater(db: Database, accountId: number): Promise<number> {
   const result = await db.execute<{ next_seq: string }>(sql`
@@ -254,7 +294,13 @@ function mapEventRow(row: Record<string, unknown>): DomainEventRow {
 /** Ordered per-account read: events with account_seq > afterSeq. */
 export async function listEventsSince(
   db: Database,
-  input: { accountId: number; afterSeq: number; limit?: number },
+  input: {
+    accountId: number;
+    afterSeq: number;
+    /** Inclusive replay ceiling captured after the live subscription. */
+    throughSeq?: number;
+    limit?: number;
+  },
 ): Promise<DomainEventRow[]> {
   const limit = input.limit ?? 500;
   // NB: ORDER BY must use the QUALIFIED column — a bare account_seq would
@@ -265,7 +311,9 @@ export async function listEventsSince(
            de.transaction_ref, de.data, de.schema_version, de.observation_id::text as observation_id,
            de.dedup_key, de.created_at
     from domain_events de
-    where de.account_id = ${input.accountId} and de.account_seq > ${input.afterSeq}
+    where de.account_id = ${input.accountId}
+      and de.account_seq > ${input.afterSeq}
+      ${input.throughSeq === undefined ? sql`` : sql`and de.account_seq <= ${input.throughSeq}`}
     order by de.account_seq asc
     limit ${limit}
   `);

@@ -84,11 +84,40 @@ export function startDomainEventsSmokeConsumer(app: AppContext): DomainEventsSmo
     guards: null as ReturnType<typeof createAccountSeqGuards> | null,
   };
 
+  function recordGap(accountId: number, afterSeq: number, throughSeq: number) {
+    if (!state.guards) {
+      return;
+    }
+    const watermark = state.guards.watermarks().get(accountId) ?? 0;
+    if (watermark >= throughSeq) {
+      return;
+    }
+    state.gapCount += 1;
+    dirty = true;
+    app.logger.error({
+      accountId,
+      afterSeq,
+      throughSeq,
+    }, "v2 smoke consumer observed an account_seq GAP");
+
+    // The shared hub rebases to the captured head after proving that the
+    // interval is no longer readable. Follow that rebase after recording the
+    // signal, otherwise every later event would be miscounted as another gap.
+    const rebased = new Map(state.guards.watermarks());
+    rebased.set(accountId, throughSeq);
+    state.guards = createAccountSeqGuards(rebased);
+  }
+
   function consume(event: DomainEventRow) {
     if (!state.guards) {
       return;
     }
+    const afterSeq = state.guards.watermarks().get(event.accountId) ?? 0;
     const verdict = state.guards.advance(event.accountId, event.accountSeq);
+    if (verdict.gap) {
+      recordGap(event.accountId, afterSeq, event.accountSeq);
+      return;
+    }
     if (!verdict.deliver) {
       // The hub never redelivers behind its own watermark; a duplicate here is
       // a real anomaly, not catch-up overlap (replay buffers before live).
@@ -99,13 +128,6 @@ export function startDomainEventsSmokeConsumer(app: AppContext): DomainEventsSmo
         accountSeq: event.accountSeq,
       }, "v2 smoke consumer observed a DUPLICATE domain-event frame");
       return;
-    }
-    if (verdict.gap) {
-      state.gapCount += 1;
-      app.logger.error({
-        accountId: event.accountId,
-        accountSeq: event.accountSeq,
-      }, "v2 smoke consumer observed an account_seq GAP");
     }
     state.framesSeen += 1;
     dirty = true;
@@ -157,6 +179,7 @@ export function startDomainEventsSmokeConsumer(app: AppContext): DomainEventsSmo
     // endpoint's exact ordering discipline.
     let replayDone = false;
     const buffered: DomainEventRow[] = [];
+    const pendingContinuityLosses = new Map<number, { afterSeq: number; throughSeq: number }>();
     unsubscribe = hub.subscribe({
       accountIds: undefined,
       deliver(event) {
@@ -165,6 +188,16 @@ export function startDomainEventsSmokeConsumer(app: AppContext): DomainEventsSmo
           return;
         }
         consume(event);
+      },
+      continuityLost(accountId, afterSeq, throughSeq) {
+        if (!replayDone) {
+          const pending = pendingContinuityLosses.get(accountId);
+          if (!pending || throughSeq > pending.throughSeq) {
+            pendingContinuityLosses.set(accountId, { afterSeq, throughSeq });
+          }
+          return;
+        }
+        recordGap(accountId, afterSeq, throughSeq);
       },
     });
     await hub.ready().catch(() => undefined);
@@ -193,11 +226,22 @@ export function startDomainEventsSmokeConsumer(app: AppContext): DomainEventsSmo
         }
       }
     }
-    replayDone = true;
+    for (const [accountId, loss] of pendingContinuityLosses) {
+      recordGap(accountId, loss.afterSeq, loss.throughSeq);
+    }
+    pendingContinuityLosses.clear();
     for (const event of buffered) {
+      // A live append can be captured both by the fixed replay head and by the
+      // already-subscribed hub. That overlap is expected, not a duplicate
+      // anomaly; discard it before enabling direct live delivery.
+      const watermark = state.guards?.watermarks().get(event.accountId);
+      if (watermark !== undefined && event.accountSeq <= watermark) {
+        continue;
+      }
       consume(event);
     }
     buffered.length = 0;
+    replayDone = true;
 
     checkpointTimer = setInterval(() => {
       void persist();

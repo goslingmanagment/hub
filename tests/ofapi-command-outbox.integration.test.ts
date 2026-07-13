@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -296,22 +298,45 @@ describe("OFAPI command outbox intake", () => {
 
     const { rows } = await testDb!.pool.query<{
       payload: Record<string, unknown>;
-      horizon_days: number;
+      horizon_seconds: number;
     }>(
       `select payload,
-              floor(extract(epoch from (dedupe_expires_at - created_at)) / 86400)::int
-                as horizon_days
+              floor(extract(epoch from (dedupe_expires_at - created_at)))::int
+                as horizon_seconds
        from ofapi_commands`,
     );
     expect(rows).toEqual([{
       payload: {},
-      horizon_days: 400,
+      horizon_seconds: 120,
     }]);
 
     const ledger = await testDb!.pool.query<{ count: number }>(
       "select count(*)::int as count from ofapi_credit_ledger",
     );
     expect(ledger.rows[0]?.count).toBe(0);
+  });
+
+  it("migration 0093 releases legacy 400-day typing rows for bounded cleanup", async () => {
+    const created = await createCommand(typingCommandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      `update ofapi_commands
+          set created_at = now() - interval '11 seconds',
+              dedupe_expires_at = now() + interval '400 days'
+        where id = $1`,
+      [commandId],
+    );
+
+    const migrationSql = readFileSync(
+      path.resolve("packages/db/migrations/0093_typing_command_retention.sql"),
+      "utf8",
+    );
+    await testDb!.pool.query(migrationSql);
+
+    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
+      .resolves.toMatchObject({ expired: 1, purged: 1, enqueued: 0 });
+    expect((await getCommand(commandId)).statusCode).toBe(404);
   });
 
   it("creates one queued mark-read command with an empty payload and no payload echo", async () => {
@@ -740,6 +765,66 @@ describe("OFAPI command outbox intake", () => {
       verifierResult: { source: "ofapi_response", commandKind: "typing_active_v1" },
     });
     expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
+
+    const resultFacts = await testDb!.pool.query<{ count: number }>(
+      `select count(*)::int as count from observations
+       where source = 'command_result' and payload ->> 'commandId' = $1`,
+      [commandId],
+    );
+    expect(resultFacts.rows[0]?.count).toBe(0);
+
+    await testDb!.pool.query(
+      `update ofapi_commands
+          set created_at = now() - interval '3 minutes',
+              dedupe_expires_at = now() - interval '1 second'
+        where id = $1`,
+      [commandId],
+    );
+    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
+      .resolves.toMatchObject({ purged: 1 });
+    expect((await getCommand(commandId)).statusCode).toBe(404);
+  });
+
+  it("never executes a stale typing beacon and purges it after the short dedupe window", async () => {
+    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
+    const startTyping = vi.fn().mockResolvedValue({ success: true });
+    appContext.ofapi = { startTyping } as unknown as AppContext["ofapi"];
+
+    const created = await createCommand(typingCommandBody());
+    const commandId = (created.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      "update ofapi_commands set created_at = now() - interval '11 seconds' where id = $1",
+      [commandId],
+    );
+
+    await expect(executeOfapiCommand(appContext, commandId))
+      .resolves.toMatchObject({ status: "not_claimed" });
+    expect(startTyping).not.toHaveBeenCalled();
+
+    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
+      .resolves.toMatchObject({ expired: 1, purged: 0, enqueued: 0 });
+    expect((await getCommand(commandId)).json()).toMatchObject({
+      state: "cancelled",
+      attemptCount: 0,
+      lastErrorCode: "expired_queued_ttl",
+    });
+
+    const resultFacts = await testDb!.pool.query<{ count: number }>(
+      `select count(*)::int as count from observations
+       where source = 'command_result' and payload ->> 'commandId' = $1`,
+      [commandId],
+    );
+    expect(resultFacts.rows[0]?.count).toBe(0);
+
+    await testDb!.pool.query(
+      "update ofapi_commands set dedupe_expires_at = now() - interval '1 second' where id = $1",
+      [commandId],
+    );
+    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
+      .resolves.toMatchObject({ expired: 0, purged: 1, enqueued: 0 });
+    expect((await getCommand(commandId)).statusCode).toBe(404);
   });
 
   it("executes one unsend attempt and confirms with the target platform message id", async () => {

@@ -8,17 +8,30 @@ import { resolveHarvestManifest } from "../apps/runtime/src/services/harvest-man
 
 const MACHINE = "11111111-1111-4111-8111-111111111111";
 
+const CANONICAL_TABLES = [
+  { table: "messages", kind: "harvest.messages" },
+  { table: "fan_transactions", kind: "harvest.fan_transactions" },
+  { table: "outbox", kind: "harvest.outbox" },
+  { table: "message_guard_events", kind: "harvest.message_guard_events" },
+  { table: "usage_events", kind: "harvest.usage_events" },
+  { table: "ai_spend_log", kind: "harvest.ai_spend_log" },
+  { table: "credit_log", kind: "harvest.credit_log" },
+] as const;
+
+function tableEntries(walked: number) {
+  return CANONICAL_TABLES.map((entry, index) => ({
+    ...entry,
+    walked: index === 0 ? walked : 0,
+    uploaded: index === 0 ? walked : 0,
+    duplicates: 0,
+  }));
+}
+
 function manifest(walked: number, extra: Record<string, unknown> = {}) {
   return {
     machineId: MACHINE,
     harvestFormatVersion: 2,
-    tables: [{
-      table: "messages",
-      kind: "harvest.messages",
-      walked,
-      uploaded: walked,
-      duplicates: 0,
-    }],
+    tables: tableEntries(walked),
     ...extra,
   };
 }
@@ -87,5 +100,30 @@ describe("resolveHarvestManifest", () => {
     );
 
     await expect(resolveHarvestManifest(timestamped)).rejects.toThrow(/unsafe/i);
+  });
+
+  it.each([
+    ["empty", []],
+    ["a subset", tableEntries(1).slice(0, 1)],
+    [
+      "a duplicate kind",
+      [...tableEntries(1).slice(0, -1), { ...tableEntries(1)[0], table: "credit_log" }],
+    ],
+    [
+      "an unknown kind",
+      [...tableEntries(1).slice(0, -1), {
+        table: "credit_log",
+        kind: "harvest.unknown",
+        walked: 0,
+        uploaded: 0,
+        duplicates: 0,
+      }],
+    ],
+  ])("rejects a manifest containing %s instead of all seven canonical kinds", async (_case, tables) => {
+    const dir = await mkdtemp(join(tmpdir(), "core-harvest-invalid-kinds-"));
+    const timestamped = join(dir, `chatgoose-harvest-manifest-${MACHINE}-legacy.json`);
+    await writeFile(timestamped, JSON.stringify(manifest(1, { tables })));
+
+    await expect(resolveHarvestManifest(timestamped)).rejects.toThrow(/canonical harvest kind/i);
   });
 });

@@ -50,7 +50,12 @@ export async function createOrGetOfapiCommand(
       payload: input.payload,
       payloadHash: input.payloadHash,
       retryOfCommandId: input.retryOfCommandId ?? null,
-      dedupeExpiresAt: sql`now() + interval '400 days'`,
+      // Typing is an ephemeral, lossy hint. Keep just enough custody for an
+      // ambiguous intake retry, then let the sweep delete the terminal row.
+      // Business commands retain the long idempotency horizon unchanged.
+      dedupeExpiresAt: input.kind === "typing_active_v1"
+        ? sql`now() + interval '2 minutes'`
+        : sql`now() + interval '400 days'`,
     })
     .onConflictDoNothing({
       target: [
@@ -179,7 +184,7 @@ export async function claimQueuedOfapiCommand(
  */
 export async function expireStaleQueuedOfapiCommands(
   db: Database,
-  input: { createdBefore: Date; now: Date },
+  input: { createdBefore: Date; now: Date; kind?: OfapiCommandKind },
 ) {
   return db
     .update(ofapiCommands)
@@ -192,8 +197,29 @@ export async function expireStaleQueuedOfapiCommands(
       eq(ofapiCommands.state, "queued"),
       eq(ofapiCommands.attemptCount, 0),
       lt(ofapiCommands.createdAt, input.createdBefore),
+      ...(input.kind === undefined ? [] : [eq(ofapiCommands.kind, input.kind)]),
     ))
     .returning();
+}
+
+/** Terminal typing rows are not business facts. Their short dedupe window is
+ * enough to make a lost intake response idempotent; after it closes, retaining
+ * one row per three-second UI beacon would be unbounded operational history. */
+export async function purgeExpiredTypingCommands(
+  db: Database,
+  input: { now: Date },
+) {
+  return db.delete(ofapiCommands).where(and(
+    eq(ofapiCommands.kind, "typing_active_v1"),
+    inArray(ofapiCommands.state, [
+      "confirmed",
+      "failed_retryable",
+      "failed_terminal",
+      "indeterminate",
+      "cancelled",
+    ]),
+    lt(ofapiCommands.dedupeExpiresAt, input.now),
+  )).returning({ id: ofapiCommands.id });
 }
 
 export async function listQueuedOfapiCommandIds(

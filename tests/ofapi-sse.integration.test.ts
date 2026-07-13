@@ -8,6 +8,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   createModel,
   createOnlyFansPage,
+  deleteExpiredOfapiWebhookEvents,
+  getOfapiFanoutReplayWindow,
+  getOfapiSyncReplayFloor,
   insertOfapiWebhookEvent,
   listOfapiSyncEventsForReplay,
   setPageOfapiAccountId,
@@ -452,6 +455,252 @@ describe("OFAPI webhook → SSE end-to-end", () => {
     }
 
     expect(collected).toEqual(expected);
+
+    const replayCeiling = expected[2]!;
+    const bounded = await listOfapiSyncEventsForReplay(appContext.db, {
+      afterSeq: allSeqs[0]! - 1,
+      throughSeq: replayCeiling,
+      limit: 10,
+    });
+    expect(bounded.map((row) => row.id)).toEqual(
+      expected.filter((seq) => seq <= replayCeiling),
+    );
+  }, 60_000);
+
+  it("deletes only a replayable prefix and lets an empty-journal snapshot clear the floor", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const { rows: pageRows } = await testDb.pool.query<{ id: number }>(
+      "select id::int from pages where ofapi_account_id = $1",
+      [ACCOUNT_ONE],
+    );
+    const pageId = pageRows[0]!.id;
+
+    const beforeUncommitted = await getOfapiFanoutReplayWindow(appContext.db);
+    const uncommitted = await testDb.pool.connect();
+    try {
+      await uncommitted.query("begin");
+      await uncommitted.query("select nextval('ofapi_webhook_events_fanout_seq')");
+      const duringUncommitted = await getOfapiFanoutReplayWindow(appContext.db);
+      expect(duringUncommitted.latestSeq).toBe(beforeUncommitted.latestSeq);
+    } finally {
+      await uncommitted.query("rollback");
+      uncommitted.release();
+    }
+
+    // A lower committed fanout row with no v1 frame must not mask the oldest
+    // replayable bound used by Last-Event-ID validation.
+    const journalOnly = await insertOfapiWebhookEvent(appContext.db, {
+      idempotencyKey: "continuity_non_replayable",
+      eventType: "journal.only",
+      ofapiAccountId: ACCOUNT_ONE,
+      payload: { event: "journal.only" },
+    });
+    await settleOfapiWebhookEvent(appContext.db, {
+      id: journalOnly!.id,
+      status: "processed",
+      platformAccountId: null,
+      syncEvent: null,
+      processedAt: new Date(),
+    });
+    for (let index = 0; index < 3; index += 1) {
+      const created = await insertOfapiWebhookEvent(appContext.db, {
+        idempotencyKey: `continuity_floor_${index}`,
+        eventType: "users.typing",
+        ofapiAccountId: ACCOUNT_ONE,
+        payload: { event: "users.typing", index },
+      });
+      await settleOfapiWebhookEvent(appContext.db, {
+        id: created!.id,
+        status: "processed",
+        platformAccountId: pageId,
+        syncEvent: { type: "typing", accountId: ACCOUNT_ONE, chatId: String(index) },
+        processedAt: new Date(),
+      });
+    }
+    const { rows: seqRows } = await testDb.pool.query<{ fanout_seq: string }>(
+      `select fanout_seq from ofapi_webhook_events
+       where sync_event is not null and platform_account_id is not null
+       order by fanout_seq`,
+    );
+    const firstSeq = Number(seqRows[0]!.fanout_seq);
+    const blockerSeq = Number(seqRows[1]!.fanout_seq);
+    const laterSeq = Number(seqRows[2]!.fanout_seq);
+    expect((await getOfapiFanoutReplayWindow(appContext.db)).oldestRetainedSeq).toBe(firstSeq);
+    await testDb.pool.query(
+      `update ofapi_webhook_events
+          set received_at = '2020-01-01T00:00:00Z',
+              projection_status = case when fanout_seq = $1 then 'failed' else projection_status end
+        where fanout_seq in ($2, $1, $3)`,
+      [blockerSeq, firstSeq, laterSeq],
+    );
+    await testDb.pool.query(
+      "update ofapi_webhook_events set received_at = '2020-01-01T00:00:00Z' where id = $1",
+      [journalOnly!.id],
+    );
+
+    const listener = await testDb.pool.connect();
+    await listener.query("listen ofapi_sync_events");
+    const floorNotification = new Promise<string | null>((resolve) => {
+      listener.once("notification", (message) => resolve(message.payload ?? null));
+    });
+    await deleteExpiredOfapiWebhookEvents(appContext.db, new Date("2021-01-01T00:00:00Z"));
+    expect(await Promise.race([
+      floorNotification,
+      sleep(2_000).then(() => null),
+    ])).toBe(`replay-floor:${firstSeq}`);
+    await listener.query("unlisten ofapi_sync_events");
+    listener.release();
+    await deleteExpiredOfapiWebhookEvents(appContext.db, new Date("2021-01-01T00:00:00Z"));
+    const { rows: blockedRows } = await testDb.pool.query<{ fanout_seq: string }>(
+      `select fanout_seq from ofapi_webhook_events
+       where sync_event is not null and platform_account_id is not null
+       order by fanout_seq`,
+    );
+    // The failed row blocks the later old/otherwise-eligible replay frame.
+    expect(blockedRows.map((row) => Number(row.fanout_seq))).toEqual([blockerSeq, laterSeq]);
+    const { rows: stateRows } = await testDb.pool.query<{ replay_floor: string }>(
+      "select replay_floor from ofapi_fanout_replay_state where singleton",
+    );
+    expect(Number(stateRows[0]!.replay_floor)).toBe(firstSeq);
+    expect(await getOfapiSyncReplayFloor(appContext.db)).toBe(firstSeq);
+
+    const stale = await fetch(`${baseUrl}/api/v1/events/stream`, {
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+        "last-event-id": "0",
+      },
+    });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      error: "sync_snapshot_required",
+      requestedSeq: 0,
+    });
+
+    await testDb.pool.query(
+      "update ofapi_webhook_events set projection_status = 'none' where fanout_seq = $1",
+      [blockerSeq],
+    );
+    await deleteExpiredOfapiWebhookEvents(appContext.db, new Date("2021-01-01T00:00:00Z"));
+    expect(await getOfapiSyncReplayFloor(appContext.db)).toBe(laterSeq);
+    const { rows: floorRows } = await testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from ofapi_fanout_replay_state",
+    );
+    expect(Number(floorRows[0]!.count)).toBe(1);
+
+    const snapshot = await server.inject({
+      method: "GET",
+      url: `/api/v1/events/snapshot?accountId=${ACCOUNT_ONE}&afterSeq=0`,
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+      },
+    });
+    expect(snapshot.statusCode, snapshot.body).toBe(200);
+    expect(snapshot.json()).toMatchObject({
+      snapshotCursor: laterSeq,
+    });
+
+    const staleContinuation = await server.inject({
+      method: "GET",
+      url: `/api/v1/events/snapshot?accountId=${ACCOUNT_ONE}&afterSeq=0&snapshotCursor=0`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(staleContinuation.statusCode, staleContinuation.body).toBe(409);
+    expect(staleContinuation.json()).toMatchObject({
+      error: "sync_snapshot_restart_required",
+      replayFloor: laterSeq,
+      snapshotPath: "/api/v1/events/snapshot",
+    });
+
+    // The empty journal still reports the durable floor as its committed head;
+    // reconnecting from the snapshot cursor must not loop back into 409.
+    const resumed = await fetch(`${baseUrl}/api/v1/events/stream`, {
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+        "last-event-id": String(snapshot.json().snapshotCursor),
+      },
+    });
+    expect(resumed.status).toBe(200);
+    await resumed.body?.cancel();
+  }, 60_000);
+
+  it("preserves a valid pre-0094 cursor above the retained journal tail", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const { rows: pageRows } = await testDb.pool.query<{ id: number }>(
+      "select id::int from pages where ofapi_account_id = $1",
+      [ACCOUNT_ONE],
+    );
+    const retained = await insertOfapiWebhookEvent(appContext.db, {
+      idempotencyKey: "legacy_high_water_retained_tail",
+      eventType: "users.typing",
+      ofapiAccountId: ACCOUNT_ONE,
+      payload: { event: "users.typing" },
+    });
+    await settleOfapiWebhookEvent(appContext.db, {
+      id: retained!.id,
+      status: "processed",
+      platformAccountId: pageRows[0]!.id,
+      syncEvent: { type: "typing", accountId: ACCOUNT_ONE, chatId: "legacy" },
+      processedAt: new Date(),
+    });
+    const retainedWindow = await getOfapiFanoutReplayWindow(appContext.db);
+    const retainedSeq = retainedWindow.oldestRetainedSeq;
+    if (retainedSeq === null) {
+      throw new Error("Expected one retained replay row");
+    }
+    const legacyHighWater = retainedSeq + 37;
+    // This is the post-migration shape of a legacy database whose old cleanup
+    // pruned a settled tail after the one retained row. Future nextval values
+    // remain above the captured cursor, exactly as the migration's table lock
+    // guarantees while it reads the sequence.
+    await testDb.pool.query(
+      "select setval('ofapi_webhook_events_fanout_seq', $1, true)",
+      [legacyHighWater],
+    );
+    await testDb.pool.query(
+      `insert into ofapi_fanout_replay_state (singleton, replay_floor, legacy_high_water)
+       values (true, 0, $1)
+       on conflict (singleton) do update set legacy_high_water = excluded.legacy_high_water`,
+      [legacyHighWater],
+    );
+
+    expect(await getOfapiFanoutReplayWindow(appContext.db)).toMatchObject({
+      oldestRetainedSeq: retainedSeq,
+      latestSeq: legacyHighWater,
+    });
+    const snapshot = await server.inject({
+      method: "GET",
+      url: `/api/v1/events/snapshot?accountId=${ACCOUNT_ONE}&afterSeq=${legacyHighWater}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(snapshot.statusCode, snapshot.body).toBe(200);
+    expect(snapshot.json().snapshotCursor).toBe(legacyHighWater);
+
+    const resumed = await fetch(`${baseUrl}/api/v1/events/stream`, {
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+        "last-event-id": String(legacyHighWater),
+      },
+    });
+    expect(resumed.status).toBe(200);
+    await resumed.body?.cancel();
+
+    const manufacturedAhead = await fetch(`${baseUrl}/api/v1/events/stream`, {
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+        "last-event-id": String(legacyHighWater + 1),
+      },
+    });
+    expect(manufacturedAhead.status).toBe(409);
+    expect(await manufacturedAhead.json()).toMatchObject({
+      currentSeq: legacyHighWater,
+      requestedSeq: legacyHighWater + 1,
+    });
   }, 60_000);
 
   it("requires chatter API-key auth on the stream", async (context) => {

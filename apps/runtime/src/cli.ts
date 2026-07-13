@@ -695,14 +695,20 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         const { createBundledPersonalities } = await import("./modules/ai/index.ts");
-        const { upsertAiPersona } = await import("@agency_hub_core/db");
+        const { seedBundledAiPersona } = await import("@agency_hub_core/db");
         for (const persona of createBundledPersonalities()) {
-          const row = await upsertAiPersona(app.db, {
+          if (persona.builtinVersion === undefined) {
+            throw new Error(`Bundled persona ${persona.id} is missing builtinVersion`);
+          }
+          const result = await seedBundledAiPersona(app.db, {
             key: persona.id,
             displayName: persona.name,
             systemBlock: persona.content,
+            bundledVersion: persona.builtinVersion,
           });
-          console.log(`seeded ${row.key} (${row.displayName})`);
+          console.log(
+            `seeded ${result.persona.key} (${result.persona.displayName}); action=${result.action}; version=${result.persona.revision}`,
+          );
         }
       } finally {
         await app.close();

@@ -12,6 +12,7 @@ import {
   userPageAssignments,
   users,
   deviceTokens,
+  pendingDeviceTokens,
 } from "../schema.ts";
 
 export interface CreateUserInput {
@@ -122,6 +123,12 @@ export async function createAuthSession(db: Database, input: CreateAuthSessionIn
 export async function findAuthSessionByDigest(db: Database, tokenDigest: string) {
   return db.query.authSessions.findFirst({
     where: eq(authSessions.tokenDigest, tokenDigest),
+  });
+}
+
+export async function findAuthSessionById(db: Database, sessionId: number) {
+  return db.query.authSessions.findFirst({
+    where: eq(authSessions.id, sessionId),
   });
 }
 
@@ -279,15 +286,131 @@ export interface CreateDeviceTokenInput {
   expiresAt: Date;
 }
 
+export interface CreatePendingDeviceTokenInput {
+  userId: number;
+  label: string;
+  tokenDigest: string;
+  keyPrefix: string;
+  expiresAt: Date;
+}
+
 export async function createDeviceToken(db: Database, input: CreateDeviceTokenInput) {
   const [created] = await db.insert(deviceTokens).values(input).returning();
   return created!;
+}
+
+export async function createPendingDeviceToken(
+  db: Database,
+  input: CreatePendingDeviceTokenInput,
+) {
+  const [created] = await db.insert(pendingDeviceTokens).values(input).returning();
+  return created!;
+}
+
+/** User-row lock shared by activation, revocation, password reset, and
+ * deactivation.  It closes the update-then-insert race where revoke-all could
+ * otherwise miss a token activated in the same transaction window. */
+export async function lockUserForDeviceTokenMutation(db: Database, userId: number) {
+  const [locked] = await db.select().from(users)
+    .where(eq(users.id, userId))
+    .for("update");
+  return locked ?? null;
+}
+
+export async function advanceDeviceTokenEpoch(db: Database, userId: number) {
+  const [updated] = await db.update(users).set({
+    deviceTokenEpoch: sql`${users.deviceTokenEpoch} + 1`,
+  }).where(eq(users.id, userId)).returning({
+    deviceTokenEpoch: users.deviceTokenEpoch,
+  });
+  return updated ?? null;
+}
+
+export async function findPendingDeviceTokenByDigest(
+  db: Database,
+  tokenDigest: string,
+  input?: { forUpdate?: boolean },
+) {
+  const query = db.select().from(pendingDeviceTokens)
+    .where(eq(pendingDeviceTokens.tokenDigest, tokenDigest))
+    .limit(1);
+  const [record] = input?.forUpdate === true ? await query.for("update") : await query;
+  return record ?? null;
+}
+
+export async function deletePendingDeviceTokenById(db: Database, id: number) {
+  const [deleted] = await db.delete(pendingDeviceTokens)
+    .where(eq(pendingDeviceTokens.id, id))
+    .returning({ id: pendingDeviceTokens.id });
+  return deleted ?? null;
+}
+
+export async function deletePendingDeviceTokensForUser(db: Database, userId: number) {
+  return db.delete(pendingDeviceTokens)
+    .where(eq(pendingDeviceTokens.userId, userId))
+    .returning({ id: pendingDeviceTokens.id });
+}
+
+export async function deleteExpiredPendingDeviceTokens(db: Database, now = new Date()) {
+  return db.delete(pendingDeviceTokens)
+    .where(sql`${pendingDeviceTokens.expiresAt} <= ${now}`)
+    .returning({ id: pendingDeviceTokens.id });
 }
 
 export async function findDeviceTokenByDigest(db: Database, tokenDigest: string) {
   return db.query.deviceTokens.findFirst({
     where: eq(deviceTokens.tokenDigest, tokenDigest),
   });
+}
+
+export async function findDeviceTokenForUser(
+  db: Database,
+  input: { deviceTokenId: number; userId: number },
+) {
+  return db.query.deviceTokens.findFirst({
+    where: and(
+      eq(deviceTokens.id, input.deviceTokenId),
+      eq(deviceTokens.userId, input.userId),
+    ),
+  });
+}
+
+/**
+ * Owner-controlled transfer of the one-machine harvest capability. The
+ * advisory lock serializes grants for one machine so two concurrent admin
+ * requests cannot surface a unique-index 500 or leave the authority unclear.
+ */
+export async function setDeviceTokenHarvestMachine(
+  db: Database,
+  input: { deviceTokenId: number; userId: number; machineId: string | null },
+) {
+  let replacedTokenId: number | null = null;
+  if (input.machineId) {
+    await db.execute(sql`
+      select pg_advisory_xact_lock(
+        hashtextextended(${`desktop-harvest:${input.machineId}`}, 0)
+      )
+    `);
+    const previous = await db.query.deviceTokens.findFirst({
+      where: eq(deviceTokens.harvestMachineId, input.machineId),
+    });
+    if (previous && previous.id !== input.deviceTokenId) {
+      replacedTokenId = previous.id;
+      await db.update(deviceTokens).set({
+        harvestMachineId: null,
+      }).where(eq(deviceTokens.id, previous.id));
+    }
+  }
+
+  const [updated] = await db.update(deviceTokens).set({
+    harvestMachineId: input.machineId,
+  }).where(and(
+    eq(deviceTokens.id, input.deviceTokenId),
+    eq(deviceTokens.userId, input.userId),
+    isNull(deviceTokens.revokedAt),
+  )).returning();
+
+  return { updated: updated ?? null, replacedTokenId };
 }
 
 export async function updateDeviceTokenUse(db: Database, deviceTokenId: number, input: {
@@ -315,6 +438,21 @@ export async function revokeDeviceTokensForUser(db: Database, userId: number, re
     eq(deviceTokens.userId, userId),
     isNull(deviceTokens.revokedAt),
   )).returning({ id: deviceTokens.id });
+}
+
+export async function revokeDeviceTokenById(
+  db: Database,
+  input: { deviceTokenId: number; userId: number; reason: string },
+) {
+  const [revoked] = await db.update(deviceTokens).set({
+    revokedAt: new Date(),
+    revokedReason: input.reason,
+  }).where(and(
+    eq(deviceTokens.id, input.deviceTokenId),
+    eq(deviceTokens.userId, input.userId),
+    isNull(deviceTokens.revokedAt),
+  )).returning({ id: deviceTokens.id });
+  return revoked ?? null;
 }
 
 export async function updateUserMustChangePassword(db: Database, userId: number, value: boolean) {

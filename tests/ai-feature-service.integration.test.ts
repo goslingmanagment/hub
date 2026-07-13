@@ -7,9 +7,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { aiFeatureStreamFrameSchema } from "@agency_hub_core/contracts";
 import {
+  AI_PERSONA_BUNDLED_VERSION_KEY,
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  findAiPersonaByKey,
+  seedBundledAiPersona,
   storeProxyConfig,
   upsertAiPersona,
 } from "@agency_hub_core/db";
@@ -395,7 +398,11 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       payload: { displayName: "Milly", systemBlock: "## Who you are\nMilly." },
     });
     expect(put.statusCode, put.body).toBe(200);
-    expect(put.json()).toMatchObject({ key: "custom-milly", displayName: "Milly" });
+    expect(put.json()).toMatchObject({
+      key: "custom-milly",
+      displayName: "Milly",
+      version: expect.any(Number),
+    });
 
     const list = await apiServer!.inject({
       method: "GET",
@@ -408,6 +415,372 @@ describe("kernel personas (Stage 31 Task 3)", () => {
 
     const anonymous = await apiServer!.inject({ method: "GET", url: "/api/v1/ai/personas" });
     expect(anonymous.statusCode).toBe(401);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("exposes archived lifecycle state and create-only never resurrects a tombstone", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const key = `custom-tombstone-${randomUUID()}`;
+    const created = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "Tombstone regression",
+        systemBlock: "Must remain archived",
+        expectedVersion: null,
+      },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const createdVersion = (created.json() as { version: number }).version;
+
+    const archived = await apiServer!.inject({
+      method: "DELETE",
+      url: `/api/v1/ai/personas/${key}?expectedVersion=${createdVersion}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(archived.statusCode, archived.body).toBe(200);
+    expect(archived.json()).toMatchObject({ archived: true, version: createdVersion + 1 });
+
+    const state = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/personas/state",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(state.statusCode, state.body).toBe(200);
+    expect(state.json().states).toContainEqual({
+      state: "archived",
+      key,
+      version: createdVersion + 1,
+    });
+
+    const staleCreate = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "Stale desktop cache",
+        systemBlock: "Must not unarchive",
+        expectedVersion: null,
+      },
+    });
+    expect(staleCreate.statusCode, staleCreate.body).toBe(409);
+
+    // v0.1.41 and older omit expectedVersion. Divergent legacy replay is
+    // fail-closed, and an old offline cache cannot resurrect a tombstone.
+    const legacyPut = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "Legacy stale desktop cache",
+        systemBlock: "Must still not unarchive",
+      },
+    });
+    expect(legacyPut.statusCode, legacyPut.body).toBe(409);
+
+    const after = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/personas/state",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(after.json().states).toContainEqual({
+      state: "archived",
+      key,
+      version: createdVersion + 1,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("allows exactly one expected-version winner and rejects stale numeric writers", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const key = `custom-cas-${randomUUID()}`;
+    const created = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "CAS seed",
+        systemBlock: "initial",
+        expectedVersion: null,
+      },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const createdVersion = (created.json() as { version: number }).version;
+
+    const [left, right] = await Promise.all([
+      apiServer!.inject({
+        method: "PUT",
+        url: `/api/v1/ai/personas/${key}`,
+        headers: { authorization: `Bearer ${chatterKey}` },
+        payload: {
+          displayName: "Left writer",
+          systemBlock: "left won",
+          expectedVersion: createdVersion,
+        },
+      }),
+      apiServer!.inject({
+        method: "PUT",
+        url: `/api/v1/ai/personas/${key}`,
+        headers: { authorization: `Bearer ${chatterKey}` },
+        payload: {
+          displayName: "Right writer",
+          systemBlock: "right won",
+          expectedVersion: createdVersion,
+        },
+      }),
+    ]);
+    expect([left.statusCode, right.statusCode].sort()).toEqual([200, 409]);
+    const winner = left.statusCode === 200 ? left : right;
+    expect(winner.json()).toMatchObject({ version: createdVersion + 1 });
+
+    const stale = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "Stale retry",
+        systemBlock: "must not overwrite the winner",
+        expectedVersion: createdVersion,
+      },
+    });
+    expect(stale.statusCode, stale.body).toBe(409);
+
+    const state = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/personas/state",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(state.statusCode, state.body).toBe(200);
+    const winnerBody = winner.json() as {
+      displayName: string;
+      systemBlock: string;
+      version: number;
+    };
+    expect(state.json().states).toContainEqual({
+      state: "active",
+      key,
+      displayName: winnerBody.displayName,
+      systemBlock: winnerBody.systemBlock,
+      updatedAt: expect.any(String),
+      version: createdVersion + 1,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps legacy omitted-version PUT idempotent but rejects divergent active content", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const key = `custom-legacy-cas-${randomUUID()}`;
+    const created = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "Legacy seed",
+        systemBlock: "version one",
+        expectedVersion: null,
+      },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const versionOne = (created.json() as { version: number }).version;
+
+    const identicalReplay = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: { displayName: "Legacy seed", systemBlock: "version one" },
+    });
+    expect(identicalReplay.statusCode, identicalReplay.body).toBe(200);
+    expect(identicalReplay.json()).toMatchObject({ version: versionOne });
+
+    const newer = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "Device B",
+        systemBlock: "version two",
+        expectedVersion: versionOne,
+      },
+    });
+    expect(newer.statusCode, newer.body).toBe(200);
+    const versionTwo = (newer.json() as { version: number }).version;
+
+    const staleLegacy = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: { displayName: "Legacy seed", systemBlock: "version one" },
+    });
+    expect(staleLegacy.statusCode, staleLegacy.body).toBe(409);
+
+    const state = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/personas/state",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(state.json().states).toContainEqual({
+      state: "active",
+      key,
+      displayName: "Device B",
+      systemBlock: "version two",
+      updatedAt: expect.any(String),
+      version: versionTwo,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects stale and omitted-version archives and replays an accepted archive idempotently", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const key = `custom-archive-cas-${randomUUID()}`;
+    const created = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "Archive seed",
+        systemBlock: "version one",
+        expectedVersion: null,
+      },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const versionOne = (created.json() as { version: number }).version;
+
+    const newer = await apiServer!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        displayName: "Device B",
+        systemBlock: "version two",
+        expectedVersion: versionOne,
+      },
+    });
+    expect(newer.statusCode, newer.body).toBe(200);
+    const versionTwo = (newer.json() as { version: number }).version;
+
+    const legacyDelete = await apiServer!.inject({
+      method: "DELETE",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(legacyDelete.statusCode, legacyDelete.body).toBe(409);
+
+    const staleDelete = await apiServer!.inject({
+      method: "DELETE",
+      url: `/api/v1/ai/personas/${key}?expectedVersion=${versionOne}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(staleDelete.statusCode, staleDelete.body).toBe(409);
+
+    const archived = await apiServer!.inject({
+      method: "DELETE",
+      url: `/api/v1/ai/personas/${key}?expectedVersion=${versionTwo}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(archived.statusCode, archived.body).toBe(200);
+    expect(archived.json()).toEqual({ archived: true, version: versionTwo + 1 });
+
+    const replay = await apiServer!.inject({
+      method: "DELETE",
+      url: `/api/v1/ai/personas/${key}?expectedVersion=${versionTwo}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(replay.statusCode, replay.body).toBe(200);
+    expect(replay.json()).toEqual({ archived: true, version: versionTwo + 1 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("seeds bundled versions idempotently while preserving same-version user customization", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const key = `builtin:seed-policy-${randomUUID()}`;
+    const created = await seedBundledAiPersona(appContext.db, {
+      key,
+      displayName: "Bundled v2",
+      systemBlock: "bundled version two",
+      bundledVersion: 2,
+    });
+    expect(created).toMatchObject({ action: "created", persona: { revision: 1 } });
+
+    const customized = await upsertAiPersona(appContext.db, {
+      key,
+      displayName: "User-edited name",
+      systemBlock: "customized by user",
+      expectedVersion: created.persona.revision,
+    });
+    expect(customized.revision).toBe(2);
+    expect(customized.featureOverrides[AI_PERSONA_BUNDLED_VERSION_KEY]).toBe(2);
+
+    const sameVersion = await seedBundledAiPersona(appContext.db, {
+      key,
+      displayName: "Bundled v2",
+      systemBlock: "bundled version two",
+      bundledVersion: 2,
+    });
+    expect(sameVersion).toMatchObject({
+      action: "preserved",
+      persona: {
+        displayName: "User-edited name",
+        systemBlock: "customized by user",
+        revision: 2,
+      },
+    });
+    const repeated = await seedBundledAiPersona(appContext.db, {
+      key,
+      displayName: "Bundled v2",
+      systemBlock: "bundled version two",
+      bundledVersion: 2,
+    });
+    expect(repeated.persona.revision).toBe(2);
+
+    const upgraded = await seedBundledAiPersona(appContext.db, {
+      key,
+      displayName: "Bundled v3",
+      systemBlock: "bundled version three",
+      bundledVersion: 3,
+    });
+    expect(upgraded).toMatchObject({
+      action: "upgraded",
+      persona: {
+        displayName: "Bundled v3",
+        systemBlock: "bundled version three",
+        revision: 3,
+      },
+    });
+    expect(upgraded.persona.featureOverrides[AI_PERSONA_BUNDLED_VERSION_KEY]).toBe(3);
+
+    const legacyKey = `builtin:seed-adopt-${randomUUID()}`;
+    const legacy = await upsertAiPersona(appContext.db, {
+      key: legacyKey,
+      displayName: "Already customized",
+      systemBlock: "pre-metadata customization",
+      expectedVersion: null,
+    });
+    const adopted = await seedBundledAiPersona(appContext.db, {
+      key: legacyKey,
+      displayName: "Bundled v2",
+      systemBlock: "must not replace legacy customization",
+      bundledVersion: 2,
+    });
+    expect(adopted).toMatchObject({
+      action: "adopted",
+      persona: {
+        displayName: legacy.displayName,
+        systemBlock: legacy.systemBlock,
+        revision: legacy.revision,
+      },
+    });
+    expect((await findAiPersonaByKey(appContext.db, legacyKey))?.revision).toBe(legacy.revision);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

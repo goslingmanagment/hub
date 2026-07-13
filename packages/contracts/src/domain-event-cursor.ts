@@ -1,12 +1,15 @@
 // Kernel Stage 21: the event-stream v2 resume cursor. Opaque on the wire —
-// base64url JSON `{v: 2, w: {<accountId>: <highSeq>, …}}`, the per-account
-// high-water map. Shared by the server (modules/events) and the SDK helper so
-// both ends agree byte-for-byte; clients never construct or inspect it.
+// base64url JSON `{v: 2, w: {<accountId>: <highSeq>, …}}` for legacy/subset
+// cursors or `{v: 3, w: {…}, s: "granted"}` for an exact-grant binding.
+// Shared by the server (modules/events) and the SDK helper so both ends agree
+// byte-for-byte; clients never construct or inspect it.
 
 export type DomainEventWatermarks = ReadonlyMap<number, number>;
 
+export type DomainEventCursorScope = "granted";
+
 export type DecodedDomainEventCursor =
-  | { ok: true; watermarks: Map<number, number> }
+  | { ok: true; watermarks: Map<number, number>; scope: DomainEventCursorScope | null }
   | { ok: false; reason: string };
 
 // Isomorphic base64url (no Buffer): this file ships to the browser through
@@ -41,13 +44,22 @@ function fromBase64Url(text: string): string | null {
   }
 }
 
-export function encodeDomainEventCursor(watermarks: DomainEventWatermarks): string {
+export function encodeDomainEventCursor(
+  watermarks: DomainEventWatermarks,
+  options: { scope?: DomainEventCursorScope } = {},
+): string {
   const w: Record<string, number> = {};
   // Sorted keys → deterministic encoding (cursor equality is comparable in tests).
   for (const accountId of [...watermarks.keys()].sort((a, b) => a - b)) {
     w[String(accountId)] = watermarks.get(accountId)!;
   }
-  return toBase64Url(JSON.stringify({ v: 2, w }));
+  return toBase64Url(JSON.stringify({
+    // A distinct version makes rollback fail closed: old Core rejects a bound
+    // cursor instead of ignoring `s` and widening it at a new account's head.
+    v: options.scope === undefined ? 2 : 3,
+    w,
+    ...(options.scope === undefined ? {} : { s: options.scope }),
+  }));
 }
 
 export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor {
@@ -64,12 +76,18 @@ export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return { ok: false, reason: "not_object" };
   }
-  const candidate = parsed as { v?: unknown; w?: unknown };
-  if (candidate.v !== 2) {
+  const candidate = parsed as { v?: unknown; w?: unknown; s?: unknown };
+  if (candidate.v !== 2 && candidate.v !== 3) {
     return { ok: false, reason: "unknown_version" };
   }
   if (typeof candidate.w !== "object" || candidate.w === null || Array.isArray(candidate.w)) {
     return { ok: false, reason: "missing_watermarks" };
+  }
+  if (
+    (candidate.v === 2 && candidate.s !== undefined)
+    || (candidate.v === 3 && candidate.s !== "granted")
+  ) {
+    return { ok: false, reason: "invalid_scope" };
   }
   const watermarks = new Map<number, number>();
   for (const [key, value] of Object.entries(candidate.w as Record<string, unknown>)) {
@@ -82,5 +100,9 @@ export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor 
     }
     watermarks.set(accountId, value);
   }
-  return { ok: true, watermarks };
+  return {
+    ok: true,
+    watermarks,
+    scope: candidate.v === 3 ? "granted" : null,
+  };
 }

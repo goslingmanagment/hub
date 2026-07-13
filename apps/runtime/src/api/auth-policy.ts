@@ -4,6 +4,7 @@ import { AppError } from "../services/errors.ts";
 import {
   requireApiKeyUser,
   requireDashboardUser,
+  requireDeviceTokenUser,
   requireOwner,
   requireSessionUser,
   type AuthPrincipal,
@@ -65,6 +66,8 @@ export interface AuthPolicyEvaluationInput {
   auth: RouteAuthPolicy;
   /** Memoized upstream (request.auth), so repeated calls are free. */
   resolvePrincipal: () => Promise<AuthPrincipal | null>;
+  /** Specialized non-principal check used only by the activation route. */
+  resolvePendingDeviceToken: () => Promise<boolean>;
   /** The x-monitoring-token check (timing-safe, config-gated). */
   hasMonitoringToken: () => boolean;
   /** findPageSummaryByLabel + canAccessPage, exactly the handlers' shape. */
@@ -87,6 +90,11 @@ export async function computeAuthPolicyVerdict(
   if (auth.kind === "monitoring" && input.hasMonitoringToken()) {
     return ALLOW;
   }
+  if (auth.kind === "pending-device-token") {
+    return await input.resolvePendingDeviceToken()
+      ? ALLOW
+      : { allow: false, statusCode: 401, reason: "pending_device_token_required" };
+  }
 
   const principal = await input.resolvePrincipal();
   if (!principal) {
@@ -107,6 +115,9 @@ export async function computeAuthPolicyVerdict(
       break;
     case "apiKey":
       kindVerdict = guardVerdict(() => requireApiKeyUser(principal), "api_key_required");
+      break;
+    case "device-token":
+      kindVerdict = guardVerdict(() => requireDeviceTokenUser(principal), "device_token_required");
       break;
     case "any":
       kindVerdict = ALLOW;
