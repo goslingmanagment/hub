@@ -221,6 +221,7 @@ export const systemCheckSchema = z.object({
 export const healthResponseSchema = z.object({
   status: serviceHealthStatusEnum,
   timestamp: isoTimestamp,
+  capabilities: z.array(z.literal("desktop-lifecycle-v2")),
   checks: z.object({
     api: z.object({
       status: z.literal("ok"),
@@ -1885,8 +1886,9 @@ export const aiFeatureStreamFrameSchema = z.union([
 ]);
 
 // Stage 29 restricted capture class (DP 6-A): owner-only reads.
-// Stage 31: personas are kernel config (DP 9-A single-tenant) — the desktop
-// picker/editor reads and writes here; account→persona mappings stay local.
+// Personas are global single-tenant owner content. Legacy full-text client
+// routes remain during the read-only-client rollout; new clients consume only
+// the metadata catalog and the owner dashboard uses the separate admin CRUD.
 export const aiPersonaSchema = z.object({
   key: z.string().min(1).max(120),
   displayName: z.string().min(1).max(120),
@@ -1899,19 +1901,6 @@ export const aiPersonasResponseSchema = z.object({
   personas: z.array(aiPersonaSchema),
 });
 
-export const aiPersonaStateSchema = z.discriminatedUnion("state", [
-  aiPersonaSchema.extend({ state: z.literal("active") }),
-  z.object({
-    state: z.literal("archived"),
-    key: z.string().min(1).max(120),
-    version: z.number().int().positive(),
-  }),
-]);
-
-export const aiPersonaStatesResponseSchema = z.object({
-  states: z.array(aiPersonaStateSchema),
-});
-
 export const aiPersonaUpsertParamsSchema = z.object({
   key: z.string().min(1).max(120),
 });
@@ -1919,8 +1908,8 @@ export const aiPersonaUpsertParamsSchema = z.object({
 export const aiPersonaUpsertBodySchema = z.object({
   displayName: z.string().min(1).max(120),
   systemBlock: z.string().min(1).max(50_000),
-  // Omitted is legacy create-or-identical replay (divergence conflicts). null
-  // is create-only; a number is an optimistic active-revision update.
+  // Omitted keeps shipped clients on their transitional last-write-wins lane.
+  // null is create-only; a number is an optimistic active-revision update.
   expectedVersion: z.number().int().positive().nullable().optional(),
 }).strict();
 
@@ -1928,6 +1917,61 @@ export const aiPersonaArchiveQuerySchema = z.object({
   // Query strings cannot carry null. Zero is the explicit create-only/absent
   // sentinel; positive values archive exactly that active revision.
   expectedVersion: z.coerce.number().int().nonnegative().optional(),
+}).strict();
+
+export const aiPersonaCatalogItemSchema = z.object({
+  key: z.string().min(1).max(120),
+  displayName: z.string().min(1).max(120),
+  version: z.number().int().positive(),
+  status: z.enum(["active", "archived"]),
+});
+
+export const aiPersonaCatalogResponseSchema = z.object({
+  personas: z.array(aiPersonaCatalogItemSchema),
+});
+
+const adminAiPersonaCreateKeySchema = z.string()
+  .trim()
+  .min(1)
+  .max(120)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9:_-]*$/, "Use letters, numbers, colon, underscore, or hyphen");
+// Existing rows may have been created through the shipped legacy API, whose
+// key contract allowed any non-empty 120-character string. Admin path params
+// must preserve that exact key so the owner can update/archive every row that
+// appears in the admin list. The narrower policy applies only to new keys.
+const adminAiPersonaExistingKeySchema = z.string().min(1).max(120);
+const adminAiPersonaDisplayNameSchema = z.string().trim().min(1).max(120);
+const adminAiPersonaSystemBlockSchema = z.string()
+  .min(1)
+  .max(50_000)
+  .refine((value) => /\S/.test(value), "System prompt must contain non-whitespace text");
+
+export const adminAiPersonaSchema = aiPersonaSchema.extend({
+  status: z.enum(["active", "archived"]),
+});
+
+export const adminAiPersonasResponseSchema = z.object({
+  personas: z.array(adminAiPersonaSchema),
+});
+
+export const adminAiPersonaCreateBodySchema = z.object({
+  key: adminAiPersonaCreateKeySchema,
+  displayName: adminAiPersonaDisplayNameSchema,
+  systemBlock: adminAiPersonaSystemBlockSchema,
+}).strict();
+
+export const adminAiPersonaParamsSchema = z.object({
+  key: adminAiPersonaExistingKeySchema,
+});
+
+export const adminAiPersonaUpdateBodySchema = z.object({
+  displayName: adminAiPersonaDisplayNameSchema,
+  systemBlock: adminAiPersonaSystemBlockSchema,
+  expectedVersion: z.number().int().positive(),
+}).strict();
+
+export const adminAiPersonaArchiveQuerySchema = z.object({
+  expectedVersion: z.coerce.number().int().positive(),
 }).strict();
 
 // Stage 30 feature services: kernel-side prompt assembly over the gateway.
@@ -4238,10 +4282,15 @@ export const routeSchemas = {
       + "the platform-native accountRef needed for each durable OFAPI state walk. An "
       + "omitted-accounts cursor is bound to that exact grant keyset: reconnect returns "
       + "409 rather than widening a stale cursor at a newly granted account's head. "
+      + "Gap-recovery callers pass the rejected opaque sourceCursor so already-applied "
+      + "history is not replayed again; Core also advances past erased sequence holes. "
       + "State payloads ride the consumer stages (24/33) additively — v2's snapshot "
       + "role here is the cursor-reset handshake.",
     querystring: z.object({
       accounts: z.string().regex(/^\d+(,\d+)*$/).optional(),
+      // Rejected resume cursor whose already-applied watermarks bound replay
+      // after the caller completes the durable per-account state walk.
+      sourceCursor: z.string().min(1).optional(),
     }),
     response: {
       200: domainEventsSnapshotResponseSchema,
@@ -5233,13 +5282,14 @@ export const routeSchemas = {
       401: errorResponseSchema,
     },
   },
-  aiPersonaStates: {
+  aiPersonaCatalog: {
     auth: { kind: "apiKey" },
     tags: ["usage"],
-    summary: "List active and archived kernel AI persona lifecycle state",
+    summary: "List AI persona metadata for client pickers",
     response: {
-      200: aiPersonaStatesResponseSchema,
+      200: aiPersonaCatalogResponseSchema,
       401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   aiPersonaUpsert: {
@@ -5264,6 +5314,58 @@ export const routeSchemas = {
     response: {
       200: z.object({ archived: z.boolean(), version: z.number().int().positive() }),
       401: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminAiPersonasList: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "List full active and archived AI personas for owner administration",
+    response: {
+      200: adminAiPersonasResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminAiPersonaCreate: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Create an AI persona",
+    body: adminAiPersonaCreateBodySchema,
+    response: {
+      200: adminAiPersonaSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminAiPersonaUpdate: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Update an active AI persona with optimistic concurrency",
+    params: adminAiPersonaParamsSchema,
+    body: adminAiPersonaUpdateBodySchema,
+    response: {
+      200: adminAiPersonaSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminAiPersonaArchive: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Archive an active AI persona with optimistic concurrency",
+    params: adminAiPersonaParamsSchema,
+    querystring: adminAiPersonaArchiveQuerySchema,
+    response: {
+      200: adminAiPersonaSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
       404: errorResponseSchema,
       409: errorResponseSchema,
     },
@@ -6110,6 +6212,12 @@ export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
 export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;
 export type AiGatewayStreamFrame = z.infer<typeof aiGatewayStreamFrameSchema>;
 export type AiFeatureStreamFrame = z.infer<typeof aiFeatureStreamFrameSchema>;
+export type AiPersonaCatalogItem = z.infer<typeof aiPersonaCatalogItemSchema>;
+export type AiPersonaCatalogResponse = z.infer<typeof aiPersonaCatalogResponseSchema>;
+export type AdminAiPersona = z.infer<typeof adminAiPersonaSchema>;
+export type AdminAiPersonasResponse = z.infer<typeof adminAiPersonasResponseSchema>;
+export type AdminAiPersonaCreateBody = z.infer<typeof adminAiPersonaCreateBodySchema>;
+export type AdminAiPersonaUpdateBody = z.infer<typeof adminAiPersonaUpdateBodySchema>;
 export type SyncEvent = z.infer<typeof syncEventSchema>;
 export type NormalizedSyncMessage = z.infer<typeof normalizedSyncMessageSchema>;
 export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSchema>;

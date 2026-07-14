@@ -12,8 +12,8 @@ export interface UpsertAiPersonaInput {
   systemBlock: string;
   featureOverrides?: Record<string, unknown>;
   /**
-   * Omitted is the pre-version compatibility form: it may create an absent row
-   * or confirm identical active content, but divergent content conflicts.
+   * Omitted is the shipped-client compatibility form: identical active content
+   * is a no-op; divergent content and archived rows use last-write-wins.
    * `null` is create-only (including against archived tombstones); a number
    * updates exactly that active revision.
    */
@@ -22,7 +22,7 @@ export interface UpsertAiPersonaInput {
 
 export const AI_PERSONA_BUNDLED_VERSION_KEY = "__kernelBundledVersion";
 
-export type SeedBundledAiPersonaAction = "created" | "adopted" | "preserved" | "upgraded";
+export type SeedBundledAiPersonaAction = "created" | "preserved";
 
 export class AiPersonaVersionConflictError extends Error {
   constructor(
@@ -96,38 +96,44 @@ export async function upsertAiPersona(db: Database, input: UpsertAiPersonaInput)
     );
   }
 
-  // Pre-version clients omit expectedVersion and automatically replay every
-  // cached persona whenever they reconnect. They may still create an absent
-  // key, and an identical replay is idempotent, but a divergent active payload
-  // must not overwrite a newer CAS writer.
-  const [created] = await db.insert(aiPersonas).values(values)
-    .onConflictDoNothing({ target: aiPersonas.key })
+  // Transitional compatibility for shipped clients: pre-version Desktop and
+  // Extension builds omit expectedVersion and expect last-write-wins, including
+  // resurrection of a locally cached persona after a prior archive. Keep this
+  // lane open until preservation/read-only releases have reached the fleet.
+  // Owner dashboard writes never use this form; they always send CAS tokens.
+  const [legacyRow] = await db.insert(aiPersonas).values(values)
+    .onConflictDoUpdate({
+      target: aiPersonas.key,
+      set: {
+        displayName: input.displayName,
+        systemBlock: input.systemBlock,
+        ...(input.featureOverrides !== undefined
+          ? { featureOverrides: input.featureOverrides }
+          : {}),
+        updatedAt: new Date(),
+        archivedAt: null,
+        revision: sql`${aiPersonas.revision} + 1`,
+      },
+      setWhere: sql`${aiPersonas.displayName} is distinct from ${input.displayName}
+        or ${aiPersonas.systemBlock} is distinct from ${input.systemBlock}
+        or ${aiPersonas.archivedAt} is not null`,
+    })
     .returning();
-  if (created !== undefined) {
-    return created;
+  if (legacyRow !== undefined) {
+    return legacyRow;
   }
-  const current = await readPersonaLifecycle(db, input.key);
-  if (
-    current !== null
-    && current.archivedAt === null
-    && current.displayName === input.displayName
-    && current.systemBlock === input.systemBlock
-  ) {
-    return current;
+  const identical = await readPersonaLifecycle(db, input.key);
+  if (identical === null) {
+    throw new Error(`AI persona "${input.key}" disappeared during legacy replay`);
   }
-  throw new AiPersonaVersionConflictError(
-    input.key,
-    null,
-    current?.revision ?? null,
-  );
+  return identical;
 }
 
 /**
- * Idempotent bundled-persona seed with the legacy customization contract:
- * user edits survive every rerun of the same bundled version, while an actual
- * bundled-version increase replaces the stale built-in once. Missing metadata
- * is adopted without changing prompt content or its lifecycle revision, which
- * makes the first run safe for already-customized production rows.
+ * Create-only bundled-persona seed. The database is owner content: once a key
+ * exists, neither a rerun nor a newer binary may change its prompt, metadata,
+ * lifecycle state, timestamps, or revision. Owner edits therefore survive
+ * every deploy and an archived built-in is never resurrected by seeding.
  */
 export async function seedBundledAiPersona(
   db: Database,
@@ -142,74 +148,23 @@ export async function seedBundledAiPersona(
     throw new Error(`Invalid bundled persona version: ${input.bundledVersion}`);
   }
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const [created] = await db.insert(aiPersonas).values({
-      key: input.key,
-      displayName: input.displayName,
-      systemBlock: input.systemBlock,
-      featureOverrides: { [AI_PERSONA_BUNDLED_VERSION_KEY]: input.bundledVersion },
-    }).onConflictDoNothing({ target: aiPersonas.key }).returning();
-    if (created !== undefined) {
-      return { persona: created, action: "created" };
-    }
-
-    const current = await readPersonaLifecycle(db, input.key);
-    if (current === null) {
-      continue;
-    }
-    if (current.archivedAt !== null) {
-      throw new Error(`Bundled persona "${input.key}" is archived; refusing to resurrect it`);
-    }
-
-    const rawVersion = current.featureOverrides[AI_PERSONA_BUNDLED_VERSION_KEY];
-    if (rawVersion === undefined) {
-      const [adopted] = await db.update(aiPersonas).set({
-        featureOverrides: {
-          ...current.featureOverrides,
-          [AI_PERSONA_BUNDLED_VERSION_KEY]: input.bundledVersion,
-        },
-      }).where(and(
-        eq(aiPersonas.key, input.key),
-        isNull(aiPersonas.archivedAt),
-        eq(aiPersonas.revision, current.revision),
-      )).returning();
-      if (adopted !== undefined) {
-        return { persona: adopted, action: "adopted" };
-      }
-      continue;
-    }
-    if (typeof rawVersion !== "number" || !Number.isInteger(rawVersion) || rawVersion <= 0) {
-      throw new Error(`Bundled persona "${input.key}" has invalid version metadata`);
-    }
-    if (rawVersion > input.bundledVersion) {
-      throw new Error(
-        `Bundled persona "${input.key}" is version ${rawVersion}; refusing binary downgrade to ${input.bundledVersion}`,
-      );
-    }
-    if (rawVersion === input.bundledVersion) {
-      return { persona: current, action: "preserved" };
-    }
-
-    const [upgraded] = await db.update(aiPersonas).set({
-      displayName: input.displayName,
-      systemBlock: input.systemBlock,
-      featureOverrides: {
-        ...current.featureOverrides,
-        [AI_PERSONA_BUNDLED_VERSION_KEY]: input.bundledVersion,
-      },
-      updatedAt: new Date(),
-      revision: sql`${aiPersonas.revision} + 1`,
-    }).where(and(
-      eq(aiPersonas.key, input.key),
-      isNull(aiPersonas.archivedAt),
-      eq(aiPersonas.revision, current.revision),
-    )).returning();
-    if (upgraded !== undefined) {
-      return { persona: upgraded, action: "upgraded" };
-    }
+  const [created] = await db.insert(aiPersonas).values({
+    key: input.key,
+    displayName: input.displayName,
+    systemBlock: input.systemBlock,
+    featureOverrides: { [AI_PERSONA_BUNDLED_VERSION_KEY]: input.bundledVersion },
+  }).onConflictDoNothing({ target: aiPersonas.key }).returning();
+  if (created !== undefined) {
+    return { persona: created, action: "created" };
   }
 
-  throw new Error(`Bundled persona "${input.key}" changed concurrently; retry the seed command`);
+  const existing = await readPersonaLifecycle(db, input.key);
+  if (existing === null) {
+    // A concurrent transaction deleted the key between INSERT and SELECT.
+    // There is no supported production delete path; fail closed if one appears.
+    throw new Error(`Bundled persona "${input.key}" disappeared during seed`);
+  }
+  return { persona: existing, action: "preserved" };
 }
 
 export async function findAiPersonaByKey(db: Database, key: string) {
@@ -224,8 +179,7 @@ export async function listAiPersonas(db: Database) {
     .orderBy(aiPersonas.key);
 }
 
-/** Full lifecycle state for migration/reconciliation. Archived prompt content
- * stays in the DB but the API state projection intentionally omits it. */
+/** Full lifecycle state for the metadata catalog and owner administration. */
 export async function listAiPersonaStates(db: Database) {
   return db.select().from(aiPersonas).orderBy(aiPersonas.key);
 }
@@ -235,6 +189,20 @@ export async function archiveAiPersona(
   key: string,
   expectedVersion?: number | null,
 ) {
+  if (expectedVersion === undefined) {
+    // Transitional legacy lane: shipped clients omit the revision and expect
+    // the original last-write-wins archive behavior.
+    const [archived] = await db.update(aiPersonas)
+      .set({
+        archivedAt: new Date(),
+        updatedAt: new Date(),
+        revision: sql`${aiPersonas.revision} + 1`,
+      })
+      .where(and(eq(aiPersonas.key, key), isNull(aiPersonas.archivedAt)))
+      .returning();
+    return archived ?? null;
+  }
+
   if (expectedVersion !== undefined && expectedVersion !== null) {
     const [updated] = await db.update(aiPersonas)
       .set({
@@ -247,7 +215,7 @@ export async function archiveAiPersona(
         isNull(aiPersonas.archivedAt),
         eq(aiPersonas.revision, expectedVersion),
       ))
-      .returning({ key: aiPersonas.key, revision: aiPersonas.revision });
+      .returning();
     if (updated !== undefined) {
       return updated;
     }
@@ -256,10 +224,6 @@ export async function archiveAiPersona(
   const current = await readPersonaLifecycle(db, key);
   if (current === null) {
     return null;
-  }
-  if (current.archivedAt !== null) {
-    // A lost success response or a concurrent archive is already converged.
-    return { key: current.key, revision: current.revision };
   }
   throw new AiPersonaVersionConflictError(
     key,

@@ -4,7 +4,10 @@ import path from "node:path";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { decodeDomainEventCursor } from "@agency_hub_core/contracts";
+import {
+  decodeDomainEventCursor,
+  encodeDomainEventCursor,
+} from "@agency_hub_core/contracts";
 import {
   appendDomainEvents,
   createModel,
@@ -416,6 +419,142 @@ describe("OFAPI sync snapshot", () => {
       throw new Error(afterCursor.reason);
     }
     expect(afterCursor.watermarks.get(rows[0]!.page_id)).toBe(1);
+  });
+
+  it("bounds v2 recovery at the rejected source cursor without skipping a later incomplete OFAPI event", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    const subscription = await loadFixture("subscriptions_new.json");
+    subscription.account_id = ACCOUNT_ONE;
+    const subscriptionId = await deliver(subscription);
+    await processOfapiWebhookEvent(appContext, subscriptionId);
+    expect(await runCanonicalization(appContext, {
+      kinds: ["subscriptions.new"],
+    })).toMatchObject({ appended: 1, errored: 0 });
+
+    const message = await loadReceivedFixture();
+    message.payload.id = 9_915_001;
+    const pendingMessageId = await deliver(message);
+    expect(await runCanonicalization(appContext, {
+      kinds: ["messages.received"],
+    })).toMatchObject({ appended: 1, errored: 0 });
+
+    const { rows } = await testDb.pool.query<{
+      page_id: number;
+      account_seq: number;
+      event_type: string;
+    }>(
+      `select event.account_id::int as page_id,
+              event.account_seq::int,
+              webhook.event_type
+         from domain_events event
+         join observations observation on observation.id = event.observation_id
+         join ofapi_webhook_events webhook
+           on webhook.idempotency_key = observation.idempotency_key
+        order by event.account_seq`,
+    );
+    expect(rows.map((row) => [row.account_seq, row.event_type])).toEqual([
+      [1, "subscriptions.new"],
+      [2, "messages.received"],
+    ]);
+    const pageId = rows[0]!.page_id;
+
+    // Compatibility callers that omit sourceCursor retain the conservative
+    // all-history barrier. The completed subscription is intentionally one of
+    // the legacy behavioral classes that would otherwise pin every recovery.
+    const unbounded = await server.inject({
+      method: "GET",
+      url: "/api/v1/events/v2/snapshot",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    const unboundedCursor = decodeDomainEventCursor(unbounded.json().cursor);
+    expect(unboundedCursor.ok).toBe(true);
+    if (!unboundedCursor.ok) {
+      throw new Error(unboundedCursor.reason);
+    }
+    expect(unboundedCursor.watermarks.get(pageId)).toBe(0);
+
+    const sourceCursor = encodeDomainEventCursor(new Map([[pageId, 1]]), {
+      scope: "granted",
+    });
+    const malformed = await server.inject({
+      method: "GET",
+      url: "/api/v1/events/v2/snapshot?sourceCursor=garbage",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(malformed.statusCode, malformed.body).toBe(400);
+
+    for (const untrustedSource of [
+      // A subset cursor that omits this account does not prove any applied
+      // history. Only an exact-grant cursor may classify an absent account as
+      // newly granted and intentionally baseline it at the current head.
+      encodeDomainEventCursor(new Map()),
+      // A corrupt/rolled-back ahead cursor was rejected by the stream and is
+      // likewise not evidence that the intervening blockers were applied.
+      encodeDomainEventCursor(new Map([[pageId, 999_999]])),
+    ]) {
+      const conservative = await server.inject({
+        method: "GET",
+        url: `/api/v1/events/v2/snapshot?sourceCursor=${encodeURIComponent(untrustedSource)}`,
+        headers: { authorization: `Bearer ${chatterKey}` },
+      });
+      expect(conservative.statusCode, conservative.body).toBe(200);
+      const conservativeCursor = decodeDomainEventCursor(conservative.json().cursor);
+      expect(conservativeCursor.ok).toBe(true);
+      if (!conservativeCursor.ok) {
+        throw new Error(conservativeCursor.reason);
+      }
+      expect(conservativeCursor.watermarks.get(pageId)).toBe(0);
+    }
+
+    const bounded = await server.inject({
+      method: "GET",
+      url: `/api/v1/events/v2/snapshot?sourceCursor=${encodeURIComponent(sourceCursor)}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(bounded.statusCode, bounded.body).toBe(200);
+    const boundedCursor = decodeDomainEventCursor(bounded.json().cursor);
+    expect(boundedCursor.ok).toBe(true);
+    if (!boundedCursor.ok) {
+      throw new Error(boundedCursor.reason);
+    }
+    // Seq 1 was already applied by the caller and no longer pins recovery;
+    // seq 2 is still absent from durable state and therefore remains exactly
+    // the bounded replay tail.
+    expect(boundedCursor.watermarks.get(pageId)).toBe(1);
+    expect(await listEventsSince(appContext.db, {
+      accountId: pageId,
+      afterSeq: boundedCursor.watermarks.get(pageId)!,
+    })).toEqual([
+      expect.objectContaining({ accountSeq: 2, type: "message.received" }),
+    ]);
+
+    // Crash-before-persist retry: the same rejected source and unchanged
+    // server state reproduce the same target cursor. Reapplying the state
+    // snapshot is idempotent and cannot widen the replay interval.
+    const retried = await server.inject({
+      method: "GET",
+      url: `/api/v1/events/v2/snapshot?sourceCursor=${encodeURIComponent(sourceCursor)}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(retried.statusCode, retried.body).toBe(200);
+    expect(retried.json().cursor).toBe(bounded.json().cursor);
+
+    await processOfapiWebhookEvent(appContext, pendingMessageId);
+    const completed = await server.inject({
+      method: "GET",
+      url: `/api/v1/events/v2/snapshot?sourceCursor=${encodeURIComponent(sourceCursor)}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    const completedCursor = decodeDomainEventCursor(completed.json().cursor);
+    expect(completedCursor.ok).toBe(true);
+    if (!completedCursor.ok) {
+      throw new Error(completedCursor.reason);
+    }
+    expect(completedCursor.watermarks.get(pageId)).toBe(2);
   });
 
   it("keeps presence and non-OFAPI events at the v2 head while subscription/account barriers remain grant-scoped", async (context) => {

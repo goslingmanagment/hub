@@ -6,10 +6,12 @@ import { createHash } from "node:crypto";
 
 import {
   appendDomainEvents,
+  completeErasureLog,
   createFanslyPage,
   createModel,
   createOnlyFansPage,
   insertObservation,
+  insertErasureLog,
   insertOfapiWebhookEvent,
   setPageOfapiAccountId,
   settleOfapiWebhookEvent,
@@ -23,6 +25,7 @@ import {
   type DomainEventsSnapshotRequired,
 } from "@agency_hub_core/contracts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -405,9 +408,12 @@ describe("event stream v2", () => {
     const lilyGap = staleBody.accounts.find((account) => account.accountId === lilyId);
     expect(lilyGap).toBeDefined();
 
-    const rebound = await fetch(`${baseUrl}/api/v1/events/v2/snapshot`, {
-      headers: { authorization: `Bearer ${raceKey}` },
-    });
+    const rebound = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?sourceCursor=${encodeURIComponent(beforeBody.cursor)}`,
+      {
+        headers: { authorization: `Bearer ${raceKey}` },
+      },
+    );
     expect(rebound.status).toBe(200);
     const reboundBody = await rebound.json() as {
       cursor: string;
@@ -442,40 +448,455 @@ describe("event stream v2", () => {
     ]);
   });
 
-  it("forces snapshot recovery for an internal account-sequence hole", async (context) => {
+  it("recovers through the internal sequence hole produced by fan erasure", async (context) => {
     if (!requireSetup(context)) return;
 
     const model = await createModel(testDb!.db, {
       slug: "continuity-hole-model",
       name: "Continuity Hole",
     });
-    const page = await createFanslyPage(testDb!.db, {
+    const page = await createOnlyFansPage(testDb!.db, {
       modelId: model!.id,
       label: "continuity-hole",
     });
-    await appendDomainEvents(testDb!.db, page!.id, [
-      event("message.received", { seq: 1 }),
-      event("message.received", { seq: 2 }),
-      event("message.received", { seq: 3 }),
-    ]);
-    // Same hot-ledger shape produced when occurred_at partition tiering removes
-    // a backfilled old event between two newer retained account sequences.
-    await testDb!.pool.query(
-      "delete from domain_events where account_id = $1 and account_seq = 2",
-      [page!.id],
+    if (!page) {
+      throw new Error("failed to create continuity-hole OFAPI page");
+    }
+    await setPageOfapiAccountId(testDb!.db, {
+      pageId: page.id,
+      ofapiAccountId: "acct_continuity_hole",
+    });
+
+    const erasedFanRef = "991777002";
+    const appendObservedFanEvent = async (fanRef: string, messageId: string) => {
+      const envelope = {
+        event: "messages.received",
+        account_id: "acct_continuity_hole",
+        payload: { id: messageId, fromUser: { id: fanRef } },
+      };
+      const observation = await insertObservation(testDb!.db, {
+        source: "webhook",
+        producer: "ofapi:webhook",
+        platform: "onlyfans",
+        accountId: page.id,
+        nativeAccountRef: "acct_continuity_hole",
+        kind: "messages.received",
+        payload: envelope,
+        payloadHash: createHash("sha256").update(JSON.stringify(envelope)).digest(),
+        idempotencyKey: `continuity-hole:${messageId}`,
+      });
+      return appendDomainEvents(testDb!.db, page.id, [{
+        type: "message.received",
+        occurredAt: new Date("2026-07-13T12:00:00.000Z"),
+        fanIdentityRef: fanRef,
+        conversationRef: fanRef,
+        messageRef: messageId,
+        data: { messageId },
+        schemaVersion: 1,
+        observationId: observation.observationId,
+        dedupKey: `continuity-hole:${messageId}`,
+      }]);
+    };
+
+    await appendObservedFanEvent("991777001", "hole-survivor-1");
+    await appendObservedFanEvent(erasedFanRef, "hole-erased-2");
+    await appendObservedFanEvent("991777003", "hole-survivor-3");
+
+    const { rows: owners } = await testDb!.pool.query<{ id: number }>(
+      "select id::int from users where username = 'dima'",
     );
+    await executeErasure(
+      createTestAppContext(testDb!),
+      { scopeType: "fan", platform: "onlyfans", fanRef: erasedFanRef },
+      { initiatedBy: owners[0]!.id, auditSource: "test" },
+    );
+    const { rows: retained } = await testDb!.pool.query<{ account_seq: number }>(
+      "select account_seq::int from domain_events where account_id = $1 order by account_seq",
+      [page.id],
+    );
+    expect(retained.map((row) => row.account_seq)).toEqual([1, 3]);
 
     const cookie = await ownerCookie();
+    const sourceCursor = encodeDomainEventCursor(new Map([[page.id, 1]]));
     const response = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=${
-      encodeURIComponent(encodeDomainEventCursor(new Map([[page!.id, 1]])))
+      encodeURIComponent(sourceCursor)
     }`, { headers: { cookie } });
     expect(response.status).toBe(409);
     const body = await response.json() as DomainEventsSnapshotRequired;
     expect(body.accounts).toContainEqual(expect.objectContaining({
-      accountId: page!.id,
+      accountId: page.id,
       requestedSeq: 1,
       currentSeq: 3,
     }));
+
+    const recovery = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`
+        + `&sourceCursor=${encodeURIComponent(sourceCursor)}`,
+      { headers: { cookie } },
+    );
+    expect(recovery.status).toBe(200);
+    const recoveredBody = await recovery.json() as {
+      cursor: string;
+      accounts: Array<{ accountId: number; currentSeq: number }>;
+    };
+    expect(recoveredBody.accounts).toEqual([expect.objectContaining({
+      accountId: page.id,
+      currentSeq: 3,
+    })]);
+    const recovered = decodeDomainEventCursor(recoveredBody.cursor);
+    expect(recovered.ok).toBe(true);
+    if (!recovered.ok) {
+      throw new Error(recovered.reason);
+    }
+    // The durable state walk replaces everything through the erased seq=2;
+    // with no later replay barrier the fresh cursor may advance to the head.
+    expect(recovered.watermarks.get(page.id)).toBe(3);
+
+    // Legacy v0.1.41 does not send sourceCursor. It still needs an escape from
+    // the exact same erasure hole, even though it cannot bound already-applied
+    // history as tightly as a revision-aware client.
+    const legacyRecovery = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`,
+      { headers: { cookie } },
+    );
+    expect(legacyRecovery.status).toBe(200);
+    const legacyRecovered = decodeDomainEventCursor(
+      ((await legacyRecovery.json()) as { cursor: string }).cursor,
+    );
+    expect(legacyRecovered.ok).toBe(true);
+    if (!legacyRecovered.ok) {
+      throw new Error(legacyRecovered.reason);
+    }
+    expect(legacyRecovered.watermarks.get(page.id)).toBe(3);
+
+    await appendObservedFanEvent("991777004", "hole-post-snapshot-4");
+    const replayed: number[] = [];
+    let repeatedSnapshot: DomainEventsSnapshotRequired | null = null;
+    const handle = subscribeDomainEvents({ baseUrl, headers: { cookie } }, {
+      cursor: recoveredBody.cursor,
+      onFrame: (frame) => {
+        if (frame.event.accountId === page.id) {
+          replayed.push(frame.event.accountSeq);
+        }
+      },
+      onSnapshotRequired: (details) => { repeatedSnapshot = details; },
+    });
+    await sleep(700);
+    handle.close();
+    await handle.done;
+    expect(repeatedSnapshot).toBeNull();
+    expect(replayed).toEqual([4]);
+  });
+
+  it("drains unreplaced OFAPI events before internal and tail erasure holes", async (context) => {
+    if (!requireSetup(context)) return;
+
+    const model = await createModel(testDb!.db, {
+      slug: "continuity-prefix-model",
+      name: "Continuity Prefix",
+    });
+    const page = await createOnlyFansPage(testDb!.db, {
+      modelId: model!.id,
+      label: "continuity-prefix",
+    });
+    if (!page) {
+      throw new Error("failed to create continuity-prefix OFAPI page");
+    }
+    const ofapiAccountId = "acct_continuity_prefix";
+    await setPageOfapiAccountId(testDb!.db, {
+      pageId: page.id,
+      ofapiAccountId,
+    });
+
+    const appendObservedMessage = async (fanRef: string, messageId: string) => {
+      const envelope = {
+        event: "messages.received",
+        account_id: ofapiAccountId,
+        payload: { id: messageId, fromUser: { id: fanRef } },
+      };
+      const observation = await insertObservation(testDb!.db, {
+        source: "webhook",
+        producer: "ofapi:webhook",
+        platform: "onlyfans",
+        accountId: page.id,
+        nativeAccountRef: ofapiAccountId,
+        kind: "messages.received",
+        payload: envelope,
+        payloadHash: createHash("sha256").update(JSON.stringify(envelope)).digest(),
+        idempotencyKey: `continuity-prefix:${messageId}`,
+      });
+      await appendDomainEvents(testDb!.db, page.id, [{
+        type: "message.received",
+        occurredAt: new Date("2026-07-13T12:10:00.000Z"),
+        fanIdentityRef: fanRef,
+        conversationRef: fanRef,
+        messageRef: messageId,
+        data: { messageId },
+        schemaVersion: 1,
+        observationId: observation.observationId,
+        dedupKey: `continuity-prefix:${messageId}`,
+      }]);
+    };
+    const appendUnsettledSubscription = async (fanRef: string, suffix: string) => {
+      const idempotencyKey = `continuity-prefix:subscription:${suffix}`;
+      const envelope = {
+        event: "subscriptions.new",
+        account_id: ofapiAccountId,
+        payload: { id: `subscription-${suffix}`, user: { id: fanRef } },
+      };
+      const journal = await insertOfapiWebhookEvent(testDb!.db, {
+        idempotencyKey,
+        eventType: "subscriptions.new",
+        ofapiAccountId,
+        payload: envelope,
+      });
+      expect(journal).not.toBeNull();
+      const observation = await insertObservation(testDb!.db, {
+        source: "webhook",
+        producer: "ofapi:webhook",
+        platform: "onlyfans",
+        accountId: page.id,
+        nativeAccountRef: ofapiAccountId,
+        kind: "subscriptions.new",
+        payload: envelope,
+        payloadHash: createHash("sha256").update(JSON.stringify(envelope)).digest(),
+        idempotencyKey,
+      });
+      await appendDomainEvents(testDb!.db, page.id, [{
+        type: "subscription.started",
+        occurredAt: new Date("2026-07-13T12:10:00.000Z"),
+        fanIdentityRef: fanRef,
+        data: { fanRef },
+        schemaVersion: 1,
+        observationId: observation.observationId,
+        dedupKey: idempotencyKey,
+      }]);
+    };
+    const { rows: owners } = await testDb!.pool.query<{ id: number }>(
+      "select id::int from users where username = 'dima'",
+    );
+    const eraseFan = async (fanRef: string) => executeErasure(
+      createTestAppContext(testDb!),
+      { scopeType: "fan", platform: "onlyfans", fanRef },
+      { initiatedBy: owners[0]!.id, auditSource: "test" },
+    );
+    const drainPrefix = async (cursor: string) => {
+      const frames: Array<{ cursor: string; accountSeq: number }> = [];
+      let snapshot: DomainEventsSnapshotRequired | null = null;
+      const handle = subscribeDomainEvents({ baseUrl, headers: { cookie: await ownerCookie() } }, {
+        cursor,
+        onFrame: (frame) => {
+          if (frame.event.accountId === page.id) {
+            frames.push({ cursor: frame.cursor, accountSeq: frame.event.accountSeq });
+          }
+        },
+        onSnapshotRequired: (details) => { snapshot = details; },
+      });
+      // A tail hole has no later frame that could trip the sequence guard. The
+      // replay ceiling itself must close promptly after the retained prefix.
+      await Promise.race([
+        handle.done,
+        sleep(3_000).then(() => { throw new Error("prefix stream did not close at hole"); }),
+      ]);
+      expect(snapshot).toBeNull();
+      return frames;
+    };
+
+    await appendObservedMessage("991778001", "prefix-source-1");
+    await appendUnsettledSubscription("991778002", "internal-blocker-2");
+    const internalErasedFan = "991778003";
+    await appendObservedMessage(internalErasedFan, "prefix-erased-3");
+    await appendObservedMessage("991778004", "prefix-survivor-4");
+    await eraseFan(internalErasedFan);
+
+    const sourceCursor = encodeDomainEventCursor(new Map([[page.id, 1]]));
+    const internalPrefix = await drainPrefix(sourceCursor);
+    expect(internalPrefix.map((frame) => frame.accountSeq)).toEqual([2]);
+    const afterInternalPrefix = internalPrefix[0]!.cursor;
+
+    const internalGap = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=${
+      encodeURIComponent(afterInternalPrefix)
+    }`, { headers: { cookie: await ownerCookie() } });
+    expect(internalGap.status).toBe(409);
+    expect((await internalGap.json() as DomainEventsSnapshotRequired).accounts)
+      .toContainEqual(expect.objectContaining({
+        accountId: page.id,
+        requestedSeq: 2,
+        currentSeq: 4,
+      }));
+
+    // v0.1.41 cannot echo sourceCursor. The snapshot response therefore marks
+    // its opaque cursor as proof that the client must complete its state walk
+    // before persisting it. Core may then replay every retained behavior across
+    // the erased seq=3 and must publish a normal cursor before entering live.
+    const legacySnapshot = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`,
+      { headers: { cookie: await ownerCookie() } },
+    );
+    expect(legacySnapshot.status).toBe(200);
+    const legacyTarget = (await legacySnapshot.json() as { cursor: string }).cursor;
+    const decodedLegacyTarget = decodeDomainEventCursor(legacyTarget);
+    expect(decodedLegacyTarget.ok).toBe(true);
+    if (!decodedLegacyTarget.ok) {
+      throw new Error(decodedLegacyTarget.reason);
+    }
+    expect(decodedLegacyTarget.watermarks.get(page.id)).toBe(1);
+    expect(decodedLegacyTarget.recovery).toEqual(expect.objectContaining({ kind: "snapshot" }));
+
+    // An erasure begins by durably advancing the global epoch before it deletes
+    // either state or ledger rows. A marker minted before that point must not
+    // authorize the changed topology, and no new marker may mint while the run
+    // is incomplete.
+    const epochBump = await insertErasureLog(testDb!.db, {
+      scopeType: "fan",
+      scopeRef: "fan:onlyfans:epoch-bump-only",
+      initiatedBy: owners[0]!.id,
+      dryRun: false,
+      plan: { resolvedPageIds: [page.id], testOnly: true },
+    });
+    const invalidatedLegacy = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=${
+      encodeURIComponent(legacyTarget)
+    }`, { headers: { cookie: await ownerCookie() } });
+    expect(invalidatedLegacy.status).toBe(409);
+    const blockedDuringErasure = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`,
+      { headers: { cookie: await ownerCookie() } },
+    );
+    expect(blockedDuringErasure.status).toBe(503);
+    await completeErasureLog(testDb!.db, { id: epochBump.id, executedCounts: {} });
+
+    const refreshedLegacySnapshot = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`,
+      { headers: { cookie: await ownerCookie() } },
+    );
+    expect(refreshedLegacySnapshot.status).toBe(200);
+    const refreshedLegacyTarget = (await refreshedLegacySnapshot.json() as { cursor: string }).cursor;
+    await appendObservedMessage("991778005", "post-snapshot-target-5");
+
+    const legacyFrames: Array<{ cursor: string; event: DomainEventFrame }> = [];
+    let resolveLegacyComplete: (() => void) | null = null;
+    const legacyComplete = new Promise<void>((resolve) => { resolveLegacyComplete = resolve; });
+    const legacyHandle = subscribeDomainEvents(
+      { baseUrl, headers: { cookie: await ownerCookie() } },
+      {
+        cursor: refreshedLegacyTarget,
+        onFrame: (frame) => {
+          if (frame.event.accountId !== page.id) return;
+          legacyFrames.push(frame);
+          if (frame.event.accountSeq === 5 && frame.event.type === "message.received") {
+            resolveLegacyComplete?.();
+          }
+        },
+      },
+    );
+    await Promise.race([
+      legacyComplete,
+      sleep(3_000).then(() => { throw new Error("legacy recovery did not cross the internal hole"); }),
+    ]);
+    legacyHandle.close();
+    await legacyHandle.done;
+    expect(legacyFrames.map((frame) => [frame.event.accountSeq, frame.event.type])).toEqual([
+      [2, "subscription.started"],
+      [4, "message.received"],
+      [4, "stream.snapshot_replay_completed"],
+      [5, "message.received"],
+    ]);
+    const legacyCompletedCursor = decodeDomainEventCursor(legacyFrames.at(-1)!.cursor);
+    expect(legacyCompletedCursor.ok).toBe(true);
+    if (!legacyCompletedCursor.ok) {
+      throw new Error(legacyCompletedCursor.reason);
+    }
+    expect(legacyCompletedCursor.watermarks.get(page.id)).toBe(5);
+    expect(legacyCompletedCursor.recovery).toBeNull();
+
+    const internalRecovery = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`
+        + `&sourceCursor=${encodeURIComponent(afterInternalPrefix)}`,
+      { headers: { cookie: await ownerCookie() } },
+    );
+    expect(internalRecovery.status).toBe(200);
+    const internalTarget = (await internalRecovery.json() as { cursor: string }).cursor;
+    const decodedInternalTarget = decodeDomainEventCursor(internalTarget);
+    expect(decodedInternalTarget.ok).toBe(true);
+    if (!decodedInternalTarget.ok) {
+      throw new Error(decodedInternalTarget.reason);
+    }
+    expect(decodedInternalTarget.watermarks.get(page.id)).toBe(5);
+
+    await appendUnsettledSubscription("991778006", "tail-blocker-6");
+    const tailErasedFan = "991778007";
+    await appendObservedMessage(tailErasedFan, "prefix-erased-tail-7");
+    await eraseFan(tailErasedFan);
+
+    const tailPrefix = await drainPrefix(internalTarget);
+    expect(tailPrefix.map((frame) => frame.accountSeq)).toEqual([6]);
+    const afterTailPrefix = tailPrefix[0]!.cursor;
+    const tailGap = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=${
+      encodeURIComponent(afterTailPrefix)
+    }`, { headers: { cookie: await ownerCookie() } });
+    expect(tailGap.status).toBe(409);
+    expect((await tailGap.json() as DomainEventsSnapshotRequired).accounts)
+      .toContainEqual(expect.objectContaining({
+        accountId: page.id,
+        requestedSeq: 6,
+        currentSeq: 7,
+      }));
+
+    // A second legacy snapshot must cross both the earlier internal hole and
+    // the new tail hole while retaining both behavioral barriers. The explicit
+    // completion frame is the carrier for the head=7 cursor when no seq=7 row
+    // remains to carry an SSE id.
+    const legacyTailSnapshot = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`,
+      { headers: { cookie: await ownerCookie() } },
+    );
+    const legacyTailTarget = (await legacyTailSnapshot.json() as { cursor: string }).cursor;
+    const legacyTailFrames: Array<{ cursor: string; event: DomainEventFrame }> = [];
+    let resolveLegacyTail: (() => void) | null = null;
+    const legacyTailComplete = new Promise<void>((resolve) => { resolveLegacyTail = resolve; });
+    const legacyTailHandle = subscribeDomainEvents(
+      { baseUrl, headers: { cookie: await ownerCookie() } },
+      {
+        cursor: legacyTailTarget,
+        onFrame: (frame) => {
+          if (frame.event.accountId !== page.id) return;
+          legacyTailFrames.push(frame);
+          if (frame.event.type === "stream.snapshot_replay_completed") {
+            resolveLegacyTail?.();
+          }
+        },
+      },
+    );
+    await Promise.race([
+      legacyTailComplete,
+      sleep(3_000).then(() => { throw new Error("legacy recovery did not cross the tail hole"); }),
+    ]);
+    legacyTailHandle.close();
+    await legacyTailHandle.done;
+    expect(legacyTailFrames.map((frame) => frame.event.accountSeq)).toEqual([2, 4, 5, 6, 7]);
+    expect(legacyTailFrames.at(-1)!.event.type).toBe("stream.snapshot_replay_completed");
+    const legacyTailCompletedCursor = decodeDomainEventCursor(legacyTailFrames.at(-1)!.cursor);
+    expect(legacyTailCompletedCursor.ok).toBe(true);
+    if (!legacyTailCompletedCursor.ok) {
+      throw new Error(legacyTailCompletedCursor.reason);
+    }
+    expect(legacyTailCompletedCursor.watermarks.get(page.id)).toBe(7);
+    expect(legacyTailCompletedCursor.recovery).toBeNull();
+
+    const tailRecovery = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`
+        + `&sourceCursor=${encodeURIComponent(afterTailPrefix)}`,
+      { headers: { cookie: await ownerCookie() } },
+    );
+    expect(tailRecovery.status).toBe(200);
+    const decodedTailTarget = decodeDomainEventCursor(
+      (await tailRecovery.json() as { cursor: string }).cursor,
+    );
+    expect(decodedTailTarget.ok).toBe(true);
+    if (!decodedTailTarget.ok) {
+      throw new Error(decodedTailTarget.reason);
+    }
+    expect(decodedTailTarget.watermarks.get(page.id)).toBe(7);
   });
 
   it("returns 503 before hijacking either stream when its initial LISTEN is unavailable", async (context) => {

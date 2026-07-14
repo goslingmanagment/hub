@@ -5,12 +5,13 @@ export interface FanProfileNavigationState {
   fanLabel?: string;
 }
 
-export type SettingsTab = "credentials" | "sync" | "models" | "pages" | "users" | "configuration";
+export type SettingsTab = "credentials" | "sync" | "models" | "personas" | "pages" | "users" | "configuration";
 
 const SETTINGS_TABS = new Set<SettingsTab>([
   "credentials",
   "sync",
   "models",
+  "personas",
   "pages",
   "users",
   "configuration",

@@ -4204,3 +4204,34 @@ name, prompt, timestamp, or revision; rerunning the same version is a true
 no-op, so user customization survives. Only a strictly newer bundled version
 CAS-replaces the prompt and advances the revision, while a newer stored marker
 than the running binary fails closed instead of downgrading it.
+
+**Decision #148 (2026-07-13, global personas become owner-admin content;
+supersedes #115 and #147):** Global persona definitions and their full system
+blocks are Core owner content. Desktop and Fansly Extension clients may select a
+persona for a local account mapping, but may not create, edit, archive, or sync
+definition text in steady state. New bearer clients read
+`GET /api/v1/ai/persona-catalog`, whose active/archived entries contain only key,
+display name, numeric version, and status. Full text is available only through
+the owner-session `/api/v1/admin/ai/personas` surface. Owner create is
+create-only; owner update and archive require the exact active numeric revision
+and stale writers receive 409. Archived rows remain tombstones and there is no
+restore operation.
+
+This is a preservation-first rollout, not an immediate auth flip. The actually
+shipped legacy full-text GET and bearer PUT/DELETE remain available until both
+client fleets have released snapshot-before-read, complete JSON export,
+catalog-only behavior, and no-write steady state. During that transition an
+omitted-version PUT keeps the shipped last-write-wins/resurrection behavior and
+an omitted-version DELETE keeps the shipped archive behavior; an identical
+active replay is a true revision/timestamp no-op so reconnects cannot churn
+catalog versions. The unshipped bearer lifecycle-state route from #147 is
+removed. A later owner-gated release may close the legacy write routes only
+after preservation/read-only coverage is demonstrated.
+
+Bundled seeding is create-only. Once any row exists for a key—including an
+owner-customized or archived row—every seed rerun and bundled-version increase
+is a byte-for-byte no-op for its prompt, name, metadata, timestamps, revision,
+and lifecycle state. The lifecycle-v2 release gate therefore requires exact
+preservation-first read-only Desktop and Extension artifacts plus their
+automated coverage, not the CAS-aware Extension receipt described by #147; it
+remains fail-closed with no operator override.

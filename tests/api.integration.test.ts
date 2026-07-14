@@ -6914,6 +6914,7 @@ describe("api integration", () => {
     expect(healthy.statusCode).toBe(200);
     expect(healthy.json()).toMatchObject({
       status: "ok",
+      capabilities: [],
       checks: {
         api: {
           status: "ok",
@@ -6925,6 +6926,7 @@ describe("api integration", () => {
       },
     });
     expect(typeof healthy.json().timestamp).toBe("string");
+    expect(healthy.json().capabilities).toEqual([]);
     expect(typeof healthy.json().checks.database.latencyMs).toBe("number");
 
     const querySpy = vi
@@ -6941,6 +6943,7 @@ describe("api integration", () => {
     expect(degraded.statusCode).toBe(503);
     expect(degraded.json()).toMatchObject({
       status: "degraded",
+      capabilities: [],
       checks: {
         api: {
           status: "ok",
@@ -6952,6 +6955,7 @@ describe("api integration", () => {
       },
     });
     expect(degraded.json().checks.database.error).not.toContain("db probe failed");
+    expect(degraded.json().capabilities).toEqual([]);
     expect(typeof degraded.json().checks.database.latencyMs).toBe("number");
   });
 

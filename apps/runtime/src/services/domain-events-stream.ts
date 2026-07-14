@@ -60,6 +60,20 @@ export function createAccountSeqGuards(initial: ReadonlyMap<number, number>) {
       lastWritten.set(accountId, seq);
       return { deliver: true, gap: false };
     },
+    /**
+     * Advances across a ledger gap only while replaying a cursor that proves a
+     * complete durable-state snapshot was applied first. The route never uses
+     * this on the ordinary or live lanes; retained rows still deliver in order
+     * and the recovery marker is cleared before live fan-out starts.
+     */
+    advanceAfterSnapshot(accountId: number, seq: number): { deliver: boolean } {
+      const last = lastWritten.get(accountId);
+      if (last !== undefined && seq <= last) {
+        return { deliver: false };
+      }
+      lastWritten.set(accountId, seq);
+      return { deliver: true };
+    },
     watermarks(): ReadonlyMap<number, number> {
       return lastWritten;
     },

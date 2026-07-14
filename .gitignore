@@ -22,6 +22,11 @@ drafts/
 
 # Documentation (local/generated, not tracked)
 docs/
+!docs/
+docs/*
+!docs/runbooks/
+docs/runbooks/*
+!docs/runbooks/desktop-lifecycle-v2-cutover.md
 *.sql.gz
 
 # Local mockup/reference artifacts

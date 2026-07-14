@@ -246,6 +246,242 @@ export async function listDomainEventReplayContinuityGaps(
   return new Set(result.rows.map((row) => Number(row.account_id)));
 }
 
+/**
+ * Returns the last sequence that can be replayed contiguously from each
+ * interval's `afterSeq`. This lets the stream drain a retained prefix before
+ * it asks the client to snapshot an erased hole. In particular, an event that
+ * the durable-state snapshot cannot replace must be delivered before a later
+ * hole is crossed.
+ */
+export async function listDomainEventContiguousReplayEnds(
+  db: Database,
+  intervals: ReadonlyArray<{
+    accountId: number;
+    afterSeq: number;
+    throughSeq: number;
+  }>,
+): Promise<Map<number, number>> {
+  if (intervals.length === 0) {
+    return new Map();
+  }
+  const requestedRows = sql.join(
+    intervals.map((interval) => sql`(
+      ${interval.accountId}::bigint,
+      ${interval.afterSeq}::bigint,
+      ${interval.throughSeq}::bigint
+    )`),
+    sql`, `,
+  );
+  const result = await db.execute<{
+    account_id: string | number;
+    contiguous_through: string | number;
+  }>(sql`
+    with requested(account_id, after_seq, through_seq) as (
+      values ${requestedRows}
+    ), normalized as (
+      select account_id,
+             least(after_seq, through_seq) as base_seq,
+             through_seq
+      from requested
+    ), indexed as (
+      select normalized.account_id,
+             normalized.base_seq,
+             event.account_seq,
+             row_number() over (
+               partition by normalized.account_id
+               order by event.account_seq
+             ) as ordinal
+      from normalized
+      join domain_events event
+        on event.account_id = normalized.account_id
+       and event.account_seq > normalized.base_seq
+       and event.account_seq <= normalized.through_seq
+    ), retained as (
+      select account_id,
+             count(*)::bigint as retained_count,
+             min(base_seq + ordinal - 1) filter (
+               where account_seq <> base_seq + ordinal
+             ) as before_first_gap
+      from indexed
+      group by account_id
+    )
+    select normalized.account_id,
+           greatest(
+             normalized.base_seq,
+             least(
+               normalized.through_seq,
+               coalesce(
+                 retained.before_first_gap,
+                 normalized.base_seq + coalesce(retained.retained_count, 0)
+               )
+             )
+           )::text as contiguous_through
+    from normalized
+    left join retained using (account_id)
+  `);
+
+  return new Map(result.rows.map((row) => [
+    Number(row.account_id),
+    Number(row.contiguous_through),
+  ]));
+}
+
+/**
+ * Computes the minimum cursor a state-snapshot recovery may install to get
+ * past a missing run that starts immediately after the rejected source
+ * cursor. A fan erasure can remove a row from the middle (or tail) of an
+ * otherwise gapless account ledger while `domain_event_seq` deliberately
+ * retains its high-water.
+ *
+ * This deliberately does not jump over a retained prefix before a later hole:
+ * that prefix may contain an event that the durable-state snapshot cannot
+ * replace. The stream drains such a prefix first and closes; the next recovery
+ * request then names the cursor immediately before the hole.
+ *
+ * `afterSeq` is defensively clamped to `throughSeq` so this repository cannot
+ * manufacture a future watermark. The route separately treats an ahead-of-
+ * head source as untrusted and passes zero. Accounts whose next row is retained
+ * simply return the clamped cursor; the ordinary snapshot barrier decides how
+ * far they may advance.
+ */
+export async function listDomainEventSnapshotRecoveryFloors(
+  db: Database,
+  intervals: ReadonlyArray<{
+    accountId: number;
+    afterSeq: number;
+    throughSeq: number;
+  }>,
+): Promise<Map<number, number>> {
+  if (intervals.length === 0) {
+    return new Map();
+  }
+  const requestedRows = sql.join(
+    intervals.map((interval) => sql`(
+      ${interval.accountId}::bigint,
+      ${interval.afterSeq}::bigint,
+      ${interval.throughSeq}::bigint
+    )`),
+    sql`, `,
+  );
+  const result = await db.execute<{
+    account_id: string | number;
+    recovery_floor: string | number;
+  }>(sql`
+    with requested(account_id, after_seq, through_seq) as (
+      values ${requestedRows}
+    ), normalized as (
+      select account_id,
+             least(after_seq, through_seq) as base_seq,
+             through_seq
+      from requested
+    ), retained as (
+      select normalized.account_id,
+             min(event.account_seq) as first_retained_seq
+      from normalized
+      left join domain_events event
+        on event.account_id = normalized.account_id
+       and event.account_seq > normalized.base_seq
+       and event.account_seq <= normalized.through_seq
+      group by normalized.account_id
+    )
+    select normalized.account_id,
+           case
+             when normalized.through_seq <= normalized.base_seq
+               then normalized.base_seq
+             when retained.first_retained_seq is null
+               then normalized.through_seq
+             when retained.first_retained_seq > normalized.base_seq + 1
+               then retained.first_retained_seq - 1
+             else normalized.base_seq
+           end::text as recovery_floor
+    from normalized
+    join retained using (account_id)
+  `);
+
+  return new Map(result.rows.map((row) => [
+    Number(row.account_id),
+    Number(row.recovery_floor),
+  ]));
+}
+
+export interface DomainEventErasureEpoch {
+  /** Highest started non-dry-run erasure. Zero before the first execution. */
+  epoch: number;
+  /** True while an execution died or is still running before completion. */
+  incomplete: boolean;
+}
+
+/**
+ * Global erasure generation used by the legacy v2 snapshot-recovery cursor.
+ * executeErasure commits its log row before deleting state or ledger rows, so
+ * any erasure that can change a recovery proof first changes this value. Dry
+ * runs are excluded because they mutate neither plane.
+ */
+export async function getDomainEventErasureEpoch(
+  db: Database,
+): Promise<DomainEventErasureEpoch> {
+  const result = await db.execute<{
+    epoch: string | number;
+    incomplete: boolean;
+  }>(sql`
+    select coalesce(max(id), 0)::text as epoch,
+           coalesce(bool_or(completed_at is null), false) as incomplete
+    from erasure_log
+    where dry_run = false
+  `);
+  return {
+    epoch: Number(result.rows[0]?.epoch ?? 0),
+    incomplete: result.rows[0]?.incomplete === true,
+  };
+}
+
+/**
+ * Counts retained rows in immutable recovery intervals. Since account_seq is
+ * append-only and never backfilled, a changed count for `(base, target]`
+ * proves that erasure or retention changed the gap topology after snapshot
+ * minting. Rows appended above target do not affect the proof.
+ */
+export async function listDomainEventRecoveryRetainedCounts(
+  db: Database,
+  intervals: ReadonlyArray<{
+    accountId: number;
+    baseSeq: number;
+    targetSeq: number;
+  }>,
+): Promise<Map<number, number>> {
+  if (intervals.length === 0) {
+    return new Map();
+  }
+  const requestedRows = sql.join(
+    intervals.map((interval) => sql`(
+      ${interval.accountId}::bigint,
+      ${interval.baseSeq}::bigint,
+      ${interval.targetSeq}::bigint
+    )`),
+    sql`, `,
+  );
+  const result = await db.execute<{
+    account_id: string | number;
+    retained_count: string | number;
+  }>(sql`
+    with requested(account_id, base_seq, target_seq) as (
+      values ${requestedRows}
+    )
+    select requested.account_id,
+           count(event.account_seq)::text as retained_count
+    from requested
+    left join domain_events event
+      on event.account_id = requested.account_id
+     and event.account_seq > requested.base_seq
+     and event.account_seq <= requested.target_seq
+    group by requested.account_id
+  `);
+  return new Map(result.rows.map((row) => [
+    Number(row.account_id),
+    Number(row.retained_count),
+  ]));
+}
+
 /** The account's highest assigned account_seq (0 when no events yet). */
 export async function getAccountHighWater(db: Database, accountId: number): Promise<number> {
   const result = await db.execute<{ next_seq: string }>(sql`

@@ -208,6 +208,26 @@ describe("compose config", () => {
     expect(rollback).toContain("unable to capture current schema migration state");
   });
 
+  it("deploy-production.sh hard-blocks the lifecycle cutover until read-only client coverage is verifiable", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const prepare = getShellFunction(text, "prepare_lifecycle_cutover");
+    const mainStart = text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"');
+    const cutoverPrepareIndex = text.indexOf("prepare_lifecycle_cutover", mainStart);
+    const initializeIndex = text.indexOf("initialize_deploy_metadata_and_tags", cutoverPrepareIndex);
+    const schemaCaptureIndex = text.indexOf('capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"', initializeIndex);
+    const recreateIndex = text.indexOf('log "Recreating the remote production stack"', cutoverPrepareIndex);
+
+    expect(prepare).toContain("cutover is blocked");
+    expect(prepare).toContain("there is no operator override");
+    expect(text).not.toContain("DEPLOY_EXTENSION_PERSONA_CAS_STATUS");
+    expect(text).not.toContain(".desktop-lifecycle-v2-cutover-complete");
+    expect(text).not.toContain("mark_lifecycle_cutover_complete");
+    expect(cutoverPrepareIndex).toBeGreaterThan(mainStart);
+    expect(initializeIndex).toBeGreaterThan(cutoverPrepareIndex);
+    expect(schemaCaptureIndex).toBeGreaterThan(initializeIndex);
+    expect(recreateIndex).toBeGreaterThan(cutoverPrepareIndex);
+  });
+
   it("deploy-production.sh routes compose recreate failures through rollback handling", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const rollback = getShellFunction(text, "rollback_remote_stack");

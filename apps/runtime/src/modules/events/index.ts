@@ -2,16 +2,20 @@ import {
   decodeDomainEventCursor,
   encodeDomainEventCursor,
   routeSchemas,
+  type DomainEventCursorRecovery,
   type DomainEventsSnapshotRequired,
 } from "@agency_hub_core/contracts";
 import {
   getOfapiFanoutReplayWindow,
   getMaxOfapiFanoutSeq,
   getOfapiSyncReplayFloor,
+  getDomainEventErasureEpoch,
   listOfapiStateSafeDomainEventWatermarks,
   listDomainEventAccountBounds,
+  listDomainEventContiguousReplayEnds,
   listDomainEventHighWaters,
-  listDomainEventReplayContinuityGaps,
+  listDomainEventRecoveryRetainedCounts,
+  listDomainEventSnapshotRecoveryFloors,
   listEventsSince,
   listOfapiSyncEventsForReplay,
   listPageOfapiAccountRefs,
@@ -461,6 +465,8 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     let watermarks: Map<number, number>;
     let grantScopeBound = false;
+    let snapshotRecoveryReplay = false;
+    let snapshotRecovery: DomainEventCursorRecovery | null = null;
     if (cursorText !== null) {
       const decoded = decodeDomainEventCursor(cursorText);
       if (!decoded.ok) {
@@ -468,6 +474,8 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
       watermarks = decoded.watermarks;
       grantScopeBound = decoded.scope === "granted";
+      snapshotRecovery = decoded.recovery;
+      snapshotRecoveryReplay = snapshotRecovery?.kind === "snapshot";
       for (const accountId of watermarks.keys()) {
         if (granted !== undefined && !granted.has(accountId)) {
           throw new ForbiddenError("Cursor names an account outside the granted scope");
@@ -497,7 +505,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     // Gap rule: a watermark ahead of the head never existed; one below the
     // account's retained floor cannot be replayed (floors become real with
-    // Stage 28 tiering; the conformance test makes one synthetically).
+    // Stage 28 tiering; the conformance test makes one synthetically). If a
+    // hole lies after a retained contiguous prefix, let the stream deliver
+    // that prefix first. It may contain behavior that the state snapshot does
+    // not materialize; the stream closes at the prefix ceiling and the next
+    // request receives 409 at the now-immediate hole.
     const cursorAccounts = new Set(watermarks.keys());
     const addedGrantAccounts = grantScopeBound
       ? [...universe].filter((accountId) => !cursorAccounts.has(accountId))
@@ -505,6 +517,38 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const validationBounds = await listDomainEventAccountBounds(
       appContext.db,
       [...new Set([...watermarks.keys(), ...addedGrantAccounts])],
+    );
+    const validationReplayEnds = await listDomainEventContiguousReplayEnds(
+      appContext.db,
+      [...watermarks].map(([accountId, afterSeq]) => ({
+        accountId,
+        afterSeq,
+        throughSeq: validationBounds.get(accountId)!.currentSeq,
+      })),
+    );
+    const recoveryErasureState = snapshotRecoveryReplay
+      ? await getDomainEventErasureEpoch(appContext.db)
+      : null;
+    const recoveryRetainedCounts = snapshotRecovery === null
+      ? null
+      : await listDomainEventRecoveryRetainedCounts(
+        appContext.db,
+        [...snapshotRecovery.base].map(([accountId, baseSeq]) => ({
+          accountId,
+          baseSeq,
+          targetSeq: snapshotRecovery!.targets.get(accountId)!,
+        })),
+      );
+    const recoveryTopologyChanged = snapshotRecovery !== null && (
+      [...snapshotRecovery.targets].some(([accountId, targetSeq]) => (
+        (validationBounds.get(accountId)?.currentSeq ?? -1) < targetSeq
+        || recoveryRetainedCounts?.get(accountId) !== snapshotRecovery!.retainedCounts.get(accountId)
+      ))
+    );
+    const snapshotRecoveryInvalid = recoveryErasureState !== null && (
+      recoveryErasureState.incomplete
+      || recoveryErasureState.epoch !== snapshotRecovery!.erasureEpoch
+      || recoveryTopologyChanged
     );
     const gapped: DomainEventsSnapshotRequired["accounts"] = [];
     // A full-grant snapshot cursor commits its exact account keyset. If a page
@@ -524,7 +568,13 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       const ahead = watermark > bound.currentSeq;
       const floor = bound.oldestRetainedSeq ?? (bound.currentSeq + 1);
       const belowFloor = watermark < bound.currentSeq && watermark + 1 < floor;
-      if (ahead || belowFloor) {
+      const immediateHole = watermark < bound.currentSeq
+        && (validationReplayEnds.get(accountId) ?? watermark) <= watermark;
+      if (
+        snapshotRecoveryInvalid
+        || ahead
+        || (!snapshotRecoveryReplay && (belowFloor || immediateHole))
+      ) {
         gapped.push({
           accountId,
           requestedSeq: watermark,
@@ -532,26 +582,6 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           currentSeq: bound.currentSeq,
         });
       }
-    }
-    const continuityGaps = await listDomainEventReplayContinuityGaps(
-      appContext.db,
-      [...watermarks].map(([accountId, afterSeq]) => ({
-        accountId,
-        afterSeq,
-        throughSeq: validationBounds.get(accountId)!.currentSeq,
-      })),
-    );
-    for (const accountId of continuityGaps) {
-      if (gapped.some((entry) => entry.accountId === accountId)) {
-        continue;
-      }
-      const bound = validationBounds.get(accountId)!;
-      gapped.push({
-        accountId,
-        requestedSeq: watermarks.get(accountId)!,
-        oldestAvailableSeq: bound.oldestRetainedSeq,
-        currentSeq: bound.currentSeq,
-      });
     }
     if (gapped.length > 0) {
       return reply.code(409).send({
@@ -591,11 +621,28 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     const guards = createAccountSeqGuards(watermarks);
 
-    function writeV2Frame(event: DomainEventRow, payload?: unknown) {
+    function encodedConnectionCursor() {
+      return encodeDomainEventCursor(guards.watermarks(), {
+        ...(grantScopeBound ? { scope: "granted" as const } : {}),
+        ...(snapshotRecoveryReplay
+          ? {
+            recovery: snapshotRecovery!,
+          }
+          : {}),
+      });
+    }
+
+    function writeV2Frame(
+      event: DomainEventRow,
+      payload?: unknown,
+      allowSnapshotGap = false,
+    ) {
       if (raw.writableEnded || raw.destroyed) {
         return;
       }
-      const verdict = guards.advance(event.accountId, event.accountSeq);
+      const verdict = allowSnapshotGap
+        ? { ...guards.advanceAfterSnapshot(event.accountId, event.accountSeq), gap: false }
+        : guards.advance(event.accountId, event.accountSeq);
       if (verdict.gap) {
         request.log.error({
           accountId: event.accountId,
@@ -625,10 +672,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         accountRef: ofapiAccountRefs.get(event.accountId) ?? null,
         ...(payload !== undefined ? { payload } : {}),
       };
-      raw.write(`id: ${encodeDomainEventCursor(
-        guards.watermarks(),
-        grantScopeBound ? { scope: "granted" } : {},
-      )}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
+      raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
     }
 
     /** Live-path frame write: enrich one event, then write. Enrichment
@@ -658,6 +702,8 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     });
     let liveChain: Promise<void> = Promise.resolve();
     let replayBounds: Awaited<ReturnType<typeof listDomainEventAccountBounds>>;
+    const replayThroughByAccount = new Map<number, number>();
+    let closeAfterReplayPrefix = false;
     let unsubscribe: () => void;
     try {
       const captured = await subscribeBeforeReplayBoundary({
@@ -689,7 +735,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       });
       unsubscribe = captured.unsubscribe;
       replayBounds = captured.boundary;
-      const replayContinuityGaps = await listDomainEventReplayContinuityGaps(
+      const replayEnds = await listDomainEventContiguousReplayEnds(
         appContext.db,
         [...watermarks].map(([accountId, afterSeq]) => ({
           accountId,
@@ -700,11 +746,14 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       for (const [accountId, watermark] of watermarks) {
         const bound = replayBounds.get(accountId);
         const floor = bound?.oldestRetainedSeq ?? ((bound?.currentSeq ?? 0) + 1);
+        const replayThrough = snapshotRecoveryReplay
+          ? snapshotRecovery!.targets.get(accountId) ?? watermark
+          : replayEnds.get(accountId) ?? watermark;
         if (
           bound === undefined
           || watermark > bound.currentSeq
-          || (watermark < bound.currentSeq && watermark + 1 < floor)
-          || replayContinuityGaps.has(accountId)
+          || (!snapshotRecoveryReplay && watermark < bound.currentSeq && watermark + 1 < floor)
+          || (!snapshotRecoveryReplay && watermark < bound.currentSeq && replayThrough <= watermark)
         ) {
           request.log.warn(
             { accountId },
@@ -715,6 +764,8 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           raw.destroy();
           return;
         }
+        replayThroughByAccount.set(accountId, replayThrough);
+        closeAfterReplayPrefix ||= !snapshotRecoveryReplay && replayThrough < bound.currentSeq;
       }
     } catch (error) {
       request.log.warn({ err: error }, "v2 SSE replay boundary capture failed; closing stream");
@@ -805,7 +856,8 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     try {
       for (const [accountId, watermark] of watermarks) {
         const bound = replayBounds.get(accountId)!;
-        if (bound.currentSeq <= watermark) {
+        const replayThrough = replayThroughByAccount.get(accountId) ?? bound.currentSeq;
+        if (replayThrough <= watermark) {
           continue;
         }
         let afterSeq = watermark;
@@ -816,16 +868,18 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           const rows = await listEventsSince(appContext.db, {
             accountId,
             afterSeq,
-            throughSeq: bound.currentSeq,
+            throughSeq: replayThrough,
             limit: SSE_REPLAY_BATCH_SIZE,
           });
-          const continuity = validateGaplessReplayBatch({
-            rows,
-            afterSeq,
-            throughSeq: bound.currentSeq,
-            limit: SSE_REPLAY_BATCH_SIZE,
-          });
-          if (!continuity.ok) {
+          const continuity = snapshotRecoveryReplay
+            ? null
+            : validateGaplessReplayBatch({
+              rows,
+              afterSeq,
+              throughSeq: replayThrough,
+              limit: SSE_REPLAY_BATCH_SIZE,
+            });
+          if (continuity !== null && !continuity.ok) {
             throw new Error(`domain-event replay interval contains a gap for account ${accountId}`);
           }
           const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
@@ -834,12 +888,27 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
               return new Map<number, unknown>();
             });
           for (const row of rows) {
-            writeV2Frame(row, enrichments.get(row.id));
+            writeV2Frame(row, enrichments.get(row.id), snapshotRecoveryReplay);
           }
-          afterSeq = continuity.nextSeq;
-          if (continuity.done) {
+          if (snapshotRecoveryReplay) {
+            const lastRetainedSeq = rows.at(-1)?.accountSeq;
+            if (lastRetainedSeq === undefined || lastRetainedSeq >= replayThrough) {
+              break;
+            }
+            afterSeq = lastRetainedSeq;
+            continue;
+          }
+          afterSeq = continuity!.nextSeq;
+          if (continuity!.done) {
             break;
           }
+        }
+        if (snapshotRecoveryReplay) {
+          // A tail hole has no retained row whose frame could carry the captured
+          // high-water. Advance only the in-memory recovery guard; the explicit
+          // completion frame below publishes this watermark atomically after
+          // every account's retained rows have been delivered.
+          guards.advanceAfterSnapshot(accountId, replayThrough);
         }
       }
     } catch (error) {
@@ -851,6 +920,115 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     if (bufferedLive.overflowed || raw.destroyed || raw.writableEnded) {
       return;
+    }
+    if (closeAfterReplayPrefix) {
+      request.log.warn(
+        "v2 SSE drained the retained prefix before an erased sequence hole; closing for recovery",
+      );
+      cleanup();
+      raw.end();
+      return;
+    }
+    let completedSnapshotRecovery = false;
+    if (snapshotRecoveryReplay) {
+      // v0.1.41 does not send sourceCursor back to the snapshot endpoint. Its
+      // opaque v4 cursor is persisted only after the complete state walk, so it
+      // authorizes replaying every retained behavioral event across erased
+      // account_seq values. Publish one ignored-but-valid domain frame with a
+      // normal cursor only after every account reached the captured boundary;
+      // a crash before this frame resumes in recovery mode, while live fan-out
+      // after it is strict and gapless again.
+      const completionErasureState = await getDomainEventErasureEpoch(appContext.db);
+      const completionRetainedCounts = await listDomainEventRecoveryRetainedCounts(
+        appContext.db,
+        [...snapshotRecovery!.base].map(([accountId, baseSeq]) => ({
+          accountId,
+          baseSeq,
+          targetSeq: snapshotRecovery!.targets.get(accountId)!,
+        })),
+      );
+      if (
+        completionErasureState.incomplete
+        || completionErasureState.epoch !== snapshotRecovery!.erasureEpoch
+        || [...snapshotRecovery!.retainedCounts].some(
+          ([accountId, retainedCount]) => completionRetainedCounts.get(accountId) !== retainedCount,
+        )
+      ) {
+        request.log.warn(
+          {
+            cursorErasureEpoch: snapshotRecovery!.erasureEpoch,
+            currentErasureEpoch: completionErasureState.epoch,
+            incompleteErasure: completionErasureState.incomplete,
+          },
+          "v2 snapshot recovery invalidated by erasure; closing before ordinary checkpoint",
+        );
+        cleanup();
+        raw.end();
+        return;
+      }
+      const checkpoint = [...guards.watermarks()].find(([, seq]) => seq > 0);
+      snapshotRecoveryReplay = false;
+      completedSnapshotRecovery = true;
+      if (checkpoint !== undefined) {
+        const [accountId, accountSeq] = checkpoint;
+        const frame = {
+          accountId,
+          accountSeq,
+          type: "stream.snapshot_replay_completed",
+          occurredAt: new Date().toISOString(),
+          data: null,
+          accountRef: ofapiAccountRefs.get(accountId) ?? null,
+        };
+        raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
+      }
+    }
+    if (completedSnapshotRecovery) {
+      // Events committed after snapshot mint but before the subscribe boundary
+      // are outside the marker's immutable target. Catch them up only after the
+      // ordinary checkpoint, using the normal gapless proof. A hole here closes
+      // at the target cursor and forces a new state recovery on reconnect.
+      try {
+        for (const [accountId, afterRecoverySeq] of guards.watermarks()) {
+          const throughSeq = replayBounds.get(accountId)?.currentSeq ?? afterRecoverySeq;
+          if (throughSeq <= afterRecoverySeq) continue;
+          let afterSeq = afterRecoverySeq;
+          for (;;) {
+            const rows = await listEventsSince(appContext.db, {
+              accountId,
+              afterSeq,
+              throughSeq,
+              limit: SSE_REPLAY_BATCH_SIZE,
+            });
+            const continuity = validateGaplessReplayBatch({
+              rows,
+              afterSeq,
+              throughSeq,
+              limit: SSE_REPLAY_BATCH_SIZE,
+            });
+            if (!continuity.ok) {
+              throw new Error(`post-snapshot replay interval contains a gap for account ${accountId}`);
+            }
+            const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
+              .catch((error) => {
+                request.log.warn(
+                  { err: error },
+                  "v2 post-snapshot replay enrichment failed; serving thin frames",
+                );
+                return new Map<number, unknown>();
+              });
+            for (const row of rows) {
+              writeV2Frame(row, enrichments.get(row.id));
+            }
+            afterSeq = continuity.nextSeq;
+            if (continuity.done) break;
+          }
+        }
+      } catch (error) {
+        request.log.warn({ err: error }, "v2 post-snapshot replay failed; closing stream");
+        cleanup();
+        raw.end();
+        return;
+      }
     }
     replayDone = true;
     const buffered = bufferedLive.drain();
@@ -878,9 +1056,42 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       accountIds = granted === undefined ? [...heads.keys()] : [...granted];
     }
 
+    let sourceCursor: Extract<ReturnType<typeof decodeDomainEventCursor>, { ok: true }> | null = null;
+    if (request.query.sourceCursor !== undefined) {
+      const decoded = decodeDomainEventCursor(request.query.sourceCursor);
+      if (!decoded.ok) {
+        throw new BadRequestError(`Invalid v2 source cursor (${decoded.reason})`);
+      }
+      sourceCursor = decoded;
+    }
+    // A source cursor is supplied only after the caller has durably applied
+    // every frame through those watermarks and is about to replace older
+    // state with the per-account snapshot walk. An account absent from an
+    // exact-grant cursor is newly granted and baselines at the head captured
+    // above; absence from a subset/legacy cursor proves nothing and stays at
+    // zero. An ahead-of-head source is not a trustworthy applied watermark,
+    // so it also falls back to zero instead of skipping retained blockers.
+    // Legacy callers have no source cursor; starting them at zero preserves
+    // the old barrier behavior while still advancing beyond an immediate
+    // deleted prefix/internal/tail hole.
+    const recoveryFloors = await listDomainEventSnapshotRecoveryFloors(
+      appContext.db,
+      accountIds.map((accountId) => {
+        const throughSeq = heads.get(accountId) ?? 0;
+        const sourceSeq = sourceCursor?.watermarks.get(accountId);
+        const afterSeq = sourceCursor === null
+          ? 0
+          : sourceSeq === undefined
+            ? sourceCursor.scope === "granted" ? throughSeq : 0
+            : sourceSeq <= throughSeq ? sourceSeq : 0;
+        return { accountId, afterSeq, throughSeq };
+      }),
+    );
+
     const stateSafe = await listOfapiStateSafeDomainEventWatermarks(
       appContext.db,
       accountIds,
+      recoveryFloors,
     );
     const watermarks = new Map<number, number>();
     const accounts = accountIds
@@ -895,11 +1106,47 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           currentSeq,
         };
       });
+    const legacySnapshotRecovery = sourceCursor === null
+      && accounts.some((account) => (watermarks.get(account.accountId) ?? account.currentSeq) < account.currentSeq);
+    const legacyRecoveryErasureState = legacySnapshotRecovery
+      ? await getDomainEventErasureEpoch(appContext.db)
+      : null;
+    if (legacyRecoveryErasureState?.incomplete) {
+      throw new ServiceUnavailableError(
+        "Event snapshot recovery is temporarily unavailable during erasure",
+      );
+    }
+    const legacyRecoveryTargets = new Map(
+      accounts.map((account) => [account.accountId, account.currentSeq]),
+    );
+    const legacyRecoveryRetainedCounts = legacyRecoveryErasureState === null
+      ? null
+      : await listDomainEventRecoveryRetainedCounts(
+        appContext.db,
+        [...watermarks].map(([accountId, baseSeq]) => ({
+          accountId,
+          baseSeq,
+          targetSeq: legacyRecoveryTargets.get(accountId)!,
+        })),
+      );
 
     return {
       cursor: encodeDomainEventCursor(
         watermarks,
-        request.query.accounts === undefined ? { scope: "granted" } : {},
+        {
+          ...(request.query.accounts === undefined ? { scope: "granted" as const } : {}),
+          ...(legacyRecoveryErasureState === null
+            ? {}
+            : {
+              recovery: {
+                kind: "snapshot" as const,
+                erasureEpoch: legacyRecoveryErasureState.epoch,
+                base: new Map(watermarks),
+                targets: legacyRecoveryTargets,
+                retainedCounts: legacyRecoveryRetainedCounts!,
+              },
+            }),
+        },
       ),
       accounts,
     };

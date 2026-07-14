@@ -110,6 +110,10 @@ function recentCountersFromSnapshot(snapshot: Awaited<ReturnType<typeof getSyncS
 export async function getSystemHealth(app: AppContext) {
   const timestamp = new Date().toISOString();
   const startedAt = Date.now();
+  // This capability is a production-fleet promise, not merely an API-schema
+  // flag. Keep it absent until the preservation-first read-only Desktop and
+  // Extension artifacts are shipped and fleet coverage is verifiable.
+  const capabilities: Array<"desktop-lifecycle-v2"> = [];
 
   try {
     await app.pool.query("select 1");
@@ -119,6 +123,7 @@ export async function getSystemHealth(app: AppContext) {
       body: {
         status: "ok" as const,
         timestamp,
+        capabilities,
         checks: {
           api: {
             status: "ok" as const,
@@ -141,6 +146,7 @@ export async function getSystemHealth(app: AppContext) {
       body: {
         status: "degraded" as const,
         timestamp,
+        capabilities,
         checks: {
           api: {
             status: "ok" as const,

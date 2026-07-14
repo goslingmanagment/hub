@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { aiFeatureStreamFrameSchema } from "@agency_hub_core/contracts";
 import {
   AI_PERSONA_BUNDLED_VERSION_KEY,
+  archiveAiPersona,
   createFanslyPage,
   createModel,
   createOnlyFansPage,
@@ -417,7 +418,7 @@ describe("kernel personas (Stage 31 Task 3)", () => {
     expect(anonymous.statusCode).toBe(401);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("exposes archived lifecycle state and create-only never resurrects a tombstone", async (context) => {
+  it("catalogs tombstones while create-only stays strict and legacy replay may resurrect", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -446,15 +447,17 @@ describe("kernel personas (Stage 31 Task 3)", () => {
 
     const state = await apiServer!.inject({
       method: "GET",
-      url: "/api/v1/ai/personas/state",
+      url: "/api/v1/ai/persona-catalog",
       headers: { authorization: `Bearer ${chatterKey}` },
     });
     expect(state.statusCode, state.body).toBe(200);
-    expect(state.json().states).toContainEqual({
-      state: "archived",
+    expect(state.json().personas).toContainEqual({
+      status: "archived",
       key,
+      displayName: "Tombstone regression",
       version: createdVersion + 1,
     });
+    expect(state.body).not.toContain("Must remain archived");
 
     const staleCreate = await apiServer!.inject({
       method: "PUT",
@@ -468,28 +471,29 @@ describe("kernel personas (Stage 31 Task 3)", () => {
     });
     expect(staleCreate.statusCode, staleCreate.body).toBe(409);
 
-    // v0.1.41 and older omit expectedVersion. Divergent legacy replay is
-    // fail-closed, and an old offline cache cannot resurrect a tombstone.
+    // v0.1.41 and older omit expectedVersion. Preserve their shipped LWW
+    // behavior until the preservation/read-only client rollout completes.
     const legacyPut = await apiServer!.inject({
       method: "PUT",
       url: `/api/v1/ai/personas/${key}`,
       headers: { authorization: `Bearer ${chatterKey}` },
       payload: {
         displayName: "Legacy stale desktop cache",
-        systemBlock: "Must still not unarchive",
+        systemBlock: "Legacy resurrection remains transitional",
       },
     });
-    expect(legacyPut.statusCode, legacyPut.body).toBe(409);
+    expect(legacyPut.statusCode, legacyPut.body).toBe(200);
 
     const after = await apiServer!.inject({
       method: "GET",
-      url: "/api/v1/ai/personas/state",
+      url: "/api/v1/ai/persona-catalog",
       headers: { authorization: `Bearer ${chatterKey}` },
     });
-    expect(after.json().states).toContainEqual({
-      state: "archived",
+    expect(after.json().personas).toContainEqual({
+      status: "active",
       key,
-      version: createdVersion + 1,
+      displayName: "Legacy stale desktop cache",
+      version: createdVersion + 2,
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -552,7 +556,7 @@ describe("kernel personas (Stage 31 Task 3)", () => {
 
     const state = await apiServer!.inject({
       method: "GET",
-      url: "/api/v1/ai/personas/state",
+      url: "/api/v1/ai/personas",
       headers: { authorization: `Bearer ${chatterKey}` },
     });
     expect(state.statusCode, state.body).toBe(200);
@@ -561,8 +565,7 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       systemBlock: string;
       version: number;
     };
-    expect(state.json().states).toContainEqual({
-      state: "active",
+    expect(state.json().personas).toContainEqual({
       key,
       displayName: winnerBody.displayName,
       systemBlock: winnerBody.systemBlock,
@@ -571,7 +574,7 @@ describe("kernel personas (Stage 31 Task 3)", () => {
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("keeps legacy omitted-version PUT idempotent but rejects divergent active content", async (context) => {
+  it("keeps identical legacy replay revision-idempotent while divergent content remains LWW", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -588,7 +591,8 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       },
     });
     expect(created.statusCode, created.body).toBe(200);
-    const versionOne = (created.json() as { version: number }).version;
+    const createdBody = created.json() as { version: number; updatedAt: string };
+    const versionOne = createdBody.version;
 
     const identicalReplay = await apiServer!.inject({
       method: "PUT",
@@ -597,7 +601,10 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       payload: { displayName: "Legacy seed", systemBlock: "version one" },
     });
     expect(identicalReplay.statusCode, identicalReplay.body).toBe(200);
-    expect(identicalReplay.json()).toMatchObject({ version: versionOne });
+    expect(identicalReplay.json()).toMatchObject({
+      version: versionOne,
+      updatedAt: createdBody.updatedAt,
+    });
 
     const newer = await apiServer!.inject({
       method: "PUT",
@@ -618,24 +625,24 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       headers: { authorization: `Bearer ${chatterKey}` },
       payload: { displayName: "Legacy seed", systemBlock: "version one" },
     });
-    expect(staleLegacy.statusCode, staleLegacy.body).toBe(409);
+    expect(staleLegacy.statusCode, staleLegacy.body).toBe(200);
+    expect(staleLegacy.json()).toMatchObject({ version: versionTwo + 1 });
 
     const state = await apiServer!.inject({
       method: "GET",
-      url: "/api/v1/ai/personas/state",
+      url: "/api/v1/ai/personas",
       headers: { authorization: `Bearer ${chatterKey}` },
     });
-    expect(state.json().states).toContainEqual({
-      state: "active",
+    expect(state.json().personas).toContainEqual({
       key,
-      displayName: "Device B",
-      systemBlock: "version two",
+      displayName: "Legacy seed",
+      systemBlock: "version one",
       updatedAt: expect.any(String),
-      version: versionTwo,
+      version: versionTwo + 1,
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("rejects stale and omitted-version archives and replays an accepted archive idempotently", async (context) => {
+  it("keeps omitted-version legacy archive while numeric stale archives conflict", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -667,13 +674,6 @@ describe("kernel personas (Stage 31 Task 3)", () => {
     expect(newer.statusCode, newer.body).toBe(200);
     const versionTwo = (newer.json() as { version: number }).version;
 
-    const legacyDelete = await apiServer!.inject({
-      method: "DELETE",
-      url: `/api/v1/ai/personas/${key}`,
-      headers: { authorization: `Bearer ${chatterKey}` },
-    });
-    expect(legacyDelete.statusCode, legacyDelete.body).toBe(409);
-
     const staleDelete = await apiServer!.inject({
       method: "DELETE",
       url: `/api/v1/ai/personas/${key}?expectedVersion=${versionOne}`,
@@ -681,24 +681,30 @@ describe("kernel personas (Stage 31 Task 3)", () => {
     });
     expect(staleDelete.statusCode, staleDelete.body).toBe(409);
 
-    const archived = await apiServer!.inject({
+    const legacyDelete = await apiServer!.inject({
       method: "DELETE",
-      url: `/api/v1/ai/personas/${key}?expectedVersion=${versionTwo}`,
+      url: `/api/v1/ai/personas/${key}`,
       headers: { authorization: `Bearer ${chatterKey}` },
     });
-    expect(archived.statusCode, archived.body).toBe(200);
-    expect(archived.json()).toEqual({ archived: true, version: versionTwo + 1 });
+    expect(legacyDelete.statusCode, legacyDelete.body).toBe(200);
+    expect(legacyDelete.json()).toEqual({ archived: true, version: versionTwo + 1 });
 
-    const replay = await apiServer!.inject({
+    const staleAfterArchive = await apiServer!.inject({
       method: "DELETE",
       url: `/api/v1/ai/personas/${key}?expectedVersion=${versionTwo}`,
       headers: { authorization: `Bearer ${chatterKey}` },
     });
-    expect(replay.statusCode, replay.body).toBe(200);
-    expect(replay.json()).toEqual({ archived: true, version: versionTwo + 1 });
+    expect(staleAfterArchive.statusCode, staleAfterArchive.body).toBe(409);
+
+    const legacyReplay = await apiServer!.inject({
+      method: "DELETE",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(legacyReplay.statusCode, legacyReplay.body).toBe(404);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("seeds bundled versions idempotently while preserving same-version user customization", async (context) => {
+  it("seeds bundled personas create-only and never overwrites an existing key", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -750,14 +756,14 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       bundledVersion: 3,
     });
     expect(upgraded).toMatchObject({
-      action: "upgraded",
+      action: "preserved",
       persona: {
-        displayName: "Bundled v3",
-        systemBlock: "bundled version three",
-        revision: 3,
+        displayName: "User-edited name",
+        systemBlock: "customized by user",
+        revision: 2,
       },
     });
-    expect(upgraded.persona.featureOverrides[AI_PERSONA_BUNDLED_VERSION_KEY]).toBe(3);
+    expect(upgraded.persona.featureOverrides[AI_PERSONA_BUNDLED_VERSION_KEY]).toBe(2);
 
     const legacyKey = `builtin:seed-adopt-${randomUUID()}`;
     const legacy = await upsertAiPersona(appContext.db, {
@@ -773,7 +779,7 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       bundledVersion: 2,
     });
     expect(adopted).toMatchObject({
-      action: "adopted",
+      action: "preserved",
       persona: {
         displayName: legacy.displayName,
         systemBlock: legacy.systemBlock,
@@ -781,6 +787,24 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       },
     });
     expect((await findAiPersonaByKey(appContext.db, legacyKey))?.revision).toBe(legacy.revision);
+
+    const archived = await archiveAiPersona(appContext.db, legacyKey, legacy.revision);
+    expect(archived?.archivedAt).not.toBeNull();
+    const archivedSeed = await seedBundledAiPersona(appContext.db, {
+      key: legacyKey,
+      displayName: "Bundled must not restore",
+      systemBlock: "must not replace archived owner content",
+      bundledVersion: 99,
+    });
+    expect(archivedSeed).toMatchObject({
+      action: "preserved",
+      persona: {
+        displayName: legacy.displayName,
+        systemBlock: legacy.systemBlock,
+        revision: legacy.revision + 1,
+        archivedAt: expect.any(Date),
+      },
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

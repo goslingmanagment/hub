@@ -31,6 +31,32 @@ export {
   isPromptDebugEchoEnabled,
 } from "./prompt-debug-echo.ts";
 
+interface PersonaRecord {
+  key: string;
+  displayName: string;
+  systemBlock: string;
+  updatedAt: Date;
+  archivedAt: Date | null;
+  revision: number;
+}
+
+function serializePersona(persona: PersonaRecord) {
+  return {
+    key: persona.key,
+    displayName: persona.displayName,
+    systemBlock: persona.systemBlock,
+    updatedAt: persona.updatedAt.toISOString(),
+    version: persona.revision,
+  };
+}
+
+function serializeAdminPersona(persona: PersonaRecord) {
+  return {
+    ...serializePersona(persona),
+    status: persona.archivedAt === null ? "active" as const : "archived" as const,
+  };
+}
+
 // AI module (target §6.1): gateway stream, usage ledger intake, usage
 // reporting. Handlers relocated verbatim from server.ts (Stage 19 Task 3).
 
@@ -54,8 +80,8 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     await pipeAiGatewaySse(request, reply, stream);
   });
 
-  // Stage 31: personas as kernel config — the desktop picker lists here and
-  // the editor upserts; account→persona mappings stay client-local.
+  // Transitional legacy full-text route. Shipped clients still read this
+  // contract while the read-only catalog releases roll out.
   server.get("/api/v1/ai/personas", {
     schema: routeSchemas.aiPersonasList,
   }, async (request) => {
@@ -63,40 +89,31 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     requireApiKeyUser(principal);
     const personas = await listAiPersonas(appContext.db);
     return {
+      personas: personas.map(serializePersona),
+    };
+  });
+
+  // Client-facing steady-state contract: metadata only. Prompt instructions
+  // never cross this route, including for archived tombstones.
+  server.get("/api/v1/ai/persona-catalog", {
+    schema: routeSchemas.aiPersonaCatalog,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const personas = await listAiPersonaStates(appContext.db);
+    return {
       personas: personas.map((persona) => ({
         key: persona.key,
         displayName: persona.displayName,
-        systemBlock: persona.systemBlock,
-        updatedAt: persona.updatedAt.toISOString(),
         version: persona.revision,
+        status: persona.archivedAt === null ? "active" as const : "archived" as const,
       })),
     };
   });
 
-  server.get("/api/v1/ai/personas/state", {
-    schema: routeSchemas.aiPersonaStates,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    const states = await listAiPersonaStates(appContext.db);
-    return {
-      states: states.map((persona) => persona.archivedAt === null
-        ? {
-            state: "active" as const,
-            key: persona.key,
-            displayName: persona.displayName,
-            systemBlock: persona.systemBlock,
-            updatedAt: persona.updatedAt.toISOString(),
-            version: persona.revision,
-          }
-        : {
-            state: "archived" as const,
-            key: persona.key,
-            version: persona.revision,
-          }),
-    };
-  });
-
+  // Transitional legacy write lane. Omitted expectedVersion retains the
+  // shipped clients' last-write-wins behavior until preservation coverage is
+  // proven. Numeric tokens remain additive for already-built newer clients.
   server.put("/api/v1/ai/personas/:key", {
     schema: routeSchemas.aiPersonaUpsert,
   }, async (request) => {
@@ -118,16 +135,10 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
       throw error;
     }
-    return {
-      key: persona.key,
-      displayName: persona.displayName,
-      systemBlock: persona.systemBlock,
-      updatedAt: persona.updatedAt.toISOString(),
-      version: persona.revision,
-    };
+    return serializePersona(persona);
   });
 
-    server.delete("/api/v1/ai/personas/:key", {
+  server.delete("/api/v1/ai/personas/:key", {
     schema: routeSchemas.aiPersonaArchive,
   }, async (request) => {
     const principal = await requirePrincipal(request);
@@ -155,7 +166,85 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return { archived: true, version: archived.revision };
   });
 
-    // Stage 30: kernel-side prompt assembly — same auth, same SSE pump, same
+  // Permanent owner surface. These routes are cookie-session + owner only and
+  // every mutation is create-only or numeric CAS; bearer credentials cannot
+  // read full prompt content through this namespace.
+  server.get("/api/v1/admin/ai/personas", {
+    schema: routeSchemas.adminAiPersonasList,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const personas = await listAiPersonaStates(appContext.db);
+    return { personas: personas.map(serializeAdminPersona) };
+  });
+
+  server.post("/api/v1/admin/ai/personas", {
+    schema: routeSchemas.adminAiPersonaCreate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    try {
+      const persona = await upsertAiPersona(appContext.db, {
+        key: request.body.key,
+        displayName: request.body.displayName,
+        systemBlock: request.body.systemBlock,
+        expectedVersion: null,
+      });
+      return serializeAdminPersona(persona);
+    } catch (error) {
+      if (error instanceof AiPersonaVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+  });
+
+  server.put("/api/v1/admin/ai/personas/:key", {
+    schema: routeSchemas.adminAiPersonaUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    try {
+      const persona = await upsertAiPersona(appContext.db, {
+        key: request.params.key,
+        displayName: request.body.displayName,
+        systemBlock: request.body.systemBlock,
+        expectedVersion: request.body.expectedVersion,
+      });
+      return serializeAdminPersona(persona);
+    } catch (error) {
+      if (error instanceof AiPersonaVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+  });
+
+  server.delete("/api/v1/admin/ai/personas/:key", {
+    schema: routeSchemas.adminAiPersonaArchive,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    let persona;
+    try {
+      persona = await archiveAiPersona(
+        appContext.db,
+        request.params.key,
+        request.query.expectedVersion,
+      );
+    } catch (error) {
+      if (error instanceof AiPersonaVersionConflictError) {
+        throw new ConflictError(error.message);
+      }
+      throw error;
+    }
+    if (persona === null) {
+      throw new NotFoundError("Persona not found");
+    }
+    return serializeAdminPersona(persona);
+  });
+
+  // Stage 30: kernel-side prompt assembly — same auth, same SSE pump, same
   // gateway internals; only the prompt is built here instead of the client.
   server.post("/api/v1/ai/features/:feature", {
     schema: routeSchemas.aiFeatureStream,

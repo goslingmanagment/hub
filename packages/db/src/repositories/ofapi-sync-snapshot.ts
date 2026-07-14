@@ -201,6 +201,7 @@ export interface OfapiStateSafeDomainEventWatermark {
 export async function listOfapiStateSafeDomainEventWatermarks(
   db: Database,
   accountIds: readonly number[],
+  minimumSafeSeqs?: ReadonlyMap<number, number>,
 ): Promise<Map<number, OfapiStateSafeDomainEventWatermark>> {
   const watermarks = new Map<number, OfapiStateSafeDomainEventWatermark>();
   if (accountIds.length === 0) {
@@ -208,7 +209,10 @@ export async function listOfapiStateSafeDomainEventWatermarks(
   }
 
   const requestedRows = sql.join(
-    accountIds.map((accountId) => sql`(${accountId}::bigint)`),
+    accountIds.map((accountId) => sql`(
+      ${accountId}::bigint,
+      ${minimumSafeSeqs?.get(accountId) ?? null}::bigint
+    )`),
     sql`, `,
   );
   const result = await db.execute<{
@@ -216,12 +220,14 @@ export async function listOfapiStateSafeDomainEventWatermarks(
     account_ref: string | null;
     current_seq: string;
     barrier_seq: string | null;
+    minimum_safe_seq: string | null;
   }>(sql`
-    with requested(account_id) as (values ${requestedRows})
+    with requested(account_id, minimum_safe_seq) as (values ${requestedRows})
     select requested.account_id,
            account_page.ofapi_account_id as account_ref,
            coalesce(seq.next_seq - 1, 0)::text as current_seq,
-           barrier.account_seq::text as barrier_seq
+           barrier.account_seq::text as barrier_seq,
+           requested.minimum_safe_seq::text
     from requested
     left join ${pages} account_page on account_page.id = requested.account_id
     left join domain_event_seq seq on seq.account_id = requested.account_id
@@ -237,6 +243,10 @@ export async function listOfapiStateSafeDomainEventWatermarks(
         on ${ofapiWebhookEvents.idempotencyKey} = observation.idempotency_key
        and ${ofapiWebhookEvents.eventType} = observation.kind
       where event.account_id = requested.account_id
+        and (
+          requested.minimum_safe_seq is null
+          or event.account_seq > requested.minimum_safe_seq
+        )
         and ${ofapiSnapshotReplayRequired()}
       order by event.account_seq asc
       limit 1
@@ -248,9 +258,12 @@ export async function listOfapiStateSafeDomainEventWatermarks(
     const earliestReplayRequiredSeq = row.barrier_seq === null
       ? null
       : Number(row.barrier_seq);
+    const minimumSafeSeq = row.minimum_safe_seq === null
+      ? 0
+      : Math.min(currentSeq, Number(row.minimum_safe_seq));
     const safeSeq = earliestReplayRequiredSeq === null
       ? currentSeq
-      : Math.max(0, Math.min(currentSeq, earliestReplayRequiredSeq - 1));
+      : Math.max(minimumSafeSeq, Math.min(currentSeq, earliestReplayRequiredSeq - 1));
     watermarks.set(Number(row.account_id), {
       accountRef: row.account_ref,
       currentSeq,

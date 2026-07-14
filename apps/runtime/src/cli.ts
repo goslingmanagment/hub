@@ -690,7 +690,7 @@ export function buildProgram() {
 
   program
     .command("ai:personas-seed")
-    .description("Stage 30: upsert the bundled personas into ai_personas (idempotent)")
+    .description("Create missing bundled personas without changing existing owner content")
     .action(async () => {
       const app = await createAppContext();
       try {

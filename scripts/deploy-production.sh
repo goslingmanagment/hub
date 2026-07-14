@@ -215,6 +215,7 @@ ROLLBACK_RELEASE_FILES_CAPTURED=0
 ROLLBACK_RELEASE_FILES_RESTORED=0
 SCHEMA_BASELINE_CAPTURED=0
 ROLLBACK_COMPOSE_RECREATE_FAILED=0
+API_HEALTH_ATTEMPTS=60
 LOCAL_DEPLOY_LOCK_DIR=""
 LOCAL_DEPLOY_LOCK_ACQUIRED=0
 REMOTE_DEPLOY_LOCK_DIR="${APP_DIR%/}/.deploy.lock"
@@ -622,6 +623,10 @@ COMMIT;
 SQL'" >"$output_file"
 }
 
+prepare_lifecycle_cutover() {
+  fail "desktop-lifecycle-v2 cutover is blocked: preservation-first read-only Desktop and Extension artifacts/coverage are not verified yet; there is no operator override"
+}
+
 remote_curl_status() {
   local output_file="$1"
   local url="$2"
@@ -680,7 +685,7 @@ wait_for_api_health() {
   local url="${VERIFY_URL%/}/api/v1/health"
   local attempt=0
 
-  while (( attempt < 60 )); do
+  while (( attempt < API_HEALTH_ATTEMPTS )); do
     attempt=$((attempt + 1))
     local status_code
     status_code="$(curl_status "$health_file" "$url" || true)"
@@ -1028,6 +1033,7 @@ SCHEMA_BEFORE_FILE="${TEMP_DIR}/schema-before.txt"
 SCHEMA_AFTER_FILE="${TEMP_DIR}/schema-after.txt"
 ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"
 
+prepare_lifecycle_cutover
 initialize_deploy_metadata_and_tags
 acquire_local_deploy_lock
 preflight_migration_files
@@ -1051,12 +1057,10 @@ run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.prod
 SYNC_MONITORING_TOKEN="$(read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN")" \
   || fail_after_release_sync "Unable to read monitoring token after syncing release files"
 
-if capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"; then
-  SCHEMA_BASELINE_CAPTURED=1
-  log "Captured remote schema migration state for rollback safety"
-else
-  log "Unable to capture remote schema migration state; automatic rollback will be skipped"
-fi
+capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE" \
+  || fail_after_release_sync "Unable to capture remote schema migration state before recreate"
+SCHEMA_BASELINE_CAPTURED=1
+log "Captured remote schema migration state for rollback safety"
 
 log "Recreating the remote production stack"
 run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \

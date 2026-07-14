@@ -145,6 +145,7 @@ describe("health and docs route auth", () => {
       body: {
         status: "ok",
         timestamp: "2026-04-30T00:00:00.000Z",
+        capabilities: [],
         checks: {
           api: { status: "ok" },
           database: { status: "ok", latencyMs: 1, error: null },

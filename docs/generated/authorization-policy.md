@@ -21,10 +21,14 @@ body remain handler-checked and are noted per route in the service layer.
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `any` | any authenticated principal |
 
-## Routes (156)
+## Routes (160)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
+| GET | `/api/v1/admin/ai/personas` | `adminAiPersonasList` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ai/personas` | `adminAiPersonaCreate` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaArchive` | `owner-session` | — | — |
+| PUT | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaUpdate` | `owner-session` | — | — |
 | GET | `/api/v1/admin/config` | `adminConfig` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/config` | `adminConfigUpdate` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/config/:key` | `adminConfigClear` | `owner-session` | — | — |
@@ -92,10 +96,10 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — |
 | POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `apiKey` | — | — |
+| GET | `/api/v1/ai/persona-catalog` | `aiPersonaCatalog` | `apiKey` | — | — |
 | GET | `/api/v1/ai/personas` | `aiPersonasList` | `apiKey` | — | — |
 | DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `apiKey` | — | — |
 | PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `apiKey` | — | — |
-| GET | `/api/v1/ai/personas/state` | `aiPersonaStates` | `apiKey` | — | — |
 | GET | `/api/v1/ai/restricted/generations` | `aiRestrictedGenerations` | `owner-session` | — | — |
 | GET | `/api/v1/ai/restricted/generations/:generationRef` | `aiRestrictedGenerationDetail` | `owner-session` | — | — |
 | GET | `/api/v1/archive/conversations/:ref/messages` | `archiveConversationMessages` | `session` | — | — |
