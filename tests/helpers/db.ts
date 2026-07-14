@@ -147,6 +147,30 @@ export async function applyTestMigrations(
 
     for (const file of selected) {
       const migration = await readFile(path.join(migrationsDir, file), "utf8");
+      if (migration.startsWith("-- agency-hub:no-transaction")) {
+        const statements = migration.split("-- agency-hub:statement")
+          .slice(1)
+          .map((statement) => statement.trim())
+          .filter(Boolean);
+        if (statements.length === 0) {
+          throw new Error(`Non-transactional test migration ${file} has no delimited statements`);
+        }
+        for (const statement of statements) {
+          const generatorMarker = "-- agency-hub:execute-returned-statements";
+          if (statement.startsWith(generatorMarker)) {
+            const generated = await client.query<{ statement: string }>(
+              statement.slice(generatorMarker.length).trim(),
+            );
+            for (const row of generated.rows) {
+              await client.query(row.statement);
+            }
+          } else {
+            await client.query(statement);
+          }
+        }
+        await client.query("insert into schema_migrations (id) values ($1)", [file]);
+        continue;
+      }
       await client.query("begin");
       try {
         await client.query(migration);

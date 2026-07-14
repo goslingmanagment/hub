@@ -9,12 +9,15 @@ import {
   createModel,
   createOnlyFansPage,
   createOrGetOfapiCommand,
+  ERASURE_EXECUTION_PROTOCOL,
+  insertErasureLog,
 } from "@agency_hub_core/db";
 
 import {
   erasureScopeRef,
   executeErasure,
   planErasure,
+  withErasureExecutionLock,
 } from "../apps/runtime/src/services/erasure/index.ts";
 import { rebuildFanEarningsProjection } from "../apps/runtime/src/services/projections/fan-earnings.ts";
 import {
@@ -48,6 +51,7 @@ const scope = { scopeType: "fan", platform: "onlyfans", fanRef: FAN_A } as const
 function appStub() {
   return {
     db: testDb!.db,
+    pool: testDb!.pool,
     config: { lakeDir } as never,
     logger: { info: () => {}, warn: () => {}, error: () => {} },
   } as never;
@@ -145,7 +149,13 @@ describe("erasure drill (Stage 28 Task 4)", () => {
 
     // ── Seed: catalog, identities, per-fan hot rows.
     const model = await createModel(db, { slug: "erasure-model", name: "Erasure Model" });
+    if (!model) {
+      throw new Error("Failed to seed erasure model");
+    }
     const page = await createOnlyFansPage(db, { modelId: model.id, label: "erasure-of" });
+    if (!page) {
+      throw new Error("Failed to seed erasure page");
+    }
     pageId = page.id;
     ownerId = Number((await one<{ id: string }>(
       `insert into users (username, role) values ('erasure-owner', 'owner') returning id::text as id`,
@@ -1050,5 +1060,130 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(result.executedCounts["hot:egress_endpoints:delete"], "egress_endpoints target").toBe(1);
     expect(await count(`page_credentials where platform_account_id = ${page.id}`)).toBe(0);
     expect(await count(`egress_endpoints where platform_account_id = ${page.id}`)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("a converged retry supersedes every unresolved attempt for only the same scope", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const model = await createModel(testDb.db, {
+      slug: `erasure-retry-${randomUUID()}`,
+      name: "Erasure Retry",
+    });
+    if (!model) {
+      throw new Error("Failed to seed erasure retry model");
+    }
+    const pageLabel = `erasure-retry-${randomUUID()}`;
+    const page = await createOnlyFansPage(testDb.db, { modelId: model.id, label: pageLabel });
+    if (!page) {
+      throw new Error("Failed to seed erasure retry page");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ($1, 'owner') returning id::text as id`,
+      [`erasure-retry-${randomUUID()}`],
+    );
+    const scopeRef = `page:${pageLabel}`;
+    const oldAttempts = await Promise.all([1, 2].map(() => insertErasureLog(testDb!.db, {
+      scopeType: "page",
+      scopeRef,
+      initiatedBy: Number(operator.id),
+      dryRun: false,
+      plan: { scopeRef, resolvedPageIds: [page.id] },
+      executionProtocol: ERASURE_EXECUTION_PROTOCOL,
+    })));
+    const reusedSelectorAttempt = await insertErasureLog(testDb.db, {
+      scopeType: "page",
+      scopeRef,
+      initiatedBy: Number(operator.id),
+      dryRun: false,
+      plan: { scopeRef, resolvedPageIds: [page.id + 1] },
+      executionProtocol: ERASURE_EXECUTION_PROTOCOL,
+    });
+    const preCutoverAttempt = await insertErasureLog(testDb.db, {
+      scopeType: "page",
+      scopeRef,
+      initiatedBy: Number(operator.id),
+      dryRun: false,
+      plan: { scopeRef, resolvedPageIds: [page.id] },
+    });
+    const unrelated = await insertErasureLog(testDb.db, {
+      scopeType: "page",
+      scopeRef: `page:unrelated-${randomUUID()}`,
+      initiatedBy: Number(operator.id),
+      dryRun: false,
+      plan: { scopeRef: "unrelated", resolvedPageIds: [] },
+    });
+
+    const result = await executeErasure(
+      appStub(),
+      { scopeType: "page", pageLabel },
+      { initiatedBy: Number(operator.id) },
+    );
+    const { rows } = await testDb.pool.query<{
+      id: string;
+      resolution_kind: string | null;
+      superseded_by_id: string | null;
+    }>(
+      `select id::text, resolution_kind, superseded_by_id::text
+       from erasure_log where id = any($1::bigint[]) order by id`,
+      [[
+        ...oldAttempts.map((row) => row.id),
+        reusedSelectorAttempt.id,
+        preCutoverAttempt.id,
+        unrelated.id,
+        result.logId,
+      ]],
+    );
+    const byId = new Map(rows.map((row) => [Number(row.id), row]));
+    for (const old of oldAttempts) {
+      expect(byId.get(old.id)).toMatchObject({
+        resolution_kind: "superseded",
+        superseded_by_id: String(result.logId),
+      });
+    }
+    expect(byId.get(result.logId)).toMatchObject({
+      resolution_kind: "completed",
+      superseded_by_id: null,
+    });
+    expect(byId.get(unrelated.id)).toMatchObject({
+      resolution_kind: null,
+      superseded_by_id: null,
+    });
+    expect(byId.get(reusedSelectorAttempt.id)).toMatchObject({
+      resolution_kind: null,
+      superseded_by_id: null,
+    });
+    expect(byId.get(preCutoverAttempt.id)).toMatchObject({
+      resolution_kind: null,
+      superseded_by_id: null,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("the global execution lock serializes distinct erasure scopes across lake rewrites", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    let releaseFirst!: () => void;
+    let firstEntered!: () => void;
+    const firstEnteredPromise = new Promise<void>((resolve) => { firstEntered = resolve; });
+    const holdFirst = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const first = withErasureExecutionLock(appStub(), async () => {
+      firstEntered();
+      await holdFirst;
+    });
+    await firstEnteredPromise;
+
+    let otherScopeEntered = false;
+    const otherScope = withErasureExecutionLock(appStub(), async () => {
+      otherScopeEntered = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(otherScopeEntered).toBe(false);
+
+    releaseFirst();
+    await Promise.all([first, otherScope]);
+    expect(otherScopeEntered).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -719,6 +719,7 @@ describe("health service", () => {
     const result = await getSystemHealth(app as never);
 
     expect(result.statusCode).toBe(503);
+    expect(result.body.contractHash).toMatch(/^[a-f0-9]{64}$/);
     expect(result.body.checks.database.error).toBe("Database check failed");
     expect(app.logger.error).toHaveBeenCalledWith(
       expect.objectContaining({

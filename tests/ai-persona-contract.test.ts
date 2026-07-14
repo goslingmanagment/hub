@@ -18,12 +18,17 @@ describe("AI persona contracts", () => {
     expect(routeSchemas).not.toHaveProperty("aiPersonaStates");
   });
 
+  it("publishes persona-definition conflicts on the feature route", () => {
+    expect(routeSchemas.aiFeatureStream.response).toHaveProperty("409");
+  });
+
   it("cannot represent full prompt text in a parsed catalog response", () => {
     const parsed = aiPersonaCatalogResponseSchema.parse({
       personas: [{
         key: "custom:milly",
         displayName: "Milly",
         version: 7,
+        definitionId: "v1:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ",
         status: "active",
         systemBlock: "must not survive response parsing",
       }],
@@ -33,6 +38,7 @@ describe("AI persona contracts", () => {
         key: "custom:milly",
         displayName: "Milly",
         version: 7,
+        definitionId: "v1:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ",
         status: "active",
       }],
     });

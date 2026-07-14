@@ -24,16 +24,37 @@ runbook is complete.
    the schema changes. Do not manually restore the old Core image afterward: old
    Core cannot consume v3 cursors or newly enrolled pending-device credentials.
 4. Reserve at least ten minutes for the `observations` index migration and ten
-   minutes for owner bindings. Keep the owner dashboard session open.
+   minutes for owner bindings. Keep the owner dashboard session open. The
+   deploy verifier permits up to twenty minutes for API health while startup
+   holds the migration lock and builds that index; do not reduce this below the
+   measured production migration window.
 
-## Current release block
+Migration 0096 is additionally run as a bounded candidate-image one-shot before
+stack recreation, with the current API still serving. The deploy captures the
+pre-migration schema baseline first and waits synchronously for the advisory
+lock holder to exit; failure leaves the current stack running. Startup retains
+the twenty-minute budget as crash/retry protection, but the normal deploy path
+should find 0096 already recorded and reach health without the index-build gap.
+Before the one-shot starts, local pending migrations through 0096 are compared
+with that remote baseline. Any pending migration not on the explicit
+rollback-compatible allowlist sets a rollback-forbidden latch immediately, so
+an interrupted concurrent build can never trigger automatic image rollback
+while its schema ledger row is still absent.
 
-This branch deliberately cannot be deployed yet. `deploy-production.sh` stops
-before stack recreation, and `/api/v1/health` deliberately does not advertise
-`desktop-lifecycle-v2`. There is no environment-variable acknowledgement or
-completion-marker bypass.
+## Current capability and client-release block
 
-Before unblocking the deploy, land and build both preservation-first read-only
+The additive Core schema and compatibility routes may be deployed normally;
+blocking every Core or emergency release would make unrelated fixes impossible.
+`/api/v1/health` deliberately does not advertise `desktop-lifecycle-v2`, so the
+Desktop publication gate remains closed. There is no environment-variable
+acknowledgement or completion-marker bypass for capability enablement.
+Before replacing the stack, the deploy script interrogates the built candidate
+image itself. A candidate that advertises `desktop-lifecycle-v2` is rejected;
+the current branch deliberately has no evidence-bypass input. The later cutover
+change must replace that fail-closed branch with verification of owner-approved,
+exact client artifacts and their preservation/read-only test evidence.
+
+Before enabling the capability, land and build both preservation-first read-only
 client changes above. The eventual deploy change must verify the exact Desktop
 and Extension release artifacts plus automated tests proving snapshot-before-read,
 export completeness, catalog-only steady state, and absence of persona writes;
@@ -41,7 +62,7 @@ an operator-entered status string is not evidence. It must also restore the
 explicit machine UUID inventory and verify that every required UUID is bound to
 a non-revoked, unexpired device token before the capability is advertised.
 
-Only the release that performs all of those checks may return
+Only a later owner-gated release that performs all of those checks may return
 `desktop-lifecycle-v2` from health. Do not add the capability merely because the
 Core schema/routes exist.
 
@@ -73,5 +94,6 @@ change into this lifecycle deployment.
 - After migrations begin, diagnose and roll forward. Do not use the old Core
   image as a recovery shortcut.
 - If owner binding cannot be completed, leave Desktop unpublished, repair the
-  binding or token, and rerun this deploy. The absent completion marker keeps the
-  cutover gate active.
+  binding or token, and rerun this deploy. The runtime capability stays absent
+  and the Desktop publication gate stays closed; there is no completion-marker
+  bypass.

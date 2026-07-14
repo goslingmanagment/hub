@@ -3,7 +3,7 @@
 // bundle of @kernel/sdk for consumption OUTSIDE this pnpm workspace (client
 // repos can't resolve workspace:* deps, and shipping core's .ts source would
 // subject it to the consumer's compiler flags). The script stages the runtime
-// subset — sdk entrypoints + contracts (routes/sdk-runtime/cursor/policy) +
+// subset — sdk entrypoints + contracts (routes/sdk-runtime/cursor/policy/hash) +
 // the three dependency-free shared modules — rewrites imports to relative
 // paths, compiles it HERE (core's tsc, zod, @types/node), and ships js+d.ts.
 // Consumers only see declarations (skipLibCheck applies), so their strictness
@@ -96,7 +96,14 @@ writeFileSync(
 );
 
 const toShared = [["@agency_hub_core/shared", "../shared/index"]];
-for (const file of ["routes.ts", "sdk-runtime.ts", "domain-event-cursor.ts", "authorization-policy.ts", "index.ts"]) {
+for (const file of [
+  "routes.ts",
+  "sdk-runtime.ts",
+  "domain-event-cursor.ts",
+  "authorization-policy.ts",
+  "contract-hash.ts",
+  "index.ts",
+]) {
   stageFile(`packages/contracts/src/${file}`, join(staging, `src/contracts/${file}`), toShared);
 }
 

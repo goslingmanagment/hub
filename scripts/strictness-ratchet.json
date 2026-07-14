@@ -84,7 +84,6 @@
   "tests/domain-events-smoke.integration.test.ts": 2,
   "tests/domain-events-v2.integration.test.ts": 14,
   "tests/egress-resolver.integration.test.ts": 3,
-  "tests/erasure.integration.test.ts": 2,
   "tests/fan-earnings-projection.integration.test.ts": 14,
   "tests/fan-page-identity.repository.integration.test.ts": 32,
   "tests/fan-profiles.repository.integration.test.ts": 30,

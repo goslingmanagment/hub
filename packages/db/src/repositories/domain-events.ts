@@ -425,7 +425,7 @@ export async function getDomainEventErasureEpoch(
     incomplete: boolean;
   }>(sql`
     select coalesce(max(id), 0)::text as epoch,
-           coalesce(bool_or(completed_at is null), false) as incomplete
+           coalesce(bool_or(resolution_kind is null and completed_at is null), false) as incomplete
     from erasure_log
     where dry_run = false
   `);

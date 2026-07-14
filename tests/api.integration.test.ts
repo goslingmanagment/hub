@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { KERNEL_CONTRACT_HASH } from "@agency_hub_core/contracts";
 import {
   createOnlyFansPage,
   createUser,
@@ -6914,6 +6915,7 @@ describe("api integration", () => {
     expect(healthy.statusCode).toBe(200);
     expect(healthy.json()).toMatchObject({
       status: "ok",
+      contractHash: KERNEL_CONTRACT_HASH,
       capabilities: [],
       checks: {
         api: {
@@ -6943,6 +6945,7 @@ describe("api integration", () => {
     expect(degraded.statusCode).toBe(503);
     expect(degraded.json()).toMatchObject({
       status: "degraded",
+      contractHash: KERNEL_CONTRACT_HASH,
       capabilities: [],
       checks: {
         api: {

@@ -145,6 +145,7 @@ describe("health and docs route auth", () => {
       body: {
         status: "ok",
         timestamp: "2026-04-30T00:00:00.000Z",
+        contractHash: "0".repeat(64),
         capabilities: [],
         checks: {
           api: { status: "ok" },

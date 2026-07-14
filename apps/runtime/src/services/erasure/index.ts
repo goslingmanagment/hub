@@ -86,7 +86,78 @@ interface ResolvedScope {
   nativeRefs: string[];
 }
 
-type Db = Pick<AppContext, "db" | "config" | "logger">;
+type Db = Pick<AppContext, "db" | "config" | "logger" | "pool">;
+
+const ERASURE_EXECUTION_LOCK_KEY = 8_154_030_001;
+
+/**
+ * Erasures are rare break-glass operations and every scope can touch the same
+ * parquet file/temp path. One global session lock spans database transactions
+ * and post-commit lake rewrites, preventing cross-scope filesystem races.
+ */
+export async function withErasureExecutionLock<T>(
+  app: Pick<AppContext, "pool">,
+  run: () => Promise<T>,
+): Promise<T> {
+  const client = await app.pool.connect();
+  let destroyClient = false;
+  try {
+    try {
+      await client.query(
+        "select pg_advisory_lock($1::bigint)",
+        [ERASURE_EXECUTION_LOCK_KEY],
+      );
+    } catch (error) {
+      // The server may have acquired the session lock before the response was
+      // lost. Never return an ambiguously locked connection to the pool.
+      destroyClient = true;
+      throw error;
+    }
+
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    try {
+      outcome = { ok: true, value: await run() };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+
+    let unlocked = false;
+    let unlockFailed = false;
+    let unlockError: unknown;
+    try {
+      const unlockResult = await client.query<{ unlocked: boolean }>(
+        "select pg_advisory_unlock($1::bigint) as unlocked",
+        [ERASURE_EXECUTION_LOCK_KEY],
+      );
+      unlocked = unlockResult.rows[0]?.unlocked === true;
+    } catch (error) {
+      unlockFailed = true;
+      unlockError = error;
+      // A session-level advisory lock survives a normal pool release. If the
+      // explicit unlock failed, destroy this connection so PostgreSQL closes
+      // the session and releases every lock it may still carry.
+      destroyClient = true;
+    }
+    if (!unlockFailed && !unlocked) {
+      destroyClient = true;
+    }
+
+    // Preserve the execution failure if both work and unlock fail; closing the
+    // dedicated session below still releases every session advisory lock.
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    if (unlockFailed) {
+      throw unlockError;
+    }
+    if (!unlocked) {
+      throw new Error("Global erasure execution lock was not held");
+    }
+    return outcome.value;
+  } finally {
+    client.release(destroyClient ? true : undefined);
+  }
+}
 
 async function rows<T extends Record<string, unknown>>(app: Db, query: SQL): Promise<T[]> {
   const result = await app.db.execute<T>(query);
@@ -980,7 +1051,7 @@ function workToPlan(work: ErasureWork): ErasurePlan {
     targets,
     sharedObservations: work.lineage?.sharedObsIds.length ?? 0,
     totalRows: targets.reduce((sum, target) => sum + target.rows, 0),
-    resolvedPageIds: work.scope.pageIds,
+    resolvedPageIds: [...new Set(work.scope.pageIds)].sort((left, right) => left - right),
   };
 }
 
@@ -999,15 +1070,28 @@ export interface ErasureExecutionResult {
  * The irreversible act. Hot + ledger deletes run in ONE transaction; the
  * lake rewrite follows after commit (filesystem work can't join it). The
  * tombstone is written BEFORE any deletion and completed with the actual
- * counts after — an executed erasure_log row with completed_at NULL is a
- * mid-flight death and must be re-run to convergence (all steps idempotent).
+ * counts after. An unresolved execution is a mid-flight death and must be
+ * re-run to convergence; the successful retry supersedes that exact scope.
  */
 export async function executeErasure(
   app: Db,
   input: ErasureScopeInput,
   options: { initiatedBy: number; auditSource?: string },
 ): Promise<ErasureExecutionResult> {
-  const { insertErasureLog, completeErasureLog, acquireErasureFenceExclusiveLocks } =
+  return withErasureExecutionLock(app, () => executeErasureLocked(app, input, options));
+}
+
+async function executeErasureLocked(
+  app: Db,
+  input: ErasureScopeInput,
+  options: { initiatedBy: number; auditSource?: string },
+): Promise<ErasureExecutionResult> {
+  const {
+    insertErasureLog,
+    completeErasureLogAndSupersedeScope,
+    acquireErasureFenceExclusiveLocks,
+    ERASURE_EXECUTION_PROTOCOL,
+  } =
     await import("@agency_hub_core/db");
   const work = await buildWork(app, input);
   const plan = workToPlan(work);
@@ -1021,6 +1105,7 @@ export async function executeErasure(
     initiatedBy: options.initiatedBy,
     dryRun: false,
     plan: plan as unknown as Record<string, unknown>,
+    executionProtocol: ERASURE_EXECUTION_PROTOCOL,
   });
 
   const executedCounts: Record<string, number> = {};
@@ -1051,13 +1136,20 @@ export async function executeErasure(
     record(target, await rewriteLakeTarget(plan.scopeRef, target));
   }
 
-  await completeErasureLog(app.db, {
+  const resolution = await completeErasureLogAndSupersedeScope(app.db, {
     id: logRow.id,
+    scopeType: input.scopeType,
+    scopeRef: plan.scopeRef,
+    resolvedPageIds: plan.resolvedPageIds,
+    executionProtocol: ERASURE_EXECUTION_PROTOCOL,
     executedCounts: {
       ...executedCounts,
       sharedObservationsKept: plan.sharedObservations,
     },
   });
+  if (!resolution) {
+    throw new Error(`Erasure log ${logRow.id} could not be completed`);
+  }
 
   // Stage 7 dual-write choke point: audit_events + an operator observation.
   // The observation's account_id is NULL by design — the erasure's own audit
@@ -1071,11 +1163,17 @@ export async function executeErasure(
       logId: logRow.id,
       totalRows: plan.totalRows,
       sharedObservationsKept: plan.sharedObservations,
+      supersededLogIds: resolution.supersededIds,
     },
   });
 
   app.logger.info(
-    { scopeRef: plan.scopeRef, totalRows: plan.totalRows, logId: logRow.id },
+    {
+      scopeRef: plan.scopeRef,
+      totalRows: plan.totalRows,
+      logId: logRow.id,
+      supersededLogIds: resolution.supersededIds,
+    },
     "Erasure executed",
   );
   return { plan, executedCounts, logId: logRow.id };

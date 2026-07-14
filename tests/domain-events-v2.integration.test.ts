@@ -7,6 +7,8 @@ import { createHash } from "node:crypto";
 import {
   appendDomainEvents,
   completeErasureLog,
+  completeErasureLogAndSupersedeScope,
+  ERASURE_EXECUTION_PROTOCOL,
   createFanslyPage,
   createModel,
   createOnlyFansPage,
@@ -753,6 +755,7 @@ describe("event stream v2", () => {
       initiatedBy: owners[0]!.id,
       dryRun: false,
       plan: { resolvedPageIds: [page.id], testOnly: true },
+      executionProtocol: ERASURE_EXECUTION_PROTOCOL,
     });
     const invalidatedLegacy = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=${
       encodeURIComponent(legacyTarget)
@@ -763,7 +766,39 @@ describe("event stream v2", () => {
       { headers: { cookie: await ownerCookie() } },
     );
     expect(blockedDuringErasure.status).toBe(503);
-    await completeErasureLog(testDb!.db, { id: epochBump.id, executedCounts: {} });
+    const retry = await insertErasureLog(testDb!.db, {
+      scopeType: "fan",
+      scopeRef: "fan:onlyfans:epoch-bump-only",
+      initiatedBy: owners[0]!.id,
+      dryRun: false,
+      plan: { resolvedPageIds: [page.id], testOnly: true, retry: true },
+      executionProtocol: ERASURE_EXECUTION_PROTOCOL,
+    });
+    const unrelatedIncomplete = await insertErasureLog(testDb!.db, {
+      scopeType: "fan",
+      scopeRef: "fan:onlyfans:unrelated-incomplete",
+      initiatedBy: owners[0]!.id,
+      dryRun: false,
+      plan: { resolvedPageIds: [page.id], testOnly: true },
+    });
+    const resolved = await completeErasureLogAndSupersedeScope(testDb!.db, {
+      id: retry.id,
+      scopeType: "fan",
+      scopeRef: retry.scopeRef,
+      resolvedPageIds: [page.id],
+      executionProtocol: ERASURE_EXECUTION_PROTOCOL,
+      executedCounts: {},
+    });
+    expect(resolved?.supersededIds).toContain(epochBump.id);
+
+    // The same-scope crash is resolved, but a different scope must continue to
+    // fail recovery closed. Resolving by max(id) would incorrectly clear it.
+    const stillBlockedByUnrelated = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`,
+      { headers: { cookie: await ownerCookie() } },
+    );
+    expect(stillBlockedByUnrelated.status).toBe(503);
+    await completeErasureLog(testDb!.db, { id: unrelatedIncomplete.id, executedCounts: {} });
 
     const refreshedLegacySnapshot = await fetch(
       `${baseUrl}/api/v1/events/v2/snapshot?accounts=${page.id}`,

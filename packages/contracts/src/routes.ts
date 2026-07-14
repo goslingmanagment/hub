@@ -221,6 +221,7 @@ export const systemCheckSchema = z.object({
 export const healthResponseSchema = z.object({
   status: serviceHealthStatusEnum,
   timestamp: isoTimestamp,
+  contractHash: z.string().regex(/^[a-f0-9]{64}$/),
   capabilities: z.array(z.literal("desktop-lifecycle-v2")),
   checks: z.object({
     api: z.object({
@@ -1849,6 +1850,7 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
     model: z.string(),
     provider: z.enum(["anthropic", "openrouter"]),
     providerResponseId: z.string().nullable(),
+    personaDefinitionId: z.string().min(16).max(100).optional(),
     quota: aiGatewayQuotaSchema,
   }).strict(),
   z.object({
@@ -1923,6 +1925,9 @@ export const aiPersonaCatalogItemSchema = z.object({
   key: z.string().min(1).max(120),
   displayName: z.string().min(1).max(120),
   version: z.number().int().positive(),
+  // Opaque identity of the exact definition bytes. Clients compare it but do
+  // not parse it; it is independent of monotonic revision after DB restore.
+  definitionId: z.string().min(16).max(100),
   status: z.enum(["active", "archived"]),
 });
 
@@ -1986,6 +1991,7 @@ export const aiFeatureStreamBodySchema = z.object({
   conversationRef: z.string().min(1).max(255),
   fanRef: z.string().min(1).max(255).nullable().optional(),
   personaKey: z.string().min(1).max(120).nullable().optional(),
+  expectedPersonaDefinitionId: z.string().min(16).max(100).optional(),
   model: z.string().min(1).max(100).optional(),
   reasoningEffort: aiGatewayReasoningEffortSchema.optional(),
   replyTone: z.enum(["none", "casual", "flirty", "upsell", "spicy"]).optional(),
@@ -5385,6 +5391,7 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      409: errorResponseSchema,
       429: errorResponseSchema,
       503: errorResponseSchema,
     },

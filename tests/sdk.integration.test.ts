@@ -10,6 +10,7 @@ import {
   settleOfapiWebhookEvent,
 } from "@agency_hub_core/db";
 import {
+  KERNEL_CONTRACT_HASH as CONTRACTS_CONTRACT_HASH,
   KernelApiError,
   createKernelClient,
   routeSchemas,
@@ -266,6 +267,7 @@ describe("SDK generator determinism", () => {
     // The committed meta hash equals sha256 of the committed OpenAPI document.
     const expectedHash = createHash("sha256").update(openApiDocumentJson, "utf8").digest("hex");
     expect(KERNEL_CONTRACT_HASH).toBe(expectedHash);
+    expect(CONTRACTS_CONTRACT_HASH).toBe(expectedHash);
     expect(first.get("src/meta.ts")).toContain(expectedHash);
 
     // A schema-shape change (the drift drill renames a response field) MUST

@@ -123,12 +123,14 @@ describe("AI persona owner administration", () => {
           key: active.key,
           displayName: active.displayName,
           version: active.revision,
+          definitionId: expect.stringMatching(/^v1:[A-Za-z0-9_-]{43}$/),
           status: "active",
         },
         {
           key: archived.key,
           displayName: archived.displayName,
           version: archived.revision + 1,
+          definitionId: expect.stringMatching(/^v1:[A-Za-z0-9_-]{43}$/),
           status: "archived",
         },
       ]);
@@ -184,7 +186,7 @@ describe("AI persona owner administration", () => {
     expect(owner.body).toContain("SECRET ARCHIVED PROMPT");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("lets the owner update and archive keys admitted by the shipped legacy contract", async (context) => {
+  it("keeps owner mutations read-only while the shipped legacy write lane remains open", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -213,64 +215,47 @@ describe("AI persona owner administration", () => {
         expectedVersion: 1,
       },
     });
-    expect(updated.statusCode, updated.body).toBe(200);
-    expect(updated.json()).toMatchObject({
-      key: legacyKey,
-      displayName: "Owner-managed legacy key",
-      version: 2,
-      status: "active",
-    });
+    expect(updated.statusCode, updated.body).toBe(409);
+    expect(updated.body).toContain("read-only");
 
     const archived = await server.inject({
       method: "DELETE",
       url: `/api/v1/admin/ai/personas/${legacyKey}?expectedVersion=2`,
       headers: { cookie },
     });
-    expect(archived.statusCode, archived.body).toBe(200);
-    expect(archived.json()).toMatchObject({
-      key: legacyKey,
-      version: 3,
-      status: "archived",
+    expect(archived.statusCode, archived.body).toBe(409);
+
+    const unchanged = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
     });
+    expect(unchanged.statusCode, unchanged.body).toBe(200);
+    expect(unchanged.json().personas).toContainEqual(expect.objectContaining({
+      key: legacyKey,
+      displayName: "Legacy dotted key",
+      version: 1,
+      status: "active",
+    }));
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("preserves owner-authored bytes and enforces numeric CAS through archive", async (context) => {
+  it("validates owner input, then rejects valid mutations without exposing admin routes to bearers", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
     const cookie = await loginCookie("owner", "owner-secret");
-    const exactSystemBlock = "\n  Keep these leading spaces.\nKeep the trailing blank line.\n\n";
     const created = await server.inject({
       method: "POST",
       url: "/api/v1/admin/ai/personas",
       headers: { cookie },
       payload: {
-        key: " custom:exact-bytes ",
-        displayName: " Exact bytes ",
-        systemBlock: exactSystemBlock,
+        key: "custom:blocked",
+        displayName: "Blocked",
+        systemBlock: "valid owner prompt",
       },
     });
-    expect(created.statusCode, created.body).toBe(200);
-    expect(created.json()).toMatchObject({
-      key: "custom:exact-bytes",
-      displayName: "Exact bytes",
-      systemBlock: exactSystemBlock,
-      status: "active",
-      version: 1,
-    });
-
-    const duplicate = await server.inject({
-      method: "POST",
-      url: "/api/v1/admin/ai/personas",
-      headers: { cookie },
-      payload: {
-        key: "custom:exact-bytes",
-        displayName: "Duplicate",
-        systemBlock: "must not overwrite",
-      },
-    });
-    expect(duplicate.statusCode, duplicate.body).toBe(409);
+    expect(created.statusCode, created.body).toBe(409);
 
     const whitespaceOnly = await server.inject({
       method: "POST",
@@ -283,63 +268,6 @@ describe("AI persona owner administration", () => {
       },
     });
     expect(whitespaceOnly.statusCode, whitespaceOnly.body).toBe(400);
-
-    const [left, right] = await Promise.all([
-      server.inject({
-        method: "PUT",
-        url: "/api/v1/admin/ai/personas/custom:exact-bytes",
-        headers: { cookie },
-        payload: {
-          displayName: "Left",
-          systemBlock: "left bytes\n",
-          expectedVersion: 1,
-        },
-      }),
-      server.inject({
-        method: "PUT",
-        url: "/api/v1/admin/ai/personas/custom:exact-bytes",
-        headers: { cookie },
-        payload: {
-          displayName: "Right",
-          systemBlock: "right bytes\n",
-          expectedVersion: 1,
-        },
-      }),
-    ]);
-    expect([left.statusCode, right.statusCode].sort()).toEqual([200, 409]);
-    const winner = (left.statusCode === 200 ? left : right).json() as {
-      displayName: string;
-      systemBlock: string;
-      version: number;
-    };
-    expect(winner.version).toBe(2);
-
-    const staleArchive = await server.inject({
-      method: "DELETE",
-      url: "/api/v1/admin/ai/personas/custom:exact-bytes?expectedVersion=1",
-      headers: { cookie },
-    });
-    expect(staleArchive.statusCode, staleArchive.body).toBe(409);
-
-    const archived = await server.inject({
-      method: "DELETE",
-      url: `/api/v1/admin/ai/personas/custom:exact-bytes?expectedVersion=${winner.version}`,
-      headers: { cookie },
-    });
-    expect(archived.statusCode, archived.body).toBe(200);
-    expect(archived.json()).toMatchObject({
-      displayName: winner.displayName,
-      systemBlock: winner.systemBlock,
-      version: 3,
-      status: "archived",
-    });
-
-    const staleReplay = await server.inject({
-      method: "DELETE",
-      url: `/api/v1/admin/ai/personas/custom:exact-bytes?expectedVersion=${winner.version}`,
-      headers: { cookie },
-    });
-    expect(staleReplay.statusCode, staleReplay.body).toBe(409);
 
     for (const token of [chatterKey, deviceToken]) {
       const deniedMutation = await server.inject({
@@ -354,5 +282,43 @@ describe("AI persona owner administration", () => {
       });
       expect(deniedMutation.statusCode, deniedMutation.body).toBe(403);
     }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("changes the opaque definition identity only when exact definition bytes change", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const key = "custom:definition-identity";
+    const write = (systemBlock: string) => server!.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${key}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: { displayName: "Definition Identity", systemBlock },
+    });
+    const read = async () => {
+      const response = await server!.inject({
+        method: "GET",
+        url: "/api/v1/ai/persona-catalog",
+        headers: { authorization: `Bearer ${chatterKey}` },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json().personas.find((persona: { key: string }) => persona.key === key) as {
+        version: number;
+        definitionId: string;
+      };
+    };
+
+    expect((await write("first bytes")).statusCode).toBe(200);
+    const first = await read();
+    expect((await write("second bytes")).statusCode).toBe(200);
+    const second = await read();
+    expect(second.version).toBe(first.version + 1);
+    expect(second.definitionId).not.toBe(first.definitionId);
+
+    // The shipped reconnect replay is a true no-op: revision, timestamp, and
+    // content identity all remain stable for identical bytes.
+    expect((await write("second bytes")).statusCode).toBe(200);
+    expect(await read()).toEqual(second);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

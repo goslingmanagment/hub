@@ -39,6 +39,17 @@ export class ConflictError extends AppError {
   }
 }
 
+/** The selected persona changed after the client read the metadata catalog. */
+export class PersonaDefinitionChangedError extends AppError {
+  constructor() {
+    super(
+      "AI persona definition changed; refresh the persona catalog and retry",
+      409,
+      "persona_definition_changed",
+    );
+  }
+}
+
 export class SnapshotRestartRequiredError extends AppError {
   readonly snapshotPath = "/api/v1/events/snapshot" as const;
 

@@ -4235,3 +4235,106 @@ and lifecycle state. The lifecycle-v2 release gate therefore requires exact
 preservation-first read-only Desktop and Extension artifacts plus their
 automated coverage, not the CAS-aware Extension receipt described by #147; it
 remains fail-closed with no operator override.
+
+**Decision #149 (2026-07-14, replay-journal retention remains contiguous-prefix
+only):** A recent, pending, or failed replayable OFAPI webhook row blocks
+automatic deletion of every later replayable frame, even when a later row is
+old and fully projected/archived. The durable replay floor is proof of one
+contiguous removed prefix; deleting around a blocker would make it a lossy
+max-deleted approximation and could strand an offline client beyond missing
+frames. Journal-only/non-replayable rows may still be removed independently
+when their consumed guards pass. A persistent oldest blocker is an operator
+repair/alert condition, not permission for the cleanup job to discard its tail.
+The stale webhook retention test is corrected to match this already-pinned
+behavior; the SSE regression continues to prove that a failed blocker retains
+the eligible frame behind it until repaired.
+
+**Decision #150 (2026-07-14, interrupted erasures resolve by immutable target,
+never by latest log id):** One global session-level erasure lock is held across
+planning, database deletion, post-commit lake rewrite, and log completion.
+Erasures are rare break-glass operations, and page/model/fan scopes can rewrite
+the same parquet file and `.erasure.tmp` path; scope-local locks are therefore
+unsafe. This is distinct from page-id writer fence locks, which protect archive
+material only inside the database transaction.
+
+A successful retry creates its own auditable plan and, in the same completion
+transaction, marks an earlier unresolved non-dry-run attempt `superseded` only
+when both its selector (`scope_type + scope_ref`) and its stored immutable set of
+resolved page IDs exactly match the converged row. Automatic adoption is also
+limited to rows and plans stamped
+`execution_protocol=global-erasure-lock-v1`: acquiring the same
+global session lock proves that no stamped predecessor is still executing.
+Protocol-null pre-cutover attempts might belong to a process that never took
+this lock and therefore remain unresolved for explicit operator review, even
+when their page IDs match. A reused label/slug with new page IDs, a newer
+attempt, or any other scope likewise remains unresolved and continues to fail
+snapshot recovery closed. Completed and superseded rows are resolved;
+historical rows with `completed_at` but no new marker remain resolved for
+compatibility. No `max(id)` heuristic is allowed to declare an older or
+unrelated erasure complete.
+
+**Decision #151 (2026-07-14, persona administration is read-only while legacy
+LWW exists; catalog carries content identity):** Decision #148's owner surface
+is intentionally read-only during the preservation window. Owner POST/PUT/DELETE
+return 409 after owner authentication, and the dashboard renders no mutation
+controls, until a later owner-gated release closes the shipped bearer LWW lane.
+This prevents a legacy reconnect from silently destroying newly authored owner
+prompt bytes without requiring a rushed partial prompt-history system. Full
+owner reads remain available for migration review; legacy compatibility writes
+remain exactly as specified by #148.
+
+The metadata-only client catalog adds `definitionId`, an opaque `v1:` identity
+derived from the exact key, display name, and system-block bytes. Clients compare
+but never parse it, and the prompt text remains absent. Unlike monotonic database
+revision, this identity remains truthful when disaster recovery restores an
+older row/revision, so clients can invalidate persona-dependent caches and
+in-flight work against the actual restored definition. A definition-aware
+feature request sends that catalog value as `expectedPersonaDefinitionId`.
+An omitted `personaKey` is only a compatibility alias for the active
+database-backed `builtin:lora` row; it never reads bundled source prompt bytes,
+and an archived/missing default fails closed.
+Core resolves the persona and rejects either a byte mismatch or an
+expected catalog entry that is now missing/archived with 409
+`persona_definition_changed` before loading prompt context, reserving quota, or
+invoking a provider. Requests without the precondition retain the legacy 400 for
+an unavailable persona; the successful meta frame echoes the applied value as
+`personaDefinitionId`. Both fields are additive and optional during fleet
+rollout: an old request receives the old meta shape. Rollout is Core-first: the
+old feature-body schema is strict and may reject the new request field with 400,
+so clients enable the precondition only after observing the compatible catalog
+and health contract. On an accepted request, a missing echo is an old/partial
+Core signal rather than proof that the selected definition was applied.
+
+**Decision #152 (2026-07-14, lifecycle gate constrains capability enablement,
+not ordinary Core deploys):** Additive, repair, and emergency Core releases must
+remain deployable while the Desktop/Extension preservation evidence is pending.
+The deployment script therefore no longer aborts every invocation. The cutover
+continues to fail closed: before release-file sync or stack replacement, deploy
+interrogates the built candidate image's runtime capability manifest. Ordinary
+Core candidates advertise none and proceed; any candidate advertising
+`desktop-lifecycle-v2` is rejected until a later reviewed change implements
+owner-gated verification of exact Desktop/Extension fleet artifacts. There is
+no environment/status-file bypass. Public health exposes the
+generated normalized-OpenAPI `contractHash`, so client release gates can compare
+the running Core contract to their vendored SDK manifest without pretending a
+route-local 401 proves schema compatibility or inventing source-SHA ancestry.
+The large observations
+harvest compatibility index is split from migration 0090 and built by an
+explicit, idempotent `CREATE INDEX CONCURRENTLY IF NOT EXISTS` migration outside
+a transaction while still under the global migration advisory lock. Deploy runs
+the exact prefix through 0096 in a foreground candidate-image one-shot before
+stack recreation, after capturing the schema baseline, so the old API remains
+available throughout the long concurrent build. Recreate/rollback handling
+cannot begin until that one-shot exits and releases the migration lock; startup's
+twenty-minute health budget remains only crash/retry protection. Before the
+one-shot starts, pending migrations through 0096 are compared with the captured
+remote baseline; any non-allowlisted migration raises a rollback-forbidden
+latch immediately, including the pre-ledger crash window of a concurrent index.
+
+**Decision #153 (2026-07-14, cursor integrity terminology):** Domain-event
+resume cursors v2/v3/v4 are canonical Base64URL JSON and are not MAC-signed.
+Their recovery safety comes from strict shape/scope checks plus server-side
+erasure epoch and retained-topology validation. The bounded OFAPI snapshot
+`stateCursor` is a different contract and is HMAC-SHA256 signed with a key
+version. Documentation and release descriptions must name which cursor they
+mean; "signed recovery cursor" is not a valid description of domain-event v4.

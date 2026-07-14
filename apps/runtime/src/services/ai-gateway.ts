@@ -182,6 +182,8 @@ export interface AiGatewayStreamInternalOptions {
    * gateway route and never persisted separately from the existing restricted
    * generation record. */
   debugFrame?: AiFeatureDebugInputFrame;
+  /** Echoed only for clients that supplied the matching feature precondition. */
+  personaDefinitionId?: string;
 }
 
 export async function prepareAiGatewayStream(
@@ -315,6 +317,9 @@ export async function prepareAiGatewayStream(
       model: input.model,
       provider: provider.provider,
       providerResponseId: null,
+      ...(internal?.personaDefinitionId !== undefined
+        ? { personaDefinitionId: internal.personaDefinitionId }
+        : {}),
       quota: quotaFrame,
     },
     ...(internal?.debugFrame ? { debugFrame: internal.debugFrame } : {}),

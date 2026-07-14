@@ -71,6 +71,13 @@ beforeEach(async (context) => {
 
   appContext = createTestAppContext(testDb);
   appContext.config.chatMuseAiGatewayEnabled = true;
+  const bundledPersona = createBundledPersonalities()[0]!;
+  await seedBundledAiPersona(appContext.db, {
+    key: bundledPersona.id,
+    displayName: bundledPersona.name,
+    systemBlock: bundledPersona.content,
+    bundledVersion: bundledPersona.builtinVersion!,
+  });
   const model = await createModel(appContext.db, { slug: "svc", name: "Svc" });
   if (!model) {
     throw new Error("test setup: model creation failed");
@@ -158,10 +165,14 @@ async function seedConversation() {
   );
 }
 
-function capturingProvider(capture: { input?: AiGatewayProviderInput }): AiGatewayProvider {
+function capturingProvider(capture: {
+  input?: AiGatewayProviderInput;
+  calls?: number;
+}): AiGatewayProvider {
   return {
     provider: "anthropic",
     async *stream(input) {
+      capture.calls = (capture.calls ?? 0) + 1;
       capture.input = input;
       yield { type: "content_delta", text: "sure thing 😘" };
       yield {
@@ -309,6 +320,7 @@ describe("AI feature service pilot (Stage 30)", () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.body).toContain("sure thing");
+    expect(aiFrames(response.body)[0]).not.toHaveProperty("personaDefinitionId");
 
     // The provider received the KERNEL-assembled prompt: migrated persona
     // as system block #2 (1h cache), formatted transcript + spending in
@@ -336,6 +348,64 @@ describe("AI feature service pilot (Stage 30)", () => {
     ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("never falls back to source prompt bytes when the default DB persona is archived", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const bundled = createBundledPersonalities()[0]!;
+    const catalog = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/persona-catalog",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(catalog.statusCode, catalog.body).toBe(200);
+    const definitionId = catalog.json().personas.find(
+      (persona: { key: string }) => persona.key === bundled.id,
+    ).definitionId as string;
+    const stored = await findAiPersonaByKey(appContext.db, bundled.id);
+    expect(stored).toBeDefined();
+    await archiveAiPersona(appContext.db, bundled.id, stored!.revision);
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+
+    const response = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+      },
+    });
+    expect(response.statusCode, response.body).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: "bad_request",
+      message: expect.stringContaining("Default persona builtin:lora is unavailable"),
+    });
+
+    const definitionAware = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        expectedPersonaDefinitionId: definitionId,
+      },
+    });
+    expect(definitionAware.statusCode, definitionAware.body).toBe(409);
+    expect(definitionAware.json()).toMatchObject({
+      error: "persona_definition_changed",
+      statusCode: 409,
+    });
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("uses a stored persona when personaKey is given and 404s unknown features", async (context) => {
     if (!testDb) {
       context.skip();
@@ -347,7 +417,16 @@ describe("AI feature service pilot (Stage 30)", () => {
       displayName: "Milly",
       systemBlock: "## Who you are\nYou are Milly.",
     });
-    const capture: { input?: AiGatewayProviderInput } = {};
+    const catalog = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/persona-catalog",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(catalog.statusCode, catalog.body).toBe(200);
+    const definitionId = catalog.json().personas.find(
+      (persona: { key: string }) => persona.key === "milly",
+    ).definitionId as string;
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
 
     const response = await apiServer!.inject({
@@ -360,10 +439,100 @@ describe("AI feature service pilot (Stage 30)", () => {
         platform: "onlyfans",
         conversationRef: FAN,
         personaKey: "milly",
+        expectedPersonaDefinitionId: definitionId,
       },
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(capture.input!.body.prompt.systemBlocks[1]!.text).toContain("You are Milly.");
+    expect(aiFrames(response.body)[0]).toMatchObject({
+      type: "meta",
+      personaDefinitionId: definitionId,
+    });
+
+    const stale = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        personaKey: "milly",
+        expectedPersonaDefinitionId: `v1:${"x".repeat(43)}`,
+      },
+    });
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json()).toEqual({
+      error: "persona_definition_changed",
+      message: "AI persona definition changed; refresh the persona catalog and retry",
+      statusCode: 409,
+    });
+    expect(capture.calls).toBe(1);
+    const usageAfterConflict = await testDb!.pool.query<{ count: string }>(
+      "select count(*)::text as count from ai_usage_events",
+    );
+    expect(usageAfterConflict.rows[0]!.count).toBe("1");
+
+    const current = await findAiPersonaByKey(appContext.db, "milly");
+    expect(current).toBeDefined();
+    await archiveAiPersona(appContext.db, "milly", current!.revision);
+    const archived = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        personaKey: "milly",
+        expectedPersonaDefinitionId: definitionId,
+      },
+    });
+    expect(archived.statusCode, archived.body).toBe(409);
+    expect(archived.json()).toMatchObject({
+      error: "persona_definition_changed",
+      statusCode: 409,
+    });
+
+    const missing = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        personaKey: "missing-after-catalog",
+        expectedPersonaDefinitionId: definitionId,
+      },
+    });
+    expect(missing.statusCode, missing.body).toBe(409);
+    expect(missing.json()).toMatchObject({
+      error: "persona_definition_changed",
+      statusCode: 409,
+    });
+    expect(capture.calls).toBe(1);
+
+    const legacyMissing = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        personaKey: "missing-after-catalog",
+      },
+    });
+    expect(legacyMissing.statusCode, legacyMissing.body).toBe(400);
+    expect(legacyMissing.json()).toMatchObject({
+      error: "bad_request",
+      message: "Unknown persona: missing-after-catalog",
+    });
 
     const unknown = await apiServer!.inject({
       method: "POST",
@@ -456,6 +625,7 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       key,
       displayName: "Tombstone regression",
       version: createdVersion + 1,
+      definitionId: expect.any(String),
     });
     expect(state.body).not.toContain("Must remain archived");
 
@@ -494,6 +664,7 @@ describe("kernel personas (Stage 31 Task 3)", () => {
       key,
       displayName: "Legacy stale desktop cache",
       version: createdVersion + 2,
+      definitionId: expect.any(String),
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 

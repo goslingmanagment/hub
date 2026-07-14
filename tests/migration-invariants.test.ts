@@ -102,4 +102,24 @@ describe("database migration invariants", () => {
     expect(migration).not.toContain('max("fanout_seq")');
     expect(migration).not.toContain('"fanout_seq" bigint PRIMARY KEY');
   });
+
+  it("builds the harvest observation lookup concurrently and idempotently", async () => {
+    const base = await readFile(
+      "packages/db/migrations/0090_device_token_harvest_capability.sql",
+      "utf8",
+    );
+    const index = await readFile(
+      "packages/db/migrations/0096_observations_harvest_lookup_concurrently.sql",
+      "utf8",
+    );
+
+    expect(base).not.toContain("observations_harvest_machine_client_event_idx");
+    expect(index.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(index).toContain("on only observations");
+    expect(index).toContain("-- agency-hub:execute-returned-statements");
+    expect(index).toContain("drop index concurrently if exists %I.%I");
+    expect(index).toContain("not index_state.indisvalid");
+    expect(index).toContain("create index concurrently if not exists %I");
+    expect(index).toContain("alter index observations_harvest_machine_client_event_idx attach partition");
+  });
 });

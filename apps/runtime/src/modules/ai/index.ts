@@ -25,6 +25,7 @@ import { requireApiKeyUser, requireOwner } from "../../services/auth.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { hasDebugInputCapability } from "./prompt-debug-echo.ts";
+import { aiPersonaDefinitionId } from "./persona-definition.ts";
 
 export {
   hasDebugInputCapability,
@@ -38,6 +39,16 @@ interface PersonaRecord {
   updatedAt: Date;
   archivedAt: Date | null;
   revision: number;
+}
+
+const ADMIN_PERSONA_MUTATIONS_ENABLED = false;
+
+function requireAdminPersonaMutationsEnabled(): void {
+  if (!ADMIN_PERSONA_MUTATIONS_ENABLED) {
+    throw new ConflictError(
+      "AI persona administration is read-only until legacy client write access is closed",
+    );
+  }
 }
 
 function serializePersona(persona: PersonaRecord) {
@@ -106,6 +117,9 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
         key: persona.key,
         displayName: persona.displayName,
         version: persona.revision,
+        // Opaque content identity. Unlike the monotonic database revision, it
+        // remains correct if disaster recovery restores an older definition.
+        definitionId: aiPersonaDefinitionId(persona),
         status: persona.archivedAt === null ? "active" as const : "archived" as const,
       })),
     };
@@ -166,9 +180,9 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return { archived: true, version: archived.revision };
   });
 
-  // Permanent owner surface. These routes are cookie-session + owner only and
-  // every mutation is create-only or numeric CAS; bearer credentials cannot
-  // read full prompt content through this namespace.
+  // Future permanent owner namespace. Full reads are cookie-session + owner
+  // only; mutations stay registered but fail closed until the legacy bearer
+  // write lane is removed. Bearer credentials cannot read prompt text here.
   server.get("/api/v1/admin/ai/personas", {
     schema: routeSchemas.adminAiPersonasList,
   }, async (request) => {
@@ -183,6 +197,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
+    requireAdminPersonaMutationsEnabled();
     try {
       const persona = await upsertAiPersona(appContext.db, {
         key: request.body.key,
@@ -204,6 +219,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
+    requireAdminPersonaMutationsEnabled();
     try {
       const persona = await upsertAiPersona(appContext.db, {
         key: request.params.key,
@@ -225,6 +241,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
+    requireAdminPersonaMutationsEnabled();
     let persona;
     try {
       persona = await archiveAiPersona(

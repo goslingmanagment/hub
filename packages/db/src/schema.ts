@@ -2818,8 +2818,8 @@ export const aiAcceptanceEvents = pgTable(
 
 // Stage 28: erasure tombstones — every break-glass erasure run (dry or
 // executed) records its scope, initiator, per-plane plan, and (executions)
-// the counts actually removed. An executed row with completed_at NULL died
-// mid-flight and must be re-run to convergence.
+// the counts actually removed. An unresolved executed row died mid-flight and
+// a successful same-scope re-run marks it superseded after convergence.
 export const erasureLog = pgTable(
   "erasure_log",
   {
@@ -2834,6 +2834,10 @@ export const erasureLog = pgTable(
     executedCounts: jsonb("executed_counts").$type<Record<string, unknown>>(),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    resolutionKind: text("resolution_kind").$type<"completed" | "superseded">(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    supersededById: bigint("superseded_by_id", { mode: "number" }),
+    executionProtocol: text("execution_protocol").$type<"global-erasure-lock-v1">(),
   },
   (table) => ({
     scopeIdx: index("erasure_log_scope_idx").on(
@@ -2841,6 +2845,27 @@ export const erasureLog = pgTable(
       table.scopeRef,
       table.startedAt,
     ),
+    unresolvedScopeIdx: index("erasure_log_unresolved_scope_idx")
+      .on(table.scopeType, table.scopeRef, table.startedAt, table.id)
+      .where(sql`${table.dryRun} = false and ${table.resolutionKind} is null`),
+    supersededByFk: foreignKey({
+      name: "erasure_log_superseded_by_fk",
+      columns: [table.supersededById],
+      foreignColumns: [table.id],
+    }).onDelete("restrict"),
+    resolutionKindCheck: check("erasure_log_resolution_kind_check", sql`
+      ${table.resolutionKind} is null or ${table.resolutionKind} in ('completed', 'superseded')
+    `),
+    executionProtocolCheck: check("erasure_log_execution_protocol_check", sql`
+      ${table.executionProtocol} is null or ${table.executionProtocol} = 'global-erasure-lock-v1'
+    `),
+    resolutionShapeCheck: check("erasure_log_resolution_shape_check", sql`
+      (${table.resolutionKind} is null and ${table.resolvedAt} is null and ${table.supersededById} is null)
+      or (${table.resolutionKind} = 'completed' and ${table.completedAt} is not null
+          and ${table.resolvedAt} is not null and ${table.supersededById} is null)
+      or (${table.resolutionKind} = 'superseded' and ${table.completedAt} is null
+          and ${table.resolvedAt} is not null and ${table.supersededById} is not null)
+    `),
   }),
 );
 
