@@ -56,7 +56,7 @@ anywhere else in runtime code (comment `ofapi.ts:33-35`).
   500/502/503/504 (`ofapi.ts:731-752`), up to `OFAPI_OBSERVED_RETRIES = 3`
   (`ofapi.ts:29`).
 - **Per-call credit metering** (`ofapi.ts:130-177`, `reportCreditSpend`
-  `ofapi.ts:558-604`): every HTTP response that reached the server is reported
+  `ofapi.ts:558-604`): charge-bearing HTTP responses that reached the server are reported
   to the injected `onCreditSpend` sink, retries included (the server charged
   each). `parseResponseMeta` (`ofapi.ts:434-449`) reads
   `_meta._credits.used/.balance`, `_meta._cache.is_cached`, and
@@ -65,7 +65,9 @@ anywhere else in runtime code (comment `ofapi.ts:33-35`).
   2xx without `_meta` assumes 1 credit with `estimated=true`; an error without
   `_meta` produces no row unless a balance is present, in which case a
   0-credit reconciliation anchor is emitted. Fallback credits are overridable
-  per operation (typing sends `fallbackCredits:0` `ofapi.ts:1080`; the
+  per operation. Typing sends `fallbackCredits:0` and suppresses a zero-credit
+  observation so high-frequency ephemeral beacons cannot grow the permanent
+  ledger; an unexpected non-zero provider charge is still reported. The
   upload-status gateway op sends `0` `ofapi-read-gateway.ts:338`). Sink
   failures are swallowed (`ofapi.ts:601-603`). Each observation carries
   `pageId` (ledger attribution, D2), `actorUserId` (Stage 9 acting principal,
@@ -289,11 +291,13 @@ Contract prose: `docs/ofapi-command-outbox-contract.md`.
   | other non-null status | `indeterminate` | `ofapi_http_<n>` |
   | null (transport) | `indeterminate` | `ofapi_transport_unknown` |
 
-- **Sweep** (`sweepOfapiCommands` `ofapi-command-executor.ts:429`): marks stale
+- **Sweep** (`sweepOfapiCommands` `ofapi-command-executor.ts:429`): typing rows
+  have a 10-second claim/expiry TTL and a two-minute dedupe horizon; terminal
+  typing rows are deleted after that horizon. Other stale
   `in_flight` older than `STALE_IN_FLIGHT_MS = 2min` as `indeterminate` (never
   auto-requeued `ofapi-command-executor.ts:34,434`) and re-enqueues up to
   `COMMAND_SWEEP_LIMIT = 100` queued commands. As of Stage 28 the redaction arm
-  is retired — terminal payloads are kept permanently
+  is retired — terminal business-command payloads are kept permanently
   (`ofapi-command-executor.ts:445-447`).
 - **Webhook verification** (`verifyOfapiCommandFromSentWebhook`
   `ofapi-command-executor.ts:494-587`): on a `messages.sent` webhook, matches
@@ -304,10 +308,10 @@ Contract prose: `docs/ofapi-command-outbox-contract.md`.
   logged.
 - **command_result observation** (Stage 7 producer 5,
   `recordCommandResultObservation` `ofapi-command-executor.ts:107-141`): every
-  settle emits an observation with source `command_result`, producer
+  durable business-command settle emits an observation with source `command_result`, producer
   `ofapi:command-executor`, kind `command.<state>`, key `cmd:<id>:<state>`
   (deduping the direct-confirm vs webhook-confirm race), best-effort AFTER the
-  finalize commit.
+  finalize commit. Cosmetic typing is explicitly excluded.
 - **Payload validation** (executor): text (`textPayload`), media
   (`mediaPayload` `ofapi-command-executor.ts:204` — price 0 or a 3..200
   integer, 1-50 unique mediaFiles matching `MEDIA_ID_PATTERN`, previews a

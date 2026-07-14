@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   getMaxOfapiFanoutSeq: vi.fn(),
+  getOfapiSyncReplayFloor: vi.fn(),
   listOfapiSyncEventsForReplay: vi.fn(),
 }));
 
@@ -47,25 +48,41 @@ interface Harness {
   failNextReads(n: number): void;
   /** Emits a connection error, dropping the LISTEN client (hub reconnects). */
   dropListen(): void;
+  /** Atomically records that cleanup removed a page frame through this seq. */
+  raiseFloor(replayFloor: number): void;
+  continuityLosses: number[];
 }
 
 function makeHarness(input: {
   baselineSeq: number;
   journal?: number[];
+  failConnects?: number;
   onDeliver?: (frame: SyncEventFrame, harness: Harness) => void;
 }): Harness {
   const journal: SyncEventFrame[] = (input.journal ?? []).map(frame);
+  let replayFloor = 0;
   let failReads = 0;
+  let failConnects = input.failConnects ?? 0;
+  let highWaterReads = 0;
 
-  dbMocks.getMaxOfapiFanoutSeq.mockResolvedValue(input.baselineSeq);
+  dbMocks.getMaxOfapiFanoutSeq.mockImplementation(async () => {
+    highWaterReads += 1;
+    if (highWaterReads === 1) {
+      return input.baselineSeq;
+    }
+    return Math.max(input.baselineSeq, replayFloor, ...journal.map((row) => row.id));
+  });
+  dbMocks.getOfapiSyncReplayFloor.mockImplementation(async () => replayFloor);
   dbMocks.listOfapiSyncEventsForReplay.mockImplementation(
-    async (_db: unknown, query: { afterSeq: number; limit: number }) => {
+    async (_db: unknown, query: { afterSeq: number; throughSeq?: number; limit: number }) => {
       if (failReads > 0) {
         failReads -= 1;
         throw new Error("transient pool blip");
       }
       return journal
-        .filter((row) => row.id > query.afterSeq)
+        .filter((row) => row.id > query.afterSeq && (
+          query.throughSeq === undefined || row.id <= query.throughSeq
+        ))
         .sort((a, b) => a.id - b.id)
         .slice(0, query.limit);
     },
@@ -76,6 +93,10 @@ function makeHarness(input: {
     db: {},
     pool: {
       connect: vi.fn(async () => {
+        if (failConnects > 0) {
+          failConnects -= 1;
+          throw new Error("LISTEN unavailable");
+        }
         const client = Object.assign(new EventEmitter(), {
           query: vi.fn(async () => undefined),
           release: vi.fn(),
@@ -89,9 +110,12 @@ function makeHarness(input: {
 
   const hub = createSyncEventHub(app);
   const delivered: number[] = [];
+  const continuityLosses: number[] = [];
+  let accepting = true;
   const harness: Harness = {
     hub,
     delivered,
+    continuityLosses,
     settle: (id) => journal.push(frame(id)),
     notify: (payload) => {
       clients.at(-1)!.emit("notification", { channel: "ofapi_sync_events", payload });
@@ -102,10 +126,20 @@ function makeHarness(input: {
     dropListen: () => {
       clients.at(-1)!.emit("error", new Error("connection lost"));
     },
+    raiseFloor: (floor) => {
+      replayFloor = floor;
+    },
   };
   hub.subscribe({
     pageIds: new Set([PAGE]),
+    continuityLost: (floor) => {
+      continuityLosses.push(floor);
+      accepting = false;
+    },
     deliver: (row) => {
+      if (!accepting) {
+        return;
+      }
       delivered.push(row.id);
       input.onDeliver?.(row, harness);
     },
@@ -122,6 +156,13 @@ afterEach(async () => {
 });
 
 describe("sync event hub delivery contract (audit B3)", () => {
+  it("fails ready closed while the initial LISTEN and baseline are unavailable", async () => {
+    const h = makeHarness({ baselineSeq: 99, failConnects: 2 });
+    activeHub = h.hub;
+    await expect(h.hub.ready()).rejects.toThrow("LISTEN unavailable");
+    expect(h.delivered).toEqual([]);
+  });
+
   // Sim scenario A: void handleNotification().catch() swallowed a transient
   // fetch error, the frame was never broadcast or retried, and once a later
   // frame advanced Last-Event-ID the strict > replay could never recover it.
@@ -215,6 +256,22 @@ describe("sync event hub delivery contract (audit B3)", () => {
     h.settle(102);
 
     await vi.waitFor(() => expect(h.delivered).toEqual([100, 101, 102]), { timeout: 4_000 });
+  });
+
+  it("closes an affected live subscriber before advancing past a cleanup floor", async () => {
+    const h = makeHarness({ baselineSeq: 99 });
+    activeHub = h.hub;
+    await h.hub.ready();
+
+    // Frame 100 settled old enough to be cleaned before the hub's wake-up was
+    // drained. The atomic page floor is the durable evidence that 101 must not
+    // advance this connection past the lost frame.
+    h.raiseFloor(100);
+    h.settle(101);
+    h.notify("101");
+
+    await vi.waitFor(() => expect(h.continuityLosses).toEqual([100]));
+    expect(h.delivered).toEqual([]);
   });
 });
 

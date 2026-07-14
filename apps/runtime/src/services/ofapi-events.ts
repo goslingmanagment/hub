@@ -5,6 +5,7 @@ import {
   findPageByOfapiAccountId,
   getOfapiWebhookEventById,
   listPendingOfapiWebhookEventIds,
+  OFAPI_SYNC_EVENT_CHANNEL,
   settleOfapiWebhookEvent,
 } from "@agency_hub_core/db";
 import { sql } from "drizzle-orm";
@@ -62,9 +63,9 @@ export const OFAPI_EVENT_SWEEP_QUEUE = "ofapi.events.sweep";
 export const OFAPI_EVENT_CLEANUP_QUEUE = "ofapi.events.cleanup";
 export const OFAPI_EVENT_PROCESS_BATCH_SIZE = 100;
 
-// Postgres NOTIFY channel carrying journal row ids from the worker's event
-// processor to the API process's SSE fanout (services/events-stream.ts).
-export const OFAPI_SYNC_EVENT_CHANNEL = "ofapi_sync_events";
+// Postgres NOTIFY channel carrying journal row ids/floor advances from the
+// worker to the API process's SSE fanout (services/events-stream.ts).
+export { OFAPI_SYNC_EVENT_CHANNEL };
 
 // Stage 1 retention stand-down: journal rows are business facts (money events
 // included) and must outlive the ledger build-out; effectively-forever.
@@ -378,6 +379,10 @@ export async function cleanupExpiredOfapiEvents(app: AppContext, now = new Date(
 
 type OfapiWorkerBoss = Pick<PgBoss, "send" | "work">;
 
+// Besides preserving settle-order fanout, the snapshot cursor barrier relies
+// on this singleton: no later sequence may commit while an earlier one remains
+// invisible. Multi-worker fanout requires a committed contiguous watermark,
+// not merely nextval()/max(fanout_seq), before this assertion can be relaxed.
 function assertOfapiEventWorkerSingleton(app: Pick<AppContext, "config">) {
   const replicas = app.config.ofapiEventWorkerReplicas ?? 1;
   if (replicas !== 1) {

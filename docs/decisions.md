@@ -644,15 +644,17 @@ left no synthetic row behind.
 typing beacon. It extends the existing command outbox instead of adding a generic write proxy.
 
 - **Command kind:** `typing_active_v1`, with the same `clientCommandId`, account, conversation,
-  page/chatter ACL, durable dedupe, and one-attempt executor as text commands. Payload is exactly
-  `{}`.
+  page/chatter ACL, and one-attempt executor as text commands. Payload is exactly `{}`. Unlike
+  business commands, typing has a two-minute dedupe horizon; terminal rows are deleted after that
+  horizon and it never emits a permanent `command_result` observation.
 - **No retry/recovery:** typing is lossy and cosmetic. `retryOfCommandId` is rejected, desktop does
   not need status recovery UI for a missed beacon, and re-sending typing later is a fresh command.
+  A queued beacon older than ten seconds is unclaimable and expires rather than appearing late.
 - **Vendor request:** one `POST /api/{accountId}/chats/{conversationId}/typing` through the core
   OFAPI client, with global pacing, bounded timeout, no body, and no automatic retry.
 - **Accounting:** the endpoint is documented free, so a successful response without `_meta` records
-  zero estimated fallback credits under operation `ofapi_command_typing_active`; provider
-  `_meta._credits.used` still wins if returned.
+  no permanent credit-ledger row. Provider `_meta._credits.used` still wins if returned, and any
+  unexpected non-zero charge is recorded under operation `ofapi_command_typing_active`.
 - **Verifier/privacy:** `messages.sent` webhook repair applies only to `send_text_message_v1`.
   Typing rows confirm only from the endpoint response, keep `platform_message_id=null`, and expose
   only non-payload audit fields.
@@ -4116,3 +4118,223 @@ change—the capture lane already accepts the revision metadata verbatim and the
 existing machine/kind count remains the reconciliation authority.
 An incomplete reconciliation exits non-zero so shell automation cannot mistake
 the report for a passed custody gate.
+
+**Decision #145 (2026-07-13, server-owned Desktop harvest authority and
+machine-stable retry identity):** `x-client-version: harvest-*` is routing
+metadata, never authority. A normal chatter API key or self-issued device token
+can choose every request header and therefore may not journal canonicalizable
+`harvest.*` facts. Migration 0090 adds one nullable, unique machine UUID to a
+device-token row. Only an owner session can bind, transfer, or remove that
+capability through the admin route; ingest requires the authenticated token's
+server-loaded binding and requires every trusted harvest payload to carry that
+exact machine UUID. Assigned-page resolution remains unchanged. Ordinary
+client-capture kinds remain available to unprivileged device tokens, while any
+attempt to claim the harvest producer without a binding fails 403 before the
+capture transaction. Webhook, REST/readthrough, and all non-harvest
+canonicalization paths are unchanged.
+
+Harvest idempotency is machine + deterministic client event, not human
+principal + event. That identity survives a different chatter signing into the
+same preserved Desktop database. A partial expression index supports a bounded
+compatibility lookup for immutable pre-0090 observations, whose keys retain the
+old principal prefix; no captured row is rewritten or deleted. New concurrent
+requests also converge through the existing observation-key uniqueness because
+they construct the same machine key. Any duplicates already captured before
+0090 remain visible for reconciliation and operator review.
+
+Rollout is Core-first and fail-closed. Immediately after migration, the owner
+binds each approved active Desktop token ID to the UUID in that machine's
+manifest/diagnostics; uploaders retry their unchanged request bodies while the
+binding is absent, so there is no compatibility translation or silent loss.
+Rollback reopens the old header-trust behavior and is therefore an explicit
+security rollback. Separately, a device-token-only self-service DELETE revokes
+exactly the current credential and writes its audit row in the same transaction;
+cookie sessions, API keys, and sibling device tokens cannot use that operation.
+
+**Decision #146 (2026-07-13, bounded resumable Desktop state snapshots):**
+`limit` on `GET /api/v1/events/snapshot` historically bounded only thread rows;
+one response could still collect every hot/archive message in up to 50 threads
+plus every unresolved tombstone. The additive `pageMode=bounded_v1` protocol
+instead caps durable message-or-tombstone rows per response (`messageLimit`,
+default 100, maximum 200) and carries an opaque `stateCursor`. That cursor binds
+the account, requested sequence, sticky fanout snapshot cursor, state timestamp,
+message limit, current thread, store phase, and row keyset; malformed or
+scope-mismatched cursors fail 400. Tombstones page first, then each thread pages
+its archive overlays before hot rows without an archive twin, preserving the
+legacy archive-wins merge exactly and eventually returning every row. No row is
+truncated; a formal byte ceiling is deliberately not claimed because one
+retained message/media row is indivisible.
+
+Compatibility is Core-first and additive. Legacy callers keep the original
+thread-page response byte semantics and see no `nextStateCursor`. New Desktop
+clients probe bounded mode with legacy `limit=1`; an old or rolled-back Core
+strips the unknown query fields and omits `nextStateCursor`, so the client
+idempotently switches to one-thread legacy pagination and still refuses to
+checkpoint until every page is applied. A bounded response always includes
+`nextStateCursor` (terminal `null` included), and only that terminal marker
+authorizes the existing snapshot-cursor checkpoint.
+
+**Decision #147 (2026-07-13, persona revision CAS includes archive and legacy
+reconnects):** Persona revision is the lifecycle token for both update and
+archive. A numeric PUT or DELETE mutates exactly one active revision; a stale
+writer receives 409. DELETE encodes an explicit absent/create-only token as
+`expectedVersion=0` and never interprets it as permission to remove an active
+row. Replaying an archive after a lost response is idempotent and returns the
+existing archived revision.
+
+Pre-version Desktop v0.1.41 automatically PUTs every cached custom persona on
+each reconnect and omits the token. That form may create an absent key or
+confirm identical active content, but divergent active content and every
+omitted-version active DELETE return 409. This intentionally trades old-client
+write availability for shared-state safety: an old Desktop retains a rejected
+edit locally, but cannot overwrite or archive a newer writer. Core must deploy
+before the revision-aware Desktop. The new Desktop captures the exact editor
+base revision, journals it before I/O, and reconciles a create-only archive only
+when Core's full active payload matches the locally journaled base; it then
+retries with the observed numeric revision. It completes the revision-bearing
+lifecycle-state preflight before DELETE, preventing an old Core from stripping
+the unknown CAS query and mutating first. No timestamp participates in
+conflict resolution.
+
+The bundled-persona seed keeps the legacy customization contract as part of
+this lifecycle. `feature_overrides.__kernelBundledVersion` records the bundled
+version without changing the public persona contract. The first post-upgrade
+seed adopts an existing row at the current bundled version without changing its
+name, prompt, timestamp, or revision; rerunning the same version is a true
+no-op, so user customization survives. Only a strictly newer bundled version
+CAS-replaces the prompt and advances the revision, while a newer stored marker
+than the running binary fails closed instead of downgrading it.
+
+**Decision #148 (2026-07-13, global personas become owner-admin content;
+supersedes #115 and #147):** Global persona definitions and their full system
+blocks are Core owner content. Desktop and Fansly Extension clients may select a
+persona for a local account mapping, but may not create, edit, archive, or sync
+definition text in steady state. New bearer clients read
+`GET /api/v1/ai/persona-catalog`, whose active/archived entries contain only key,
+display name, numeric version, and status. Full text is available only through
+the owner-session `/api/v1/admin/ai/personas` surface. Owner create is
+create-only; owner update and archive require the exact active numeric revision
+and stale writers receive 409. Archived rows remain tombstones and there is no
+restore operation.
+
+This is a preservation-first rollout, not an immediate auth flip. The actually
+shipped legacy full-text GET and bearer PUT/DELETE remain available until both
+client fleets have released snapshot-before-read, complete JSON export,
+catalog-only behavior, and no-write steady state. During that transition an
+omitted-version PUT keeps the shipped last-write-wins/resurrection behavior and
+an omitted-version DELETE keeps the shipped archive behavior; an identical
+active replay is a true revision/timestamp no-op so reconnects cannot churn
+catalog versions. The unshipped bearer lifecycle-state route from #147 is
+removed. A later owner-gated release may close the legacy write routes only
+after preservation/read-only coverage is demonstrated.
+
+Bundled seeding is create-only. Once any row exists for a key—including an
+owner-customized or archived row—every seed rerun and bundled-version increase
+is a byte-for-byte no-op for its prompt, name, metadata, timestamps, revision,
+and lifecycle state. The lifecycle-v2 release gate therefore requires exact
+preservation-first read-only Desktop and Extension artifacts plus their
+automated coverage, not the CAS-aware Extension receipt described by #147; it
+remains fail-closed with no operator override.
+
+**Decision #149 (2026-07-14, replay-journal retention remains contiguous-prefix
+only):** A recent, pending, or failed replayable OFAPI webhook row blocks
+automatic deletion of every later replayable frame, even when a later row is
+old and fully projected/archived. The durable replay floor is proof of one
+contiguous removed prefix; deleting around a blocker would make it a lossy
+max-deleted approximation and could strand an offline client beyond missing
+frames. Journal-only/non-replayable rows may still be removed independently
+when their consumed guards pass. A persistent oldest blocker is an operator
+repair/alert condition, not permission for the cleanup job to discard its tail.
+The stale webhook retention test is corrected to match this already-pinned
+behavior; the SSE regression continues to prove that a failed blocker retains
+the eligible frame behind it until repaired.
+
+**Decision #150 (2026-07-14, interrupted erasures resolve by immutable target,
+never by latest log id):** One global session-level erasure lock is held across
+planning, database deletion, post-commit lake rewrite, and log completion.
+Erasures are rare break-glass operations, and page/model/fan scopes can rewrite
+the same parquet file and `.erasure.tmp` path; scope-local locks are therefore
+unsafe. This is distinct from page-id writer fence locks, which protect archive
+material only inside the database transaction.
+
+A successful retry creates its own auditable plan and, in the same completion
+transaction, marks an earlier unresolved non-dry-run attempt `superseded` only
+when both its selector (`scope_type + scope_ref`) and its stored immutable set of
+resolved page IDs exactly match the converged row. Automatic adoption is also
+limited to rows and plans stamped
+`execution_protocol=global-erasure-lock-v1`: acquiring the same
+global session lock proves that no stamped predecessor is still executing.
+Protocol-null pre-cutover attempts might belong to a process that never took
+this lock and therefore remain unresolved for explicit operator review, even
+when their page IDs match. A reused label/slug with new page IDs, a newer
+attempt, or any other scope likewise remains unresolved and continues to fail
+snapshot recovery closed. Completed and superseded rows are resolved;
+historical rows with `completed_at` but no new marker remain resolved for
+compatibility. No `max(id)` heuristic is allowed to declare an older or
+unrelated erasure complete.
+
+**Decision #151 (2026-07-14, persona administration is read-only while legacy
+LWW exists; catalog carries content identity):** Decision #148's owner surface
+is intentionally read-only during the preservation window. Owner POST/PUT/DELETE
+return 409 after owner authentication, and the dashboard renders no mutation
+controls, until a later owner-gated release closes the shipped bearer LWW lane.
+This prevents a legacy reconnect from silently destroying newly authored owner
+prompt bytes without requiring a rushed partial prompt-history system. Full
+owner reads remain available for migration review; legacy compatibility writes
+remain exactly as specified by #148.
+
+The metadata-only client catalog adds `definitionId`, an opaque `v1:` identity
+derived from the exact key, display name, and system-block bytes. Clients compare
+but never parse it, and the prompt text remains absent. Unlike monotonic database
+revision, this identity remains truthful when disaster recovery restores an
+older row/revision, so clients can invalidate persona-dependent caches and
+in-flight work against the actual restored definition. A definition-aware
+feature request sends that catalog value as `expectedPersonaDefinitionId`.
+An omitted `personaKey` is only a compatibility alias for the active
+database-backed `builtin:lora` row; it never reads bundled source prompt bytes,
+and an archived/missing default fails closed.
+Core resolves the persona and rejects either a byte mismatch or an
+expected catalog entry that is now missing/archived with 409
+`persona_definition_changed` before loading prompt context, reserving quota, or
+invoking a provider. Requests without the precondition retain the legacy 400 for
+an unavailable persona; the successful meta frame echoes the applied value as
+`personaDefinitionId`. Both fields are additive and optional during fleet
+rollout: an old request receives the old meta shape. Rollout is Core-first: the
+old feature-body schema is strict and may reject the new request field with 400,
+so clients enable the precondition only after observing the compatible catalog
+and health contract. On an accepted request, a missing echo is an old/partial
+Core signal rather than proof that the selected definition was applied.
+
+**Decision #152 (2026-07-14, lifecycle gate constrains capability enablement,
+not ordinary Core deploys):** Additive, repair, and emergency Core releases must
+remain deployable while the Desktop/Extension preservation evidence is pending.
+The deployment script therefore no longer aborts every invocation. The cutover
+continues to fail closed: before release-file sync or stack replacement, deploy
+interrogates the built candidate image's runtime capability manifest. Ordinary
+Core candidates advertise none and proceed; any candidate advertising
+`desktop-lifecycle-v2` is rejected until a later reviewed change implements
+owner-gated verification of exact Desktop/Extension fleet artifacts. There is
+no environment/status-file bypass. Public health exposes the
+generated normalized-OpenAPI `contractHash`, so client release gates can compare
+the running Core contract to their vendored SDK manifest without pretending a
+route-local 401 proves schema compatibility or inventing source-SHA ancestry.
+The large observations
+harvest compatibility index is split from migration 0090 and built by an
+explicit, idempotent `CREATE INDEX CONCURRENTLY IF NOT EXISTS` migration outside
+a transaction while still under the global migration advisory lock. Deploy runs
+the exact prefix through 0096 in a foreground candidate-image one-shot before
+stack recreation, after capturing the schema baseline, so the old API remains
+available throughout the long concurrent build. Recreate/rollback handling
+cannot begin until that one-shot exits and releases the migration lock; startup's
+twenty-minute health budget remains only crash/retry protection. Before the
+one-shot starts, pending migrations through 0096 are compared with the captured
+remote baseline; any non-allowlisted migration raises a rollback-forbidden
+latch immediately, including the pre-ledger crash window of a concurrent index.
+
+**Decision #153 (2026-07-14, cursor integrity terminology):** Domain-event
+resume cursors v2/v3/v4 are canonical Base64URL JSON and are not MAC-signed.
+Their recovery safety comes from strict shape/scope checks plus server-side
+erasure epoch and retained-topology validation. The bounded OFAPI snapshot
+`stateCursor` is a different contract and is HMAC-SHA256 signed with a key
+version. Documentation and release descriptions must name which cursor they
+mean; "signed recovery cursor" is not a valid description of domain-event v4.

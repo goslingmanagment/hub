@@ -31,11 +31,16 @@ function principalOf(input: {
 const ownerSession = principalOf({ authMethod: "session", role: "owner" });
 const leadSession = principalOf({ authMethod: "session", role: "team_lead" });
 const chatterKey = principalOf({ authMethod: "api_key", role: "chatter" });
+const chatterDevice: AuthPrincipal = {
+  ...principalOf({ authMethod: "device_token", role: "chatter" }),
+  deviceTokenId: 7,
+};
 
 function evaluate(input: {
   auth: RouteAuthPolicy;
   principal?: AuthPrincipal | null;
   monitoringToken?: boolean;
+  pendingDeviceToken?: boolean;
   pageAccess?: PageAccessResolution;
   pageLabelParam?: string;
 }) {
@@ -47,6 +52,7 @@ function evaluate(input: {
       }
       return input.principal;
     },
+    resolvePendingDeviceToken: async () => input.pendingDeviceToken ?? false,
     hasMonitoringToken: () => input.monitoringToken ?? false,
     resolvePageAccess: async () => {
       if (input.pageAccess === undefined) {
@@ -66,8 +72,23 @@ describe("computeAuthPolicyVerdict", () => {
     await expect(evaluate({ auth: { kind: "hmac" } })).resolves.toEqual({ allow: true });
   });
 
+  it("admits only the specialized pending bearer on the activation policy", async () => {
+    await expect(evaluate({
+      auth: { kind: "pending-device-token" },
+      pendingDeviceToken: true,
+    })).resolves.toEqual({ allow: true });
+    await expect(evaluate({
+      auth: { kind: "pending-device-token" },
+      pendingDeviceToken: false,
+    })).resolves.toEqual({
+      allow: false,
+      statusCode: 401,
+      reason: "pending_device_token_required",
+    });
+  });
+
   it("denies unauthenticated requests on principal kinds with 401", async () => {
-    for (const kind of ["session", "owner-session", "apiKey", "any"] as const) {
+    for (const kind of ["session", "owner-session", "apiKey", "device-token", "any"] as const) {
       await expect(evaluate({ auth: { kind }, principal: null })).resolves.toEqual({
         allow: false,
         statusCode: 401,
@@ -98,6 +119,15 @@ describe("computeAuthPolicyVerdict", () => {
     await expect(evaluate({ auth: { kind: "apiKey" }, principal: chatterKey }))
       .resolves.toEqual({ allow: true });
     await expect(evaluate({ auth: { kind: "apiKey" }, principal: ownerSession }))
+      .resolves.toMatchObject({ allow: false, statusCode: 403 });
+  });
+
+  it("accepts only a device-token principal for kind device-token", async () => {
+    await expect(evaluate({ auth: { kind: "device-token" }, principal: chatterDevice }))
+      .resolves.toEqual({ allow: true });
+    await expect(evaluate({ auth: { kind: "device-token" }, principal: chatterKey }))
+      .resolves.toMatchObject({ allow: false, statusCode: 403 });
+    await expect(evaluate({ auth: { kind: "device-token" }, principal: ownerSession }))
       .resolves.toMatchObject({ allow: false, statusCode: 403 });
   });
 

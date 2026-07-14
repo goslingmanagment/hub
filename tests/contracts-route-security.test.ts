@@ -34,4 +34,12 @@ describe("route schema security", () => {
     expect(routeSchemas.aiGatewayStream.auth.kind).toBe("apiKey");
     expect(routeSecurityFromAuth(routeSchemas.aiGatewayStream.auth)).toEqual(bearerOnlySecurity);
   });
+
+  it("documents pending device-token activation as bearer-only", () => {
+    const bearerOnlySecurity = [{ bearerAuth: [] }];
+
+    expect(routeSchemas.authActivateDeviceToken.auth.kind).toBe("pending-device-token");
+    expect(routeSecurityFromAuth(routeSchemas.authActivateDeviceToken.auth))
+      .toEqual(bearerOnlySecurity);
+  });
 });

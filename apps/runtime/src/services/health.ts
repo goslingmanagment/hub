@@ -3,9 +3,12 @@ import {
   countUnresolvedProjectionDebtByAccount,
 } from "@agency_hub_core/db";
 
+import { KERNEL_CONTRACT_HASH } from "@agency_hub_core/contracts";
+
 import type { AppContext } from "../bootstrap.ts";
 import { listConnectionStatuses } from "./connections.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
+import { PUBLIC_RUNTIME_CAPABILITIES } from "./public-capabilities.ts";
 import { getSyncStatusSnapshot, type SyncDomainBlockStatus } from "./sync-status.ts";
 
 type ServiceHealthStatus = "ok" | "degraded";
@@ -110,6 +113,10 @@ function recentCountersFromSnapshot(snapshot: Awaited<ReturnType<typeof getSyncS
 export async function getSystemHealth(app: AppContext) {
   const timestamp = new Date().toISOString();
   const startedAt = Date.now();
+  // This capability is a production-fleet promise, not merely an API-schema
+  // flag. Keep it absent until the preservation-first read-only Desktop and
+  // Extension artifacts are shipped and fleet coverage is verifiable.
+  const capabilities = [...PUBLIC_RUNTIME_CAPABILITIES];
 
   try {
     await app.pool.query("select 1");
@@ -119,6 +126,8 @@ export async function getSystemHealth(app: AppContext) {
       body: {
         status: "ok" as const,
         timestamp,
+        contractHash: KERNEL_CONTRACT_HASH,
+        capabilities,
         checks: {
           api: {
             status: "ok" as const,
@@ -141,6 +150,8 @@ export async function getSystemHealth(app: AppContext) {
       body: {
         status: "degraded" as const,
         timestamp,
+        contractHash: KERNEL_CONTRACT_HASH,
+        capabilities,
         checks: {
           api: {
             status: "ok" as const,

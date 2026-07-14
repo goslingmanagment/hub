@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 //     and since Stage 28 sync_runs; 30 days)
 //   - the golden-signals sampler prune (ops_metric_samples; 90 days)
 //   - the page_dm_messages prune (cache policy, archive-coverage-gated)
+//   - terminal typing command expiry after its short idempotency window
+//   - expired pending device-token custody (10-minute activation window)
 //   - pg-boss's own archival tables
 // The Stage 28 erasure module is the one sanctioned NON-scheduled deleter:
 // owner-initiated, dry-run default, tombstoned in erasure_log.
@@ -35,6 +37,7 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/fan-metadata.ts",
   "packages/db/src/repositories/message-archive.ts",
   "packages/db/src/repositories/observations.ts",
+  "packages/db/src/repositories/ofapi-commands.ts",
   "packages/db/src/repositories/ofapi.ts",
   "packages/db/src/repositories/ops-metrics.ts",
   "packages/db/src/repositories/page-dm.ts",

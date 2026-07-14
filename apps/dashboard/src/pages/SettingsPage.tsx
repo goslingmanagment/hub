@@ -6,11 +6,13 @@ import { ModelsTab } from "./settings/ModelsTab.js";
 import { PagesTab } from "./settings/PagesTab.js";
 import { UsersTab } from "./settings/UsersTab.js";
 import { ConfigurationTab } from "./settings/ConfigurationTab.js";
+import { AiPersonasTab } from "./settings/AiPersonasTab.js";
 
 const tabs: { key: SettingsTab; label: string }[] = [
   { key: "credentials", label: "Credentials" },
   { key: "sync", label: "Sync" },
   { key: "models", label: "Models" },
+  { key: "personas", label: "AI Personas" },
   { key: "pages", label: "Pages" },
   { key: "users", label: "Users" },
   { key: "configuration", label: "Configuration" },
@@ -50,6 +52,7 @@ export function SettingsPage() {
       {activeTab === "credentials" && <CredentialsTab />}
       {activeTab === "sync" && <SyncTab />}
       {activeTab === "models" && <ModelsTab />}
+      {activeTab === "personas" && <AiPersonasTab />}
       {activeTab === "pages" && <PagesTab />}
       {activeTab === "users" && <UsersTab />}
       {activeTab === "configuration" && <ConfigurationTab />}

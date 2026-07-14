@@ -189,6 +189,7 @@ export const users = pgTable("users", {
   role: userRoleEnum("role").notNull(),
   passwordHash: text("password_hash"),
   mustChangePassword: boolean("must_change_password").default(false).notNull(),
+  deviceTokenEpoch: bigint("device_token_epoch", { mode: "number" }).default(0).notNull(),
   // Deactivation tombstone (decision #126, mirrors the Stage 13 pages
   // standard): NULL = active. Set freezes every auth path; never hard-delete.
   disabledAt: timestamp("disabled_at", { withTimezone: true }),
@@ -1688,6 +1689,10 @@ export const deviceTokens = pgTable(
     label: text("label").default("").notNull(),
     tokenDigest: text("token_digest").notNull().unique(),
     keyPrefix: text("key_prefix").notNull(),
+    // Owner-bound capability for the one-time local DB harvest. The ingest
+    // lane requires this exact machine id; a caller-controlled client-version
+    // header alone never grants authority to mint canonical platform facts.
+    harvestMachineId: uuid("harvest_machine_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -1697,6 +1702,32 @@ export const deviceTokens = pgTable(
   (table) => ({
     userIdx: index("device_tokens_user_idx").on(table.userId),
     expiryIdx: index("device_tokens_expiry_idx").on(table.expiresAt),
+    harvestMachineUniq: uniqueIndex("device_tokens_harvest_machine_uidx")
+      .on(table.harvestMachineId)
+      .where(sql`${table.harvestMachineId} is not null`),
+  }),
+);
+
+// Enrollment reservations never authenticate application traffic.  Desktop
+// first persists the server-generated raw token in encrypted staging plus a
+// non-secret local journal, then promotes this row into device_tokens through
+// the explicit activation route.  The short TTL bounds abandoned custody.
+export const pendingDeviceTokens = pgTable(
+  "pending_device_tokens",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    label: text("label").default("").notNull(),
+    tokenDigest: text("token_digest").notNull().unique(),
+    keyPrefix: text("key_prefix").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdx: index("pending_device_tokens_user_idx").on(table.userId),
+    expiryIdx: index("pending_device_tokens_expiry_idx").on(table.expiresAt),
   }),
 );
 
@@ -2426,6 +2457,26 @@ export const ofapiWebhookEvents = pgTable(
   }),
 );
 
+// One global contiguous replay floor for v1 SSE rows removed from the webhook
+// journal. Cleanup cannot advance it past a retained replayable blocker.
+export const ofapiFanoutReplayState = pgTable(
+  "ofapi_fanout_replay_state",
+  {
+    singleton: boolean("singleton").primaryKey().default(true),
+    replayFloor: bigint("replay_floor", { mode: "number" }).notNull().default(0),
+    legacyHighWater: bigint("legacy_high_water", { mode: "number" }).notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    singletonCheck: check("ofapi_fanout_replay_state_singleton_check", sql`${table.singleton}`),
+    floorCheck: check("ofapi_fanout_replay_state_floor_check", sql`${table.replayFloor} >= 0`),
+    legacyHighWaterCheck: check(
+      "ofapi_fanout_replay_state_legacy_high_water_check",
+      sql`${table.legacyHighWater} >= 0`,
+    ),
+  }),
+);
+
 // Heartbeat table for the in-dashboard Configuration surface. Each running process
 // (api, worker) upserts a row carrying the sanitized config values it is actually
 // using (RunningSnapshot from the config registry), so the page can show per-instance
@@ -2703,6 +2754,7 @@ export const aiPersonas = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
+    revision: bigint("revision", { mode: "number" }).default(1).notNull(),
   },
 );
 
@@ -2766,8 +2818,8 @@ export const aiAcceptanceEvents = pgTable(
 
 // Stage 28: erasure tombstones — every break-glass erasure run (dry or
 // executed) records its scope, initiator, per-plane plan, and (executions)
-// the counts actually removed. An executed row with completed_at NULL died
-// mid-flight and must be re-run to convergence.
+// the counts actually removed. An unresolved executed row died mid-flight and
+// a successful same-scope re-run marks it superseded after convergence.
 export const erasureLog = pgTable(
   "erasure_log",
   {
@@ -2782,6 +2834,10 @@ export const erasureLog = pgTable(
     executedCounts: jsonb("executed_counts").$type<Record<string, unknown>>(),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    resolutionKind: text("resolution_kind").$type<"completed" | "superseded">(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    supersededById: bigint("superseded_by_id", { mode: "number" }),
+    executionProtocol: text("execution_protocol").$type<"global-erasure-lock-v1">(),
   },
   (table) => ({
     scopeIdx: index("erasure_log_scope_idx").on(
@@ -2789,6 +2845,27 @@ export const erasureLog = pgTable(
       table.scopeRef,
       table.startedAt,
     ),
+    unresolvedScopeIdx: index("erasure_log_unresolved_scope_idx")
+      .on(table.scopeType, table.scopeRef, table.startedAt, table.id)
+      .where(sql`${table.dryRun} = false and ${table.resolutionKind} is null`),
+    supersededByFk: foreignKey({
+      name: "erasure_log_superseded_by_fk",
+      columns: [table.supersededById],
+      foreignColumns: [table.id],
+    }).onDelete("restrict"),
+    resolutionKindCheck: check("erasure_log_resolution_kind_check", sql`
+      ${table.resolutionKind} is null or ${table.resolutionKind} in ('completed', 'superseded')
+    `),
+    executionProtocolCheck: check("erasure_log_execution_protocol_check", sql`
+      ${table.executionProtocol} is null or ${table.executionProtocol} = 'global-erasure-lock-v1'
+    `),
+    resolutionShapeCheck: check("erasure_log_resolution_shape_check", sql`
+      (${table.resolutionKind} is null and ${table.resolvedAt} is null and ${table.supersededById} is null)
+      or (${table.resolutionKind} = 'completed' and ${table.completedAt} is not null
+          and ${table.resolvedAt} is not null and ${table.supersededById} is null)
+      or (${table.resolutionKind} = 'superseded' and ${table.completedAt} is null
+          and ${table.resolvedAt} is not null and ${table.supersededById} is not null)
+    `),
   }),
 );
 

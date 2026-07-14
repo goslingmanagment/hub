@@ -208,6 +208,53 @@ describe("compose config", () => {
     expect(rollback).toContain("unable to capture current schema migration state");
   });
 
+  it("allows additive Core deploys while lifecycle capability enablement remains blocked", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const health = await readComposeFile("apps/runtime/src/services/health.ts");
+    const waitForApi = getShellFunction(text, "wait_for_api_health");
+    const capabilityGate = getShellFunction(text, "verify_candidate_lifecycle_capability");
+    const preRecreateMigration = getShellFunction(text, "run_pre_recreate_harvest_index_migration");
+    const forbidRollback = getShellFunction(text, "forbid_rollback_for_pending_pre_recreate_migrations");
+    const rollback = getShellFunction(text, "rollback_remote_stack");
+    const mainStart = text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"');
+    const initializeIndex = text.indexOf("initialize_deploy_metadata_and_tags", mainStart);
+    const buildIndex = text.indexOf("build_candidate_image", initializeIndex);
+    const capabilityGateIndex = text.indexOf("verify_candidate_lifecycle_capability", buildIndex);
+    const schemaCaptureIndex = text.indexOf('capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"', capabilityGateIndex);
+    const forbidRollbackIndex = text.indexOf("forbid_rollback_for_pending_pre_recreate_migrations", schemaCaptureIndex);
+    const preRecreateMigrationIndex = text.indexOf("run_pre_recreate_harvest_index_migration", forbidRollbackIndex);
+    const releaseSyncIndex = text.indexOf('log "Syncing release files', preRecreateMigrationIndex);
+    const recreateIndex = text.indexOf('log "Recreating the remote production stack"', initializeIndex);
+
+    expect(text).not.toContain("prepare_lifecycle_cutover");
+    expect(text).not.toContain("desktop-lifecycle-v2 cutover is blocked");
+    expect(health).toContain("[...PUBLIC_RUNTIME_CAPABILITIES]");
+    expect(capabilityGate).toContain("print-public-capabilities");
+    expect(capabilityGate).toContain("owner-gated Desktop/Extension fleet evidence verification is not implemented yet");
+    expect(capabilityGate).not.toContain("DEPLOY_EXTENSION_PERSONA_CAS_STATUS");
+    expect(capabilityGateIndex).toBeGreaterThan(buildIndex);
+    expect(preRecreateMigration).toContain("RUNTIME_IMAGE=");
+    expect(preRecreateMigration).toContain("--no-deps api node packages/db/dist/migrate.js --through 0096_observations_harvest_lookup_concurrently.sql");
+    expect(preRecreateMigration).toContain("current stack was left running");
+    expect(forbidRollback).toContain("SCHEMA_BEFORE_FILE");
+    expect(forbidRollback).toContain("is_rollback_compatible_migration");
+    expect(forbidRollback).toContain("ROLLBACK_FORBIDDEN=1");
+    expect(rollback).toContain('ROLLBACK_FORBIDDEN:-0');
+    expect(schemaCaptureIndex).toBeGreaterThan(capabilityGateIndex);
+    expect(forbidRollbackIndex).toBeGreaterThan(schemaCaptureIndex);
+    expect(preRecreateMigrationIndex).toBeGreaterThan(schemaCaptureIndex);
+    expect(releaseSyncIndex).toBeGreaterThan(preRecreateMigrationIndex);
+    expect(text).not.toContain("DEPLOY_EXTENSION_PERSONA_CAS_STATUS");
+    expect(text).not.toContain(".desktop-lifecycle-v2-cutover-complete");
+    expect(text).not.toContain("mark_lifecycle_cutover_complete");
+    expect(text).toContain("API_HEALTH_MAX_WAIT_SECONDS=1200");
+    expect(text).not.toContain("API_HEALTH_ATTEMPTS");
+    expect(waitForApi).toContain("SECONDS + API_HEALTH_MAX_WAIT_SECONDS");
+    expect(waitForApi).toContain('curl_status "$health_file" "$url" 5');
+    expect(initializeIndex).toBeGreaterThan(mainStart);
+    expect(recreateIndex).toBeGreaterThan(initializeIndex);
+  });
+
   it("deploy-production.sh routes compose recreate failures through rollback handling", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const rollback = getShellFunction(text, "rollback_remote_stack");

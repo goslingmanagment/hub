@@ -30,11 +30,13 @@ import {
   requireOwner,
   SESSION_COOKIE_NAME,
   type AuthPrincipal,
+  type PendingDeviceTokenActivationCredential,
 } from "../services/auth.ts";
 import {
   AppError,
   ForbiddenError,
   NotFoundError,
+  SnapshotRestartRequiredError,
   UnauthorizedError,
 } from "../services/errors.ts";
 import {
@@ -67,6 +69,7 @@ import { ensureOfapiQueues } from "../services/ofapi-events.ts";
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthPrincipal | null;
+    pendingDeviceTokenAuth?: PendingDeviceTokenActivationCredential | null;
     authPolicy?: { routeKey: string; verdict: AuthPolicyVerdict };
   }
   interface FastifyInstance {
@@ -154,6 +157,7 @@ export async function buildApiServer(appContext: AppContext) {
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
   server.decorateRequest("auth");
+  server.decorateRequest("pendingDeviceTokenAuth");
   server.decorateRequest("authPolicy");
 
   // Stage 4 fleet-verify: the desktop stamps x-client-version on every call;
@@ -231,6 +235,7 @@ export async function buildApiServer(appContext: AppContext) {
   const requestAuth = createRequestAuth(appContext);
   const {
     resolvePrincipal,
+    resolvePendingDeviceToken,
     requirePrincipal,
     hasValidSyncHealthMonitoringToken,
   } = requestAuth;
@@ -299,6 +304,7 @@ export async function buildApiServer(appContext: AppContext) {
     const verdict = await computeAuthPolicyVerdict({
       auth: entry.auth,
       resolvePrincipal: () => resolvePrincipal(request),
+      resolvePendingDeviceToken: async () => (await resolvePendingDeviceToken(request)) !== null,
       hasMonitoringToken: () => hasValidSyncHealthMonitoringToken(request),
       resolvePageAccess: async (pageLabel) => {
         const page = await findPageSummaryByLabel(appContext.db, pageLabel);
@@ -410,6 +416,17 @@ export async function buildApiServer(appContext: AppContext) {
         error: "Internal Server Error",
         message: "Response validation failed",
         statusCode: 500,
+      });
+      return;
+    }
+
+    if (error instanceof SnapshotRestartRequiredError) {
+      reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message,
+        statusCode: error.statusCode,
+        replayFloor: error.replayFloor,
+        snapshotPath: error.snapshotPath,
       });
       return;
     }

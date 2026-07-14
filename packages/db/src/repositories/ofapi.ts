@@ -1,9 +1,10 @@
-import { and, asc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
   ofapiCreditLedger,
   ofapiCreditState,
+  ofapiFanoutReplayState,
   ofapiSpendProjectionEvents,
   ofapiWebhookConfig,
   ofapiWebhookEvents,
@@ -13,6 +14,7 @@ import {
 } from "../schema.ts";
 
 const OFAPI_SPEND_TRANSACTION_PAGE_LOCK_NAMESPACE = 9_003_001;
+export const OFAPI_SYNC_EVENT_CHANNEL = "ofapi_sync_events";
 
 export async function withOfapiSpendTransactionPageLock<T>(
   db: Database,
@@ -949,6 +951,8 @@ export async function listOfapiSyncEventsForReplay(
   db: Database,
   input: {
     afterSeq: number;
+    /** Inclusive replay ceiling captured after the live subscription. */
+    throughSeq?: number;
     pageIds?: number[];
     limit: number;
   },
@@ -966,6 +970,9 @@ export async function listOfapiSyncEventsForReplay(
     .from(ofapiWebhookEvents)
     .where(and(
       gt(ofapiWebhookEvents.fanoutSeq, input.afterSeq),
+      ...(input.throughSeq === undefined
+        ? []
+        : [lte(ofapiWebhookEvents.fanoutSeq, input.throughSeq)]),
       eq(ofapiWebhookEvents.status, "processed"),
       isNotNull(ofapiWebhookEvents.syncEvent),
       isNotNull(ofapiWebhookEvents.platformAccountId),
@@ -989,7 +996,11 @@ export async function getMaxOfapiFanoutSeq(db: Database): Promise<number> {
     .select({ maxSeq: sql<number | null>`max(${ofapiWebhookEvents.fanoutSeq})::bigint` })
     .from(ofapiWebhookEvents);
 
-  return row?.maxSeq === null || row?.maxSeq === undefined ? 0 : Number(row.maxSeq);
+  const retainedHighWater = row?.maxSeq === null || row?.maxSeq === undefined
+    ? 0
+    : Number(row.maxSeq);
+  const state = await getOfapiFanoutReplayState(db);
+  return Math.max(retainedHighWater, state.replayFloor, state.legacyHighWater);
 }
 
 export interface OfapiFanoutReplayWindow {
@@ -1009,13 +1020,19 @@ export async function getOfapiFanoutReplayWindow(
     latestSeq: number | string | bigint | null;
   }>(sql`
     select
-      min(fanout_seq)::bigint as "oldestRetainedSeq",
-      coalesce((
-        select case when is_called then last_value else 0 end
-        from ofapi_webhook_events_fanout_seq
-      ), 0)::bigint as "latestSeq"
+      min(fanout_seq) filter (
+        where status = 'processed'
+          and sync_event is not null
+          and platform_account_id is not null
+      )::bigint as "oldestRetainedSeq",
+      greatest(
+        coalesce(max(fanout_seq), 0),
+        coalesce((
+          select greatest(replay_floor, legacy_high_water)
+          from ofapi_fanout_replay_state where singleton
+        ), 0)
+      )::bigint as "latestSeq"
     from ofapi_webhook_events
-    where fanout_seq is not null
   `);
   const row = result.rows[0];
   return {
@@ -1026,22 +1043,114 @@ export async function getOfapiFanoutReplayWindow(
   };
 }
 
+/** Global contiguous prefix through which v1 replayable rows were removed. */
+export async function getOfapiSyncReplayFloor(db: Database): Promise<number> {
+  return (await getOfapiFanoutReplayState(db)).replayFloor;
+}
+
+/** Replay deletion floor plus the one-time pre-0094 cursor high-water. */
+export async function getOfapiFanoutReplayState(db: Database): Promise<{
+  replayFloor: number;
+  legacyHighWater: number;
+}> {
+  const [row] = await db
+    .select({
+      replayFloor: ofapiFanoutReplayState.replayFloor,
+      legacyHighWater: ofapiFanoutReplayState.legacyHighWater,
+    })
+    .from(ofapiFanoutReplayState)
+    .where(eq(ofapiFanoutReplayState.singleton, true))
+    .limit(1);
+  return {
+    replayFloor: row?.replayFloor == null ? 0 : Number(row.replayFloor),
+    legacyHighWater: row?.legacyHighWater == null ? 0 : Number(row.legacyHighWater),
+  };
+}
+
 export async function deleteExpiredOfapiWebhookEvents(
   db: Database,
   receivedBefore: Date,
 ) {
   // Stage 1 belt-and-braces guard: a journal row may only be deleted once its
-  // projection and archive bookkeeping show it consumed — 'pending'/'failed'
-  // rows are never deletable regardless of age ('none' means no consumer wants
-  // the row). This permanently closes the "expire before the projection
-  // consumes" class even if the retention window is ever shortened again.
-  await db
-    .delete(ofapiWebhookEvents)
-    .where(and(
-      lt(ofapiWebhookEvents.receivedAt, receivedBefore),
-      notInArray(ofapiWebhookEvents.projectionStatus, ["pending", "failed"]),
-      notInArray(ofapiWebhookEvents.archiveStatus, ["pending", "failed"]),
-    ));
+  // projection and archive bookkeeping show it consumed. Replayable rows are
+  // additionally prefix-only: the first recent/pending/failed row blocks every
+  // later replayable deletion, so one global floor is a complete continuity
+  // proof rather than a lossy max-deleted approximation.
+  await db.transaction(async (tx) => {
+    // Test resets and disaster-recovery restores can legitimately start from
+    // an empty singleton table; recreate the zero state idempotently before
+    // taking the serialization lock.
+    await tx
+      .insert(ofapiFanoutReplayState)
+      .values({ singleton: true, replayFloor: 0 })
+      .onConflictDoNothing({ target: ofapiFanoutReplayState.singleton });
+    const locked = await tx.execute<{ replayFloor: string | number }>(sql`
+      select replay_floor as "replayFloor"
+      from ofapi_fanout_replay_state
+      where singleton
+      for update
+    `);
+    const replayFloor = Number(locked.rows[0]?.replayFloor ?? 0);
+    await tx.execute(sql`
+      with blocker as (
+        select min(e.fanout_seq) as fanout_seq
+        from ofapi_webhook_events e
+        where e.fanout_seq > ${replayFloor}
+          and e.status = 'processed'
+          and e.sync_event is not null
+          and e.platform_account_id is not null
+          and not (
+            e.received_at < ${receivedBefore}
+            and e.projection_status not in ('pending', 'failed')
+            and e.archive_status not in ('pending', 'failed')
+          )
+      ), removed as (
+        delete from ofapi_webhook_events e
+        using blocker
+        where e.received_at < ${receivedBefore}
+          and e.status <> 'pending'
+          and e.projection_status not in ('pending', 'failed')
+          and e.archive_status not in ('pending', 'failed')
+          and (
+            e.status <> 'processed'
+            or e.sync_event is null
+            or e.fanout_seq is null
+            or e.platform_account_id is null
+            or e.fanout_seq <= ${replayFloor}
+            or (
+              e.fanout_seq > ${replayFloor}
+              and (blocker.fanout_seq is null or e.fanout_seq < blocker.fanout_seq)
+            )
+          )
+        returning case
+          when e.status = 'processed'
+           and e.sync_event is not null
+           and e.fanout_seq is not null
+           and e.platform_account_id is not null
+          then e.fanout_seq
+          else null
+        end as replay_seq
+      ), advanced as (
+        update ofapi_fanout_replay_state state
+        set replay_floor = greatest(
+              state.replay_floor,
+              coalesce((select max(replay_seq) from removed), state.replay_floor)
+            ),
+            updated_at = now()
+        where state.singleton
+        returning state.replay_floor
+      )
+      select replay_floor from advanced
+    `);
+    const deletedThrough = await getOfapiSyncReplayFloor(tx as Database);
+    if (deletedThrough > replayFloor) {
+      // Cleanup itself must wake a live API hub: the deleted row's earlier
+      // settle NOTIFY may still be waiting behind this transaction.
+      await tx.execute(sql`
+        select pg_notify(${OFAPI_SYNC_EVENT_CHANNEL}, ${`replay-floor:${deletedThrough}`})
+      `);
+    }
+  });
 }
 
 function utcDayOf(now: Date) {

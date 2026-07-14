@@ -1,5 +1,6 @@
 import {
   closeOrphanedSyncRuns,
+  deleteExpiredPendingDeviceTokens,
   deleteExpiredRawPayloads,
   deleteExpiredSyncObservability,
   getLatestScheduledReportDateOnOrBefore,
@@ -183,10 +184,15 @@ export async function startWorkerServices(
   });
 
   await boss.work(RAW_PAYLOAD_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
-    await deleteExpiredRawPayloads(app.db, new Date());
+    const now = new Date();
+    await deleteExpiredRawPayloads(app.db, now);
+    // Pending device credentials are deliberately short-lived custody, not an
+    // audit fact. Reuse the already-scheduled nightly retention job so crashed
+    // Desktop reservations cannot accumulate forever.
+    await deleteExpiredPendingDeviceTokens(app.db, now);
     await deleteExpiredSyncObservability(
       app.db,
-      new Date(Date.now() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000),
+      new Date(now.getTime() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000),
     );
   });
 

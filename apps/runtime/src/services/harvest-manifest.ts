@@ -1,6 +1,18 @@
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 
+export const CANONICAL_HARVEST_KINDS = [
+  "harvest.messages",
+  "harvest.fan_transactions",
+  "harvest.outbox",
+  "harvest.message_guard_events",
+  "harvest.usage_events",
+  "harvest.ai_spend_log",
+  "harvest.credit_log",
+] as const;
+
+const canonicalHarvestKindSet = new Set<string>(CANONICAL_HARVEST_KINDS);
+
 export interface HarvestManifest {
   machineId: string;
   appVersion?: string;
@@ -29,6 +41,23 @@ function parseManifest(text: string, path: string): HarvestManifest {
   }
   if (!Array.isArray(manifest.tables)) {
     throw new Error(`Harvest manifest ${path} must carry tables[]`);
+  }
+  const kinds: string[] = [];
+  for (const entry of manifest.tables as unknown[]) {
+    if (entry === null || typeof entry !== "object" || typeof (entry as { kind?: unknown }).kind !== "string") {
+      throw new Error(`Harvest manifest ${path} must contain each canonical harvest kind exactly once`);
+    }
+    kinds.push((entry as { kind: string }).kind);
+  }
+  if (
+    kinds.length !== CANONICAL_HARVEST_KINDS.length ||
+    new Set(kinds).size !== CANONICAL_HARVEST_KINDS.length ||
+    kinds.some((kind) => !canonicalHarvestKindSet.has(kind))
+  ) {
+    throw new Error(
+      `Harvest manifest ${path} must contain each canonical harvest kind exactly once: `
+        + CANONICAL_HARVEST_KINDS.join(", "),
+    );
   }
   return manifest as HarvestManifest;
 }

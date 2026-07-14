@@ -299,7 +299,8 @@ export interface OfapiClient {
     input: OfapiMediaMessageInput,
   ): Promise<OfapiSentMessage>;
   // Decision #57: exactly one advisory typing beacon. The endpoint is documented
-  // as free, so fallback credit accounting records zero credits if _meta is absent.
+  // as free, so an absent/non-charging _meta does not create a permanent credit
+  // ledger row; an unexpected provider-reported charge is still recorded.
   startTyping?(
     context: OfapiRequestContext,
     accountId: string,
@@ -568,6 +569,10 @@ export function createOfapiClient(input: {
     attemptNumber: number;
     fallbackCredits?: number;
     fallbackEstimated?: boolean;
+    /** Ephemeral free operations (typing) must not create one permanent
+     * ledger row per UI beacon. A provider-reported non-zero charge still
+     * reaches the sink and is never hidden. */
+    suppressZeroCredits?: boolean;
     actorUserId?: number | null;
   }) {
     if (!onCreditSpend) {
@@ -586,6 +591,9 @@ export function createOfapiClient(input: {
       }
       : resolveOfapiCreditSpend({ httpStatus: report.httpStatus, meta });
     if (!spend) {
+      return;
+    }
+    if (report.suppressZeroCredits === true && spend.credits === 0) {
       return;
     }
 
@@ -1085,6 +1093,7 @@ export function createOfapiClient(input: {
       attemptNumber: 1,
       fallbackCredits: 0,
       fallbackEstimated: true,
+      suppressZeroCredits: true,
     });
 
     if (!response.ok) {

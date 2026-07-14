@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   closeOrphanedSyncRuns: vi.fn(),
+  deleteExpiredPendingDeviceTokens: vi.fn(),
   deleteExpiredRawPayloads: vi.fn(),
   deleteExpiredSyncObservability: vi.fn(),
   getLatestScheduledReportDateOnOrBefore: vi.fn(),
@@ -149,6 +150,18 @@ function getTelegramWorkHandler(boss: {
     throw new Error("Expected telegram.daily-report handler to be registered");
   }
 
+  return handler;
+}
+
+function getRawPayloadCleanupHandler(boss: {
+  work: ReturnType<typeof vi.fn>;
+}) {
+  const workCalls = boss.work.mock.calls as unknown as Array<[string, unknown, () => Promise<unknown>]>;
+  const workCall = workCalls.find(([queueName]) => queueName === "raw-payload-cleanup");
+  const handler = workCall?.[2];
+  if (!handler) {
+    throw new Error("Expected raw-payload-cleanup handler to be registered");
+  }
   return handler;
 }
 
@@ -311,6 +324,13 @@ describe("worker startup", () => {
     expect(ofapiDmAnalyticsMocks.ensureOfapiDmAnalyticsSchedules).not.toHaveBeenCalled();
     expect(ofapiDmAnalyticsMocks.startOfapiDmAnalyticsWorker).toHaveBeenCalledWith(app, boss);
     expect(app.logger.info).toHaveBeenCalledWith("Worker started");
+
+    await expect(getRawPayloadCleanupHandler(boss)()).resolves.toBeUndefined();
+    expect(dbMocks.deleteExpiredPendingDeviceTokens).toHaveBeenCalledTimes(1);
+    expect(dbMocks.deleteExpiredPendingDeviceTokens).toHaveBeenCalledWith(
+      app.db,
+      new Date("2026-03-23T11:00:00.000Z"),
+    );
 
     await runtime.shutdown();
 

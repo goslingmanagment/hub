@@ -39,6 +39,29 @@ export class ConflictError extends AppError {
   }
 }
 
+/** The selected persona changed after the client read the metadata catalog. */
+export class PersonaDefinitionChangedError extends AppError {
+  constructor() {
+    super(
+      "AI persona definition changed; refresh the persona catalog and retry",
+      409,
+      "persona_definition_changed",
+    );
+  }
+}
+
+export class SnapshotRestartRequiredError extends AppError {
+  readonly snapshotPath = "/api/v1/events/snapshot" as const;
+
+  constructor(readonly replayFloor: number) {
+    super(
+      `Snapshot cursor is below replay continuity floor ${replayFloor}; restart without snapshotCursor/stateCursor`,
+      409,
+      "sync_snapshot_restart_required",
+    );
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(message = "Too many requests") {
     super(message, 429, "rate_limit_exceeded");

@@ -11,9 +11,15 @@ import {
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
 import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
-import { BadRequestError, NotFoundError, ProductGateError } from "../../../services/errors.ts";
+import {
+  BadRequestError,
+  NotFoundError,
+  PersonaDefinitionChangedError,
+  ProductGateError,
+} from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
+import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import {
   isFanProfileFeatureEnabled,
   loadFanBio,
@@ -31,9 +37,9 @@ import {
   DEFAULT_MESSAGE_COUNT_BY_BUCKET,
   FEATURE_POLICIES,
   HI_GREETING_MAX_TRANSCRIPT,
+  BUNDLED_LORA_PERSONALITY_ID,
   analyzePingSegment,
   buildPrompt,
-  createBundledPersonalities,
   isOperationFeature,
   type OperationFeature,
   type Personality,
@@ -62,6 +68,8 @@ export interface AiFeatureRequestBody {
   conversationRef: string;
   fanRef?: string | null;
   personaKey?: string | null;
+  /** Optional cache/provenance precondition from the metadata catalog. */
+  expectedPersonaDefinitionId?: string;
   model?: string;
   reasoningEffort?: AiGatewayReasoningEffort;
   replyTone?: ReplyTone;
@@ -86,20 +94,36 @@ export interface AiFeatureRequestBody {
 async function resolvePersona(
   app: Pick<AppContext, "db">,
   personaKey: string | null | undefined,
-): Promise<Personality> {
-  if (personaKey) {
-    const stored = await findAiPersonaByKey(app.db, personaKey);
-    if (!stored) {
+  expectedDefinitionId: string | undefined,
+): Promise<{ personality: Personality; definitionId: string }> {
+  // Omitted personaKey is the legacy spelling of the default bundled key, not
+  // permission to bypass Core lifecycle state with source-code prompt bytes.
+  const resolvedKey = personaKey || BUNDLED_LORA_PERSONALITY_ID;
+  const stored = await findAiPersonaByKey(app.db, resolvedKey);
+  if (!stored) {
+    // A definition-aware client selected this catalog entry before it was
+    // archived/deleted. Preserve the same structured refresh signal as a
+    // byte-level definition mismatch; legacy callers retain their historical
+    // 400 distinction for unavailable keys.
+    if (expectedDefinitionId !== undefined) {
+      throw new PersonaDefinitionChangedError();
+    }
+    if (personaKey) {
       throw new BadRequestError(`Unknown persona: ${personaKey}`);
     }
-    return {
+    throw new BadRequestError(
+      `Default persona ${BUNDLED_LORA_PERSONALITY_ID} is unavailable; select an active persona`,
+    );
+  }
+  return {
+    personality: {
       id: stored.key,
       name: stored.displayName,
       content: stored.systemBlock,
       updatedAt: stored.updatedAt.getTime(),
-    };
-  }
-  return createBundledPersonalities()[0]!;
+    },
+    definitionId: aiPersonaDefinitionId(stored),
+  };
 }
 
 export async function prepareAiFeatureStream(
@@ -136,7 +160,17 @@ export async function prepareAiFeatureStream(
   const pageId = stored.page.id;
   const fanRef = body.fanRef ?? body.conversationRef;
 
-  const persona = await resolvePersona(app, body.personaKey);
+  const persona = await resolvePersona(
+    app,
+    body.personaKey,
+    body.expectedPersonaDefinitionId,
+  );
+  if (
+    body.expectedPersonaDefinitionId !== undefined
+    && body.expectedPersonaDefinitionId !== persona.definitionId
+  ) {
+    throw new PersonaDefinitionChangedError();
+  }
 
   let contextValues: {
     transcript: string;
@@ -288,7 +322,7 @@ export async function prepareAiFeatureStream(
 
   const prompt = buildPrompt({
     feature,
-    personality: persona,
+    personality: persona.personality,
     platform: body.platform,
     transcript: contextValues.transcript,
     fanSpendingData: contextValues.fanSpendingData,
@@ -346,10 +380,15 @@ export async function prepareAiFeatureStream(
     app,
     principal,
     gatewayBody,
-    contextManifest !== undefined || debugFrame !== undefined
+    contextManifest !== undefined
+      || debugFrame !== undefined
+      || body.expectedPersonaDefinitionId !== undefined
       ? {
         ...(contextManifest !== undefined ? { contextManifest } : {}),
         ...(debugFrame !== undefined ? { debugFrame } : {}),
+        ...(body.expectedPersonaDefinitionId !== undefined
+          ? { personaDefinitionId: persona.definitionId }
+          : {}),
       }
       : undefined,
   );

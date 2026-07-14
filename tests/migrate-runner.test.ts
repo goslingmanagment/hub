@@ -77,6 +77,68 @@ describe("runMigrations", () => {
     }
   });
 
+  it("runs explicitly marked idempotent concurrent-index migrations outside a transaction", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-concurrent-"));
+    const migration = "-- agency-hub:no-transaction\n"
+      + "-- agency-hub:statement\nselect 1;\n"
+      + "-- agency-hub:statement\n-- agency-hub:execute-returned-statements\nselect 'generated' as statement;\n";
+    const db = {
+      query: vi.fn(async (text: string) => text === "select 'generated' as statement;"
+        ? { rowCount: 1, rows: [{ statement: "create index concurrently if not exists probe_idx on probe(id);" }] }
+        : { rowCount: 0, rows: [] }),
+    };
+
+    try {
+      await writeFile(path.join(tempDir, "0001_concurrent.sql"), migration);
+      await expect(runMigrations({
+        db: db as never,
+        migrationsDir: tempDir,
+      })).resolves.toBeUndefined();
+
+      expect(db.query).toHaveBeenCalledWith(
+        "create index concurrently if not exists probe_idx on probe(id);",
+      );
+      expect(db.query).toHaveBeenCalledWith(
+        "insert into schema_migrations (id) values ($1)",
+        ["0001_concurrent.sql"],
+      );
+      expect(db.query).not.toHaveBeenCalledWith("begin");
+      expect(db.query).not.toHaveBeenCalledWith("commit");
+      expect(db.query).not.toHaveBeenCalledWith("rollback");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies an exact bounded prefix for a pre-recreate long migration", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-through-"));
+    const db = {
+      query: vi.fn(async (text: string) => ({ rowCount: 0, rows: [], command: text })),
+    };
+
+    try {
+      await writeFile(path.join(tempDir, "0001_first.sql"), "select 1;\n");
+      await writeFile(path.join(tempDir, "0002_long.sql"), "select 2;\n");
+      await writeFile(path.join(tempDir, "0003_future.sql"), "select 3;\n");
+
+      await runMigrations({
+        db: db as never,
+        migrationsDir: tempDir,
+        through: "0002_long.sql",
+      });
+
+      expect(db.query).toHaveBeenCalledWith(expect.stringContaining("select 1;"));
+      expect(db.query).toHaveBeenCalledWith(expect.stringContaining("select 2;"));
+      expect(db.query).not.toHaveBeenCalledWith(expect.stringContaining("select 3;"));
+      expect(db.query).not.toHaveBeenCalledWith(
+        "insert into schema_migrations (id) values ($1)",
+        ["0003_future.sql"],
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("ignores dotfile SQL metadata in migrations directories", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-dotfiles-"));
     const db = {

@@ -16,13 +16,19 @@ body remain handler-checked and are noted per route in the service layer.
 | `session` | dashboard cookie session (owner/team_lead) |
 | `any-session` | any live cookie session, any human role |
 | `owner-session` | dashboard cookie session, owner role only |
-| `apiKey` | bearer API key |
+| `apiKey` | bearer API key or device token |
+| `device-token` | device-token bearer only |
+| `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `any` | any authenticated principal |
 
-## Routes (151)
+## Routes (160)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
+| GET | `/api/v1/admin/ai/personas` | `adminAiPersonasList` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ai/personas` | `adminAiPersonaCreate` | `owner-session` | — | — |
+| DELETE | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaArchive` | `owner-session` | — | — |
+| PUT | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaUpdate` | `owner-session` | — | — |
 | GET | `/api/v1/admin/config` | `adminConfig` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/config` | `adminConfigUpdate` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/config/:key` | `adminConfigClear` | `owner-session` | — | — |
@@ -79,6 +85,7 @@ body remain handler-checked and are noted per route in the service layer.
 | DELETE | `/api/v1/admin/users/:username/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/:username/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/device-tokens` | `adminIssueDeviceToken` | `owner-session` | — | — |
+| PATCH | `/api/v1/admin/users/:username/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — |
 | GET | `/api/v1/admin/users/:username/grants` | `adminListUserGrants` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/models` | `adminGrantModel` | `owner-session` | — | — |
 | DELETE | `/api/v1/admin/users/:username/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — |
@@ -89,6 +96,7 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — |
 | POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `apiKey` | — | — |
+| GET | `/api/v1/ai/persona-catalog` | `aiPersonaCatalog` | `apiKey` | — | — |
 | GET | `/api/v1/ai/personas` | `aiPersonasList` | `apiKey` | — | — |
 | DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `apiKey` | — | — |
 | PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `apiKey` | — | — |
@@ -98,6 +106,9 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/archive/search` | `archiveSearch` | `session` | — | — |
 | POST | `/api/v1/auth/change-password` | `authChangePassword` | `any-session` | — | — |
 | POST | `/api/v1/auth/device-tokens` | `authIssueDeviceToken` | `any-session` | — | — |
+| POST | `/api/v1/auth/device-tokens/activate` | `authActivateDeviceToken` | `pending-device-token` | — | — |
+| DELETE | `/api/v1/auth/device-tokens/current` | `authRevokeCurrentDeviceToken` | `device-token` | — | — |
+| POST | `/api/v1/auth/device-tokens/reservations` | `authReserveDeviceToken` | `any-session` | — | — |
 | POST | `/api/v1/auth/login` | `login` | `public` | — | — |
 | POST | `/api/v1/auth/logout` | `logout` | `public` | — | — |
 | GET | `/api/v1/auth/me` | `me` | `any` | — | — |

@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { KERNEL_CONTRACT_HASH } from "@agency_hub_core/contracts";
 import {
   createOnlyFansPage,
   createUser,
@@ -55,6 +56,8 @@ import {
   assignPageToUser,
   createUserAccount,
   issueChatterApiKey,
+  issueDeviceTokenForUsername,
+  setDeviceTokenHarvestCapabilityForUsername,
   setUserPassword,
   unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
@@ -6912,6 +6915,8 @@ describe("api integration", () => {
     expect(healthy.statusCode).toBe(200);
     expect(healthy.json()).toMatchObject({
       status: "ok",
+      contractHash: KERNEL_CONTRACT_HASH,
+      capabilities: [],
       checks: {
         api: {
           status: "ok",
@@ -6923,6 +6928,7 @@ describe("api integration", () => {
       },
     });
     expect(typeof healthy.json().timestamp).toBe("string");
+    expect(healthy.json().capabilities).toEqual([]);
     expect(typeof healthy.json().checks.database.latencyMs).toBe("number");
 
     const querySpy = vi
@@ -6939,6 +6945,8 @@ describe("api integration", () => {
     expect(degraded.statusCode).toBe(503);
     expect(degraded.json()).toMatchObject({
       status: "degraded",
+      contractHash: KERNEL_CONTRACT_HASH,
+      capabilities: [],
       checks: {
         api: {
           status: "ok",
@@ -6950,6 +6958,7 @@ describe("api integration", () => {
       },
     });
     expect(degraded.json().checks.database.error).not.toContain("db probe failed");
+    expect(degraded.json().capabilities).toEqual([]);
     expect(typeof degraded.json().checks.database.latencyMs).toBe("number");
   });
 
@@ -9963,6 +9972,8 @@ describe("api integration", () => {
     }
 
     const appContext = createTestAppContext(testDb);
+    const HARVEST_MACHINE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const HV_UPLOADER_MACHINE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const issuedKey = await issueChatterApiKey(appContext, {
       username: "anton",
       pageLabel: "lana",
@@ -10082,13 +10093,25 @@ describe("api integration", () => {
     });
     expect(unauthenticated.statusCode).toBe(401);
 
-    // Stage 12: harvest kinds journal VERBATIM under the desktop-harvest
+    // Stage 12: the client-version header alone grants nothing. An owner must
+    // bind this exact device token to the preserved Desktop machine first.
+    const harvestDevice = await issueDeviceTokenForUsername(appContext, {
+      username: "anton",
+      label: "anton-harvest-desktop",
+    }, { source: "test" });
+    await setDeviceTokenHarvestCapabilityForUsername(appContext, {
+      username: "anton",
+      deviceTokenId: harvestDevice.id,
+      machineId: HARVEST_MACHINE,
+    }, { source: "test" });
+
+    // Authorized harvest kinds journal VERBATIM under the desktop-harvest
     // producer (x-client-version 'harvest-<app version>').
     const harvest = await server.inject({
       method: "POST",
       url: "/api/v1/ingest/observations",
       headers: {
-        authorization: `Bearer ${issuedKey.key}`,
+        authorization: `Bearer ${harvestDevice.token}`,
         "x-client-version": "harvest-0.1.29",
       },
       payload: {
@@ -10096,7 +10119,7 @@ describe("api integration", () => {
           clientEventId: "55555555-5555-4555-8555-555555555555",
           kind: "harvest.outbox",
           observedAt: "2026-05-01T09:00:00.000Z",
-          payload: { table: "outbox", machineId: "m-1", row: { id: 7 } },
+          payload: { table: "outbox", machineId: HARVEST_MACHINE, row: { id: 7 } },
         }],
       },
     });
@@ -10123,15 +10146,24 @@ describe("api integration", () => {
       username: "hv-uploader",
       role: "chatter",
     }, { source: "cli" });
-    const harvestKey = await issueChatterApiKey(appContext, {
+    await issueChatterApiKey(appContext, {
       username: "hv-uploader",
       pageLabel: "hv-of",
     }, { source: "cli" });
+    const harvestUploaderDevice = await issueDeviceTokenForUsername(appContext, {
+      username: "hv-uploader",
+      label: "hv-harvest-desktop",
+    }, { source: "test" });
+    await setDeviceTokenHarvestCapabilityForUsername(appContext, {
+      username: "hv-uploader",
+      deviceTokenId: harvestUploaderDevice.id,
+      machineId: HV_UPLOADER_MACHINE,
+    }, { source: "test" });
     const resolved = await server.inject({
       method: "POST",
       url: "/api/v1/ingest/observations",
       headers: {
-        authorization: `Bearer ${harvestKey.key}`,
+        authorization: `Bearer ${harvestUploaderDevice.token}`,
         "x-client-version": "harvest-0.1.29",
       },
       payload: {
@@ -10141,7 +10173,7 @@ describe("api integration", () => {
           observedAt: "2026-05-01T09:05:00.000Z",
           payload: {
             table: "messages",
-            machineId: "m-1",
+            machineId: HV_UPLOADER_MACHINE,
             ofapiAccountId: "acct_hv",
             row: { message_id: "1", chat_id: "9", created_at: "2026-05-01T09:05:00+00:00", is_sent_by_me: 0 },
           },
@@ -10161,7 +10193,7 @@ describe("api integration", () => {
       method: "POST",
       url: "/api/v1/ingest/observations",
       headers: {
-        authorization: `Bearer ${issuedKey.key}`,
+        authorization: `Bearer ${harvestDevice.token}`,
         "x-client-version": "harvest-0.1.29",
       },
       payload: {
@@ -10171,7 +10203,7 @@ describe("api integration", () => {
           observedAt: "2026-05-01T09:06:00.000Z",
           payload: {
             table: "messages",
-            machineId: "m-2",
+            machineId: HARVEST_MACHINE,
             ofapiAccountId: "acct_hv",
             row: { message_id: "2", chat_id: "9", created_at: "2026-05-01T09:06:00+00:00", is_sent_by_me: 0 },
           },

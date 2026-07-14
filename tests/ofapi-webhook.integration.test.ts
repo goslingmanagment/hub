@@ -380,7 +380,7 @@ describe("OFAPI event processing", () => {
     })).toEqual([]);
   });
 
-  it("prunes only consumed journal rows past the retention window", async (context) => {
+  it("retains a consumed replay row when an older row blocks the contiguous prune prefix", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -403,9 +403,9 @@ describe("OFAPI event processing", () => {
       .orderBy(ofapiWebhookEvents.id);
     expect(rows).toHaveLength(3);
     const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
-    // Both message-shaped rows age out of the window; only the one whose
-    // projection+archive bookkeeping shows consumed may be deleted (Stage 1
-    // belt-and-braces guard).
+    // Both message-shaped rows age out of the window. The later row is fully
+    // consumed, but the first fresh replayable row is a continuity blocker:
+    // replay deletion is prefix-only, so the later frame must remain too.
     await testDb.pool.query(
       `update ofapi_webhook_events
        set received_at = $1,
@@ -423,7 +423,7 @@ describe("OFAPI event processing", () => {
     await cleanupExpiredOfapiEvents(appContext);
 
     const remaining = await appContext.db.select().from(ofapiWebhookEvents).orderBy(ofapiWebhookEvents.id);
-    expect(remaining.map((row) => row.id)).toEqual([rows[0]!.id, rows[2]!.id]);
+    expect(remaining.map((row) => row.id)).toEqual(rows.map((row) => row.id));
   });
 });
 

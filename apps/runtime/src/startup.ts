@@ -4,6 +4,7 @@ import { loadConfig } from "@agency_hub_core/shared";
 import { runMigrations } from "../../../packages/db/src/migrate-runner.ts";
 import { runApiRuntime } from "./api-runtime.ts";
 import { runSchedulerRuntime } from "./scheduler-runtime.ts";
+import { PUBLIC_RUNTIME_CAPABILITIES } from "./services/public-capabilities.ts";
 import { runWorkerRuntime } from "./worker-runtime.ts";
 
 const MIGRATION_LOCK_KEY_1 = 31415;
@@ -45,6 +46,11 @@ function resolveRole() {
 }
 
 export async function main() {
+  if (process.argv[2] === "print-public-capabilities") {
+    process.stdout.write(`${JSON.stringify(PUBLIC_RUNTIME_CAPABILITIES)}\n`);
+    return;
+  }
+
   const role = resolveRole();
   await runStartupMigrations();
 

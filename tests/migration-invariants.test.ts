@@ -86,4 +86,40 @@ describe("database migration invariants", () => {
     expect(migration).toContain('ALTER COLUMN "credentials_updated_at" SET NOT NULL');
     expect(migration).not.toContain('ADD COLUMN "credentials_updated_at" timestamp with time zone DEFAULT now() NOT NULL');
   });
+
+  it("separates the zero replay floor from the locked legacy cursor high-water", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0094_event_replay_continuity.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain('CREATE TABLE "ofapi_fanout_replay_state"');
+    expect(migration).toContain('"singleton" boolean PRIMARY KEY');
+    expect(migration).toContain('LOCK TABLE "ofapi_webhook_events" IN ACCESS EXCLUSIVE MODE');
+    expect(migration).toContain('"legacy_high_water" bigint DEFAULT 0 NOT NULL');
+    expect(migration).toContain('CASE WHEN "is_called" THEN "last_value" ELSE 0 END');
+    expect(migration).toContain('FROM "ofapi_webhook_events_fanout_seq"');
+    expect(migration).not.toContain('max("fanout_seq")');
+    expect(migration).not.toContain('"fanout_seq" bigint PRIMARY KEY');
+  });
+
+  it("builds the harvest observation lookup concurrently and idempotently", async () => {
+    const base = await readFile(
+      "packages/db/migrations/0090_device_token_harvest_capability.sql",
+      "utf8",
+    );
+    const index = await readFile(
+      "packages/db/migrations/0096_observations_harvest_lookup_concurrently.sql",
+      "utf8",
+    );
+
+    expect(base).not.toContain("observations_harvest_machine_client_event_idx");
+    expect(index.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(index).toContain("on only observations");
+    expect(index).toContain("-- agency-hub:execute-returned-statements");
+    expect(index).toContain("drop index concurrently if exists %I.%I");
+    expect(index).toContain("not index_state.indisvalid");
+    expect(index).toContain("create index concurrently if not exists %I");
+    expect(index).toContain("alter index observations_harvest_machine_client_event_idx attach partition");
+  });
 });

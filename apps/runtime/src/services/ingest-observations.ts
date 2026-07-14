@@ -8,7 +8,12 @@
 
 import { createHash } from "node:crypto";
 
-import { findPageByLabel, insertObservation, listOfapiMappedPages } from "@agency_hub_core/db";
+import {
+  findPageByLabel,
+  hasHarvestObservationClientEvent,
+  insertObservation,
+  listOfapiMappedPages,
+} from "@agency_hub_core/db";
 
 import type {
   IngestObservationsBody,
@@ -44,8 +49,12 @@ export const HARVEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
 const HARVEST_VERSION_PREFIX = "harvest-";
 const HARVEST_PRODUCER_PREFIX = "desktop-harvest@";
 
+export function isHarvestClientVersion(clientVersion: string) {
+  return clientVersion.startsWith(HARVEST_VERSION_PREFIX);
+}
+
 export function ingestProducerForClientVersion(clientVersion: string) {
-  return clientVersion.startsWith(HARVEST_VERSION_PREFIX)
+  return isHarvestClientVersion(clientVersion)
     ? `${HARVEST_PRODUCER_PREFIX}${clientVersion.slice(HARVEST_VERSION_PREFIX.length)}`
     : `desktop@${clientVersion}`;
 }
@@ -99,6 +108,8 @@ export async function ingestClientObservations(
      */
     allowedPageIds: readonly number[] | null;
     clientVersion: string;
+    /** Server-derived from the authenticated device-token row, never a header. */
+    authorizedHarvestMachineId: string | null;
     events: IngestObservationsBody["events"];
   },
 ): Promise<IngestObservationsResponse> {
@@ -111,6 +122,23 @@ export async function ingestClientObservations(
 
   const producer = ingestProducerForClientVersion(input.clientVersion);
   const harvestProducer = isHarvestProducer(producer);
+  if (harvestProducer && !input.authorizedHarvestMachineId) {
+    throw new Error("Harvest producer reached ingest without a server-authorized machine");
+  }
+
+  // The capability is token + machine bound. A capable token cannot use a
+  // second caller-chosen machine id to escape machine-stable deduplication or
+  // inflate reconciliation counts.
+  if (harvestProducer) {
+    for (const [index, event] of input.events.entries()) {
+      if (
+        HARVEST_KIND_ALLOWLIST.has(event.kind) &&
+        event.payload.machineId !== input.authorizedHarvestMachineId
+      ) {
+        throw new InvalidIngestEventError(index, "machineId does not match the device harvest capability");
+      }
+    }
+  }
 
   // Resolve page labels once per batch. An unknown or out-of-scope label
   // journals with a null account (capture-first) — the fact is not lost over
@@ -159,6 +187,14 @@ export async function ingestClientObservations(
       const page = harvestAccountRef ??
         (event.pageLabel ? pageByLabel.get(event.pageLabel) ?? null : null);
       const kind = ingestKindFor(event.kind, producer);
+      const trustedHarvestEvent = harvestProducer && HARVEST_KIND_ALLOWLIST.has(event.kind);
+      if (trustedHarvestEvent && await hasHarvestObservationClientEvent(tx, {
+        machineId: input.authorizedHarvestMachineId!,
+        clientEventId: event.clientEventId,
+      })) {
+        duplicates += 1;
+        continue;
+      }
       const result = await insertObservation(tx, {
         source: "client_capture",
         producer,
@@ -167,7 +203,9 @@ export async function ingestClientObservations(
         kind,
         payload: event.payload,
         payloadHash: createHash("sha256").update(JSON.stringify(event.payload)).digest(),
-        idempotencyKey: `${input.principalUserId}:${event.clientEventId}`,
+        idempotencyKey: trustedHarvestEvent
+          ? `${input.authorizedHarvestMachineId}:${event.clientEventId}`
+          : `${input.principalUserId}:${event.clientEventId}`,
         observedAt: observedAts[index],
         actorPrincipalId: input.principalUserId,
       });

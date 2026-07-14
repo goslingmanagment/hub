@@ -215,6 +215,12 @@ ROLLBACK_RELEASE_FILES_CAPTURED=0
 ROLLBACK_RELEASE_FILES_RESTORED=0
 SCHEMA_BASELINE_CAPTURED=0
 ROLLBACK_COMPOSE_RECREATE_FAILED=0
+ROLLBACK_FORBIDDEN=0
+ROLLBACK_FORBIDDEN_REASON=""
+# Startup owns schema migration. The concurrent observations index can run for
+# ten minutes on production data while every API process correctly stays
+# pre-listen, so health verification must cover that migration window.
+API_HEALTH_MAX_WAIT_SECONDS=1200
 LOCAL_DEPLOY_LOCK_DIR=""
 LOCAL_DEPLOY_LOCK_ACQUIRED=0
 REMOTE_DEPLOY_LOCK_DIR="${APP_DIR%/}/.deploy.lock"
@@ -532,6 +538,24 @@ schema_migration_delta_allows_rollback() {
   return 0
 }
 
+forbid_rollback_for_pending_pre_recreate_migrations() {
+  local migration_path
+  local migration
+  local through="0096_observations_harvest_lookup_concurrently.sql"
+
+  for migration_path in "${ROOT_DIR}"/packages/db/migrations/*.sql; do
+    migration="${migration_path##*/}"
+    [[ "$migration" > "$through" ]] && continue
+    grep -Fxq "$migration" "$SCHEMA_BEFORE_FILE" && continue
+    if ! is_rollback_compatible_migration "$migration"; then
+      ROLLBACK_FORBIDDEN=1
+      ROLLBACK_FORBIDDEN_REASON="pending non-rollback-compatible pre-recreate migration: ${migration}"
+      log "Automatic rollback disabled before migration starts: ${ROLLBACK_FORBIDDEN_REASON}"
+      return 0
+    fi
+  done
+}
+
 read_remote_env_value() {
   local key="$1"
   local escaped_key
@@ -541,6 +565,11 @@ read_remote_env_value() {
 }
 
 rollback_remote_stack() {
+  if [[ "${ROLLBACK_FORBIDDEN:-0}" == "1" ]]; then
+    log "Rollback skipped; ${ROLLBACK_FORBIDDEN_REASON:-a pre-recreate migration made rollback unsafe}"
+    return 0
+  fi
+
   if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
     log "Rollback skipped; no previous image was captured"
     return 0
@@ -678,12 +707,11 @@ curl_status_with_monitoring_token() {
 wait_for_api_health() {
   local health_file="$1"
   local url="${VERIFY_URL%/}/api/v1/health"
-  local attempt=0
+  local deadline=$((SECONDS + API_HEALTH_MAX_WAIT_SECONDS))
 
-  while (( attempt < 60 )); do
-    attempt=$((attempt + 1))
+  while (( SECONDS < deadline )); do
     local status_code
-    status_code="$(curl_status "$health_file" "$url" || true)"
+    status_code="$(curl_status "$health_file" "$url" 5 || true)"
     if [[ "$status_code" == "200" ]] && grep -q '"checks"' "$health_file"; then
       return 0
     fi
@@ -1006,6 +1034,29 @@ build_candidate_image() {
   esac
 }
 
+verify_candidate_lifecycle_capability() {
+  local capabilities
+  capabilities="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$IMAGE_CANDIDATE_TAG") node apps/runtime/dist/startup.js print-public-capabilities")" \
+    || fail "Unable to interrogate candidate runtime capabilities"
+
+  if [[ "$capabilities" == *'"desktop-lifecycle-v2"'* ]]; then
+    fail "Candidate advertises desktop-lifecycle-v2, but owner-gated Desktop/Extension fleet evidence verification is not implemented yet; refusing stack replacement"
+  fi
+  [[ "$capabilities" == "[]" ]] \
+    || fail "Candidate returned an unexpected public capability manifest: ${capabilities}"
+  log "Candidate public capabilities verified: ${capabilities}"
+}
+
+run_pre_recreate_harvest_index_migration() {
+  local candidate_compose
+  candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
+  log "Applying migrations through 0096 with the candidate image while the current API remains online"
+  # This foreground one-shot owns the migration advisory lock. Deployment
+  # cannot enter recreate/rollback handling until it exits and releases it.
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps api node packages/db/dist/migrate.js --through 0096_observations_harvest_lookup_concurrently.sql" \
+    || fail "Pre-recreate migration through 0096 failed; current stack was left running"
+}
+
 require_command docker
 require_command ssh
 require_command tar
@@ -1039,6 +1090,13 @@ capture_remote_rollback_image
 capture_remote_release_files
 
 build_candidate_image
+verify_candidate_lifecycle_capability
+capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE" \
+  || fail "Unable to capture remote schema migration state before pre-recreate migration"
+SCHEMA_BASELINE_CAPTURED=1
+log "Captured remote schema migration state for rollback safety"
+forbid_rollback_for_pending_pre_recreate_migrations
+run_pre_recreate_harvest_index_migration
 
 log "Syncing release files to ${REMOTE}:${APP_DIR}"
 tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$REMOTE" \
@@ -1050,13 +1108,6 @@ run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && test -f .env.prod
   || fail_after_release_sync "Remote prerequisite validation failed after syncing release files"
 SYNC_MONITORING_TOKEN="$(read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN")" \
   || fail_after_release_sync "Unable to read monitoring token after syncing release files"
-
-if capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"; then
-  SCHEMA_BASELINE_CAPTURED=1
-  log "Captured remote schema migration state for rollback safety"
-else
-  log "Unable to capture remote schema migration state; automatic rollback will be skipped"
-fi
 
 log "Recreating the remote production stack"
 run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \

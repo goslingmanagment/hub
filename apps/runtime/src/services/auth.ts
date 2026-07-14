@@ -4,13 +4,20 @@ import argon2 from "argon2";
 
 import {
   assignUserToPage,
+  advanceDeviceTokenEpoch,
   createApiKey,
   createAuthSession,
+  createPendingDeviceToken,
   createUser,
   deleteExpiredAuthSessions,
+  deleteExpiredPendingDeviceTokens,
+  deletePendingDeviceTokenById,
+  deletePendingDeviceTokensForUser,
   findActiveApiKeysForUser,
   findApiKeyByDigest,
   findAuthSessionByDigest,
+  findAuthSessionById,
+  findPendingDeviceTokenByDigest,
   findUserById,
   findUserByUsername,
   insertAuditEvent,
@@ -19,16 +26,19 @@ import {
   listUserPageAssignments,
   listUsers,
   lockUserForApiKeyRotation,
+  lockUserForDeviceTokenMutation,
   revokeApiKeysByIds,
   revokeApiKeysForUser,
   revokeAuthSessionsForUser,
   revokeAuthSession,
+  revokeDeviceTokenById,
   touchApiKey,
   touchAuthSession,
   unassignUserFromPage,
   updateUserPasswordHash,
   createDeviceToken,
   findDeviceTokenByDigest,
+  findDeviceTokenForUser,
   findModelBySlug,
   insertAccessGrant,
   listDeviceTokensForUser,
@@ -38,6 +48,7 @@ import {
   resolveGrantedPageAssignments,
   revokeAccessGrants,
   revokeDeviceTokensForUser,
+  setDeviceTokenHarvestMachine,
   updateDeviceTokenUse,
   updateUserDisabledAt,
   updateUserMustChangePassword,
@@ -51,7 +62,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, ForbiddenError, NotFoundError, TooManyRequestsError, UnauthorizedError } from "./errors.ts";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, TooManyRequestsError, UnauthorizedError } from "./errors.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
@@ -100,6 +111,13 @@ export interface AuthPrincipal {
   authMethod: "session" | "api_key" | "device_token";
   user: AuthenticatedUser;
   assignedPageIds: number[];
+  /** Present only for a device-token principal; never caller-controlled. */
+  deviceTokenId?: number;
+  /** Present only for a cookie-session principal; used to revalidate a
+   * reserve request after taking the user credential-mutation lock. */
+  authSessionId?: number;
+  /** Owner-bound capability carried by this exact device token. */
+  harvestMachineId?: string;
 }
 
 function roleNeedsPassword(role: UserRole) {
@@ -397,6 +415,19 @@ export async function setUserPassword(
 
   const passwordHash = await argon2.hash(input.password, { type: argon2.argon2id });
   await withAuditTransaction(app, async (dbTx) => {
+    const lockedUser = await lockUserForDeviceTokenMutation(dbTx, user.id);
+    if (!lockedUser) {
+      throw new NotFoundError(`User "${input.username}" not found`);
+    }
+    if (!roleCanUseSession(lockedUser.role)) {
+      throw new BadRequestError(`Role "${lockedUser.role}" cannot use password login`);
+    }
+    assertUserNotDeactivated(lockedUser);
+    // Invalidate the authority snapshot held by any legacy/admin issuance
+    // request that authenticated before this password reset and is waiting on
+    // the same user row lock.  Session revocation alone cannot stop that
+    // already-resolved principal from minting a post-reset token.
+    await advanceDeviceTokenEpoch(dbTx, user.id);
     await updateUserPasswordHash(
       dbTx,
       user.id,
@@ -408,6 +439,7 @@ export async function setUserPassword(
       user.id,
       "password_reset",
     );
+    const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
 
     await recordAudit({ db: dbTx }, {
       ...audit,
@@ -416,6 +448,7 @@ export async function setUserPassword(
       metadata: {
         username: user.username,
         revokedSessions: revokedSessions.length,
+        deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
         mustChangePassword: input.mustChangePassword ?? false,
       },
     });
@@ -448,10 +481,12 @@ export async function deactivateUser(
   }
 
   return withAuditTransaction(app, async (dbTx) => {
+    await lockUserForDeviceTokenMutation(dbTx, user.id);
     await updateUserDisabledAt(dbTx, user.id, new Date());
     const revokedKeys = await revokeApiKeysForUser(dbTx, user.id, "user_deactivated");
     const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "user_deactivated");
     const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "user_deactivated");
+    const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
 
     await recordAudit({ db: dbTx }, {
       ...audit,
@@ -462,6 +497,7 @@ export async function deactivateUser(
         revokedApiKeys: revokedKeys.length,
         revokedDeviceTokens: revokedTokens.length,
         revokedSessions: revokedSessions.length,
+        deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
       },
     });
 
@@ -526,15 +562,32 @@ export async function changeOwnPassword(
 
   const passwordHash = await argon2.hash(input.newPassword, { type: argon2.argon2id });
   await withAuditTransaction(app, async (dbTx) => {
+    const lockedUser = await lockUserForDeviceTokenMutation(dbTx, user.id);
+    if (
+      !lockedUser
+      || lockedUser.disabledAt
+      || !roleCanUseSession(lockedUser.role)
+      || lockedUser.passwordHash !== user.passwordHash
+    ) {
+      throw new UnauthorizedError("Password authority changed while the request was in flight");
+    }
+    // See setUserPassword: linearize legacy token issuance with the password
+    // boundary, not merely with session lookup at request entry.
+    await advanceDeviceTokenEpoch(dbTx, user.id);
     await updateUserPasswordHash(dbTx, user.id, passwordHash);
     await updateUserMustChangePassword(dbTx, user.id, false);
     const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "password_changed");
+    const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
     await recordAudit({ db: dbTx }, {
       source: "api",
       actorUserId: user.id,
       eventType: "user.password_changed_self",
       targetUserId: user.id,
-      metadata: { username: user.username, revokedSessions: revokedSessions.length },
+      metadata: {
+        username: user.username,
+        revokedSessions: revokedSessions.length,
+        deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
+      },
     });
   });
   return { ok: true as const };
@@ -766,7 +819,10 @@ export async function listApiKeysForUsers(
 }
 
 export async function cleanupExpiredSessions(app: AppContext, now = new Date()) {
-  await deleteExpiredAuthSessions(app.db, now);
+  await Promise.all([
+    deleteExpiredAuthSessions(app.db, now),
+    deleteExpiredPendingDeviceTokens(app.db, now),
+  ]);
 }
 
 // Audit B7: the route-level @fastify/rate-limit plugin runs at onRequest where
@@ -954,6 +1010,7 @@ export async function authenticateSessionToken(app: AppContext, sessionToken: st
     authMethod: "session" as const,
     user,
     assignedPageIds: user.assignedPages.map((page) => page.id),
+    authSessionId: session.id,
   } satisfies AuthPrincipal;
 }
 
@@ -1016,9 +1073,10 @@ export function requireDashboardUser(principal: AuthPrincipal) {
 
 /** Any live cookie session, any human role (self-serve auth surface). */
 export function requireSessionUser(principal: AuthPrincipal) {
-  if (principal.authMethod !== "session") {
+  if (principal.authMethod !== "session" || principal.authSessionId === undefined) {
     throw new ForbiddenError("This route requires a cookie session");
   }
+  return principal.authSessionId;
 }
 
 export function requireOwner(principal: AuthPrincipal) {
@@ -1032,6 +1090,21 @@ export function requireApiKeyUser(principal: AuthPrincipal) {
   if (principal.authMethod !== "api_key" && principal.authMethod !== "device_token") {
     throw new ForbiddenError("Bearer credential required");
   }
+}
+
+export function requireDeviceTokenUser(principal: AuthPrincipal) {
+  if (principal.authMethod !== "device_token" || principal.deviceTokenId === undefined) {
+    throw new ForbiddenError("Device-token bearer required");
+  }
+  return principal.deviceTokenId;
+}
+
+export function requireHarvestDeviceToken(principal: AuthPrincipal) {
+  const deviceTokenId = requireDeviceTokenUser(principal);
+  if (!principal.harvestMachineId) {
+    throw new ForbiddenError("This device token has no Desktop harvest capability");
+  }
+  return { deviceTokenId, machineId: principal.harvestMachineId };
 }
 
 /**
@@ -1067,7 +1140,12 @@ export function enforceRevenueRouteRoleScope(
 // --- Device tokens (kernel Stage 22) ---
 
 export const DEVICE_TOKEN_PREFIX = "agency_hub_device_";
+/** Reservation prefix intentionally unknown to pre-0092 Core builds.  A
+ * rollback therefore routes it as a legacy API key and fails authentication
+ * even after a newer Core has activated the digest into device_tokens. */
+export const PENDING_DEVICE_TOKEN_PREFIX = "agency_hub_pending_device_";
 const DEVICE_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const PENDING_DEVICE_TOKEN_TTL_MS = 10 * 60 * 1000;
 /** Sliding refresh never extends past creation + this hard cap. */
 const DEVICE_TOKEN_MAX_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 /** Refresh writes are throttled: bump only when it gains at least a day. */
@@ -1077,6 +1155,8 @@ export async function issueDeviceToken(
   app: AppContext,
   input: {
     userId: number;
+    /** Present for the self-serve session route; omitted for owner/CLI issue. */
+    authSessionId?: number;
     label: string;
   },
   audit: AuditContext,
@@ -1096,8 +1176,30 @@ export async function issueDeviceToken(
   const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
   // Token row + audit commit together (review R1-7).
   const created = await withAuditTransaction(app, async (dbTx) => {
+    const lockedUser = await lockUserForDeviceTokenMutation(dbTx, user.id);
+    if (!lockedUser) {
+      throw new NotFoundError("User not found");
+    }
+    if (!roleCanUseSession(lockedUser.role)) {
+      throw new BadRequestError(`Role "${lockedUser.role}" cannot hold device tokens`);
+    }
+    assertUserNotDeactivated(lockedUser);
+    if (lockedUser.deviceTokenEpoch !== user.deviceTokenEpoch) {
+      throw new ConflictError("Device-token authority changed while issuance was in flight");
+    }
+    if (input.authSessionId !== undefined) {
+      const session = await findAuthSessionById(dbTx, input.authSessionId);
+      if (
+        !session
+        || session.userId !== lockedUser.id
+        || session.revokedAt
+        || session.expiresAt <= new Date()
+      ) {
+        throw new UnauthorizedError("Session is no longer eligible to issue a device token");
+      }
+    }
     const createdToken = await createDeviceToken(dbTx, {
-      userId: user.id,
+      userId: lockedUser.id,
       label: input.label,
       tokenDigest: sha256Hex(rawToken),
       keyPrefix,
@@ -1107,8 +1209,8 @@ export async function issueDeviceToken(
     await recordAudit({ db: dbTx }, {
       ...audit,
       eventType: "device_token.issued",
-      targetUserId: user.id,
-      metadata: { username: user.username, label: input.label, keyPrefix },
+      targetUserId: lockedUser.id,
+      metadata: { username: lockedUser.username, label: input.label, keyPrefix },
     });
 
     return createdToken;
@@ -1120,6 +1222,183 @@ export async function issueDeviceToken(
     label: created.label,
     keyPrefix,
     expiresAt,
+  };
+}
+
+/** Reserve a server-generated token without making it an application bearer.
+ * The caller's session is revalidated after the user mutation lock is held, so
+ * a password reset cannot race an already-authenticated request into creating
+ * a fresh pending credential after session revocation. */
+export async function reservePendingDeviceToken(
+  app: AppContext,
+  input: {
+    userId: number;
+    authSessionId: number;
+    label: string;
+  },
+  audit: AuditContext,
+) {
+  const userAtStart = await findUserById(app.db, input.userId);
+  if (!userAtStart || userAtStart.disabledAt || !roleCanUseSession(userAtStart.role)) {
+    throw new UnauthorizedError("Session is no longer eligible to reserve a device token");
+  }
+  const tokenBody = randomToken(24);
+  const rawToken = `${PENDING_DEVICE_TOKEN_PREFIX}${tokenBody}`;
+  const keyPrefix = `${PENDING_DEVICE_TOKEN_PREFIX}${tokenBody.slice(0, API_KEY_DISPLAY_LENGTH)}`;
+
+  const created = await withAuditTransaction(app, async (dbTx) => {
+    const user = await lockUserForDeviceTokenMutation(dbTx, input.userId);
+    const session = await findAuthSessionById(dbTx, input.authSessionId);
+    if (
+      !user
+      || user.disabledAt
+      || !roleCanUseSession(user.role)
+      || !session
+      || session.userId !== user.id
+      || session.revokedAt
+      || session.expiresAt <= new Date()
+      || user.deviceTokenEpoch !== userAtStart.deviceTokenEpoch
+    ) {
+      throw new UnauthorizedError("Session is no longer eligible to reserve a device token");
+    }
+    const expiresAt = new Date(Date.now() + PENDING_DEVICE_TOKEN_TTL_MS);
+
+    const reservation = await createPendingDeviceToken(dbTx, {
+      userId: user.id,
+      label: input.label,
+      tokenDigest: sha256Hex(rawToken),
+      keyPrefix,
+      expiresAt,
+    });
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "device_token.reserved",
+      targetUserId: user.id,
+      metadata: {
+        username: user.username,
+        label: input.label,
+        keyPrefix,
+        expiresAt: expiresAt.toISOString(),
+      },
+    });
+    return reservation;
+  });
+
+  return {
+    token: rawToken,
+    reservationId: created.id,
+    label: created.label,
+    keyPrefix,
+    reservationExpiresAt: created.expiresAt,
+  };
+}
+
+export interface PendingDeviceTokenActivationCredential {
+  token: string;
+  userId: number;
+  state: "pending" | "active";
+}
+
+/** Specialized authentication for the activation route.  It admits only the
+ * 0092 reservation prefix.  An already-moved active row is recognized solely
+ * to make a lost activation response retry idempotent. */
+export async function authenticatePendingDeviceTokenForActivation(
+  app: AppContext,
+  rawToken: string,
+): Promise<PendingDeviceTokenActivationCredential | null> {
+  if (!rawToken.startsWith(PENDING_DEVICE_TOKEN_PREFIX)) {
+    return null;
+  }
+  const digest = sha256Hex(rawToken);
+  const now = new Date();
+  const pending = await findPendingDeviceTokenByDigest(app.db, digest);
+  if (pending && pending.expiresAt > now) {
+    const user = await findUserById(app.db, pending.userId);
+    if (user && !user.disabledAt && roleCanUseSession(user.role)) {
+      return { token: rawToken, userId: user.id, state: "pending" };
+    }
+    return null;
+  }
+  const active = await findDeviceTokenByDigest(app.db, digest);
+  if (!active || active.revokedAt || active.expiresAt <= now) {
+    return null;
+  }
+  const user = await findUserById(app.db, active.userId);
+  return user && !user.disabledAt && roleCanUseSession(user.role)
+    ? { token: rawToken, userId: user.id, state: "active" }
+    : null;
+}
+
+/** Atomically linearizes activation against password reset, disable,
+ * revoke-all and another activation.  Both pending and user rows are locked in
+ * the common user-then-pending order. */
+export async function activatePendingDeviceToken(
+  app: AppContext,
+  credential: PendingDeviceTokenActivationCredential,
+) {
+  if (!credential.token.startsWith(PENDING_DEVICE_TOKEN_PREFIX)) {
+    throw new UnauthorizedError("Invalid pending device token");
+  }
+  const digest = sha256Hex(credential.token);
+  const activated = await withAuditTransaction(app, async (dbTx) => {
+    const user = await lockUserForDeviceTokenMutation(dbTx, credential.userId);
+    if (!user || user.disabledAt || !roleCanUseSession(user.role)) {
+      throw new UnauthorizedError("Invalid pending device token");
+    }
+    // Time is sampled only after the potentially long row-lock wait.  A
+    // reservation that expires while revoke/reset owns the lock cannot cross
+    // its TTL on a stale pre-wait timestamp.
+    const now = new Date();
+
+    const pending = await findPendingDeviceTokenByDigest(dbTx, digest, { forUpdate: true });
+    if (pending !== null) {
+      if (pending.userId !== user.id || pending.expiresAt <= now) {
+        throw new UnauthorizedError("Pending device token has expired");
+      }
+      const expiresAt = new Date(now.getTime() + DEVICE_TOKEN_TTL_MS);
+      const active = await createDeviceToken(dbTx, {
+        userId: pending.userId,
+        label: pending.label,
+        tokenDigest: pending.tokenDigest,
+        keyPrefix: pending.keyPrefix,
+        expiresAt,
+      });
+      await deletePendingDeviceTokenById(dbTx, pending.id);
+      await recordAudit({ db: dbTx }, {
+        source: "api",
+        actorUserId: user.id,
+        targetUserId: user.id,
+        eventType: "device_token.activated",
+        metadata: {
+          username: user.username,
+          deviceTokenId: active.id,
+          label: active.label,
+          keyPrefix: active.keyPrefix,
+        },
+      });
+      return active;
+    }
+
+    // Response-loss retry: the digest has already moved.  Never resurrect a
+    // revoked/expired row and never accept a legacy-prefix active token here.
+    const active = await findDeviceTokenByDigest(dbTx, digest);
+    if (
+      !active
+      || active.userId !== user.id
+      || active.revokedAt
+      || active.expiresAt <= now
+      || !credential.token.startsWith(PENDING_DEVICE_TOKEN_PREFIX)
+    ) {
+      throw new UnauthorizedError("Invalid pending device token");
+    }
+    return active;
+  });
+
+  return {
+    id: activated.id,
+    label: activated.label,
+    keyPrefix: activated.keyPrefix,
+    expiresAt: activated.expiresAt,
   };
 }
 
@@ -1149,12 +1428,14 @@ export async function authenticateDeviceToken(app: AppContext, deviceToken: stri
     authMethod: "device_token" as const,
     user,
     assignedPageIds: user.assignedPages.map((page) => page.id),
+    deviceTokenId: record.id,
+    ...(record.harvestMachineId ? { harvestMachineId: record.harvestMachineId } : {}),
   } satisfies AuthPrincipal;
 }
 
 /** Prefix-discriminated bearer authentication: api key or device token. */
 export async function authenticateBearerToken(app: AppContext, token: string) {
-  if (token.startsWith(DEVICE_TOKEN_PREFIX)) {
+  if (token.startsWith(DEVICE_TOKEN_PREFIX) || token.startsWith(PENDING_DEVICE_TOKEN_PREFIX)) {
     return authenticateDeviceToken(app, token);
   }
   return authenticateApiKeyToken(app, token);
@@ -1166,17 +1447,96 @@ export async function listDeviceTokensForUsername(app: AppContext, username: str
     throw new NotFoundError(`User "${username}" not found`);
   }
   const tokens = await listDeviceTokensForUser(app.db, user.id);
-  return tokens.map((token) => ({
+  return tokens.map((token) => deviceTokenResponse(token));
+}
+
+function deviceTokenResponse(token: Awaited<ReturnType<typeof listDeviceTokensForUser>>[number]) {
+  return {
     id: token.id,
     label: token.label,
     keyPrefix: token.keyPrefix,
+    harvestMachineId: token.harvestMachineId ?? null,
     isActive: token.revokedAt === null && token.expiresAt > new Date(),
     expiresAt: token.expiresAt.toISOString(),
     lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
     createdAt: token.createdAt.toISOString(),
     revokedAt: token.revokedAt?.toISOString() ?? null,
     revokedReason: token.revokedReason ?? null,
-  }));
+  };
+}
+
+export async function setDeviceTokenHarvestCapabilityForUsername(
+  app: AppContext,
+  input: { username: string; deviceTokenId: number; machineId: string | null },
+  audit: AuditContext,
+) {
+  const user = await findUserByUsername(app.db, input.username);
+  if (!user) {
+    throw new NotFoundError(`User "${input.username}" not found`);
+  }
+
+  return withAuditTransaction(app, async (dbTx) => {
+    const token = await findDeviceTokenForUser(dbTx, {
+      deviceTokenId: input.deviceTokenId,
+      userId: user.id,
+    });
+    if (!token) {
+      throw new NotFoundError(`Device token ${input.deviceTokenId} not found for "${input.username}"`);
+    }
+    if (token.revokedAt || token.expiresAt <= new Date()) {
+      throw new BadRequestError("Harvest capability requires an active device token");
+    }
+
+    const changed = await setDeviceTokenHarvestMachine(dbTx, {
+      deviceTokenId: token.id,
+      userId: user.id,
+      machineId: input.machineId,
+    });
+    if (!changed.updated) {
+      throw new BadRequestError("Harvest capability requires an active device token");
+    }
+
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "device_token.harvest_capability_changed",
+      targetUserId: user.id,
+      metadata: {
+        username: user.username,
+        deviceTokenId: token.id,
+        previousMachineId: token.harvestMachineId ?? null,
+        machineId: input.machineId,
+        replacedTokenId: changed.replacedTokenId,
+      },
+    });
+
+    return deviceTokenResponse(changed.updated);
+  });
+}
+
+export async function revokeCurrentDeviceToken(
+  app: AppContext,
+  principal: AuthPrincipal,
+  audit: AuditContext,
+) {
+  const deviceTokenId = requireDeviceTokenUser(principal);
+  await withAuditTransaction(app, async (dbTx) => {
+    const revoked = await revokeDeviceTokenById(dbTx, {
+      deviceTokenId,
+      userId: principal.user.id,
+      reason: "self_revoked",
+    });
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "device_token.self_revoked",
+      targetUserId: principal.user.id,
+      metadata: {
+        username: principal.user.username,
+        deviceTokenId,
+        changed: revoked !== null,
+      },
+    });
+  });
+  return { revoked: true as const };
 }
 
 export async function issueDeviceTokenForUsername(
@@ -1202,12 +1562,19 @@ export async function revokeDeviceTokensForUsername(
   }
   // Revoke + audit commit together (review R1-7).
   const revoked = await withAuditTransaction(app, async (dbTx) => {
+    await lockUserForDeviceTokenMutation(dbTx, user.id);
+    await advanceDeviceTokenEpoch(dbTx, user.id);
     const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "revoked");
+    const deletedPendingDeviceTokens = await deletePendingDeviceTokensForUser(dbTx, user.id);
     await recordAudit({ db: dbTx }, {
       ...audit,
       eventType: "device_token.revoked",
       targetUserId: user.id,
-      metadata: { username: user.username, revokedCount: revokedTokens.length },
+      metadata: {
+        username: user.username,
+        revokedCount: revokedTokens.length,
+        deletedPendingDeviceTokens: deletedPendingDeviceTokens.length,
+      },
     });
     return revokedTokens;
   });
