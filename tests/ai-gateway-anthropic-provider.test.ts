@@ -8,6 +8,7 @@ import type { AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gat
 import {
   createAnthropicAiGatewayProvider,
   createAnthropicGatewayProxyFetch,
+  createPageProxyAnthropicClientResolver,
   type AnthropicGatewayClient,
 } from "../apps/runtime/src/services/ai-gateway-anthropic-provider.ts";
 
@@ -218,4 +219,36 @@ describe("Anthropic AI gateway provider", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("dials a dead page proxy once per generation — SDK retries hit the sticky failure", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => {
+      // The SOCKS handshake failure shape of the lora-2 incident (2026-07-15).
+      const socks = new Error("Proxy connection timed out");
+      socks.name = "SocksClientError";
+      throw socks;
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const resolve = createPageProxyAnthropicClientResolver("test-key");
+      const resolution = await resolve(providerInput());
+
+      await expect(resolution.client.messages.create(
+        {
+          model: "claude-sonnet-4-6",
+          max_tokens: 16,
+          stream: true,
+          messages: [{ role: "user", content: "hi" }],
+        } as unknown as Parameters<typeof resolution.client.messages.create>[0],
+        {},
+      )).rejects.toThrow();
+      // Without the sticky wrapper the SDK re-dials the dead proxy on every
+      // retry, each burning a full connect timeout (the 31s hangs).
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await resolution.release?.();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }, 15_000);
 });

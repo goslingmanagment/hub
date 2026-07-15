@@ -1,4 +1,8 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
+import {
+  classifyProviderStreamFailure,
+  formatObservedError,
+} from "@agency_hub_core/shared";
 
 // Stage 30: the migrated prompt unit's public surface (tests and feature
 // services reach it through this module index — boundary rule).
@@ -361,14 +365,22 @@ export async function pipeAiGatewaySse(
         terminalOutcome = "cancelled";
       } else {
         terminalOutcome = "failed";
+        // The frame code NAMES the failure class for clients (a dead page
+        // proxy is escalate-not-retry); the redacted cause chain goes to the
+        // log only — frame messages stay static, no provider text leaks.
+        const code = classifyProviderStreamFailure(error);
         request.log.warn({
           requestId: stream.requestId,
           errorName: error instanceof Error ? error.name : "UnknownError",
+          observedError: formatObservedError(error),
+          code,
         }, "AI gateway provider stream failed");
         writeFrame({
           type: "error",
-          code: "provider_stream_failed",
-          message: "AI gateway provider stream failed",
+          code,
+          message: code === "provider_proxy_unreachable"
+            ? "AI gateway could not reach the page's egress proxy"
+            : "AI gateway provider stream failed",
           retryAfterMs: null,
         });
       }

@@ -151,6 +151,65 @@ export function classifyTransportError(error: unknown): "timeout" | "transport" 
   return "transport";
 }
 
+// Failure shapes that mean the upstream CONNECTION never came up (proxy dead,
+// host unreachable) — as opposed to an established stream dying mid-flight.
+const CONNECT_FAILURE_NAMES = new Set(["ConnectTimeoutError", "SocksClientError"]);
+const CONNECT_FAILURE_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ECONNREFUSED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+]);
+
+function isConnectFailure(error: unknown): boolean {
+  for (const cause of iterateErrorChain(error)) {
+    if (!(cause instanceof Error)) {
+      continue;
+    }
+    if (CONNECT_FAILURE_NAMES.has(cause.name)) {
+      return true;
+    }
+    const code = (cause as Error & { code?: unknown }).code;
+    if (typeof code === "string" && CONNECT_FAILURE_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** AI-lane frame code for a failed provider stream: a connect-level failure
+ * is the page's egress proxy being unreachable — page-scoped infrastructure
+ * the chatter must escalate, not retry — while anything else stays the
+ * generic provider stream failure. */
+export function classifyProviderStreamFailure(
+  error: unknown,
+): "provider_proxy_unreachable" | "provider_stream_failed" {
+  return isConnectFailure(error) ? "provider_proxy_unreachable" : "provider_stream_failed";
+}
+
+/** Wraps a fetch so that once a connect-level failure is observed, every
+ * subsequent call fails instantly with the same error. Scoped to one client
+ * resolution (= one generation): the Anthropic SDK's retry policy re-dials
+ * connection errors, and against a dead proxy each re-dial burns a full
+ * connect timeout for an outcome that cannot change within the request. */
+export function createStickyConnectFailureFetch(fetchImpl: typeof fetch): typeof fetch {
+  let connectFailure: unknown = null;
+  return async (input, init) => {
+    if (connectFailure !== null) {
+      throw connectFailure;
+    }
+    try {
+      return await fetchImpl(input, init);
+    } catch (error) {
+      if (isConnectFailure(error)) {
+        connectFailure = error;
+      }
+      throw error;
+    }
+  };
+}
+
 export function formatObservedError(error: unknown) {
   return redactSensitiveText(Array.from(iterateErrorChain(error))
     .map((cause, index) => `${index === 0 ? "" : `cause(${index}): `}${formatErrorCause(cause)}`)
