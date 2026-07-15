@@ -818,6 +818,52 @@ export async function listApiKeysForUsers(
   return listApiKeys(app.db, userIds);
 }
 
+/** D116(c) fleet-gate foundation (desktop D19). Per ACTIVE chatter: does a
+ * live device token exist whose last_used_at is fresher than the window, and
+ * how many API keys remain active. Read-only. Probe/service accounts are not
+ * modeled yet (no schema flag) — only disabled users are excluded; the future
+ * service-account split narrows this further. */
+export const DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS = 14;
+
+export async function deviceTokenAdoptionReport(app: AppContext, now = new Date()) {
+  const freshFloor = now.getTime()
+    - DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const users = await listUsers(app.db);
+  const chatters = [];
+  for (const user of users) {
+    if (user.role !== "chatter" || user.disabledAt) continue;
+    const tokens = await listDeviceTokensForUser(app.db, user.id);
+    const lastTokenUse = tokens.reduce<Date | null>((max, token) => (
+      token.revokedAt === null
+        && token.expiresAt > now
+        && token.lastUsedAt
+        && (max === null || token.lastUsedAt > max)
+        ? token.lastUsedAt
+        : max
+    ), null);
+    const keys = await listApiKeys(app.db, [user.id]);
+    const lastKeyUse = keys.reduce<Date | null>((max, key) => (
+      key.lastUsedAt && (max === null || key.lastUsedAt > max) ? key.lastUsedAt : max
+    ), null);
+    chatters.push({
+      username: user.username,
+      hasFreshDeviceToken: lastTokenUse !== null && lastTokenUse.getTime() >= freshFloor,
+      deviceTokenLastUsedAt: lastTokenUse?.toISOString() ?? null,
+      activeApiKeys: keys.filter((key) => key.revokedAt === null).length,
+      apiKeyLastUsedAt: lastKeyUse?.toISOString() ?? null,
+    });
+  }
+  return {
+    generatedAt: now.toISOString(),
+    freshWindowDays: DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS,
+    chatters,
+    gate: {
+      allActiveChattersOnFreshTokens: chatters.length > 0
+        && chatters.every((row) => row.hasFreshDeviceToken),
+    },
+  };
+}
+
 export async function cleanupExpiredSessions(app: AppContext, now = new Date()) {
   await Promise.all([
     deleteExpiredAuthSessions(app.db, now),

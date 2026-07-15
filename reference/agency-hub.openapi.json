@@ -2706,6 +2706,166 @@
         }
       }
     },
+    "/api/v1/admin/device-token-adoption": {
+      "get": {
+        "summary": "Device-token adoption across active chatters (D116(c) gate report)",
+        "tags": [
+          "admin"
+        ],
+        "description": "Read-only: per active chatter, whether a live device token was used within the freshness window, plus remaining active API keys. Foundation for the client key-fallback deletion gate.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "freshWindowDays": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "chatters": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "username": {
+                            "type": "string"
+                          },
+                          "hasFreshDeviceToken": {
+                            "type": "boolean"
+                          },
+                          "deviceTokenLastUsedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "activeApiKeys": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "apiKeyLastUsedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "username",
+                          "hasFreshDeviceToken",
+                          "deviceTokenLastUsedAt",
+                          "activeApiKeys",
+                          "apiKeyLastUsedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "gate": {
+                      "type": "object",
+                      "properties": {
+                        "allActiveChattersOnFreshTokens": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "allActiveChattersOnFreshTokens"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "freshWindowDays",
+                    "chatters",
+                    "gate"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/incidents": {
       "get": {
         "summary": "List sync incidents and seven-day summary counts",

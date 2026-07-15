@@ -149,6 +149,23 @@ export const deviceTokenHarvestCapabilityBodySchema = z.object({
   machineId: z.string().uuid().nullable(),
 });
 
+// D116(c) fleet-gate foundation (desktop D19): per active chatter, token
+// freshness and remaining active API keys. Read-only reporting surface.
+export const deviceTokenAdoptionRowSchema = z.object({
+  username: z.string(),
+  hasFreshDeviceToken: z.boolean(),
+  deviceTokenLastUsedAt: isoTimestamp.nullable(),
+  activeApiKeys: z.number().int().nonnegative(),
+  apiKeyLastUsedAt: isoTimestamp.nullable(),
+});
+
+export const deviceTokenAdoptionReportSchema = z.object({
+  generatedAt: isoTimestamp,
+  freshWindowDays: z.number().int().positive(),
+  chatters: z.array(deviceTokenAdoptionRowSchema),
+  gate: z.object({ allActiveChattersOnFreshTokens: z.boolean() }),
+});
+
 export const accessGrantItemSchema = z.object({
   id: intId,
   scopeType: z.enum(["org", "model", "page"]),
@@ -5678,6 +5695,19 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+    },
+  },
+  adminDeviceTokenAdoption: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Device-token adoption across active chatters (D116(c) gate report)",
+    description: "Read-only: per active chatter, whether a live device token "
+      + "was used within the freshness window, plus remaining active API keys. "
+      + "Foundation for the client key-fallback deletion gate.",
+    response: {
+      200: deviceTokenAdoptionReportSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   adminGrantModel: {

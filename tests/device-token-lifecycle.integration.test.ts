@@ -12,6 +12,8 @@ import {
   changeOwnPassword,
   createUserAccount,
   deactivateUser,
+  deviceTokenAdoptionReport,
+  issueChatterApiKey,
   issueDeviceToken,
   revokeDeviceTokensForUsername,
   setUserPassword,
@@ -452,5 +454,77 @@ describe("legacy/admin issuance authority races", () => {
       url: "/api/v1/auth/login",
       payload: { username: "anton", password: "second-new-secret" },
     })).statusCode).toBe(401);
+  });
+});
+
+describe("device-token adoption report (D116(c) gate, desktop D19)", () => {
+  it("reports per-chatter freshness and gates on every active chatter", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const activeApp = setup.app;
+
+    await createUserAccount(activeApp, { username: "tokenized", role: "chatter" }, { source: "cli" });
+    await createUserAccount(activeApp, { username: "keyonly", role: "chatter" }, { source: "cli" });
+    await createUserAccount(activeApp, { username: "staletoken", role: "chatter" }, { source: "cli" });
+
+    const tokenized = await findUserByUsername(activeApp.db, "tokenized");
+    const fresh = await issueDeviceToken(
+      activeApp,
+      { userId: tokenized!.id, label: "machine-a" },
+      { source: "cli" },
+    );
+    await setup.testDb.pool.query(
+      "update device_tokens set last_used_at = now() where id = $1",
+      [fresh.id],
+    );
+
+    const stale = await findUserByUsername(activeApp.db, "staletoken");
+    const staleIssued = await issueDeviceToken(
+      activeApp,
+      { userId: stale!.id, label: "machine-b" },
+      { source: "cli" },
+    );
+    await setup.testDb.pool.query(
+      "update device_tokens set last_used_at = now() - interval '20 days' where id = $1",
+      [staleIssued.id],
+    );
+
+    await issueChatterApiKey(activeApp, { username: "keyonly" }, { source: "cli" });
+
+    const report = await deviceTokenAdoptionReport(activeApp);
+    const rows = new Map(report.chatters.map((row) => [row.username, row]));
+    expect(rows.get("tokenized")).toMatchObject({ hasFreshDeviceToken: true, activeApiKeys: 0 });
+    expect(rows.get("staletoken")).toMatchObject({ hasFreshDeviceToken: false });
+    expect(rows.get("keyonly")).toMatchObject({ hasFreshDeviceToken: false, activeApiKeys: 1 });
+    // owner and the team_lead fixture are not chatters and never appear
+    expect(rows.has("owner")).toBe(false);
+    expect(rows.has("anton")).toBe(false);
+    expect(report.freshWindowDays).toBe(14);
+    expect(report.gate.allActiveChattersOnFreshTokens).toBe(false);
+
+    // Disabling the laggards flips the gate: only ACTIVE chatters count.
+    await deactivateUser(activeApp, { username: "keyonly" }, { source: "cli" });
+    await deactivateUser(activeApp, { username: "staletoken" }, { source: "cli" });
+    const after = await deviceTokenAdoptionReport(activeApp);
+    expect(after.chatters.map((row) => row.username)).toEqual(["tokenized"]);
+    expect(after.gate.allActiveChattersOnFreshTokens).toBe(true);
+  });
+
+  it("is owner-only over HTTP", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const response = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/admin/device-token-adoption",
+      headers: { cookie: await login(setup.server, "anton", "chatter-secret") },
+    });
+    expect(response.statusCode).toBe(403);
+    const ok = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/admin/device-token-adoption",
+      headers: { cookie: await login(setup.server, "owner", "owner-secret") },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json<{ freshWindowDays: number }>().freshWindowDays).toBe(14);
   });
 });
