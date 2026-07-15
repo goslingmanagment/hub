@@ -6916,7 +6916,7 @@ describe("api integration", () => {
     expect(healthy.json()).toMatchObject({
       status: "ok",
       contractHash: KERNEL_CONTRACT_HASH,
-      capabilities: [],
+      capabilities: ["desktop-lifecycle-v2"],
       checks: {
         api: {
           status: "ok",
@@ -6928,7 +6928,7 @@ describe("api integration", () => {
       },
     });
     expect(typeof healthy.json().timestamp).toBe("string");
-    expect(healthy.json().capabilities).toEqual([]);
+    expect(healthy.json().capabilities).toEqual(["desktop-lifecycle-v2"]);
     expect(typeof healthy.json().checks.database.latencyMs).toBe("number");
 
     const querySpy = vi
@@ -6946,7 +6946,7 @@ describe("api integration", () => {
     expect(degraded.json()).toMatchObject({
       status: "degraded",
       contractHash: KERNEL_CONTRACT_HASH,
-      capabilities: [],
+      capabilities: ["desktop-lifecycle-v2"],
       checks: {
         api: {
           status: "ok",
@@ -6958,7 +6958,7 @@ describe("api integration", () => {
       },
     });
     expect(degraded.json().checks.database.error).not.toContain("db probe failed");
-    expect(degraded.json().capabilities).toEqual([]);
+    expect(degraded.json().capabilities).toEqual(["desktop-lifecycle-v2"]);
     expect(typeof degraded.json().checks.database.latencyMs).toBe("number");
   });
 

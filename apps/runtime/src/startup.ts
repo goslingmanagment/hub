@@ -4,6 +4,11 @@ import { loadConfig } from "@agency_hub_core/shared";
 import { runMigrations } from "../../../packages/db/src/migrate-runner.ts";
 import { runApiRuntime } from "./api-runtime.ts";
 import { runSchedulerRuntime } from "./scheduler-runtime.ts";
+import {
+  DESKTOP_LIFECYCLE_V2_EVIDENCE,
+  validateDesktopLifecycleV2Evidence,
+  verifyDesktopLifecycleV2Inventory,
+} from "./services/desktop-lifecycle-v2-evidence.ts";
 import { PUBLIC_RUNTIME_CAPABILITIES } from "./services/public-capabilities.ts";
 import { runWorkerRuntime } from "./worker-runtime.ts";
 
@@ -34,6 +39,17 @@ async function runStartupMigrations() {
   }
 }
 
+async function verifyLifecycleInventory() {
+  const config = loadConfig();
+  const pool = createPool(config.databaseUrl);
+  try {
+    const verified = await verifyDesktopLifecycleV2Inventory(pool);
+    process.stdout.write(`${JSON.stringify({ ok: true, verified })}\n`);
+  } finally {
+    await pool.end();
+  }
+}
+
 function resolveRole() {
   const role = process.argv[2] ?? process.env.AGENCY_HUB_ROLE ?? "worker";
   // Stage 25: 'scheduler' owns cron registration + firing (leader-elected);
@@ -48,6 +64,15 @@ function resolveRole() {
 export async function main() {
   if (process.argv[2] === "print-public-capabilities") {
     process.stdout.write(`${JSON.stringify(PUBLIC_RUNTIME_CAPABILITIES)}\n`);
+    return;
+  }
+  if (process.argv[2] === "print-desktop-lifecycle-v2-evidence") {
+    validateDesktopLifecycleV2Evidence();
+    process.stdout.write(`${JSON.stringify(DESKTOP_LIFECYCLE_V2_EVIDENCE)}\n`);
+    return;
+  }
+  if (process.argv[2] === "verify-desktop-lifecycle-v2-inventory") {
+    await verifyLifecycleInventory();
     return;
   }
 

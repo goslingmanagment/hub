@@ -41,30 +41,47 @@ rollback-compatible allowlist sets a rollback-forbidden latch immediately, so
 an interrupted concurrent build can never trigger automatic image rollback
 while its schema ledger row is still absent.
 
-## Current capability and client-release block
+## Exact first-enable evidence and monotonic capability
 
-The additive Core schema and compatibility routes may be deployed normally;
-blocking every Core or emergency release would make unrelated fixes impossible.
-`/api/v1/health` deliberately does not advertise `desktop-lifecycle-v2`, so the
-Desktop publication gate remains closed. There is no environment-variable
-acknowledgement or completion-marker bypass for capability enablement.
-Before replacing the stack, the deploy script interrogates the built candidate
-image itself. A candidate that advertises `desktop-lifecycle-v2` is rejected;
-the current branch deliberately has no evidence-bypass input. The later cutover
-change must replace that fail-closed branch with verification of owner-approved,
-exact client artifacts and their preservation/read-only test evidence.
+The first Core image that advertises `desktop-lifecycle-v2` embeds a versioned
+evidence manifest. It pins the exact Extension release tag, source tree, proof
+blobs, CI run and served XPI hashes; the exact Desktop source tree,
+cross-platform CI, non-publishing Windows candidate run, uploaded artifact
+digest and extracted file hashes; and a non-empty inventory of preserved
+Desktop machine UUIDs bound to exact active chatter device-token rows.
 
-Before enabling the capability, land and build both preservation-first read-only
-client changes above. The eventual deploy change must verify the exact Desktop
-and Extension release artifacts plus automated tests proving snapshot-before-read,
-export completeness, catalog-only steady state, and absence of persona writes;
-an operator-entered status string is not evidence. It must also restore the
-explicit machine UUID inventory and verify that every required UUID is bound to
-a non-revoked, unexpired device token before the capability is advertised.
+Before stack replacement, `scripts/deploy-production.sh` reads that manifest
+from the built candidate image and first matches its bytes against the immutable
+SHA-256 approved in the deploy script. The local verifier pins `github.com` plus
+the exact trusted repositories, checks the immutable GitHub objects and runs,
+the live Extension feed/XPI, and the unexpired Desktop Actions artifact. It also
+hashes and inspects the private Extension persona export, Desktop persona export,
+and Desktop diagnostics files supplied through the three `*-receipt` deploy
+arguments. Those private files stay on the operator machine and are not copied
+into the image or production host.
 
-Only a later owner-gated release that performs all of those checks may return
-`desktop-lifecycle-v2` from health. Do not add the capability merely because the
-Core schema/routes exist.
+A candidate-image command then checks the inventory read-only against the
+production database. The inventory check is repeated at the last safe point
+before image promotion. That records the exact active binding as a cutover
+precondition and keeps the observation-to-promotion window small; it is not a
+lock. An owner can still revoke or transfer the token after the check. Such a
+later access change must block that machine's harvest/Desktop publication, but
+it does not retract the monotonic protocol capability after Core advertises it.
+There is no environment acknowledgement, operator status string, or
+completion-file bypass.
+
+The deploy gate implements four transitions:
+
+- absent to absent: ordinary additive Core deployment;
+- absent to present: full external evidence and production inventory checks;
+- present to present: monotonic continuation without depending forever on an
+  expired one-time artifact or harvest token;
+- present to absent: rejected as a capability regression.
+
+For absent to present, automatic image rollback is disabled before stack
+recreation. Once the capability may have been observed by a client, recovery is
+roll-forward only. After API health reaches 200, the deploy also verifies that
+the served health capability matches the candidate image.
 
 ## Complete the fleet cutover
 

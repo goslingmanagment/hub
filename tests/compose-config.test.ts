@@ -208,11 +208,15 @@ describe("compose config", () => {
     expect(rollback).toContain("unable to capture current schema migration state");
   });
 
-  it("allows additive Core deploys while lifecycle capability enablement remains blocked", async () => {
+  it("enables lifecycle-v2 only through exact first-cutover evidence and keeps it monotonic", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
+    const evidenceVerifier = await readComposeFile("scripts/verify-desktop-lifecycle-v2-evidence.mjs");
     const health = await readComposeFile("apps/runtime/src/services/health.ts");
     const waitForApi = getShellFunction(text, "wait_for_api_health");
     const capabilityGate = getShellFunction(text, "verify_candidate_lifecycle_capability");
+    const manifestDigestGate = getShellFunction(text, "verify_approved_lifecycle_manifest_digest");
+    const inventoryGate = getShellFunction(text, "verify_candidate_lifecycle_inventory");
+    const postDeployCapability = getShellFunction(text, "verify_post_deploy_lifecycle_capability");
     const preRecreateMigration = getShellFunction(text, "run_pre_recreate_harvest_index_migration");
     const forbidRollback = getShellFunction(text, "forbid_rollback_for_pending_pre_recreate_migrations");
     const rollback = getShellFunction(text, "rollback_remote_stack");
@@ -225,12 +229,35 @@ describe("compose config", () => {
     const preRecreateMigrationIndex = text.indexOf("run_pre_recreate_harvest_index_migration", forbidRollbackIndex);
     const releaseSyncIndex = text.indexOf('log "Syncing release files', preRecreateMigrationIndex);
     const recreateIndex = text.indexOf('log "Recreating the remote production stack"', initializeIndex);
+    const inventoryRecheckIndex = text.indexOf("verify_candidate_lifecycle_inventory", recreateIndex);
+    const lifecycleRollbackForbiddenIndex = text.indexOf("ROLLBACK_FORBIDDEN=1", recreateIndex);
+    const promoteIndex = text.indexOf('docker tag $(printf', recreateIndex);
+    const healthWaitIndex = text.indexOf("wait_for_api_health", recreateIndex);
+    const postDeployCapabilityIndex = text.indexOf("verify_post_deploy_lifecycle_capability", healthWaitIndex);
 
     expect(text).not.toContain("prepare_lifecycle_cutover");
     expect(text).not.toContain("desktop-lifecycle-v2 cutover is blocked");
     expect(health).toContain("[...PUBLIC_RUNTIME_CAPABILITIES]");
     expect(capabilityGate).toContain("print-public-capabilities");
-    expect(capabilityGate).toContain("owner-gated Desktop/Extension fleet evidence verification is not implemented yet");
+    expect(capabilityGate).toContain("print-desktop-lifecycle-v2-evidence");
+    expect(capabilityGate).toContain("verify-desktop-lifecycle-v2-evidence.mjs");
+    expect(capabilityGate).toContain("verify_approved_lifecycle_manifest_digest");
+    expect(manifestDigestGate).toContain("shasum -a 256");
+    expect(manifestDigestGate).toContain("APPROVED_DESKTOP_LIFECYCLE_V2_EVIDENCE_SHA256");
+    expect(capabilityGate).toContain("EXTENSION_PERSONA_RECEIPT");
+    expect(capabilityGate).toContain("DESKTOP_PERSONA_RECEIPT");
+    expect(capabilityGate).toContain("DESKTOP_DIAGNOSTICS_RECEIPT");
+    expect(evidenceVerifier.match(/"--hostname"/g)).toHaveLength(2);
+    expect(evidenceVerifier.match(/"github\.com"/g)).toHaveLength(2);
+    expect(capabilityGate).toContain("'[]->[]'");
+    expect(capabilityGate).toContain("'[]->[\"desktop-lifecycle-v2\"]'");
+    expect(capabilityGate).toContain("'[\"desktop-lifecycle-v2\"]->[\"desktop-lifecycle-v2\"]'");
+    expect(capabilityGate).toContain("'[\"desktop-lifecycle-v2\"]->[]'");
+    expect(capabilityGate).toContain("would regress the already-enabled");
+    expect(capabilityGate).toContain("LIFECYCLE_FIRST_ENABLE=1");
+    expect(inventoryGate).toContain("verify-desktop-lifecycle-v2-inventory");
+    expect(inventoryGate).toContain("--no-deps api");
+    expect(postDeployCapability).toContain("desktop-lifecycle-v2");
     expect(capabilityGate).not.toContain("DEPLOY_EXTENSION_PERSONA_CAS_STATUS");
     expect(capabilityGateIndex).toBeGreaterThan(buildIndex);
     expect(preRecreateMigration).toContain("RUNTIME_IMAGE=");
@@ -247,12 +274,17 @@ describe("compose config", () => {
     expect(text).not.toContain("DEPLOY_EXTENSION_PERSONA_CAS_STATUS");
     expect(text).not.toContain(".desktop-lifecycle-v2-cutover-complete");
     expect(text).not.toContain("mark_lifecycle_cutover_complete");
+    expect(text).not.toContain("DEPLOY_DESKTOP_LIFECYCLE");
     expect(text).toContain("API_HEALTH_MAX_WAIT_SECONDS=1200");
     expect(text).not.toContain("API_HEALTH_ATTEMPTS");
     expect(waitForApi).toContain("SECONDS + API_HEALTH_MAX_WAIT_SECONDS");
     expect(waitForApi).toContain('curl_status "$health_file" "$url" 5');
     expect(initializeIndex).toBeGreaterThan(mainStart);
     expect(recreateIndex).toBeGreaterThan(initializeIndex);
+    expect(inventoryRecheckIndex).toBeGreaterThan(recreateIndex);
+    expect(lifecycleRollbackForbiddenIndex).toBeGreaterThan(inventoryRecheckIndex);
+    expect(promoteIndex).toBeGreaterThan(lifecycleRollbackForbiddenIndex);
+    expect(postDeployCapabilityIndex).toBeGreaterThan(healthWaitIndex);
   });
 
   it("deploy-production.sh routes compose recreate failures through rollback handling", async () => {

@@ -28,6 +28,13 @@ Options:
   --verify-url <url>     Public HTTPS base URL to verify after deploy. Default: remote http://127.0.0.1:<port>
   --identity <path>      SSH identity file
   --ssh-port <port>      SSH port
+  --extension-persona-receipt <path>
+                        Private Extension legacy-persona export used only by
+                        the first desktop-lifecycle-v2 enablement verifier
+  --desktop-persona-receipt <path>
+                        Private Desktop legacy-persona export for first enable
+  --desktop-diagnostics-receipt <path>
+                        Private Desktop diagnostics receipt for first enable
   -h, --help             Show this help text
 
 Environment variable equivalents:
@@ -42,6 +49,9 @@ Environment variable equivalents:
   DEPLOY_VERIFY_URL
   DEPLOY_IDENTITY_FILE
   DEPLOY_SSH_PORT
+  DEPLOY_EXTENSION_PERSONA_RECEIPT
+  DEPLOY_DESKTOP_PERSONA_RECEIPT
+  DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT
 EOF
 }
 
@@ -81,6 +91,9 @@ HTTP_PORT="${DEPLOY_HTTP_PORT:-3000}"
 VERIFY_URL="${DEPLOY_VERIFY_URL:-}"
 IDENTITY_FILE="${DEPLOY_IDENTITY_FILE:-}"
 SSH_PORT="${DEPLOY_SSH_PORT:-}"
+EXTENSION_PERSONA_RECEIPT="${DEPLOY_EXTENSION_PERSONA_RECEIPT:-}"
+DESKTOP_PERSONA_RECEIPT="${DEPLOY_DESKTOP_PERSONA_RECEIPT:-}"
+DESKTOP_DIAGNOSTICS_RECEIPT="${DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -131,6 +144,21 @@ while [[ $# -gt 0 ]]; do
     --ssh-port)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       SSH_PORT="$2"
+      shift 2
+      ;;
+    --extension-persona-receipt)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      EXTENSION_PERSONA_RECEIPT="$2"
+      shift 2
+      ;;
+    --desktop-persona-receipt)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      DESKTOP_PERSONA_RECEIPT="$2"
+      shift 2
+      ;;
+    --desktop-diagnostics-receipt)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      DESKTOP_DIAGNOSTICS_RECEIPT="$2"
       shift 2
       ;;
     -h|--help)
@@ -217,6 +245,11 @@ SCHEMA_BASELINE_CAPTURED=0
 ROLLBACK_COMPOSE_RECREATE_FAILED=0
 ROLLBACK_FORBIDDEN=0
 ROLLBACK_FORBIDDEN_REASON=""
+LIFECYCLE_FIRST_ENABLE=0
+LIFECYCLE_CANDIDATE_HAS_CAPABILITY=0
+# Filled only after the exact chatter token inventory is bound and reviewed.
+# This is deliberately deploy-owned rather than supplied by the candidate image.
+APPROVED_DESKTOP_LIFECYCLE_V2_EVIDENCE_SHA256="2285d565034e636fe5aa03290f3d722bce77ae6190390a78a7c0bd0a7fdd38de"
 # Startup owns schema migration. The concurrent observations index can run for
 # ten minutes on production data while every API process correctly stays
 # pre-listen, so health verification must cover that migration window.
@@ -245,7 +278,8 @@ for file in \
   .env.production.example \
   README.md \
   docker-compose.production.yml \
-  scripts/deploy-production.sh
+  scripts/deploy-production.sh \
+  scripts/verify-desktop-lifecycle-v2-evidence.mjs
 do
   if [[ -e "${ROOT_DIR}/${file}" ]]; then
     REMOTE_RELEASE_FILES+=("$file")
@@ -1035,16 +1069,125 @@ build_candidate_image() {
 }
 
 verify_candidate_lifecycle_capability() {
-  local capabilities
-  capabilities="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$IMAGE_CANDIDATE_TAG") node apps/runtime/dist/startup.js print-public-capabilities")" \
-    || fail "Unable to interrogate candidate runtime capabilities"
+  local running_capabilities
+  local candidate_capabilities
 
-  if [[ "$capabilities" == *'"desktop-lifecycle-v2"'* ]]; then
-    fail "Candidate advertises desktop-lifecycle-v2, but owner-gated Desktop/Extension fleet evidence verification is not implemented yet; refusing stack replacement"
+  candidate_capabilities="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$IMAGE_CANDIDATE_TAG") node apps/runtime/dist/startup.js print-public-capabilities")" \
+    || fail "Unable to interrogate candidate runtime capabilities"
+  case "$candidate_capabilities" in
+    '[]')
+      LIFECYCLE_CANDIDATE_HAS_CAPABILITY=0
+      ;;
+    '["desktop-lifecycle-v2"]')
+      LIFECYCLE_CANDIDATE_HAS_CAPABILITY=1
+      ;;
+    *)
+      fail "Candidate returned an unexpected public capability manifest: ${candidate_capabilities}"
+      ;;
+  esac
+
+  if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
+    [[ "$LIFECYCLE_CANDIDATE_HAS_CAPABILITY" == "0" ]] \
+      || fail "Cannot enable desktop-lifecycle-v2 without a captured running image capability baseline"
+    log "No running image capability baseline; candidate keeps desktop-lifecycle-v2 absent"
+    return 0
   fi
-  [[ "$capabilities" == "[]" ]] \
-    || fail "Candidate returned an unexpected public capability manifest: ${capabilities}"
-  log "Candidate public capabilities verified: ${capabilities}"
+
+  running_capabilities="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$ROLLBACK_IMAGE_TAG") node apps/runtime/dist/startup.js print-public-capabilities")" \
+    || fail "Unable to interrogate running runtime capabilities"
+  case "${running_capabilities}->${candidate_capabilities}" in
+    '[]->[]')
+      log "Candidate keeps desktop-lifecycle-v2 absent"
+      ;;
+    '[]->["desktop-lifecycle-v2"]')
+      LIFECYCLE_FIRST_ENABLE=1
+      [[ -n "$EXTENSION_PERSONA_RECEIPT" && -r "$EXTENSION_PERSONA_RECEIPT" ]] \
+        || fail "First desktop-lifecycle-v2 enablement requires a readable Extension persona receipt"
+      [[ -n "$DESKTOP_PERSONA_RECEIPT" && -r "$DESKTOP_PERSONA_RECEIPT" ]] \
+        || fail "First desktop-lifecycle-v2 enablement requires a readable Desktop persona receipt"
+      [[ -n "$DESKTOP_DIAGNOSTICS_RECEIPT" && -r "$DESKTOP_DIAGNOSTICS_RECEIPT" ]] \
+        || fail "First desktop-lifecycle-v2 enablement requires a readable Desktop diagnostics receipt"
+      run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$IMAGE_CANDIDATE_TAG") node apps/runtime/dist/startup.js print-desktop-lifecycle-v2-evidence" \
+        >"$LIFECYCLE_EVIDENCE_FILE" \
+        || fail "Unable to read desktop-lifecycle-v2 evidence from candidate image"
+      verify_approved_lifecycle_manifest_digest
+      log "Verifying exact Desktop/Extension release evidence"
+      node "$ROOT_DIR/scripts/verify-desktop-lifecycle-v2-evidence.mjs" \
+        "$LIFECYCLE_EVIDENCE_FILE" \
+        "$LIFECYCLE_ARTIFACT_DIR" \
+        "$EXTENSION_PERSONA_RECEIPT" \
+        "$DESKTOP_PERSONA_RECEIPT" \
+        "$DESKTOP_DIAGNOSTICS_RECEIPT" \
+        || fail "Desktop lifecycle v2 external evidence verification failed"
+      verify_candidate_lifecycle_inventory
+      log "First desktop-lifecycle-v2 enablement evidence verified"
+      ;;
+    '["desktop-lifecycle-v2"]->["desktop-lifecycle-v2"]')
+      log "Candidate preserves the already-enabled desktop-lifecycle-v2 capability"
+      ;;
+    '["desktop-lifecycle-v2"]->[]')
+      fail "Candidate would regress the already-enabled desktop-lifecycle-v2 capability"
+      ;;
+    *)
+      fail "Running image returned an unexpected public capability manifest: ${running_capabilities}"
+      ;;
+  esac
+}
+
+verify_approved_lifecycle_manifest_digest() {
+  local actual
+  [[ "$APPROVED_DESKTOP_LIFECYCLE_V2_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "Approved desktop-lifecycle-v2 evidence SHA-256 is not finalized"
+  actual="$(shasum -a 256 "$LIFECYCLE_EVIDENCE_FILE" | awk '{print $1}')" \
+    || fail "Unable to hash desktop-lifecycle-v2 evidence from candidate image"
+  [[ "$actual" == "$APPROVED_DESKTOP_LIFECYCLE_V2_EVIDENCE_SHA256" ]] \
+    || fail "Candidate desktop-lifecycle-v2 evidence does not match the deploy-approved manifest SHA-256"
+  log "Candidate desktop-lifecycle-v2 evidence matches the deploy-approved manifest SHA-256"
+}
+
+verify_candidate_lifecycle_inventory() {
+  local candidate_compose
+  local result
+  candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
+  result="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps api node apps/runtime/dist/startup.js verify-desktop-lifecycle-v2-inventory")" \
+    || fail "Desktop lifecycle v2 production inventory verification failed"
+  node - "$result" <<'NODE' \
+    || fail "Desktop lifecycle v2 inventory verifier returned an unexpected result"
+const result = JSON.parse(process.argv[2]);
+const keys = Object.keys(result).sort();
+if (JSON.stringify(keys) !== JSON.stringify(["ok", "verified"])) {
+  throw new Error(`unexpected result keys: ${keys.join(",")}`);
+}
+if (result.ok !== true || !Array.isArray(result.verified) || result.verified.length === 0) {
+  throw new Error("inventory verification did not return a non-empty success set");
+}
+for (const item of result.verified) {
+  const itemKeys = Object.keys(item).sort();
+  if (JSON.stringify(itemKeys) !== JSON.stringify(["machineId", "tokenId", "username"])) {
+    throw new Error(`unexpected verified item keys: ${itemKeys.join(",")}`);
+  }
+  if (typeof item.machineId !== "string" || !Number.isSafeInteger(item.tokenId) || typeof item.username !== "string") {
+    throw new Error("invalid verified inventory item");
+  }
+}
+NODE
+  log "Desktop lifecycle v2 production inventory verified"
+}
+
+verify_post_deploy_lifecycle_capability() {
+  local expected="false"
+  [[ "$LIFECYCLE_CANDIDATE_HAS_CAPABILITY" == "1" ]] && expected="true"
+  node - "$HEALTH_FILE" "$expected" <<'NODE'
+const fs = require("node:fs");
+const [path, expectedRaw] = process.argv.slice(2);
+const body = JSON.parse(fs.readFileSync(path, "utf8"));
+const capabilities = body.capabilities;
+if (!Array.isArray(capabilities)) throw new Error("health capabilities is not an array");
+const present = capabilities.includes("desktop-lifecycle-v2");
+if (present !== (expectedRaw === "true")) {
+  throw new Error(`health desktop-lifecycle-v2=${present}, expected ${expectedRaw}`);
+}
+NODE
 }
 
 run_pre_recreate_harvest_index_migration() {
@@ -1064,6 +1207,9 @@ require_command curl
 require_command mktemp
 require_command shasum
 require_command git
+require_command gh
+require_command node
+require_command unzip
 require_command cp
 require_command find
 require_command awk
@@ -1078,6 +1224,8 @@ DASHBOARD_FILE="${TEMP_DIR}/dashboard.html"
 SCHEMA_BEFORE_FILE="${TEMP_DIR}/schema-before.txt"
 SCHEMA_AFTER_FILE="${TEMP_DIR}/schema-after.txt"
 ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"
+LIFECYCLE_EVIDENCE_FILE="${TEMP_DIR}/desktop-lifecycle-v2-evidence.json"
+LIFECYCLE_ARTIFACT_DIR="${TEMP_DIR}/desktop-lifecycle-v2-artifacts"
 
 initialize_deploy_metadata_and_tags
 acquire_local_deploy_lock
@@ -1110,6 +1258,14 @@ SYNC_MONITORING_TOKEN="$(read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN")" 
   || fail_after_release_sync "Unable to read monitoring token after syncing release files"
 
 log "Recreating the remote production stack"
+if [[ "$LIFECYCLE_FIRST_ENABLE" == "1" ]]; then
+  # The owner binding can be revoked or transferred while a long candidate
+  # build runs. Re-read it at the last safe point before promotion.
+  verify_candidate_lifecycle_inventory
+  ROLLBACK_FORBIDDEN=1
+  ROLLBACK_FORBIDDEN_REASON="desktop-lifecycle-v2 was enabled; capability rollback is unsafe"
+  log "Automatic rollback disabled before the one-way desktop-lifecycle-v2 transition"
+fi
 run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \
   || fail_after_release_sync "Unable to promote candidate image tag after validation"
 STACK_RECREATED=1
@@ -1120,6 +1276,8 @@ fi
 
 log "Waiting for ${VERIFY_URL%/}/api/v1/health"
 wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VERIFY_URL%/}/api/v1/health"
+verify_post_deploy_lifecycle_capability \
+  || fail "Production health capability does not match the verified candidate"
 
 log "Waiting for the worker container healthcheck"
 wait_for_worker_health || fail "Worker container never reached a healthy state"
