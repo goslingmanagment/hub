@@ -276,6 +276,25 @@ describe("config", () => {
     expect(config.encryptionKeysByVersion.get(2)?.equals(currentKey)).toBe(true);
   });
 
+  it("can skip dotenv loading for machine-readable runtime commands", async () => {
+    const dotenvPath = path.join(testCwd, ".env");
+    await writeFile(
+      dotenvPath,
+      "FANSLY_BASE_URL=https://example.invalid/should-not-load\n",
+      "utf8",
+    );
+
+    try {
+      const env: NodeJS.ProcessEnv = { ...baseEnv };
+      const config = loadConfig(env, { loadDotEnv: false });
+
+      expect(env.FANSLY_BASE_URL).toBeUndefined();
+      expect(config.fanslyBaseUrl).toBe("https://apiv3.fansly.com/api/v1");
+    } finally {
+      await rm(dotenvPath, { force: true });
+    }
+  });
+
   it("loads dotenv values into the supplied env object without mutating process.env", async () => {
     const originalFanslyBaseUrl = process.env.FANSLY_BASE_URL;
     const dotenvPath = path.join(testCwd, ".env");

@@ -40,7 +40,9 @@ async function runStartupMigrations() {
 }
 
 async function verifyLifecycleInventory() {
-  const config = loadConfig();
+  // Docker Compose already injects .env.production. Keep this machine-readable
+  // command's stdout free of dotenv's informational banner.
+  const config = loadConfig(process.env, { loadDotEnv: false });
   const pool = createPool(config.databaseUrl);
   try {
     const verified = await verifyDesktopLifecycleV2Inventory(pool);
