@@ -4361,3 +4361,31 @@ semantics (429/5xx) are untouched — only connect failures stick. (3) The frame
 `code` remains an open string in the contract: clients match by prefix
 (`provider*`), so new codes ship without a contract bump or SDK re-vendor. The
 extension side of this incident is chatgoose E38.
+
+**Decision #155 (2026-07-15, PPV poison-loop incident — canonical refs +
+serve-time tourniquet):** `message.ppv_unlocked` canonicalization shipped the
+webhook's top-level `user_id` as `conversationRef`/`fanIdentityRef`. On this
+notification kind that field is the RECIPIENT CREATOR (the same live-verified
+trap `tips.received` already documents in `ofapi-payloads.ts`), so every one
+of the 70 ledgered ppv events named a non-existent conversation. Desktop
+≥0.1.37 deterministically rejected those frames, froze its v2 cursor, and its
+SSE reconnect loop burned ~14k OFAPI credits in one night (nginx forensics
+2026-07-15; the `ofapi_burn_rate:global` alert fired 00:44 MSK and went
+unacted). Ruling: (a) notification-kind refs come ONLY from
+`notificationChatId()` / `extractMessageIdFromNotification()`
+(payload.user.id / the `{MESSAGE_LINK}` chat path); an unresolvable chat
+publishes NO event — the observation stays journaled unparsed rather than
+shipping refs that poison every conversation-resolving consumer. No
+canonicalizer version bump: replayed history would dedup away on
+`ppv:<notificationId>`, so a v4 sweep buys nothing. (b) A TEMPORARY serve-time
+suppression of `message.ppv_unlocked` on the v2 stream
+(`SUPPRESSED_V2_FRAME_TYPES`, modules/events) unwedges every fielded desktop
+with one deploy: the account watermark still advances via the next delivered
+frame, and the suppressed events lose nothing consumers use (wrong-ref'd,
+no-op in v1 projections/archive — that archive comment recorded the ref as
+unreliable BEFORE the incident; a consumer hardening its checks must consult
+the producer's recorded deviations). REMOVE once `x-client-version` shows the
+fleet on a non-rejecting desktop (its D17). (c) The 70 bad rows are NOT
+rewritten — `domain_events` stays append-only; repair follows the
+`fansly-1970-repair.ts` superseding pattern as a follow-up wave, alongside ppv
+facts entering snapshots and the read-budget gate (incident plan P1/P3).

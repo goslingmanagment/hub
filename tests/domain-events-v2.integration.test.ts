@@ -1164,3 +1164,49 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
     });
   });
 });
+
+describe("event stream v2 — incident 2026-07-15 tourniquet (#155)", () => {
+  it("suppresses message.ppv_unlocked frames while the watermark advances past them", async (context) => {
+    if (!requireSetup(context)) return;
+
+    // Anchor on the current head so earlier tests' events stay out of frame.
+    const snapshot = await fetch(`${baseUrl}/api/v1/events/v2/snapshot`, {
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    const { cursor } = await snapshot.json() as { cursor: string };
+
+    await appendDomainEvents(testDb!.db, lanaId, [
+      event("message.received", { text: "before ppv" }),
+      event("message.ppv_unlocked", { amountText: "$45.00" }),
+      event("message.received", { text: "after ppv" }),
+    ]);
+
+    const frames: Array<{ cursor: string; event: DomainEventFrame }> = [];
+    const handle = subscribeDomainEvents(bearerOptions(), {
+      cursor,
+      onFrame: (frame) => frames.push(frame),
+    });
+    await sleep(600);
+    handle.close();
+    await handle.done;
+
+    expect(frames.map((frame) => frame.event.type))
+      .toEqual(["message.received", "message.received"]);
+    const seqs = frames.map((frame) => frame.event.accountSeq);
+    expect(seqs[1]! - seqs[0]!).toBe(2); // the ppv seq sits between, undelivered
+
+    // The suppressed seq must ride the next frame's id line: resuming from the
+    // last delivered frame replays nothing — no client can wedge on the hidden
+    // event because no cursor ever points before it without also being before
+    // a delivered frame.
+    const resumed: DomainEventFrame[] = [];
+    const resume = subscribeDomainEvents(bearerOptions(), {
+      cursor: frames.at(-1)!.cursor,
+      onFrame: (frame) => resumed.push(frame.event),
+    });
+    await sleep(500);
+    resume.close();
+    await resume.done;
+    expect(resumed).toEqual([]);
+  });
+});

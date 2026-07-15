@@ -91,6 +91,16 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // Separate from raw.writableLength: these objects arrive while the durable
   // replay query is still running and have not reached the socket yet.
   const SSE_MAX_PRE_REPLAY_BUFFERED_BYTES = 1_000_000;
+  // TEMPORARY tourniquet, incident 2026-07-15 (decision #155): desktop ≤0.1.42
+  // deterministically rejects message.ppv_unlocked frames (the canonicalizer
+  // shipped the creator id as conversationRef) and wedges its cursor in a
+  // reconnect loop that burns paid OFAPI reads (~14k credits/night). Suppressing
+  // the frame at serve time — the account watermark still advances with the next
+  // delivered frame — unwedges the whole fleet with one deploy and loses nothing
+  // consumers use: the ledgered event is wrong-ref'd anyway and its projections
+  // are v1 no-ops. REMOVE once x-client-version on the read gateway shows the
+  // fleet on a desktop whose ppvUnlocked handler is non-rejecting (its D17).
+  const SUPPRESSED_V2_FRAME_TYPES: ReadonlySet<string> = new Set(["message.ppv_unlocked"]);
 
   function sameNumberSet(left: ReadonlySet<number>, right: ReadonlySet<number>) {
     if (left.size !== right.size) {
@@ -653,6 +663,9 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
       if (!verdict.deliver) {
         return;
+      }
+      if (SUPPRESSED_V2_FRAME_TYPES.has(event.type)) {
+        return; // watermark advanced above; the next frame's id carries it
       }
       if (raw.writableLength > SSE_MAX_BUFFERED_BYTES) {
         request.log.warn("v2 SSE client not consuming; dropping connection");

@@ -14,6 +14,10 @@ import {
   type CanonicalEventDraft,
   type CanonicalizableObservation,
 } from "./types.ts";
+import {
+  extractMessageIdFromNotification,
+  notificationChatId,
+} from "../ofapi-payloads.ts";
 
 // v3 (W8.2 / A48, decision #133): subscriptions.renewed joins the family —
 // journaled renewals produced ZERO events through v2. The version bump makes
@@ -145,14 +149,25 @@ export function canonicalizeOfapiWebhookObservation(
       if (!notificationId) {
         return [];
       }
+      // Incident 2026-07-15 (decision #155): top-level user_id is the recipient
+      // CREATOR on this kind (live-verified — same trap tips.received documents
+      // in ofapi-payloads.ts), so it must never be published as the
+      // conversation. The fan (= chat) id is payload.user.id / the
+      // {MESSAGE_LINK} chat path; with neither present the observation stays
+      // journaled unparsed rather than shipping refs that poison every
+      // conversation-resolving consumer.
+      const chatId = notificationChatId(payload);
+      if (!chatId) {
+        return [];
+      }
       const replacePairs = isRecord(payload.replacePairs) ? payload.replacePairs : {};
       const messageLink = asString(replacePairs["{MESSAGE_LINK}"]);
-      const messageRef = messageLink?.match(/(\d+)(?:[^\d]*)$/)?.[1] ?? null;
+      const messageRef = extractMessageIdFromNotification(payload) ?? null;
       return [{
         type: "message.ppv_unlocked",
         occurredAt: asDate(payload.createdAt, observation.receivedAt),
-        fanIdentityRef: asString(payload.user_id),
-        conversationRef: asString(payload.user_id),
+        fanIdentityRef: chatId,
+        conversationRef: chatId,
         messageRef,
         data: {
           amountText: asString(replacePairs["{AMOUNT}"]),

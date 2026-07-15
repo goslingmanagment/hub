@@ -70,11 +70,48 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
   it("canonicalizes messages.ppv.unlocked keyed on the notification id", () => {
     const events = canonicalizeOfapiWebhookObservation(observation("messages_ppv_unlocked"));
     expect(events).toHaveLength(1);
+    // Incident 2026-07-15 (decision #155): the fixture's top-level user_id
+    // (514788334) is the recipient creator; publishing it as the conversation
+    // poisoned every chat-resolving consumer. The fan/chat id is
+    // payload.user.id.
     expect(events[0]).toMatchObject({
       type: "message.ppv_unlocked",
-      fanIdentityRef: "514788334",
+      fanIdentityRef: "1000003",
+      conversationRef: "1000003",
       dedupKey: "ppv:1000002",
     });
+    expect(events[0]!.conversationRef).not.toBe("514788334");
+  });
+
+  it("derives ppv refs from the chat link when payload.user is absent (live shape)", () => {
+    const envelope = fixture("messages_ppv_unlocked");
+    const payload = envelope.payload as Record<string, unknown>;
+    delete payload.user;
+    payload.replacePairs = {
+      "{AMOUNT}": "$45.00",
+      "{MESSAGE_LINK}":
+        "<a href='https://onlyfans.com/my/chats/chat/490236887?firstId=10408879870963'>message</a>",
+    };
+    const events = canonicalizeOfapiWebhookObservation(
+      observation("messages_ppv_unlocked", { payload: envelope }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      fanIdentityRef: "490236887",
+      conversationRef: "490236887",
+      messageRef: "10408879870963",
+    });
+  });
+
+  it("publishes no ppv event when neither user id nor chat link resolves", () => {
+    const envelope = fixture("messages_ppv_unlocked");
+    const payload = envelope.payload as Record<string, unknown>;
+    delete payload.user;
+    // Anonymized fixture text carries no link; user_id must NOT be a fallback.
+    const events = canonicalizeOfapiWebhookObservation(
+      observation("messages_ppv_unlocked", { payload: envelope }),
+    );
+    expect(events).toEqual([]);
   });
 
   it("canonicalizes transactions.new into transaction.posted", () => {
