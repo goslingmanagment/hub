@@ -17,17 +17,18 @@ and desktop 0.1.31 kernel cutovers shipped. The dashboard rebuild was CANCELLED
 console; the in-core workboard direction is deprecated (#117), but the
 STANDALONE workboard app (Stage 34, repo `~/code/workboard`) was REOPENED by
 #119 — design pass pending, owner-approved PRD before any code. Stage 35 (this
-documentation standard) is the closing stage. `docs/project-kernel/` is
-the migration's historical archive — living docs are `docs/` + `docs/generated/`.**
+documentation standard) is the closing stage. The migration's historical record
+lives in `docs/migration-history/` (per-stage specs, roadmap, execution log);
+living docs are `docs/` + `docs/generated/`.**
 
 ## Read these before designing or building anything
 
 | Doc | What it answers |
 |---|---|
 | `docs/decisions.md` | Every technical decision, numbered, append-only — including the family law (anti-deletion, updated-in-change) and cross-repo rulings clients reference |
-| `docs/generated/` | Machine-generated reference (auth policy table + 24 code maps) — start at `00-overview.md`, it indexes which map covers what; regenerate, never hand-edit; each file's banner says how |
-| `docs/project-kernel/pass3/stages/` | The 35 stage specs of the migration — the WHY behind most of today's architecture; superseded ones carry banners |
-| `docs/project-kernel/pass3/execution-log.md` | Per-stage status board of the migration |
+| `docs/generated/` | Machine-generated reference (auth policy table + 24 code maps) — start at `00-overview.md`, it indexes which map covers what; regenerate, never hand-edit; each file's banner says how (`REGENERATION-PROMPT.md` there is the generator) |
+| `docs/migration-history/stages/` | The 35 stage specs of the Project Kernel migration — the WHY behind most of today's architecture; superseded ones carry banners |
+| `docs/migration-history/execution-log.md` | Per-stage status board of the migration |
 | `docs/runbooks/` | Operational rituals — incl. the break-glass direct-read runbook (DP 8) and go-live checklists |
 | `docs/ai-gateway-contract.md`, `docs/ofapi-command-outbox-contract.md` | The two most load-bearing client contracts in prose |
 | `reference/agency-hub.openapi.json` | The generated OpenAPI snapshot — the contract clients see |
@@ -108,4 +109,4 @@ the migration's historical archive — living docs are `docs/` + `docs/generated
 
 Multi-session work is the norm here — see `SESSIONS.md` for the runbook
 (restartable prompts, one-repo-per-session boundaries, the stage-execution
-harness in `docs/project-kernel/prompts/prompt-4-stage-execution.md`).
+harness in `docs/migration-history/stage-execution-harness.md`).

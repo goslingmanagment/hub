@@ -9,7 +9,7 @@ import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 // through that page's production egress + pacing, and classifies whether core's
 // single pasted `fansly-client-check` validates server-side. Read-only: writes
 // nothing to Fansly and nothing to Postgres beyond ordinary sync telemetry.
-// See docs/project-kernel/pass3/stages/stage-06-fansly-server-replay-gate.md.
+// See docs/migration-history/stages/stage-06-fansly-server-replay-gate.md.
 
 export type ReplayProbeFamily =
   | "earnings/stats/accounts"

@@ -4405,3 +4405,39 @@ maximum. It continues to split and sanitize the completed output it actually
 receives. The prompt regression suite pins the 2–3-part instruction and the
 absence of the old single-message opt-out; the output suite pins the unchanged
 fallback behavior.
+
+**Decision #157 (2026-07-15, documentation cleanup — `docs/project-kernel/`
+dissolved):** The Project Kernel migration is complete, so its archive folder
+and the "project-kernel / pass1 / pass2 / pass3 / maps" naming are retired; the
+enduring records become normal documentation and spent scaffolding is removed.
+Tombstone (family anti-deletion law):
+- **Kept, relocated →** `docs/migration-history/`: all 35 stage specs,
+  `roadmap.md`, `execution-log.md`, the stage-execution harness
+  (`prompts/prompt-4-stage-execution.md` → `stage-execution-harness.md`), and
+  `target-architecture.md`, whose §14 compatibility invariants the harness
+  cites as binding. The live map generator moves from
+  `docs/project-kernel/prompts/prompt-1-map.md` to
+  `docs/generated/REGENERATION-PROMPT.md`, with its title and output-path
+  instructions updated. The resulting migration-history tree contains 40
+  tracked documents: four root records, one stage index, and 35 stage specs.
+- **Deleted, git-recoverable (tracked):** all 21 superseded Pass-1 maps under
+  `docs/project-kernel/maps/`, replaced by the 24 living maps under
+  `docs/generated/`; the retired `prompts/prompt-workboard-design.md`; and the
+  two frozen `workboard/` copies. The live Workboard brief and PRD skeleton are
+  in the standalone `~/code/workboard` repo per #119.
+- **Historical untracked scratch cleanup:** before its 2026-07-12 removal, the
+  local-only material was archived to
+  `~/code/archive/docs-cleanup-2026-07-12/core/` (not Git history): the Pass-2
+  review and decision-points files; Pass-2/3 generation prompts (`prompt-2`,
+  `prompt-3`, `prompt-3a-continue`, `prompt-3a-roadmap-skeleton`, `prompt-3b`,
+  `prompt-3c`); `project-kernel/README.md`; the 2026-07-02 architecture review;
+  the 2026-07-08 system-audit report and JSON artifacts; the seven-file
+  `fix-plans-2026-07-10/` program; `prompts/{project_review,workboard_v2}.md`;
+  and the completed `superpowers/plans/2026-07-07-main-review-findings-fixes.md`.
+- `CLAUDE.md`, `AGENTS.md`, `SESSIONS.md`, and the two Stage-6 source comments
+  are repointed in this change. Historical paths inside prior append-only
+  decisions and migration records stay verbatim. The 24 generated map bodies
+  are intentionally not hand-edited here: their banners still name the retired
+  generator path until the immediately-following regeneration commit rebuilds
+  them from `docs/generated/REGENERATION-PROMPT.md` against this structural
+  snapshot (generated docs are exempt from the family anti-deletion rule).

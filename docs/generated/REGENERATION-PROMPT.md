@@ -1,6 +1,10 @@
-# Project Kernel — Pass 1: Codebase Map (core)
+# Code-map regeneration prompt — core (Agency Hub)
 
-Run this on Opus 4.8, in a fresh session opened in this repo.
+This is the re-runnable generator for the machine maps in `docs/generated/`.
+Every file there cites this prompt in its banner. Run it on Opus 4.8, in a
+fresh session opened in this repo, whenever the maps need regenerating.
+(Originally the Project-Kernel Pass-1 map prompt; the historical Pass-1
+originals have been retired now that `docs/generated/` is the living reference.)
 
 ---
 
@@ -38,20 +42,19 @@ the actual behavior.
 Ignore old audit/review/plan documents in the repo — document the code
 as it is now, not as documents say it was or should be.
 
-Write the documentation in English into docs/project-kernel/ in this repo
-(the folder already exists and holds the prompt files for this
-initiative — leave those and any other existing files untouched).
+Write the documentation in English into `docs/generated/` in this repo
+(create the folder if absent), alongside this prompt file — leave this prompt
+(`REGENERATION-PROMPT.md`) and the auth-policy table untouched, and overwrite
+the previous maps.
 
 ---
 
-## Stage 35 regeneration addendum (2026-07-07)
+## Regeneration notes
 
-This prompt is re-runnable. When regenerating (Stage 35 and after):
+When regenerating the maps:
 
 - Write the maps into `docs/generated/` in this repo (create the folder if
-  absent), NOT into `docs/project-kernel/` — that folder now holds the
-  historical Pass 1 originals, which stay untouched and carry superseded
-  banners.
+  absent). This prompt lives there too, as `REGENERATION-PROMPT.md`.
 - Start every generated file with this banner (fill in the current date and
   `git rev-parse --short HEAD`):
 
@@ -59,9 +62,8 @@ This prompt is re-runnable. When regenerating (Stage 35 and after):
   > Machine-generated reference — regenerate by re-running that prompt in a
   > fresh session; do not hand-edit.
 
-- Map the tree as it is TODAY (post-kernel-migration). The Pass 1 originals
-  may be consulted as a checklist of territories, but every claim must be
-  re-verified against current code — subsystems that no longer exist are
+- Map the tree as it is TODAY (post-kernel-migration). Every claim must be
+  verified against current code — subsystems that no longer exist are
   dropped, new ones (whatever the code contains now) are mapped.
 - Keep file naming NN-topic.md with a 00-overview.md index, but let today's
   codebase dictate the actual breakdown.

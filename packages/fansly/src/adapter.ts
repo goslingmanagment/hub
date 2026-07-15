@@ -440,7 +440,7 @@ export class FanslyAdapter {
   // These test whether core can replay, server-side, the Fansly endpoint families
   // that today only the extension calls (DP 1-B). They reuse `buildHeaders` as-is
   // (the single pasted `fansly-client-check`); response typing is deliberately loose
-  // (Stage 16 hardens it). See docs/project-kernel/pass3/stages/stage-06-*.md.
+  // (Stage 16 hardens it). See docs/migration-history/stages/stage-06-*.md.
 
   async getEarningsStatsAccountsPage(
     context: FanslyRequestContext,

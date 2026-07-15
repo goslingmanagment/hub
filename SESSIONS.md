@@ -10,9 +10,9 @@ code. Prompts state goals, hard constraints, and done-criteria — not steps.
 
 | Prompt | Use |
 |---|---|
-| `docs/project-kernel/prompts/prompt-4-stage-execution.md` | The (historical) stage-execution harness that ran the 35-stage migration — parameterized `STAGE=NN`; keep for reference and for any remaining stage tails |
+| `docs/migration-history/stage-execution-harness.md` | The (historical) stage-execution harness that ran the 35-stage migration — parameterized `STAGE=NN`; keep for reference and for any remaining stage tails |
 | `~/code/workboard` (no prompt file) | Stage 34 standalone-workboard design pass (reopened by #119) — open a fresh session there; its CLAUDE.md + `docs/prd.md` skeleton are the brief. Fills the PRD, STOPS for owner review before any code |
-| `docs/prompts/` (map prompts) | Regenerate `docs/generated/` maps after substantive changes |
+| `docs/generated/REGENERATION-PROMPT.md` | Regenerate the `docs/generated/` maps after substantive changes |
 
 ## Standing rules for any core session
 
@@ -28,6 +28,6 @@ code. Prompts state goals, hard constraints, and done-criteria — not steps.
 
 ## Ops watches (recurring, calendar-gated)
 
-Consult `docs/project-kernel/pass3/execution-log.md` §standing-risks and the
+Consult `docs/migration-history/execution-log.md` §standing-risks and the
 latest decisions.md entries for the live list (release week-watches, invoice
 reconciliation, would-deny→enforce flips, tiering cycles).
