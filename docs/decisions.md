@@ -4389,3 +4389,19 @@ fleet on a non-rejecting desktop (its D17). (c) The 70 bad rows are NOT
 rewritten — `domain_events` stays append-only; repair follows the
 `fansly-1970-repair.ts` superseding pattern as a follow-up wave, alongside ppv
 facts entering snapshots and the read-budget gate (incident plan P1/P3).
+
+**Decision #156 (2026-07-15, Split mode is a strict prompt request, not an
+output guarantee):** A `fast-reply` request with `replyMode=preferSplit` now
+instructs the model to return two short `[NEXT]`-separated parts minimum and
+three maximum. The prior opt-out that allowed one unsplit message when a split
+felt forced is removed; two parts are the default and a third is reserved for
+content that genuinely benefits from another send.
+
+This is a prompt-level generation requirement, not deterministic transport
+enforcement. Provider output remains probabilistic: the reply normalizer does
+not invent or duplicate text when the model returns one usable part, and does
+not silently truncate extra usable parts when the model exceeds the requested
+maximum. It continues to split and sanitize the completed output it actually
+receives. The prompt regression suite pins the 2–3-part instruction and the
+absence of the old single-message opt-out; the output suite pins the unchanged
+fallback behavior.

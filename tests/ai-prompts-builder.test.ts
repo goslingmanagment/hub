@@ -103,10 +103,10 @@ function buildSplitReplyInstructions(
   }
 
   return `- Split mode is on for this reply.
-- Prefer short, text-like multi-message delivery over one long block when that feels more human.
-- Use [NEXT] only when the follow-up reads like a natural second thought or quick extra send.
-- Keep each part brief and casual.
-- If a split would feel forced, return one clean message instead.`;
+- Deliver the reply as separate short, text-like sends, separated by [NEXT].
+- ALWAYS return at least 2 parts: split even a brief reply into a main send plus a natural follow-up.
+- Use 3 parts only when the content genuinely needs the extra send - never more than 3.
+- Keep each part brief and casual, like real back-to-back texts.`;
 }
 
 const TONE_INSTRUCTIONS: Record<Exclude<ReplyTone, 'none'>, string> = {
@@ -600,7 +600,10 @@ describe('split reply instructions', () => {
       }),
     );
     expect(result.user).toContain('Split mode is on for this reply.');
-    expect(result.user).toContain('Prefer short, text-like multi-message delivery');
+    expect(result.user).toContain('ALWAYS return at least 2 parts');
+    expect(result.user).toContain('never more than 3');
+    expect(result.user).toContain('separated by [NEXT]');
+    expect(result.user).not.toContain('return one clean message instead');
   });
 
   it('does not include split instructions for fast-reply with default mode', () => {

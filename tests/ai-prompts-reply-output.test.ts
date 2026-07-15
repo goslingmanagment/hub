@@ -12,6 +12,16 @@ import {
 } from '../apps/runtime/src/modules/ai/index.ts';
 
 describe('reply output normalization', () => {
+  it('preserves provider cardinality when split-mode instructions are not followed', () => {
+    expect(normalizeReplyParts('just one message')).toEqual(['just one message']);
+    expect(normalizeReplyParts('one[NEXT]two[NEXT]three[NEXT]four')).toEqual([
+      'one',
+      'two',
+      'three',
+      'four',
+    ]);
+  });
+
   // Gemini leak regression: bracket-garbage part + trailing prompt echo (1.3.x production bug).
   it('removes Gemini prompt leak fragments without filtering short valid replies', () => {
     expect(

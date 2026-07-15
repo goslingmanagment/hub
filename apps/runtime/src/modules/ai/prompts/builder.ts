@@ -156,10 +156,10 @@ const TONE_FOOTER =
   'The personality still controls voice, cadence, emoji habits, slang, and message length — only the intent and energy of this reply should shift.';
 
 const SPLIT_REPLY_INSTRUCTIONS = `- Split mode is on for this reply.
-- Prefer short, text-like multi-message delivery over one long block when that feels more human.
-- Use [NEXT] only when the follow-up reads like a natural second thought or quick extra send.
-- Keep each part brief and casual.
-- If a split would feel forced, return one clean message instead.`;
+- Deliver the reply as separate short, text-like sends, separated by [NEXT].
+- ALWAYS return at least 2 parts: split even a brief reply into a main send plus a natural follow-up.
+- Use 3 parts only when the content genuinely needs the extra send - never more than 3.
+- Keep each part brief and casual, like real back-to-back texts.`;
 
 const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
   'segment-a':
