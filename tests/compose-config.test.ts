@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -141,15 +142,53 @@ describe("compose config", () => {
     expect(text).not.toContain('DIST_BASE_TAG="${IMAGE_TAG}-dist-base"');
   });
 
-  it("deploy-production.sh validates cached Node base architecture for the build platform", async () => {
+  it("deploy-production.sh validates and builds from the same canonical Node base image", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
-    const ensureBase = getShellFunction(text, "ensure_node_base_cache");
+    const ensureBase = getShellFunction(text, "ensure_node_base_image");
+    const buildFull = getShellFunction(text, "build_full_candidate_image");
 
-    expect(ensureBase).toContain('docker image inspect "$NODE_BASE_CACHE_IMAGE"');
-    expect(ensureBase).toContain('docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_CACHE_IMAGE" node -p "process.platform + \'/\' + process.arch"');
+    expect(text).not.toContain("agency_hub_core/node:22-bookworm-slim");
+    expect(ensureBase).toContain('docker image inspect "$NODE_BASE_IMAGE"');
+    expect(ensureBase).toContain('docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_IMAGE" node -p "process.platform + \'/\' + process.arch"');
+    expect(ensureBase).not.toContain("NODE_BASE_CACHE");
     expect(ensureBase).toContain("linux/x64");
     expect(ensureBase).toContain("failed ${BUILD_PLATFORM} runtime validation");
     expect(ensureBase).toContain('docker pull --platform="${BUILD_PLATFORM}" "$NODE_BASE_IMAGE"');
+    expect(buildFull).toContain('--build-arg "NODE_BASE_IMAGE=${NODE_BASE_IMAGE}"');
+    expect(buildFull).not.toContain("NODE_BASE_CACHE");
+  });
+
+  it("accepts but ignores the deprecated Node base cache flag and environment variable", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const script = path.join(repoRoot, "scripts/deploy-production.sh");
+    const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
+    delete cleanEnv.DEPLOY_NODE_BASE_CACHE_IMAGE;
+
+    const flagResult = spawnSync(
+      "bash",
+      [script, "--node-base-cache-image", "legacy.invalid/team/node:22", "--help"],
+      { encoding: "utf8", env: cleanEnv },
+    );
+    expect(flagResult.status, flagResult.stderr).toBe(0);
+    expect(flagResult.stdout).toContain("Usage:");
+    expect(flagResult.stderr).toContain("deprecated and ignored");
+
+    const envResult = spawnSync("bash", [script, "--help"], {
+      encoding: "utf8",
+      env: {
+        ...cleanEnv,
+        DEPLOY_NODE_BASE_CACHE_IMAGE: "legacy.invalid/team/node:22",
+      },
+    });
+    expect(envResult.status, envResult.stderr).toBe(0);
+    expect(envResult.stdout).toContain("Usage:");
+    expect(envResult.stderr).toContain("deprecated and ignored");
+
+    const legacyOption = text.match(/^ {4}--node-base-cache-image\)([\s\S]*?)\n\s+;;/m)?.[0];
+    expect(legacyOption).toContain("shift 2");
+    expect(legacyOption).not.toContain("NODE_BASE_IMAGE=");
+    expect(legacyOption).not.toContain("docker");
+    expect(text).not.toContain('NODE_BASE_IMAGE=${NODE_BASE_CACHE_IMAGE}');
   });
 
   it("deploy-production.sh runs migration preflight before building candidate images", async () => {
@@ -212,6 +251,7 @@ describe("compose config", () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const evidenceVerifier = await readComposeFile("scripts/verify-desktop-lifecycle-v2-evidence.mjs");
     const health = await readComposeFile("apps/runtime/src/services/health.ts");
+    const startup = await readComposeFile("apps/runtime/src/startup.ts");
     const waitForApi = getShellFunction(text, "wait_for_api_health");
     const capabilityGate = getShellFunction(text, "verify_candidate_lifecycle_capability");
     const manifestDigestGate = getShellFunction(text, "verify_approved_lifecycle_manifest_digest");
@@ -257,6 +297,7 @@ describe("compose config", () => {
     expect(capabilityGate).toContain("LIFECYCLE_FIRST_ENABLE=1");
     expect(inventoryGate).toContain("verify-desktop-lifecycle-v2-inventory");
     expect(inventoryGate).toContain("--no-deps api");
+    expect(startup).toContain("loadConfig(process.env, { loadDotEnv: false })");
     expect(postDeployCapability).toContain("desktop-lifecycle-v2");
     expect(capabilityGate).not.toContain("DEPLOY_EXTENSION_PERSONA_CAS_STATUS");
     expect(capabilityGateIndex).toBeGreaterThan(buildIndex);
@@ -398,7 +439,7 @@ describe("compose config", () => {
     expect(dockerfile).toContain("FROM ${NODE_BASE_IMAGE} AS target-base");
     expect(dockerfile).toContain("LABEL agency-hub.dependency-checksum=");
     expect(dockerfile).toContain("LABEL agency-hub.source-revision=");
-    expect(fullBuild).toContain('--build-arg "NODE_BASE_IMAGE=${NODE_BASE_CACHE_IMAGE}"');
+    expect(fullBuild).toContain('--build-arg "NODE_BASE_IMAGE=${NODE_BASE_IMAGE}"');
     expect(fullBuild).toContain('--build-arg "APP_DEPENDENCY_CHECKSUM=${APP_DEPENDENCY_CHECKSUM}"');
     expect(fullBuild).toContain('--build-arg "APP_SOURCE_REVISION=${APP_SOURCE_REVISION}"');
     expect(distBuild).toContain("docker tag $(printf '%q' \"$ROLLBACK_IMAGE_TAG\") $(printf '%q' \"$DIST_BASE_TAG\")");

@@ -182,9 +182,15 @@ By default the script uses `--mode full`:
 - it runs migration filename preflight checks before the Docker build
 - it acquires local and remote deploy locks so two deploys cannot race over shared production state
 - it performs a full Docker image build and does not fall back to dist-only unless `--mode auto` is explicitly requested
-- the Node base image is read through a stable local cache tag, `agency_hub_core/node:22-bookworm-slim`, to avoid re-resolving Docker Hub metadata on every deploy
+- the canonical `node:22-bookworm-slim` base image is validated for `linux/amd64` and used unchanged by BuildKit, so a local alias cannot be mistaken for a private Docker Hub namespace
 - every built runtime image is labeled with the dependency checksum and source revision
 - after health checks, the running API, scheduler, and worker images must have labels matching the source revision and dependency checksum for this deploy
+
+Older deploy wrappers may still pass `--node-base-cache-image` or set
+`DEPLOY_NODE_BASE_CACHE_IMAGE`. Both forms remain accepted as deprecated
+compatibility shims, emit a warning, and are ignored; only the canonical
+`--node-base-image` / `DEPLOY_NODE_BASE_IMAGE` value can select the image used
+for validation and the Docker build.
 
 `--mode auto` is available only as an explicit opt-in. In auto mode, if the full build fails before the remote release is modified, the script can fall back to a dist-only overlay build from the currently running production image. Dist-only fallback is allowed only when the current production image carries the same dependency checksum label.
 
