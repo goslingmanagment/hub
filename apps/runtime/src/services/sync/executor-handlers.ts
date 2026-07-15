@@ -3,6 +3,7 @@ import {
   assertOwnedPageSyncLease,
   countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
+  countPageFollowsByGeneration,
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
   finalizePageDmConversationMessageSync,
@@ -138,6 +139,7 @@ import {
 } from "./shared.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage, type HydrationCaptureContext } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
+import { FollowersReconcileConsistencyError } from "./errors.ts";
 
 export type ExecutorRequestContext = {
   budget: SyncChunkBudget;
@@ -2168,7 +2170,10 @@ export async function executeFollowersReconcileChunk(
             existingActiveFollowers,
           },
         });
-        throw new Error("Follower reconcile returned zero rows; refusing destructive finalization");
+        throw new FollowersReconcileConsistencyError({
+          code: "followers_reconcile_empty_first_page",
+          message: "Follower reconcile returned zero rows; refusing destructive finalization",
+        });
       }
     }
 
@@ -2180,19 +2185,6 @@ export async function executeFollowersReconcileChunk(
         observedCount: state.observedCount + page.items.length,
       };
     const finalObservedCount = state.observedCount + page.items.length;
-    if (page.done && finalObservedCount !== state.sourceFollowerCount) {
-      await input.telemetry.addAnomaly({
-        code: "followers_reconcile_partial_page_guard",
-        severity: "warn",
-        message: "Follower reconcile returned fewer rows than the source follower count; refusing destructive finalization",
-        details: {
-          sourceFollowerCount: state.sourceFollowerCount,
-          observedCount: finalObservedCount,
-          pageCount: state.pageCount,
-        },
-      });
-      throw new Error("Follower reconcile returned a partial result; refusing destructive finalization");
-    }
 
     const hydratedFollowers = await hydrateFanslyFollowerRows(app, {
       requestContext,
@@ -2216,6 +2208,7 @@ export async function executeFollowersReconcileChunk(
       if (unmappedFollowerIds.length > 0) {
         return {
           kind: "blocked" as const,
+          reason: "unmapped" as const,
           unmappedFollowerIds,
         };
       }
@@ -2269,6 +2262,18 @@ export async function executeFollowersReconcileChunk(
         await upsertPageFollows(dbTx, followInputs);
         await upsertFanPages(dbTx, fanPageInputs);
         await upsertFanPageExternalPresences(dbTx, fanPagePresenceInputs);
+        const generationObservedCount = asNumber(await countPageFollowsByGeneration(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          generation: state.generation,
+        })) ?? 0;
+        if (generationObservedCount !== state.sourceFollowerCount) {
+          return {
+            kind: "blocked" as const,
+            reason: "snapshot_mismatch" as const,
+            finalObservedCount,
+            generationObservedCount,
+          };
+        }
         await deactivatePageFollowsByGeneration(dbTx, {
           platformAccountId: input.pageContext.page.id,
           generation: state.generation,
@@ -2291,6 +2296,7 @@ export async function executeFollowersReconcileChunk(
             lastSuccessfulRunId: input.syncRunId,
           }),
           processedThisPage: followInputs.length,
+          generationObservedCount,
         };
       }
 
@@ -2308,17 +2314,51 @@ export async function executeFollowersReconcileChunk(
       };
     });
     if (pageWrite.kind === "blocked") {
-      await recordFollowerMappingBlockedAnomaly(input.telemetry, {
-        stream: "followers_reconcile",
-        offset: state.offset,
-        unmappedFollowerIds: pageWrite.unmappedFollowerIds,
+      if (pageWrite.reason === "unmapped") {
+        await recordFollowerMappingBlockedAnomaly(input.telemetry, {
+          stream: "followers_reconcile",
+          offset: state.offset,
+          unmappedFollowerIds: pageWrite.unmappedFollowerIds,
+        });
+        throw new FollowersReconcileConsistencyError({
+          code: "followers_reconcile_unmapped_rows",
+          message: "Follower reconcile left source follower rows unmapped; refusing destructive finalization",
+        });
+      }
+
+      await input.telemetry.addAnomaly({
+        code: "followers_reconcile_generation_guard",
+        severity: "warn",
+        message: "Follower reconcile generation did not match the source follower count; refusing destructive finalization",
+        details: {
+          sourceFollowerCount: state.sourceFollowerCount,
+          observedCount: pageWrite.finalObservedCount,
+          generationObservedCount: pageWrite.generationObservedCount,
+          pageCount: state.pageCount,
+        },
       });
-      throw new Error("Follower reconcile left source follower rows unmapped; refusing destructive finalization");
+      throw new FollowersReconcileConsistencyError({
+        code: "followers_reconcile_inconsistent_snapshot",
+        message: `Follower reconcile generation contained ${pageWrite.generationObservedCount} unique rows for source count ${state.sourceFollowerCount}; refusing destructive finalization`,
+      });
     }
 
     processedThisChunk += pageWrite.processedThisPage;
 
     if (pageWrite.kind === "complete") {
+      if (finalObservedCount !== state.sourceFollowerCount) {
+        await input.telemetry.addAnomaly({
+          code: "followers_reconcile_offset_drift_tolerated",
+          severity: "warn",
+          message: "Follower reconcile raw row count drifted while the unique generation count remained complete",
+          details: {
+            sourceFollowerCount: state.sourceFollowerCount,
+            observedCount: finalObservedCount,
+            generationObservedCount: pageWrite.generationObservedCount,
+            pageCount: state.pageCount,
+          },
+        });
+      }
       await input.telemetry.recordCheckpointAdvanced(
         "followers_reconcile",
         summarizeCheckpoint(pageWrite.checkpoint),
@@ -2331,6 +2371,7 @@ export async function executeFollowersReconcileChunk(
           pageCount: state.pageCount,
           processedThisChunk,
           sourceFollowerCount: state.sourceFollowerCount,
+          generationObservedCount: pageWrite.generationObservedCount,
         },
       } satisfies StreamChunkResult;
     }

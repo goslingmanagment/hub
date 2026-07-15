@@ -329,6 +329,46 @@ describe("notification incidents integration", () => {
     expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("opens a forced stream blocker incident below the retry threshold", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = (await createModel(testDb.db, {
+      slug: "forced-blocker-model",
+      name: "Forced Blocker Model",
+    }))!;
+    const page = (await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "forced-blocker-page",
+    }))!;
+    const app = createTestAppContext(testDb);
+    const run = (await startSyncRun(testDb.db, {
+      platformAccountId: page.id,
+      stream: "followers",
+      trigger: "worker",
+    }))!;
+
+    await notifySyncChunkFailureIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      stream: "followers",
+      runId: run.id,
+      hasProxy: false,
+      previousConsecutiveFailures: 0,
+      forceOpen: true,
+      errorSummary: "permanent provider failure",
+    });
+
+    expect(await getNotificationIncidentByKey(
+      testDb.db,
+      `stream_failed_threshold:${page.id}:followers`,
+    )).toEqual(expect.objectContaining({ status: "open" }));
+    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("detects terminal proxy failures from the newest attempt window instead of the oldest rows", async (context) => {
     if (!testDb) {
       context.skip();

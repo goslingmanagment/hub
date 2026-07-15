@@ -568,6 +568,23 @@ export async function countActivePageFollows(db: Database, platformAccountId: nu
   return result.rows[0]?.count ?? 0;
 }
 
+export async function countPageFollowsByGeneration(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+  },
+) {
+  const result = await db.execute(sql`
+    select count(*)::int as count
+    from page_follows
+    where platform_account_id = ${input.platformAccountId}
+      and last_seen_generation = ${input.generation}
+  `);
+
+  return result.rows[0]?.count ?? 0;
+}
+
 export async function deactivatePageFollowsMissingFromSnapshot(
   db: Database,
   platformAccountId: number,
