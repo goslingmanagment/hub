@@ -16,11 +16,11 @@ Options:
   --image <tag>          Docker image tag. Default: agency_hub_core/runtime:production
   --mode <mode>          Build mode: full, dist-only, or auto. Default: full
   --node-base-image <tag>
-                        Node base image used to seed the local Docker cache.
+                        Canonical Node base image used for full builds.
                         Default: node:22-bookworm-slim
   --node-base-cache-image <tag>
-                        Local Docker tag used for stable full builds.
-                        Default: agency_hub_core/node:22-bookworm-slim
+                        Deprecated compatibility option; accepted but ignored.
+                        Use --node-base-image instead.
   --allow-unlabeled-dist-base
                         Allow dist-only deploy from an existing production image
                         without agency-hub dependency checksum labels.
@@ -43,7 +43,7 @@ Environment variable equivalents:
   DEPLOY_IMAGE_TAG
   DEPLOY_BUILD_MODE
   DEPLOY_NODE_BASE_IMAGE
-  DEPLOY_NODE_BASE_CACHE_IMAGE
+  DEPLOY_NODE_BASE_CACHE_IMAGE (deprecated; accepted but ignored)
   DEPLOY_ALLOW_UNLABELED_DIST_BASE
   DEPLOY_HTTP_PORT
   DEPLOY_VERIFY_URL
@@ -80,12 +80,23 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+warn_deprecated_node_base_cache() {
+  if [[ "${DEPRECATED_NODE_BASE_CACHE_WARNING_EMITTED:-0}" == "1" ]]; then
+    return
+  fi
+  log "warning: --node-base-cache-image / DEPLOY_NODE_BASE_CACHE_IMAGE is deprecated and ignored; use --node-base-image / DEPLOY_NODE_BASE_IMAGE"
+  DEPRECATED_NODE_BASE_CACHE_WARNING_EMITTED=1
+}
+
 REMOTE="${DEPLOY_REMOTE:-}"
 APP_DIR="${DEPLOY_APP_DIR:-/opt/agency-hub}"
 IMAGE_TAG="${DEPLOY_IMAGE_TAG:-agency_hub_core/runtime:production}"
 BUILD_MODE="${DEPLOY_BUILD_MODE:-full}"
 NODE_BASE_IMAGE="${DEPLOY_NODE_BASE_IMAGE:-node:22-bookworm-slim}"
-NODE_BASE_CACHE_IMAGE="${DEPLOY_NODE_BASE_CACHE_IMAGE:-agency_hub_core/node:22-bookworm-slim}"
+DEPRECATED_NODE_BASE_CACHE_WARNING_EMITTED=0
+if [[ -n "${DEPLOY_NODE_BASE_CACHE_IMAGE+x}" ]]; then
+  warn_deprecated_node_base_cache
+fi
 ALLOW_UNLABELED_DIST_BASE="${DEPLOY_ALLOW_UNLABELED_DIST_BASE:-0}"
 HTTP_PORT="${DEPLOY_HTTP_PORT:-3000}"
 VERIFY_URL="${DEPLOY_VERIFY_URL:-}"
@@ -119,7 +130,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --node-base-cache-image)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
-      NODE_BASE_CACHE_IMAGE="$2"
+      # Compatibility only: consume the legacy value but never retain or use it.
+      warn_deprecated_node_base_cache
       shift 2
       ;;
     --allow-unlabeled-dist-base)
@@ -888,36 +900,32 @@ calculate_source_revision() {
   fi
 }
 
-ensure_node_base_cache() {
-  if docker image inspect "$NODE_BASE_CACHE_IMAGE" >/dev/null 2>&1; then
+ensure_node_base_image() {
+  if docker image inspect "$NODE_BASE_IMAGE" >/dev/null 2>&1; then
     local cached_runtime
-    if cached_runtime="$(docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_CACHE_IMAGE" node -p "process.platform + '/' + process.arch" 2>/dev/null)" \
+    if cached_runtime="$(docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_IMAGE" node -p "process.platform + '/' + process.arch" 2>/dev/null)" \
       && [[ "$cached_runtime" == "linux/x64" ]]; then
-      log "Using cached Node base image ${NODE_BASE_CACHE_IMAGE} for ${BUILD_PLATFORM}"
+      log "Using Node base image ${NODE_BASE_IMAGE} for ${BUILD_PLATFORM}"
       return 0
     fi
 
     if [[ -n "${cached_runtime:-}" ]]; then
-      log "Cached Node base image ${NODE_BASE_CACHE_IMAGE} is invalid for ${BUILD_PLATFORM}: expected linux/x64, got ${cached_runtime}"
+      log "Node base image ${NODE_BASE_IMAGE} is invalid for ${BUILD_PLATFORM}: expected linux/x64, got ${cached_runtime}"
     else
-      log "Cached Node base image ${NODE_BASE_CACHE_IMAGE} failed ${BUILD_PLATFORM} runtime validation"
+      log "Node base image ${NODE_BASE_IMAGE} failed ${BUILD_PLATFORM} runtime validation"
     fi
   else
-    log "Node base cache ${NODE_BASE_CACHE_IMAGE} is not present locally"
+    log "Node base image ${NODE_BASE_IMAGE} is not present locally"
   fi
 
   local attempt
   for attempt in 1 2 3; do
     log "Pulling Node base image ${NODE_BASE_IMAGE} for ${BUILD_PLATFORM} (attempt ${attempt}/3)"
     if docker pull --platform="${BUILD_PLATFORM}" "$NODE_BASE_IMAGE"; then
-      if [[ "$NODE_BASE_IMAGE" != "$NODE_BASE_CACHE_IMAGE" ]]; then
-        docker tag "$NODE_BASE_IMAGE" "$NODE_BASE_CACHE_IMAGE"
-      fi
-
       local refreshed_runtime
-      if refreshed_runtime="$(docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_CACHE_IMAGE" node -p "process.platform + '/' + process.arch" 2>/dev/null)" \
+      if refreshed_runtime="$(docker run --rm --platform="${BUILD_PLATFORM}" "$NODE_BASE_IMAGE" node -p "process.platform + '/' + process.arch" 2>/dev/null)" \
         && [[ "$refreshed_runtime" == "linux/x64" ]]; then
-        log "Cached Node base image as ${NODE_BASE_CACHE_IMAGE} for ${BUILD_PLATFORM}"
+        log "Pulled and validated Node base image ${NODE_BASE_IMAGE} for ${BUILD_PLATFORM}"
         return 0
       fi
 
@@ -931,12 +939,12 @@ ensure_node_base_cache() {
 }
 
 build_full_candidate_image() {
-  ensure_node_base_cache || return 1
+  ensure_node_base_image || return 1
 
   log "Building ${IMAGE_CANDIDATE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
   docker build \
     --platform="${BUILD_PLATFORM}" \
-    --build-arg "NODE_BASE_IMAGE=${NODE_BASE_CACHE_IMAGE}" \
+    --build-arg "NODE_BASE_IMAGE=${NODE_BASE_IMAGE}" \
     --build-arg "APP_DEPENDENCY_CHECKSUM=${APP_DEPENDENCY_CHECKSUM}" \
     --build-arg "APP_SOURCE_REVISION=${APP_SOURCE_REVISION}" \
     -t "$IMAGE_CANDIDATE_TAG" \
