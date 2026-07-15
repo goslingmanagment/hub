@@ -2,7 +2,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Dispatcher } from "undici";
 
 import type { AiGatewayStreamFrame } from "@agency_hub_core/contracts";
-import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
+import {
+  createProxyRequestDispatcher,
+  createStickyConnectFailureFetch,
+} from "@agency_hub_core/shared";
 
 import type { AiGatewayProvider, AiGatewayProviderInput } from "./ai-gateway.ts";
 import {
@@ -143,8 +146,15 @@ export function createPageProxyAnthropicClientResolver(
     }
 
     const dispatcher = createProxyRequestDispatcher(proxy);
+    // Sticky connect failure: the SDK's retry policy re-dials connection
+    // errors, and against a dead page proxy every re-dial burns a full
+    // connect timeout (3 × 10s ≈ the 31s hangs of the lora-2 incident) for
+    // an outcome that cannot change within one generation.
     return {
-      client: createSdkClient(apiKey, createAnthropicGatewayProxyFetch(dispatcher)),
+      client: createSdkClient(
+        apiKey,
+        createStickyConnectFailureFetch(createAnthropicGatewayProxyFetch(dispatcher)),
+      ),
       async release() {
         await dispatcher.close().catch(() => undefined);
       },

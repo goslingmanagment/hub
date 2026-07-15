@@ -4338,3 +4338,26 @@ erasure epoch and retained-topology validation. The bounded OFAPI snapshot
 `stateCursor` is a different contract and is HMAC-SHA256 signed with a key
 version. Documentation and release descriptions must name which cursor they
 mean; "signed recovery cursor" is not a valid description of domain-event v4.
+
+**Decision #154 (2026-07-15, dead page proxies are named and dialed once):**
+The lora-2 incident: a dead page SOCKS proxy made every AI generation on that
+page hang ~31 seconds (Anthropic SDK default retry policy re-dialing a dead
+proxy — three connect timeouts plus backoff) and surface to clients as the
+generic `provider_stream_failed`, which the extension collapsed into its own
+generic hub error; the cause was rediscovered by hand from the ledger and a
+TCP probe. Three rulings. (1) The AI-lane stream catch classifies connect-level
+failures (undici `ConnectTimeoutError`/`UND_ERR_CONNECT_TIMEOUT`,
+`SocksClientError`, `ECONNREFUSED`-class codes anywhere in the cause chain —
+`classifyProviderStreamFailure` in shared http-client) and emits the frame code
+`provider_proxy_unreachable` with a static proxy-naming message; everything
+else keeps `provider_stream_failed`. Frame messages stay static — the redacted
+cause chain (`formatObservedError`) goes to the server log line only, never to
+clients. (2) The page-proxy Anthropic client wraps its fetch in
+`createStickyConnectFailureFetch`: the first connect-level failure is cached
+for the rest of that client resolution (= one generation), so SDK retries fail
+instantly instead of re-dialing a proxy that cannot recover within the request
+(~31s → ~10s worst case, instant when the proxy refuses). HTTP-level retry
+semantics (429/5xx) are untouched — only connect failures stick. (3) The frame
+`code` remains an open string in the contract: clients match by prefix
+(`provider*`), so new codes ship without a contract bump or SDK re-vendor. The
+extension side of this incident is chatgoose E38.

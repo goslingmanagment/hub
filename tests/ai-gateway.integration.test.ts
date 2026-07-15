@@ -494,6 +494,40 @@ describe("ChatMuse AI gateway runtime gate", () => {
     }]);
   });
 
+  it("names a connect-level provider failure provider_proxy_unreachable (dead page proxy)", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        yield* [];
+        // The Anthropic SDK wraps transport failures; the SOCKS handshake
+        // failure rides the cause chain (lora-2 incident shape, 2026-07-15).
+        const socks = new Error("Proxy connection timed out");
+        socks.name = "SocksClientError";
+        const wrapped = new Error("Connection error.");
+        wrapped.cause = socks;
+        throw wrapped;
+      },
+    };
+
+    const response = await streamGateway(gatewayBody());
+
+    expect(response.statusCode, response.body).toBe(200);
+    const frames = parseAiSseFrames(response.body);
+    expect(frames[0]?.data).toMatchObject({ type: "meta" });
+    expect(frames[1]?.data).toEqual({
+      type: "error",
+      code: "provider_proxy_unreachable",
+      message: "AI gateway could not reach the page's egress proxy",
+      retryAfterMs: null,
+    });
+
+    const outcomeRows = await testDb!.pool.query<{ gatewayOutcome: string | null }>(
+      "select gateway_outcome as \"gatewayOutcome\" from ai_usage_events",
+    );
+    expect(outcomeRows.rows).toEqual([{ gatewayOutcome: "failed" }]);
+  });
+
   it("records streamed content without provider usage as failed instead of zero-cost completed", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
     appContext.aiGatewayProvider = {
