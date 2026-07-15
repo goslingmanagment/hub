@@ -1,234 +1,266 @@
-> Generated 2026-07-07 from docs/project-kernel/prompts/prompt-1-map.md at commit 0bc74f6.
+> Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 
 # Events and Streaming
 
-This document maps the two independent Server-Sent-Events (SSE) stacks the
-kernel exposes to clients. **v1** streams OFAPI sync events from the
-`ofapi_sync_events` journal in settle-ordered `fanout_seq`. **v2** streams
-domain events (see `06-capture-and-canonicalization.md`) per account, using
-opaque per-account watermark cursors over the gapless `domain_events` table. It
-covers each hub (LISTEN/NOTIFY, serialized journal drain, monotonic-seq guard),
-each SSE endpoint (frame shape, resume, the 409 snapshot handshake, heartbeat /
-auth-revalidate / lifetime limits), the snapshot endpoints, the v2 cursor
-contract, the enrichment builder, the domain-events smoke conformance consumer,
-and the `modules/ingest` and `modules/events` route surfaces. Sources are
-anchored to `file:line`.
+The runtime serves two Server-Sent Events protocols side by side. v1 streams
+settled OFAPI webhook fanout with one global sequence. v2 streams canonical
+domain events with a gapless sequence per account and an opaque multi-account
+cursor. Both subscribe to a shared PostgreSQL LISTEN hub before capturing a
+replay boundary, buffer live overlap, and close rather than advance across a
+continuity loss.
 
-## 1. v1 — OFAPI sync events
+## 1. Shared SSE mechanics
 
-### Journal and fanout
+`apps/runtime/src/services/sse-replay-buffer.ts` provides three safety tools:
 
-The journal is `ofapi_sync_events`, populated by the OFAPI event worker in
-`services/ofapi-events.ts`. Channel `ofapi_sync_events`
-(`ofapi-events.ts:66`). The worker settles rows sequentially — a single worker
-preserves `fanout_seq` settle order (`ofapi-events.ts:443`/`:449`) — assigns the
-settle-order `fanout_seq`, then `pg_notify(OFAPI_SYNC_EVENT_CHANNEL, <rowId>)`
-on commit (`ofapi-events.ts:343`). Queues: `ofapi.events.process.v2`, `sweep`
-(cron `* * * * *`), and `cleanup` (cron `30 2 * * *`) (`ofapi-events.ts:59-61`,
-`:253-254`).
+- `subscribeBeforeReplayBoundary` attaches the live subscriber before reading
+  the committed replay ceiling. A commit before subscribe is in the ceiling;
+  one after subscribe is buffered; overlap is harmlessly deduplicated.
+- `createBoundedSseReplayBuffer` retains live objects during durable replay.
+  Both HTTP streams use a 1,000,000-byte pre-replay cap. Overflow releases the
+  retained array and destroys the connection so the unchanged client cursor
+  can replay everything.
+- `validateGaplessReplayBatch` requires exact `afterSeq + 1` progression
+  through a captured ceiling. A short batch before the ceiling is itself a
+  gap, not end-of-data.
 
-### Hub
+Both routes send `retry: 3000`, heartbeat comments every 25 seconds, revalidate
+credentials/assignments every 60 seconds, and end after 15 minutes so clients
+reauthenticate. A socket with more than 1,000,000 buffered bytes is dropped as
+a non-consuming client. There is no event-route rate limiter.
 
-`createSyncEventHub` (`services/events-stream.ts:72`):
+The LISTEN connections treat `NOTIFY` as a wakeup, never as the event payload.
+Each hub serially rereads its durable journal, advances its delivery watermark
+only after broadcast, catches up after LISTEN reconnect, and destroys rather
+than pools a connection that has LISTEN state.
 
-- A single shared LISTEN connection; a NOTIFY is a wake-up only — frames are
-  never built from the notification payload (`events-stream.ts:207-214`).
-- One serialized `drainJournal` reads forward from `deliveredSeq` in
-  fanout-seq order via `listOfapiSyncEventsForReplay` (batch 500,
-  `events-stream.ts:14`/`:133`), advancing the watermark only after a
-  successful broadcast.
-- `requestDrain` coalesces overlapping wake-ups (`drainAgain`,
-  `events-stream.ts:102`).
-- Reconnect backoff 1s→30s; drain-retry backoff 1s→30s.
-- `createMonotonicSeqGuard` (`events-stream.ts:43`) enforces strictly increasing
-  wire ids, so a `fanout_seq > Last-Event-ID` resume cannot skip.
+## 2. v1 OFAPI sync events
 
-### Endpoint `GET /api/v1/events/stream`
+`apps/runtime/src/services/events-stream.ts` fans settled rows from the OFAPI
+event journal. The event worker assigns a global `fanout_seq` in receive/settle
+order and notifies `OFAPI_SYNC_EVENT_CHANNEL` in the settle transaction. The
+single event worker/advisory lock described in
+`docs/generated/09-ofapi-boundary.md` is what makes that global committed order
+meaningful.
 
-Registered at `modules/events/index.ts:86`.
+The hub drains retained deliverable rows in batches of 500 up to a captured
+high-water. It also reads `getOfapiSyncReplayFloor`. If cleanup has advanced the
+floor beyond a subscriber's cursor, `continuityLost(replayFloor)` closes that
+connection; the hub itself rebases after notifying affected consumers so later
+traffic can continue after snapshot recovery. Processed rows with no desktop
+frame and cleaned tail rows may occupy sequence positions, so the hub advances
+to the maximum of retained head and continuity floor after all deliverable
+rows are read.
 
-- **Frame:** `id: <fanout_seq>\nevent: sync\ndata: <syncEvent JSON>`
-  (`modules/events/index.ts:176`).
-- **Resume:** via the `Last-Event-ID` header or `?lastEventId`
-  (`modules/events/index.ts:98-104`).
-- **Snapshot handshake:** if the cursor is ahead of `latestSeq` or below the
-  retained window → HTTP 409 `sync_snapshot_required` (v1) with
-  `snapshotPath /api/v1/events/snapshot` (`modules/events/index.ts:106-136`).
-- **Subscribe-before-replay:** Core installs the live subscription first, then
-  captures a fresh durable replay ceiling and replays only through that fixed
-  ceiling. Live frames buffer until replay flushes; the pre-replay buffer is
-  capped at 1 MB and overflow destroys the connection without manufacturing a
-  cursor, so reconnect repeats the lossless journal replay.
-- **Limits:** heartbeat `: keep-alive` every 25s
-  (`SSE_HEARTBEAT_INTERVAL_MS`, `modules/events/index.ts:65`); auth revalidate
-  every 60s (a revoked key or changed page assignment → `raw.end()`); max
-  lifetime 15min (`:70`); drop if buffered > 1 MB (`:72`).
+### `GET /api/v1/events/stream`
 
-### Snapshot `GET /api/v1/events/snapshot`
+The route requires an API-key user and scopes frames to currently assigned page
+ids. `Last-Event-ID` wins over the query fallback. A requested id ahead of the
+current sequence, older than the retained replay window, or below the durable
+continuity floor returns 409 `sync_snapshot_required` pointing to
+`/api/v1/events/snapshot`.
 
-Serves `getOfapiSyncSnapshot` (`services/ofapi-sync-snapshot.ts`), which reads
-the hot/archive message tables plus the replay window. This is a serve-time
-snapshot, not sync orchestration.
+The connection uses a monotonic global guard seeded from the requested id.
+Replay is bounded by the committed high-water captured after live subscribe;
+the replay floor is rechecked after boundary capture, during each replay page,
+and immediately before flushing buffered live frames. A floor movement closes
+at the last safe id.
 
-`pageMode=bounded_v1` signs the initial thread, archive-row, and hot-message
-row high-waters into the opaque `stateCursor`. Every continuation enforces
-those ceilings, so concurrent inserts remain in the post-snapshot event tail
-instead of extending the state walk indefinitely.
+Frame ids are decimal `fanout_seq` values. Event data is the validated legacy
+`SyncEvent` union: message receive/send/delete, PPV unlock, tip, chat-list
+refresh, presence, typing, and account auth. Duplicate replay/live overlap is
+discarded by the monotonic guard.
 
-## 2. v2 — domain events, per account
+### `GET /api/v1/events/snapshot`
 
-### Hub
+This route calls `apps/runtime/src/services/ofapi-sync-snapshot.ts` for one
+assigned OFAPI account. It returns page/auth state, hot threads/messages, cold
+archive deltas, and unresolved tombstones plus a safe `snapshotCursor`.
+Legacy thread pagination and the HMAC-signed `pageMode=bounded_v1`
+`stateCursor` protocol are mapped in
+`docs/generated/10-ofapi-projections.md`. A sticky cursor below the new replay
+floor returns `sync_snapshot_restart_required`; that snapshot walk must restart
+without its old snapshot/state cursor.
 
-`createDomainEventHub` (`services/domain-events-stream.ts:60`) generalizes the
-v1 discipline to **per-account watermarks** over the gapless `domain_events`
-table:
+## 3. v2 domain-event hub
 
-- LISTEN channel `domain_events_appended` (`domain-events.ts:125`). The notify
-  payload `<accountId>:<seq>` is parsed to mark `dirtyAccounts`; an invalid or
-  non-positive payload triggers `rebaselineAll`
-  (`domain-events-stream.ts:230-245`).
-- The first LISTEN baselines `delivered` at `listDomainEventHighWaters`
-  (`domain-events-stream.ts:256`). A reconnect after a gap sets `rebaselineAll`
-  and re-lists high-waters (`:115-139`).
-- The drain per dirty account reads `listEventsSince` (batch 500,
-  `domain-events-stream.ts:21`), broadcasts, and advances that account's
-  watermark.
-- `createAccountSeqGuards` (`domain-events-stream.ts:42`):
-  `advance(accountId, seq)` returns `{deliver, gap}` — `gap` is true when
-  `seq > last+1` (a bug signal), and `deliver` is false when `seq <= last`.
+`apps/runtime/src/services/domain-events-stream.ts` generalizes the hub to one
+watermark per account over `domain_events`. The append repository notifies
+`DOMAIN_EVENTS_APPENDED_CHANNEL` with the account id as a hint. A reconnect
+re-lists every account head because a LISTEN gap can hide activity on any
+account.
 
-### Endpoint `GET /api/v1/events/v2/stream`
+For each dirty account, the hub captures `currentSeq`, reads batches of 500,
+and validates exact continuity. If a retained interval is no longer gapless,
+it calls each matching subscriber's
+`continuityLost(accountId, afterSeq, throughSeq)` at the safe cursor. It then
+rebases the shared hub watermark to the captured head so a client that has
+completed snapshot recovery can receive future appends rather than leaving the
+whole account lane wedged.
 
-Registered at `modules/events/index.ts:305`. The **cursor is the opaque
-per-account watermark map, not a scalar.**
+Per-connection guards reject duplicates and refuse a jump larger than one.
+`advanceAfterSnapshot` is a separate narrow operation used only while a valid
+snapshot-recovery cursor authorizes crossing erased sequence positions; live
+delivery never uses it.
 
-- **Cursor resolution:** from `Last-Event-ID` / `?cursor` via
-  `decodeDomainEventCursor` (`modules/events/index.ts:331`). Granted-scope is
-  enforced (a cursor account outside the grant → 403, `:337`). Accounts absent
-  from the cursor start at their current "now" high-water (`:344`); with no
-  cursor, all granted accounts start at now (`:349`).
-- **Gap rule** (`modules/events/index.ts:359-374`) via
-  `listDomainEventAccountBounds`: a watermark greater than `currentSeq` (never
-  existed) or below `oldestRetainedSeq - 1` (pruned) → HTTP 409
-  `sync_snapshot_required` (v2) with a per-account `accounts[]` list and
-  `snapshotPath /api/v1/events/v2/snapshot`.
-- **Frame:**
-  `id: <encodeDomainEventCursor(guards.watermarks())>\nevent: domain\ndata: <frame JSON>`
-  — the id line carries the **full re-encoded cursor**, not a scalar seq
-  (`modules/events/index.ts:442`). Frame fields: `accountId`, `accountSeq`,
-  `type`, `occurredAt`, `data`, `fanRef`, `conversationRef`, `messageRef`,
-  `accountRef` (the OFAPI ref via `listPageOfapiAccountRefs`,
-  `modules/events/index.ts:392`), and optional `payload` (enrichment).
-- **Ordering:** per-account batched replay (`modules/events/index.ts:552-581`);
-  the live subscription is installed before fresh per-account replay
-  high-waters are captured, and a `liveChain` promise preserves per-account
-  order across async enrichment (`:461-473`). The same bounded 1 MB
-  pre-replay-buffer fail-close rule applies.
-- **Ephemeral lane** (Stage 24): typing indicators are forwarded from the v1
-  `syncEventHub` as `event: ephemeral` frames — no id line, never advancing the
-  cursor, live-only (`modules/events/index.ts:475-490`).
-- **Limits:** the same heartbeat, auth-revalidate (bearer **or** session
-  cookie), lifetime, and buffered-drop limits as v1.
+## 4. v2 cursor contract
 
-### Snapshot `GET /api/v1/events/v2/snapshot`
+`packages/contracts/src/domain-event-cursor.ts` defines canonical base64url
+JSON. Clients must treat it as opaque.
 
-Registered at `modules/events/index.ts:597`. Returns
-`{cursor: encodeDomainEventCursor(watermarks), accounts: [{accountId,
-accountRef, currentSeq}]}`. `accountRef` is the platform-native OFAPI account
-id used by Desktop's durable state endpoint (or `null` for non-OFAPI pages),
-read in the same SQL statement snapshot as the cursor watermark.
-`accounts[].currentSeq` is the committed domain-event
-high-water. The opaque cursor is normally at the same watermark, but remains
-immediately before the earliest retained OFAPI event that is not yet proven
-present in the durable state snapshot. This prevents state recovery followed
-by a v2 resubscribe from skipping a webhook observation canonicalized before
-its independent hot/cold projection completes. `subscriptions.new` and
-`subscriptions.renewed` also remain replayable: the v1 Desktop path maps both
-to an awaited chat-head refresh, and the durable snapshot does not replace
-that behavioral effect. v2 currently maps only canonical
-`subscription.started`; renewed is conservatively over-barriered by the shared
-cross-protocol predicate.
+| Version | Shape | Meaning |
+|---|---|---|
+| v2 | `{v:2,w}` | legacy/subset watermarks; absent granted accounts may be additively baselined at their current heads |
+| v3 | `{v:3,w,s:"granted"}` | exact current grant universe; a newly granted account requires another state snapshot |
+| v4 | v3/v2 watermarks plus `{r:"snapshot",e,b,t,c}` | temporary authorization to replay retained behavior across erased ledger holes after durable state recovery |
 
-When `accounts` is omitted, the cursor is marked as bound to the exact granted
-numeric account keyset returned in this response. A reconnect after a grant
-widening returns `409 sync_snapshot_required`; Core never fills the missing
-account at its current head. This lets Desktop verify its independent
-read-gateway refresh against `accounts[].accountRef`, walk state for exactly
-those refs, and retry the handshake on drift. Cursor accounts outside the
-current grant still return 403, preserving revocation safety. Explicit
-`?accounts=...` cursors remain subset-scoped and are not marked as full-grant
-cursors.
+Here `w` is account-to-safe-sequence, `e` is the highest non-dry-run erasure id
+observed at mint, `b` is immutable recovery base, `t` is immutable account
+target, and `c` is the retained row count in each `(base,target]` interval.
 
-The binding uses cursor payload version 3 while legacy/subset cursors remain
-version 2. Current Core accepts both. A rollback Core that predates this
-contract rejects the bound cursor instead of ignoring the marker and widening
-it unsafely; Desktop retains its prior checkpoint and retries fail-closed.
+These v2/v3/v4 cursors are not MAC-signed. The decoder enforces canonical
+encoding, integer/account topology, version-specific fields, and
+`base <= watermark <= target`; the route checks grant scope, current heads,
+retained counts, and the server-side erasure epoch before trusting recovery.
+This cursor must not be confused with the separately HMAC-signed OFAPI
+snapshot `stateCursor`.
 
-## 3. The v2 cursor contract
+## 5. `GET /api/v1/events/v2/stream`
 
-`packages/contracts/src/domain-event-cursor.ts` defines an opaque base64url JSON
-value `{v: 2, w: {<accountId>: <highSeq>}}` (`:44-51`), with sorted keys for a
-deterministic encoding. It is isomorphic (uses `btoa`/`atob`, no `Buffer`) so
-the same code runs in the browser SDK and in node. `decodeDomainEventCursor`
-validates `version == 2`, positive-integer account ids, and non-negative-integer
-watermarks; a round-trip guard rejects non-canonical base64 (`:35`). The module
-is shared by the server (`modules/events`, `domain-events-smoke`) and the SDK.
+The route accepts a human session, user API key, or active device token and
+derives the granted numeric account set. `Last-Event-ID` wins over `cursor`.
+With no cursor it begins at the current heads and emits exact-grant cursors. A
+supplied cursor may not name an account outside the grant.
 
-## 4. Enrichment
+Before opening SSE, the route loads per-account bounds and each contiguous
+replay end. It returns 409 `sync_snapshot_required` when a watermark is ahead,
+the next required event is already below the retained floor, an immediate hole
+exists, a v4 recovery marker is invalid, or an exact-grant cursor is missing a
+newly granted account.
 
-`buildMessagePayloadEnrichments` (`services/domain-events-enrich.ts:35`)
-augments frames for `message.received | sent` only, when `observationId > 0`,
-`conversationRef` is non-null, the source is `webhook`, and the observation kind
-is `messages.received | sent` (`domain-events-enrich.ts:18-19`, `:39-54`). It
-fetches the source observation envelopes (`findObservationEnvelopesByIds`) and
-builds a normalized message via `normalizeOfapiSyncMessage`, returning
-`event.id → message`. A failure degrades to the thin frame and never drops the
-connection (`domain-events-enrich.ts:448-456`).
+If an ordinary cursor has a valid retained prefix followed by an internal
+hole, the route does not discard that prefix. It replays the contiguous prefix,
+then closes. The next reconnect is now positioned at the immediate hole and
+receives the 409 snapshot instruction. This preserves behavioral events that a
+state snapshot may not materialize.
 
-## 5. Conformance instrument
+Accounts are independent streams multiplexed on one connection; ordering is
+guaranteed per account, not globally. Every `event: domain` frame contains:
 
-`startDomainEventsSmokeConsumer` (`services/domain-events-smoke.ts:72`,
-Stage 21) is a permanent worker-side subscriber over the **same hub**
-(`accountIds: undefined` = every account). It counts gaps and duplicates (both
-must stay 0), checkpoints its cursor to `domain_events_smoke_checkpoint` every
-30s (`domain-events-smoke.ts:26`), and logs a summary every 10min. It resumes
-from the stored cursor or "now", and its live-buffer-then-replay ordering
-mirrors the endpoint (`domain-events-smoke.ts:158-200`).
+- account id and account sequence;
+- canonical type, occurrence time, and event data;
+- fan, conversation, and message refs when present;
+- the page's OFAPI account ref when mapped;
+- optional normalized message payload enrichment.
 
-## 6. Route surfaces
+The `id` line is the entire updated opaque multi-account cursor. Typing is not
+ledgered; v2 forwards v1 typing as live-only `event: ephemeral` frames with no
+id, so it never changes replay state.
 
-### `modules/ingest/index.ts:32` `registerIngestRoutes`
+### Temporary PPV frame suppression
 
-The observation front doors:
+At this commit `SUPPRESSED_V2_FRAME_TYPES` contains
+`message.ppv_unlocked`. This is a serve-time incident tourniquet for desktop
+versions that reject historically wrong conversation references and reconnect
+in a paid-read loop. The event remains in the ledger. The connection guard
+advances across it, but no frame is written; the next delivered domain frame's
+cursor carries the advanced watermark. The code comment requires removal once
+the desktop fleet tolerates/correctly handles the type.
 
-- `POST /api/v1/ingest/observations` — client-capture lane (see
-  `06-capture-and-canonicalization.md` §3).
-- `POST /api/v1/ofapi/webhook` — own plugin scope, buffer-mode body parser,
-  HMAC over raw bytes → `receiveOfapiWebhook` (`modules/ingest/index.ts:91-110`).
-- `GET` / `POST /api/v1/admin/ofapi/webhook` — owner-only status / register
-  (`:113`, `:122`).
-- `GET /api/v1/ofapi/read/*` — read gateway
-  `executeOfapiReadGatewayRequest` (capture-through; `:131`).
-- `POST /api/v1/ofapi/commands`, `GET /api/v1/ofapi/commands/:id`,
-  `POST /api/v1/ofapi/commands/:id/cancel` — command outbox (`:153`, `:178`,
-  `:186`).
+## 6. Message enrichment
 
-### `modules/events/index.ts:47` `registerEventsRoutes`
+`apps/runtime/src/services/domain-events-enrich.ts` enriches
+`message.received` and `message.sent` frames without changing the ledger. For a
+normal OFAPI webhook event it loads the source observation envelope and applies
+`normalizeOfapiSyncMessage`. Fansly/non-webhook/malformed sources remain thin.
 
-The stream + snapshot pairs:
+A schema-v2 superseding message event instead builds its payload directly from
+the complete `data.head`, including text, created time, direction, price,
+opened/tip state, and media. Reading the old observation would reproduce the
+material being corrected. Enrichment failure logs and serves a thin frame; it
+does not drop the connection. Live enrichments are promise-chained so async
+lookups cannot reorder an account's frames.
 
-- `GET /api/v1/events/stream` (v1 SSE), `GET /api/v1/events/snapshot`.
-- `GET /api/v1/events/v2/stream` (v2 SSE), `GET /api/v1/events/v2/snapshot`.
-- An `onClose` hook destroys hijacked SSE streams and closes both hubs
-  (`modules/events/index.ts:54-62`). The hubs (`syncEventHub` /
-  `domainEventHub`) are created lazily per module (`:51-52`).
+## 7. v4 snapshot recovery
 
-## 7. Notable invariants
+Erasure can legitimately remove domain-event rows and leave sequence holes. A
+v4 cursor says the client has already durably replaced materialized state and
+may now receive retained behavioral events across those known holes.
 
-- The v1 stack builds frames only from the serialized journal drain, never from
-  the NOTIFY payload; the monotonic-seq guard prevents a resume from skipping.
-- The v2 stream id line carries the whole per-account cursor (not a scalar seq),
-  so resume is per-account and the gap rule can detect a pruned or
-  never-existed watermark independently for each account.
+During a v4 replay the route:
+
+1. Verifies no erasure is incomplete, the erasure epoch matches, every target
+   is still at or below the current head, and retained counts match the
+   cursor-declared topology.
+2. Replays every retained row from base through each immutable target using
+   snapshot-only guard advancement.
+3. Rechecks erasure epoch/incomplete state and retained counts after replay.
+4. Removes the recovery marker and emits a normal-cursor
+   `stream.snapshot_replay_completed` domain checkpoint.
+5. Replays events committed after the snapshot targets through the ordinary
+   strict gapless validator, then enters the live lane.
+
+A failure before the completion checkpoint leaves the client's persisted v4
+cursor in recovery mode. A topology/erasure change closes before publishing a
+normal cursor, forcing a fresh snapshot.
+
+## 8. `GET /api/v1/events/v2/snapshot`
+
+The route accepts an optional account subset and optional opaque
+`sourceCursor`. Requested accounts must be granted. It captures account heads,
+computes a recovery floor per account, and asks the OFAPI state-coverage query
+for the highest sequence safely represented by a subsequent state snapshot.
+The response contains the recovery cursor and account id/native OFAPI ref/head;
+the actual account state is fetched through the v1 snapshot endpoint.
+
+With `sourceCursor`, the floor starts from the client's durably applied
+watermark. An account absent from an exact-grant cursor is newly granted and
+baselines at the captured head; absence from a legacy/subset cursor proves
+nothing and starts at zero. An ahead-of-head source watermark also falls back
+to zero.
+
+Legacy clients that omit `sourceCursor` can still receive a v4 cursor when the
+safe state sequence is behind the account head. The route refuses recovery
+with 503 while an erasure is incomplete. Full-grant snapshots emit exact-grant
+scope; explicitly requested subsets do not.
+
+## 9. Conformance consumer and SDK
+
+`apps/runtime/src/services/domain-events-smoke.ts` tails every account through
+the same domain-event hub, replays from a persisted cursor, and records frames,
+gaps, and duplicates. It checkpoints every 30 seconds and logs a summary every
+ten minutes. On hub continuity loss it increments the gap counter and rebases
+its local guard to the hub's captured head so later events do not become a
+cascade of false gaps.
+
+The smoke consumer's pre-replay array is not the HTTP route's bounded 1 MB
+buffer; it is an internal conformance instrument. Expected replay/live overlap
+is removed before duplicate accounting.
+
+`packages/contracts/src/sdk-runtime.ts` exposes `subscribeDomainEvents`. It
+persists/returns opaque frame ids, validates domain frames, surfaces a 409
+through `onSnapshotRequired`, and deliberately leaves reconnect and snapshot
+orchestration to the caller.
+
+## 10. Route surface and invariants
+
+`apps/runtime/src/modules/events/index.ts` registers all four event endpoints:
+
+- `GET /api/v1/events/stream`
+- `GET /api/v1/events/snapshot`
+- `GET /api/v1/events/v2/stream`
+- `GET /api/v1/events/v2/snapshot`
+
+Key invariants are:
+
+- subscribe precedes replay-boundary capture;
+- a notification is only a signal to reread durable state;
+- no ordinary connection advances its persisted cursor across a missing
+  sequence;
+- replay is bounded by captured committed heads rather than moving targets;
+- grant changes close/recover rather than silently widening an exact cursor;
+- ephemeral frames have no id and no replay promise;
+- cleanup/erasure continuity floors are checked both before and during replay,
+  because validation can become stale while a connection is opening.

@@ -1,176 +1,204 @@
-> Generated 2026-07-07 from docs/project-kernel/prompts/prompt-1-map.md at commit 0bc74f6.
+> Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 
 # Sync Engine
 
-This document maps the pull-ingest pipeline that fetches platform data on a
-schedule: the planner that decides which pages are due, the `page_sync_states`
-FSM, the executor coordinator that serializes fetches and leases chunks of work,
-the chunk budget and failure classification (including the auth-pause behavior),
-the 11 sync streams, the registry-dispatched `executeStreamChunk` that routes to
-per-platform handler halves (Stage 18), how each stream's results dual-write into
-`raw_payloads` and `observations`, the cursor/checkpoint shapes, the rate
-limiter, telemetry, and failed-fetch journaling. Every fetched page feeds the
-capture spine documented in `06-capture-and-canonicalization.md`. Sources are
-anchored to `file:line`.
+The sync engine is a durable per-page, per-stream state machine. PostgreSQL
+decides what work is due, owns cursors and retry times, and records progress;
+pg-boss provides disposable wakeups. Platform handlers fetch one bounded
+chunk, journal raw responses, update projections, and either complete or yield
+back to the queue.
 
-## 1. Scheduling and dispatch model
+## 1. Durable state and scheduling policy
 
-The sync queues live in `services/sync-queue.ts`:
+`packages/db/src/repositories/page-sync.ts` defines the eleven streams, their
+domains, cadence, work class, dependencies, priorities, and state transitions.
+`page_sync_states` is the retry and reconciliation authority. A queue row can
+expire or disappear without losing the request, because the planner can
+materialize another wakeup from durable state.
 
-- **Planner queue** `sync.planner`, cron `* * * * *` (`sync-queue.ts:113`).
-- **Page-executor queue** `sync.page.execute`, with DLQs
-  (`sync-queue.ts:5-8`).
-- **Per-page scheduling:** `sendSyncPageWakeup` uses
-  `singletonKey = platformAccountId` so at most one job per page is in flight
-  (`sync-queue.ts:184`), plus a numeric `priority`.
+| Stream | Domain | Cadence | Scheduled priority | Default class |
+|---|---|---:|---:|---|
+| `light` | connection | 1 h | 60 | live |
+| `transactions` | financials | 1 h | 50 | live |
+| `fan_identities` | financials | 6 h | 49 | maintenance |
+| `top_spenders` | financials | 1 h | 45 | maintenance |
+| `subscribers` | audience | 1 h | 40 | live |
+| `followers` | audience | 1 h | 35 | live |
+| `followers_reconcile` | audience | 48 h | 34 | maintenance |
+| `dm_conversations` | messages_live | 30 min | 30 | live |
+| `dm_messages` | messages_history | 24 h | 25 | history |
+| `fan_earnings` | financials | 24 h | 20 | maintenance |
+| `purchase_history` | messages_history | 4 h | 19 | history |
+
+The policy's base priority for `purchase_history` is 15; scheduled requests
+receive 19 through the source-specific priority table. Manual, onboarding,
+reset, recovery, and anomaly requests receive their own boosts without
+changing stream order.
+
+Dependencies are also durable policy: `top_spenders` follows transactions;
+`followers_reconcile` follows followers; `purchase_history` follows light;
+message-head and message-history work wait for progressively larger page
+foundations. `getSyncStreamDependenciesForPage` applies platform-specific
+exceptions, including the reduced OFAPI DM prerequisite set.
+
+Migration `packages/db/migrations/0089_page_sync_dispatch_source.sql` separates
+immutable `request_source` audit lineage from mutable `dispatch_source`.
+Continuation and superseding generations can therefore retain the fair
+scheduling class without rewriting how the request originated.
+
+Tombstoned pages are excluded by the repository's active-page predicates, so
+they are not scheduled, leased, or kept alive by executor continuation.
 
 ## 2. Planner
 
-`runSyncPlannerCycle` (`sync/planner.ts:20`) runs the scheduling cycle:
+`apps/runtime/src/services/sync/planner.ts` runs the minutely planner cycle:
 
-- Closes inactive runs (older than 90s, `planner.ts:17`, `:25`).
-- `ensurePageSyncStates` provisions FSM rows.
-- Pauses disabled OnlyFans DM / audience / top-spender streams by config
-  (`planner.ts:42-59`).
-- `scheduleDuePageSync`, then `listRunnablePageSync` → per page
-  `sendSyncPageWakeup` + `markPageSyncEnqueued` (`planner.ts:62-74`).
-- Dependency flags are computed via `pageSyncDependencyInput` (gated on
-  `ofapiDmSyncEnabled`; `sync/dependencies.ts`).
+1. Close sync runs inactive for more than 90 seconds.
+2. Ensure every active page has the required stream-state rows.
+3. Pause flag-ineligible OnlyFans DM, audience, and top-spender streams.
+4. Turn due policy slots into pending durable requests.
+5. List runnable pages, send one page wakeup, and mark successful enqueue.
 
-## 3. Executor coordinator
+The planner does not encode retry delay in `startAfter`. Retry timing stays in
+`page_sync_states.retry_at`; the planner sends a wakeup only when that state is
+runnable.
 
-`startSyncPageExecutor` (`sync/executor.ts:779`) spawns
-`syncPageExecutorConcurrency` workers over one shared `ExecutorCoordinator`,
-which combines a serialized fetch lock with a `localActiveGroups` set that
-enforces group-concurrency 1 per page (`executor.ts:705-777`).
+Manual/API scheduling flows through `apps/runtime/src/services/sync-control.ts`
+and the same repository transitions. A newer request can supersede the
+currently leased generation; completion/yield compare request sequence before
+deciding whether the stream is really finished.
 
-`executeNextSyncPageChunk` (`executor.ts:324`) is the unit of work:
+## 3. Queue lane and fairness
 
-1. `acquirePageSyncLease` (TTL 120s, `executor.ts:47`/`:332`).
-2. Starts a sync run and a `SyncRunTelemetry`, a `SyncChunkBudget`, and lease
-   plus run heartbeats (`executor.ts:353-378`).
-3. Calls `executeStreamChunk` inside `runWithPageSyncExecutionContext`
-   (`executor.ts:382`).
-4. Result handling: `satisfied` → `completePageSync`; otherwise `yieldPageSync`
-   (a continuation); a lease-fenced result goes idle.
+`apps/runtime/src/services/sync-queue.ts` owns queue `sync.page.execute` and its
+dead-letter queue. Its production contract is:
 
-`processSyncPageExecuteJob` (`executor.ts:659`) loops continuations locally up to
-`MAX_LOCAL_EXECUTOR_CHUNKS = 500` (`executor.ts:48`), and re-wakes for delayed
-continuations using `singletonKey <pageId>:dm-messages-deep-continuation`.
+- exclusive queue policy;
+- 15-minute expiry;
+- 30-second heartbeat;
+- `retryLimit: 0`, because durable state owns retries;
+- singleton key equal to the page id;
+- group id from provider plus egress key, limiting one active page per egress
+  lane.
 
-Supporting locking primitives: `withPageSyncLock` (`sync/locking.ts`).
+Queue creation alone is conflict-no-op in pg-boss, so startup explicitly calls
+`updateQueue`, reads the queue back, and fails if policy, expiry, heartbeat, or
+retry limit still drift.
 
-## 4. Chunk budget
+`apps/runtime/src/services/sync/executor.ts` fetches FIFO across available
+groups (`priority: false`, creation order, group concurrency one). Numeric
+stream priority remains inside the page state; FIFO page wakeups and one-chunk
+quantums prevent a continuously renewed high-priority page from starving an
+older page that shares its egress.
 
-`SyncChunkBudget` (`sync/chunk-budget.ts`) is constructed with
-`maxRequests = 5` and `maxWallClockMs = 45000`, and implements
-`HttpRequestObserver`. `shouldYield` fires on either the request budget or the
-wall clock, with yield reason `request_budget` or `wall_clock`.
+Multiple local workers share a serialized fetch section and an active-group
+set. The fetch excludes groups already running in this process, closing the
+window between pg-boss fetches and its group accounting.
 
-## 5. Failure classification and the auth pause
+## 4. One job, one chunk
 
-`classifyTaskFailure` (`sync/executor.ts:182`) maps errors to a retry/block
-decision:
+`processSyncPageExecuteJob` executes exactly one bounded chunk. It never drains
+the page locally. A required continuation returns to pg-boss so queue ordering
+can arbitrate again.
 
-| Condition | Decision | Reason |
-|---|---|---|
-| `FanslyApiError` 429 | retry | `rate_limit` |
-| status ≥ 500 | retry | `provider_5xx` |
-| status ≥ 400 | blocked | `provider_bad_data` |
-| cursor errors | blocked | `invalid_cursor` |
-| `http_5xx` / timeout | retry | (transient) |
-| "manual action" / "shared rate limit" | blocked | `manual_action_required` |
-| default | retry | `transient_network` |
+Parent completion and child insertion occur in one PostgreSQL transaction via
+pg-boss's caller-supplied database wrapper. Completion must report exactly one
+affected row before the child can be inserted. A database-clock check refuses
+handoff inside the final 60 seconds of the job expiry window; the planner then
+reconciles durable state. Jobs created under old expiry, retry, or singleton
+semantics are detected and rolled forward without making a vendor request.
 
-Retry vs block routes to the `retryPageSync` / `blockPageSync` DB functions.
-**Auth errors (401/403, `executor.ts:67`)** call `blockPageSync` and then
-`pausePageSyncForAuth`, which **parks every stream for the page** (Stage 26,
-`executor.ts:543`), and fire `notifyAuthFailedIncident`.
+`runSyncPageExecutorUntilIdle` is a CLI/test helper. It is not the production
+worker fairness path.
 
-Error normalization: `normalizeSyncError` and `SyncPayloadPersistenceError`
-(`sync/errors.ts`).
+## 5. Leasing, budgets, and yields
 
-## 6. The sync streams and per-platform dispatch
+The executor chooses the highest durable runnable stream for the page, claims
+its request generation, dispatches the platform handler, and records complete,
+yield, retry, block, or pause through repository compare-and-set transitions.
 
-The stream set `SYNC_STREAMS` (`packages/db/.../page-sync.ts:15`) has 11 entries:
-`light`, `fan_identities`, `transactions`, `top_spenders`, `subscribers`,
-`followers`, `followers_reconcile`, `dm_conversations`, `dm_messages`,
-`fan_earnings`, `purchase_history`. They fall into domains `connection`,
-`financials`, `audience`, `messages_live`, `messages_history`
-(`page-sync.ts:31`).
+`apps/runtime/src/services/sync/chunk-budget.ts` bounds a chunk to five HTTP
+requests and 45 seconds by default. The request observer counts actual started
+requests, including retries. `hasRequestCapacity(count)` lets a multi-call unit
+reserve its entire cost; Fansly fan earnings reserves two calls before
+starting a fan. `resolveYieldReason` records either `request_budget` or
+`wall_clock` against the same required capacity.
 
-`executeStreamChunk` (`sync/executor-handlers.ts:3786`) is **registry-dispatched**
-(Stage 18): it looks up `appPlatformRegistry.get(platform).pull[stream]`
-(`executor-handlers.ts:3817`); an undeclared stream throws loudly. The registry
-lives at `apps/runtime/src/platforms/registry.ts`, where `FANSLY_PULL`
-(`registry.ts:97`) and `ONLYFANS_PULL` (`registry.ts:110`) map streams to
-handler halves:
+Yielded cursors and checkpoints are stored before continuation. The cursor is
+stream-specific JSON and is always interpreted by the matching handler; the
+generic executor treats it as opaque state. A completed walk resets the cursor
+where the handler requires a fresh cadence walk.
 
-- **Fansly:** `fanslyLightChunk`, `fanslyTransactionsChunk`,
-  `fanslyTopSpendersChunk`, `fanslySubscribersChunk`, `executeFollowersChunk`,
-  `executeFollowersReconcileChunk`, `fanslyDmConversationsChunk`,
-  `fanslyDmMessagesChunk`, `executeFanEarningsChunk`,
-  `executePurchaseHistoryChunk`.
-- **OnlyFans:** `onlyfansLightChunk`, `onlyfansTransactionsChunk`,
-  `executeFanIdentitiesChunk`, `onlyfansTopSpendersChunk`,
-  `onlyfansSubscribersChunk`, `onlyfansDmConversationsChunk`,
-  `onlyfansDmMessagesChunk`.
+## 6. Platform dispatch
 
-Handler bodies live in `sync/executor-handlers.ts` (exports at `:852-3785`).
+`apps/runtime/src/platforms/registry.ts` maps platform capability to split
+handler functions in `apps/runtime/src/services/sync/executor-handlers.ts`:
 
-## 7. How each stream's results enter observations
+- Fansly supports every stream except `fan_identities`: ten streams total.
+- OnlyFans supports `light`, `transactions`, `fan_identities`, `top_spenders`,
+  `subscribers`, `dm_conversations`, and `dm_messages`: seven streams total.
 
-Every fetched page goes through `persistRawPayload` (`sync/shared.ts:79`), which
-(a) inserts a `raw_payloads` row and (b) **dual-writes an observation** with
-`source = pull`, `kind = <endpoint>`, `producer = sync:<platform>:<stream>`
-(`shared.ts:98-133`). The observations then canonicalize as described in
-`06-capture-and-canonicalization.md` §4.
+The registry also defines manual trigger scopes. Fansly's `all` scope
+deliberately omits the heavy `fan_earnings` and `purchase_history` crawls even
+though the adapter supports them.
 
-Endpoints observed and their downstream canonical events:
+The Fansly bulk-stream gate in `apps/runtime/src/services/sync/fansly-stream-gate.ts`
+is ramp-aware. An empty or blank allowlist means every page. The gate reports
+`ramped`, `flag_off`, `not_allowlisted`, or `unsupported_platform`; disabled
+bulk work stays out of normal page-health expectations.
 
-- **transactions** — `syncTransactions` (`sync/transactions.ts:1436`), a
-  backfill/incremental state machine with a single-writer gate
-  (`assertPageTransactionsWriter`), persists endpoint `earnings_transactions`
-  (`transactions.ts:733`/`:1248`) → `transaction.posted`.
-- **OFAPI OnlyFans DM** (`sync/ofapi-dm-sync.ts`):
-  `executeOfapiDmConversationsChunk` (`:500`, persists endpoint
-  `dm_conversations`, `:562`) and `executeOfapiDmMessagesChunk` (`:828`,
-  persists `dm_messages`, `:931`); `dm_messages` canonicalizes to `message.*`.
-  A credit/request budget guard `createOfapiRestGuard` (`ofapi-dm-sync.ts:168`)
-  can block with reasons `ofapi_request_budget`, `ofapi_daily_credit_budget`, or
-  `ofapi_credit_floor` (`:118`).
-- **OFAPI OnlyFans audience** (`sync/ofapi-audience-sync.ts`):
-  `executeOfapiAudienceChunk` (`:269`, endpoint `fans_active`, `:439`); the
-  stream list `ONLYFANS_AUDIENCE_STREAMS` (`:64`); generation-based
-  end-of-sweep expiry.
-- **fan-earnings / purchase-history** (Fansly bulk;
-  `executor-handlers.ts:3494` / `:3655`) → `fan.earnings_observed` /
-  `message.ppv_unlocked`.
-- **fan identities** — `syncOfapiFanIdentities`
-  (`sync/ofapi-fan-identities.ts:114`); **top spenders**
-  (`sync/onlyfans-top-spenders.ts`); **followers / subscribers**
-  (`executor-handlers.ts`). Fan hydration lives in `sync/fan-hydration.ts`.
+## 7. Raw-response journaling
 
-## 8. Cursor and checkpoint shapes
+Every successful fetch reaches `persistRawPayload` before its durable cursor is
+advanced. Sync execution context increments a fetch counter, producing an
+idempotency key of the form
+`<page>:<stream>:<run>:<nextPageSyncObservationSeq>`. The counter is per HTTP
+fetch, not per logical page or cursor value, so repeated shapes in one run do
+not collide. Failed fetches are journaled best-effort with the same fetch
+sequence discipline and failure metadata.
 
-Cursor/checkpoint state for the streams is defined in `sync/cursor-state.ts`,
-covering `subscribers`, `followers`, `followers_reconcile`, `dm_conversations`
-(`full_scan` + ofapi), `ofapi_audience`, `dm_messages`
-(`backfill` / `deep_backfill` / `incremental`), and `top_spenders`. The
-transaction backfill state is in `sync/transaction-backfill.ts`.
+These `pull` observations feed the canonicalizers described in
+`docs/generated/06-capture-and-canonicalization.md`. Projection writes that are
+part of a stream happen after capture and use stream-specific idempotency or
+upsert rules.
 
-## 9. Rate limiting, observability, and failed-fetch journaling
+## 8. Notable stream behavior
 
-- **Rate limiter:** `createSyncRateLimitWaiter` (`sync/rate-limiter.ts`).
-- **Telemetry:** `SyncRunTelemetry` (`sync/observability.ts:368`), the telemetry
-  class with anomaly and checkpoint summaries. CLI status/watch rendering lives
-  in `sync/view.ts`.
-- **Failed-fetch journaling:** `persistFailedSyncPayload` (`sync/shared.ts:368`)
-  writes a `raw_payloads` row (kind failed) plus an observation with kind
-  `<endpoint>:failed` — so even failed fetches are captured
-  (see `06-capture-and-canonicalization.md` §2, producer #3).
+OnlyFans DM history in `apps/runtime/src/services/sync/ofapi-dm-sync.ts` uses a
+conversation-local adaptive breaker. The normal message page size is 100. An
+opaque first-page timeout is retried as single attempts at 20 and then 5.
+Three distinct conversation failures in one run escalate to page/provider
+failure. Per-chat health, quarantine, and a sticky preferred page limit keep a
+poison chat from pinning the whole stream. Regular conversations retain 200
+messages; spender conversations retain 1,000.
 
-A note on retention: the raw-payload cleanup schedule exists but is a no-op —
-retention was stood down (`sync/shared.ts:29-33`).
+DM thread-summary finalization is intentionally separated from vendor fact
+capture. A failure records projection debt and allows the sync chunk to keep
+its captured facts. `apps/runtime/src/services/projection-debt-sweep.ts` repairs
+that debt every five minutes without calling a platform.
+
+Fansly top-spender work has bootstrap and current-window modes and a bounded
+candidate cap. Fansly fan-earnings and purchase-history walks are low-priority,
+flag/ramp-gated bulk work rather than prerequisites for the ordinary
+financial/messages health blocks.
+
+## 9. Failure classification and health
+
+`apps/runtime/src/services/sync/executor.ts` classifies failures before writing
+state:
+
+- provider 401/403 is account auth failure and pauses every page stream;
+- `ProxyMissingError` or `FanslyProxyMissingError` is a permanent
+  `manual_action_required` / `proxy_missing` blocker;
+- rate limits and transient transport failures become durable retries with a
+  future `retry_at`;
+- unsupported or explicitly disabled paths become paused/blocked according to
+  their handler result rather than hot-looping.
+
+Worker heartbeats, runs, per-stream progress, blocks, queue delay, and
+freshness summaries are exposed through `sync-status.ts`, `sync-monitor.ts`,
+`sync-summary.ts`, `sync-blocks.ts`, and `sync/observability.ts`. Those views
+derive from durable stream state; queue presence alone is not evidence that a
+sync is healthy or complete.

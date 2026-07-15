@@ -1,176 +1,199 @@
-> Generated 2026-07-07 from docs/project-kernel/prompts/prompt-1-map.md at commit 0bc74f6.
+> Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 
-# DB Client, Migration Runner & Repository Layer
+# DB Client, Migrations, and Repositories
 
-This map describes the mechanics of the `packages/db` package: the pooled
-Drizzle client, the forward-only migration runner (its advisory lock, ledger
-table, per-file transactions, and numbering guards), the runtime schema guard,
-the shape of the `0000`–`0074` migration series with its notable structural
-migrations, and the inventory of repository modules and their append / dedup /
-watermark primitives. It is descriptive and anchored to file:line.
+`packages/db` owns the PostgreSQL pool, the Drizzle schema mirror, the
+forward-only SQL migration runner, the startup schema guard, and the reusable
+data-access modules consumed by the services. Current schema shape is mapped in
+`04-database-schema.md`.
 
-## The pg Pool / Drizzle client
+## Client construction
 
-`packages/db/src/client.ts:1-16` constructs the shared database client:
+`packages/db/src/client.ts` creates a `pg.Pool` and wraps it with
+`drizzle(pool, { schema })`. The package installs a PostgreSQL OID 20 parser so
+raw `BIGINT` results become JavaScript `bigint`. Callers can use the Drizzle
+database and the underlying pool; repositories use both typed query building
+and explicit SQL for operations that need database-specific locking,
+partition, JSON, or conflict behavior.
 
-- A `pg.Pool` is created and wrapped with `drizzle(pool, { schema })`
-  (`client.ts:1-16`), exposing the Drizzle query builder over the typed schema
-  mirror (`packages/db/src/schema.ts`).
-- `client.ts:6` installs the global BIGINT type parser
-  `pg.types.setTypeParser(20, (value) => BigInt(value))`, so all `int8`
-  columns are returned as native JS `bigint` (see `04-database-schema.md` for
-  the money-unit implications).
+## Migration discovery and ordering
 
-## Forward-only migration runner
+`packages/db/src/migrations-dir.ts` accepts migration names matching
+`NNNN_name.sql`, sorts them lexically, and resolves either an explicit
+directory, `packages/db/migrations` under the current working directory, or
+the package-relative migration directory.
 
-`packages/db/src/migrate-runner.ts` is the sole applier of schema change.
-There are **no** down-migrations — every migration is forward-only, and applied
-migrations are never edited.
+`packages/db/src/migrate-runner.ts` applies the sorted series. Its invariants
+are:
 
-- **`runMigrations()`** (`migrate-runner.ts:92`) is the entry logic. Invoked via
-  `packages/db/src/migrate.ts:3-20` (the `pnpm db:migrate` command).
-- **Session advisory lock:** before applying anything it takes
-  `pg_advisory_lock(31415, 27182)` (keys `MIGRATION_LOCK_KEY_1` /
-  `MIGRATION_LOCK_KEY_2` at `migrate-runner.ts:10-11`, acquired at
-  `:77-80`), so only one migrator can run at a time.
-- **Ledger table:** `schema_migrations(id text primary key, applied_at)` is
-  created if absent (`migrate-runner.ts:99-104`). Each migration is recorded by
-  its filename.
-- **Per-file transaction:** each `.sql` file runs in its own `begin`/`commit`
-  (`migrate-runner.ts:124-139`); a file that fails rolls back only itself.
+- a session advisory lock on keys `(31415, 27182)` serializes migration
+  runners;
+- `schema_migrations(id, applied_at)` is the application ledger;
+- two files cannot share the same four-digit prefix;
+- already applied files must form a contiguous prefix of the complete sorted
+  list; and
+- `through` can limit a run to the contiguous prefix ending at one exact
+  filename, and fails if that filename does not exist.
 
-### Numbering guards
+Normal files execute in one transaction per file: SQL, ledger insert, and
+commit succeed together, while any error rolls that file back. The series has
+no down-migration mechanism.
 
-Two assertions fail the run before any SQL executes if the migration set is
-malformed:
+PostgreSQL operations forbidden inside a transaction use a separate protocol.
+A file beginning with `-- agency-hub:no-transaction` is split at
+`-- agency-hub:statement` markers. Each operation runs under the same advisory
+lock, followed by the ledger insert. An operation beginning with
+`-- agency-hub:execute-returned-statements` is first executed as a statement
+generator; every returned `statement` string is then executed. This path is
+used for idempotent concurrent-index work, so a process death before the ledger
+insert can safely rerun the operations.
 
-| Guard | Location | Rejects |
-|---|---|---|
-| `assertUniqueMigrationPrefixes` | `migrate-runner.ts:13-31` | Two files sharing the same 4-digit prefix. |
-| `assertContiguousAppliedPrefix` | `migrate-runner.ts:33-52` | Out-of-order application — the applied set must be a contiguous prefix of the sorted file list (no gaps, no skipping ahead). |
-
-### Filename pattern & directory resolution
-
-- Filenames must match `/^[0-9]{4}_[a-z0-9][a-z0-9_-]*\.sql$/`
-  (`migrations-dir.ts:8,21-28`).
-- Files are sorted lexically (`migrations-dir.ts:31`), which for the
-  zero-padded 4-digit prefixes is also numeric order.
-- Directory resolution prefers `cwd/packages/db/migrations`, then falls back to
-  a module-relative path (`migrations-dir.ts:50-53`).
+Migration 0096 uses that protocol to create harvest-compatibility indexes on
+individual observation partitions with `CREATE INDEX CONCURRENTLY IF NOT
+EXISTS`, then attach them to the partitioned parent index.
 
 ## Runtime schema guard
 
-`packages/db/src/schema-guard.ts:63` `assertRuntimeSchemaReady()` runs at
-process start and refuses to boot against a database that is not fully migrated
-to the current head. It asserts:
+`packages/db/src/schema-guard.ts` runs during process bootstrap and rejects a
+database that does not match the runtime's minimum expected shape. It verifies:
 
-- `schema_migrations` exists and the **latest** migration id is applied
-  (`schema-guard.ts:87-94`).
-- Required tables `pages`, `page_sync_states`, `page_sync_cursors` exist
-  (`schema-guard.ts:10, 96-108`).
-- Legacy tables are absent (`schema-guard.ts:11-21, 110-119`).
-- `sync_runs.stats` is `jsonb NOT NULL DEFAULT '{}'`
-  (`schema-guard.ts:121-144`).
+- the `schema_migrations` table exists and contains the current final migration;
+- `pages`, `page_sync_states`, and `page_sync_cursors` exist;
+- the named legacy account, proxy, sync-state, checkpoint, request,
+  rate-limit, and raw-payload tables are absent; and
+- `sync_runs.stats` is `jsonb NOT NULL DEFAULT '{}'::jsonb`.
 
-This behavior is pinned by `tests/schema-guard.test.ts`.
+The guard reports the same `DATABASE_URL` migration command for each detected
+drift condition. `tests/schema-guard.test.ts` covers the behavior.
 
-## The migration series 0000–0074
+## Migration series
 
-75 SQL files, `0000`–`0074`, under `packages/db/migrations/`. Selected
-structurally notable migrations (as named in the schema map):
+There are 96 migrations, from `0000_baseline.sql` through
+`0096_observations_harvest_lookup_concurrently.sql`. The baseline establishes
+the catalog, sync, fan, money, DM, auth, notification, audit, and initial
+projection tables. Later structural groups include:
 
-| Migration | What it introduced |
+| Range | Persisted change |
 |---|---|
-| `0000_baseline.sql` | The foundational schema: `models`, `pages`, `users`, `fans`, `page_fans`, `transactions` (money truth, cols at 0000:570-590), sync engine tables, `audit_events`, workboard snoozes. |
-| `0003` / `0004` | `ai_usage_events` and its feature scan. |
-| `0010` | `onlyfans_public_profile_resolutions`. |
-| `0018` | `notification_incident_recoveries`. |
-| `0019` / `0020` / `0022` / `0023` | Workboard v2: `workboard_state`, `workboard_contact_log`, `wb_closing_cache`, `wb_llm_usage_daily`, `wb_closing_settings`, `wb_classifier_runs`. |
-| `0027` | OFAPI webhook config + events. |
-| `0029` / `0031` | OFAPI credit state and the append-only `ofapi_credit_ledger`. |
-| `0034` | `runtime_instances` (heartbeat / leader election). |
-| `0035` | Config surface: `config_settings` + `config_audit_log`. |
-| `0036` | `ofapi_spend_projection_events` (shadow spend). |
-| `0037` / `0042` | `dm_message_archive`, `dm_message_daily_aggregates`. |
-| `0038`–`0046` | `ofapi_commands` outbox and its command types (typing/unsend/mark-read/send-media). |
-| `0040` | `ai_usage_events` hardening: `cost_micro_usd` CHECK ≥ 0, `provider`/`gateway_outcome` CHECKs. |
-| `0053` | Tombstone / soft-retire markers (`pages.deleted_at`, `workboard_contact_log.retracted_at`, `wb_closing_cache.superseded_at`). |
-| `0054` | **`observations`** partitioned capture spine + `observation_keys`; 2026 monthly partitions seeded. |
-| `0056` | Flip `pages` child FKs CASCADE → RESTRICT. |
-| `0057` | **`domain_events`** partitioned event log + `domain_event_keys` + `domain_event_seq`; `pre_2024` catch-all + 2024–2026 partitions. |
-| `0059` | `message_archive`, `projection_seq_watermarks`. |
-| `0061` | `fan_earnings_stats` (FKs ON DELETE RESTRICT). |
-| `0063` | `transactions` fee/VAT/tax columns. |
-| `0064` | `domain_events_smoke_checkpoint`. |
-| `0065` | `access_grants`, `device_tokens`, `users.must_change_password`. |
-| `0066` | `workboard_claim_leases`. |
-| `0067` | `ops_metric_samples` + `golden_signal_lag` incident kind. |
-| `0068` | `platforms` reference table. |
-| `0071` | `erasure_log` (Stage 28.4 tombstone). |
-| `0072` | `ai_generation_content` + `ai_acceptance_events` (Stage 29 DP-6A restricted class). |
-| `0073` | `ai_personas` (Stage 30 kernel config). |
-| `0074` | `ai_usage_events.user_id` nullable (system lane); `copied` acceptance lifecycle. |
+| `0003`-`0004` | AI usage ledger and feature scan |
+| `0018`-`0023` | notification recovery and workboard-v2 state |
+| `0027`-`0031` | OFAPI webhook and credit state/ledger |
+| `0034`-`0037` | runtime instances, config audit, OFAPI spend shadow, DM archive |
+| `0038`-`0046` | OFAPI command outbox and command variants |
+| `0053`-`0057` | tombstones, observations journal, restrictive page FKs, domain-event ledger |
+| `0059`-`0068` | event projections, fan earnings, money detail, smoke checkpoint, access/device auth, claims, operations metrics, platforms |
+| `0071`-`0074` | erasure log, restricted AI capture, personas, system AI lane, acceptance lifecycle |
 
-## Repository layer
+The migrations after the previous generated-map baseline are:
 
-Repositories live in `packages/db/src/repositories/*` and are exported through
-`packages/db/src/repositories/index.ts`. They are the only sanctioned place SQL
-is issued; every module that issues a `delete` is pinned by
-`tests/retention-deleters.test.ts` (see `18-retention-erasure-tiering.md`).
-
-### Append / dedup / watermark primitives
-
-The two capture spines carry the core append + dedup + gapless-seq logic:
-
-- **`observations.ts`** — the capture append. `insertObservation` /
-  `insertObservations` append via a pre-allocated identity id plus an
-  `observation_keys` claim; `ON CONFLICT DO NOTHING` on the key is the
-  duplicate signal (`observations.ts:54-68`). Also
-  `findObservationByKey`, `findObservationEnvelopesByIds`,
-  `listObservationsByKindAfterId`, `ensureObservationPartitions`,
-  `getObservationPartitionLeadMonths`, `countHarvestObservations`,
-  `listHarvestTransactionResidue`. Partition naming/creation lives here
-  (`observations.ts:263-321`).
-- **`domain-events.ts`** — the gapless event append. `appendDomainEvents`
-  takes the per-account `domain_event_seq.next_seq` **FOR UPDATE** for the
-  whole batch to assign a serial gapless `account_seq`
-  (`domain-events.ts:52-122`) and emits `pg_notify('domain_events_appended')`
-  on commit (`domain-events.ts:115-125`); `domain_event_keys` gives content-hash
-  dedup on `(account_id, dedup_key)` (`domain-events.ts:71-80`). Also
-  `listDomainEventHighWaters`, `listDomainEventAccountBounds`,
-  `getAccountHighWater`, `listEventsSince`, `listObservationsForReplay`,
-  `markObservationParsed`, `ensureDomainEventPartitions`,
-  `getDomainEventPartitionLeadMonths`.
-
-### Repository module inventory
-
-| Module | Responsibility (selected functions) |
+| Migration | Persisted change |
 |---|---|
-| `observations.ts` | Capture append + dedup + partition management (above). |
-| `domain-events.ts` | Gapless event append + replay + partition management (above). |
-| `erasure.ts` | `insertErasureLog`, `completeErasureLog`, `listErasureLog`. |
-| `ai-restricted.ts` | `insertAiGenerationContent`, `insertAiAcceptanceEvent`, `listAiGenerationContent`, `getAiGenerationContentByRef`, `getAiGenerationContentVolume`. |
-| `ai-personas.ts` | `upsertAiPersona`, `findAiPersonaByKey`, `listAiPersonas`, `archiveAiPersona` (soft-retire). |
-| `ai-usage.ts` | `insertAiUsageEvents`, `reserveAiGatewayUsageEvent`, `recordAiGatewayQuotaDenied`, `finalizeAiGatewayUsageEvent`, `markStaleAiGatewayReservationsFailed`, `getAiGatewayDailyUsageTotals`, `getAiGatewayFeatureDailyTotals`, `listChatterUsageSummary`. |
-| `ops-metrics.ts` | `insertOpsMetricSamples`, `pruneOpsMetricSamples` (deleter), `listRecentOpsMetricSamples`. |
-| `config-settings.ts` | `getConfigOverrides`, `setConfigOverridesAtomic`, `applyConfigPatchesInTx`, `setConfigOverride`, `clearConfigOverride` (deleter), `listConfigAudit`. |
-| `auth.ts` | User/session/apikey/devicetoken CRUD incl. `deleteExpiredAuthSessions` (deleter), `insertAuditEvent`, `revoke*` family. |
-| `access-grants.ts` | `insertAccessGrant`, `revokeAccessGrants`, `listGrantsForUser`, `resolveGrantedPageAssignments`, `listModelsByIds`, `listPagesByIds`. |
-| `transactions.ts` | `upsertTransaction`, `markTransactionsScanToken`, `rebuildRevenueRollups`, `rebuildFollowerRollups`, `rebuildSubscriberRollups`, `getRevenueBreakdown`, `retireTransactionsMissingFromWindow` (soft-retire), `countActiveInWindowTransactionsByScanToken`, `getOldestPendingTransactionAt`. |
-| `catalog.ts` | Model/page create/update, `deleteModelBySlug`/`deletePageByLabel` (deleters), `deleteProxyConfig`, credential storage, `getPageBusinessFactPresence`, metadata. |
-| `sync.ts` | Sync run lifecycle; `deleteExpiredRawPayloads`, `deleteExpiredSyncObservability` (30-day deleter), `deleteCheckpoints`, monitor queries. |
-| `page-sync.ts` | Page sync scheduling/lease/state machine (~40 fns). |
-| `page-dm.ts` | DM conversation/message upsert; `prunePageDmMessagesToLimit`/`deletePageDmMessageByPlatformMessageId`/reset (deleters), `getPageDmMessageRetentionLimit`. |
-| `message-archive.ts` | Archive projection apply/rebuild/`resetMessageArchiveProjection`, `countArchiveCoverageGaps`, `backfillArchiveFrom*`, `upsertFanEarningsStat`, `listTopFanEarnings`. |
-| `dm-message-archive.ts` | `upsertDmMessageArchive`, `tombstoneDmMessageArchive`, `deleteExpiredDmMessageArchiveRows` (deleter), status. |
-| `dm-analytics.ts` | DM daily aggregates. |
-| `fans.ts` | Fan/page/subscription/follow upsert & spend recompute (~30 fns). |
-| `spenders.ts` | Spender projections, ranked/window/lifetime metrics, scope visibility (~30 fns). |
-| `top-spenders.ts` | `upsertPageTopSpenders`, `deletePageTopSpenders` (deleter), aggregate. |
-| `reporting.ts` | Revenue/subscriber/follower/transaction read models (~35 fns). |
-| `workboard-v2.ts` | Workboard states, closing classifier, LLM usage, claims (~50 fns; incl. `deleteIneligibleWorkboardStates` deleter). |
-| `ofapi.ts` | OFAPI webhook/credit-ledger/spend-projection (~65 fns; `deleteExpiredOfapiWebhookEvents` deleter). |
-| `ofapi-commands.ts` | Command outbox lifecycle. |
-| `ofapi-sync-snapshot.ts`, `onlyfans-public-profiles.ts`, `sync-context.ts`, `runtime-instances.ts` (`reapStaleInstances`), `notifications.ts`, `telegram-settings.ts`, `fan-page-identity.ts`, `fan-profiles.ts`, `fan-metadata.ts`, `egress.ts`, `search.ts` | Supporting read/write modules for their named domains. |
+| `0075_dm_archive_readthrough.sql` | REST-readthrough provenance and nullable source-journal linkage in the DM archive |
+| `0076_dm_archive_corrections.sql` | material/emitted fingerprints, revision linkage, field provenance, and the repair signal |
+| `0077_domain_events_2024_2025_reopen.sql` | explicitly addressable older domain-event partitions |
+| `0078_proxy_missing_incident_kind.sql` | `proxy_missing` incident kind |
+| `0079_users_disabled_at.sql` | user deactivation tombstone |
+| `0080_w5_observability.sql` | scheduler and operations-sampler observability state |
+| `0081_w7_money_correctness.sql` | sticky transaction-negation inactive reasons |
+| `0082_w8_future_catchall_partitions.sql` | observation and event catch-all partitions beginning in 2031 |
+| `0083_w10_message_archive_shadow.sql` | message-archive shadow rebuild support |
+| `0084_page_dm_threads_count_floor_only.sql` | replacement of the stored-message upper bound with a nonnegative floor |
+| `0085_projection_debt.sql` | durable projection repair debt |
+| `0086_page_dm_message_sync_health.sql` | per-conversation failure, retry, and quarantine state |
+| `0087_fan_profiles_source_generated_at.sql` | upstream generation time on fan profiles |
+| `0088_sync_health_preferred_limit.sql` | learned conversation page-size state |
+| `0089_page_sync_dispatch_source.sql` | actual sync dispatch source |
+| `0090_device_token_harvest_capability.sql` | machine-bound harvest capability and compatibility lookup support |
+| `0091_ai_persona_revision.sql` | AI persona revision |
+| `0092_pending_device_tokens.sql` | non-authenticating device enrollment reservations |
+| `0093_typing_command_retention.sql` | typing-command retention behavior |
+| `0094_event_replay_continuity.sql` | v1 fanout replay continuity state |
+| `0095_erasure_attempt_resolution.sql` | completed/superseded erasure-attempt resolution protocol |
+| `0096_observations_harvest_lookup_concurrently.sql` | concurrent partition-leaf harvest lookup indexes |
+
+## Observation repository
+
+`packages/db/src/repositories/observations.ts` implements the observation
+append protocol. It preallocates an observation id, claims
+`(source, idempotency_key)` in `observation_keys`, and writes the partitioned
+journal row only for the winning claim. Both inserted and duplicate results
+include the authoritative journal `received_at`; on a duplicate this is the
+existing key's timestamp, allowing an immediate projector to address the
+correct partition.
+
+If an autocommit journal insert fails after its key claim, the repository
+removes only that exact claim and rethrows the original failure. In a caller
+transaction, rollback removes both operations. Batch insertion is sequential.
+
+The repository also exposes partition creation and lead checks, keyed lookup,
+envelope and replay scans, harvest counts, transaction-residue queries, and a
+staged-rollout compatibility lookup for old principal-based versus current
+machine-based harvest idempotency keys. Migration 0096 supplies the bounded
+partition indexes used by that compatibility lookup.
+
+## Domain-event repository
+
+`packages/db/src/repositories/domain-events.ts` serializes each account's
+batch on `domain_event_seq ... FOR UPDATE`. It preallocates event ids, claims
+`(account_id, dedup_key)` in `domain_event_keys`, and advances `account_seq`
+only for new claims. The result contains a per-input outcome and the resolved
+event id even when the key already existed. A successful nonempty append emits
+one `domain_events_appended` notification after commit; consumers use the
+notification as a wake-up and drain from their own watermark.
+
+Replay queries expose account bounds, high waters, retained continuity gaps,
+contiguous replay ends, state-snapshot recovery floors, the erasure epoch, and
+retained recovery counts. Event listing accepts a `throughSeq` ceiling so a
+recovery calculation and subsequent drain can stay inside the same bounded
+interval. The repository also provides observation replay/parse operations and
+domain-event partition management.
+
+## DM convergence repositories
+
+Several modules form the current message convergence path:
+
+- `dm-message-candidate.ts` reduces webhook, REST-reconcile, and command
+  candidates into one DM archive head. Outcomes distinguish deferred, fenced,
+  written, and no-op cases. It also lists material/emitted repair mismatches
+  and advances the emitted fingerprint after event publication.
+- `dm-material-fingerprint.ts` hashes a domain-separated canonical material
+  tuple. Storage uses `bytea`; hexadecimal fingerprints appear only in
+  superseding-event dedup keys and event data.
+- `ai-transcript-union.ts` reads both message archives in one database
+  snapshot, applies cross-store tombstones, prefers the fresh DM row for a
+  duplicated message reference, applies PPV-open upgrades, and caps the
+  deterministic result tail at 1,500 rows.
+- `erasure-fence.ts` supplies shared DM-writer and exclusive erasure advisory
+  locks plus scope-fence checks.
+- `projection-debt.ts` records, lists, resolves, and counts rebuildable DM
+  thread-summary failures.
+
+`dm-message-archive.ts`, `message-archive.ts`, `page-dm.ts`, and
+`dm-analytics.ts` provide the archive lifecycle, event projection, hot
+conversation/message store, and aggregate projection operations around that
+convergence path.
+
+## Repository inventory
+
+The directory `packages/db/src/repositories/` contains 41 modules. Grouped by
+responsibility, they are:
+
+| Area | Modules |
+|---|---|
+| Capture and event ledger | `observations.ts`, `domain-events.ts` |
+| Message convergence and projections | `ai-transcript-union.ts`, `dm-material-fingerprint.ts`, `dm-message-candidate.ts`, `dm-message-archive.ts`, `message-archive.ts`, `page-dm.ts`, `dm-analytics.ts`, `projection-debt.ts` |
+| Fan and money facts | `fans.ts`, `fan-metadata.ts`, `fan-page-identity.ts`, `fan-profiles.ts`, `transactions.ts`, `spenders.ts`, `top-spenders.ts`, `reporting.ts` |
+| Sync and platform state | `sync.ts`, `sync-context.ts`, `page-sync.ts`, `ofapi-sync-snapshot.ts`, `onlyfans-public-profiles.ts`, `egress.ts` |
+| OFAPI boundary | `ofapi.ts`, `ofapi-commands.ts` |
+| AI | `ai-usage.ts`, `ai-restricted.ts`, `ai-personas.ts` |
+| Auth, access, and erasure | `auth.ts`, `access-grants.ts`, `erasure.ts`, `erasure-fence.ts` |
+| Operations and configuration | `catalog.ts`, `config-settings.ts`, `notifications.ts`, `ops-metrics.ts`, `runtime-instances.ts`, `telegram-settings.ts` |
+| Product read models | `search.ts`, `workboard-v2.ts` |
+
+These modules include ordinary CRUD, soft-retirement, append ledgers,
+watermarks, leases, projections, retention cleanup, advisory-lock protocols,
+and reporting queries. Tests that police retention and erasure behavior inspect
+the actual delete surfaces rather than treating every repository mutation as
+equivalent.

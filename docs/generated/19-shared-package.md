@@ -1,91 +1,103 @@
-> Generated 2026-07-07 from docs/project-kernel/prompts/prompt-1-map.md at commit 0bc74f6.
+> Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 
-# 19 — The Shared Package (`@agency_hub_core/shared`)
+# Shared Package
 
-This map inventories `packages/shared/src` — the cross-cutting library that every runtime module and service imports as `@agency_hub_core/shared`. The barrel `index.ts:1-17` re-exports every module below. Contents span the money codec, domain type vocabularies, the business-day/period engine, spender bucketing and retention codecs, the Fansly snowflake decoder, fan-label helpers, the config/registry/settings machinery, the at-rest crypto envelope, proxy normalization and SSRF guards, the observed HTTP client, DM-text normalization, the logger, and the browser/node split. The money codec has its own map (`13-financial-and-money.md`); it is summarized here for completeness.
+`packages/shared` is the framework-independent utility and vocabulary package
+published inside the workspace as `@agency_hub_core/shared`. Its server barrel
+is `packages/shared/src/index.ts`; the dashboard build aliases the package to
+the smaller `packages/shared/src/browser.ts` entry instead.
 
-## Module inventory
+## Export surfaces
 
-| Module | Anchors | What it provides |
-|---|---|---|
-| `money.ts` | see below | The single money codec — full detail in `13-financial-and-money.md`. |
-| `types.ts` | see below | Domain type vocabularies. |
-| `time.ts` | see below | Business-day / period engine. |
-| `spender-buckets.ts` | `:14` | Spender auto-list bands. |
-| `spender-retention.ts` | `:12-23` | Retention-status codec. |
-| `snowflake.ts` | `:3` | Fansly id → date decode. |
-| `fans.ts` | `:21-156` | Fan-label + DM sync-exclusion helpers. |
-| `config.ts` | `:205,366` | `AppConfig`, `loadConfig`, env invariants. |
-| `config-registry.ts` | `:98,298` | Descriptor registry + running snapshot. |
-| `config-settings.ts` | `:24-237` | Override validation + boot/staged/live machinery. |
-| `crypto.ts` | `:13-59` | AES-256-GCM envelope for secrets at rest. |
-| `proxy.ts` / `proxy-string.ts` | `:293,402` / `:19` | Proxy normalize/mask + SSRF allow-check. |
-| `http-client.ts` / `http-request.ts` | `:40,124,178` / `:43` | undici dispatcher factory + observed requests. |
-| `dm-text.ts` | `:23` | `normalizeDmMessageText`. |
-| `logger.ts` | `:28` | `createLogger`. |
-| `browser.ts` | — | Browser/node split (no exports; side-effecting/empty). |
+The server barrel exports 18 modules:
 
-Downstream, the money codec is used heavily by `modules/finance/index.ts`, `services/reporting.ts`, `services/spenders.ts`, `services/telegram-report.ts`, and `modules/workboard/engine.ts`.
+| Area | Modules |
+|---|---|
+| Configuration | `config.ts`, `config-registry.ts`, `config-settings.ts` |
+| Security and transport | `crypto.ts`, `proxy.ts`, `proxy-string.ts`, `http-client.ts`, `http-request.ts` |
+| Domain codecs | `money.ts`, `types.ts`, `time.ts`, `fans.ts`, `spender-buckets.ts`, `spender-retention.ts`, `snowflake.ts` |
+| Text and logging | `dm-text.ts`, `unicode.ts`, `logger.ts` |
 
-## `money.ts` — the money codec (summary)
+The browser entry exports only `fans.ts`, `dm-text.ts`, `money.ts`,
+`proxy-string.ts`, `spender-retention.ts`, `time.ts`, and `types.ts`. Node-only
+configuration, crypto, proxy dispatchers, request observation, logging, and
+Unicode JSON sanitation are therefore absent from the dashboard bundle.
 
-Platform money is **MILLS** (`bigint`, 1/1000 USD) via branded type `Mills` (`money.ts:10`); AI-plane money is **MICRO-USD** (`number`, integer) via `MicroUsd` (`money.ts:12`); `MillsLike` is `bigint | number | string` (`money.ts:15`). Source-named constructors (`millsFromInteger` `:29`, `millsFromDollars` `:43`, `millsFromCents` `:61`, `microUsdFromDollars` `:67`, `microUsdFromDbInt` `:75`), the two converters (`millsToMicroUsd` `:82` exact; `microUsdToMills` `:87` lossy), display/aggregation helpers, and commission math (`calculateNetMillsFromGross` `:170`, `calculateGrossMillsFromNet` `:185`, scale `COMMISSION_RATE_SCALE = 10_000n` `:17`) are all detailed in `13-financial-and-money.md`.
+## Configuration
 
-## `types.ts` — domain vocabularies
+`packages/shared/src/config.ts` defines `AppConfig` and loads environment
+values. `packages/shared/src/config-registry.ts` is the descriptor catalog used
+to present and govern configuration keys; descriptors carry value type,
+default, subsystem, editability, runtime-application mode, and optional bounds,
+dependencies, cost warnings, or destructive-change markers.
 
-The kernel's enumerated vocabularies and their type aliases:
+`packages/shared/src/config-settings.ts` contains pure overlay logic shared by
+the API, worker, and tests:
 
-- **Platforms** — `platforms` / `Platform` (`types.ts:1`).
-- **Transaction types** — `transactionTypes` / `TransactionType` (`types.ts:4`).
-- **Reporting classification** — `transactionClassificationByType` mapping each type to a bucket of `revenue` / `adjustment` / `unclassified` / `excluded` (`types.ts:32-69`), read through `getTransactionClassification` (`types.ts:77`); the filtered sets `reportableTransactionTypes` and `spenderAnalyticsTransactionTypes` (`types.ts:83-89`).
-- **Transaction states** — `transactionStates` (`types.ts:100`).
-- **User roles** — `userRoles` and `creatableUserRoles` (`types.ts:104-107`).
-- **Fan flags** — `fanFlagTypes` = whale / vip / risky (`types.ts:109`).
-- **AI usage features** — `aiUsageFeatures`, including `workboard-closing` (`types.ts:112-124`).
-- **Credential + HTTP-request events** — credential bundles and the `HttpRequest*` event types (`types.ts:126-222`).
+- `validateConfigOverride` rejects unknown and non-editable keys, validates
+  scalar types, trims strings, and clamps integer overrides to descriptor
+  bounds;
+- `resolveEffectiveConfig` overlays valid editable database values on the
+  environment config and records whether each value came from `env` or
+  `override`;
+- staged boot flags use a separate validator and boot-time application path;
+- the AI transcript fresh-union mode permits stepwise upward transitions and
+  direct rollback transitions.
 
-## `time.ts` — business-day / period engine
+## Domain vocabularies and codecs
 
-The period/business-day engine over Moscow and UTC zones (`time.ts:3-4`). Period option sets `PERIOD_OPTIONS` and `SPENDER_PERIOD_OPTIONS` (`time.ts:5-15`); bounds resolvers `resolvePeriodBounds` / `resolvePeriodBoundsForPlatform` (`time.ts:316,331`) and `resolveSpenderPeriodBounds…` (`time.ts:473`), plus comparison-bounds helpers. Business-date primitives: `toBusinessDate`, `businessDateToUtcStart`, `diffBusinessDays`, and `resolveAutoSpenderSeriesGranularity`. OnlyFans revenue windows run one day longer than the Fansly equivalents — encoded in `ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS` (`time.ts:71-74`).
+`packages/shared/src/types.ts` defines the common literal vocabularies for
+platforms, transaction types and reporting buckets, transaction states, user
+roles, fan flags, AI usage features, stored platform credentials, sync health,
+and observed HTTP request events. Transaction classification distinguishes
+revenue, adjustment, unclassified, and excluded types and separately records
+whether a type affects spender analytics.
 
-## `spender-buckets.ts` — auto-list bands
+`packages/shared/src/money.ts` is the integer money boundary: platform amounts
+use branded bigint mills and AI cost uses integer micro-USD. It provides
+source-named constructors, explicit converters, formatting, aggregation, and
+commission calculations. The financial paths are mapped in
+`docs/generated/13-financial-and-money.md`.
 
-`SPENDER_AUTO_LIST_BUCKETS` (`spender-buckets.ts:14`) — mills bands mirroring the Fansly `[FB] $X-$Y Spenders` labels. It is the single source shared by both the spender auto-lists and the Workboard v2 "lists" mode.
+`packages/shared/src/time.ts` resolves Moscow- and UTC-based business periods,
+comparison windows, spender periods, and automatic series granularity.
+`packages/shared/src/spender-buckets.ts` defines the shared spend bands;
+`packages/shared/src/spender-retention.ts` classifies spend-recency status.
+`packages/shared/src/snowflake.ts` decodes Fansly follow IDs into timestamps.
 
-## `spender-retention.ts` — retention codec
+`packages/shared/src/fans.ts` centralizes fan display-label fallback order,
+Fansly DM exclusion metadata, and external-presence source names.
+`packages/shared/src/dm-text.ts` normalizes DM message text.
 
-`classifyRetention` (`spender-retention.ts:23`) maps recency to statuses `active` / `cooling` / `inactive` / `needs_reactivation`. Thresholds (`spender-retention.ts:12-17`): active ≤ 14 days, inactive ≤ 45 days, and a reactivation spend threshold of `100_000` mills.
+## Secrets, proxying, and observed HTTP
 
-## `snowflake.ts` — Fansly id decode
+`packages/shared/src/crypto.ts` provides AES-256-GCM JSON envelopes, versioned
+decryption, token generation, and SHA-256 helpers used by runtime persistence
+paths.
 
-`fanslyFollowIdToDate` (`snowflake.ts:3`) decodes a Fansly BIGINT snowflake id into a timestamp (epoch `1561494359900`, `>> 22n`).
+`packages/shared/src/proxy.ts` parses and normalizes HTTP, HTTPS, and SOCKS5
+proxy configuration, removes inline credentials from normalized URLs, masks
+sensitive text, and rejects disallowed proxy targets. Its target checks cover
+private and ambiguous numeric IP forms. `packages/shared/src/proxy-string.ts`
+handles the compact proxy string format used by browser-visible code.
 
-## `fans.ts` — fan labels + DM sync exclusion
+`packages/shared/src/http-client.ts` creates direct and proxy-aware undici
+dispatchers, including SOCKS5 connections. It also classifies transport and AI
+provider stream failures, parses retry timing, formats redacted error chains,
+and exposes a generation-scoped sticky-connect-failure fetch wrapper.
 
-`resolveFanLabel` / `resolveFanLabelForScope` (`fans.ts:63,67`) produce display labels; the Fansly DM sync-exclusion reason keys/enums live at `fans.ts:21-39`; `buildFanslyDmConversationMetadata` (`fans.ts:156`) assembles conversation metadata.
+`packages/shared/src/http-request.ts` implements the retry loop for an observed
+request. Callers provide transport and response classification callbacks; the
+wrapper emits started, retry, success, and failed events through the observer
+interface declared in `packages/shared/src/types.ts`.
 
-## `config.ts` / `config-registry.ts` / `config-settings.ts` — configuration machinery
+## Unicode and logging
 
-- **`config.ts`** — the `AppConfig` shape (`config.ts:205`) and `loadConfig` (`config.ts:366`), which reads the environment and runs env-invariant checks.
-- **`config-registry.ts`** — the descriptor registry: `CONFIG_DESCRIPTORS` (`config-registry.ts:98`) with `RUNNING_SCHEMA_VERSION = 2` and per-descriptor editability of `never` / `staged` / `editable`; `buildRunningSnapshot` (`config-registry.ts:298`) assembles the running view.
-- **`config-settings.ts`** — the override machinery: `validateConfigOverride` (`config-settings.ts:24`), `collectCostWarnings` (`:90`), `resolveEffectiveConfig` (`:130`), `validateStagedOverride` (`:170`), and `applyBootOverrides` (`:237`).
+`packages/shared/src/unicode.ts` prevents malformed UTF-16 from reaching
+Postgres JSON/JSONB. It offers surrogate-safe truncation and a deep copier that
+replaces unpaired surrogates in object keys and values with U+FFFD.
 
-## `crypto.ts` — at-rest secret envelope
-
-`encryptJson` / `decryptJson` / `decryptJsonWithKeyVersion` (`crypto.ts:13,55,59`) implement an AES-256-GCM envelope for secrets at rest, alongside `sha256Hex` and `randomToken`. Used, among other places, for Telegram bot-token encryption.
-
-## `proxy.ts` / `proxy-string.ts` — proxy config + SSRF guard
-
-Normalize, mask, and validate proxy configurations. `assertProxyTargetAllowed` (`proxy.ts:293`) is the SSRF allow-check; `redactSensitiveText` (`proxy.ts:402`) masks secrets in text; `parseProxyString` (`proxy-string.ts:19`) parses proxy connection strings.
-
-## `http-client.ts` / `http-request.ts` — observed HTTP client
-
-`createRequestDispatcher` / `createProxyRequestDispatcher` (`http-client.ts:40,124`) build undici dispatchers (direct or proxied); retry timing is `resolveRetryDelayMs` (`http-client.ts:178`). `executeObservedRequest` (`http-request.ts:43`) runs a request under observation (capturing the request/response as an event).
-
-## `dm-text.ts` / `logger.ts` / `browser.ts`
-
-- `dm-text.ts` — `normalizeDmMessageText` (`dm-text.ts:23`), the canonical DM-text normalizer used by conversation and message projections.
-- `logger.ts` — `createLogger` (`logger.ts:28`).
-- `browser.ts` — the browser/node split; no exports (side-effecting/empty).
+`packages/shared/src/logger.ts` constructs the pino logger used by server-side
+packages. It is not part of the browser entry.

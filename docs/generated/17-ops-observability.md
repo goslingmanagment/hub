@@ -1,90 +1,117 @@
-> Generated 2026-07-07 from docs/project-kernel/prompts/prompt-1-map.md at commit 0bc74f6.
+> Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 
-# Ops & observability
+# Operations, health, metrics, and runtime liveness
 
-The kernel's operational observability rests on three services plus the ops
-HTTP module. The golden-signals service samples the five pipeline latencies
-(and one AI-volume gauge) minutely and latches breaches into incidents; the
-DB disk-usage guard checks free space hourly and stands down retention on
-breach; the reporting service builds the revenue/growth/fan reports that back
-the finance and audience modules; and the ~1209-line ops module hosts health,
-OFAPI credits, sync control, raw-SQL admin, live config, and the notifications
-dashboard. This document maps all four.
+Operational state is assembled from public health services, detailed sync
+status, minutely metric sampling, persistent incidents, process heartbeats,
+queue state, database statistics, and owner-only admin routes. The principal
+entry points are `apps/runtime/src/services/health.ts`, `golden-signals.ts`,
+`runtime-heartbeat.ts`, `ops-watchdog.ts`, `sync-status.ts`, and
+`apps/runtime/src/modules/ops/index.ts`.
 
-## Golden signals (`services/golden-signals.ts`, 255 lines)
+## Health endpoints
 
-The Stage 25 five golden signals. `runGoldenSignalSample`
-(`golden-signals.ts:181`) runs minutely on queue `ops.metrics.sample`
-(`golden-signals.ts:30`), computing p50/p95 over a 10-minute trailing window,
-with 90-day retention (`golden-signals.ts:33`). Sources: `ofapi_webhook_events`,
-`domain_events` / `observations`, `projection_seq_watermarks`,
-`ofapi_commands`, `domain_events_smoke_checkpoint`.
+`GET /api/v1/health` is public. `getSystemHealth` probes the database and
+reports overall status, public runtime capabilities, and the normalized OpenAPI
+`contractHash`. The capability manifest comes from
+`apps/runtime/src/services/public-capabilities.ts`; it is also inspected by
+deployment gates before a candidate stack replacement.
 
-The p95 thresholds (`GOLDEN_SIGNAL_THRESHOLDS_MS`, `golden-signals.ts:36`):
+`GET /api/v1/health/sync` is the reduced monitoring surface. It accepts the
+configured monitoring token and returns page/stream freshness without exposing
+owner admin data. `getPublicSyncHealth` combines stream checkpoints, failure
+counts, freshness thresholds, and wedged retry states.
 
-| Signal | p95 threshold | Meaning |
-|---|---|---|
-| `capture` | 60 s | webhook → observation |
-| `canonicalize` | 180 s | observation → domain_events |
-| `projection` | 180 s | domain_events → projections |
-| `command_settle` | 300 s | outbound command settle |
-| `sse_delivery` | 600 s | SSE fan-out delivery |
-| `ai_content_bytes` | 5 GB | Stage 29 gauge (BYTES) riding the p95 slot |
+Detailed owner/team-lead sync routes expose global status, recent requests,
+overview, per-page blocks, message-block diagnostics, and administrative run
+history/control. Their implementation spans `apps/runtime/src/modules/ops/index.ts`,
+`apps/runtime/src/services/sync-status.ts`, and the sync repositories.
 
-The `ai_content_bytes` entry is a Stage 29 (DP 6) restricted-class volume guard
-— a gauge measured in bytes that rides the p95 slot so the existing breach
-latch covers it (`golden-signals.ts:42-44`).
+## Golden signals
 
-On breach the sample calls `notifyOfapiGlobalIncident({kind:
-"golden_signal_lag"})`, otherwise it resolves (`golden-signals.ts:196-203`).
-The report is served at `GET /api/v1/ops/metrics` via `getGoldenSignalsReport`
-(`golden-signals.ts:214`, wired in `ops/index.ts:179`). The worker is
-`startGoldenSignalWorker` (`golden-signals.ts:244`); the schedule is
-`* * * * *` UTC (`golden-signals.ts:60`).
+`apps/runtime/src/services/golden-signals.ts` schedules
+`ops.metrics.sample` every minute. It computes p50/p95 over a trailing ten-minute
+window for capture, canonicalization, projection backlog, command settlement,
+and SSE smoke-checkpoint staleness. It also emits always-present age gauges for
+waiting capture rows and queued commands, restricted AI content row/byte
+volume, acceptance events per hour, and registered AI transcript health-floor
+backlogs.
 
-## DB disk-usage guard (`services/db-disk-alert.ts`, 122 lines)
+Thresholds are explicit in `GOLDEN_SIGNAL_THRESHOLDS_MS`. A breach opens a
+metric-specific `golden_signal_lag` incident; recovery resolves that same latch.
+A missing SSE checkpoint or failed health-floor probe is recorded as a blind
+probe, not a healthy zero. Samples are stored in `ops_metric_samples` through
+`packages/db/src/repositories/ops-metrics.ts` and retained for 90 days.
 
-The Stage 1 retention stand-down guard. `runDbDiskUsageCheck`
-(`db-disk-alert.ts:71`) runs hourly at `:15` UTC (`db-disk-alert.ts:64`),
-performs a `statfs("/")`, and compares against a default **80%** threshold
-(`DEFAULT_DISK_USAGE_ALERT_PERCENT`, `db-disk-alert.ts:22`; overridable via
-`config.diskUsageAlertPercent`). On breach it calls
-`notifyOfapiGlobalIncident({kind: "db_disk_usage"})` with free/total GiB plus
-the Postgres size, otherwise it resolves (`db-disk-alert.ts:103-118`). Queue:
-`db.disk-usage.check`. This is the guard that lets retention stand down rather
-than write into a nearly-full disk.
+`GET /api/v1/ops/metrics` accepts the monitoring token or a dashboard session
+and returns recent series plus thresholds. `tests/golden-signals.integration.test.ts` covers SQL
+inputs, latch behavior, pruning, and failed probes.
 
-## Reporting service (`services/reporting.ts`, exports at `:430-1081`)
+## Runtime heartbeats and deadmen
 
-The revenue/growth/fan report builders that back the finance and audience HTTP
-modules. Exported builders:
+API, worker, and active scheduler roles call
+`startRuntimeHeartbeat` in `apps/runtime/src/services/runtime-heartbeat.ts`.
+Each successful database upsert publishes role, instance identity, sanitized
+running config snapshot, skipped boot overrides, image tag, and timestamps.
+Heartbeats refresh every 60 seconds; repository readers
+apply a staleness TTL so stopped instances disappear from current state.
 
-- Summaries: `getPageSummary`, `listPageSummaries`, `listModelSummaries`.
-- Revenue: `getPageRevenueReport`, `getOverviewRevenueReport`,
-  `getModelRevenueReport`, `getPageTransactionsReport`.
-- Growth/audience: `getPageSubscribersReport` / `…Daily`,
-  `getPageFollowersReport` / `…Daily`, `getPageFansReport`,
-  `getPageDeletedFansReport`, `getOverviewGrowthReport`.
-- Fan detail: `getPageFanDetailReport`, `getCrossPageFanDetailReport`.
-- Fan spend: `getFanSpendSummary` (`reporting.ts:1081`) — per-fan spend via
-  `getFanSpendByIdentifier`.
+Worker and scheduler Docker healthchecks read role-specific health files. The
+file is written only after the heartbeat database write succeeds, coupling file
+freshness to event-loop and database progress. Scheduler leadership is guarded
+by a session advisory lock in `scheduler-leader.ts`; a hot standby that does not
+hold the lock does not publish the active scheduler heartbeat.
 
-## Ops HTTP module (`apps/runtime/src/modules/ops/index.ts`, 1209 lines)
+`apps/runtime/src/services/ops-watchdog.ts` runs in the API process every
+minute, with boot grace. It reads the scheduler heartbeat and latest
+`ops.metrics.sample` job success. Silence beyond three minutes opens
+`scheduler_silent` or `ops_sampler_silent`; fresh evidence resolves the
+corresponding incident.
 
-The largest module. What it hosts:
+## Disk and partition guards
 
-- **Health** — `GET /api/v1/health` (`ops/index.ts:158`) and
-  `/api/v1/health/sync` (`ops/index.ts:166`).
-- **Golden signals** — `GET /api/v1/ops/metrics` (`ops/index.ts:179`).
-- **OFAPI credits** — summary / daily / `ledger` / `ledger.csv` /
-  spend-comparison / dm-archive (`ops/index.ts:186-271`).
-- **Sync control** — runs / trigger / blocks (`ops/index.ts:273-503`).
-- **Admin (raw-SQL)** — logs / queue-jobs / db-stats / incidents
-  (`ops/index.ts:520-710`).
-- **Config** — live PATCH plus staged-flip with atomic version-checked apply
-  (`ops/index.ts:810-994`).
-- **Notifications dashboard** — the full Telegram settings/test/discover-chats,
-  incidents, and report preview/send/history surface
-  (`ops/index.ts:716-1207`).
+`apps/runtime/src/services/db-disk-alert.ts` schedules an hourly
+`db.disk-usage.check` job. It reads database/volume usage, compares it with the
+configured percentage, and opens/resolves `db_disk_usage`.
+
+`apps/runtime/src/services/observations-partitions.ts` schedules a daily
+partition check. It creates monthly `observations` and `domain_events`
+partitions three months ahead and requires at least two full future months of lead. Creation/check failure or
+insufficient lead opens `observations_partitions`; restored lead resolves it.
+Missing partitions remain an insert failure so webhook/sync capture does not
+fall into a default partition silently.
+
+## Ops admin module
+
+`apps/runtime/src/modules/ops/index.ts` groups these owner-facing surfaces:
+
+- OFAPI credit summary, daily data, ledger/CSV, spend comparison, and DM archive
+  status;
+- sync status, blocks, runs, trigger/pause/resume/reset controls, and active
+  connection inventory;
+- structured log tail, pg-boss queue jobs, database table/index statistics, and
+  incident listing;
+- configuration read/update/staged/delete operations; and
+- Telegram notification settings, discovery, testing, incident resolution, and
+  report operations.
+
+The public credit summary has a narrower contract than owner credit detail.
+Raw SQL used by logs, queue, and DB-stat routes is fixed in the handler; caller
+input is constrained by route schemas.
+
+## Reporting and dashboard consumers
+
+`apps/runtime/src/services/reporting.ts` is the read-model layer for revenue,
+growth, followers/subscribers, fan detail, and summaries. Operational report
+history is separate in the notifications repositories. Dashboard pages under
+`apps/dashboard/src/pages/dev/`, `OfapiCreditsPage.tsx`,
+`NotificationsPage.tsx`, and Settings consume the corresponding generated SDK
+operations.
+
+Health, watchdog, heartbeat, sync-status, disk, partition, queue, credit, and
+dashboard presentation behavior have dedicated tests under `tests/health.test.ts`,
+`tests/ops-watchdog.integration.test.ts`, `tests/runtime-heartbeat.test.ts`,
+`tests/sync-status.test.ts`, `tests/db-disk-alert.test.ts`, and related ops
+integration suites.
