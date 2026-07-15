@@ -427,6 +427,7 @@ export async function notifySyncChunkFailureIncident(
     runId: number;
     hasProxy: boolean;
     previousConsecutiveFailures: number;
+    forceOpen?: boolean;
     errorCode?: string | null;
     errorSummary: string;
     occurredAt?: Date;
@@ -446,7 +447,7 @@ export async function notifySyncChunkFailureIncident(
     // re-alert ever. At-or-above keeps hitting the open path: dedupe handles
     // the standing case, the `reopened` transition restores post-resolve
     // alerting, and the D3-N1 retry covers a lost open send.
-    if ((input.previousConsecutiveFailures + 1) < STREAM_FAILURE_THRESHOLD) {
+    if (!input.forceOpen && (input.previousConsecutiveFailures + 1) < STREAM_FAILURE_THRESHOLD) {
       return;
     }
 

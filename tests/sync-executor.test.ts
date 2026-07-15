@@ -32,6 +32,12 @@ const sharedMocks = vi.hoisted(() => ({
   persistFailedSyncPayload: vi.fn(),
 }));
 
+const notificationMocks = vi.hoisted(() => ({
+  notifyAuthFailedIncident: vi.fn(),
+  notifySyncChunkFailureIncident: vi.fn(),
+  resolveSyncChunkRecoveryIncidents: vi.fn(),
+}));
+
 const telemetryMocks = vi.hoisted(() => ({
   instances: [] as Array<{
     metadata: Record<string, unknown>;
@@ -60,6 +66,7 @@ vi.mock("../apps/runtime/src/services/sync/shared.ts", async () => {
     persistFailedSyncPayload: sharedMocks.persistFailedSyncPayload,
   };
 });
+vi.mock("../apps/runtime/src/services/notification-incidents.ts", () => notificationMocks);
 vi.mock("../apps/runtime/src/services/sync/observability.ts", () => ({
   SyncRunTelemetry: class {
     readonly metadata: Record<string, unknown>;
@@ -84,6 +91,7 @@ import {
   processSyncPageExecuteJob,
   startSyncPageExecutor,
 } from "../apps/runtime/src/services/sync/executor.ts";
+import { FollowersReconcileConsistencyError } from "../apps/runtime/src/services/sync/errors.ts";
 
 describe("sync executor", () => {
   const taskLease = {
@@ -183,6 +191,10 @@ describe("sync executor", () => {
       mock.mockReset();
     }
     sharedMocks.persistFailedSyncPayload.mockReset();
+    for (const mock of Object.values(notificationMocks)) {
+      mock.mockReset();
+      mock.mockResolvedValue(undefined);
+    }
     telemetryMocks.instances.length = 0;
 
     dbMocks.startSyncRun.mockResolvedValue({
@@ -1207,6 +1219,91 @@ describe("sync executor", () => {
       runId: 777,
       needsContinuation: false,
     });
+  });
+
+  it.each([
+    { previousConsecutiveFailures: 0, previousRetryKind: null },
+    { previousConsecutiveFailures: 1, previousRetryKind: "provider_404" },
+  ])("retries Fansly 404 failures before the terminal attempt ($previousConsecutiveFailures prior)", async ({
+    previousConsecutiveFailures,
+    previousRetryKind,
+  }) => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      consecutiveFailures: previousConsecutiveFailures,
+      retryKind: previousRetryKind,
+    });
+    handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("not found", 404));
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      retryKind: "provider_404",
+    }));
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
+      previousConsecutiveFailures,
+      forceOpen: false,
+    }));
+  });
+
+  it("blocks a Fansly 404 after two retries and opens the incident immediately", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      consecutiveFailures: 2,
+      retryKind: "provider_404",
+    });
+    handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("not found", 404));
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      blockerKind: "provider_bad_data",
+      blockerCode: "provider_404_exhausted",
+    }));
+    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
+      previousConsecutiveFailures: 2,
+      forceOpen: true,
+    }));
+  });
+
+  it("blocks an unsafe follower reconcile snapshot without retrying", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(new FollowersReconcileConsistencyError({
+      code: "followers_reconcile_inconsistent_snapshot",
+      message: "Follower reconcile generation is incomplete",
+    }));
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      blockerKind: "provider_bad_data",
+      blockerCode: "followers_reconcile_inconsistent_snapshot",
+    }));
+    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
+      forceOpen: true,
+    }));
   });
 
   it("keeps long-running chunks alive with a worker heartbeat", async () => {

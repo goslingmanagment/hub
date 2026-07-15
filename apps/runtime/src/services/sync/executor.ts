@@ -42,7 +42,10 @@ import {
   type SyncPageExecutePayload,
 } from "../sync-queue.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
-import { normalizeSyncError } from "./errors.ts";
+import {
+  FollowersReconcileConsistencyError,
+  normalizeSyncError,
+} from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
 import { pauseDisabledOnlyFansDmPollingForPage } from "./onlyfans-dm-polling.ts";
@@ -186,6 +189,10 @@ async function resolveSyncPageWakeupTarget(
 function classifyTaskFailure(
   error: unknown,
   failure: ReturnType<typeof normalizeSyncError>,
+  input: {
+    previousConsecutiveFailures: number;
+    previousRetryKind: string | null;
+  },
 ): {
   mode: "retry" | "blocked";
   retryClass?: string;
@@ -205,6 +212,15 @@ function classifyTaskFailure(
     };
   }
 
+  if (error instanceof FollowersReconcileConsistencyError) {
+    return {
+      mode: "blocked",
+      blockerType: "provider_bad_data",
+      blockerCode: error.code,
+      blockerReason: failure.summary,
+    };
+  }
+
   if (error instanceof FanslyApiError) {
     if (error.status === 429) {
       return {
@@ -217,6 +233,25 @@ function classifyTaskFailure(
       return {
         mode: "retry",
         retryClass: "provider_5xx",
+      };
+    }
+
+    if (error.status === 404) {
+      const previous404Failures = input.previousRetryKind === "provider_404"
+        ? input.previousConsecutiveFailures
+        : 0;
+      if (previous404Failures < 2) {
+        return {
+          mode: "retry",
+          retryClass: "provider_404",
+        };
+      }
+
+      return {
+        mode: "blocked",
+        blockerType: "provider_bad_data",
+        blockerCode: "provider_404_exhausted",
+        blockerReason: failure.summary,
       };
     }
 
@@ -624,7 +659,10 @@ export async function executeNextSyncPageChunk(
       };
     }
 
-    const classified = classifyTaskFailure(error, failure);
+    const classified = classifyTaskFailure(error, failure, {
+      previousConsecutiveFailures: taskLease.consecutiveFailures,
+      previousRetryKind: taskLease.retryKind,
+    });
     if (classified.mode === "blocked") {
       const blockResult = await blockPageSync(app.db, {
         pageId: platformAccountId,
@@ -695,6 +733,7 @@ export async function executeNextSyncPageChunk(
       runId: run.id,
       hasProxy,
       previousConsecutiveFailures: taskLease.consecutiveFailures,
+      forceOpen: classified.mode === "blocked",
       errorCode: failure.error.code,
       errorSummary: failure.summary,
       occurredAt: failedAt,

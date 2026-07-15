@@ -39,6 +39,19 @@ export class SyncPayloadPersistenceError extends Error {
   }
 }
 
+export class FollowersReconcileConsistencyError extends Error {
+  readonly code: string;
+
+  constructor(input: {
+    code: string;
+    message: string;
+  }) {
+    super(input.message);
+    this.name = "FollowersReconcileConsistencyError";
+    this.code = input.code;
+  }
+}
+
 function clampSummary(summary: string) {
   if (summary.length <= MAX_SYNC_ERROR_SUMMARY_CHARS) {
     return {
