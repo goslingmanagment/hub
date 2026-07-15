@@ -5,4 +5,6 @@ export type PublicRuntimeCapability = "desktop-lifecycle-v2";
  * The deploy script interrogates the candidate image through startup's
  * print-public-capabilities mode before it can replace the running stack.
  */
-export const PUBLIC_RUNTIME_CAPABILITIES: readonly PublicRuntimeCapability[] = [];
+export const PUBLIC_RUNTIME_CAPABILITIES: readonly PublicRuntimeCapability[] = [
+  "desktop-lifecycle-v2",
+];
