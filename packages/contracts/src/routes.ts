@@ -151,10 +151,16 @@ export const deviceTokenHarvestCapabilityBodySchema = z.object({
 
 // D116(c) fleet-gate foundation (desktop D19): per active chatter, token
 // freshness and remaining active API keys. Read-only reporting surface.
+// Deliberately NO aggregate go/no-go boolean: chatter-role automation
+// accounts (probes/scripts) are indistinguishable from humans until the
+// service-account split lands, so any all-chatters flag would be
+// permanently false — the summary counts let the phase-2 CI (or the owner)
+// apply policy over the rows once accounts are classified.
 export const deviceTokenAdoptionRowSchema = z.object({
   username: z.string(),
   hasFreshDeviceToken: z.boolean(),
   deviceTokenLastUsedAt: isoTimestamp.nullable(),
+  deviceTokenExpiresAt: isoTimestamp.nullable(),
   activeApiKeys: z.number().int().nonnegative(),
   apiKeyLastUsedAt: isoTimestamp.nullable(),
 });
@@ -163,7 +169,11 @@ export const deviceTokenAdoptionReportSchema = z.object({
   generatedAt: isoTimestamp,
   freshWindowDays: z.number().int().positive(),
   chatters: z.array(deviceTokenAdoptionRowSchema),
-  gate: z.object({ allActiveChattersOnFreshTokens: z.boolean() }),
+  summary: z.object({
+    activeChatters: z.number().int().nonnegative(),
+    onFreshTokens: z.number().int().nonnegative(),
+    withActiveApiKeys: z.number().int().nonnegative(),
+  }),
 });
 
 export const accessGrantItemSchema = z.object({

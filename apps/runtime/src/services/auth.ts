@@ -820,9 +820,13 @@ export async function listApiKeysForUsers(
 
 /** D116(c) fleet-gate foundation (desktop D19). Per ACTIVE chatter: does a
  * live device token exist whose last_used_at is fresher than the window, and
- * how many API keys remain active. Read-only. Probe/service accounts are not
- * modeled yet (no schema flag) — only disabled users are excluded; the future
- * service-account split narrows this further. */
+ * how many API keys remain active. Read-only. Probe/script automation shares
+ * the chatter role (no schema flag yet), so this deliberately publishes
+ * summary COUNTS instead of an all-chatters go/no-go boolean — that flag
+ * would be permanently false until the service-account split classifies
+ * accounts; phase-2 CI applies policy over the rows then. apiKeyLastUsedAt
+ * deliberately spans revoked keys (rotation moves the real last use onto a
+ * revoked row — same idiom as getAdminUserById). */
 export const DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS = 14;
 
 export async function deviceTokenAdoptionReport(app: AppContext, now = new Date()) {
@@ -833,13 +837,16 @@ export async function deviceTokenAdoptionReport(app: AppContext, now = new Date(
   for (const user of users) {
     if (user.role !== "chatter" || user.disabledAt) continue;
     const tokens = await listDeviceTokensForUser(app.db, user.id);
-    const lastTokenUse = tokens.reduce<Date | null>((max, token) => (
-      token.revokedAt === null
-        && token.expiresAt > now
-        && token.lastUsedAt
-        && (max === null || token.lastUsedAt > max)
+    const liveTokens = tokens.filter(
+      (token) => token.revokedAt === null && token.expiresAt > now,
+    );
+    const lastTokenUse = liveTokens.reduce<Date | null>((max, token) => (
+      token.lastUsedAt && (max === null || token.lastUsedAt > max)
         ? token.lastUsedAt
         : max
+    ), null);
+    const latestExpiry = liveTokens.reduce<Date | null>((max, token) => (
+      max === null || token.expiresAt > max ? token.expiresAt : max
     ), null);
     const keys = await listApiKeys(app.db, [user.id]);
     const lastKeyUse = keys.reduce<Date | null>((max, key) => (
@@ -849,6 +856,9 @@ export async function deviceTokenAdoptionReport(app: AppContext, now = new Date(
       username: user.username,
       hasFreshDeviceToken: lastTokenUse !== null && lastTokenUse.getTime() >= freshFloor,
       deviceTokenLastUsedAt: lastTokenUse?.toISOString() ?? null,
+      // The 365-day hard cap makes expiry the other half of "still viable":
+      // a token used yesterday can still die tomorrow (Stage 22 max lifetime).
+      deviceTokenExpiresAt: latestExpiry?.toISOString() ?? null,
       activeApiKeys: keys.filter((key) => key.revokedAt === null).length,
       apiKeyLastUsedAt: lastKeyUse?.toISOString() ?? null,
     });
@@ -857,9 +867,10 @@ export async function deviceTokenAdoptionReport(app: AppContext, now = new Date(
     generatedAt: now.toISOString(),
     freshWindowDays: DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS,
     chatters,
-    gate: {
-      allActiveChattersOnFreshTokens: chatters.length > 0
-        && chatters.every((row) => row.hasFreshDeviceToken),
+    summary: {
+      activeChatters: chatters.length,
+      onFreshTokens: chatters.filter((row) => row.hasFreshDeviceToken).length,
+      withActiveApiKeys: chatters.filter((row) => row.activeApiKeys > 0).length,
     },
   };
 }

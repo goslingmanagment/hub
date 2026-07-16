@@ -2755,6 +2755,16 @@
                               }
                             ]
                           },
+                          "deviceTokenExpiresAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "activeApiKeys": {
                             "type": "integer",
                             "minimum": 0,
@@ -2775,21 +2785,36 @@
                           "username",
                           "hasFreshDeviceToken",
                           "deviceTokenLastUsedAt",
+                          "deviceTokenExpiresAt",
                           "activeApiKeys",
                           "apiKeyLastUsedAt"
                         ],
                         "additionalProperties": false
                       }
                     },
-                    "gate": {
+                    "summary": {
                       "type": "object",
                       "properties": {
-                        "allActiveChattersOnFreshTokens": {
-                          "type": "boolean"
+                        "activeChatters": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "onFreshTokens": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "withActiveApiKeys": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
-                        "allActiveChattersOnFreshTokens"
+                        "activeChatters",
+                        "onFreshTokens",
+                        "withActiveApiKeys"
                       ],
                       "additionalProperties": false
                     }
@@ -2798,7 +2823,7 @@
                     "generatedAt",
                     "freshWindowDays",
                     "chatters",
-                    "gate"
+                    "summary"
                   ],
                   "additionalProperties": false
                 }
