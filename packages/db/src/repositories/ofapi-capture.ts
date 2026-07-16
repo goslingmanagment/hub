@@ -1232,6 +1232,7 @@ interface AttemptControlRow extends Record<string, unknown> {
   job_lease_token: string | null;
   response_observation_id: unknown;
   response_observation_received_at: string | Date | null;
+  response_observed_at: string | Date | null;
   credit_state: "reserved" | "settled" | "released" | "indeterminate";
   settled_credits: unknown;
 }
@@ -1713,6 +1714,122 @@ export async function captureOfapiAttemptResponse(
       receivedAt: observation.receivedAt,
       duplicate: !observation.inserted,
     };
+  });
+}
+
+/**
+ * Applies provider credit metadata only after the raw response observation is
+ * durable. Capture initially settles the reserved estimate so no reservation
+ * can leak; this local correction appends a delta and refreshes the balance
+ * without another vendor request.
+ */
+export async function reconcileOfapiCapturedAttemptCredit(
+  db: Database,
+  input: {
+    attemptId: string;
+    actualCredits: number;
+    balanceAfter?: number | null;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const actualCredits = normalizeCredits(input.actualCredits);
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    await database.execute(sql`select id from ofapi_credit_state where id = 1 for update`);
+    const preflight = await database.execute<{ origin_principal_id: unknown }>(sql`
+      select origin_principal_id
+      from ofapi_request_attempts
+      where id = ${input.attemptId}::uuid
+    `);
+    const principalId = asNullableNumber(
+      preflight.rows[0]?.origin_principal_id,
+      "origin_principal_id",
+    );
+    if (principalId !== null) {
+      await database.execute(sql`
+        select principal_user_id
+        from ofapi_principal_budget_state
+        where principal_user_id = ${principalId}
+        for update
+      `);
+    }
+    const attempt = await lockAttempt(database, input.attemptId);
+    if (
+      !attempt ||
+      attempt.state !== "response_captured" ||
+      attempt.credit_state !== "settled"
+    ) {
+      return false;
+    }
+    const priorCredits = asNumber(attempt.settled_credits, "settled_credits");
+    const alreadyExact = await database.execute<{ credit_estimated: boolean }>(sql`
+      select credit_estimated
+      from ofapi_request_attempts
+      where id = ${input.attemptId}::uuid
+    `);
+    if (alreadyExact.rows[0]?.credit_estimated === false) {
+      if (priorCredits !== actualCredits) {
+        throw new OfapiCaptureInvariantError(
+          `Attempt ${input.attemptId} credit metadata changed after reconciliation`,
+        );
+      }
+      return true;
+    }
+
+    const responseObservedAt = asNullableDate(
+      attempt.response_observed_at,
+      "response_observed_at",
+    ) ?? now;
+    const delta = actualCredits - priorCredits;
+    if (delta !== 0) {
+      await database.execute(sql`
+        insert into ofapi_credit_ledger (
+          occurred_at, source, operation, page_id, http_status, credits,
+          estimated, balance_after, request_id, details, actor_user_id,
+          attempt_id, attempt_entry_phase
+        ) values (
+          ${responseObservedAt},
+          'adjustment',
+          ${attempt.operation},
+          ${asNumber(attempt.page_id, "page_id")},
+          null,
+          ${delta},
+          false,
+          ${input.balanceAfter ?? null},
+          ${input.attemptId},
+          ${JSON.stringify({ certainty: "captured_meta", priorCredits, actualCredits })}::jsonb,
+          ${principalId},
+          ${input.attemptId}::uuid,
+          'certainty_adjustment'
+        )
+      `);
+    }
+
+    await adjustReservationCounters(database, {
+      reservationDay: dateOnly(attempt.reservation_day)!,
+      budgetScope: attempt.budget_scope,
+      reservedCredits: asNumber(attempt.reserved_credits, "reserved_credits"),
+      principalId,
+      principalWindowStartedAt: asNullableDate(
+        attempt.principal_window_started_at,
+        "principal_window_started_at",
+      ),
+      creditDelta: delta,
+      releaseReservation: false,
+      balanceAfter: input.balanceAfter ?? null,
+      responseObservedAt,
+      now,
+    });
+    await database.execute(sql`
+      update ofapi_request_attempts
+      set settled_credits = ${actualCredits},
+          credit_estimated = false,
+          balance_after = ${input.balanceAfter ?? null},
+          updated_at = ${now}
+      where id = ${input.attemptId}::uuid
+    `);
+    return true;
   });
 }
 

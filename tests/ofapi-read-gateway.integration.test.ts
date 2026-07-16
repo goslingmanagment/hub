@@ -42,6 +42,7 @@ const ACCOUNT_TWO = "acct_02000000000000000000000000000000";
 interface ScriptedResponse {
   status: number;
   body?: unknown;
+  rawBody?: string | Buffer;
   headers?: Record<string, string>;
   destroyAfterHeaders?: boolean;
 }
@@ -86,7 +87,7 @@ beforeAll(async () => {
       response.destroy(new Error("scripted upstream body failure"));
       return;
     }
-    response.end(JSON.stringify(scripted.body ?? null));
+    response.end(scripted.rawBody ?? JSON.stringify(scripted.body ?? null));
   });
   const address = await listenOnLoopback(upstreamServer, "OFAPI read gateway tests");
   if (address) {
@@ -487,6 +488,106 @@ describe("OFAPI read gateway integration", () => {
       "select 1 from observations where source = 'readthrough'",
     );
     expect(observations.rows).toHaveLength(0);
+  });
+
+  it("capture-first serves only after the raw response and attempt are durable", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    scriptedResponses.push({
+      status: 200,
+      body: {
+        data: [{ id: 77 }],
+        _meta: { _credits: { used: 2, balance: 8998 } },
+      },
+    });
+
+    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data).toEqual([{ id: 77 }]);
+    expect(upstreamRequests).toHaveLength(1);
+    const state = await testDb!.pool.query<{
+      request_state: string;
+      attempt_state: string;
+      parser_outcome: string;
+      settled_credits: number;
+      credit_estimated: boolean;
+    }>(
+      `select request.state as request_state,
+              attempt.state as attempt_state,
+              attempt.parser_outcome,
+              attempt.settled_credits,
+              attempt.credit_estimated
+       from ofapi_interactive_requests request
+       join ofapi_request_attempts attempt
+         on attempt.interactive_request_id = request.id`,
+    );
+    expect(state.rows).toEqual([{
+      request_state: "served",
+      attempt_state: "response_captured",
+      parser_outcome: "accepted",
+      settled_credits: 2,
+      credit_estimated: false,
+    }]);
+    const observations = await testDb!.pool.query<{
+      source: string;
+      producer: string;
+      kind: string;
+    }>(
+      `select source, producer, kind
+       from observations
+       where source = 'ofapi_capture'
+       order by id`,
+    );
+    expect(observations.rows).toEqual([{
+      source: "ofapi_capture",
+      producer: "ofapi-mirror-interactive",
+      kind: "ofapi.interactive_response.v1",
+    }]);
+    const ledger = await testDb!.pool.query<{ credits: number }>(
+      `select coalesce(sum(credits), 0)::int as credits
+       from ofapi_credit_ledger
+       where attempt_id is not null`,
+    );
+    expect(ledger.rows[0]?.credits).toBe(2);
+  });
+
+  it("capture-first records malformed success once and refuses to serve it", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    scriptedResponses.push({ status: 200, rawBody: "{not-json" });
+
+    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+
+    expect(response.statusCode, response.body).toBe(503);
+    expect(upstreamRequests).toHaveLength(1);
+    const attempt = await testDb!.pool.query<{
+      parser_outcome: string;
+      raw_body: string;
+    }>(
+      `select attempt.parser_outcome,
+              observation.payload #>> '{response,body}' as raw_body
+       from ofapi_request_attempts attempt
+       join observations observation
+         on observation.id = attempt.response_observation_id
+        and observation.received_at = attempt.response_observation_received_at`,
+    );
+    expect(attempt.rows).toEqual([{
+      parser_outcome: "contract_rejected",
+      raw_body: "{not-json",
+    }]);
   });
 
   it("fails open when the tee queue is full: serves 200, counts drops, raises the incident (Stage 9)", async () => {

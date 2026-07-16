@@ -3,6 +3,7 @@ import { listOfapiMappedPages } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import type { AuthPrincipal } from "./auth.ts";
 import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
+import { executeCaptureFirstInteractiveRead } from "./ofapi-capture-transport.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { isOfapiDmReadthroughReconcileEnabled } from "./ofapi-dm-readthrough.ts";
 import { enqueueReadGatewayCapture } from "./ofapi-read-gateway-capture.ts";
@@ -376,7 +377,11 @@ export async function executeOfapiReadGatewayRequest(
   if (app.config.ofapiCreditLedgerEnabled !== true) {
     throw new ServiceUnavailableError("OFAPI desktop read gateway requires the credit ledger");
   }
-  if (!app.ofapi?.proxyRead) {
+  const captureFirst = app.config.ofapiMirrorInteractiveCaptureEnabled === true;
+  if (
+    !app.ofapi ||
+    (captureFirst ? !app.ofapi.dispatchGovernedRaw : !app.ofapi.proxyRead)
+  ) {
     throw new ServiceUnavailableError("OFAPI client is not configured");
   }
 
@@ -424,22 +429,35 @@ export async function executeOfapiReadGatewayRequest(
     ofapiAccountId: request.accountId,
   });
   try {
-    const response = await app.ofapi.proxyRead({
-      pageId: page.id,
-      dispatcher: egress.dispatcher,
-      egressKey: egress.egressKey,
-      // Stage 9: the acting chatter attributes this read's credit spend.
-      actorUserId: principal.user.id,
-    }, {
-      operation: request.operation,
-      pathname: request.pathname,
-      query: request.query,
-      fallbackCredits: request.fallbackCredits,
-      fallbackEstimated: request.fallbackEstimated,
-    });
+    const response = captureFirst
+      ? await executeCaptureFirstInteractiveRead(app, {
+        principalUserId: principal.user.id,
+        pageId: page.id,
+        ofapiAccountId: request.accountId,
+        dispatcher: egress.dispatcher,
+        egressKey: egress.egressKey,
+        operation: request.operation,
+        surface: request.operation,
+        pathname: request.pathname,
+        query: request.query,
+        fallbackCredits: request.fallbackCredits,
+      })
+      : await app.ofapi.proxyRead!({
+        pageId: page.id,
+        dispatcher: egress.dispatcher,
+        egressKey: egress.egressKey,
+        // Stage 9: the acting chatter attributes this read's credit spend.
+        actorUserId: principal.user.id,
+      }, {
+        operation: request.operation,
+        pathname: request.pathname,
+        query: request.query,
+        fallbackCredits: request.fallbackCredits,
+        fallbackEstimated: request.fallbackEstimated,
+      });
     // Stage 9 producer 4: tee every successful proxied body into the journal
     // — O(1) enqueue off the latency path, fail-open with a visible counter.
-    if (response.status >= 200 && response.status < 300) {
+    if (!captureFirst && response.status >= 200 && response.status < 300) {
       enqueueReadGatewayCapture({
         app,
         principalUserId: principal.user.id,

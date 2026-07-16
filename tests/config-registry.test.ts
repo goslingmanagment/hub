@@ -107,6 +107,7 @@ describe("config registry", () => {
     "ofapiSpendProjectionShadowEnabled",
     "ofapiSpendTransactionIngestEnabled",
     "ofapiDesktopReadGatewayEnabled",
+    "ofapiMirrorInteractiveCaptureEnabled",
     "ofapiDesktopCommandOutboxEnabled",
     "ofapiDesktopCommandExecutionEnabled",
     "chatMuseAiGatewayEnabled",
@@ -120,7 +121,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the sixteen live keys, the nineteen boot keys, and nothing else", () => {
+  it("wires exactly the sixteen live keys, the twenty boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

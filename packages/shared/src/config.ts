@@ -147,6 +147,10 @@ const envSchema = z.object({
   OFAPI_SPEND_PROJECTION_SHADOW_ENABLED: booleanSchema.default(false),
   OFAPI_SPEND_TRANSACTION_INGEST_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_READ_GATEWAY_ENABLED: booleanSchema.default(false),
+  // Decision #158: switches gateway GETs onto the durable capture-first
+  // transport. Separate from the gateway flag so a deploy is inert and the
+  // old read path remains an immediate rollback until the canary is proven.
+  OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED: booleanSchema.default(false),
   // W3.2 (decision #125): queued-only outbox rows older than this expire to
@@ -302,6 +306,7 @@ export interface AppConfig {
   ofapiSpendProjectionShadowEnabled?: boolean;
   ofapiSpendTransactionIngestEnabled?: boolean;
   ofapiDesktopReadGatewayEnabled?: boolean;
+  ofapiMirrorInteractiveCaptureEnabled?: boolean;
   ofapiDesktopCommandOutboxEnabled?: boolean;
   ofapiDesktopCommandExecutionEnabled?: boolean;
   /** Fast-reply freshness PR4: readthrough reconcile (boot flag). */
@@ -479,6 +484,7 @@ export function loadConfig(
     ofapiSpendProjectionShadowEnabled: parsed.OFAPI_SPEND_PROJECTION_SHADOW_ENABLED,
     ofapiSpendTransactionIngestEnabled: parsed.OFAPI_SPEND_TRANSACTION_INGEST_ENABLED,
     ofapiDesktopReadGatewayEnabled: parsed.OFAPI_DESKTOP_READ_GATEWAY_ENABLED,
+    ofapiMirrorInteractiveCaptureEnabled: parsed.OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED,
     ofapiDesktopCommandOutboxEnabled: parsed.OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED,
     ofapiDesktopCommandExecutionEnabled: parsed.OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED,
     ofapiDmReadthroughReconcileEnabled: parsed.OFAPI_DM_READTHROUGH_RECONCILE_ENABLED,
