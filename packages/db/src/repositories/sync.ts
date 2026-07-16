@@ -1222,6 +1222,11 @@ export interface SyncMonitorStreamRow {
   recent5xxCount: number;
   recentFailedAttemptCount: number;
   recentRetryCount: number;
+  recentPhysicalAttemptCount: number;
+  recentPhysicalSuccessCount: number;
+  stalePhysicalAttemptCount: number;
+  physicalAttemptsSinceLastSuccess: number;
+  lastPhysicalSuccessAt: Date | null;
   last429At: Date | null;
   last5xxAt: Date | null;
   providerNextAvailableAt: Date | null;
@@ -1337,6 +1342,26 @@ function normalizeSyncMonitorStreamRow(row: Record<string, unknown>): SyncMonito
     recent5xxCount: normalizeNumber(row.recent5xxCount as NumericValue, "recent5xxCount"),
     recentFailedAttemptCount: normalizeNumber(row.recentFailedAttemptCount as NumericValue, "recentFailedAttemptCount"),
     recentRetryCount: normalizeNumber(row.recentRetryCount as NumericValue, "recentRetryCount"),
+    recentPhysicalAttemptCount: normalizeNumber(
+      row.recentPhysicalAttemptCount as NumericValue,
+      "recentPhysicalAttemptCount",
+    ),
+    recentPhysicalSuccessCount: normalizeNumber(
+      row.recentPhysicalSuccessCount as NumericValue,
+      "recentPhysicalSuccessCount",
+    ),
+    stalePhysicalAttemptCount: normalizeNumber(
+      row.stalePhysicalAttemptCount as NumericValue,
+      "stalePhysicalAttemptCount",
+    ),
+    physicalAttemptsSinceLastSuccess: normalizeNumber(
+      row.physicalAttemptsSinceLastSuccess as NumericValue,
+      "physicalAttemptsSinceLastSuccess",
+    ),
+    lastPhysicalSuccessAt: parseTimestamp(
+      row.lastPhysicalSuccessAt as TimestampValue,
+      "lastPhysicalSuccessAt",
+    ),
     last429At: parseTimestamp(row.last429At as TimestampValue, "last429At"),
     last5xxAt: parseTimestamp(row.last5xxAt as TimestampValue, "last5xxAt"),
     providerNextAvailableAt: parseTimestamp(row.providerNextAvailableAt as TimestampValue, "providerNextAvailableAt"),
@@ -1451,6 +1476,7 @@ export async function listSyncMonitorStreamRows(
     pageIds?: number[];
     pageLabel?: string;
     windowStart?: Date;
+    now?: Date;
     streams?: SyncStream[];
   },
 ) {
@@ -1470,6 +1496,8 @@ export async function listSyncMonitorStreamRows(
   }
 
   const windowStart = input?.windowStart ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const now = input?.now ?? new Date();
+  const stalePhysicalAttemptBefore = new Date(now.getTime() - 2 * 60 * 1000);
   const requestedStreams = input?.streams ?? SYNC_CONTROL_STREAMS;
   const requestedStreamsSql = streamArraySql(requestedStreams);
   const fanslyStreamsSql = streamArraySql(
@@ -1762,6 +1790,60 @@ export async function listSyncMonitorStreamRows(
         and a.stream = any(${requestedStreamsSql})
       group by a.page_id, a.stream
     ),
+    attempts_with_last_success as (
+      select a.page_id as "pageId",
+             a.stream as "stream",
+             a.state as "state",
+             a.started_at as "startedAt",
+             max(a.started_at) filter (where a.state = 'success') over (
+               partition by a.page_id, a.stream
+             ) as "lastPhysicalSuccessAt"
+      from ${syncHttpAttempts} a
+      inner join visible_pages vp on vp."pageId" = a.page_id
+      where a.stream = any(${requestedStreamsSql})
+    ),
+    physical_attempt_health as (
+      select attempts."pageId" as "pageId",
+             attempts."stream" as "stream",
+             count(*) filter (
+               where attempts."startedAt" >= ${windowStart}
+                 and (
+                   attempts."state" in ('success', 'retry', 'failed')
+                   or (
+                     attempts."state" = 'started'
+                     and attempts."startedAt" <= ${stalePhysicalAttemptBefore}
+                   )
+                 )
+             )::int as "recentPhysicalAttemptCount",
+             count(*) filter (
+               where attempts."startedAt" >= ${windowStart}
+                 and attempts."state" = 'success'
+             )::int as "recentPhysicalSuccessCount",
+             count(*) filter (
+               where attempts."state" = 'started'
+                 and attempts."startedAt" <= ${stalePhysicalAttemptBefore}
+                 and (
+                   attempts."lastPhysicalSuccessAt" is null
+                   or attempts."startedAt" > attempts."lastPhysicalSuccessAt"
+                 )
+             )::int as "stalePhysicalAttemptCount",
+             count(*) filter (
+               where (
+                 attempts."state" in ('retry', 'failed')
+                 or (
+                   attempts."state" = 'started'
+                   and attempts."startedAt" <= ${stalePhysicalAttemptBefore}
+                 )
+               )
+                 and (
+                   attempts."lastPhysicalSuccessAt" is null
+                   or attempts."startedAt" > attempts."lastPhysicalSuccessAt"
+                 )
+             )::int as "physicalAttemptsSinceLastSuccess",
+             max(attempts."lastPhysicalSuccessAt") as "lastPhysicalSuccessAt"
+      from attempts_with_last_success attempts
+      group by attempts."pageId", attempts."stream"
+    ),
     provider_rate_limits as (
       select rl.provider as "platform",
              rl.egress_key as "egressKey",
@@ -1839,6 +1921,11 @@ export async function listSyncMonitorStreamRows(
            coalesce(rac."recent5xxCount", 0)::int as "recent5xxCount",
            coalesce(rac."recentFailedAttemptCount", 0)::int as "recentFailedAttemptCount",
            coalesce(rac."recentRetryCount", 0)::int as "recentRetryCount",
+           coalesce(pah."recentPhysicalAttemptCount", 0)::int as "recentPhysicalAttemptCount",
+           coalesce(pah."recentPhysicalSuccessCount", 0)::int as "recentPhysicalSuccessCount",
+           coalesce(pah."stalePhysicalAttemptCount", 0)::int as "stalePhysicalAttemptCount",
+           coalesce(pah."physicalAttemptsSinceLastSuccess", 0)::int as "physicalAttemptsSinceLastSuccess",
+           pah."lastPhysicalSuccessAt" as "lastPhysicalSuccessAt",
            rac."last429At" as "last429At",
            rac."last5xxAt" as "last5xxAt",
            prl."providerNextAvailableAt" as "providerNextAvailableAt",
@@ -1862,6 +1949,9 @@ export async function listSyncMonitorStreamRows(
     left join recent_attempt_counts rac
       on rac."pageId" = ps."pageId"
      and rac."stream" = ps."stream"
+    left join physical_attempt_health pah
+      on pah."pageId" = ps."pageId"
+     and pah."stream" = ps."stream"
     left join provider_rate_limits prl
       on prl."platform" = ps."platform"
      and prl."egressKey" = ps."egressKey"

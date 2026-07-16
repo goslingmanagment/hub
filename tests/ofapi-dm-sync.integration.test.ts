@@ -170,10 +170,16 @@ async function seedMappedPage(label = "lora-of") {
     slug: `model-${label}`,
     name: `Model ${label}`,
   });
+  if (!model) {
+    throw new Error(`model ${label} was not created`);
+  }
   const page = await createOnlyFansPage(appContext.db, {
     modelId: model.id,
     label,
   });
+  if (!page) {
+    throw new Error(`page ${label} was not created`);
+  }
   await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId: OFAPI_ACCOUNT });
   await ensurePageSyncStates(appContext.db, { pageId: page.id });
   return page;
@@ -187,6 +193,9 @@ async function buildChunkInput(page: { id: number }, stream: "dm_conversations" 
     stream,
     trigger: "manual",
   });
+  if (!run) {
+    throw new Error(`sync run for page ${page.id} was not created`);
+  }
   const stored = await findPageById(appContext.db, page.id);
   if (!stored) {
     throw new Error(`page ${page.id} missing`);
@@ -250,7 +259,7 @@ beforeEach(async (context) => {
 });
 
 describe("OFAPI DM conversations sync", () => {
-  it("bootstraps the full chats list, seeds conversations, and requests a dm_messages follow-up", async (context) => {
+  it("bootstraps the full chats list without self-seeding the retired history crawler", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -304,12 +313,13 @@ describe("OFAPI DM conversations sync", () => {
     expect(state.mode).toBe("ofapi");
     expect(state.bootstrapCompletedAt).toBeTruthy();
 
-    // Pending-backfill conversations trigger the dm_messages follow-up request.
-    const [messagesState] = await listPageSyncStates(appContext.db, {
+    // Head evidence never creates paid history work by itself. Only durable
+    // OF mirror intentions may do that after S1.
+    const messagesStates = await listPageSyncStates(appContext.db, {
       pageId: page.id,
       streams: ["dm_messages"],
     });
-    expect(messagesState!.requestSeq).toBeGreaterThan(0);
+    expect(messagesStates).toEqual([]);
 
     // Credits were recorded from _meta on both requests.
     const credit = await getOfapiCreditState(appContext.db);
@@ -806,7 +816,7 @@ describe("OFAPI DM messages sync", () => {
 });
 
 describe("OFAPI DM sync gating + admin controls", () => {
-  it("does not force-pause DM streams for OFAPI-mapped pages, and admin block controls work", async (context) => {
+  it("keeps List Chats available while every legacy history control stays retired", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -821,7 +831,7 @@ describe("OFAPI DM sync gating + admin controls", () => {
     const offContext = { ...createTestAppContext(testDb!, { ofapiDmSyncEnabled: false }), ofapi: appContext.ofapi };
     expect(await pauseDisabledOnlyFansDmPollingForPage(offContext, page.id)).toBe(true);
 
-    // Admin block controls target the OnlyFans DM streams (D3: no new plumbing).
+    // Live List Chats remains controllable.
     const boss = { send: vi.fn(async () => null) };
     const resumed = await resumeSyncBlock(appContext, boss as never, {
       pageLabel: page.label,
@@ -830,22 +840,26 @@ describe("OFAPI DM sync gating + admin controls", () => {
     expect(resumed.accepted).toBe(true);
     expect(resumed.requests.map((request) => request.stream)).toEqual(["dm_conversations"]);
 
-    const triggered = await triggerSyncBlock(appContext, boss as never, {
+    // History actions fail before writes/wakeups and the state row stays a
+    // durable retired tombstone.
+    await expect(triggerSyncBlock(appContext, boss as never, {
       pageLabel: page.label,
       block: "messages_history",
-    });
-    expect(triggered.accepted).toBe(true);
-    expect(triggered.requests.map((request) => request.stream)).toEqual(["dm_messages"]);
+    })).rejects.toThrow(/permanently retired/i);
+    await expect(resumeSyncBlock(appContext, boss as never, {
+      pageLabel: page.label,
+      block: "messages_history",
+    })).rejects.toThrow(/permanently retired/i);
+    await expect(pauseSyncBlock(appContext, {
+      pageLabel: page.label,
+      block: "messages_history",
+    })).rejects.toThrow(/permanently retired/i);
+    expect(boss.send).toHaveBeenCalledTimes(1);
 
-    const paused = await pauseSyncBlock(appContext, {
-      pageLabel: page.label,
-      block: "messages_history",
-    });
-    expect(paused.accepted).toBe(true);
-    const [messagesState] = await listPageSyncStates(appContext.db, {
+    const messagesStates = await listPageSyncStates(appContext.db, {
       pageId: page.id,
       streams: ["dm_messages"],
     });
-    expect(messagesState!.status).toBe("paused");
+    expect(messagesStates).toEqual([]);
   });
 });

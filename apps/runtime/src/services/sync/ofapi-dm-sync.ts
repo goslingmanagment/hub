@@ -444,30 +444,6 @@ export function parseOfapiRestMessage(
   };
 }
 
-// Local copy of executor-handlers' followup predicate (kept duplicated so this
-// module never imports executor-handlers — that would be an import cycle).
-function needsDmMessagesFollowup(conversation: {
-  fanId: number | null;
-  isVisible: boolean;
-  lastMessageId: string | null;
-  newestStoredMessageId: string | null;
-  lastMessageAt: Date | null;
-  lastMessageSyncAt: Date | null;
-  messageCoverageStatus: MessageCoverageStatus;
-}) {
-  if (!conversation.isVisible || conversation.fanId === null) {
-    return false;
-  }
-  if (conversation.messageCoverageStatus === "pending_backfill") {
-    return true;
-  }
-  if (conversation.lastMessageId === conversation.newestStoredMessageId) {
-    return false;
-  }
-  return conversation.lastMessageSyncAt === null ||
-    (conversation.lastMessageAt !== null && conversation.lastMessageSyncAt < conversation.lastMessageAt);
-}
-
 function resolveOfapiCoverageStatus(input: {
   currentMode: "backfill" | "incremental";
   existingStatus: MessageCoverageStatus;
@@ -559,7 +535,6 @@ export async function executeOfapiDmConversationsChunk(
   }
 
   let processedConversations = 0;
-  let followupNeeded = false;
   let pagesFetched = 0;
 
   const processChatsPage = async (offset: number, pageIndex: number) => {
@@ -700,9 +675,6 @@ export async function executeOfapiDmConversationsChunk(
         headForwardOnly: true,
       });
       processedConversations += 1;
-      if (upserted && needsDmMessagesFollowup(upserted)) {
-        followupNeeded = true;
-      }
     }
   };
 
@@ -817,15 +789,6 @@ export async function executeOfapiDmConversationsChunk(
         },
       };
     }
-  }
-
-  if (followupNeeded) {
-    await requestPageSync(app.db, {
-      pageId: input.pageContext.page.id,
-      streams: ["dm_messages"],
-      source: "scheduled",
-      ...pageSyncDependencyInput(app),
-    });
   }
 
   return result;

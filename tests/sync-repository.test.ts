@@ -492,6 +492,26 @@ describe("sync repository timestamp normalization", () => {
     expect(sqlText).toContain('and prl."egressKey" = ps."egressKey"');
   });
 
+  it("derives physical request health from attempts instead of logical chunks", async () => {
+    const execute = vi.fn().mockResolvedValue({ rows: [] });
+    const db = { execute } as never;
+
+    await listSyncMonitorStreamRows(db, {
+      pageIds: [55],
+      windowStart: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    const sqlText = extractSqlText(execute.mock.calls[0]?.[0]);
+    expect(sqlText).toContain("attempts_with_last_success as (");
+    expect(sqlText).toContain("physical_attempt_health as (");
+    expect(sqlText).toContain('as "recentPhysicalAttemptCount"');
+    expect(sqlText).toContain('as "recentPhysicalSuccessCount"');
+    expect(sqlText).toContain('as "stalePhysicalAttemptCount"');
+    expect(sqlText).toContain('as "physicalAttemptsSinceLastSuccess"');
+    expect(sqlText).toContain("attempts.\"state\" in ('retry', 'failed')");
+    expect(sqlText).toContain("attempts.\"state\" = 'started'");
+  });
+
   it("sorts rate-limit locks deterministically before taking row locks", async () => {
     const lockedScopes: Array<[unknown, unknown, unknown]> = [];
     const execute = vi.fn().mockImplementation(async (query) => {

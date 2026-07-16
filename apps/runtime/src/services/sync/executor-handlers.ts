@@ -114,7 +114,6 @@ import {
 } from "./onlyfans-dm-polling.ts";
 import {
   executeOfapiDmConversationsChunk,
-  executeOfapiDmMessagesChunk,
   isOfapiDmSyncEligiblePage,
 } from "./ofapi-dm-sync.ts";
 import {
@@ -2912,20 +2911,19 @@ export async function fanslyDmConversationsChunk(
 }
 
 export async function onlyfansDmMessagesChunk(
-  app: AppContext,
+  _app: AppContext,
   input: ExecutorRequestContext & {
     streamState: PageSyncLease;
     syncRunId: number;
   },
 ): Promise<StreamChunkResult> {
-  if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
-    return executeOfapiDmMessagesChunk(app, input);
-  }
-  // OnlyMonster polling retired (Stage 18) — see onlyfansDmConversationsChunk.
+  // OF mirror S0: this handler is retained only as a rollback-compatible code
+  // symbol. The legacy per-chat crawler must never issue another vendor call;
+  // durable capture jobs use the separate intent-driven ofapi_capture stream.
   return {
     satisfied: true,
     yieldReason: null,
-    stats: { skipped: "onlyfans_dm_requires_ofapi_mapping" },
+    stats: { skipped: "legacy_ofapi_dm_messages_retired" },
   } satisfies StreamChunkResult;
 }
 

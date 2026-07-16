@@ -73,6 +73,19 @@ function BlockDetailCard({
     : block.state === "failed"
     ? "border-danger/20 bg-danger/[0.04] text-danger"
     : "border-warning/25 bg-warning/10 text-warning-dark";
+  const physicalAttemptCount24h = typeof block.metrics.physicalAttemptCount24h === "number"
+    ? block.metrics.physicalAttemptCount24h
+    : 0;
+  const physicalSuccessCount24h = typeof block.metrics.physicalSuccessCount24h === "number"
+    ? block.metrics.physicalSuccessCount24h
+    : 0;
+  const maxPhysicalAttemptsSinceLastSuccess =
+    typeof block.metrics.maxPhysicalAttemptsSinceLastSuccess === "number"
+      ? block.metrics.maxPhysicalAttemptsSinceLastSuccess
+      : 0;
+  const stalePhysicalAttemptCount = typeof block.metrics.stalePhysicalAttemptCount === "number"
+    ? block.metrics.stalePhysicalAttemptCount
+    : 0;
 
   return (
     <div className="rounded-xl border border-border bg-card px-5 py-4">
@@ -151,6 +164,29 @@ function BlockDetailCard({
 
       {/* Timing */}
       <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
+        {physicalAttemptCount24h > 0 && (
+          <>
+            <span className="text-text-muted">Sync HTTP attempts (24h)</span>
+            <span className="text-text-secondary">
+              {physicalSuccessCount24h}/{physicalAttemptCount24h} succeeded (
+              {Math.round((physicalSuccessCount24h / physicalAttemptCount24h) * 100)}%)
+            </span>
+          </>
+        )}
+        {stalePhysicalAttemptCount > 0 && (
+          <>
+            <span className="text-text-muted">Stuck sync attempts</span>
+            <span className="text-danger font-medium">{stalePhysicalAttemptCount}</span>
+          </>
+        )}
+        {maxPhysicalAttemptsSinceLastSuccess > 0 && (
+          <>
+            <span className="text-text-muted">Attempts without success</span>
+            <span className="text-warning-dark font-medium">
+              {maxPhysicalAttemptsSinceLastSuccess}
+            </span>
+          </>
+        )}
         {block.succeededAt && (
           <>
             <span className="text-text-muted">Last success</span>

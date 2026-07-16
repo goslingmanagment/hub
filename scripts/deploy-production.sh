@@ -63,6 +63,9 @@ fail() {
   if [[ "${STACK_RECREATED:-0}" == "1" ]]; then
     rollback_remote_stack
     dump_remote_diagnostics
+  elif [[ "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]]; then
+    restore_quiesced_sync_services \
+      || log "Unable to restart quiesced sync services; the API remains online and the DB fence remains active"
   fi
   printf '[deploy] error: %s\n' "$*" >&2
   exit 1
@@ -244,6 +247,7 @@ if [[ -n "$IDENTITY_FILE" ]]; then
 fi
 
 STACK_RECREATED=0
+LEGACY_SYNC_QUIESCED=0
 APP_DEPENDENCY_CHECKSUM=""
 APP_SOURCE_REVISION=""
 DEPLOY_RUN_ID=""
@@ -278,6 +282,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0016_canonical_proxy_egress_key_function.sql"
   "0017_reapply_egress_rate_limit_scope_key_repair.sql"
   "0018_notification_incident_recovery_watermarks.sql"
+  "0097_retire_onlyfans_legacy_dm_messages.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
@@ -394,6 +399,11 @@ release_remote_deploy_lock() {
 
 cleanup_deploy() {
   local exit_status=$?
+
+  if [[ "$exit_status" != "0" && "${STACK_RECREATED:-0}" != "1" && "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]]; then
+    restore_quiesced_sync_services \
+      || log "Unable to restart quiesced sync services during deploy cleanup"
+  fi
 
   if [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]]; then
     release_remote_deploy_lock || log "Unable to release remote deploy lock ${REMOTE_DEPLOY_LOCK_DIR}"
@@ -587,7 +597,7 @@ schema_migration_delta_allows_rollback() {
 forbid_rollback_for_pending_pre_recreate_migrations() {
   local migration_path
   local migration
-  local through="0096_observations_harvest_lookup_concurrently.sql"
+  local through="0097_retire_onlyfans_legacy_dm_messages.sql"
 
   for migration_path in "${ROOT_DIR}"/packages/db/migrations/*.sql; do
     migration="${migration_path##*/}"
@@ -608,6 +618,50 @@ read_remote_env_value() {
   escaped_key="$(printf '%q' "$key")"
 
   run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; awk -v key=${escaped_key} 'function trim(value) { sub(/^[[:space:]]+/, \"\", value); sub(/[[:space:]]+$/, \"\", value); return value } /^[[:space:]]*(#|$)/ { next } { line = \$0; eq = index(line, \"=\"); if (eq == 0) next; name = trim(substr(line, 1, eq - 1)); if (name == key) { value = trim(substr(line, eq + 1)); quote = substr(value, 1, 1); if ((quote == \"\\\"\" || quote == sprintf(\"%c\", 39)) && substr(value, length(value), 1) == quote) value = substr(value, 2, length(value) - 2); print value; exit } }' .env.production"
+}
+
+quiesce_remote_legacy_sync_services() {
+  log "Quiescing the old scheduler and worker before installing the permanent DB fence"
+  # Set before the multi-service stop: compose can stop one service and then
+  # fail on the other, and the deploy cleanup must still restore both.
+  LEGACY_SYNC_QUIESCED=1
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} stop -t 75 scheduler worker"
+}
+
+restore_quiesced_sync_services() {
+  [[ "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]] || return 0
+  log "Restarting the quiesced scheduler and worker behind the permanent DB fence"
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} up -d scheduler worker" \
+    || return 1
+  LEGACY_SYNC_QUIESCED=0
+}
+
+verify_remote_legacy_onlyfans_dm_messages_retired() {
+  local unsafe_count
+  unsafe_count="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
+export PGPASSWORD=\"\$POSTGRES_PASSWORD\"
+psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -v ON_ERROR_STOP=1 -Atq <<'\''SQL'\''
+SELECT count(*)
+FROM pages p
+LEFT JOIN page_sync_states st
+  ON st.page_id = p.id
+ AND st.stream = '\''dm_messages'\''
+WHERE p.platform = '\''onlyfans'\''
+  AND p.status = '\''active'\''
+  AND (
+    st.page_id IS NULL
+    OR st.status <> '\''paused'\''
+    OR st.blocker_kind IS DISTINCT FROM '\''retired'\''
+    OR st.blocker_code IS DISTINCT FROM '\''legacy_ofapi_dm_messages_retired'\''
+    OR st.leased_seq IS NOT NULL
+    OR st.lease_owner IS NOT NULL
+    OR st.lease_token IS NOT NULL
+    OR st.lease_heartbeat_at IS NOT NULL
+    OR st.lease_expires_at IS NOT NULL
+  );
+SQL'")" || return 1
+
+  [[ "$unsafe_count" == "0" ]]
 }
 
 rollback_remote_stack() {
@@ -655,6 +709,12 @@ rollback_remote_stack() {
       log "The previous image may not be compatible with the migrated database; inspect diagnostics before choosing a manual rollback"
       return 0
     fi
+  fi
+
+  if ! verify_remote_legacy_onlyfans_dm_messages_retired; then
+    log "Rollback skipped; durable retirement of legacy OnlyFans dm_messages is not proven"
+    log "An old image could resurrect the paid crawler; keep the current stack stopped and inspect page_sync_states"
+    return 0
   fi
 
   log "Rolling back remote stack to ${ROLLBACK_IMAGE_TAG}"
@@ -1198,14 +1258,14 @@ if (present !== (expectedRaw === "true")) {
 NODE
 }
 
-run_pre_recreate_harvest_index_migration() {
+run_pre_recreate_safe_migrations() {
   local candidate_compose
   candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
-  log "Applying migrations through 0096 with the candidate image while the current API remains online"
+  log "Applying rollback-compatible migrations through 0097 while the current API remains online"
   # This foreground one-shot owns the migration advisory lock. Deployment
   # cannot enter recreate/rollback handling until it exits and releases it.
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps api node packages/db/dist/migrate.js --through 0096_observations_harvest_lookup_concurrently.sql" \
-    || fail "Pre-recreate migration through 0096 failed; current stack was left running"
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${candidate_compose} run --rm --no-deps api node packages/db/dist/migrate.js --through 0097_retire_onlyfans_legacy_dm_messages.sql" \
+    || fail "Pre-recreate migration through 0097 failed; current API was left running"
 }
 
 require_command docker
@@ -1251,8 +1311,12 @@ capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE" \
   || fail "Unable to capture remote schema migration state before pre-recreate migration"
 SCHEMA_BASELINE_CAPTURED=1
 log "Captured remote schema migration state for rollback safety"
+quiesce_remote_legacy_sync_services \
+  || fail "Unable to quiesce the legacy scheduler and worker"
 forbid_rollback_for_pending_pre_recreate_migrations
-run_pre_recreate_harvest_index_migration
+run_pre_recreate_safe_migrations
+verify_remote_legacy_onlyfans_dm_messages_retired \
+  || fail "Legacy OnlyFans dm_messages retirement proof failed"
 
 log "Syncing release files to ${REMOTE}:${APP_DIR}"
 tar -C "$ROOT_DIR" -cf - "${REMOTE_RELEASE_FILES[@]}" | ssh "${SSH_ARGS[@]}" "$REMOTE" \
@@ -1281,6 +1345,7 @@ if ! run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COM
   ROLLBACK_COMPOSE_RECREATE_FAILED=1
   fail "docker compose failed while recreating the production stack"
 fi
+LEGACY_SYNC_QUIESCED=0
 
 log "Waiting for ${VERIFY_URL%/}/api/v1/health"
 wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VERIFY_URL%/}/api/v1/health"

@@ -3,6 +3,7 @@ import {
   ensurePageSyncStates,
   listRunnablePageSync,
   markPageSyncEnqueued,
+  retireLegacyOnlyFansDmMessages,
   scheduleDuePageSync,
 } from "@agency_hub_core/db";
 import type { PgBoss } from "pg-boss";
@@ -39,11 +40,16 @@ export async function runSyncPlannerCycle(
 
   const dependencyInput = pageSyncDependencyInput(app);
   await ensurePageSyncStates(app.db, { now, ...dependencyInput });
+  const retiredOnlyFansDmRows = await retireLegacyOnlyFansDmMessages(app.db, now);
+  if (retiredOnlyFansDmRows > 0) {
+    app.logger.warn({
+      retiredOnlyFansDmRows,
+    }, "Permanently parked legacy OnlyFans dm_messages rows");
+  }
   const pausedOnlyFansDmPages = await pauseDisabledOnlyFansDmPollingForAllPages(app, now);
   if (pausedOnlyFansDmPages > 0) {
-    app.logger.warn({
-      pausedOnlyFansDmPages,
-    }, "Paused OnlyFans DM polling because ONLYFANS_DM_POLLING_ENABLED is false");
+    app.logger.warn({ pausedOnlyFansDmPages },
+      "Paused legacy OnlyFans dm_conversations polling because ONLYFANS_DM_POLLING_ENABLED is false");
   }
   const pausedOnlyFansAudiencePages = await pauseDisabledOnlyFansAudienceForAllPages(app, now);
   if (pausedOnlyFansAudiencePages > 0) {

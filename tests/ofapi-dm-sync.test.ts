@@ -78,13 +78,13 @@ describe("filterOnlyFansDmPollingStreams", () => {
     )).toEqual(["light"]);
   });
 
-  it("keeps DM streams for OFAPI-mapped OnlyFans pages when the sync flag is on", () => {
+  it("keeps List Chats but permanently removes the legacy history stream for mapped pages", () => {
     expect(filterOnlyFansDmPollingStreams(
       "onlyfans",
       [...streams],
       { onlyFansDmPollingEnabled: false, ofapiDmSyncEnabled: true },
       { ofapiAccountId: "acct_1" },
-    )).toEqual([...streams]);
+    )).toEqual(["light", "dm_conversations"]);
 
     expect(filterOnlyFansDmPollingStreams(
       "onlyfans",

@@ -92,6 +92,15 @@ export interface SyncMonitorRecentErrors {
   last5xxAt: string | null;
 }
 
+export interface SyncMonitorPhysicalHealth {
+  state: "healthy" | "failed";
+  attempts24h: number;
+  successes24h: number;
+  attemptsSinceLastSuccess: number;
+  staleAttempts: number;
+  lastSuccessAt: string | null;
+}
+
 export interface SyncMonitorLastCompletion {
   runId: number;
   trigger: string;
@@ -134,6 +143,7 @@ export interface SyncMonitorStreamItem {
   deepBackfill: SyncMonitorDeepBackfill | null;
   recentRuns: SyncMonitorRecentRuns;
   recentErrors: SyncMonitorRecentErrors;
+  physicalHealth: SyncMonitorPhysicalHealth;
   rateHealth: SyncMonitorRateHealth;
   activeRun: SyncMonitorActiveRun | null;
   lastCompletion: SyncMonitorLastCompletion | null;
@@ -680,7 +690,9 @@ function streamItemFor(
   },
 ): SyncMonitorStreamItem {
   const status = statusFor(row, now);
-  const stalled = isStalled(row, now);
+  const physicalFailed = row.stalePhysicalAttemptCount > 0 ||
+    row.physicalAttemptsSinceLastSuccess >= 3;
+  const stalled = isStalled(row, now) || physicalFailed;
   const pending = isPending(row);
   const retryAt = isRetrying(row, now) ? row.retryAt : null;
   const deepBackfill = buildDmMessagesDeepBackfill(
@@ -699,6 +711,14 @@ function streamItemFor(
     deepBackfill,
     recentRuns: recentRunsFor(row),
     recentErrors: recentErrorsFor(row),
+    physicalHealth: {
+      state: physicalFailed ? "failed" : "healthy",
+      attempts24h: row.recentPhysicalAttemptCount,
+      successes24h: row.recentPhysicalSuccessCount,
+      attemptsSinceLastSuccess: row.physicalAttemptsSinceLastSuccess,
+      staleAttempts: row.stalePhysicalAttemptCount,
+      lastSuccessAt: iso(row.lastPhysicalSuccessAt),
+    },
     rateHealth: rateHealthFor({
       total429s: row.recent429Count,
       last429At: row.last429At,
@@ -708,8 +728,17 @@ function streamItemFor(
     lastCompletion: lastCompletionFor(row),
     succeededAt: iso(latestSuccessTimestamp(row)),
     failedAt: iso(failedTimestamp(row)),
-    lastErrorSummary: row.lastErrorSummary ?? row.lastCompletedErrorSummary,
-    consecutiveFailures: row.consecutiveFailures,
+    lastErrorSummary: row.lastErrorSummary ?? row.lastCompletedErrorSummary ?? (
+      physicalFailed
+        ? row.stalePhysicalAttemptCount > 0
+          ? `${row.stalePhysicalAttemptCount} sync HTTP attempt(s) are stuck`
+          : `${row.physicalAttemptsSinceLastSuccess} sync HTTP attempts completed without a success`
+        : null
+    ),
+    consecutiveFailures: Math.max(
+      row.consecutiveFailures,
+      row.physicalAttemptsSinceLastSuccess,
+    ),
   } satisfies Omit<SyncMonitorStreamItem, "syncUx">;
   const syncUxInput = {
     ...item,
@@ -743,6 +772,7 @@ export async function getPageStreamSyncUxByStream(
     pageIds: [input.pageId],
     streams: input.streams,
     windowStart,
+    now,
   });
 
   return new Map(
@@ -833,6 +863,7 @@ export async function getSyncMonitorSnapshot(
       pageIds: input?.pageIds,
       pageLabel: input?.pageLabel,
       windowStart,
+      now,
       streams: [...MONITORED_SYNC_STREAMS],
     }),
     listSyncMonitorRecentEvents(app.db, {

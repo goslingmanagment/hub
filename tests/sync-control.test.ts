@@ -17,7 +17,7 @@ describe("resolveStreamsForScope", () => {
     ]);
   });
 
-  it("supports message sync for both Fansly and OnlyFans DM streams", () => {
+  it("keeps Fansly history while permanently excluding legacy OnlyFans history", () => {
     expect(resolveStreamsForScope("fansly", "messages")).toEqual([
       "dm_conversations",
       "dm_messages",
@@ -31,7 +31,6 @@ describe("resolveStreamsForScope", () => {
     ]);
     expect(resolveStreamsForScope("onlyfans", "messages")).toEqual([
       "dm_conversations",
-      "dm_messages",
     ]);
   });
 
@@ -60,7 +59,6 @@ describe("resolveStreamsForScope", () => {
       }),
     ).toEqual([
       "dm_conversations",
-      "dm_messages",
     ]);
     expect(
       filterStreamsForSyncConfig("fansly", resolveStreamsForScope("fansly", "messages"), {

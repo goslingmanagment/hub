@@ -135,6 +135,11 @@ function buildMonitorRow(overrides: Record<string, unknown> = {}) {
     recent5xxCount: 0,
     recentFailedAttemptCount: 0,
     recentRetryCount: 0,
+    recentPhysicalAttemptCount: 0,
+    recentPhysicalSuccessCount: 0,
+    stalePhysicalAttemptCount: 0,
+    physicalAttemptsSinceLastSuccess: 0,
+    lastPhysicalSuccessAt: null,
     last429At: null,
     last5xxAt: null,
     providerNextAvailableAt: null,
@@ -199,6 +204,76 @@ describe("sync status service", () => {
       failedRuns: 4,
       http429s: 2,
       http5xxs: 4,
+    });
+  });
+
+  it("reports physical request health independently from logical run outcomes", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "light",
+        recentPhysicalAttemptCount: 10,
+        recentPhysicalSuccessCount: 3,
+        physicalAttemptsSinceLastSuccess: 7,
+        lastPhysicalSuccessAt: new Date("2026-03-24T10:00:00.000Z"),
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.connection.metrics).toMatchObject({
+      physicalAttemptCount24h: 10,
+      physicalSuccessCount24h: 3,
+      physicalSuccessRate24h: 0.3,
+      maxPhysicalAttemptsSinceLastSuccess: 7,
+      stalePhysicalAttemptCount: 0,
+      physicalAttemptsSinceLastSuccessByStream: { light: 7 },
+    });
+    expect(snapshot.pages[0]?.blocks.connection).toMatchObject({
+      state: "failed",
+      needsAttention: true,
+      statusReason: {
+        code: "physical_attempts_without_success",
+      },
+    });
+  });
+
+  it("marks a lane unhealthy when a physical attempt is stuck past its deadline", async () => {
+    dbMocks.ensurePageSyncStates.mockResolvedValue([]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "light",
+        recentPhysicalAttemptCount: 1,
+        stalePhysicalAttemptCount: 1,
+        physicalAttemptsSinceLastSuccess: 1,
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.connection).toMatchObject({
+      state: "failed",
+      needsAttention: true,
+      statusReason: {
+        code: "physical_attempt_stuck",
+      },
+      metrics: {
+        stalePhysicalAttemptCount: 1,
+      },
     });
   });
 
@@ -270,8 +345,8 @@ describe("sync status service", () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([{
       id: 9,
-      label: "lora-vip-of",
-      platform: "onlyfans",
+      label: "lora-vip-fansly",
+      platform: "fansly",
       username: "lora_vip",
       displayName: "Lora VIP",
       followerCount: 9,
@@ -309,11 +384,11 @@ describe("sync status service", () => {
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-of", stream: "light" }),
-      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-of", stream: "dm_conversations", cadenceSeconds: 1800 }),
+      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-fansly", stream: "light" }),
+      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-fansly", stream: "dm_conversations", cadenceSeconds: 1800 }),
       buildMonitorRow({
         pageId: 9,
-        pageLabel: "lora-vip-of",
+        pageLabel: "lora-vip-fansly",
         stream: "dm_messages",
         cadenceSeconds: 86400,
         status: "running",

@@ -149,6 +149,24 @@ const BLOCK_TASKS: Record<SyncBlockKey, readonly SyncStream[]> = {
   messages_history: ["dm_messages"],
 };
 
+const ONLYFANS_HISTORY_RETIRED_MESSAGE =
+  "OnlyFans legacy message-history crawler is permanently retired; durable OF mirror jobs own history acquisition";
+const PERMANENTLY_RETIRED_SYNC_BLOCKS = new Set<`${Platform}:${SyncBlockKey}`>([
+  "onlyfans:messages_history",
+]);
+
+function assertLegacyOnlyFansHistoryNotRequested(
+  platform: Platform,
+  block: SyncBlockKey,
+) {
+  // This is an explicit product-policy guard, not a consequence of the
+  // current adapter capability set. Future mirror streams must not silently
+  // reactivate these legacy buttons by changing registry metadata.
+  if (PERMANENTLY_RETIRED_SYNC_BLOCKS.has(`${platform}:${block}`)) {
+    throw new ConflictError(ONLYFANS_HISTORY_RETIRED_MESSAGE);
+  }
+}
+
 function blockTasksForPlatform(platform: Platform, block: SyncBlockKey) {
   const supportedStreams = new Set(appPlatformRegistry.get(platform).capabilities.streams);
   return BLOCK_TASKS[block].filter((stream) => supportedStreams.has(stream));
@@ -392,6 +410,7 @@ export async function triggerSyncBlock(
 ) {
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
+  assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
   const dependencyInput = pageSyncDependencyInput(app);
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {
@@ -440,6 +459,7 @@ export async function pauseSyncBlock(
 ) {
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
+  assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
   const dependencyInput = pageSyncDependencyInput(app);
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {
@@ -476,6 +496,7 @@ export async function resumeSyncBlock(
 ) {
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
+  assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
   const dependencyInput = pageSyncDependencyInput(app);
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {

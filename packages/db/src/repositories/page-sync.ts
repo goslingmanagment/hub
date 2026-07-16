@@ -597,8 +597,100 @@ export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): Sync
       "top_spenders",
       "subscribers",
       "dm_conversations",
-      "dm_messages",
     ];
+}
+
+export const ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND = "retired";
+export const ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_CODE =
+  "legacy_ofapi_dm_messages_retired";
+export const ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_MESSAGE =
+  "Legacy OnlyFans dm_messages crawler is permanently retired; history acquisition is owned by durable OF mirror jobs";
+
+/**
+ * Permanently parks any pre-existing OnlyFans dm_messages state row.
+ *
+ * New OnlyFans pages no longer receive this stream through
+ * getSyncStreamsForPlatform(), but old rows remain durable. This repair is
+ * deliberately idempotent and clears every lease field so neither the normal
+ * scheduler nor an expired-lease reclaimer can resurrect the retired lane.
+ */
+export async function retireLegacyOnlyFansDmMessages(
+  db: Database,
+  now = new Date(),
+) {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const inserted = await database.execute(sql`
+      insert into ${pageSyncStates} (
+        page_id,
+        stream,
+        status,
+        cadence_seconds,
+        slot_offset_seconds,
+        blocker_kind,
+        blocker_code,
+        blocker_message,
+        blocked_at,
+        created_at,
+        updated_at
+      )
+      select p.id,
+             'dm_messages',
+             'paused',
+             ${SYNC_STREAM_POLICY.dm_messages.cadenceSeconds},
+             mod(
+               (p.id::bigint * 2654435761::bigint) +
+                 (${SYNC_STREAM_POLICY.dm_messages.streamIndex}::bigint * 2246822519::bigint),
+               ${SYNC_STREAM_POLICY.dm_messages.cadenceSeconds}::bigint
+             )::int,
+             ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND},
+             ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_CODE},
+             ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_MESSAGE},
+             ${now},
+             ${now},
+             ${now}
+      from ${pages} p
+      where p.platform = 'onlyfans'
+        and p.status = 'active'
+      on conflict (page_id, stream) do nothing
+    `);
+
+    const updated = await database.execute(sql`
+      update ${pageSyncStates} st
+      set status = 'paused',
+          blocker_kind = ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND},
+          blocker_code = ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_CODE},
+          blocker_message = ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_MESSAGE},
+          blocked_at = coalesce(st.blocked_at, ${now}),
+          leased_seq = null,
+          lease_owner = null,
+          lease_token = null,
+          lease_heartbeat_at = null,
+          lease_expires_at = null,
+          retry_kind = null,
+          retry_at = null,
+          updated_at = ${now}
+      from ${pages} p
+      where p.id = st.page_id
+        and p.platform = 'onlyfans'
+        and st.stream = 'dm_messages'
+        and (
+          st.status <> 'paused'
+          or st.blocker_kind is distinct from ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND}
+          or st.blocker_code is distinct from ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_CODE}
+          or st.blocker_message is distinct from ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_MESSAGE}
+          or st.leased_seq is not null
+          or st.lease_owner is not null
+          or st.lease_token is not null
+          or st.lease_heartbeat_at is not null
+          or st.lease_expires_at is not null
+          or st.retry_kind is not null
+          or st.retry_at is not null
+        )
+    `);
+
+    return (inserted.rowCount ?? 0) + (updated.rowCount ?? 0);
+  });
 }
 
 export function resolvePageSyncPriority(stream: SyncStream, source: SyncRequestSource) {
@@ -1341,6 +1433,7 @@ export async function listRunnablePageSync(
       where st.request_seq > st.applied_seq
         and st.status <> 'paused'
         and st.blocker_kind is null
+        and not (p.platform = 'onlyfans' and st.stream = 'dm_messages')
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
     )
@@ -1406,6 +1499,13 @@ export async function acquirePageSyncLease(
         and st.request_seq > st.applied_seq
         and st.status <> 'paused'
         and st.blocker_kind is null
+        and not exists (
+          select 1
+          from ${pages} retired_page
+          where retired_page.id = st.page_id
+            and retired_page.platform = 'onlyfans'
+            and st.stream = 'dm_messages'
+        )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
         and exists (
@@ -1433,6 +1533,13 @@ export async function acquirePageSyncLease(
         and st.request_seq = candidate."requestSeq"
         and st.status <> 'paused'
         and st.blocker_kind is null
+        and not exists (
+          select 1
+          from ${pages} retired_page
+          where retired_page.id = st.page_id
+            and retired_page.platform = 'onlyfans'
+            and st.stream = 'dm_messages'
+        )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
       returning st.page_id as "pageId",
@@ -2028,6 +2135,7 @@ export async function resumePageSync(
         where page_id = ${input.pageId}
           and stream = ${stream}
           and status = 'paused'
+          and blocker_kind is distinct from ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND}
       `);
     }
   });
@@ -2056,10 +2164,10 @@ export async function resetPageSync(
         set leased_seq = null,
             retry_kind = null,
             retry_at = null,
-            blocker_kind = case when blocker_kind = 'auth' then blocker_kind else null end,
-            blocker_code = case when blocker_kind = 'auth' then blocker_code else null end,
-            blocker_message = case when blocker_kind = 'auth' then blocker_message else null end,
-            blocked_at = case when blocker_kind = 'auth' then blocked_at else null end,
+            blocker_kind = case when blocker_kind in ('auth', ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND}) then blocker_kind else null end,
+            blocker_code = case when blocker_kind in ('auth', ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND}) then blocker_code else null end,
+            blocker_message = case when blocker_kind in ('auth', ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND}) then blocker_message else null end,
+            blocked_at = case when blocker_kind in ('auth', ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND}) then blocked_at else null end,
             phase = null,
             progress = '{}'::jsonb,
             lease_owner = null,
@@ -2071,6 +2179,7 @@ export async function resetPageSync(
             last_error_summary = null,
             status = case
                        when status = 'paused' then 'paused'::page_sync_status
+                       when blocker_kind = ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND} then 'paused'::page_sync_status
                        when blocker_kind = 'auth' then 'blocked'::page_sync_status
                        else 'idle'::page_sync_status
                      end,

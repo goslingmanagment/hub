@@ -103,6 +103,21 @@ describe("database migration invariants", () => {
     expect(migration).not.toContain('"fanout_seq" bigint PRIMARY KEY');
   });
 
+  it("keeps the retired OnlyFans history lane fenced across application rollbacks", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0097_retire_onlyfans_legacy_dm_messages.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain("guard_retired_onlyfans_dm_messages");
+    expect(migration).toContain("before insert or update on page_sync_states");
+    expect(migration).toContain("p.platform = 'onlyfans'");
+    expect(migration).toContain("new.status := 'paused'::page_sync_status");
+    expect(migration).toContain("new.blocker_kind := 'retired'");
+    expect(migration).toContain("new.lease_token := null");
+    expect(migration).toContain("on conflict (page_id, stream) do nothing");
+  });
+
   it("builds the harvest observation lookup concurrently and idempotently", async () => {
     const base = await readFile(
       "packages/db/migrations/0090_device_token_harvest_capability.sql",

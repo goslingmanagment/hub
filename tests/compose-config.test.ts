@@ -247,6 +247,39 @@ describe("compose config", () => {
     expect(rollback).toContain("unable to capture current schema migration state");
   });
 
+  it("makes legacy OnlyFans DM retirement a prerequisite for deploy and rollback", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const quiesce = getShellFunction(text, "quiesce_remote_legacy_sync_services") ?? "";
+    const restore = getShellFunction(text, "restore_quiesced_sync_services") ?? "";
+    const migrate = getShellFunction(text, "run_pre_recreate_safe_migrations") ?? "";
+    const verify = getShellFunction(text, "verify_remote_legacy_onlyfans_dm_messages_retired");
+    const rollback = getShellFunction(text, "rollback_remote_stack");
+    const baselineIndex = text.indexOf('SCHEMA_BASELINE_CAPTURED=1');
+    const quiesceIndex = text.indexOf("quiesce_remote_legacy_sync_services", baselineIndex);
+    const migrationIndex = text.indexOf("run_pre_recreate_safe_migrations", quiesceIndex);
+    const verifyIndex = text.indexOf("verify_remote_legacy_onlyfans_dm_messages_retired", migrationIndex);
+    const promoteIndex = text.indexOf('log "Recreating the remote production stack"', verifyIndex);
+
+    expect(quiesce).toContain("stop -t 75 scheduler worker");
+    expect(quiesce).toContain("LEGACY_SYNC_QUIESCED=1");
+    expect(quiesce.indexOf("LEGACY_SYNC_QUIESCED=1"))
+      .toBeLessThan(quiesce.indexOf("stop -t 75 scheduler worker"));
+    expect(restore).toContain("up -d scheduler worker");
+    expect(text).toContain('LEGACY_SYNC_QUIESCED:-0');
+    expect(text).toContain("restore_quiesced_sync_services");
+    expect(migrate).toContain("--through 0097_retire_onlyfans_legacy_dm_messages.sql");
+    expect(verify).toContain("LEFT JOIN page_sync_states");
+    expect(verify).toContain("st.page_id IS NULL");
+    expect(verify).toContain('[[ "$unsafe_count" == "0" ]]');
+    expect(rollback).toContain("verify_remote_legacy_onlyfans_dm_messages_retired");
+    expect(rollback).toContain("could resurrect the paid crawler");
+    expect(text).toContain('"0097_retire_onlyfans_legacy_dm_messages.sql"');
+    expect(quiesceIndex).toBeGreaterThan(baselineIndex);
+    expect(migrationIndex).toBeGreaterThan(quiesceIndex);
+    expect(verifyIndex).toBeGreaterThan(migrationIndex);
+    expect(promoteIndex).toBeGreaterThan(verifyIndex);
+  });
+
   it("enables lifecycle-v2 only through exact first-cutover evidence and keeps it monotonic", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const evidenceVerifier = await readComposeFile("scripts/verify-desktop-lifecycle-v2-evidence.mjs");
@@ -257,7 +290,7 @@ describe("compose config", () => {
     const manifestDigestGate = getShellFunction(text, "verify_approved_lifecycle_manifest_digest");
     const inventoryGate = getShellFunction(text, "verify_candidate_lifecycle_inventory");
     const postDeployCapability = getShellFunction(text, "verify_post_deploy_lifecycle_capability");
-    const preRecreateMigration = getShellFunction(text, "run_pre_recreate_harvest_index_migration");
+    const preRecreateMigration = getShellFunction(text, "run_pre_recreate_safe_migrations");
     const forbidRollback = getShellFunction(text, "forbid_rollback_for_pending_pre_recreate_migrations");
     const rollback = getShellFunction(text, "rollback_remote_stack");
     const mainStart = text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"');
@@ -266,7 +299,7 @@ describe("compose config", () => {
     const capabilityGateIndex = text.indexOf("verify_candidate_lifecycle_capability", buildIndex);
     const schemaCaptureIndex = text.indexOf('capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"', capabilityGateIndex);
     const forbidRollbackIndex = text.indexOf("forbid_rollback_for_pending_pre_recreate_migrations", schemaCaptureIndex);
-    const preRecreateMigrationIndex = text.indexOf("run_pre_recreate_harvest_index_migration", forbidRollbackIndex);
+    const preRecreateMigrationIndex = text.indexOf("run_pre_recreate_safe_migrations", forbidRollbackIndex);
     const releaseSyncIndex = text.indexOf('log "Syncing release files', preRecreateMigrationIndex);
     const recreateIndex = text.indexOf('log "Recreating the remote production stack"', initializeIndex);
     const inventoryRecheckIndex = text.indexOf("verify_candidate_lifecycle_inventory", recreateIndex);
@@ -302,8 +335,8 @@ describe("compose config", () => {
     expect(capabilityGate).not.toContain("DEPLOY_EXTENSION_PERSONA_CAS_STATUS");
     expect(capabilityGateIndex).toBeGreaterThan(buildIndex);
     expect(preRecreateMigration).toContain("RUNTIME_IMAGE=");
-    expect(preRecreateMigration).toContain("--no-deps api node packages/db/dist/migrate.js --through 0096_observations_harvest_lookup_concurrently.sql");
-    expect(preRecreateMigration).toContain("current stack was left running");
+    expect(preRecreateMigration).toContain("--no-deps api node packages/db/dist/migrate.js --through 0097_retire_onlyfans_legacy_dm_messages.sql");
+    expect(preRecreateMigration).toContain("current API was left running");
     expect(forbidRollback).toContain("SCHEMA_BEFORE_FILE");
     expect(forbidRollback).toContain("is_rollback_compatible_migration");
     expect(forbidRollback).toContain("ROLLBACK_FORBIDDEN=1");

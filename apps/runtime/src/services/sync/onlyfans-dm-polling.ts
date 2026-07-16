@@ -11,8 +11,9 @@ import { isOfapiDmSyncEligiblePage } from "./ofapi-dm-sync.ts";
 
 export const ONLYFANS_DM_POLLING_STREAMS = [
   "dm_conversations",
-  "dm_messages",
 ] as const satisfies SyncStream[];
+
+export const ONLYFANS_RETIRED_DM_STREAM = "dm_messages" as const satisfies SyncStream;
 
 export const ONLYFANS_DM_POLLING_DISABLED_MESSAGE =
   "OnlyFans DM polling is disabled by ONLYFANS_DM_POLLING_ENABLED=false";
@@ -40,14 +41,20 @@ export function filterOnlyFansDmPollingStreams(
   // streams run the OFAPI REST handlers, not the parked OnlyMonster poller.
   page?: { ofapiAccountId: string | null },
 ) {
-  if (platform !== "onlyfans" || isOnlyFansDmPollingEnabled(config)) {
+  if (platform !== "onlyfans") {
     return [...streams];
+  }
+  const withoutRetiredHistory = streams.filter(
+    (stream) => stream !== ONLYFANS_RETIRED_DM_STREAM,
+  );
+  if (isOnlyFansDmPollingEnabled(config)) {
+    return withoutRetiredHistory;
   }
   if (page && isOfapiDmSyncEligiblePage(config, { platform, ofapiAccountId: page.ofapiAccountId })) {
-    return [...streams];
+    return withoutRetiredHistory;
   }
 
-  return streams.filter((stream) => !isOnlyFansDmPollingStream(stream));
+  return withoutRetiredHistory.filter((stream) => !isOnlyFansDmPollingStream(stream));
 }
 
 async function pauseOnlyFansDmPollingForPage(

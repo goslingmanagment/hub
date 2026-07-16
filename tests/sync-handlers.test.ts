@@ -104,6 +104,7 @@ import {
   fanslySubscribersChunk,
   fanslyTopSpendersChunk,
   fanslyTransactionsChunk,
+  onlyfansDmMessagesChunk,
   onlyfansTransactionsChunk,
 } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
@@ -324,9 +325,9 @@ describe("sync executor handlers", () => {
     });
   });
 
-  it("skips OnlyFans DM stream chunks when polling is disabled", async () => {
+  it("rejects the retired history stream before registry dispatch", async () => {
     const telemetry = createTelemetry();
-    const result = await executeStreamChunk({
+    await expect(executeStreamChunk({
       db: {},
       config: {
         onlyFansDmPollingEnabled: false,
@@ -349,22 +350,30 @@ describe("sync executor handlers", () => {
       syncRunId: 910,
       telemetry: telemetry as never,
       budget: new SyncChunkBudget(),
+    } as never)).rejects.toThrow(/Unsupported executor stream "dm_messages"/);
+    expect(telemetry.addNote).not.toHaveBeenCalled();
+  });
+
+  it("keeps the retired OnlyFans history handler physically incapable of vendor I/O", async () => {
+    const listChatMessages = vi.fn(async () => {
+      throw new Error("must not run");
+    });
+    const result = await onlyfansDmMessagesChunk({
+      ofapi: { listChatMessages },
+    } as never, {
+      pageContext: {
+        platform: "onlyfans",
+        page: { id: 55, label: "onlyfans-page" },
+      },
+      streamState: { stream: "dm_messages" },
     } as never);
 
     expect(result).toEqual({
       satisfied: true,
       yieldReason: null,
-      stats: {
-        disabledByConfig: true,
-      },
+      stats: { skipped: "legacy_ofapi_dm_messages_retired" },
     });
-    expect(telemetry.addNote).toHaveBeenCalledWith(
-      "OnlyFans DM polling is disabled by ONLYFANS_DM_POLLING_ENABLED=false",
-      {
-        stream: "dm_messages",
-        pageId: 55,
-      },
-    );
+    expect(listChatMessages).not.toHaveBeenCalled();
   });
 
   it("syncs Fansly top spenders in steady state using the trailing 7 day window", async () => {

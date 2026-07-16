@@ -42,6 +42,8 @@ export const SYNC_DOMAIN_BLOCKS = [
   "messages_history",
 ] as const satisfies readonly SyncDomain[];
 
+const PHYSICAL_ATTEMPTS_WITHOUT_SUCCESS_ALERT = 3;
+
 export type SyncDomainBlockKey = typeof SYNC_DOMAIN_BLOCKS[number];
 
 export type SyncDomainBlockState =
@@ -1142,11 +1144,23 @@ function deriveDomainState(
         messagesMonitorRow.dmLaggingConversationCount === 0 &&
         deepBackfillPendingPages === 0)
     : !primaryPending;
+  const maxPhysicalAttemptsSinceLastSuccess = monitorRows.reduce(
+    (maximum, row) => Math.max(maximum, row.physicalAttemptsSinceLastSuccess),
+    0,
+  );
+  const stalePhysicalAttemptCount = monitorRows.reduce(
+    (total, row) => total + row.stalePhysicalAttemptCount,
+    0,
+  );
+  const physicalLaneUnhealthy = stalePhysicalAttemptCount > 0 ||
+    maxPhysicalAttemptsSinceLastSuccess >= PHYSICAL_ATTEMPTS_WITHOUT_SUCCESS_ALERT;
 
   let state: SyncDomainBlockState;
   if (anyPrimaryPaused) {
     state = "paused";
   } else if (anyPrimaryFailed) {
+    state = "failed";
+  } else if (physicalLaneUnhealthy) {
     state = "failed";
   } else if (anyPrimaryDelayed) {
     state = "delayed";
@@ -1227,7 +1241,7 @@ function deriveDomainState(
   const progressRole = progressStream ? taskRoleForBlock(policy, progressStream) : null;
 
   const metricsRow = monitorRows[0] ?? null;
-  const metrics = (() => {
+  const domainMetrics = (() => {
     switch (block) {
       case "connection":
         return {};
@@ -1259,18 +1273,50 @@ function deriveDomainState(
         };
     }
   })();
+  const physicalAttemptCount24h = monitorRows.reduce(
+    (total, row) => total + row.recentPhysicalAttemptCount,
+    0,
+  );
+  const physicalSuccessCount24h = monitorRows.reduce(
+    (total, row) => total + row.recentPhysicalSuccessCount,
+    0,
+  );
+  const physicalAttemptsSinceLastSuccessByStream = Object.fromEntries(
+    monitorRows.map((row) => [row.stream, row.physicalAttemptsSinceLastSuccess]),
+  );
+  const metrics = {
+    ...domainMetrics,
+    physicalAttemptCount24h,
+    physicalSuccessCount24h,
+    physicalSuccessRate24h: physicalAttemptCount24h > 0
+      ? physicalSuccessCount24h / physicalAttemptCount24h
+      : null,
+    maxPhysicalAttemptsSinceLastSuccess,
+    stalePhysicalAttemptCount,
+    physicalAttemptsSinceLastSuccessByStream,
+  };
 
   const primaryReasonTask = firstAttentionTask(primaryTasks) ?? primaryTasks.find((task) => task.statusReason !== null) ?? null;
   const supportingReasonTask = firstAttentionTask(supportingTasks) ??
     supportingTasks.find((task) => task.statusReason !== null) ??
     null;
   const activeReasonTask = primaryReasonTask ?? supportingReasonTask;
-  const statusReason = buildDelayedDomainReason({
-    block,
-    state,
-    statusReason: activeReasonTask?.statusReason ?? null,
-    messagesHistoryComplete,
-  });
+  const statusReason = physicalLaneUnhealthy
+    ? {
+      code: stalePhysicalAttemptCount > 0
+        ? "physical_attempt_stuck"
+        : "physical_attempts_without_success",
+      summary: stalePhysicalAttemptCount > 0
+        ? `${stalePhysicalAttemptCount.toLocaleString()} HTTP attempt(s) remained unfinished beyond the request deadline.`
+        : `${maxPhysicalAttemptsSinceLastSuccess.toLocaleString()} HTTP attempts completed without a success.`,
+      waitingFor: null,
+    }
+    : buildDelayedDomainReason({
+      block,
+      state,
+      statusReason: activeReasonTask?.statusReason ?? null,
+      messagesHistoryComplete,
+    });
   const errorTask = state === "failed" || state === "retrying"
     ? primaryTasks.find((task) => task.error !== null) ?? supportingTasks.find((task) => task.error !== null) ?? null
     : null;
@@ -1530,6 +1576,7 @@ export async function getSyncStatusSnapshot(
       ? listSyncMonitorStreamRows(app.db, {
         pageIds: scopedPageIds,
         windowStart: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+        now,
         streams: monitorStreams,
       })
       : Promise.resolve([] as SyncMonitorStreamRow[]),

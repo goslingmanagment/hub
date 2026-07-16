@@ -22,7 +22,6 @@ import {
   fanslyTopSpendersChunk,
   fanslyTransactionsChunk,
   onlyfansDmConversationsChunk,
-  onlyfansDmMessagesChunk,
   onlyfansLightChunk,
   onlyfansSubscribersChunk,
   onlyfansTopSpendersChunk,
@@ -89,7 +88,6 @@ const ONLYFANS_STREAMS: CanonicalStream[] = [
   "top_spenders",
   "subscribers",
   "dm_conversations",
-  "dm_messages",
 ];
 
 // The per-platform pull maps route straight to the split handler halves —
@@ -114,7 +112,6 @@ const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   top_spenders: onlyfansTopSpendersChunk,
   subscribers: onlyfansSubscribersChunk,
   dm_conversations: onlyfansDmConversationsChunk,
-  dm_messages: onlyfansDmMessagesChunk,
 };
 
 export const fanslyPlatformAdapter: AppPlatformAdapter = {
@@ -171,7 +168,7 @@ export const onlyfansPlatformAdapter: AppPlatformAdapter = {
   syncScopes: {
     light: ["light", "transactions", "fan_identities"],
     data: ["light", "transactions", "fan_identities", "top_spenders", "subscribers"],
-    messages: ["dm_conversations", "dm_messages"],
+    messages: ["dm_conversations"],
     all: [
       "light",
       "transactions",
@@ -179,7 +176,6 @@ export const onlyfansPlatformAdapter: AppPlatformAdapter = {
       "top_spenders",
       "subscribers",
       "dm_conversations",
-      "dm_messages",
     ],
   },
   pull: ONLYFANS_PULL,
