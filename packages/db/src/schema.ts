@@ -2591,6 +2591,47 @@ export const ofapiPrincipalBudgetState = pgTable("ofapi_principal_budget_state",
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const ofapiStorageHealthState = pgTable(
+  "ofapi_storage_health_state",
+  {
+    id: integer("id").primaryKey().default(1),
+    healthy: boolean("healthy").notNull(),
+    breached: boolean("breached").notNull(),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+    usedBytes: bigint("used_bytes", { mode: "number" }),
+    freeBytes: bigint("free_bytes", { mode: "number" }),
+    totalBytes: bigint("total_bytes", { mode: "number" }),
+    error: text("error"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    singletonCheck: check("ofapi_storage_health_state_singleton_check", sql`${table.id} = 1`),
+    nonnegativeCheck: check(
+      "ofapi_storage_health_state_nonnegative_check",
+      sql`(${table.usedBytes} is null or ${table.usedBytes} >= 0)
+        and (${table.freeBytes} is null or ${table.freeBytes} >= 0)
+        and (${table.totalBytes} is null or ${table.totalBytes} >= 0)`,
+    ),
+    shapeCheck: check(
+      "ofapi_storage_health_state_shape_check",
+      sql`(
+          ${table.error} is null
+          and ${table.usedBytes} is not null
+          and ${table.freeBytes} is not null
+          and ${table.totalBytes} is not null
+          and ${table.healthy} = (not ${table.breached})
+        ) or (
+          ${table.error} is not null
+          and ${table.usedBytes} is null
+          and ${table.freeBytes} is null
+          and ${table.totalBytes} is null
+          and not ${table.healthy}
+          and not ${table.breached}
+        )`,
+    ),
+  }),
+);
+
 export const ofapiCaptureControls = pgTable("ofapi_capture_controls", {
   controlKey: text("control_key").primaryKey(),
   paused: boolean("paused").default(false).notNull(),

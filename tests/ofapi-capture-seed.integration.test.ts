@@ -45,6 +45,7 @@ async function seedPageAndChat(input?: {
   chatId?: string;
   headId?: string;
   anchorId?: string;
+  withCoverage?: boolean;
 }) {
   const chatId = input?.chatId ?? "chat-1";
   const headId = input?.headId ?? "102";
@@ -79,29 +80,31 @@ async function seedPageAndChat(input?: {
     lastMessagePreview: "head",
     lastSeenGeneration: 1,
   });
-  await testDb!.pool.query(`
-    insert into ofapi_message_coverage (
-      page_id, chat_id, classification, source, frozen_head_id,
-      oldest_message_id, target, target_hash, page_chain_hash,
-      raw_count, accepted_count, boundary_duplicate_count,
-      explicitly_irrelevant_count, rejected_count, parse_debt,
-      required_serving_high_water, proof_observation_id,
-      proof_observation_received_at, proof_policy_version,
-      source_contract_version, parser_version, source_account_seq
-    ) values (
-      $1, $2, 'continuous_history', 'pagination_exhausted', $3,
-      '1', '{}'::jsonb, $4, $5,
-      1, 1, 0, 0, 0, 0,
-      0, 1, now(), $6, 'ofapi-capture-v1', 'ofapi-capture-parser-v1', 1
-    )
-  `, [
-    page.id,
-    chatId,
-    anchorId,
-    "a".repeat(64),
-    "b".repeat(64),
-    OFAPI_CAPTURE_PROOF_POLICY_VERSION,
-  ]);
+  if (input?.withCoverage !== false) {
+    await testDb!.pool.query(`
+      insert into ofapi_message_coverage (
+        page_id, chat_id, classification, source, frozen_head_id,
+        oldest_message_id, target, target_hash, page_chain_hash,
+        raw_count, accepted_count, boundary_duplicate_count,
+        explicitly_irrelevant_count, rejected_count, parse_debt,
+        required_serving_high_water, proof_observation_id,
+        proof_observation_received_at, proof_policy_version,
+        source_contract_version, parser_version, source_account_seq
+      ) values (
+        $1, $2, 'continuous_history', 'pagination_exhausted', $3,
+        '1', '{}'::jsonb, $4, $5,
+        1, 1, 0, 0, 0, 0,
+        0, 1, now(), $6, 'ofapi-capture-v1', 'ofapi-capture-parser-v1', 1
+      )
+    `, [
+      page.id,
+      chatId,
+      anchorId,
+      "a".repeat(64),
+      "b".repeat(64),
+      OFAPI_CAPTURE_PROOF_POLICY_VERSION,
+    ]);
+  }
   return { page, chatId, headId, anchorId, ofapiAccountId };
 }
 
@@ -127,6 +130,63 @@ afterAll(async () => {
 });
 
 describe("owner bounded OFAPI capture seed", () => {
+  it("can bootstrap a first proof only through an explicit exhaustion target", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPageAndChat({ withCoverage: false });
+    const owner = await login("owner", "owner");
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: owner.cookie },
+      payload: {
+        dryRun: false,
+        goal: "history_to_exhaustion",
+        targets: [{ pageId: seeded.page.id, chatId: seeded.chatId }],
+      },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      dryRun: false,
+      created: 1,
+      coalesced: 0,
+      skipped: 0,
+      results: [{
+        pageId: seeded.page.id,
+        chatId: seeded.chatId,
+        goal: "history_to_exhaustion",
+        frozenHeadId: seeded.headId,
+        anchorMessageId: null,
+        status: "created",
+      }],
+    });
+    const jobId = (response.json() as { results: Array<{ jobId: string }> }).results[0]!.jobId;
+    expect(await getOfapiCaptureJob(appContext.db, jobId)).toMatchObject({
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.ofapiAccountId,
+      goal: "history_to_exhaustion",
+      activeSlotKey: `page:${seeded.page.id}:chat:${seeded.chatId}`,
+      target: {
+        chatId: seeded.chatId,
+        frozenHeadId: seeded.headId,
+        anchorMessageId: null,
+        limit: 100,
+        reason: "owner_manual_bootstrap",
+      },
+      budgetScope: "bulk",
+      originPrincipalId: owner.userId,
+      createdBy: "owner",
+      maxCalls: 3,
+      maxCredits: 3,
+      maxPages: 3,
+      maxItems: 300,
+    });
+  });
+
   it("dry-runs, creates only explicit targets, and coalesces without changing the target", async (context) => {
     if (!testDb || !server) {
       context.skip();

@@ -21,6 +21,9 @@ export.
   the slot blocked until vendor reconciliation.
 - A completed quote is accepted only when its type, dates, file type, exact
   account, row count, and cost match the frozen request contract.
+- An indeterminate create remains blocked until an owner independently checks
+  the vendor. Reconciliation can either adopt the verified vendor export ID or
+  confirm that no export was created; it never repeats the create POST.
 
 The vendor contract was rechecked on 2026-07-16 against the official
 [Create Data Export](https://docs.onlyfansapi.com/api-reference/data-exports/create-data-export),
@@ -38,11 +41,19 @@ charges the calculated credits only when the separate start operation runs.
    `would_create` response. Repeat with `dryRun: false` only in the owner window.
 3. Inspect `/api/v1/admin/ofapi/export-quotes/:jobId`. Record `totalRows`,
    `creditCost`, `quotedAt`, `expiresAt`, attempts, and actual spent credits.
-4. When the quote is safely terminal and recorded, cancel the blocked quote job
+4. If create is `blocked / indeterminate`, inspect the owner capture-operator
+   status and independently check the vendor. Preview, then execute exactly one
+   `/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create` action with the
+   original attempt ID and expected job row version:
+   - `adopt_created` with the verified vendor export ID continues with status
+     GETs only;
+   - `confirm_not_created` releases the uncertain attempt and leaves the job
+     blocked as `export_quote_failed` so it can be cancelled safely.
+5. When the quote is safely terminal and recorded, cancel the blocked quote job
    through `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` with
    `{ "expectedState": "blocked", "reason": "..." }` to release the one
    page export slot.
-5. Repeat for `profile: "fleet_tail"` without `chatIds`. This is the number used
+6. Repeat for `profile: "fleet_tail"` without `chatIds`. This is the number used
    for the backend/coverage owner decision; do not extrapolate from the pilot.
 
 Example dry-run body:

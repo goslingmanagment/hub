@@ -335,6 +335,37 @@ async function seedCertifiedHistory(chatId = "123") {
   );
 }
 
+async function seedUncertifiedHistory(chatId = "456", frozenHeadId = "203") {
+  appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+  appContext.config.ofapiMessageHistoryShadowEnabled = true;
+  appContext.config.ofapiMessageHistoryDbFallbackEnabled = true;
+  await upsertPageDmConversation(appContext.db, {
+    platformAccountId: assignedPageId,
+    fanId: null,
+    platformConversationId: chatId,
+    partnerPlatformUserId: chatId,
+    partnerUsername: "uncertified-fan",
+    partnerDisplayName: "Uncertified Fan",
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: frozenHeadId,
+    lastUnreadMessageId: null,
+    lastMessageAt: new Date("2026-07-16T13:03:00.000Z"),
+    lastMessageSenderId: chatId,
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: `message-${frozenHeadId}`,
+    lastSeenGeneration: 7,
+  });
+  await testDb!.pool.query(
+    `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+     values (1, current_date, 9000, now())
+     on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+  );
+}
+
 describe("OFAPI read gateway integration", () => {
   it("synthesizes only assigned accounts and a sanitized whoami", async () => {
     const accounts = await inject("accounts");
@@ -571,6 +602,75 @@ describe("OFAPI read gateway integration", () => {
     expect(attempts.rows[0]?.count).toBe("0");
   });
 
+  it("coalesces repeated explicit no-certificate misses into one bounded repair", async () => {
+    await seedUncertifiedHistory();
+    scriptedResponses.push(
+      { status: 200, body: { data: [{ id: 202 }], _pagination: { next_page: null } } },
+      { status: 200, body: { data: [{ id: 202 }], _pagination: { next_page: null } } },
+    );
+
+    const first = await inject(
+      `${ACCOUNT_ONE}/chats/456/messages?limit=2&order=desc&first_id=202&skip_users=all`,
+      "deep-history-v1",
+    );
+    const second = await inject(
+      `${ACCOUNT_ONE}/chats/456/messages?limit=2&order=desc&first_id=202&skip_users=all`,
+      "deep-history-v1",
+    );
+
+    expect(first.statusCode, first.body).toBe(200);
+    expect(second.statusCode, second.body).toBe(200);
+    expect(first.headers["x-agency-hub-read-fallback"]).toBe("no_certificate");
+    expect(second.headers["x-agency-hub-read-fallback"]).toBe("no_certificate");
+    expect(upstreamRequests).toHaveLength(2);
+
+    const jobs = await testDb!.pool.query<{
+      kind: string;
+      goal: string;
+      state: string;
+      active_slot_key: string;
+      target: Record<string, unknown>;
+      target_generation: number;
+      budget_scope: string;
+      origin_principal_id: number;
+      created_by: string;
+      max_calls: number;
+      max_credits: number;
+      max_pages: number;
+      max_items: number;
+    }>(`
+      select kind, goal, state, active_slot_key, target,
+             target_generation, budget_scope,
+             origin_principal_id::int, created_by,
+             max_calls, max_credits, max_pages, max_items
+      from ofapi_capture_jobs
+    `);
+    const chatterId = (await testDb!.pool.query<{ id: number }>(
+      "select id::int from users where username = 'chatter'",
+    )).rows[0]!.id;
+    expect(jobs.rows).toEqual([{
+      kind: "chat_paginate",
+      goal: "history_to_exhaustion",
+      state: "ready",
+      active_slot_key: `page:${assignedPageId}:chat:456`,
+      target: {
+        chatId: "456",
+        frozenHeadId: "203",
+        anchorMessageId: null,
+        limit: 100,
+        reason: "interactive_history_miss",
+      },
+      target_generation: 7,
+      budget_scope: "interactive",
+      origin_principal_id: chatterId,
+      created_by: "interactive_open",
+      max_calls: 3,
+      max_credits: 3,
+      max_pages: 3,
+      max_items: 300,
+    }]);
+  });
+
   it("keeps old clients and non-certified history on one capture-first vendor fallback", async () => {
     await seedCertifiedHistory();
     scriptedResponses.push(
@@ -591,6 +691,9 @@ describe("OFAPI read gateway integration", () => {
     expect(legacy.statusCode, legacy.body).toBe(200);
     expect(legacy.headers["x-agency-hub-read-source"]).toBe("vendor");
     expect(legacy.headers["x-agency-hub-read-fallback"]).toBe("surface_not_cutover");
+    expect((await testDb!.pool.query(
+      "select 1 from ofapi_capture_jobs",
+    )).rows).toHaveLength(0);
 
     // An independent head advance invalidates the proof and takes exactly one live GET.
     await testDb!.pool.query(
@@ -605,6 +708,30 @@ describe("OFAPI read gateway integration", () => {
     expect(stale.headers["x-agency-hub-read-source"]).toBe("vendor");
     expect(stale.headers["x-agency-hub-read-fallback"]).toBe("stale_head");
     expect(upstreamRequests).toHaveLength(2);
+
+    const repair = await testDb!.pool.query<{
+      goal: string;
+      active_slot_key: string;
+      target: Record<string, unknown>;
+      budget_scope: string;
+      created_by: string;
+    }>(`
+      select goal, active_slot_key, target, budget_scope, created_by
+      from ofapi_capture_jobs
+    `);
+    expect(repair.rows).toEqual([{
+      goal: "connect_to_anchor",
+      active_slot_key: `page:${assignedPageId}:chat:123`,
+      target: {
+        chatId: "123",
+        frozenHeadId: "104",
+        anchorMessageId: "103",
+        limit: 100,
+        reason: "interactive_history_miss",
+      },
+      budget_scope: "interactive",
+      created_by: "interactive_open",
+    }]);
 
     const attempts = await testDb!.pool.query<{
       serving_mode: string;
@@ -641,6 +768,9 @@ describe("OFAPI read gateway integration", () => {
     expect(response.headers["x-agency-hub-read-fallback"]).toBe("gap");
     expect(response.json().data.map((item: { id: number }) => item.id)).toEqual([101, 100]);
     expect(upstreamRequests).toHaveLength(1);
+    expect((await testDb!.pool.query(
+      "select 1 from ofapi_capture_jobs",
+    )).rows).toHaveLength(0);
   });
 
   it("shadows certified ids without changing the vendor response", async () => {

@@ -63,6 +63,8 @@ describe("runDbDiskUsageCheck", () => {
     });
 
     expect(result).toMatchObject({ breached: true, thresholdPercent: 80, databaseBytes: 2 * GIB });
+    expect(result).toMatchObject({ healthy: false, usedBytes: 90 * GIB, availableBytes: 10 * GIB });
+    expect((app as { db: { execute: ReturnType<typeof vi.fn> } }).db.execute).toHaveBeenCalledTimes(2);
     expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
     expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
     const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
@@ -89,7 +91,8 @@ describe("runDbDiskUsageCheck", () => {
   it("still alerts when pg_database_size is unavailable", async () => {
     const app = appStub();
     (app as { db: { execute: ReturnType<typeof vi.fn> } }).db.execute
-      .mockRejectedValue(new Error("db down"));
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValueOnce(new Error("db down"));
     await runDbDiskUsageCheck(app, {
       statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 5 }),
     });
@@ -99,16 +102,30 @@ describe("runDbDiskUsageCheck", () => {
     expect(input.errorSummary).not.toContain("Postgres");
   });
 
-  it("skips quietly when the filesystem cannot be statted", async () => {
+  it("persists and alerts an unhealthy sample when the filesystem cannot be statted", async () => {
     const app = appStub();
+    const now = new Date("2026-07-05T12:15:00.000Z");
     const result = await runDbDiskUsageCheck(app, {
+      now,
       statfsImpl: async () => {
         throw new Error("statfs failed");
       },
     });
 
-    expect(result).toBeNull();
-    expect(incidentMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      healthy: false,
+      breached: false,
+      checkedAt: now,
+      usedBytes: null,
+      availableBytes: null,
+      error: "statfs failed",
+    });
+    expect((app as { db: { execute: ReturnType<typeof vi.fn> } }).db.execute).toHaveBeenCalledTimes(1);
+    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledWith(app, {
+      kind: "db_disk_usage",
+      errorSummary: "Disk health unavailable: statfs failed",
+      occurredAt: now,
+    });
     expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
   });
 });

@@ -160,6 +160,11 @@ export async function startWorkerServices(
     orphanedRunPartial: orphanedRuns.partialCount,
   }, "Orphaned sync run startup cleanup complete");
 
+  const startupDiskHealth = await runDbDiskUsageCheck(app);
+  if (startupDiskHealth) {
+    app.logger.info(startupDiskHealth, "Startup disk usage check complete");
+  }
+
   await boss.start();
   await ensureSyncQueues(boss, createdQueues);
   await ensureWorkboardQueues(boss, createdQueues);

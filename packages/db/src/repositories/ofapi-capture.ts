@@ -14,12 +14,19 @@ import type {
   OfapiRequestAttemptState,
 } from "../schema.ts";
 import { appendProjectionOnlyDomainEventsInTransaction } from "./domain-events.ts";
+import {
+  matchesOfapiMessageCoverageProofReference,
+  type OfapiMessageCoverageProofReference,
+} from "./ofapi-message-coverage.ts";
 import { insertObservation } from "./observations.ts";
 
 export const OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION = "ofapi-capture-v1";
 export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v1";
 export const OFAPI_CAPTURE_PROOF_POLICY_VERSION = "ofapi-proof-v1";
 export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v1";
+export const OFAPI_STORAGE_HEALTH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+const OFAPI_STORAGE_HEALTH_RETRY_MS = 5 * 60 * 1000;
 
 export class OfapiCaptureInvariantError extends Error {
   constructor(message: string) {
@@ -128,6 +135,7 @@ export interface OfapiCaptureJobRecord {
   pendingObservationReceivedAt: Date | null;
   terminalObservationId: number | null;
   terminalObservationReceivedAt: Date | null;
+  result: Record<string, unknown> | null;
   reasonCode: string | null;
   reasonMessage: string | null;
   maxCalls: number | null;
@@ -182,6 +190,7 @@ function mapCaptureJob(row: Record<string, unknown>): OfapiCaptureJobRecord {
       row.terminal_observation_received_at,
       "terminal_observation_received_at",
     ),
+    result: row.result === null ? null : asRecord(row.result, "result"),
     reasonCode: row.reason_code === null ? null : String(row.reason_code),
     reasonMessage: row.reason_message === null ? null : String(row.reason_message),
     maxCalls: asNullableNumber(row.max_calls, "max_calls"),
@@ -555,6 +564,7 @@ export type OfapiBudgetDenialReason =
   | "principal_storm_block"
   | "credit_floor"
   | "balance_stale"
+  | "storage_unhealthy"
   | "persistent_pause"
   | "deadline";
 
@@ -593,6 +603,8 @@ export interface ReserveOfapiRequestAttemptInput {
   principalCreditCap?: number;
   denialBlockThreshold?: number;
   denialBlockMs?: number;
+  requireFreshStorageHealth?: boolean;
+  storageHealthMaxAgeMs?: number;
   jobLeaseToken?: string | null;
   deadlineAt: Date;
   policyVersion?: string;
@@ -690,6 +702,8 @@ function resolveDenialRetryAt(
       return input.principalBlockedUntil ?? null;
     case "balance_stale":
       return input.floorProbeNotBefore ?? null;
+    case "storage_unhealthy":
+      return new Date(now.getTime() + OFAPI_STORAGE_HEALTH_RETRY_MS);
     case "credit_floor":
     case "persistent_pause":
     case "deadline":
@@ -949,6 +963,36 @@ export async function reserveOfapiRequestAttempt(
       limit 1
     `);
 
+    const storageHealthResult = input.requireFreshStorageHealth === true
+      ? await database.execute<{
+        healthy: boolean;
+        breached: boolean;
+        checked_at: string | Date;
+        error: string | null;
+      }>(sql`
+        select healthy, breached, checked_at, error
+        from ofapi_storage_health_state
+        where id = 1
+      `)
+      : null;
+    const storageHealthRow = storageHealthResult?.rows[0] ?? null;
+    const storageHealthCheckedAt = storageHealthRow
+      ? asDate(storageHealthRow.checked_at, "storage_health.checked_at")
+      : null;
+    const storageHealthMaxAgeMs = Math.max(
+      0,
+      input.storageHealthMaxAgeMs ?? OFAPI_STORAGE_HEALTH_MAX_AGE_MS,
+    );
+    const storageHealthFresh = storageHealthCheckedAt !== null &&
+      now.getTime() - storageHealthCheckedAt.getTime() <= storageHealthMaxAgeMs;
+    const storageHealthy = input.requireFreshStorageHealth !== true || (
+      storageHealthRow !== null &&
+      storageHealthRow.healthy === true &&
+      storageHealthRow.breached === false &&
+      storageHealthRow.error === null &&
+      storageHealthFresh
+    );
+
     const globalSpent = dateOnly(credit.spend_day) === day
       ? asNumber(credit.spent_credits, "spent_credits")
       : 0;
@@ -972,6 +1016,8 @@ export async function reserveOfapiRequestAttempt(
     let denial: OfapiBudgetDenialReason | null = null;
     if (paused.rows.length > 0) {
       denial = "persistent_pause";
+    } else if (!storageHealthy) {
+      denial = "storage_unhealthy";
     } else if (principalBlockedUntil && principalBlockedUntil.getTime() > now.getTime()) {
       denial = "principal_storm_block";
     } else if (!balanceFresh || lastBalance === null) {
@@ -1002,7 +1048,7 @@ export async function reserveOfapiRequestAttempt(
 
     if (denial) {
       let thresholdCrossing = false;
-      if (principalId !== null && principal) {
+      if (denial !== "storage_unhealthy" && principalId !== null && principal) {
         const previousDenials = asNumber(
           principal.consecutive_budget_denials,
           "consecutive_budget_denials",
@@ -1060,6 +1106,8 @@ export async function reserveOfapiRequestAttempt(
       principalUsedCallsBefore: principalUsedCalls,
       principalUsedCreditsBefore: principalUsedCredits,
       isFloorProbe,
+      storageHealthRequired: input.requireFreshStorageHealth === true,
+      storageHealthCheckedAt,
     };
 
     await database.execute(sql`
@@ -2088,6 +2136,15 @@ export type OfapiCaptureParseDisposition =
   }
   | {
     kind: "complete";
+    /**
+     * Exact coverage row this terminal fact joins onto. It is checked under
+     * row lock in the same transaction before either the proof observation or
+     * its domain event can be appended.
+     */
+    expectedSupersedes?: {
+      conversationRef: string;
+      proof: OfapiMessageCoverageProofReference;
+    };
     terminal: {
       producer: string;
       kind: string;
@@ -2284,6 +2341,45 @@ export async function settleOfapiCaptureParse(
         break;
       }
       case "complete": {
+        const expectedSupersedes = input.disposition.expectedSupersedes ?? null;
+        if (expectedSupersedes !== null) {
+          if (
+            input.disposition.terminal.coverage?.conversationRef !==
+              expectedSupersedes.conversationRef
+          ) {
+            throw new OfapiCaptureInvariantError(
+              "Anchor proof expectation does not match the terminal conversation",
+            );
+          }
+          const currentProof = await database.execute<Record<string, unknown>>(sql`
+            select *
+            from ofapi_message_coverage
+            where page_id = ${job.pageId}
+              and chat_id = ${expectedSupersedes.conversationRef}
+            for update
+          `);
+          if (!matchesOfapiMessageCoverageProofReference(
+            currentProof.rows[0],
+            expectedSupersedes.proof,
+          )) {
+            await database.execute(sql`
+              update ofapi_capture_jobs
+              set state = 'blocked',
+                  pending_observation_id = null,
+                  pending_observation_received_at = null,
+                  zero_progress_count = zero_progress_count + 1,
+                  reason_code = 'anchor_proof_changed',
+                  reason_message = 'The continuous proof at the requested anchor changed before completion',
+                  lease_owner = null,
+                  lease_token = null,
+                  lease_until = null,
+                  row_version = row_version + 1,
+                  updated_at = ${now}
+              where id = ${input.jobId}::uuid
+            `);
+            return true;
+          }
+        }
         const terminal = await insertObservation(database, {
           source: "ofapi_capture",
           producer: input.disposition.terminal.producer,
@@ -2520,6 +2616,35 @@ export async function resolveOfapiIndeterminateAttempt(
         and state = 'indeterminate'
         and certainty_resolved_at is null
     `);
+    if (attempt.capture_job_id !== null) {
+      let requeuedSafeRead = false;
+      if (attempt.request_semantics === "safe_read") {
+        const requeued = await database.execute<{ id: string }>(sql`
+          update ofapi_capture_jobs
+          set state = 'retry_wait',
+              next_attempt_at = ${now},
+              reason_code = 'operator_reconciled_safe_read',
+              reason_message = ${`Attempt certainty resolved: ${input.resolution}`},
+              spent_credits = greatest(0, spent_credits + ${delta}),
+              row_version = row_version + 1,
+              updated_at = ${now}
+          where id = ${String(attempt.capture_job_id)}::uuid
+            and state = 'blocked'
+            and reason_code = 'indeterminate'
+          returning id::text as id
+        `);
+        requeuedSafeRead = requeued.rows.length === 1;
+      }
+      if (!requeuedSafeRead && delta !== 0) {
+        await database.execute(sql`
+          update ofapi_capture_jobs
+          set spent_credits = greatest(0, spent_credits + ${delta}),
+              row_version = row_version + 1,
+              updated_at = ${now}
+          where id = ${String(attempt.capture_job_id)}::uuid
+        `);
+      }
+    }
     await database.execute(sql`
       insert into ofapi_capture_operator_actions (
         action, target_type, target_ref, expected_state,
@@ -2700,4 +2825,331 @@ export async function getOfapiRequestAttempt(db: Database, attemptId: string) {
     select * from ofapi_request_attempts where id = ${attemptId}::uuid
   `);
   return result.rows[0] ?? null;
+}
+
+export interface OfapiCaptureOperatorAttemptRecord {
+  attemptId: string;
+  captureJobId: string | null;
+  pageId: number;
+  operation: string;
+  state: OfapiRequestAttemptState;
+  creditState: "reserved" | "settled" | "released" | "indeterminate";
+  reservedCredits: number;
+  settledCredits: number | null;
+  certaintyResolution: string | null;
+  dispatchStartedAt: Date | null;
+  finishedAt: Date | null;
+}
+
+function mapOperatorAttempt(row: Record<string, unknown>): OfapiCaptureOperatorAttemptRecord {
+  return {
+    attemptId: String(row.id),
+    captureJobId: row.capture_job_id === null ? null : String(row.capture_job_id),
+    pageId: asNumber(row.page_id, "page_id"),
+    operation: String(row.operation),
+    state: String(row.state) as OfapiRequestAttemptState,
+    creditState: String(row.credit_state) as OfapiCaptureOperatorAttemptRecord["creditState"],
+    reservedCredits: asNumber(row.reserved_credits, "reserved_credits"),
+    settledCredits: asNullableNumber(row.settled_credits, "settled_credits"),
+    certaintyResolution: row.certainty_resolution === null
+      ? null
+      : String(row.certainty_resolution),
+    dispatchStartedAt: asNullableDate(row.dispatch_started_at, "dispatch_started_at"),
+    finishedAt: asNullableDate(row.finished_at, "finished_at"),
+  };
+}
+
+export async function getOfapiCaptureOperatorAttempt(db: Database, attemptId: string) {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select * from ofapi_request_attempts where id = ${attemptId}::uuid
+  `);
+  return result.rows[0] ? mapOperatorAttempt(result.rows[0]) : null;
+}
+
+export async function getOfapiCaptureOperatorStatus(
+  db: Database,
+  input?: { jobSampleLimit?: number; attemptSampleLimit?: number },
+) {
+  const jobSampleLimit = Math.max(1, Math.min(50, Math.trunc(input?.jobSampleLimit ?? 20)));
+  const attemptSampleLimit = Math.max(
+    1,
+    Math.min(20, Math.trunc(input?.attemptSampleLimit ?? 10)),
+  );
+  const [controls, jobGroups, jobSamples, indeterminateSummary, attempts, storage] =
+    await Promise.all([
+      db.execute<Record<string, unknown>>(sql`
+        select control_key, paused, reason, version, updated_at
+        from ofapi_capture_controls
+        order by control_key
+        limit 100
+      `),
+      db.execute<Record<string, unknown>>(sql`
+        select state, reason_code, count(*)::bigint as count,
+               min(updated_at) as oldest_updated_at
+        from ofapi_capture_jobs
+        where state in ('ready', 'leased', 'awaiting_parse', 'retry_wait', 'blocked')
+        group by state, reason_code
+        order by min(updated_at), state, reason_code nulls first
+        limit 100
+      `),
+      db.execute<Record<string, unknown>>(sql`
+        select id, page_id, kind, state, reason_code, row_version, updated_at
+        from ofapi_capture_jobs
+        where state in ('ready', 'leased', 'awaiting_parse', 'retry_wait', 'blocked')
+        order by updated_at, id
+        limit ${jobSampleLimit}
+      `),
+      db.execute<Record<string, unknown>>(sql`
+        select count(*)::bigint as count, min(finished_at) as oldest_at
+        from ofapi_request_attempts
+        where state = 'indeterminate' and certainty_resolved_at is null
+      `),
+      db.execute<Record<string, unknown>>(sql`
+        select *
+        from ofapi_request_attempts
+        where state = 'indeterminate' and certainty_resolved_at is null
+        order by finished_at, id
+        limit ${attemptSampleLimit}
+      `),
+      db.execute<Record<string, unknown>>(sql`
+        select healthy, breached, checked_at, used_bytes, free_bytes, total_bytes, error
+        from ofapi_storage_health_state
+        where id = 1
+      `),
+    ]);
+  const summary = indeterminateSummary.rows[0];
+  const storageRow = storage.rows[0];
+  return {
+    controls: controls.rows.map((row) => ({
+      controlKey: String(row.control_key),
+      paused: Boolean(row.paused),
+      reason: row.reason === null ? null : String(row.reason),
+      version: asNumber(row.version, "control.version"),
+      updatedAt: asDate(row.updated_at, "control.updated_at"),
+    })),
+    jobGroups: jobGroups.rows.map((row) => ({
+      state: String(row.state) as OfapiCaptureJobState,
+      reasonCode: row.reason_code === null ? null : String(row.reason_code),
+      count: asNumber(row.count, "job_group.count"),
+      oldestUpdatedAt: asDate(row.oldest_updated_at, "job_group.oldest_updated_at"),
+    })),
+    jobSamples: jobSamples.rows.map((row) => ({
+      jobId: String(row.id),
+      pageId: asNumber(row.page_id, "job.page_id"),
+      kind: String(row.kind) as OfapiCaptureJobKind,
+      state: String(row.state) as OfapiCaptureJobState,
+      reasonCode: row.reason_code === null ? null : String(row.reason_code),
+      rowVersion: asNumber(row.row_version, "job.row_version"),
+      updatedAt: asDate(row.updated_at, "job.updated_at"),
+    })),
+    indeterminate: {
+      count: summary ? asNumber(summary.count, "indeterminate.count") : 0,
+      oldestAt: summary
+        ? asNullableDate(summary.oldest_at, "indeterminate.oldest_at")
+        : null,
+      samples: attempts.rows.map(mapOperatorAttempt),
+    },
+    storageHealth: storageRow
+      ? {
+        healthy: Boolean(storageRow.healthy),
+        breached: Boolean(storageRow.breached),
+        checkedAt: asDate(storageRow.checked_at, "storage.checked_at"),
+        usedBytes: asNullableNumber(storageRow.used_bytes, "storage.used_bytes"),
+        freeBytes: asNullableNumber(storageRow.free_bytes, "storage.free_bytes"),
+        totalBytes: asNullableNumber(storageRow.total_bytes, "storage.total_bytes"),
+        errorPresent: storageRow.error !== null,
+      }
+      : null,
+  };
+}
+
+export async function reconcileOfapiExportCreate(
+  db: Database,
+  input: {
+    jobId: string;
+    attemptId: string;
+    action: "confirm_not_created" | "adopt_created";
+    vendorExportId?: string | null;
+    actualCredits?: number | null;
+    expectedState?: "blocked";
+    expectedReasonCode?: "indeterminate";
+    expectedJobRowVersion: number;
+    actorUserId: number;
+    reason: string;
+    execute?: boolean;
+    allowUnresolvedPreview?: boolean;
+    recordAction?: boolean;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const jobResult = await database.execute<Record<string, unknown>>(sql`
+      select * from ofapi_capture_jobs where id = ${input.jobId}::uuid for update
+    `);
+    const attemptResult = await database.execute<Record<string, unknown>>(sql`
+      select * from ofapi_request_attempts where id = ${input.attemptId}::uuid for update
+    `);
+    const jobRow = jobResult.rows[0];
+    const attemptRow = attemptResult.rows[0];
+    if (!jobRow || !attemptRow) return { outcome: "not_found" as const };
+    const job = mapCaptureJob(jobRow);
+    const attempt = mapOperatorAttempt(attemptRow);
+    const requiredResolution = input.action === "confirm_not_created"
+      ? "confirmed_not_billed"
+      : "confirmed_billed";
+    const billedCredits = input.action === "confirm_not_created"
+      ? 0
+      : input.actualCredits === null || input.actualCredits === undefined
+        ? attempt.reservedCredits
+        : normalizeCredits(input.actualCredits);
+    const resolutionDelta = billedCredits - attempt.reservedCredits;
+    const result = jobRow.result === null ? null : asRecord(jobRow.result, "job.result");
+    const marker = result?.operatorReconcile;
+    const expectedVendorId = input.action === "adopt_created" ? input.vendorExportId ?? null : null;
+    if (
+      marker && typeof marker === "object" && !Array.isArray(marker)
+      && (marker as Record<string, unknown>).action === input.action
+      && (marker as Record<string, unknown>).attemptId === input.attemptId
+      && ((marker as Record<string, unknown>).vendorExportId ?? null) === expectedVendorId
+      && (marker as Record<string, unknown>).billedCredits === billedCredits
+    ) {
+      return { outcome: "already_reconciled" as const, job, attempt };
+    }
+    const unresolvedCertainty = attempt.certaintyResolution === null
+      && attemptRow.certainty_resolved_at === null
+      && attempt.creditState === "indeterminate";
+    const crashWindowVersion = !unresolvedCertainty
+      && attempt.certaintyResolution === requiredResolution
+      && resolutionDelta !== 0
+      && job.rowVersion === input.expectedJobRowVersion + 1;
+    if (
+      job.kind !== "account_export"
+      || job.state !== (input.expectedState ?? "blocked")
+      || job.reasonCode !== (input.expectedReasonCode ?? "indeterminate")
+      || (job.rowVersion !== input.expectedJobRowVersion && !crashWindowVersion)
+      || attempt.captureJobId !== job.id
+      || attempt.pageId !== job.pageId
+      || attempt.operation !== "ofapi_export_quote_create"
+      || attempt.state !== "indeterminate"
+      || String(attemptRow.ofapi_account_id) !== job.ofapiAccountId
+      || String(attemptRow.request_semantics) !== "stateful"
+    ) {
+      return { outcome: "conflict" as const, job, attempt };
+    }
+    if (
+      unresolvedCertainty
+        ? !(input.execute !== true && input.allowUnresolvedPreview === true)
+        : attempt.certaintyResolution !== requiredResolution
+          || attemptRow.certainty_resolved_at === null
+          || attempt.settledCredits !== billedCredits
+          || (billedCredits === 0
+            ? attempt.creditState !== "released"
+            : attempt.creditState !== "settled")
+    ) {
+      return { outcome: "certainty_unresolved" as const, job, attempt };
+    }
+    if (
+      input.action === "adopt_created"
+      && (typeof input.vendorExportId !== "string"
+        || !/^data_export_[A-Za-z0-9_-]+$/.test(input.vendorExportId))
+    ) {
+      throw new OfapiCaptureInvariantError("A valid vendor export id is required for adoption");
+    }
+    const cursor = input.action === "adopt_created"
+      ? {
+        phase: "quote_calculating",
+        vendorExportId: input.vendorExportId!,
+        vendorStatus: "operator_adopted",
+        pollCount: 0,
+        quoteRequestedAt: now.toISOString(),
+        lastStatusAt: now.toISOString(),
+        totalRows: null,
+        creditCost: null,
+        quotedAt: null,
+        expiresAt: null,
+        lastObservationId: null,
+        lastObservationReceivedAt: null,
+      }
+      : job.cursor;
+    const next = {
+      state: input.action === "adopt_created" ? "retry_wait" : "blocked",
+      reasonCode: input.action === "adopt_created"
+        ? "export_create_reconciled"
+        : "export_quote_failed",
+      rowVersion: job.rowVersion + 1 + (unresolvedCertainty && resolutionDelta !== 0 ? 1 : 0),
+    } as const;
+    const markerValue = {
+      version: 1,
+      action: input.action,
+      attemptId: input.attemptId,
+      vendorExportId: expectedVendorId,
+      billedCredits,
+      reconciledAt: now.toISOString(),
+    };
+    if (input.execute === true) {
+      const updated = await database.execute<Record<string, unknown>>(sql`
+        update ofapi_capture_jobs
+        set state = ${next.state},
+            reason_code = ${next.reasonCode},
+            reason_message = ${input.reason},
+            cursor = ${cursor === null ? null : JSON.stringify(cursor)}::jsonb,
+            cursor_hash = ${cursor === null ? null : hashOfapiCaptureValue(cursor)},
+            result = coalesce(result, '{}'::jsonb)
+              || jsonb_build_object('operatorReconcile', ${JSON.stringify(markerValue)}::jsonb),
+            next_attempt_at = ${now},
+            row_version = row_version + 1,
+            updated_at = ${now}
+        where id = ${input.jobId}::uuid
+          and state = 'blocked'
+          and reason_code = 'indeterminate'
+          and row_version = ${job.rowVersion}
+        returning *
+      `);
+      if (!updated.rows[0]) return { outcome: "conflict" as const, job, attempt };
+      await database.execute(sql`
+        insert into ofapi_capture_operator_actions (
+          action, target_type, target_ref, expected_state, previous_state,
+          resulting_state, dry_run, actor_user_id, reason, occurred_at
+        ) values (
+          ${`reconcile_export_create:${input.action}`}, 'job', ${input.jobId},
+          'blocked:indeterminate',
+          ${JSON.stringify({
+            state: job.state,
+            reasonCode: job.reasonCode,
+            rowVersion: job.rowVersion,
+            attemptId: input.attemptId,
+            certaintyResolution: attempt.certaintyResolution,
+          })}::jsonb,
+          ${JSON.stringify(next)}::jsonb,
+          false, ${input.actorUserId}, ${input.reason}, ${now}
+        )
+      `);
+      return {
+        outcome: "reconciled" as const,
+        job: mapCaptureJob(updated.rows[0]),
+        attempt,
+      };
+    }
+    if (input.recordAction !== false) await database.execute(sql`
+      insert into ofapi_capture_operator_actions (
+        action, target_type, target_ref, expected_state, previous_state,
+        resulting_state, dry_run, actor_user_id, reason, occurred_at
+      ) values (
+        ${`reconcile_export_create:${input.action}`}, 'job', ${input.jobId},
+        'blocked:indeterminate',
+        ${JSON.stringify({
+          state: job.state,
+          reasonCode: job.reasonCode,
+          rowVersion: job.rowVersion,
+          attemptId: input.attemptId,
+          certaintyResolution: attempt.certaintyResolution,
+        })}::jsonb,
+        ${JSON.stringify(next)}::jsonb,
+        true, ${input.actorUserId}, ${input.reason}, ${now}
+      )
+    `);
+    return { outcome: "would_reconcile" as const, job: { ...job, ...next }, attempt };
+  });
 }

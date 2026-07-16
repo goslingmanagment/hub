@@ -114,6 +114,7 @@ export async function executeCaptureFirstInteractiveRead(
       pathname: input.pathname,
       query: input.query,
     },
+    requireFreshStorageHealth: true,
     surface: input.surface,
     servingMode: input.servingMode ?? "vendor_only",
     fallbackReason: input.fallbackReason ?? null,

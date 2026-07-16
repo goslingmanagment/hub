@@ -32,6 +32,30 @@ async function waitForDatabaseReady(pool: ReturnType<typeof createPool>) {
   });
 }
 
+async function seedHealthyStorageSample(pool: ReturnType<typeof createPool>) {
+  const relation = await pool.query<{ name: string | null }>(
+    "select to_regclass('public.ofapi_storage_health_state')::text as name",
+  );
+  if (!relation.rows[0]?.name) {
+    return;
+  }
+  await pool.query(`
+    insert into ofapi_storage_health_state (
+      id, healthy, breached, checked_at,
+      used_bytes, free_bytes, total_bytes, error, updated_at
+    ) values (1, true, false, clock_timestamp(), 1, 9, 10, null, clock_timestamp())
+    on conflict (id) do update set
+      healthy = excluded.healthy,
+      breached = excluded.breached,
+      checked_at = excluded.checked_at,
+      used_bytes = excluded.used_bytes,
+      free_bytes = excluded.free_bytes,
+      total_bytes = excluded.total_bytes,
+      error = excluded.error,
+      updated_at = excluded.updated_at
+  `);
+}
+
 export async function startTestDatabase(input?: {
   from?: string;
   through?: string;
@@ -52,6 +76,7 @@ export async function startTestDatabase(input?: {
 
     const db = createDb(pool);
     await applyTestMigrations(pool, input);
+    await seedHealthyStorageSample(pool);
 
     return {
       container,
@@ -109,6 +134,10 @@ export async function resetIntegrationDatabase(pool: ReturnType<typeof createPoo
   }
 
   await pool.query(`truncate ${tableNames.join(", ")} restart identity cascade`);
+  // Governed OFAPI transports opt into the fail-closed disk gate. Integration
+  // fixtures get an explicit fresh healthy sample; tests for missing/stale/
+  // breached storage delete or replace this singleton themselves.
+  await seedHealthyStorageSample(pool);
 }
 
 export async function applyTestMigrations(

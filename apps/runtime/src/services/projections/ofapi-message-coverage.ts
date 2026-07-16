@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   applyOfapiMessageCoverageEvents,
   getProjectionWatermark,
@@ -7,6 +9,7 @@ import {
   setProjectionWatermark,
   type DomainEventRow,
   type OfapiMessageCoverageProjectionEvent,
+  type OfapiMessageCoverageProofReference,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -34,6 +37,60 @@ function count(value: unknown, field: string) {
   return value;
 }
 
+function nullableString(value: unknown, field: string) {
+  if (value === null) return null;
+  return string(value, field);
+}
+
+function proofReference(value: unknown, field: string): OfapiMessageCoverageProofReference {
+  const proof = record(value, field);
+  const receivedAt = new Date(string(
+    proof.proofObservationReceivedAt,
+    `${field}.proofObservationReceivedAt`,
+  ));
+  if (Number.isNaN(receivedAt.getTime())) {
+    throw new Error(`Invalid coverage ${field}.proofObservationReceivedAt`);
+  }
+  return {
+    proofObservationId: count(proof.proofObservationId, `${field}.proofObservationId`),
+    proofObservationReceivedAt: receivedAt,
+    sourceAccountSeq: count(proof.sourceAccountSeq, `${field}.sourceAccountSeq`),
+    frozenHeadId: string(proof.frozenHeadId, `${field}.frozenHeadId`),
+    oldestMessageId: nullableString(proof.oldestMessageId, `${field}.oldestMessageId`),
+    targetHash: string(proof.targetHash, `${field}.targetHash`),
+    pageChainHash: string(proof.pageChainHash, `${field}.pageChainHash`),
+    rawCount: count(proof.rawCount, `${field}.rawCount`),
+    acceptedCount: count(proof.acceptedCount, `${field}.acceptedCount`),
+    boundaryDuplicateCount: count(
+      proof.boundaryDuplicateCount,
+      `${field}.boundaryDuplicateCount`,
+    ),
+    explicitlyIrrelevantCount: count(
+      proof.explicitlyIrrelevantCount,
+      `${field}.explicitlyIrrelevantCount`,
+    ),
+    rejectedCount: count(proof.rejectedCount, `${field}.rejectedCount`),
+    parseDebt: count(proof.parseDebt, `${field}.parseDebt`),
+    requiredServingHighWater: count(
+      proof.requiredServingHighWater,
+      `${field}.requiredServingHighWater`,
+    ),
+    proofPolicyVersion: string(proof.proofPolicyVersion, `${field}.proofPolicyVersion`),
+    sourceContractVersion: string(
+      proof.sourceContractVersion,
+      `${field}.sourceContractVersion`,
+    ),
+    parserVersion: string(proof.parserVersion, `${field}.parserVersion`),
+  };
+}
+
+function serializedProof(proof: OfapiMessageCoverageProofReference) {
+  return {
+    ...proof,
+    proofObservationReceivedAt: proof.proofObservationReceivedAt.toISOString(),
+  };
+}
+
 function parseCoverageEvent(event: DomainEventRow): OfapiMessageCoverageProjectionEvent {
   const data = record(event.data, "data");
   const target = record(data.target, "target");
@@ -47,8 +104,46 @@ function parseCoverageEvent(event: DomainEventRow): OfapiMessageCoverageProjecti
   if (data.classification !== "continuous_history" || data.source !== "pagination_exhausted") {
     throw new Error("Unsupported coverage proof classification");
   }
-  if (evidence.kind !== "vendor_eof") {
-    throw new Error("Continuous coverage is missing explicit vendor EOF evidence");
+  const evidenceKind = evidence.kind;
+  const supersedes = data.supersedes === null
+    ? null
+    : proofReference(data.supersedes, "supersedes");
+  if (evidenceKind === "vendor_eof") {
+    if (
+      supersedes !== null ||
+      (evidence.inheritedProof !== null && evidence.inheritedProof !== undefined)
+    ) {
+      throw new Error("Vendor EOF coverage cannot supersede an anchor proof");
+    }
+  } else if (evidenceKind === "anchor_chain") {
+    if (supersedes === null) {
+      throw new Error("Anchor-chain coverage is missing supersedes evidence");
+    }
+    const inherited = proofReference(evidence.inheritedProof, "evidence.inheritedProof");
+    if (JSON.stringify(serializedProof(inherited)) !== JSON.stringify(serializedProof(supersedes))) {
+      throw new Error("Anchor-chain inherited proof does not match supersedes");
+    }
+    if (
+      target.anchorMessageId !== inherited.frozenHeadId ||
+      range.fromMessageId !== inherited.oldestMessageId ||
+      data.proofPolicyVersion !== inherited.proofPolicyVersion
+    ) {
+      throw new Error("Anchor-chain coverage does not join the inherited range");
+    }
+    const capturedPageChainHash = string(
+      evidence.capturedPageChainHash,
+      "evidence.capturedPageChainHash",
+    );
+    const expectedHash = createHash("sha256").update(JSON.stringify({
+      protocol: "ofapi-anchor-chain-v1",
+      pageChainHash: capturedPageChainHash,
+      inheritedProof: serializedProof(inherited),
+    })).digest("hex");
+    if (evidence.pageChainHash !== expectedHash) {
+      throw new Error("Anchor-chain coverage hash is invalid");
+    }
+  } else {
+    throw new Error("Continuous coverage is missing explicit terminal evidence");
   }
   const proofReceivedAt = new Date(string(
     data.proofObservationReceivedAt,
@@ -86,6 +181,7 @@ function parseCoverageEvent(event: DomainEventRow): OfapiMessageCoverageProjecti
     sourceContractVersion: string(data.sourceContractVersion, "sourceContractVersion"),
     parserVersion: string(data.parserVersion, "parserVersion"),
     sourceAccountSeq: event.accountSeq,
+    supersedes,
   };
 }
 

@@ -28,6 +28,27 @@ export interface OfapiMessageCoverageProjectionEvent {
   sourceContractVersion: string;
   parserVersion: string;
   sourceAccountSeq: number;
+  supersedes: OfapiMessageCoverageProofReference | null;
+}
+
+export interface OfapiMessageCoverageProofReference {
+  proofObservationId: number;
+  proofObservationReceivedAt: Date;
+  sourceAccountSeq: number;
+  frozenHeadId: string;
+  oldestMessageId: string | null;
+  targetHash: string;
+  pageChainHash: string;
+  rawCount: number;
+  acceptedCount: number;
+  boundaryDuplicateCount: number;
+  explicitlyIrrelevantCount: number;
+  rejectedCount: number;
+  parseDebt: number;
+  requiredServingHighWater: number;
+  proofPolicyVersion: string;
+  sourceContractVersion: string;
+  parserVersion: string;
 }
 
 function assertContinuousProof(event: OfapiMessageCoverageProjectionEvent) {
@@ -46,10 +67,36 @@ export async function applyOfapiMessageCoverageEvents(
   db: Database,
   events: readonly OfapiMessageCoverageProjectionEvent[],
 ) {
-  let projected = 0;
-  for (const event of events) {
-    assertContinuousProof(event);
-    const result = await db.execute<{ page_id: unknown }>(sql`
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    let projected = 0;
+    for (const event of events) {
+      assertContinuousProof(event);
+      if (event.supersedes !== null) {
+        const current = await database.execute<Record<string, unknown>>(sql`
+          select *
+          from ofapi_message_coverage
+          where page_id = ${event.pageId}
+            and chat_id = ${event.chatId}
+          for update
+        `);
+        const row = current.rows[0];
+        const alreadyApplied = row !== undefined &&
+          Number(row.source_account_seq) >= event.sourceAccountSeq;
+        const monotoneLaterProof = row !== undefined &&
+          row.classification === "continuous_history" &&
+          row.revoked_at === null &&
+          Number(row.source_account_seq) > event.supersedes.sourceAccountSeq &&
+          Number(row.source_account_seq) < event.sourceAccountSeq;
+        if (
+          !alreadyApplied &&
+          !monotoneLaterProof &&
+          !matchesOfapiMessageCoverageProofReference(row, event.supersedes)
+        ) {
+          throw new Error("Anchor-chain coverage does not supersede the current proof");
+        }
+      }
+      const result = await database.execute<{ page_id: unknown }>(sql`
       insert into ofapi_message_coverage (
         page_id, chat_id, classification, source, frozen_head_id,
         oldest_message_id, target, target_hash, page_chain_hash,
@@ -95,10 +142,100 @@ export async function applyOfapiMessageCoverageEvents(
         updated_at = now()
       where ofapi_message_coverage.source_account_seq < excluded.source_account_seq
       returning page_id
-    `);
-    projected += result.rows.length;
-  }
-  return { projected };
+      `);
+      projected += result.rows.length;
+    }
+    return { projected };
+  });
+}
+
+export function matchesOfapiMessageCoverageProofReference(
+  row: Record<string, unknown> | undefined,
+  proof: OfapiMessageCoverageProofReference,
+) {
+  return row !== undefined &&
+    row.classification === "continuous_history" &&
+    row.revoked_at === null &&
+    Number(row.proof_observation_id) === proof.proofObservationId &&
+    new Date(row.proof_observation_received_at as string | Date).getTime() ===
+      proof.proofObservationReceivedAt.getTime() &&
+    Number(row.source_account_seq) === proof.sourceAccountSeq &&
+    row.frozen_head_id === proof.frozenHeadId &&
+    (row.oldest_message_id === null ? null : String(row.oldest_message_id)) ===
+      proof.oldestMessageId &&
+    row.target_hash === proof.targetHash &&
+    row.page_chain_hash === proof.pageChainHash &&
+    Number(row.raw_count) === proof.rawCount &&
+    Number(row.accepted_count) === proof.acceptedCount &&
+    Number(row.boundary_duplicate_count) === proof.boundaryDuplicateCount &&
+    Number(row.explicitly_irrelevant_count) === proof.explicitlyIrrelevantCount &&
+    Number(row.rejected_count) === proof.rejectedCount &&
+    Number(row.parse_debt) === proof.parseDebt &&
+    Number(row.required_serving_high_water) === proof.requiredServingHighWater &&
+    row.proof_policy_version === proof.proofPolicyVersion &&
+    row.source_contract_version === proof.sourceContractVersion &&
+    row.parser_version === proof.parserVersion;
+}
+
+/**
+ * Returns the exact latest proof that can close a newly captured page chain.
+ * The projection reducer re-checks this same identity before superseding it.
+ */
+export async function getComposableOfapiMessageCoverageProof(
+  db: Database,
+  input: {
+    pageId: number;
+    chatId: string;
+    expectedFrozenHeadId: string;
+    proofPolicyVersion: string;
+  },
+): Promise<OfapiMessageCoverageProofReference | null> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select coverage.*
+    from ofapi_message_coverage coverage
+    join observations proof
+      on proof.id = coverage.proof_observation_id
+     and proof.received_at = coverage.proof_observation_received_at
+     and proof.account_id = coverage.page_id
+     and proof.source = 'ofapi_capture'
+     and proof.kind = 'ofapi.capture_completed.v1'
+    where coverage.page_id = ${input.pageId}
+      and coverage.chat_id = ${input.chatId}
+      and coverage.classification = 'continuous_history'
+      and coverage.frozen_head_id = ${input.expectedFrozenHeadId}
+      and coverage.proof_policy_version = ${input.proofPolicyVersion}
+      and coverage.revoked_at is null
+      and coverage.parse_debt = 0
+      and coverage.rejected_count = 0
+      and coverage.raw_count = coverage.accepted_count
+        + coverage.boundary_duplicate_count
+        + coverage.explicitly_irrelevant_count
+  `);
+  const row = result.rows[0];
+  if (!row) return null;
+  return mapProofReference(row);
+}
+
+function mapProofReference(row: Record<string, unknown>): OfapiMessageCoverageProofReference {
+  return {
+    proofObservationId: Number(row.proof_observation_id),
+    proofObservationReceivedAt: new Date(row.proof_observation_received_at as string | Date),
+    sourceAccountSeq: Number(row.source_account_seq),
+    frozenHeadId: String(row.frozen_head_id),
+    oldestMessageId: row.oldest_message_id === null ? null : String(row.oldest_message_id),
+    targetHash: String(row.target_hash),
+    pageChainHash: String(row.page_chain_hash),
+    rawCount: Number(row.raw_count),
+    acceptedCount: Number(row.accepted_count),
+    boundaryDuplicateCount: Number(row.boundary_duplicate_count),
+    explicitlyIrrelevantCount: Number(row.explicitly_irrelevant_count),
+    rejectedCount: Number(row.rejected_count),
+    parseDebt: Number(row.parse_debt),
+    requiredServingHighWater: Number(row.required_serving_high_water),
+    proofPolicyVersion: String(row.proof_policy_version),
+    sourceContractVersion: String(row.source_contract_version),
+    parserVersion: String(row.parser_version),
+  };
 }
 
 export interface OfapiMessageCoverageServingState {

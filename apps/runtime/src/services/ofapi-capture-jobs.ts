@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   blockOfapiCaptureJobLease,
   captureOfapiAttemptResponse,
+  getComposableOfapiMessageCoverageProof,
   leaseNextOfapiCaptureJob,
   loadOfapiCaptureObservation,
   markOfapiAttemptDispatching,
@@ -14,6 +15,7 @@ import {
   settleOfapiCaptureParse,
   type OfapiCaptureJobRecord,
   type OfapiHttpOutcome,
+  type OfapiMessageCoverageProofReference,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -178,7 +180,8 @@ async function blockJob(
 function terminalFact(
   job: OfapiCaptureJobRecord,
   input: {
-    classification: "continuous_history" | "connected_to_anchor";
+    evidenceKind: "vendor_eof" | "anchor_chain";
+    inheritedProof: OfapiMessageCoverageProofReference | null;
     lastMessageId: string | null;
     pages: number;
     rawCount: number;
@@ -194,11 +197,41 @@ function terminalFact(
 ) {
   const chatId = stringField(job.target.chatId);
   if (!chatId) throw new Error("Terminal chat coverage is missing chatId");
+  const inherited = input.inheritedProof;
+  const inheritedEvidence = inherited === null ? null : {
+    proofObservationId: inherited.proofObservationId,
+    proofObservationReceivedAt: inherited.proofObservationReceivedAt.toISOString(),
+    sourceAccountSeq: inherited.sourceAccountSeq,
+    frozenHeadId: inherited.frozenHeadId,
+    oldestMessageId: inherited.oldestMessageId,
+    targetHash: inherited.targetHash,
+    pageChainHash: inherited.pageChainHash,
+    rawCount: inherited.rawCount,
+    acceptedCount: inherited.acceptedCount,
+    boundaryDuplicateCount: inherited.boundaryDuplicateCount,
+    explicitlyIrrelevantCount: inherited.explicitlyIrrelevantCount,
+    rejectedCount: inherited.rejectedCount,
+    parseDebt: inherited.parseDebt,
+    requiredServingHighWater: inherited.requiredServingHighWater,
+    proofPolicyVersion: inherited.proofPolicyVersion,
+    sourceContractVersion: inherited.sourceContractVersion,
+    parserVersion: inherited.parserVersion,
+  };
+  const pageChainHash = inheritedEvidence === null
+    ? input.pageChainHash
+    : createHash("sha256").update(JSON.stringify({
+      protocol: "ofapi-anchor-chain-v1",
+      pageChainHash: input.pageChainHash,
+      inheritedProof: inheritedEvidence,
+    })).digest("hex");
+  const oldestMessageId = inherited?.oldestMessageId ?? input.lastMessageId;
+  const requiredServingHighWater = Math.max(
+    input.requiredServingHighWater,
+    inherited?.requiredServingHighWater ?? 0,
+  );
   const payload = {
     scope: "chat",
-    source: input.classification === "continuous_history"
-      ? "pagination_exhausted"
-      : "continuous_anchors",
+    source: "pagination_exhausted",
     jobId: job.id,
     pageId: job.pageId,
     chatId,
@@ -207,35 +240,39 @@ function terminalFact(
     targetHash: job.targetHash,
     frozenHeadId: stringField(job.target.frozenHeadId),
     goal: job.goal,
-    classification: input.classification,
+    classification: "continuous_history",
     range: {
-      fromMessageId: input.lastMessageId,
+      fromMessageId: oldestMessageId,
       toFrozenHeadId: stringField(job.target.frozenHeadId),
     },
     evidence: {
-      kind: input.classification === "continuous_history" ? "vendor_eof" : "anchor_chain",
-      pageChainHash: input.pageChainHash,
+      kind: input.evidenceKind,
+      pageChainHash,
+      capturedPageChainHash: input.pageChainHash,
       pages: input.pages,
       lastPageObservation: {
         id: input.lastPageObservationId,
         receivedAt: input.lastPageObservationReceivedAt.toISOString(),
       },
+      inheritedProof: inheritedEvidence,
     },
     counts: {
-      raw: input.rawCount,
-      accepted: input.acceptedCount,
-      boundaryDuplicate: input.boundaryDuplicateCount,
-      explicitlyIrrelevant: input.explicitlyIrrelevantCount,
-      rejected: input.rejectedCount,
+      raw: input.rawCount + (inherited?.rawCount ?? 0),
+      accepted: input.acceptedCount + (inherited?.acceptedCount ?? 0),
+      boundaryDuplicate: input.boundaryDuplicateCount +
+        (inherited?.boundaryDuplicateCount ?? 0),
+      explicitlyIrrelevant: input.explicitlyIrrelevantCount +
+        (inherited?.explicitlyIrrelevantCount ?? 0),
+      rejected: input.rejectedCount + (inherited?.rejectedCount ?? 0),
     },
-    lastMessageId: input.lastMessageId,
+    lastMessageId: oldestMessageId,
     pages: input.pages,
-    requiredServingHighWater: input.requiredServingHighWater,
+    requiredServingHighWater,
     sourceContractVersion: job.sourceContractVersion,
     parserVersion: job.parserVersion,
     proofPolicyVersion: job.proofPolicyVersion,
     parseDebt: 0,
-    supersedes: null,
+    supersedes: inheritedEvidence,
   };
   return {
     producer: "ofapi-mirror-background",
@@ -244,17 +281,15 @@ function terminalFact(
     payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
     idempotencyKey: `capture-complete:${job.id}:${job.targetHash}`,
     observedAt: new Date(),
-    coverage: input.classification === "continuous_history"
-      ? {
-        conversationRef: chatId,
-        dedupKey: `capture-coverage:${job.id}:${job.targetHash}`,
-        checkpointDedupKey: `projection-checkpoint:capture-coverage:${job.id}:${job.targetHash}`,
-        checkpointData: {
-          profile: "ofapi_message_coverage_v1",
-          originClass: "capture_background",
-        },
-      }
-      : null,
+    coverage: {
+      conversationRef: chatId,
+      dedupKey: `capture-coverage:${job.id}:${job.targetHash}`,
+      checkpointDedupKey: `projection-checkpoint:capture-coverage:${job.id}:${job.targetHash}`,
+      checkpointData: {
+        profile: "ofapi_message_coverage_v1",
+        originClass: "capture_background",
+      },
+    },
   };
 }
 
@@ -490,8 +525,38 @@ async function parseCapturedJob(
     : anchorReached || continuousToEnd;
 
   if (completes) {
+    const inheritedProof = continuousToEnd || target.anchorMessageId === null
+      ? null
+      : await getComposableOfapiMessageCoverageProof(app.db, {
+        pageId: job.pageId,
+        chatId: target.chatId,
+        expectedFrozenHeadId: target.anchorMessageId,
+        proofPolicyVersion: job.proofPolicyVersion,
+      });
+    if (!continuousToEnd && inheritedProof === null) {
+      await settleOfapiCaptureParse(app.db, {
+        jobId: job.id,
+        attemptId: observation.attemptId,
+        leaseToken: job.leaseToken,
+        observationId: observation.id,
+        observationReceivedAt: observation.receivedAt,
+        parserOutcome: "accepted",
+        rawCount: page.rawCount,
+        acceptedCount: page.items.length,
+        boundaryDuplicateCount: page.boundaryDuplicateCount,
+        explicitlyIrrelevantCount: 0,
+        rejectedCount: 0,
+        disposition: {
+          kind: "blocked",
+          reasonCode: "anchor_proof_changed",
+          reasonMessage: "The continuous proof at the requested anchor is absent or changed",
+        },
+      });
+      return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+    }
     const terminal = terminalFact(job, {
-      classification: continuousToEnd ? "continuous_history" : "connected_to_anchor",
+      evidenceKind: continuousToEnd ? "vendor_eof" : "anchor_chain",
+      inheritedProof,
       lastMessageId,
       pages,
       rawCount,
@@ -518,13 +583,28 @@ async function parseCapturedJob(
       rejectedCount: 0,
       disposition: {
         kind: "complete",
+        ...(inheritedProof === null
+          ? {}
+          : {
+            expectedSupersedes: {
+              conversationRef: target.chatId,
+              proof: inheritedProof,
+            },
+          }),
         terminal,
         result: {
-          classification: continuousToEnd ? "continuous_history" : "connected_to_anchor",
-          lastMessageId,
+          classification: "continuous_history",
+          completionEvidence: continuousToEnd ? "vendor_eof" : "anchor_chain",
+          lastMessageId: inheritedProof?.oldestMessageId ?? lastMessageId,
           pages,
-          pageChainHash,
-          requiredServingHighWater: materialHighWater,
+          pageChainHash: terminal.payload.evidence &&
+              typeof terminal.payload.evidence === "object"
+            ? (terminal.payload.evidence as Record<string, unknown>).pageChainHash
+            : pageChainHash,
+          requiredServingHighWater: Math.max(
+            materialHighWater,
+            inheritedProof?.requiredServingHighWater ?? 0,
+          ),
         },
       },
     });
@@ -695,6 +775,7 @@ export async function executeOfapiCaptureJobChunk(
       method: requestPlan.method,
       requestSemantics: requestPlan.requestSemantics,
       requestShape: requestPlan.request,
+      requireFreshStorageHealth: true,
       reservedCredits: requestPlan.reservedCredits,
       globalDailyCap,
       scopeDailyCap: job.budgetScope === "bulk"

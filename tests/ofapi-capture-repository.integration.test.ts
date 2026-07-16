@@ -12,6 +12,7 @@ import {
   createOrGetOfapiCaptureJob,
   createUser,
   evaluateOfapiHistoryCoverage,
+  getComposableOfapiMessageCoverageProof,
   getOfapiCaptureJob,
   getOfapiRequestAttempt,
   insertObservation,
@@ -93,8 +94,41 @@ async function createAndReserveInteractive(input?: {
   reservedCredits?: number;
   globalDailyCap?: number;
   scopeDailyCap?: number;
+  requireFreshStorageHealth?: boolean;
+  storageHealth?: {
+    healthy: boolean;
+    breached: boolean;
+    checkedAt: Date;
+    error?: string | null;
+  };
 }) {
   const seeded = await seed();
+  if (input?.storageHealth) {
+    const failure = input.storageHealth.error != null;
+    await testDb!.pool.query(`
+      insert into ofapi_storage_health_state (
+        id, healthy, breached, checked_at,
+        used_bytes, free_bytes, total_bytes, error, updated_at
+      ) values (1, $1, $2, $3, $4, $5, $6, $7, $3)
+      on conflict (id) do update set
+        healthy = excluded.healthy,
+        breached = excluded.breached,
+        checked_at = excluded.checked_at,
+        used_bytes = excluded.used_bytes,
+        free_bytes = excluded.free_bytes,
+        total_bytes = excluded.total_bytes,
+        error = excluded.error,
+        updated_at = excluded.updated_at
+    `, [
+      input.storageHealth.healthy,
+      input.storageHealth.breached,
+      input.storageHealth.checkedAt,
+      failure ? null : 80,
+      failure ? null : 20,
+      failure ? null : 100,
+      input.storageHealth.error ?? null,
+    ]);
+  }
   const request = await createOfapiInteractiveRequest(testDb!.db, {
     pageId: seeded.page.id,
     ofapiAccountId: seeded.accountId,
@@ -126,6 +160,9 @@ async function createAndReserveInteractive(input?: {
     balanceMaxAgeMs: 60 * 60 * 1000,
     principalCallCap: 100,
     principalCreditCap: 100,
+    ...(input?.requireFreshStorageHealth === undefined
+      ? {}
+      : { requireFreshStorageHealth: input.requireFreshStorageHealth }),
     deadlineAt: new Date(NOW.getTime() + 60_000),
     now: NOW,
   });
@@ -403,6 +440,68 @@ describe("OFAPI capture correctness repository", () => {
     );
     expect(attempts.rows[0]?.n).toBe("0");
     expect(denials.rows).toEqual([{ denied_count: "1", reason: "global_cap" }]);
+  });
+
+  it("temporarily denies missing, stale, or breached storage without punishing the principal", async () => {
+    if (!testDb) return;
+    const cases = [
+      { label: "missing", storageHealth: undefined },
+      {
+        label: "stale",
+        storageHealth: {
+          healthy: true,
+          breached: false,
+          checkedAt: new Date(NOW.getTime() - 3 * 60 * 60 * 1000),
+        },
+      },
+      {
+        label: "breached",
+        storageHealth: { healthy: false, breached: true, checkedAt: NOW },
+      },
+    ] as const;
+
+    for (const sample of cases) {
+      if (sample.label === "missing") {
+        await testDb.pool.query("delete from ofapi_storage_health_state");
+      }
+      const seeded = await createAndReserveInteractive({
+        requireFreshStorageHealth: true,
+        ...(sample.storageHealth === undefined ? {} : { storageHealth: sample.storageHealth }),
+      });
+      expect(seeded.reservation).toEqual({
+        admitted: false,
+        reason: "storage_unhealthy",
+        retryAt: new Date(NOW.getTime() + 5 * 60 * 1000),
+      });
+      const principal = await testDb.pool.query<{
+        consecutive_budget_denials: number;
+        blocked_until: Date | null;
+        last_denial_reason: string | null;
+      }>(`
+        select consecutive_budget_denials, blocked_until, last_denial_reason
+        from ofapi_principal_budget_state
+        where principal_user_id = $1
+      `, [seeded.owner.id]);
+      expect(principal.rows[0]).toMatchObject({
+        consecutive_budget_denials: 0,
+        blocked_until: null,
+        last_denial_reason: null,
+      });
+    }
+
+    const attempts = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from ofapi_request_attempts",
+    );
+    expect(attempts.rows[0]?.n).toBe("0");
+  });
+
+  it("admits governed capture with a fresh healthy storage sample", async () => {
+    if (!testDb) return;
+    const seeded = await createAndReserveInteractive({
+      requireFreshStorageHealth: true,
+      storageHealth: { healthy: true, breached: false, checkedAt: NOW },
+    });
+    expect(seeded.reservation.admitted).toBe(true);
   });
 
   it("releases a pre-dispatch reservation without inventing a vendor attempt", async () => {
@@ -756,6 +855,315 @@ describe("OFAPI capture correctness repository", () => {
     expect(attempts.rows[0]?.count).toBe("1");
   });
 
+  it("composes bounded anchor chains without poisoning a lagging projection", async () => {
+    if (!testDb) return;
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: messagePage({ nextPage: null }),
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    await runOfapiMessageCoverageProjection(fixture.app, { accountId: fixture.page.id });
+    await runMessageArchiveProjection(fixture.app, { accountId: fixture.page.id });
+
+    const oldProof = await testDb.pool.query<{
+      proof_observation_id: string;
+      proof_observation_received_at: Date;
+      source_account_seq: string;
+      target_hash: string;
+      page_chain_hash: string;
+    }>(`
+      select proof_observation_id::text,
+             proof_observation_received_at,
+             source_account_seq::text,
+             target_hash,
+             page_chain_hash
+      from ofapi_message_coverage
+      where page_id = $1 and chat_id = '42'
+    `, [fixture.page.id]);
+    const prior = oldProof.rows[0];
+    if (!prior) throw new Error("old coverage proof missing");
+
+    const anchorBody = Buffer.from(JSON.stringify({
+      data: [
+        { id: "102", isSentByMe: false, createdAt: "2026-07-16T12:01:00.000Z", text: "new" },
+        { id: "101", isSentByMe: true, createdAt: "2026-07-16T12:00:00.000Z", text: "middle" },
+        { id: "100", isSentByMe: false, createdAt: "2026-07-16T11:59:00.000Z", text: "anchor" },
+      ],
+      _pagination: { next_page: "older-than-anchor" },
+      _meta: { _credits: { used: 1, balance: 998 } },
+    }));
+    fixture.dispatchGovernedRaw.mockImplementation(async (
+      _context: unknown,
+      request: { beforeDispatch: () => Promise<boolean> },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence missing");
+      return {
+        status: 200,
+        bodyBytes: anchorBody,
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const repair = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: fixture.page.id,
+      ofapiAccountId: fixture.accountId,
+      kind: "chat_paginate",
+      goal: "connect_to_anchor",
+      activeSlotKey: `page:${fixture.page.id}:chat:42`,
+      target: {
+        chatId: "42",
+        frozenHeadId: "102",
+        anchorMessageId: "100",
+        limit: 100,
+      },
+      budgetScope: "interactive",
+      createdBy: "interactive_open",
+      originPrincipalId: fixture.owner.id,
+      maxCalls: 1,
+      maxCredits: 1,
+      maxPages: 1,
+      maxItems: 100,
+    });
+
+    const callsBeforeRepair = fixture.dispatchGovernedRaw.mock.calls.length;
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(callsBeforeRepair + 1);
+    expect(await getOfapiCaptureJob(testDb.db, repair.job.id)).toMatchObject({
+      state: "complete",
+      result: {
+        classification: "continuous_history",
+        completionEvidence: "anchor_chain",
+        lastMessageId: "99",
+      },
+    });
+
+    const terminal = await testDb.pool.query<{ payload: Record<string, unknown> }>(`
+      select observation.payload
+      from observations observation
+      join ofapi_capture_jobs job
+        on job.terminal_observation_id = observation.id
+       and job.terminal_observation_received_at = observation.received_at
+      where job.id = $1
+    `, [repair.job.id]);
+    expect(terminal.rows[0]?.payload).toMatchObject({
+      classification: "continuous_history",
+      range: { fromMessageId: "99", toFrozenHeadId: "102" },
+      evidence: {
+        kind: "anchor_chain",
+        inheritedProof: {
+          proofObservationId: Number(prior.proof_observation_id),
+          proofObservationReceivedAt: prior.proof_observation_received_at.toISOString(),
+          sourceAccountSeq: Number(prior.source_account_seq),
+          targetHash: prior.target_hash,
+          pageChainHash: prior.page_chain_hash,
+          frozenHeadId: "100",
+          oldestMessageId: "99",
+        },
+      },
+      supersedes: {
+        proofObservationId: Number(prior.proof_observation_id),
+        sourceAccountSeq: Number(prior.source_account_seq),
+      },
+    });
+
+    // A second valid completion can commit before the projector consumes the
+    // first one. Both were atomically checked against the same old proof; the
+    // reducer must advance through them in sequence instead of wedging on the
+    // now-monotone intermediate row.
+    const laterAnchorBody = Buffer.from(JSON.stringify({
+      data: [
+        { id: "104", isSentByMe: false, createdAt: "2026-07-16T12:03:00.000Z" },
+        { id: "103", isSentByMe: true, createdAt: "2026-07-16T12:02:00.000Z" },
+        { id: "100", isSentByMe: false, createdAt: "2026-07-16T11:59:00.000Z" },
+      ],
+      _pagination: { next_page: "older-than-anchor" },
+      _meta: { _credits: { used: 1, balance: 997 } },
+    }));
+    fixture.dispatchGovernedRaw.mockImplementation(async (
+      _context: unknown,
+      request: { beforeDispatch: () => Promise<boolean> },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence missing");
+      return {
+        status: 200,
+        bodyBytes: laterAnchorBody,
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const laterRepair = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: fixture.page.id,
+      ofapiAccountId: fixture.accountId,
+      kind: "chat_paginate",
+      goal: "connect_to_anchor",
+      activeSlotKey: `page:${fixture.page.id}:chat:42`,
+      target: {
+        chatId: "42",
+        frozenHeadId: "104",
+        anchorMessageId: "100",
+        limit: 100,
+      },
+      budgetScope: "interactive",
+      createdBy: "interactive_open",
+      originPrincipalId: fixture.owner.id,
+      maxCalls: 1,
+      maxCredits: 1,
+      maxPages: 1,
+      maxItems: 100,
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect(await getOfapiCaptureJob(testDb.db, laterRepair.job.id)).toMatchObject({
+      state: "complete",
+      result: { completionEvidence: "anchor_chain", lastMessageId: "99" },
+    });
+
+    await runOfapiMessageCoverageProjection(fixture.app, { accountId: fixture.page.id });
+    await runMessageArchiveProjection(fixture.app, { accountId: fixture.page.id });
+    expect(await evaluateOfapiHistoryCoverage(testDb.db, {
+      pageId: fixture.page.id,
+      chatId: "42",
+      expectedCurrentHeadId: "104",
+      requestedFirstId: "99",
+      acceptedProofPolicyVersions: [laterRepair.job.proofPolicyVersion],
+    })).toMatchObject({ eligible: true });
+  });
+
+  it("atomically blocks anchor completion when the inherited proof changed", async () => {
+    if (!testDb) return;
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: messagePage({ nextPage: null }),
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    await runOfapiMessageCoverageProjection(fixture.app, { accountId: fixture.page.id });
+
+    const inheritedProof = await getComposableOfapiMessageCoverageProof(testDb.db, {
+      pageId: fixture.page.id,
+      chatId: "42",
+      expectedFrozenHeadId: "100",
+      proofPolicyVersion: fixture.job.proofPolicyVersion,
+    });
+    if (!inheritedProof) throw new Error("inherited proof missing");
+
+    const anchorBody = Buffer.from(JSON.stringify({
+      data: [
+        { id: "102", isSentByMe: false, createdAt: "2026-07-16T12:01:00.000Z" },
+        { id: "100", isSentByMe: false, createdAt: "2026-07-16T11:59:00.000Z" },
+      ],
+      _pagination: { next_page: "older-than-anchor" },
+      _meta: { _credits: { used: 1, balance: 998 } },
+    }));
+    fixture.dispatchGovernedRaw.mockImplementation(async (
+      _context: unknown,
+      request: { beforeDispatch: () => Promise<boolean> },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence missing");
+      return {
+        status: 200,
+        bodyBytes: anchorBody,
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const repair = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: fixture.page.id,
+      ofapiAccountId: fixture.accountId,
+      kind: "chat_paginate",
+      goal: "connect_to_anchor",
+      activeSlotKey: `page:${fixture.page.id}:chat:42`,
+      target: {
+        chatId: "42",
+        frozenHeadId: "102",
+        anchorMessageId: "100",
+        limit: 100,
+      },
+      budgetScope: "interactive",
+      createdBy: "interactive_open",
+      originPrincipalId: fixture.owner.id,
+      maxCalls: 1,
+      maxCredits: 1,
+      maxPages: 1,
+      maxItems: 100,
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    const capturedJob = await getOfapiCaptureJob(testDb.db, repair.job.id);
+    if (
+      !capturedJob?.leaseToken ||
+      capturedJob.pendingObservationId === null ||
+      capturedJob.pendingObservationReceivedAt === null
+    ) {
+      throw new Error("repair response was not durably captured");
+    }
+    const attempt = await testDb.pool.query<{ id: string }>(`
+      select id::text
+      from ofapi_request_attempts
+      where capture_job_id = $1 and state = 'response_captured'
+    `, [repair.job.id]);
+    const attemptId = attempt.rows[0]?.id;
+    if (!attemptId) throw new Error("captured repair attempt missing");
+
+    // Simulate a newer coverage projection winning after the parser read its
+    // anchor but before the completion transaction acquires the row lock.
+    await testDb.pool.query(`
+      update ofapi_message_coverage
+      set page_chain_hash = repeat('f', 64), updated_at = now()
+      where page_id = $1 and chat_id = '42'
+    `, [fixture.page.id]);
+
+    const terminalKey = `anchor-race-proof:${repair.job.id}`;
+    expect(await settleOfapiCaptureParse(testDb.db, {
+      jobId: repair.job.id,
+      attemptId,
+      leaseToken: capturedJob.leaseToken,
+      observationId: capturedJob.pendingObservationId,
+      observationReceivedAt: capturedJob.pendingObservationReceivedAt,
+      parserOutcome: "accepted",
+      rawCount: 2,
+      acceptedCount: 2,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: {
+        kind: "complete",
+        expectedSupersedes: { conversationRef: "42", proof: inheritedProof },
+        terminal: {
+          producer: "race-test",
+          kind: "ofapi.capture_completed.v1",
+          payload: { mustNotBeCaptured: true },
+          payloadHash: Buffer.alloc(32, 7),
+          idempotencyKey: terminalKey,
+          coverage: {
+            conversationRef: "42",
+            dedupKey: `anchor-race-coverage:${repair.job.id}`,
+            checkpointDedupKey: `anchor-race-checkpoint:${repair.job.id}`,
+          },
+        },
+      },
+    })).toBe(true);
+
+    expect(await getOfapiCaptureJob(testDb.db, repair.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "anchor_proof_changed",
+      pendingObservationId: null,
+      pendingObservationReceivedAt: null,
+      leaseOwner: null,
+      leaseToken: null,
+      leaseUntil: null,
+      terminalObservationId: null,
+    });
+    const forbidden = await testDb.pool.query<{ observations: string; events: string }>(`
+      select
+        (select count(*)::text from observations where idempotency_key = $1) as observations,
+        (select count(*)::text from domain_events
+          where account_id = $2 and dedup_key = $3) as events
+    `, [terminalKey, fixture.page.id, `anchor-race-coverage:${repair.job.id}`]);
+    expect(forbidden.rows[0]).toEqual({ observations: "0", events: "0" });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+  });
+
   it("captures valid JSON contract drift but freezes the cursor and does not retry the vendor", async () => {
     if (!testDb) return;
     const fixture = await createCaptureExecutionFixture({
@@ -970,7 +1378,7 @@ describe("OFAPI capture correctness repository", () => {
     expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
   });
 
-  it("parks an expired dispatch as indeterminate instead of reissuing it", async () => {
+  it("requeues the same frozen safe-read job only after owner certainty resolution", async () => {
     if (!testDb) return;
     const seeded = await seed();
     const created = await createOrGetOfapiCaptureJob(testDb.db, {
@@ -1037,6 +1445,29 @@ describe("OFAPI capture correctness repository", () => {
     expect(await listRunnableOfapiCapturePages(testDb.db, {
       now: new Date(NOW.getTime() + 3_000),
     })).toEqual([]);
+
+    expect(await resolveOfapiIndeterminateAttempt(testDb.db, {
+      attemptId: reservation.attemptId,
+      resolution: "confirmed_billed",
+      actorUserId: seeded.owner.id,
+      reason: "vendor console confirmed the safe GET charge",
+      now: new Date(NOW.getTime() + 3_000),
+    })).toBe(true);
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "retry_wait",
+      reasonCode: "operator_reconciled_safe_read",
+      target: { chatId: "expired", frozenHeadId: "100" },
+      spentCredits: 1,
+      attemptCount: 1,
+      dispatchCount: 1,
+    });
+    expect(await listRunnableOfapiCapturePages(testDb.db, {
+      now: new Date(NOW.getTime() + 3_001),
+    })).toEqual([{
+      pageId: seeded.page.id,
+      priority: 0,
+      requestedAt: new Date(NOW.getTime() + 3_000),
+    }]);
   });
 
   it("does not hot-loop an awaiting-parse job parked after parser failure", async () => {
@@ -1230,6 +1661,24 @@ describe("OFAPI capture correctness repository", () => {
       actorUserId: fixture.owner.id,
       reason: "must not free an uncertain stateful slot",
     })).toEqual({ cancelled: false, currentState: "blocked" });
+    const attempt = await testDb.pool.query<{ id: string }>(`
+      select id::text as id
+      from ofapi_request_attempts
+      where capture_job_id = $1
+      order by reserved_at desc
+      limit 1
+    `, [fixture.job.id]);
+    expect(await resolveOfapiIndeterminateAttempt(testDb.db, {
+      attemptId: attempt.rows[0]!.id,
+      resolution: "confirmed_billed",
+      actorUserId: fixture.owner.id,
+      reason: "vendor console confirmed the uncertain create charge",
+    })).toBe(true);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "indeterminate",
+      spentCredits: 1,
+    });
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
     expect(dispatchGovernedRaw).toHaveBeenCalledTimes(1);
   });

@@ -3436,11 +3436,30 @@ export const ofapiWebhookReconcileBodySchema = z.discriminatedUnion("action", [
 
 export const ofapiCaptureSeedBodySchema = z.object({
   dryRun: z.boolean().default(true),
+  goal: z.enum(["connect_to_anchor", "history_to_exhaustion"])
+    .default("connect_to_anchor"),
   targets: z.array(z.object({
     pageId: intId,
     chatId: z.string().trim().min(1).max(200),
-    anchorMessageId: z.string().trim().min(1).max(200),
+    anchorMessageId: z.string().trim().min(1).max(200).optional(),
   })).min(1).max(20),
+}).superRefine((value, ctx) => {
+  value.targets.forEach((target, index) => {
+    if (value.goal === "connect_to_anchor" && target.anchorMessageId === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["targets", index, "anchorMessageId"],
+        message: "connect_to_anchor requires a verified anchorMessageId",
+      });
+    }
+    if (value.goal === "history_to_exhaustion" && target.anchorMessageId !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["targets", index, "anchorMessageId"],
+        message: "history_to_exhaustion must not declare an anchorMessageId",
+      });
+    }
+  });
 });
 
 export const ofapiCaptureSeedResponseSchema = z.object({
@@ -3459,8 +3478,9 @@ export const ofapiCaptureSeedResponseSchema = z.object({
   results: z.array(z.object({
     pageId: intId,
     chatId: z.string(),
+    goal: z.enum(["connect_to_anchor", "history_to_exhaustion"]),
     frozenHeadId: z.string(),
-    anchorMessageId: z.string(),
+    anchorMessageId: z.string().nullable(),
     status: z.enum([
       "would_create",
       "would_coalesce",
@@ -3556,6 +3576,164 @@ export const ofapiExportQuoteStatusResponseSchema = z.object({
     quotedAt: isoTimestamp.nullable(),
     expiresAt: isoTimestamp.nullable(),
   }).nullable(),
+});
+
+const ofapiCaptureControlKeySchema = z.string().trim().max(200).refine(
+  (value) => value === "global"
+    || /^page:[1-9]\d*$/.test(value)
+    || /^(scope):(live|interactive|bulk)$/.test(value)
+    || /^operation:[a-z0-9_.:-]+$/.test(value),
+  "Unsupported OFAPI capture control key",
+);
+
+const ofapiCaptureOperatorAttemptSchema = z.object({
+  attemptId: z.string().uuid(),
+  captureJobId: z.string().uuid().nullable(),
+  pageId: intId,
+  operation: z.string(),
+  state: z.enum([
+    "reserved",
+    "released_pre_dispatch",
+    "dispatching",
+    "response_captured",
+    "indeterminate",
+  ]),
+  creditState: z.enum(["reserved", "settled", "released", "indeterminate"]),
+  reservedCredits: z.number().int().nonnegative(),
+  settledCredits: z.number().int().nonnegative().nullable(),
+  certaintyResolution: z.string().nullable(),
+  dispatchStartedAt: isoTimestamp.nullable(),
+  finishedAt: isoTimestamp.nullable(),
+});
+
+export const ofapiCaptureOperatorStatusResponseSchema = z.object({
+  controls: z.array(z.object({
+    controlKey: z.string(),
+    paused: z.boolean(),
+    reason: z.string().nullable(),
+    version: z.number().int().nonnegative(),
+    updatedAt: isoTimestamp,
+  })),
+  jobGroups: z.array(z.object({
+    state: ofapiExportQuoteJobStateSchema,
+    reasonCode: z.string().nullable(),
+    count: z.number().int().nonnegative(),
+    oldestUpdatedAt: isoTimestamp,
+  })),
+  jobSamples: z.array(z.object({
+    jobId: z.string().uuid(),
+    pageId: intId,
+    kind: z.enum([
+      "chat_paginate",
+      "campaign_snapshot",
+      "head_repair",
+      "account_export",
+      "export_import",
+    ]),
+    state: ofapiExportQuoteJobStateSchema,
+    reasonCode: z.string().nullable(),
+    rowVersion: z.number().int().nonnegative(),
+    updatedAt: isoTimestamp,
+  })),
+  indeterminate: z.object({
+    count: z.number().int().nonnegative(),
+    oldestAt: isoTimestamp.nullable(),
+    samples: z.array(ofapiCaptureOperatorAttemptSchema),
+  }),
+  storageHealth: z.object({
+    healthy: z.boolean(),
+    breached: z.boolean(),
+    checkedAt: isoTimestamp,
+    usedBytes: z.number().int().nonnegative().nullable(),
+    freeBytes: z.number().int().nonnegative().nullable(),
+    totalBytes: z.number().int().nonnegative().nullable(),
+    errorPresent: z.boolean(),
+  }).nullable(),
+});
+
+export const ofapiCaptureControlBodySchema = z.object({
+  controlKey: ofapiCaptureControlKeySchema,
+  paused: z.boolean(),
+  expectedVersion: z.number().int().nonnegative(),
+  reason: z.string().trim().min(1).max(500),
+  dryRun: z.boolean().default(true),
+}).strict();
+
+export const ofapiCaptureControlResponseSchema = z.object({
+  executed: z.boolean(),
+  controlKey: z.string(),
+  previous: z.object({
+    paused: z.boolean(),
+    reason: z.string().nullable(),
+    version: z.number().int().nonnegative(),
+  }),
+  next: z.object({
+    paused: z.boolean(),
+    reason: z.string(),
+    version: z.number().int().nonnegative(),
+  }),
+});
+
+export const ofapiCaptureAttemptParamsSchema = z.object({
+  attemptId: z.string().uuid(),
+});
+
+export const ofapiCaptureAttemptResolveBodySchema = z.object({
+  expectedState: z.literal("indeterminate").default("indeterminate"),
+  resolution: z.enum(["confirmed_billed", "confirmed_not_billed"]),
+  actualCredits: z.number().int().nonnegative().max(1_000_000).optional(),
+  reason: z.string().trim().min(1).max(500),
+  dryRun: z.boolean().default(true),
+}).strict().superRefine((value, ctx) => {
+  if (value.resolution === "confirmed_not_billed" && value.actualCredits !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["actualCredits"],
+      message: "confirmed_not_billed cannot declare actualCredits",
+    });
+  }
+});
+
+export const ofapiCaptureAttemptResolveResponseSchema = z.object({
+  dryRun: z.boolean(),
+  status: z.enum(["would_resolve", "resolved"]),
+  attempt: ofapiCaptureOperatorAttemptSchema,
+});
+
+export const ofapiExportCreateReconcileBodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("confirm_not_created"),
+    attemptId: z.string().uuid(),
+    expectedState: z.literal("blocked").default("blocked"),
+    expectedReasonCode: z.literal("indeterminate").default("indeterminate"),
+    expectedJobRowVersion: z.number().int().nonnegative(),
+    reason: z.string().trim().min(1).max(500),
+    dryRun: z.boolean().default(true),
+  }).strict(),
+  z.object({
+    action: z.literal("adopt_created"),
+    attemptId: z.string().uuid(),
+    expectedState: z.literal("blocked").default("blocked"),
+    expectedReasonCode: z.literal("indeterminate").default("indeterminate"),
+    expectedJobRowVersion: z.number().int().nonnegative(),
+    vendorExportId: z.string().regex(/^data_export_[A-Za-z0-9_-]+$/).max(200),
+    actualCredits: z.number().int().nonnegative().max(1_000_000).optional(),
+    reason: z.string().trim().min(1).max(500),
+    dryRun: z.boolean().default(true),
+  }).strict(),
+]);
+
+export const ofapiExportCreateReconcileResponseSchema = z.object({
+  dryRun: z.boolean(),
+  status: z.enum(["would_reconcile", "reconciled"]),
+  action: z.enum(["confirm_not_created", "adopt_created"]),
+  job: z.object({
+    jobId: z.string().uuid(),
+    state: ofapiExportQuoteJobStateSchema,
+    reasonCode: z.string().nullable(),
+    rowVersion: z.number().int().nonnegative(),
+  }),
+  attempt: ofapiCaptureOperatorAttemptSchema,
 });
 
 export const ofapiWebhookRegisterResponseSchema = z.object({
@@ -4538,12 +4716,72 @@ export const routeSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Dry-run or seed a bounded explicit OFAPI chat cohort",
-    description: "Creates no more than 20 explicitly listed connect-to-anchor jobs. "
-      + "The current chat head and a verified continuous anchor are resolved from Core; "
-      + "no chat discovery or automatic fanout occurs.",
+    description: "Creates no more than 20 explicitly listed jobs. connect_to_anchor "
+      + "requires an existing verified continuous anchor; history_to_exhaustion is the "
+      + "explicit, capped bootstrap path for a first proof. The current head is frozen "
+      + "from Core; no chat discovery or automatic fanout occurs.",
     body: ofapiCaptureSeedBodySchema,
     response: {
       200: ofapiCaptureSeedResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiCaptureOperatorStatus: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Inspect bounded OFAPI capture controls and unresolved work",
+    description: "Returns only operational metadata: controls, grouped active jobs, "
+      + "bounded job/attempt samples, and the latest storage-health result.",
+    response: {
+      200: ofapiCaptureOperatorStatusResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminOfapiCaptureControl: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Dry-run or CAS-update one OFAPI capture pause control",
+    body: ofapiCaptureControlBodySchema,
+    response: {
+      200: ofapiCaptureControlResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiCaptureAttemptResolve: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Dry-run or resolve one indeterminate OFAPI request certainty",
+    description: "Records an independently verified billed/not-billed outcome. It never "
+      + "dispatches or retries a vendor request.",
+    params: ofapiCaptureAttemptParamsSchema,
+    body: ofapiCaptureAttemptResolveBodySchema,
+    response: {
+      200: ofapiCaptureAttemptResolveResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiExportCreateReconcile: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Reconcile one uncertain quote-only OFAPI export create",
+    description: "After an independent vendor check, either confirms no export was created "
+      + "or adopts its explicit id. This route never calls OFAPI or repeats POST /data-exports.",
+    params: ofapiExportQuoteParamsSchema,
+    body: ofapiExportCreateReconcileBodySchema,
+    response: {
+      200: ofapiExportCreateReconcileResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -6515,6 +6753,18 @@ export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusRespon
 export type OfapiWebhookReconcileBody = z.infer<typeof ofapiWebhookReconcileBodySchema>;
 export type OfapiCaptureSeedBody = z.infer<typeof ofapiCaptureSeedBodySchema>;
 export type OfapiCaptureSeedResponse = z.infer<typeof ofapiCaptureSeedResponseSchema>;
+export type OfapiCaptureOperatorStatusResponse =
+  z.infer<typeof ofapiCaptureOperatorStatusResponseSchema>;
+export type OfapiCaptureControlBody = z.infer<typeof ofapiCaptureControlBodySchema>;
+export type OfapiCaptureControlResponse = z.infer<typeof ofapiCaptureControlResponseSchema>;
+export type OfapiCaptureAttemptResolveBody =
+  z.infer<typeof ofapiCaptureAttemptResolveBodySchema>;
+export type OfapiCaptureAttemptResolveResponse =
+  z.infer<typeof ofapiCaptureAttemptResolveResponseSchema>;
+export type OfapiExportCreateReconcileBody =
+  z.infer<typeof ofapiExportCreateReconcileBodySchema>;
+export type OfapiExportCreateReconcileResponse =
+  z.infer<typeof ofapiExportCreateReconcileResponseSchema>;
 export type OfapiExportQuoteBody = z.infer<typeof ofapiExportQuoteBodySchema>;
 export type OfapiExportQuoteCreateResponse =
   z.infer<typeof ofapiExportQuoteCreateResponseSchema>;

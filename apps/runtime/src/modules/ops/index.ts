@@ -74,6 +74,12 @@ import {
 import { getOfapiDmColdArchiveStatus } from "../../services/ofapi-dm-archive.ts";
 import { seedOwnerOfapiCaptureJobs } from "../../services/ofapi-capture-seed.ts";
 import {
+  getOwnerOfapiCaptureOperatorStatus,
+  reconcileOwnerOfapiExportCreate,
+  resolveOwnerOfapiCaptureAttempt,
+  setOwnerOfapiCaptureControl,
+} from "../../services/ofapi-capture-operator.ts";
+import {
   cancelOwnerOfapiExportQuote,
   createOwnerOfapiExportQuote,
   getOwnerOfapiExportQuoteStatus,
@@ -210,6 +216,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const result = await seedOwnerOfapiCaptureJobs(appContext, {
       actorUserId: principal.user.id,
       dryRun: request.body.dryRun,
+      goal: request.body.goal,
       targets: request.body.targets,
     });
     if (!result.dryRun) {
@@ -223,6 +230,91 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           created: result.created,
           coalesced: result.coalesced,
           skipped: result.skipped,
+        },
+      });
+    }
+    return result;
+  });
+
+  server.get("/api/v1/admin/ofapi/capture/operator", {
+    schema: routeSchemas.adminOfapiCaptureOperatorStatus,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return getOwnerOfapiCaptureOperatorStatus(appContext);
+  });
+
+  server.post("/api/v1/admin/ofapi/capture/controls", {
+    schema: routeSchemas.adminOfapiCaptureControl,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await setOwnerOfapiCaptureControl(appContext, {
+      ...request.body,
+      actorUserId: principal.user.id,
+    });
+    if (result.executed) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_capture_control_changed",
+        metadata: {
+          controlKey: result.controlKey,
+          paused: result.next.paused,
+          version: result.next.version,
+          reason: result.next.reason,
+        },
+      });
+    }
+    return result;
+  });
+
+  server.post("/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve", {
+    schema: routeSchemas.adminOfapiCaptureAttemptResolve,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await resolveOwnerOfapiCaptureAttempt(appContext, {
+      ...request.body,
+      attemptId: request.params.attemptId,
+      actorUserId: principal.user.id,
+    });
+    if (!result.dryRun) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_capture_attempt_resolved",
+        platformAccountId: result.attempt.pageId,
+        metadata: {
+          attemptId: result.attempt.attemptId,
+          captureJobId: result.attempt.captureJobId,
+          resolution: result.attempt.certaintyResolution,
+          settledCredits: result.attempt.settledCredits,
+        },
+      });
+    }
+    return result;
+  });
+
+  server.post("/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create", {
+    schema: routeSchemas.adminOfapiExportCreateReconcile,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await reconcileOwnerOfapiExportCreate(appContext, {
+      ...request.body,
+      jobId: request.params.jobId,
+      actorUserId: principal.user.id,
+    });
+    if (!result.dryRun) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_export_create_reconciled",
+        platformAccountId: result.attempt.pageId,
+        metadata: {
+          jobId: result.job.jobId,
+          attemptId: result.attempt.attemptId,
+          action: result.action,
+          state: result.job.state,
+          reasonCode: result.job.reasonCode,
         },
       });
     }

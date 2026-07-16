@@ -36,11 +36,13 @@ export interface DiskUsageStats {
 export function evaluateDiskUsage(stats: DiskUsageStats, thresholdPercent: number) {
   const totalBytes = stats.blocks * stats.bsize;
   const availableBytes = stats.bavail * stats.bsize;
+  const usedBytes = Math.max(0, totalBytes - availableBytes);
   const usedPercent = totalBytes > 0
     ? (1 - availableBytes / totalBytes) * 100
     : 0;
   return {
     usedPercent,
+    usedBytes,
     totalBytes,
     availableBytes,
     breached: usedPercent >= thresholdPercent,
@@ -68,6 +70,38 @@ function formatGib(bytes: number) {
   return (bytes / (1024 ** 3)).toFixed(1);
 }
 
+async function persistStorageHealthSample(
+  app: Pick<AppContext, "db">,
+  input: {
+    healthy: boolean;
+    breached: boolean;
+    checkedAt: Date;
+    usedBytes: number | null;
+    freeBytes: number | null;
+    totalBytes: number | null;
+    error: string | null;
+  },
+) {
+  await app.db.execute(sql`
+    insert into ofapi_storage_health_state (
+      id, healthy, breached, checked_at,
+      used_bytes, free_bytes, total_bytes, error, updated_at
+    ) values (
+      1, ${input.healthy}, ${input.breached}, ${input.checkedAt},
+      ${input.usedBytes}, ${input.freeBytes}, ${input.totalBytes}, ${input.error}, ${input.checkedAt}
+    )
+    on conflict (id) do update set
+      healthy = excluded.healthy,
+      breached = excluded.breached,
+      checked_at = excluded.checked_at,
+      used_bytes = excluded.used_bytes,
+      free_bytes = excluded.free_bytes,
+      total_bytes = excluded.total_bytes,
+      error = excluded.error,
+      updated_at = excluded.updated_at
+  `);
+}
+
 export async function runDbDiskUsageCheck(
   app: Pick<AppContext, "config" | "db" | "logger">,
   options?: {
@@ -75,6 +109,7 @@ export async function runDbDiskUsageCheck(
     statfsImpl?: (path: string) => Promise<DiskUsageStats>;
   },
 ) {
+  const checkedAt = options?.now ?? new Date();
   const thresholdPercent = resolveDiskUsageAlertPercent(app.config);
   const statfsImpl = options?.statfsImpl ?? ((path: string) => statfs(path));
 
@@ -82,11 +117,46 @@ export async function runDbDiskUsageCheck(
   try {
     stats = await statfsImpl(DISK_USAGE_CHECK_PATH);
   } catch (error) {
-    app.logger.warn({ err: error }, "Disk usage check failed to stat the filesystem; skipping");
-    return null;
+    const errorSummary = error instanceof Error ? error.message : String(error);
+    await persistStorageHealthSample(app, {
+      healthy: false,
+      breached: false,
+      checkedAt,
+      usedBytes: null,
+      freeBytes: null,
+      totalBytes: null,
+      error: errorSummary,
+    });
+    app.logger.warn({ err: error }, "Disk usage check failed to stat the filesystem");
+    await notifyOfapiGlobalIncident(app, {
+      kind: "db_disk_usage",
+      errorSummary: `Disk health unavailable: ${errorSummary}`,
+      occurredAt: checkedAt,
+    });
+    return {
+      healthy: false,
+      breached: false,
+      checkedAt,
+      usedBytes: null,
+      totalBytes: null,
+      availableBytes: null,
+      usedPercent: null,
+      thresholdPercent,
+      databaseBytes: null,
+      error: errorSummary,
+    };
   }
 
   const usage = evaluateDiskUsage(stats, thresholdPercent);
+  await persistStorageHealthSample(app, {
+    healthy: !usage.breached,
+    breached: usage.breached,
+    checkedAt,
+    usedBytes: usage.usedBytes,
+    freeBytes: usage.availableBytes,
+    totalBytes: usage.totalBytes,
+    error: null,
+  });
 
   // Postgres size is context for the alert text only; best-effort.
   let databaseBytes: number | null = null;
@@ -108,14 +178,21 @@ export async function runDbDiskUsageCheck(
         `free ${formatGib(usage.availableBytes)} GiB of ${formatGib(usage.totalBytes)} GiB`,
         ...(databaseBytes !== null ? [`Postgres ${formatGib(databaseBytes)} GiB`] : []),
       ].join("; "),
-      occurredAt: options?.now,
+      occurredAt: checkedAt,
     });
   } else {
     await resolveOfapiGlobalIncident(app, {
       kind: "db_disk_usage",
-      recoveredAt: options?.now,
+      recoveredAt: checkedAt,
     });
   }
 
-  return { ...usage, thresholdPercent, databaseBytes };
+  return {
+    healthy: !usage.breached,
+    ...usage,
+    checkedAt,
+    thresholdPercent,
+    databaseBytes,
+    error: null,
+  };
 }

@@ -21,7 +21,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `any` | any authenticated principal |
 
-## Routes (166)
+## Routes (170)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -53,6 +53,9 @@ body remain handler-checked and are noted per route in the service layer.
 | PATCH | `/api/v1/admin/notifications/settings` | `notificationsSettingsUpdate` | `owner-session` | — | — |
 | POST | `/api/v1/admin/notifications/test` | `notificationsTestMessage` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/capture-jobs/seed` | `adminOfapiCaptureJobsSeed` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve` | `adminOfapiCaptureAttemptResolve` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/capture/controls` | `adminOfapiCaptureControl` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/capture/operator` | `adminOfapiCaptureOperatorStatus` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/daily` | `adminOfapiCreditsDaily` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/ledger` | `adminOfapiCreditsLedger` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/ledger.csv` | `adminOfapiCreditsLedgerCsv` | `owner-session` | — | — |
@@ -61,6 +64,7 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/ofapi/export-quotes` | `adminOfapiExportQuotesCreate` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/export-quotes/:jobId` | `adminOfapiExportQuoteStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` | `adminOfapiExportQuoteCancel` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create` | `adminOfapiExportCreateReconcile` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookRegister` | `owner-session` | — | — |

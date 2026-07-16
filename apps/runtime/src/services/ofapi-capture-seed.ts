@@ -30,8 +30,9 @@ interface ResolvedSeedTarget {
   pageId: number;
   ofapiAccountId: string;
   chatId: string;
+  goal: "connect_to_anchor" | "history_to_exhaustion";
   frozenHeadId: string;
-  anchorMessageId: string;
+  anchorMessageId: string | null;
   activeSlotKey: string;
   target: Record<string, unknown>;
   targetHash: string;
@@ -70,6 +71,7 @@ function assertExplicitTargets(targets: OfapiCaptureSeedBody["targets"]) {
 async function resolveSeedTarget(
   app: AppContext,
   target: OfapiCaptureSeedBody["targets"][number],
+  goal: OfapiCaptureSeedBody["goal"],
 ): Promise<ResolvedSeedTarget> {
   const stored = await findPageById(app.db, target.pageId);
   if (!stored || stored.page.platform !== "onlyfans") {
@@ -94,38 +96,43 @@ async function resolveSeedTarget(
     pageId: target.pageId,
     chatId: target.chatId,
   });
-  if (
-    !coverage ||
-    coverage.revokedAt !== null ||
-    coverage.classification !== "continuous_history" ||
-    coverage.proofPolicyVersion !== OFAPI_CAPTURE_PROOF_POLICY_VERSION ||
-    coverage.frozenHeadId !== target.anchorMessageId
-  ) {
-    throw new ConflictError(
-      `Anchor ${target.anchorMessageId} is not current verified continuous coverage for `
-      + `page ${target.pageId} chat ${target.chatId}`,
-    );
+  const verifiedCoverage = coverage !== null &&
+    coverage.revokedAt === null &&
+    coverage.classification === "continuous_history" &&
+    coverage.proofPolicyVersion === OFAPI_CAPTURE_PROOF_POLICY_VERSION;
+  let anchorMessageId: string | null = null;
+  if (goal === "connect_to_anchor") {
+    anchorMessageId = target.anchorMessageId ?? null;
+    if (!verifiedCoverage || coverage.frozenHeadId !== anchorMessageId) {
+      throw new ConflictError(
+        `Anchor ${anchorMessageId ?? "missing"} is not current verified continuous coverage for `
+        + `page ${target.pageId} chat ${target.chatId}`,
+      );
+    }
   }
   const activeSlotKey = `page:${target.pageId}:chat:${target.chatId}`;
   const frozenTarget = {
     chatId: target.chatId,
     frozenHeadId,
-    anchorMessageId: target.anchorMessageId,
+    anchorMessageId,
     limit: 100,
-    reason: "owner_manual",
+    reason: goal === "history_to_exhaustion"
+      ? "owner_manual_bootstrap"
+      : "owner_manual",
   };
   const targetHash = hashOfapiCaptureValue(frozenTarget);
   return {
     pageId: target.pageId,
     ofapiAccountId,
     chatId: target.chatId,
+    goal,
     frozenHeadId,
-    anchorMessageId: target.anchorMessageId,
+    anchorMessageId,
     activeSlotKey,
     target: frozenTarget,
     targetHash,
     jobId: deterministicSeedJobId(activeSlotKey, targetHash),
-    alreadyCovered: frozenHeadId === coverage.frozenHeadId,
+    alreadyCovered: verifiedCoverage && frozenHeadId === coverage.frozenHeadId,
   };
 }
 
@@ -137,7 +144,7 @@ export async function seedOwnerOfapiCaptureJobs(
   const dryRun = input.dryRun !== false;
   const resolved: ResolvedSeedTarget[] = [];
   for (const target of input.targets) {
-    resolved.push(await resolveSeedTarget(app, target));
+    resolved.push(await resolveSeedTarget(app, target, input.goal));
   }
 
   const seedId = randomUUID();
@@ -145,6 +152,7 @@ export async function seedOwnerOfapiCaptureJobs(
     version: "ofapi-owner-explicit-seed-v1",
     seedId,
     actorUserId: input.actorUserId,
+    goal: input.goal,
     targetCount: resolved.length,
     targetSlotKeys: resolved.map((target) => target.activeSlotKey),
     limits: OFAPI_OWNER_SEED_LIMITS,
@@ -156,6 +164,7 @@ export async function seedOwnerOfapiCaptureJobs(
       results.push({
         pageId: target.pageId,
         chatId: target.chatId,
+        goal: target.goal,
         frozenHeadId: target.frozenHeadId,
         anchorMessageId: target.anchorMessageId,
         status: "already_covered",
@@ -170,12 +179,13 @@ export async function seedOwnerOfapiCaptureJobs(
       activeSlotKey: target.activeSlotKey,
       targetHash: target.targetHash,
       kind: "chat_paginate",
-      goal: "connect_to_anchor",
+      goal: target.goal,
     });
     if (completed) {
       results.push({
         pageId: target.pageId,
         chatId: target.chatId,
+        goal: target.goal,
         frozenHeadId: target.frozenHeadId,
         anchorMessageId: target.anchorMessageId,
         status: "already_captured",
@@ -197,6 +207,7 @@ export async function seedOwnerOfapiCaptureJobs(
       results.push({
         pageId: target.pageId,
         chatId: target.chatId,
+        goal: target.goal,
         frozenHeadId: target.frozenHeadId,
         anchorMessageId: target.anchorMessageId,
         status: active ? "would_coalesce" : "would_create",
@@ -212,7 +223,7 @@ export async function seedOwnerOfapiCaptureJobs(
       pageId: target.pageId,
       ofapiAccountId: target.ofapiAccountId,
       kind: "chat_paginate",
-      goal: "connect_to_anchor",
+      goal: target.goal,
       activeSlotKey: target.activeSlotKey,
       target: target.target,
       manifest,
@@ -234,6 +245,7 @@ export async function seedOwnerOfapiCaptureJobs(
     results.push({
       pageId: target.pageId,
       chatId: target.chatId,
+      goal: target.goal,
       frozenHeadId: target.frozenHeadId,
       anchorMessageId: target.anchorMessageId,
       status: seeded.created

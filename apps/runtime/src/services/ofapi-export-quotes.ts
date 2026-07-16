@@ -51,8 +51,10 @@ interface ExportQuoteCursor extends Record<string, unknown> {
   creditCost: number | null;
   quotedAt: string | null;
   expiresAt: string | null;
-  lastObservationId: number;
-  lastObservationReceivedAt: string;
+  // A manually adopted create has no captured response lineage. The first
+  // captured status GET replaces both nulls with real observation provenance.
+  lastObservationId: number | null;
+  lastObservationReceivedAt: string | null;
 }
 
 export interface OfapiExportQuoteRequestPlan {
@@ -157,8 +159,11 @@ function parseCursor(job: OfapiCaptureJobRecord): ExportQuoteCursor | null {
     || nonnegativeInteger(cursor.pollCount) === null
     || typeof cursor.quoteRequestedAt !== "string"
     || typeof cursor.lastStatusAt !== "string"
-    || nonnegativeInteger(cursor.lastObservationId) === null
-    || typeof cursor.lastObservationReceivedAt !== "string"
+    || (cursor.lastObservationId !== null
+      && nonnegativeInteger(cursor.lastObservationId) === null)
+    || (cursor.lastObservationReceivedAt !== null
+      && typeof cursor.lastObservationReceivedAt !== "string")
+    || ((cursor.lastObservationId === null) !== (cursor.lastObservationReceivedAt === null))
   ) {
     return null;
   }
@@ -173,7 +178,9 @@ function parseCursor(job: OfapiCaptureJobRecord): ExportQuoteCursor | null {
     creditCost: cursor.creditCost === null ? null : nonnegativeInteger(cursor.creditCost),
     quotedAt: typeof cursor.quotedAt === "string" ? cursor.quotedAt : null,
     expiresAt: typeof cursor.expiresAt === "string" ? cursor.expiresAt : null,
-    lastObservationId: nonnegativeInteger(cursor.lastObservationId)!,
+    lastObservationId: cursor.lastObservationId === null
+      ? null
+      : nonnegativeInteger(cursor.lastObservationId)!,
     lastObservationReceivedAt: cursor.lastObservationReceivedAt,
   };
 }
@@ -348,6 +355,7 @@ export async function cancelOwnerOfapiExportQuote(
 export function buildOfapiExportQuoteRequest(
   job: OfapiCaptureJobRecord,
 ): OfapiExportQuoteRequestPlan | null {
+  if (job.state !== "leased") return null;
   const target = parseTarget(job);
   if (!target) return null;
   const cursor = parseCursor(job);
