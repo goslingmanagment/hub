@@ -46,6 +46,23 @@ function dataField(data: unknown, field: string): unknown {
     : undefined;
 }
 
+function recordField(data: unknown, field: string): Record<string, unknown> | null {
+  const value = dataField(data, field);
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nativeMessageBigint(value: unknown): bigint | null {
+  if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return null;
+  try {
+    const parsed = BigInt(value);
+    return parsed <= 9_223_372_036_854_775_807n ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 /** $ → mills for event payload prices (OFAPI payloads carry dollars). */
 function dollarsFieldToMills(value: unknown): bigint | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -137,7 +154,105 @@ export async function applyMessageEventsToArchive(
   let tombstoned = 0;
 
   for (const event of input.events) {
-    if (event.type === "message.received" || event.type === "message.sent") {
+    if (event.type === "message.material_observed") {
+      if (!event.messageRef) continue;
+      const head = recordField(event.data, "head");
+      if (!head || typeof head.isSentByMe !== "boolean") continue;
+      const reply = typeof head.reply === "object" && head.reply !== null && !Array.isArray(head.reply)
+        ? head.reply as Record<string, unknown>
+        : null;
+      const media = Array.isArray(head.media)
+        ? head.media.filter((item): item is Record<string, unknown> =>
+          typeof item === "object" && item !== null && !Array.isArray(item))
+        : [];
+      const textHtml = typeof head.textHtml === "string" ? head.textHtml : "";
+      const isOpened = typeof head.isOpened === "boolean" ? head.isOpened : null;
+      const isNew = typeof head.isNew === "boolean" ? head.isNew : null;
+      const materialObservedAt = headDate(head.materialObservedAt) ?? event.occurredAt;
+      const vendorChangedAt = headDate(head.vendorChangedAt);
+      const result = await db.execute(sql`
+        insert into ${target} (
+          account_id, platform, conversation_ref, message_ref, native_message_id,
+          fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
+          text_html, price_mills, is_opened, is_new, is_tip, tip_amount_mills,
+          tip_text_plain, in_reply_to_ref, reply_metadata, media_metadata,
+          origin_class, material_observed_at, vendor_changed_at,
+          source_event_id, source_account_seq, serving_contract_version
+        ) values (
+          ${input.accountId},
+          ${input.platform},
+          ${event.conversationRef},
+          ${event.messageRef},
+          ${nativeMessageBigint(head.nativeMessageId)},
+          ${event.fanIdentityRef},
+          ${head.isSentByMe ? "model" : "fan"},
+          ${head.isSentByMe},
+          ${event.occurredAt},
+          ${normalizeDmMessageText(textHtml)},
+          ${textHtml},
+          ${headMills(head.priceMills)},
+          ${isOpened},
+          ${isNew},
+          ${head.isTip === true},
+          ${headMills(head.tipAmountMills) ?? 0n},
+          ${typeof head.tipTextPlain === "string" ? head.tipTextPlain : null},
+          ${typeof reply?.messageId === "string" ? reply.messageId : null},
+          ${reply === null ? null : JSON.stringify(reply)}::jsonb,
+          ${JSON.stringify(media)}::jsonb,
+          ${typeof head.originClass === "string" ? head.originClass : null},
+          ${materialObservedAt},
+          ${vendorChangedAt},
+          ${event.id},
+          ${event.accountSeq},
+          1
+        )
+        on conflict (account_id, platform, message_ref) do update set
+          conversation_ref = coalesce(excluded.conversation_ref, ${target}.conversation_ref),
+          native_message_id = coalesce(excluded.native_message_id, ${target}.native_message_id),
+          fan_native_id = coalesce(excluded.fan_native_id, ${target}.fan_native_id),
+          sender_role = excluded.sender_role,
+          is_sent_by_me = excluded.is_sent_by_me,
+          occurred_at = excluded.occurred_at,
+          text_plain = excluded.text_plain,
+          text_html = excluded.text_html,
+          price_mills = excluded.price_mills,
+          is_opened = case
+            when ${target}.is_opened is true or excluded.is_opened is true then true
+            when ${target}.is_opened is false or excluded.is_opened is false then false
+            else null
+          end,
+          is_new = excluded.is_new,
+          is_tip = excluded.is_tip,
+          tip_amount_mills = excluded.tip_amount_mills,
+          tip_text_plain = excluded.tip_text_plain,
+          in_reply_to_ref = excluded.in_reply_to_ref,
+          reply_metadata = excluded.reply_metadata,
+          media_metadata = excluded.media_metadata,
+          origin_class = excluded.origin_class,
+          material_observed_at = excluded.material_observed_at,
+          vendor_changed_at = excluded.vendor_changed_at,
+          source_event_id = excluded.source_event_id,
+          source_account_seq = excluded.source_account_seq,
+          serving_contract_version = excluded.serving_contract_version,
+          content_pending = false,
+          updated_at = now()
+        where ${target}.content_pending
+           or ${target}.serving_contract_version < excluded.serving_contract_version
+           or (
+             excluded.vendor_changed_at is not null
+             and (${target}.vendor_changed_at is null
+               or excluded.vendor_changed_at >= ${target}.vendor_changed_at)
+           )
+           or (
+             excluded.vendor_changed_at is null
+             and ${target}.vendor_changed_at is null
+             and (${target}.material_observed_at is null
+               or excluded.material_observed_at >= ${target}.material_observed_at)
+           )
+        returning id
+      `);
+      inserted += result.rows.length;
+    } else if (event.type === "message.received" || event.type === "message.sent") {
       if (!event.messageRef) {
         continue;
       }
@@ -843,6 +958,10 @@ export async function switchMessageArchiveShadowTables(
     `);
     await tx.execute(sql`
       alter index message_archive_shadow_text_search_idx rename to message_archive_text_search_idx
+    `);
+    await tx.execute(sql`
+      alter index message_archive_shadow_ofapi_native_order_idx
+        rename to message_archive_ofapi_native_order_idx
     `);
     const newSequence = await tx.execute<{ seq: string | null }>(sql`
       select pg_get_serial_sequence('message_archive', 'id') as seq

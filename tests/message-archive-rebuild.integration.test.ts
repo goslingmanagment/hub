@@ -272,6 +272,7 @@ describe("message-archive shadow rebuild (W10)", () => {
       "message_archive_account_conv_idx",
       "message_archive_account_occurred_idx",
       "message_archive_account_id_platform_message_ref_key",
+      "message_archive_ofapi_native_order_idx",
       "message_archive_pkey",
       "message_archive_text_search_idx",
     ].sort());

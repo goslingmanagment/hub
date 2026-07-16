@@ -22,7 +22,6 @@ import {
   listPageDmConversationsByPlatformConversationIds,
   recordConversationPreferredPageLimit,
   recordConversationSyncFailure,
-  requestPageSync,
   reserveOfapiDayCredits,
   selectNextPageDmMessageSyncCandidate,
   settleOfapiDayCreditReservation,
@@ -55,7 +54,6 @@ import {
   parseDmMessagesCursorState,
   parseOfapiDmConversationCursorState,
 } from "./cursor-state.ts";
-import { pageSyncDependencyInput } from "./dependencies.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { dmRetentionDate, persistRawPayload } from "./shared.ts";
 
@@ -626,7 +624,7 @@ export async function executeOfapiDmConversationsChunk(
         (existing === null || headAdvances(summary.lastMessage, existing));
       const head = summary.lastMessage;
 
-      const upserted = await upsertPageDmConversation(dbTx, {
+      await upsertPageDmConversation(dbTx, {
         platformAccountId: input.pageContext.page.id,
         fanId: existing?.fanId ?? fan?.id ?? null,
         platformConversationId: summary.fanId,

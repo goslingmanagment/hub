@@ -37,6 +37,49 @@ export function validateGaplessReplayBatch(input: {
   return { ok: true, nextSeq, done: nextSeq >= input.throughSeq };
 }
 
+export function projectionCheckpointHiddenCount(
+  row: { type: string; data: unknown },
+): number | null {
+  if (row.type !== "stream.projection_checkpoint") return null;
+  if (typeof row.data !== "object" || row.data === null || Array.isArray(row.data)) return null;
+  const value = (row.data as Record<string, unknown>).hiddenCount;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/**
+ * v2 may omit projection-only material rows, but only an immediately
+ * following checkpoint can authorize that numeric sequence jump. Its exact
+ * hiddenCount makes a detached business row distinguishable from an intended
+ * skip without scanning the hidden range per connection.
+ */
+export function validateV2DeliverableReplayBatch(input: {
+  rows: ReadonlyArray<{ accountSeq: number; type: string; data: unknown }>;
+  afterSeq: number;
+  throughSeq: number;
+  limit: number;
+}): { ok: true; nextSeq: number; done: boolean } | { ok: false } {
+  let nextSeq = input.afterSeq;
+  for (const row of input.rows) {
+    if (row.accountSeq > input.throughSeq) return { ok: false };
+    const gap = row.accountSeq - nextSeq - 1;
+    if (gap < 0) return { ok: false };
+    if (gap > 0) {
+      const hiddenCount = projectionCheckpointHiddenCount(row);
+      if (hiddenCount === null || hiddenCount !== gap) return { ok: false };
+    } else if (row.type === "stream.projection_checkpoint") {
+      const hiddenCount = projectionCheckpointHiddenCount(row);
+      if (hiddenCount !== 0) return { ok: false };
+    }
+    nextSeq = row.accountSeq;
+  }
+  if (input.rows.length < input.limit && nextSeq < input.throughSeq) {
+    return { ok: false };
+  }
+  return { ok: true, nextSeq, done: nextSeq >= input.throughSeq };
+}
+
 /**
  * Attaches the lossless live lane before reading the durable replay boundary.
  * An event committed before subscribe is then included by the fresh boundary;

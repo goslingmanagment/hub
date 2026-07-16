@@ -127,4 +127,20 @@ describe("domain event hub live continuity", () => {
     expect(guards.advance(7, 3)).toEqual({ deliver: false, gap: true });
     expect(guards.watermarks().get(7)).toBe(1);
   });
+
+  it("advances across only the exact projection checkpoint range", () => {
+    const guards = createAccountSeqGuards(new Map([[7, 10]]));
+    expect(guards.advanceProjectionCheckpoint(7, 13, 2)).toEqual({
+      deliver: true,
+      gap: false,
+    });
+    expect(guards.watermarks().get(7)).toBe(13);
+
+    const rejected = createAccountSeqGuards(new Map([[7, 10]]));
+    expect(rejected.advanceProjectionCheckpoint(7, 13, 1)).toEqual({
+      deliver: false,
+      gap: true,
+    });
+    expect(rejected.watermarks().get(7)).toBe(10);
+  });
 });

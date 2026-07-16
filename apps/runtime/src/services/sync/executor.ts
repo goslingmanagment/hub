@@ -9,6 +9,7 @@ import {
   ensurePageSyncStates,
   findPageById,
   heartbeatPageSyncLease,
+  listRunnableOfapiCapturePages,
   listRunnablePageSync,
   PageSyncLeaseLostError,
   retryPageSync,
@@ -28,6 +29,10 @@ import type { Db as PgBossDb, JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { ProxyMissingError } from "../errors.ts";
+import {
+  executeOfapiCaptureJobChunk,
+  isOfapiBackgroundCaptureRunnable,
+} from "../ofapi-capture-jobs.ts";
 import {
   notifyAuthFailedIncident,
   notifySyncChunkFailureIncident,
@@ -89,11 +94,20 @@ function normalizeRunSource(source: SyncRequestSource | null) {
 }
 
 async function resolveContinuationPriority(
-  app: Pick<AppContext, "db">,
+  app: Pick<AppContext, "db" | "config">,
   platformAccountId: number,
 ) {
   const pages = await listRunnablePageSync(app.db, new Date());
-  return pages.find((page) => page.pageId === platformAccountId)?.priority ?? null;
+  const legacyPriority = pages.find((page) => page.pageId === platformAccountId)?.priority ?? null;
+  if (!isOfapiBackgroundCaptureRunnable(app.config)) {
+    return legacyPriority;
+  }
+  const capturePages = await listRunnableOfapiCapturePages(app.db);
+  const capturePriority = capturePages.find((page) => page.pageId === platformAccountId)?.priority
+    ?? null;
+  if (legacyPriority === null) return capturePriority;
+  if (capturePriority === null) return legacyPriority;
+  return Math.max(legacyPriority, capturePriority);
 }
 
 function buildContinuationResult(
@@ -748,6 +762,37 @@ export async function executeNextSyncPageChunk(
   }
 }
 
+export async function executeNextPageWorkChunk(
+  app: AppContext,
+  platformAccountId: number,
+): Promise<SyncPageChunkResult> {
+  if (isOfapiBackgroundCaptureRunnable(app.config)) {
+    const [legacyPages, capturePages] = await Promise.all([
+      listRunnablePageSync(app.db, new Date()),
+      listRunnableOfapiCapturePages(app.db),
+    ]);
+    const legacyPriority = legacyPages.find((page) => page.pageId === platformAccountId)?.priority
+      ?? null;
+    const capturePriority = capturePages.find((page) => page.pageId === platformAccountId)?.priority
+      ?? null;
+    if (
+      capturePriority !== null &&
+      (legacyPriority === null || capturePriority >= legacyPriority)
+    ) {
+      const captured = await executeOfapiCaptureJobChunk(app, platformAccountId);
+      const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
+      return buildContinuationResult(
+        platformAccountId,
+        null,
+        null,
+        captured.kind,
+        continuationPriority,
+      );
+    }
+  }
+  return executeNextSyncPageChunk(app, platformAccountId);
+}
+
 function readPgBossAffected(response: unknown): number {
   if (
     typeof response === "object" &&
@@ -797,7 +842,7 @@ export async function processSyncPageExecuteJob(
       "idle",
       grandfatheredPriority,
     )
-    : await executeNextSyncPageChunk(app, input.job.data.platformAccountId);
+    : await executeNextPageWorkChunk(app, input.job.data.platformAccountId);
 
   if (isGrandfatheredAttempt) {
     app.logger.warn(
@@ -1028,7 +1073,7 @@ export async function runSyncPageExecutorUntilIdle(
 ) {
   const maxChunks = input?.maxChunks ?? MAX_LOCAL_EXECUTOR_CHUNKS;
   for (let index = 0; index < maxChunks; index += 1) {
-    const result = await executeNextSyncPageChunk(app, platformAccountId);
+    const result = await executeNextPageWorkChunk(app, platformAccountId);
     if (result.kind === "idle") {
       return result;
     }

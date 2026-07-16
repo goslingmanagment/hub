@@ -15,6 +15,7 @@ import {
   runMessageArchiveBackfills,
   runMessageArchiveProjection,
 } from "../apps/runtime/src/services/projections/message-archive.ts";
+import { appendOfapiMessageMaterialPage } from "../apps/runtime/src/services/ofapi-message-material.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -330,6 +331,70 @@ describe("message archive projection (Stage 10)", () => {
     );
     expect(afterRebuild.rows).toEqual([
       { text_plain: "was deleted", content_pending: false, deleted: true },
+    ]);
+  });
+
+  it("projects full OF material without turning it into a business message event", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { ofPage } = await seedPages();
+    if (!ofPage) throw new Error("OnlyFans test page was not created");
+    await appendOfapiMessageMaterialPage(testDb.db, {
+      accountId: ofPage.id,
+      observationId: 501,
+      observationReceivedAt: new Date("2026-07-16T12:00:00Z"),
+      chatId: "chat-55",
+      originClass: "capture_background",
+      items: [{
+        id: "9001",
+        createdAt: "2026-07-16T11:00:00Z",
+        changedAt: "2026-07-16T11:30:00Z",
+        isSentByMe: false,
+        fromUser: { id: "fan-55" },
+        text: "<p>paid <b>hello</b></p>",
+        price: 12,
+        isOpened: false,
+        isNew: true,
+        isTip: false,
+        replyToMessage: { id: "8999", text: "<p>parent</p>", isSentByMe: true },
+        media: [{ id: "med-1", type: "photo", canView: true, isReady: true }],
+      }],
+    });
+
+    await runMessageArchiveProjection(appStub());
+    const row = await testDb.pool.query<{
+      native_message_id: string;
+      text_html: string;
+      text_plain: string;
+      is_opened: boolean;
+      is_new: boolean;
+      in_reply_to_ref: string;
+      origin_class: string;
+      serving_contract_version: number;
+      source_account_seq: string;
+      media_metadata: Array<Record<string, unknown>>;
+    }>(`
+      select native_message_id::text as native_message_id, text_html, text_plain,
+             is_opened, is_new, in_reply_to_ref, origin_class,
+             serving_contract_version, source_account_seq::text as source_account_seq,
+             media_metadata
+      from message_archive where account_id = $1 and message_ref = '9001'
+    `, [ofPage.id]);
+    expect(row.rows[0]).toMatchObject({
+      native_message_id: "9001",
+      text_html: "<p>paid <b>hello</b></p>",
+      text_plain: "paid hello",
+      is_opened: false,
+      is_new: true,
+      in_reply_to_ref: "8999",
+      origin_class: "capture_background",
+      serving_contract_version: 1,
+      source_account_seq: "1",
+    });
+    expect(row.rows[0]!.media_metadata).toEqual([
+      { id: "med-1", type: "photo", canView: true, isReady: true, duration: null },
     ]);
   });
 

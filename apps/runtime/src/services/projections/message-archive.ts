@@ -26,6 +26,7 @@ export const MESSAGE_EVENT_TYPES = new Set([
   "message.received",
   "message.sent",
   "message.deleted",
+  "message.material_observed",
 ]);
 
 export async function ensureMessageArchiveQueues(

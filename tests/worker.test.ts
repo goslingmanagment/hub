@@ -9,6 +9,10 @@ const dbMocks = vi.hoisted(() => ({
   scheduleDuePageSync: vi.fn(),
   listRunnablePageSync: vi.fn(),
   markPageSyncEnqueued: vi.fn(),
+  retireLegacyOnlyFansDmMessages: vi.fn(),
+  recoverStaleOfapiCaptureWork: vi.fn(),
+  listRunnableOfapiCapturePages: vi.fn(),
+  findPageById: vi.fn(),
 }));
 
 const queueMocks = vi.hoisted(() => ({
@@ -42,12 +46,23 @@ describe("sync planner", () => {
     dbMocks.scheduleDuePageSync.mockReset();
     dbMocks.listRunnablePageSync.mockReset();
     dbMocks.markPageSyncEnqueued.mockReset();
+    dbMocks.retireLegacyOnlyFansDmMessages.mockReset();
+    dbMocks.recoverStaleOfapiCaptureWork.mockReset();
+    dbMocks.listRunnableOfapiCapturePages.mockReset();
+    dbMocks.findPageById.mockReset();
     queueMocks.sendSyncPageWakeup.mockReset();
     dbMocks.closeInactiveSyncRuns.mockResolvedValue({
       totalCount: 0,
       failedCount: 0,
       partialCount: 0,
     });
+    dbMocks.retireLegacyOnlyFansDmMessages.mockResolvedValue(0);
+    dbMocks.recoverStaleOfapiCaptureWork.mockResolvedValue({
+      released: 0,
+      indeterminate: 0,
+      requeued: 0,
+    });
+    dbMocks.listRunnableOfapiCapturePages.mockResolvedValue([]);
   });
 
   it("runs inactive cleanup before promoting rows and emits one wakeup per runnable page", async () => {

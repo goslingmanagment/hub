@@ -15,14 +15,6 @@ import type {
 } from "../schema.ts";
 import { insertObservation } from "./observations.ts";
 
-const ACTIVE_CAPTURE_JOB_STATES = [
-  "ready",
-  "leased",
-  "awaiting_parse",
-  "retry_wait",
-  "blocked",
-] as const satisfies readonly OfapiCaptureJobState[];
-
 export const OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION = "ofapi-capture-v1";
 export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v1";
 export const OFAPI_CAPTURE_PROOF_POLICY_VERSION = "ofapi-proof-v1";
@@ -377,7 +369,7 @@ export async function listRunnableOfapiCapturePages(
            max(priority)::int as priority,
            min(case when state = 'awaiting_parse' then updated_at else next_attempt_at end) as requested_at
     from ofapi_capture_jobs
-    where state = 'awaiting_parse'
+    where (state = 'awaiting_parse' and reason_code is null)
        or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})
     group by page_id
     order by max(priority) desc,
@@ -411,7 +403,7 @@ export async function leaseNextOfapiCaptureJob(
       from ofapi_capture_jobs
       where page_id = ${input.pageId}
         and (
-          state = 'awaiting_parse'
+          (state = 'awaiting_parse' and reason_code is null)
           or (state in ('ready', 'retry_wait') and next_attempt_at <= ${now})
         )
       order by (state = 'awaiting_parse') desc,
@@ -434,6 +426,74 @@ export async function leaseNextOfapiCaptureJob(
     returning job.*
   `);
   return result.rows[0] ? mapCaptureJob(result.rows[0]) : null;
+}
+
+export async function blockOfapiCaptureJobLease(
+  db: Database,
+  input: {
+    jobId: string;
+    leaseToken: string;
+    reasonCode: string;
+    reasonMessage?: string | null;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const result = await db.execute<{ id: string }>(sql`
+    update ofapi_capture_jobs
+    set state = 'blocked',
+        reason_code = ${input.reasonCode},
+        reason_message = ${input.reasonMessage ?? null},
+        lease_owner = null,
+        lease_token = null,
+        lease_until = null,
+        row_version = row_version + 1,
+        updated_at = ${now}
+    where id = ${input.jobId}::uuid
+      and state in ('leased', 'awaiting_parse')
+      and lease_token = ${input.leaseToken}::uuid
+    returning id::text as id
+  `);
+  return result.rows.length === 1;
+}
+
+export async function loadOfapiCaptureObservation(
+  db: Database,
+  input: {
+    observationId: number;
+    observationReceivedAt: Date;
+  },
+) {
+  const result = await db.execute<{
+    id: string;
+    received_at: Date | string;
+    kind: string;
+    payload: unknown;
+    attempt_id: string | null;
+  }>(sql`
+    select observation.id::text as id,
+           observation.received_at,
+           observation.kind,
+           observation.payload,
+           attempt.id::text as attempt_id
+    from observations observation
+    left join ofapi_request_attempts attempt
+      on attempt.response_observation_id = observation.id
+     and attempt.response_observation_received_at = observation.received_at
+    where observation.id = ${input.observationId}
+      and observation.received_at = ${input.observationReceivedAt}
+      and observation.source = 'ofapi_capture'
+  `);
+  const row = result.rows[0];
+  return row
+    ? {
+      id: Number(row.id),
+      receivedAt: new Date(row.received_at),
+      kind: row.kind,
+      payload: row.payload,
+      attemptId: row.attempt_id,
+    }
+    : null;
 }
 
 export type OfapiBudgetDenialReason =
@@ -567,9 +627,10 @@ function resolveDenialRetryAt(
   switch (reason) {
     case "global_cap":
     case "scope_cap":
+      return nextUtcDay(now);
     case "job_cap":
     case "manifest_cap":
-      return nextUtcDay(now);
+      return null;
     case "principal_call_cap":
     case "principal_credit_cap": {
       const nextHour = utcHour(now);
@@ -733,7 +794,7 @@ export async function reserveOfapiRequestAttempt(
       consecutive_budget_denials: unknown;
       blocked_until: string | Date | null;
     } | null = null;
-    let principalWindow = principalId === null ? null : utcHour(now);
+    const principalWindow = principalId === null ? null : utcHour(now);
     if (principalId !== null && principalWindow) {
       await database.execute(sql`
         insert into ofapi_principal_budget_state (
@@ -1441,6 +1502,84 @@ export async function markOfapiAttemptIndeterminate(
   });
 }
 
+/**
+ * Planner-side crash recovery. A lease that expired before dispatch is safe
+ * to release and retry; one that crossed the dispatch CAS is financially
+ * uncertain and is parked for reconciliation. No recovery path performs a
+ * vendor request.
+ */
+export async function recoverStaleOfapiCaptureWork(
+  db: Database,
+  input?: { now?: Date; limit?: number },
+) {
+  const now = input?.now ?? new Date();
+  const limit = Math.max(1, Math.min(1_000, Math.trunc(input?.limit ?? 100)));
+  const attempts = await db.execute<{
+    id: string;
+    fence_token: string;
+    state: "reserved" | "dispatching";
+  }>(sql`
+    select attempt.id::text as id,
+           attempt.fence_token::text as fence_token,
+           attempt.state
+    from ofapi_capture_jobs job
+    join ofapi_request_attempts attempt
+      on attempt.capture_job_id = job.id
+    where job.state = 'leased'
+      and job.lease_until <= ${now}
+      and attempt.state in ('reserved', 'dispatching')
+    order by job.lease_until, attempt.id
+    limit ${limit}
+  `);
+
+  let released = 0;
+  let indeterminate = 0;
+  for (const attempt of attempts.rows) {
+    if (attempt.state === "reserved") {
+      if (await releaseOfapiAttemptPreDispatch(db, {
+        attemptId: attempt.id,
+        fenceToken: attempt.fence_token,
+        reasonCode: "lease_expired",
+        retryAt: now,
+        now,
+      })) {
+        released += 1;
+      }
+    } else if (await markOfapiAttemptIndeterminate(db, {
+      attemptId: attempt.id,
+      fenceToken: attempt.fence_token,
+      outcome: "transport",
+      details: { recovery: "expired_job_lease" },
+      now,
+    })) {
+      indeterminate += 1;
+    }
+  }
+
+  const requeued = await db.execute<{ id: string }>(sql`
+    update ofapi_capture_jobs job
+    set state = 'ready',
+        next_attempt_at = ${now},
+        reason_code = 'lease_expired_before_attempt',
+        reason_message = null,
+        lease_owner = null,
+        lease_token = null,
+        lease_until = null,
+        row_version = row_version + 1,
+        updated_at = ${now}
+    where job.state = 'leased'
+      and job.lease_until <= ${now}
+      and not exists (
+        select 1
+        from ofapi_request_attempts attempt
+        where attempt.capture_job_id = job.id
+          and attempt.state in ('reserved', 'dispatching', 'indeterminate')
+      )
+    returning job.id::text as id
+  `);
+  return { released, indeterminate, requeued: requeued.rows.length };
+}
+
 export interface CaptureOfapiAttemptResponseInput {
   attemptId: string;
   fenceToken: string;
@@ -1829,6 +1968,15 @@ export async function reconcileOfapiCapturedAttemptCredit(
           updated_at = ${now}
       where id = ${input.attemptId}::uuid
     `);
+    if (attempt.owner_kind === "capture_job" && delta !== 0) {
+      await database.execute(sql`
+        update ofapi_capture_jobs
+        set spent_credits = greatest(0, spent_credits + ${delta}),
+            row_version = row_version + 1,
+            updated_at = ${now}
+        where id = ${attempt.owner_id}::uuid
+      `);
+    }
     return true;
   });
 }

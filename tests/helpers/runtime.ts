@@ -49,6 +49,7 @@ export function createTestAppContext(
     ofapiSpendTransactionIngestEnabled?: boolean;
     ofapiDesktopReadGatewayEnabled?: boolean;
     ofapiMirrorInteractiveCaptureEnabled?: boolean;
+    ofapiMirrorBackgroundCaptureEnabled?: boolean;
     ofapiDesktopCommandOutboxEnabled?: boolean;
     ofapiDesktopCommandExecutionEnabled?: boolean;
     chatMuseAiGatewayEnabled?: boolean;
@@ -141,6 +142,8 @@ export function createTestAppContext(
       ofapiDesktopReadGatewayEnabled: overrides?.ofapiDesktopReadGatewayEnabled ?? false,
       ofapiMirrorInteractiveCaptureEnabled:
         overrides?.ofapiMirrorInteractiveCaptureEnabled ?? false,
+      ofapiMirrorBackgroundCaptureEnabled:
+        overrides?.ofapiMirrorBackgroundCaptureEnabled ?? false,
       ofapiDesktopCommandOutboxEnabled:
         overrides?.ofapiDesktopCommandOutboxEnabled ?? false,
       ofapiDesktopCommandExecutionEnabled:

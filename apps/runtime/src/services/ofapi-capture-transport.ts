@@ -23,6 +23,7 @@ import {
   type OfapiGovernedRawResponse,
   type OfapiRawResponse,
 } from "./ofapi.ts";
+import { parseOfapiJsonBytes } from "./ofapi-capture-contract.ts";
 
 const INTERACTIVE_SCOPE_DAILY_CAP = 250;
 const PRINCIPAL_HOURLY_CALL_CAP = 60;
@@ -40,59 +41,6 @@ function httpOutcome(status: number): OfapiHttpOutcome {
   if (status >= 500) return "vendor_5xx";
   if (status === 400 || status === 409 || status === 422) return "request_rejected";
   return "unexpected_http";
-}
-
-function nonNegativeInteger(value: unknown) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    return null;
-  }
-  return value;
-}
-
-function parseCapturedBody(bytes: Buffer) {
-  if (bytes.length === 0) {
-    return {
-      validJson: true,
-      body: null as unknown,
-      creditsUsed: null as number | null,
-      balanceAfter: null as number | null,
-    };
-  }
-  const text = bytes.toString("utf8");
-  if (!Buffer.from(text, "utf8").equals(bytes)) {
-    return {
-      validJson: false,
-      body: text as unknown,
-      creditsUsed: null as number | null,
-      balanceAfter: null as number | null,
-    };
-  }
-  try {
-    const body = JSON.parse(text) as unknown;
-    const root = body && typeof body === "object" && !Array.isArray(body)
-      ? body as Record<string, unknown>
-      : null;
-    const meta = root?._meta && typeof root._meta === "object" && !Array.isArray(root._meta)
-      ? root._meta as Record<string, unknown>
-      : null;
-    const credits = meta?._credits && typeof meta._credits === "object"
-        && !Array.isArray(meta._credits)
-      ? meta._credits as Record<string, unknown>
-      : null;
-    return {
-      validJson: true,
-      body,
-      creditsUsed: nonNegativeInteger(credits?.used),
-      balanceAfter: nonNegativeInteger(credits?.balance),
-    };
-  } catch {
-    return {
-      validJson: false,
-      body: text as unknown,
-      creditsUsed: null as number | null,
-      balanceAfter: null as number | null,
-    };
-  }
 }
 
 function denialError(reason: string) {
@@ -261,7 +209,7 @@ export async function executeCaptureFirstInteractiveRead(
     throw new ServiceUnavailableError("OFAPI response could not be durably captured");
   }
 
-  const parsed = parseCapturedBody(raw.bodyBytes);
+  const parsed = parseOfapiJsonBytes(raw.bodyBytes);
   if (parsed.creditsUsed !== null) {
     await reconcileOfapiCapturedAttemptCredit(app.db, {
       attemptId: reservation.attemptId,

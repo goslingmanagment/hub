@@ -38,6 +38,7 @@ import {
 } from "./services/projection-debt-sweep.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
+import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
@@ -241,6 +242,10 @@ export async function startWorkerServices(
     const readthrough = await runOfapiDmReadthroughReconcile(app);
     if (readthrough.scanned > 0) {
       app.logger.info(readthrough, "Readthrough reconcile sweep complete");
+    }
+    const captureMaterialization = await runOfapiCaptureMaterialization(app);
+    if (captureMaterialization.scanned > 0) {
+      app.logger.info(captureMaterialization, "OFAPI capture materialization sweep complete");
     }
     // Wave 2: the corrections reconciler drains material!=emitted into the
     // ledger AFTER the projectors above have merged this minute's material.

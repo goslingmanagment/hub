@@ -52,8 +52,9 @@ import { getOfapiSyncSnapshot } from "../../services/ofapi-sync-snapshot.ts";
 import {
   createBoundedSseReplayBuffer,
   estimatedSseReplayItemBytes,
+  projectionCheckpointHiddenCount,
   subscribeBeforeReplayBoundary,
-  validateGaplessReplayBatch,
+  validateV2DeliverableReplayBatch,
 } from "../../services/sse-replay-buffer.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -535,6 +536,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         afterSeq,
         throughSeq: validationBounds.get(accountId)!.currentSeq,
       })),
+      { excludeProjectionOnly: true },
     );
     const recoveryErasureState = snapshotRecoveryReplay
       ? await getDomainEventErasureEpoch(appContext.db)
@@ -650,9 +652,16 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       if (raw.writableEnded || raw.destroyed) {
         return;
       }
+      const hiddenCount = projectionCheckpointHiddenCount(event);
       const verdict = allowSnapshotGap
         ? { ...guards.advanceAfterSnapshot(event.accountId, event.accountSeq), gap: false }
-        : guards.advance(event.accountId, event.accountSeq);
+        : hiddenCount === null
+          ? guards.advance(event.accountId, event.accountSeq)
+          : guards.advanceProjectionCheckpoint(
+            event.accountId,
+            event.accountSeq,
+            hiddenCount,
+          );
       if (verdict.gap) {
         request.log.error({
           accountId: event.accountId,
@@ -755,6 +764,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           afterSeq,
           throughSeq: replayBounds.get(accountId)?.currentSeq ?? 0,
         })),
+        { excludeProjectionOnly: true },
       );
       for (const [accountId, watermark] of watermarks) {
         const bound = replayBounds.get(accountId);
@@ -883,10 +893,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
             afterSeq,
             throughSeq: replayThrough,
             limit: SSE_REPLAY_BATCH_SIZE,
+            excludeProjectionOnly: true,
           });
           const continuity = snapshotRecoveryReplay
             ? null
-            : validateGaplessReplayBatch({
+            : validateV2DeliverableReplayBatch({
               rows,
               afterSeq,
               throughSeq: replayThrough,
@@ -1011,8 +1022,9 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
               afterSeq,
               throughSeq,
               limit: SSE_REPLAY_BATCH_SIZE,
+              excludeProjectionOnly: true,
             });
-            const continuity = validateGaplessReplayBatch({
+            const continuity = validateV2DeliverableReplayBatch({
               rows,
               afterSeq,
               throughSeq,

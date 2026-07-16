@@ -1,8 +1,11 @@
 import {
   closeInactiveSyncRuns,
   ensurePageSyncStates,
+  findPageById,
+  listRunnableOfapiCapturePages,
   listRunnablePageSync,
   markPageSyncEnqueued,
+  recoverStaleOfapiCaptureWork,
   retireLegacyOnlyFansDmMessages,
   scheduleDuePageSync,
 } from "@agency_hub_core/db";
@@ -10,6 +13,8 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
+import { isOfapiBackgroundCaptureRunnable } from "../ofapi-capture-jobs.ts";
+import { resolveStoredProxyEgressKey } from "../page-context.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
 import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
@@ -66,7 +71,64 @@ export async function runSyncPlannerCycle(
   await scheduleDuePageSync(app.db, { now, ...dependencyInput });
 
   const runnablePages = await listRunnablePageSync(app.db, now);
+  const pageWork = new Map<number, {
+    pageId: number;
+    platform: "fansly" | "onlyfans";
+    priority: number;
+    requestedAt: Date;
+    egressKey: string;
+    hasLegacyWork: boolean;
+  }>();
   for (const page of runnablePages) {
+    pageWork.set(page.pageId, {
+      pageId: page.pageId,
+      platform: page.platform,
+      priority: page.priority,
+      requestedAt: page.requestedAt ?? now,
+      egressKey: page.egressKey,
+      hasLegacyWork: true,
+    });
+  }
+
+  // Recovery never calls the vendor and must remain live while dispatch is
+  // disabled. Otherwise a kill switch could strand financial reservations or
+  // leave an already-dispatched attempt looking safely retryable.
+  const recovered = await recoverStaleOfapiCaptureWork(app.db, { now });
+  if (recovered.released + recovered.indeterminate + recovered.requeued > 0) {
+    app.logger.warn(recovered, "Recovered expired OFAPI capture work");
+  }
+
+  if (isOfapiBackgroundCaptureRunnable(app.config)) {
+    const capturePages = await listRunnableOfapiCapturePages(app.db, { now });
+    for (const capture of capturePages) {
+      const existing = pageWork.get(capture.pageId);
+      if (existing) {
+        existing.priority = Math.max(existing.priority, capture.priority);
+        existing.requestedAt = existing.requestedAt <= capture.requestedAt
+          ? existing.requestedAt
+          : capture.requestedAt;
+        continue;
+      }
+      const stored = await findPageById(app.db, capture.pageId);
+      if (!stored || stored.page.platform !== "onlyfans") {
+        continue;
+      }
+      pageWork.set(capture.pageId, {
+        pageId: capture.pageId,
+        platform: "onlyfans",
+        priority: capture.priority,
+        requestedAt: capture.requestedAt,
+        egressKey: resolveStoredProxyEgressKey(stored.proxy),
+        hasLegacyWork: false,
+      });
+    }
+  }
+
+  const orderedWork = [...pageWork.values()].sort((left, right) =>
+    right.priority - left.priority ||
+    left.requestedAt.getTime() - right.requestedAt.getTime() ||
+    left.pageId - right.pageId);
+  for (const page of orderedWork) {
     const wakeupId = await sendSyncPageWakeup(boss, {
       platformAccountId: page.pageId,
       priority: page.priority,
@@ -74,7 +136,7 @@ export async function runSyncPlannerCycle(
       egressKey: page.egressKey,
     });
 
-    if (wakeupId) {
+    if (wakeupId && page.hasLegacyWork) {
       await markPageSyncEnqueued(app.db, page.pageId, now);
     }
   }

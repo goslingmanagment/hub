@@ -5,6 +5,7 @@ import {
   createBoundedSseReplayBuffer,
   subscribeBeforeReplayBoundary,
   validateGaplessReplayBatch,
+  validateV2DeliverableReplayBatch,
 } from "../apps/runtime/src/services/sse-replay-buffer.ts";
 
 describe("bounded SSE pre-replay buffer", () => {
@@ -111,5 +112,35 @@ describe("bounded SSE pre-replay buffer", () => {
       throughSeq: 15,
       limit: 2,
     })).toEqual({ ok: true, nextSeq: 12, done: false });
+  });
+
+  it("accepts only checkpoint-proven projection gaps", () => {
+    expect(validateV2DeliverableReplayBatch({
+      rows: [{
+        accountSeq: 13,
+        type: "stream.projection_checkpoint",
+        data: { hiddenCount: 2 },
+      }],
+      afterSeq: 10,
+      throughSeq: 13,
+      limit: 500,
+    })).toEqual({ ok: true, nextSeq: 13, done: true });
+
+    expect(validateV2DeliverableReplayBatch({
+      rows: [{ accountSeq: 13, type: "message.received", data: {} }],
+      afterSeq: 10,
+      throughSeq: 13,
+      limit: 500,
+    })).toEqual({ ok: false });
+    expect(validateV2DeliverableReplayBatch({
+      rows: [{
+        accountSeq: 13,
+        type: "stream.projection_checkpoint",
+        data: { hiddenCount: 1 },
+      }],
+      afterSeq: 10,
+      throughSeq: 13,
+      limit: 500,
+    })).toEqual({ ok: false });
   });
 });

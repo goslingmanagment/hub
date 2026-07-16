@@ -74,6 +74,26 @@ export function createAccountSeqGuards(initial: ReadonlyMap<number, number>) {
       lastWritten.set(accountId, seq);
       return { deliver: true };
     },
+    advanceProjectionCheckpoint(
+      accountId: number,
+      seq: number,
+      hiddenCount: number,
+    ): { deliver: boolean; gap: boolean } {
+      const last = lastWritten.get(accountId);
+      if (last !== undefined && seq <= last) {
+        return { deliver: false, gap: false };
+      }
+      if (
+        last === undefined ||
+        !Number.isSafeInteger(hiddenCount) ||
+        hiddenCount < 0 ||
+        seq !== last + hiddenCount + 1
+      ) {
+        return { deliver: false, gap: true };
+      }
+      lastWritten.set(accountId, seq);
+      return { deliver: true, gap: false };
+    },
     watermarks(): ReadonlyMap<number, number> {
       return lastWritten;
     },
@@ -98,6 +118,11 @@ export function createDomainEventHub(app: AppContext): DomainEventHub {
   let drainRetryDelayMs = DRAIN_RETRY_MIN_MS;
 
   function broadcast(event: DomainEventRow) {
+    if (event.type === "message.material_observed") {
+      // Projection-only rows advance the shared durable drain, but never enter
+      // per-client buffers. Their atomic checkpoint carries the cursor jump.
+      return;
+    }
     for (const subscriber of subscribers) {
       if (subscriber.accountIds !== undefined && !subscriber.accountIds.has(event.accountId)) {
         continue;

@@ -2,10 +2,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   appendDomainEvents,
+  appendProjectionOnlyDomainEvents,
   ensureDomainEventPartitions,
   getAccountHighWater,
   getDomainEventPartitionLeadMonths,
   listEventsSince,
+  listDomainEventContiguousReplayEnds,
   listObservationsForReplay,
   markObservationParsed,
   insertObservation,
@@ -120,6 +122,49 @@ describe("domain events append protocol (Stage 8)", () => {
       Array.from({ length: distinctKeys.size }, (_, i) => i + 1),
     );
     expect(await getAccountHighWater(testDb.db, 42)).toBe(distinctKeys.size);
+  });
+
+  it("atomically checkpoints projection-only rows and filters them from v2 replay", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const material = [
+      event({ dedupKey: "msg-material:m1:a", type: "message.material_observed" }),
+      event({ dedupKey: "msg-material:m2:b", type: "message.material_observed" }),
+    ];
+    const first = await appendProjectionOnlyDomainEvents(testDb.db, 17, material, {
+      occurredAt: new Date("2026-06-15T12:01:00Z"),
+      observationId: 91,
+      dedupKey: "projection-checkpoint:91",
+    });
+    expect(first).toMatchObject({ appended: 3, deduped: 0, highWater: 3 });
+
+    const visible = await listEventsSince(testDb.db, {
+      accountId: 17,
+      afterSeq: 0,
+      throughSeq: 3,
+      excludeProjectionOnly: true,
+    });
+    expect(visible).toHaveLength(1);
+    expect(visible[0]).toMatchObject({
+      accountSeq: 3,
+      type: "stream.projection_checkpoint",
+      data: { hiddenCount: 2 },
+    });
+    const ends = await listDomainEventContiguousReplayEnds(testDb.db, [{
+      accountId: 17,
+      afterSeq: 0,
+      throughSeq: 3,
+    }], { excludeProjectionOnly: true });
+    expect(ends.get(17)).toBe(3);
+
+    const replay = await appendProjectionOnlyDomainEvents(testDb.db, 17, material, {
+      occurredAt: new Date("2026-06-15T12:01:00Z"),
+      observationId: 91,
+      dedupKey: "projection-checkpoint:91",
+    });
+    expect(replay).toMatchObject({ appended: 0, deduped: 2, highWater: 3 });
   });
 
   it("routes historical occurred_at into the 2024/pre-2024 partitions", async (context) => {

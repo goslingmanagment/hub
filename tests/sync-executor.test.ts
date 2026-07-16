@@ -19,6 +19,7 @@ const dbMocks = vi.hoisted(() => ({
   findPageById: vi.fn(),
   heartbeatPageSyncLease: vi.fn(),
   listRunnablePageSync: vi.fn(),
+  listRunnableOfapiCapturePages: vi.fn(),
   startSyncRun: vi.fn(),
   yieldPageSync: vi.fn(),
 }));
@@ -220,6 +221,7 @@ describe("sync executor", () => {
     dbMocks.heartbeatPageSyncLease.mockResolvedValue(true);
     dbMocks.clearPageSyncLease.mockResolvedValue(true);
     dbMocks.listRunnablePageSync.mockResolvedValue([]);
+    dbMocks.listRunnableOfapiCapturePages.mockResolvedValue([]);
     dbMocks.yieldPageSync.mockResolvedValue({ updated: true, superseded: false });
     handlerMocks.resolveExecutorPageContext.mockResolvedValue({
       platform: "fansly",

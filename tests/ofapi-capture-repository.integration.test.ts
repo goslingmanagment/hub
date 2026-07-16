@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureOfapiAttemptResponse,
@@ -13,15 +13,20 @@ import {
   getOfapiCaptureJob,
   getOfapiRequestAttempt,
   leaseNextOfapiCaptureJob,
+  listRunnableOfapiCapturePages,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
   releaseOfapiAttemptPreDispatch,
+  recoverStaleOfapiCaptureWork,
   reserveOfapiRequestAttempt,
   resolveOfapiIndeterminateAttempt,
   setPageOfapiAccountId,
   settleOfapiCaptureParse,
 } from "@agency_hub_core/db";
 
+import { executeOfapiCaptureJobChunk } from "../apps/runtime/src/services/ofapi-capture-jobs.ts";
+import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -117,6 +122,86 @@ async function createAndReserveInteractive(input?: {
     now: NOW,
   });
   return { ...seeded, request, reservation };
+}
+
+function messagePage(input: {
+  nextPage: string | null;
+  shape?: "accepted" | "contract_drift";
+  creditsUsed?: number;
+}) {
+  if (input.shape === "contract_drift") {
+    return Buffer.from(JSON.stringify({ data: null, _pagination: { next_page: null } }));
+  }
+  return Buffer.from(JSON.stringify({
+    data: [
+      { id: "100", isSentByMe: false, createdAt: "2026-07-16T11:59:00.000Z", text: "head" },
+      { id: "99", isSentByMe: true, createdAt: "2026-07-16T11:58:00.000Z", text: "older" },
+    ],
+    _pagination: { next_page: input.nextPage },
+    _meta: { _credits: { used: input.creditsUsed ?? 1, balance: 999 } },
+  }));
+}
+
+async function createCaptureExecutionFixture(input: {
+  bodyBytes: Buffer;
+  maxCalls?: number;
+  maxCredits?: number;
+  maxPages?: number;
+}) {
+  const seeded = await seed();
+  const now = new Date();
+  await testDb!.pool.query(`
+    update ofapi_credit_state
+    set last_balance = 1000,
+        last_balance_at = $1,
+        updated_at = $1
+    where id = 1
+  `, [now]);
+
+  const dispatchGovernedRaw = vi.fn(async (
+    _context: unknown,
+    request: { beforeDispatch: () => Promise<boolean> },
+  ) => {
+    if (!await request.beforeDispatch()) {
+      throw new Error("durable dispatch fence was not acquired");
+    }
+    return {
+      status: 200,
+      bodyBytes: input.bodyBytes,
+      headers: { "content-type": "application/json" },
+      receivedAt: new Date(),
+    };
+  });
+  const app = createTestAppContext(testDb!, {
+    ofapi: { dispatchGovernedRaw } as never,
+    ofapiMirrorBackgroundCaptureEnabled: true,
+    ofapiDmDailyCreditBudget: 100,
+    ofapiBackfillDailyCreditBudget: 100,
+    ofapiCreditFloor: 10,
+  });
+  // The production route is intentionally proxy-bound. The test dispatcher
+  // never opens this socket; it only exercises the same durable egress lookup.
+  await saveProxy(app, seeded.page.id, { url: "http://127.0.0.1:65535" });
+  const created = await createOrGetOfapiCaptureJob(testDb!.db, {
+    pageId: seeded.page.id,
+    ofapiAccountId: seeded.accountId,
+    kind: "chat_paginate",
+    goal: "history_to_exhaustion",
+    activeSlotKey: `page:${seeded.page.id}:chat:42`,
+    target: {
+      chatId: "42",
+      frozenHeadId: "100",
+      anchorMessageId: null,
+      limit: 100,
+    },
+    budgetScope: "bulk",
+    createdBy: "owner",
+    maxCalls: input.maxCalls ?? 1,
+    maxCredits: input.maxCredits ?? 1,
+    maxPages: input.maxPages ?? 5,
+    now,
+  });
+  return { ...seeded, app, dispatchGovernedRaw, job: created.job };
 }
 
 describe("OFAPI capture correctness repository", () => {
@@ -465,5 +550,298 @@ describe("OFAPI capture correctness repository", () => {
       acceptedItems: 1,
       zeroProgressCount: 0,
     });
+  });
+
+  it("captures a paid page before parsing and never calls the vendor again after capture", async () => {
+    if (!testDb) return;
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: messagePage({ nextPage: null }),
+    });
+
+    expect(await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).toMatchObject({
+      kind: "success",
+      jobId: fixture.job.id,
+    });
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "awaiting_parse",
+      dispatchCount: 1,
+    });
+
+    fixture.dispatchGovernedRaw.mockImplementation(async () => {
+      throw new Error("captured response must be replayed locally");
+    });
+    expect(await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).toMatchObject({
+      kind: "success",
+      jobId: fixture.job.id,
+    });
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+    const completed = await getOfapiCaptureJob(testDb.db, fixture.job.id);
+    expect(completed).toMatchObject({
+      state: "complete",
+      dispatchCount: 1,
+    });
+    expect(completed?.terminalObservationId).not.toBeNull();
+    const terminal = await testDb.pool.query<{ payload: Record<string, unknown> }>(`
+      select payload from observations where id = $1
+    `, [completed?.terminalObservationId]);
+    expect(terminal.rows[0]?.payload).toMatchObject({
+      classification: "continuous_history",
+      pages: 1,
+      parseDebt: 0,
+    });
+    const attempts = await testDb.pool.query<{ count: string }>(`
+      select count(*)::text as count
+      from ofapi_request_attempts
+      where capture_job_id = $1
+    `, [fixture.job.id]);
+    expect(attempts.rows[0]?.count).toBe("1");
+  });
+
+  it("captures valid JSON contract drift but freezes the cursor and does not retry the vendor", async () => {
+    if (!testDb) return;
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: messagePage({ nextPage: null, shape: "contract_drift" }),
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "contract_rejected",
+      cursor: null,
+      acceptedPages: 0,
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles exact credits from the captured response after a process crash", async () => {
+    if (!testDb) return;
+    const seeded = await seed();
+    const created = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      kind: "chat_paginate",
+      goal: "history_to_exhaustion",
+      activeSlotKey: `page:${seeded.page.id}:chat:credit-replay`,
+      target: { chatId: "credit-replay", frozenHeadId: "100", limit: 100 },
+      budgetScope: "bulk",
+      createdBy: "owner",
+      maxCalls: 5,
+      maxCredits: 5,
+      maxPages: 5,
+      now: NOW,
+    });
+    const leased = await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      leaseOwner: "worker-before-crash",
+      leaseTtlMs: 60_000,
+      now: NOW,
+    });
+    if (!leased?.leaseToken) throw new Error("lease missing");
+    const reservation = await reserveOfapiRequestAttempt(testDb.db, {
+      ownerKind: "capture_job",
+      ownerId: created.job.id,
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      budgetScope: "bulk",
+      operation: "ofapi_capture_chat_messages",
+      endpointClass: "chat_messages",
+      egressKey: `page:${seeded.page.id}`,
+      method: "GET",
+      requestSemantics: "safe_read",
+      requestShape: { chatId: "credit-replay", firstId: "100" },
+      reservedCredits: 1,
+      globalDailyCap: 100,
+      scopeDailyCap: 100,
+      creditFloor: 10,
+      balanceMaxAgeMs: 60 * 60 * 1000,
+      jobLeaseToken: leased.leaseToken,
+      deadlineAt: new Date(NOW.getTime() + 30_000),
+      now: NOW,
+    });
+    if (!reservation.admitted) throw new Error("attempt was not admitted");
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      jobLeaseToken: leased.leaseToken,
+      now: new Date(NOW.getTime() + 1_000),
+    })).toBe(true);
+    await captureOfapiAttemptResponse(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      responseObservedAt: new Date(NOW.getTime() + 2_000),
+      httpStatus: 200,
+      httpOutcome: "success",
+      responseHeaders: { "content-type": "application/json" },
+      bodyBytes: messagePage({ nextPage: null, creditsUsed: 3 }),
+      request: { chatId: "credit-replay", firstId: "100" },
+      producer: "test-before-crash",
+      observationKind: "ofapi.chat_messages_page.v1",
+      now: new Date(NOW.getTime() + 3_000),
+    });
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "awaiting_parse",
+      spentCredits: 1,
+    });
+
+    const app = createTestAppContext(testDb, {
+      ofapiMirrorBackgroundCaptureEnabled: true,
+      ofapiDmDailyCreditBudget: 100,
+      ofapiBackfillDailyCreditBudget: 100,
+      ofapiCreditFloor: 10,
+    });
+    expect(await executeOfapiCaptureJobChunk(app, seeded.page.id)).toMatchObject({
+      kind: "success",
+      jobId: created.job.id,
+    });
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "complete",
+      spentCredits: 3,
+    });
+    expect(await getOfapiRequestAttempt(testDb.db, reservation.attemptId)).toMatchObject({
+      settled_credits: 3,
+      credit_estimated: false,
+    });
+  });
+
+  it("stops with an explicit gap when a non-terminal page reaches its hard bound", async () => {
+    if (!testDb) return;
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: messagePage({ nextPage: "vendor-next-page" }),
+      maxPages: 1,
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "gap_open",
+      dispatchCount: 1,
+    });
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("denies the next page before dispatch when the job credit cap is exhausted", async () => {
+    if (!testDb) return;
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: messagePage({ nextPage: "vendor-next-page" }),
+      maxCalls: 5,
+      maxCredits: 1,
+      maxPages: 5,
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "job_cap",
+      attemptCount: 1,
+      dispatchCount: 1,
+      spentCredits: 1,
+    });
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("parks an expired dispatch as indeterminate instead of reissuing it", async () => {
+    if (!testDb) return;
+    const seeded = await seed();
+    const created = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      kind: "chat_paginate",
+      goal: "history_to_exhaustion",
+      activeSlotKey: `page:${seeded.page.id}:chat:expired`,
+      target: { chatId: "expired", frozenHeadId: "100" },
+      budgetScope: "bulk",
+      createdBy: "owner",
+      maxCalls: 2,
+      maxCredits: 2,
+      maxPages: 2,
+      now: NOW,
+    });
+    const leased = await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      leaseOwner: "crashed-worker",
+      leaseTtlMs: 1_000,
+      now: NOW,
+    });
+    if (!leased?.leaseToken) throw new Error("lease missing");
+    const reservation = await reserveOfapiRequestAttempt(testDb.db, {
+      ownerKind: "capture_job",
+      ownerId: created.job.id,
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      budgetScope: "bulk",
+      operation: "list_messages",
+      endpointClass: "messages",
+      egressKey: `page:${seeded.page.id}`,
+      method: "GET",
+      requestSemantics: "safe_read",
+      requestShape: { chatId: "expired", firstId: "100" },
+      reservedCredits: 1,
+      globalDailyCap: 100,
+      scopeDailyCap: 100,
+      creditFloor: 10,
+      balanceMaxAgeMs: 60 * 60 * 1000,
+      jobLeaseToken: leased.leaseToken,
+      deadlineAt: new Date(NOW.getTime() + 30_000),
+      now: NOW,
+    });
+    if (!reservation.admitted) throw new Error("attempt was not admitted");
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      jobLeaseToken: leased.leaseToken,
+      now: new Date(NOW.getTime() + 500),
+    })).toBe(true);
+
+    expect(await recoverStaleOfapiCaptureWork(testDb.db, {
+      now: new Date(NOW.getTime() + 2_000),
+    })).toEqual({ released: 0, indeterminate: 1, requeued: 0 });
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "indeterminate",
+    });
+    expect(await getOfapiRequestAttempt(testDb.db, reservation.attemptId)).toMatchObject({
+      state: "indeterminate",
+      credit_state: "indeterminate",
+    });
+    expect(await listRunnableOfapiCapturePages(testDb.db, {
+      now: new Date(NOW.getTime() + 3_000),
+    })).toEqual([]);
+  });
+
+  it("does not hot-loop an awaiting-parse job parked after parser failure", async () => {
+    if (!testDb) return;
+    const seeded = await seed();
+    const created = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      kind: "chat_paginate",
+      goal: "history_to_exhaustion",
+      activeSlotKey: `page:${seeded.page.id}:chat:parser-failed`,
+      target: { chatId: "parser-failed", frozenHeadId: "100" },
+      budgetScope: "bulk",
+      createdBy: "owner",
+      maxCalls: 1,
+      maxCredits: 1,
+      maxPages: 1,
+      now: NOW,
+    });
+    await testDb.pool.query(`
+      update ofapi_capture_jobs
+      set state = 'awaiting_parse', reason_code = 'parser_failed'
+      where id = $1
+    `, [created.job.id]);
+
+    expect(await listRunnableOfapiCapturePages(testDb.db, { now: NOW })).toEqual([]);
+    expect(await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      leaseOwner: "must-not-run",
+      leaseTtlMs: 60_000,
+      now: NOW,
+    })).toBeNull();
   });
 });

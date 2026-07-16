@@ -44,6 +44,13 @@ export interface AppendDomainEventsResult {
   events: AppendedDomainEventOutcome[];
 }
 
+export interface ProjectionCheckpointInput {
+  occurredAt: Date;
+  observationId: number;
+  dedupKey: string;
+  data?: Record<string, unknown>;
+}
+
 /**
  * Appends a batch of canonical events for ONE account. Self-transactional:
  * the counter-row lock spans the whole batch, so concurrent appenders for the
@@ -53,6 +60,33 @@ export async function appendDomainEvents(
   db: Database,
   accountId: number,
   events: readonly DomainEventInput[],
+): Promise<AppendDomainEventsResult> {
+  return appendDomainEventsBatch(db, accountId, events, null);
+}
+
+/**
+ * Appends projection-only material and, in the SAME account-seq transaction,
+ * one visible checkpoint covering exactly the rows that were newly appended.
+ * A client can skip the hidden range without mistaking a real ledger hole for
+ * projection traffic. Replays that dedupe the whole batch append nothing.
+ */
+export async function appendProjectionOnlyDomainEvents(
+  db: Database,
+  accountId: number,
+  events: readonly DomainEventInput[],
+  checkpoint: ProjectionCheckpointInput,
+): Promise<AppendDomainEventsResult> {
+  if (events.some((event) => event.type !== "message.material_observed")) {
+    throw new Error("Projection-only append accepts only message.material_observed events");
+  }
+  return appendDomainEventsBatch(db, accountId, events, checkpoint);
+}
+
+async function appendDomainEventsBatch(
+  db: Database,
+  accountId: number,
+  events: readonly DomainEventInput[],
+  checkpoint: ProjectionCheckpointInput | null,
 ): Promise<AppendDomainEventsResult> {
   if (events.length === 0) {
     const highWater = await getAccountHighWater(db, accountId);
@@ -74,7 +108,7 @@ export async function appendDomainEvents(
     let deduped = 0;
     const outcomes: AppendedDomainEventOutcome[] = [];
 
-    for (const event of events) {
+    const appendOne = async (event: DomainEventInput) => {
       const allocated = await tx.execute<{ id: string }>(sql`
         select nextval(pg_get_serial_sequence('domain_events', 'id'))::text as id
       `);
@@ -99,7 +133,7 @@ export async function appendDomainEvents(
           eventId: Number(existing.rows[0]!.event_id),
           appended: false,
         });
-        continue;
+        return false;
       }
       outcomes.push({ dedupKey: event.dedupKey, eventId, appended: true });
 
@@ -126,6 +160,29 @@ export async function appendDomainEvents(
       `);
       nextSeq += 1;
       appended += 1;
+      return true;
+    };
+
+    for (const event of events) {
+      await appendOne(event);
+    }
+
+    const hiddenAppended = appended;
+    if (checkpoint !== null && hiddenAppended > 0) {
+      const checkpointAppended = await appendOne({
+        type: "stream.projection_checkpoint",
+        occurredAt: checkpoint.occurredAt,
+        data: {
+          ...(checkpoint.data ?? {}),
+          hiddenCount: hiddenAppended,
+        },
+        schemaVersion: 1,
+        observationId: checkpoint.observationId,
+        dedupKey: checkpoint.dedupKey,
+      });
+      if (!checkpointAppended) {
+        throw new Error("Projection checkpoint was already claimed for newly appended material");
+      }
     }
 
     if (appended > 0) {
@@ -260,6 +317,7 @@ export async function listDomainEventContiguousReplayEnds(
     afterSeq: number;
     throughSeq: number;
   }>,
+  options?: { excludeProjectionOnly?: boolean },
 ): Promise<Map<number, number>> {
   if (intervals.length === 0) {
     return new Map();
@@ -272,6 +330,72 @@ export async function listDomainEventContiguousReplayEnds(
     )`),
     sql`, `,
   );
+  if (options?.excludeProjectionOnly === true) {
+    const classified = await db.execute<{
+      account_id: string | number;
+      contiguous_through: string | number;
+    }>(sql`
+      with requested(account_id, after_seq, through_seq) as (
+        values ${requestedRows}
+      ), normalized as (
+        select account_id,
+               least(after_seq, through_seq) as base_seq,
+               through_seq
+        from requested
+      ), visible as (
+        select normalized.account_id,
+               normalized.base_seq,
+               normalized.through_seq,
+               event.account_seq,
+               event.type,
+               event.data,
+               lag(event.account_seq, 1, normalized.base_seq) over (
+                 partition by normalized.account_id
+                 order by event.account_seq
+               ) as previous_seq
+        from normalized
+        join domain_events event
+          on event.account_id = normalized.account_id
+         and event.account_seq > normalized.base_seq
+         and event.account_seq <= normalized.through_seq
+         and event.type <> 'message.material_observed'
+      ), classified as (
+        select *,
+               case
+                 when type = 'stream.projection_checkpoint' then
+                   coalesce(data->>'hiddenCount', '') ~ '^[0-9]+$'
+                   and (data->>'hiddenCount')::bigint = account_seq - previous_seq - 1
+                 else account_seq = previous_seq + 1
+               end as edge_valid
+        from visible
+      ), summary as (
+        select account_id,
+               min(previous_seq) filter (where not edge_valid) as before_first_gap,
+               max(account_seq) as last_visible
+        from classified
+        group by account_id
+      )
+      select normalized.account_id,
+             greatest(
+               normalized.base_seq,
+               least(
+                 normalized.through_seq,
+                 coalesce(
+                   summary.before_first_gap,
+                   summary.last_visible,
+                   normalized.base_seq
+                 )
+               )
+             )::text as contiguous_through
+      from normalized
+      left join summary using (account_id)
+    `);
+    return new Map(classified.rows.map((row) => [
+      Number(row.account_id),
+      Number(row.contiguous_through),
+    ]));
+  }
+
   const result = await db.execute<{
     account_id: string | number;
     contiguous_through: string | number;
@@ -536,6 +660,7 @@ export async function listEventsSince(
     /** Inclusive replay ceiling captured after the live subscription. */
     throughSeq?: number;
     limit?: number;
+    excludeProjectionOnly?: boolean;
   },
 ): Promise<DomainEventRow[]> {
   const limit = input.limit ?? 500;
@@ -550,6 +675,9 @@ export async function listEventsSince(
     where de.account_id = ${input.accountId}
       and de.account_seq > ${input.afterSeq}
       ${input.throughSeq === undefined ? sql`` : sql`and de.account_seq <= ${input.throughSeq}`}
+      ${input.excludeProjectionOnly === true
+        ? sql`and de.type <> 'message.material_observed'`
+        : sql``}
     order by de.account_seq asc
     limit ${limit}
   `);

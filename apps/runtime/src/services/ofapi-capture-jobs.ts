@@ -1,0 +1,626 @@
+import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+
+import {
+  blockOfapiCaptureJobLease,
+  captureOfapiAttemptResponse,
+  insertObservation,
+  leaseNextOfapiCaptureJob,
+  loadOfapiCaptureObservation,
+  markOfapiAttemptDispatching,
+  markOfapiAttemptIndeterminate,
+  reconcileOfapiCapturedAttemptCredit,
+  releaseOfapiAttemptPreDispatch,
+  reserveOfapiRequestAttempt,
+  settleOfapiCaptureParse,
+  type OfapiCaptureJobRecord,
+  type OfapiHttpOutcome,
+} from "@agency_hub_core/db";
+
+import type { AppContext } from "../bootstrap.ts";
+import {
+  capturePayloadResponse,
+  parseOfapiJsonBytes,
+  parseStrictOfapiMessagePage,
+} from "./ofapi-capture-contract.ts";
+import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
+import {
+  OfapiGovernedRequestError,
+  type OfapiGovernedRawResponse,
+} from "./ofapi.ts";
+import { appendOfapiMessageMaterialPage } from "./ofapi-message-material.ts";
+
+const JOB_LEASE_TTL_MS = 120_000;
+const CAPTURE_COMMIT_ATTEMPTS = 3;
+const BALANCE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const PRINCIPAL_HOURLY_CALL_CAP = 60;
+const PRINCIPAL_HOURLY_CREDIT_CAP = 60;
+
+export function isOfapiBackgroundCaptureRunnable(
+  config: Pick<
+    AppContext["config"],
+    | "ofapiMirrorBackgroundCaptureEnabled"
+    | "ofapiAudienceSyncEnabled"
+    | "ofapiChargebacksReconcileEnabled"
+    | "ofapiFanIdentitiesSyncEnabled"
+  > | undefined,
+) {
+  // The legacy dedicated lanes reserve only their own counters. Until they
+  // join the governed global reservation transaction, running them beside
+  // background mirror work would make the physical hard cap non-atomic.
+  return config?.ofapiMirrorBackgroundCaptureEnabled === true &&
+    config.ofapiAudienceSyncEnabled !== true &&
+    config.ofapiChargebacksReconcileEnabled !== true &&
+    config.ofapiFanIdentitiesSyncEnabled !== true;
+}
+
+export interface OfapiCaptureChunkResult {
+  kind: "idle" | "success" | "failed" | "blocked";
+  pageId: number;
+  jobId: string | null;
+}
+
+interface ChatPaginateTarget {
+  chatId: string;
+  frozenHeadId: string;
+  anchorMessageId: string | null;
+  limit: number;
+}
+
+function stringField(value: unknown) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function parseTarget(job: OfapiCaptureJobRecord): ChatPaginateTarget | null {
+  const chatId = stringField(job.target.chatId);
+  const frozenHeadId = stringField(job.target.frozenHeadId);
+  const anchorMessageId = job.target.anchorMessageId === null ||
+      job.target.anchorMessageId === undefined
+    ? null
+    : stringField(job.target.anchorMessageId);
+  const rawLimit = job.target.limit;
+  const limit = typeof rawLimit === "number" && Number.isInteger(rawLimit)
+    ? Math.max(1, Math.min(100, rawLimit))
+    : 100;
+  if (
+    !chatId ||
+    !frozenHeadId ||
+    !job.maxPages ||
+    !job.maxCalls ||
+    !job.maxCredits ||
+    (job.goal === "connect_to_anchor" && !anchorMessageId)
+  ) {
+    return null;
+  }
+  return { chatId, frozenHeadId, anchorMessageId, limit };
+}
+
+function cursorField(job: OfapiCaptureJobRecord, field: string) {
+  return stringField(job.cursor?.[field]);
+}
+
+function cursorPages(job: OfapiCaptureJobRecord) {
+  const pages = job.cursor?.pages;
+  return typeof pages === "number" && Number.isInteger(pages) && pages >= 0
+    ? pages
+    : job.acceptedPages;
+}
+
+function httpOutcome(status: number): OfapiHttpOutcome {
+  if (status >= 200 && status < 300) return "success";
+  if (status === 404) return "not_found";
+  if (status === 401) return "auth_confirmed";
+  if (status === 403) return "forbidden_unconfirmed";
+  if (status === 429) return "rate";
+  if (status >= 500) return "vendor_5xx";
+  if (status === 400 || status === 409 || status === 422) return "request_rejected";
+  return "unexpected_http";
+}
+
+function retryAfter(headers: Record<string, string>, now: Date) {
+  const raw = headers["retry-after"];
+  const seconds = raw === undefined ? Number.NaN : Number(raw);
+  const waitMs = Number.isFinite(seconds) && seconds >= 0
+    ? Math.min(seconds * 1_000, 60 * 60 * 1_000)
+    : 60_000;
+  return new Date(now.getTime() + Math.max(1_000, waitMs));
+}
+
+async function blockJob(
+  app: AppContext,
+  job: OfapiCaptureJobRecord,
+  reasonCode: string,
+  reasonMessage: string,
+) {
+  if (!job.leaseToken) return false;
+  return blockOfapiCaptureJobLease(app.db, {
+    jobId: job.id,
+    leaseToken: job.leaseToken,
+    reasonCode,
+    reasonMessage,
+  });
+}
+
+async function terminalObservation(
+  app: AppContext,
+  job: OfapiCaptureJobRecord,
+  input: {
+    classification: "continuous_history" | "connected_to_anchor";
+    lastMessageId: string | null;
+    pages: number;
+    items: number;
+    requiredServingHighWater: number;
+  },
+) {
+  const payload = {
+    jobId: job.id,
+    pageId: job.pageId,
+    ofapiAccountId: job.ofapiAccountId,
+    targetHash: job.targetHash,
+    frozenHeadId: stringField(job.target.frozenHeadId),
+    goal: job.goal,
+    ...input,
+    sourceContractVersion: job.sourceContractVersion,
+    parserVersion: job.parserVersion,
+    proofPolicyVersion: job.proofPolicyVersion,
+    parseDebt: 0,
+  };
+  return insertObservation(app.db, {
+    source: "ofapi_capture",
+    producer: "ofapi-mirror-background",
+    platform: "onlyfans",
+    accountId: job.pageId,
+    nativeAccountRef: job.ofapiAccountId,
+    kind: "ofapi.capture_completed.v1",
+    payload,
+    payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+    idempotencyKey: `capture-complete:${job.id}:${job.targetHash}`,
+    observedAt: new Date(),
+    actorPrincipalId: job.originPrincipalId,
+  });
+}
+
+async function parseCapturedJob(
+  app: AppContext,
+  job: OfapiCaptureJobRecord,
+): Promise<OfapiCaptureChunkResult> {
+  if (
+    !job.leaseToken ||
+    !job.pendingObservationId ||
+    !job.pendingObservationReceivedAt
+  ) {
+    await blockJob(app, job, "pending_observation_missing", "Awaiting-parse job has no observation");
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+  const observation = await loadOfapiCaptureObservation(app.db, {
+    observationId: job.pendingObservationId,
+    observationReceivedAt: job.pendingObservationReceivedAt,
+  });
+  if (!observation?.attemptId) {
+    await blockJob(app, job, "pending_observation_missing", "Captured observation is unavailable");
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+  const captured = capturePayloadResponse(observation.payload);
+  if (!captured) {
+    await settleOfapiCaptureParse(app.db, {
+      jobId: job.id,
+      attemptId: observation.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      parserOutcome: "contract_rejected",
+      rawCount: 0,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 1,
+      disposition: { kind: "blocked", reasonCode: "capture_envelope_invalid" },
+    });
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+
+  // Credit metadata is replayed from the durable bytes as part of local
+  // parsing. The capture chunk also attempts this eagerly, but a process may
+  // die after the response transaction commits and before that correction.
+  const parsedJson = parseOfapiJsonBytes(captured.bodyBytes);
+  if (parsedJson.creditsUsed !== null) {
+    await reconcileOfapiCapturedAttemptCredit(app.db, {
+      attemptId: observation.attemptId,
+      actualCredits: parsedJson.creditsUsed,
+      balanceAfter: parsedJson.balanceAfter,
+    });
+  }
+
+  const status = captured.status;
+  if (status < 200 || status >= 300) {
+    const retryable = status === 429 || status >= 500;
+    await settleOfapiCaptureParse(app.db, {
+      jobId: job.id,
+      attemptId: observation.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      parserOutcome: "intentional_noop",
+      rawCount: 0,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: retryable
+        ? {
+          kind: "retry",
+          nextAttemptAt: retryAfter(captured.headers, new Date()),
+          reasonCode: status === 429 ? "rate_limited" : "vendor_5xx",
+        }
+        : {
+          kind: "blocked",
+          reasonCode: status === 404 ? "chat_not_found" : `http_${status}`,
+        },
+    });
+    return { kind: retryable ? "failed" : "blocked", pageId: job.pageId, jobId: job.id };
+  }
+
+  const target = parseTarget(job);
+  if (!parsedJson.validJson || !target) {
+    await settleOfapiCaptureParse(app.db, {
+      jobId: job.id,
+      attemptId: observation.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      parserOutcome: "contract_rejected",
+      rawCount: 0,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 1,
+      disposition: {
+        kind: "blocked",
+        reasonCode: !target ? "target_invalid" : "invalid_json",
+      },
+    });
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+
+  const inclusiveCursor = cursorField(job, "firstId");
+  const page = parseStrictOfapiMessagePage(parsedJson.body, {
+    requiredBoundaryCursor: inclusiveCursor ?? target.frozenHeadId,
+    boundaryIsDuplicate: inclusiveCursor !== null,
+  });
+  if (!page.accepted) {
+    await settleOfapiCaptureParse(app.db, {
+      jobId: job.id,
+      attemptId: observation.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      parserOutcome: "contract_rejected",
+      rawCount: page.rawCount,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: page.rejectedCount,
+      disposition: {
+        kind: "blocked",
+        reasonCode: "contract_rejected",
+        reasonMessage: page.reason,
+      },
+    });
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+
+  const itemIds = page.items.flatMap((item) => {
+    const id = stringField(item.id) ??
+      (typeof item.id === "number" && Number.isFinite(item.id) ? String(item.id) : null);
+    return id ? [id] : [];
+  });
+  let materialHighWater: number;
+  try {
+    const material = await appendOfapiMessageMaterialPage(app.db, {
+      accountId: job.pageId,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      chatId: target.chatId,
+      originClass: "capture_background",
+      items: page.items,
+    });
+    materialHighWater = material.highWater;
+  } catch (error) {
+    app.logger.error(
+      { err: error, jobId: job.id, observationId: observation.id },
+      "Captured OFAPI page could not be appended to the material ledger",
+    );
+    await settleOfapiCaptureParse(app.db, {
+      jobId: job.id,
+      attemptId: observation.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      parserOutcome: "failed",
+      rawCount: page.rawCount,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: {
+        kind: "parser_failed",
+        reasonMessage: error instanceof Error ? error.message : String(error),
+      },
+    });
+    return { kind: "failed", pageId: job.pageId, jobId: job.id };
+  }
+  const anchorReached = target.anchorMessageId !== null && itemIds.includes(target.anchorMessageId);
+  const pages = cursorPages(job) + 1;
+  const maxPagesReached = job.maxPages !== null && pages >= job.maxPages;
+  const continuousToEnd = !page.hasNextPage;
+  const completes = job.goal === "history_to_exhaustion"
+    ? continuousToEnd
+    : anchorReached || continuousToEnd;
+
+  if (completes) {
+    const terminal = await terminalObservation(app, job, {
+      classification: continuousToEnd ? "continuous_history" : "connected_to_anchor",
+      lastMessageId: page.nextCursor,
+      pages,
+      items: job.acceptedItems + page.items.length,
+      requiredServingHighWater: materialHighWater,
+    });
+    await settleOfapiCaptureParse(app.db, {
+      jobId: job.id,
+      attemptId: observation.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      parserOutcome: "accepted",
+      rawCount: page.rawCount,
+      acceptedCount: page.items.length,
+      boundaryDuplicateCount: page.boundaryDuplicateCount,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: {
+        kind: "complete",
+        terminalObservationId: terminal.observationId,
+        terminalObservationReceivedAt: terminal.receivedAt,
+        result: {
+          classification: continuousToEnd ? "continuous_history" : "connected_to_anchor",
+          lastMessageId: page.nextCursor,
+          pages,
+          requiredServingHighWater: materialHighWater,
+        },
+      },
+    });
+    return { kind: "success", pageId: job.pageId, jobId: job.id };
+  }
+
+  if (maxPagesReached || page.nextCursor === null) {
+    await settleOfapiCaptureParse(app.db, {
+      jobId: job.id,
+      attemptId: observation.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      parserOutcome: "accepted",
+      rawCount: page.rawCount,
+      acceptedCount: page.items.length,
+      boundaryDuplicateCount: page.boundaryDuplicateCount,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: { kind: "blocked", reasonCode: "gap_open" },
+    });
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+
+  await settleOfapiCaptureParse(app.db, {
+    jobId: job.id,
+    attemptId: observation.attemptId,
+    leaseToken: job.leaseToken,
+    observationId: observation.id,
+    observationReceivedAt: observation.receivedAt,
+    parserOutcome: "accepted",
+    rawCount: page.rawCount,
+    acceptedCount: page.items.length,
+    boundaryDuplicateCount: page.boundaryDuplicateCount,
+    explicitlyIrrelevantCount: 0,
+    rejectedCount: 0,
+    disposition: {
+      kind: "progress",
+      // The event high-water is monotone per account; carrying it through the
+      // cursor makes the eventual terminal proof wait for every earlier page.
+      cursor: {
+        firstId: page.nextCursor,
+        pages,
+        requiredServingHighWater: materialHighWater,
+      },
+      acceptedItems: page.items.length,
+    },
+  });
+  return { kind: "success", pageId: job.pageId, jobId: job.id };
+}
+
+export async function executeOfapiCaptureJobChunk(
+  app: AppContext,
+  pageId: number,
+): Promise<OfapiCaptureChunkResult> {
+  if (!isOfapiBackgroundCaptureRunnable(app.config)) {
+    return { kind: "idle", pageId, jobId: null };
+  }
+  const job = await leaseNextOfapiCaptureJob(app.db, {
+    pageId,
+    leaseOwner: `sync-page-executor:${process.pid}`,
+    leaseTtlMs: JOB_LEASE_TTL_MS,
+  });
+  if (!job) {
+    return { kind: "idle", pageId, jobId: null };
+  }
+  if (job.state === "awaiting_parse") {
+    return parseCapturedJob(app, job);
+  }
+  if (job.kind !== "chat_paginate") {
+    await blockJob(app, job, "unsupported_job_kind", `Unsupported job kind ${job.kind}`);
+    return { kind: "blocked", pageId, jobId: job.id };
+  }
+  const target = parseTarget(job);
+  if (!target || !job.leaseToken) {
+    await blockJob(app, job, "target_invalid", "chat_paginate target is invalid");
+    return { kind: "blocked", pageId, jobId: job.id };
+  }
+  const leaseToken = job.leaseToken;
+  if (!app.ofapi?.dispatchGovernedRaw) {
+    await blockJob(app, job, "transport_unavailable", "OFAPI client is not configured");
+    return { kind: "blocked", pageId, jobId: job.id };
+  }
+
+  let egress: Awaited<ReturnType<typeof resolveOfapiEgressContext>>;
+  try {
+    egress = await resolveOfapiEgressContext(app, {
+      pageId: job.pageId,
+      ofapiAccountId: job.ofapiAccountId,
+    });
+  } catch (error) {
+    await blockJob(
+      app,
+      job,
+      "egress_unavailable",
+      error instanceof Error ? error.message : String(error),
+    );
+    return { kind: "blocked", pageId, jobId: job.id };
+  }
+
+  try {
+    const currentCursor = cursorField(job, "firstId");
+    const firstId = currentCursor ?? target.frozenHeadId;
+    const query = {
+      limit: String(target.limit),
+      order: "desc",
+      first_id: firstId,
+    };
+    const deadlineAt = new Date(Date.now() + 65_000);
+    const globalDailyCap = Math.max(1, app.config.ofapiDmDailyCreditBudget ?? 500);
+    const reservation = await reserveOfapiRequestAttempt(app.db, {
+      ownerKind: "capture_job",
+      ownerId: job.id,
+      pageId: job.pageId,
+      ofapiAccountId: job.ofapiAccountId,
+      originPrincipalId: job.originPrincipalId,
+      budgetScope: job.budgetScope,
+      operation: "ofapi_capture_chat_messages",
+      endpointClass: "chat_messages",
+      egressKey: egress.egressKey,
+      method: "GET",
+      requestSemantics: "safe_read",
+      requestShape: { chatId: target.chatId, query },
+      reservedCredits: 1,
+      globalDailyCap,
+      scopeDailyCap: job.budgetScope === "bulk"
+        ? Math.min(globalDailyCap, app.config.ofapiBackfillDailyCreditBudget ?? 200)
+        : globalDailyCap,
+      creditFloor: Math.max(0, app.config.ofapiCreditFloor ?? 500),
+      balanceMaxAgeMs: BALANCE_MAX_AGE_MS,
+      allowFloorProbe: job.budgetScope === "live",
+      ...(job.originPrincipalId === null
+        ? {}
+        : {
+          principalCallCap: PRINCIPAL_HOURLY_CALL_CAP,
+          principalCreditCap: PRINCIPAL_HOURLY_CREDIT_CAP,
+        }),
+      jobLeaseToken: leaseToken,
+      deadlineAt,
+    });
+    if (!reservation.admitted) {
+      return { kind: "blocked", pageId, jobId: job.id };
+    }
+
+    let raw: OfapiGovernedRawResponse;
+    try {
+      raw = await app.ofapi.dispatchGovernedRaw({
+        pageId: job.pageId,
+        dispatcher: egress.dispatcher,
+        egressKey: egress.egressKey,
+      }, {
+        attemptId: reservation.attemptId,
+        operation: "ofapi_capture_chat_messages",
+        method: "GET",
+        pathname: `/${encodeURIComponent(job.ofapiAccountId)}/chats/${encodeURIComponent(target.chatId)}/messages`,
+        query,
+        priorityClass: job.budgetScope === "bulk" ? "bulk" : "interactive",
+        deadlineAt,
+        beforeDispatch: async () =>
+          isOfapiBackgroundCaptureRunnable(app.config) &&
+          await markOfapiAttemptDispatching(app.db, {
+            attemptId: reservation.attemptId,
+            fenceToken: reservation.fenceToken,
+            jobLeaseToken: leaseToken,
+          }),
+      });
+    } catch (error) {
+      if (error instanceof OfapiGovernedRequestError && error.phase === "pre_dispatch") {
+        await releaseOfapiAttemptPreDispatch(app.db, {
+          attemptId: reservation.attemptId,
+          fenceToken: reservation.fenceToken,
+          reasonCode: error.reason,
+          retryAt: new Date(Date.now() + 60_000),
+        });
+      } else {
+        await markOfapiAttemptIndeterminate(app.db, {
+          attemptId: reservation.attemptId,
+          fenceToken: reservation.fenceToken,
+          outcome: "transport",
+          details: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
+      return { kind: "failed", pageId, jobId: job.id };
+    }
+
+    let captured = false;
+    let captureError: unknown = null;
+    for (let attempt = 1; attempt <= CAPTURE_COMMIT_ATTEMPTS; attempt += 1) {
+      try {
+        await captureOfapiAttemptResponse(app.db, {
+          attemptId: reservation.attemptId,
+          fenceToken: reservation.fenceToken,
+          responseObservedAt: raw.receivedAt,
+          httpStatus: raw.status,
+          httpOutcome: httpOutcome(raw.status),
+          responseHeaders: raw.headers,
+          bodyBytes: raw.bodyBytes,
+          request: { chatId: target.chatId, query },
+          producer: "ofapi-mirror-background",
+          observationKind: "ofapi.chat_messages_page.v1",
+        });
+        captured = true;
+        break;
+      } catch (error) {
+        captureError = error;
+        if (attempt < CAPTURE_COMMIT_ATTEMPTS) await delay(attempt * 50);
+      }
+    }
+    if (!captured) {
+      await markOfapiAttemptIndeterminate(app.db, {
+        attemptId: reservation.attemptId,
+        fenceToken: reservation.fenceToken,
+        outcome: "capture_uncommitted",
+        responseObservedAt: raw.receivedAt,
+        details: {
+          error: captureError instanceof Error ? captureError.message : String(captureError),
+        },
+      }).catch(() => undefined);
+      return { kind: "failed", pageId, jobId: job.id };
+    }
+
+    const parsed = parseOfapiJsonBytes(raw.bodyBytes);
+    if (parsed.creditsUsed !== null) {
+      await reconcileOfapiCapturedAttemptCredit(app.db, {
+        attemptId: reservation.attemptId,
+        actualCredits: parsed.creditsUsed,
+        balanceAfter: parsed.balanceAfter,
+      });
+    }
+    // Parsing is deliberately the next local chunk. A crash here re-leases
+    // the saved observation and never repeats the paid request.
+    return { kind: "success", pageId, jobId: job.id };
+  } finally {
+    await egress.close().catch((error) => {
+      app.logger.warn({ error, jobId: job.id }, "Failed to close OFAPI capture egress");
+    });
+  }
+}
