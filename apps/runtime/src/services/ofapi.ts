@@ -104,6 +104,25 @@ export interface OfapiRawResponse {
   headers: Record<string, string>;
 }
 
+export interface OfapiGovernedRawResponse {
+  status: number;
+  bodyBytes: Buffer;
+  headers: Record<string, string>;
+  receivedAt: Date;
+}
+
+export class OfapiGovernedRequestError extends Error {
+  constructor(
+    message: string,
+    readonly phase: "pre_dispatch" | "post_dispatch",
+    readonly reason: "cancelled" | "deadline" | "transport" | "body_read" | "body_too_large",
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "OfapiGovernedRequestError";
+  }
+}
+
 export interface OfapiSentMessage {
   messageId: string;
 }
@@ -282,6 +301,27 @@ export interface OfapiClient {
       fallbackEstimated: boolean;
     },
   ): Promise<OfapiRawResponse>;
+  // Capture-first transport. The caller durably reserves the attempt before
+  // calling this method and atomically flips it to dispatching in
+  // beforeDispatch. The client performs exactly one HTTP request and returns
+  // unparsed bytes; credit settlement and parsing happen only after capture.
+  dispatchGovernedRaw?(
+    context: OfapiRequestContext,
+    input: {
+      attemptId: string;
+      operation: string;
+      method: "GET" | "POST" | "DELETE" | "PATCH";
+      pathname: string;
+      query?: Record<string, string>;
+      bodyBytes?: Buffer | null;
+      contentType?: string | null;
+      priorityClass: EgressPriorityClass;
+      deadlineAt: Date;
+      timeoutMs?: number;
+      maxResponseBytes?: number;
+      beforeDispatch: () => Promise<boolean>;
+    },
+  ): Promise<OfapiGovernedRawResponse>;
   // Decision #56: exactly one text-send attempt. Optional for legacy test
   // doubles; production createOfapiClient always implements it.
   sendTextMessage?(
@@ -898,6 +938,144 @@ export function createOfapiClient(input: {
       status: response.status,
       body,
       headers,
+    };
+  }
+
+  async function readGovernedResponseBytes(response: Response, maxBytes: number) {
+    const contentLength = response.headers.get("content-length");
+    if (contentLength !== null) {
+      const declaredLength = Number(contentLength);
+      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        throw new OfapiGovernedRequestError(
+          `OFAPI response exceeds ${maxBytes} byte capture limit`,
+          "post_dispatch",
+          "body_too_large",
+        );
+      }
+    }
+
+    if (!response.body) {
+      return Buffer.alloc(0);
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const result = await reader.read();
+        if (result.done) {
+          break;
+        }
+        const chunk = Buffer.from(result.value);
+        totalBytes += chunk.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          throw new OfapiGovernedRequestError(
+            `OFAPI response exceeds ${maxBytes} byte capture limit`,
+            "post_dispatch",
+            "body_too_large",
+          );
+        }
+        chunks.push(chunk);
+      }
+    } catch (error) {
+      if (error instanceof OfapiGovernedRequestError) {
+        throw error;
+      }
+      throw new OfapiGovernedRequestError(
+        "OFAPI governed response body read failed",
+        "post_dispatch",
+        "body_read",
+        { cause: error },
+      );
+    } finally {
+      reader.releaseLock();
+    }
+    return Buffer.concat(chunks, totalBytes);
+  }
+
+  async function dispatchGovernedRawRequest(
+    context: OfapiRequestContext,
+    options: Parameters<NonNullable<OfapiClient["dispatchGovernedRaw"]>>[1],
+  ): Promise<OfapiGovernedRawResponse> {
+    await waitForRequestSlot(options.priorityClass);
+    if (Date.now() >= options.deadlineAt.getTime()) {
+      throw new OfapiGovernedRequestError(
+        `OFAPI governed attempt ${options.attemptId} missed its deadline`,
+        "pre_dispatch",
+        "deadline",
+      );
+    }
+
+    const mayDispatch = await options.beforeDispatch();
+    if (!mayDispatch) {
+      throw new OfapiGovernedRequestError(
+        `OFAPI governed attempt ${options.attemptId} lost its dispatch fence`,
+        "pre_dispatch",
+        "cancelled",
+      );
+    }
+
+    const query = new URLSearchParams(options.query ?? {});
+    const url = `${baseUrl}${options.pathname}${query.size > 0 ? `?${query.toString()}` : ""}`;
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${input.apiKey}`,
+      accept: "application/json",
+      "x-agency-hub-attempt-id": options.attemptId,
+    };
+    if (options.contentType) {
+      headers["content-type"] = options.contentType;
+    }
+
+    let response: Response;
+    try {
+      const init: RequestInit & { dispatcher?: Dispatcher } = {
+        method: options.method,
+        headers,
+        signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS),
+      };
+      if (options.bodyBytes) {
+        init.body = Uint8Array.from(options.bodyBytes);
+      }
+      if (context.dispatcher) {
+        init.dispatcher = context.dispatcher;
+      }
+      response = await fetch(url, init);
+    } catch (error) {
+      throw new OfapiGovernedRequestError(
+        `OFAPI governed request failed: ${options.method} ${options.pathname}`,
+        "post_dispatch",
+        "transport",
+        { cause: error },
+      );
+    }
+
+    const receivedAt = new Date();
+    const bodyBytes = await readGovernedResponseBytes(
+      response,
+      Math.max(1, options.maxResponseBytes ?? 10 * 1024 * 1024),
+    );
+    const responseHeaders: Record<string, string> = {};
+    for (const name of [
+      "content-type",
+      "retry-after",
+      "x-ofapi-credits-used",
+      "x-ofapi-credits-balance",
+      "x-rate-limit-remaining-minute",
+      "x-rate-limit-limit-minute",
+    ]) {
+      const value = response.headers.get(name);
+      if (value !== null) {
+        responseHeaders[name] = value;
+      }
+    }
+
+    return {
+      status: response.status,
+      bodyBytes,
+      headers: responseHeaders,
+      receivedAt,
     };
   }
 
@@ -1555,6 +1733,9 @@ export function createOfapiClient(input: {
     },
     async proxyRead(context, options) {
       return proxyReadRequest(context, options);
+    },
+    async dispatchGovernedRaw(context, options) {
+      return dispatchGovernedRawRequest(context, options);
     },
     async sendTextMessage(context, accountId, conversationId, command) {
       return sendTextMessageRequest(context, accountId, conversationId, command);

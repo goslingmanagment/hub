@@ -2266,6 +2266,12 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   // machinery, without competing against the DM/audience ceilings.
   backfillSpendDay: date("backfill_spend_day"),
   backfillSpentCredits: integer("backfill_spent_credits").default(0).notNull(),
+  governedScopeDay: date("governed_scope_day"),
+  liveSpentCredits: integer("live_spent_credits").default(0).notNull(),
+  interactiveSpentCredits: integer("interactive_spent_credits").default(0).notNull(),
+  bulkSpentCredits: integer("bulk_spent_credits").default(0).notNull(),
+  governedUnsettledCredits: integer("governed_unsettled_credits").default(0).notNull(),
+  floorProbeNotBefore: timestamp("floor_probe_not_before", { withTimezone: true }),
   lastBalance: integer("last_balance"),
   lastBalanceAt: timestamp("last_balance_at", { withTimezone: true }),
   // Reconciliation cursor (D5): the last balance-observation ledger row that
@@ -2275,6 +2281,328 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   lastDriftCredits: integer("last_drift_credits"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export type OfapiCaptureJobKind =
+  | "chat_paginate"
+  | "campaign_snapshot"
+  | "head_repair"
+  | "account_export"
+  | "export_import";
+export type OfapiCaptureJobGoal =
+  | "history_to_exhaustion"
+  | "connect_to_anchor"
+  | "bounded_tail";
+export type OfapiCaptureJobState =
+  | "ready"
+  | "leased"
+  | "awaiting_parse"
+  | "retry_wait"
+  | "blocked"
+  | "complete"
+  | "cancelled";
+export type OfapiBudgetScope = "live" | "interactive" | "bulk";
+export type OfapiCaptureCreatedBy =
+  | "owner"
+  | "cohort_seed"
+  | "product_signal"
+  | "interactive_open"
+  | "verification_probe";
+
+export const ofapiCaptureJobs = pgTable(
+  "ofapi_capture_jobs",
+  {
+    id: uuid("id").primaryKey(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    ofapiAccountId: text("ofapi_account_id").notNull(),
+    kind: text("kind").$type<OfapiCaptureJobKind>().notNull(),
+    goal: text("goal").$type<OfapiCaptureJobGoal>(),
+    state: text("state").$type<OfapiCaptureJobState>().default("ready").notNull(),
+    activeSlotKey: text("active_slot_key").notNull(),
+    target: jsonb("target").$type<Record<string, unknown>>().notNull(),
+    targetHash: char("target_hash", { length: 64 }).notNull(),
+    targetGeneration: integer("target_generation").default(0).notNull(),
+    manifest: jsonb("manifest").$type<Record<string, unknown>>(),
+    cursor: jsonb("cursor").$type<Record<string, unknown>>(),
+    cursorHash: char("cursor_hash", { length: 64 }),
+    rowVersion: bigint("row_version", { mode: "number" }).default(0).notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    priority: integer("priority").default(0).notNull(),
+    budgetScope: text("budget_scope").$type<OfapiBudgetScope>().notNull(),
+    originPrincipalId: bigint("origin_principal_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdBy: text("created_by").$type<OfapiCaptureCreatedBy>().notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseToken: uuid("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    pendingObservationId: bigint("pending_observation_id", { mode: "number" }),
+    pendingObservationReceivedAt: timestamp("pending_observation_received_at", { withTimezone: true }),
+    terminalObservationId: bigint("terminal_observation_id", { mode: "number" }),
+    terminalObservationReceivedAt: timestamp("terminal_observation_received_at", { withTimezone: true }),
+    reasonCode: text("reason_code"),
+    reasonMessage: text("reason_message"),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    maxCalls: integer("max_calls"),
+    maxCredits: integer("max_credits"),
+    maxPages: integer("max_pages"),
+    maxItems: integer("max_items"),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    dispatchCount: integer("dispatch_count").default(0).notNull(),
+    spentCredits: integer("spent_credits").default(0).notNull(),
+    acceptedItems: bigint("accepted_items", { mode: "number" }).default(0).notNull(),
+    acceptedPages: bigint("accepted_pages", { mode: "number" }).default(0).notNull(),
+    zeroProgressCount: integer("zero_progress_count").default(0).notNull(),
+    sourceContractVersion: text("source_contract_version").notNull(),
+    parserVersion: text("parser_version").notNull(),
+    proofPolicyVersion: text("proof_policy_version").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    activeSlotUniq: uniqueIndex("ofapi_capture_jobs_active_slot_uniq")
+      .on(table.activeSlotKey)
+      .where(sql`${table.state} in ('ready', 'leased', 'awaiting_parse', 'retry_wait', 'blocked')`),
+    runnableIdx: index("ofapi_capture_jobs_runnable_idx")
+      .on(table.nextAttemptAt, table.priority.desc(), table.createdAt)
+      .where(sql`${table.state} in ('ready', 'retry_wait')`),
+    pageStateIdx: index("ofapi_capture_jobs_page_state_idx").on(table.pageId, table.state),
+    leaseUntilIdx: index("ofapi_capture_jobs_lease_until_idx")
+      .on(table.leaseUntil)
+      .where(sql`${table.state} = 'leased'`),
+    awaitingParseIdx: index("ofapi_capture_jobs_awaiting_parse_idx")
+      .on(table.updatedAt)
+      .where(sql`${table.state} = 'awaiting_parse'`),
+  }),
+);
+
+export type OfapiAttemptOwnerKind = "capture_job" | "interactive_request";
+export type OfapiRequestAttemptState =
+  | "reserved"
+  | "released_pre_dispatch"
+  | "dispatching"
+  | "response_captured"
+  | "indeterminate";
+export type OfapiHttpOutcome =
+  | "success"
+  | "not_found"
+  | "auth_confirmed"
+  | "forbidden_unconfirmed"
+  | "rate"
+  | "vendor_5xx"
+  | "request_rejected"
+  | "unexpected_http"
+  | "invalid_response";
+export type OfapiParserOutcome =
+  | "pending"
+  | "accepted"
+  | "intentional_noop"
+  | "contract_rejected"
+  | "failed";
+
+export const ofapiInteractiveRequests = pgTable(
+  "ofapi_interactive_requests",
+  {
+    id: uuid("id").primaryKey(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    ofapiAccountId: text("ofapi_account_id").notNull(),
+    principalUserId: bigint("principal_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" })
+      .notNull(),
+    operation: text("operation").notNull(),
+    surface: text("surface").notNull(),
+    target: jsonb("target").$type<Record<string, unknown>>().notNull(),
+    requestFingerprint: char("request_fingerprint", { length: 64 }).notNull(),
+    state: text("state").$type<
+      "created" | "attempt_reserved" | "response_captured" | "served" | "failed" | "indeterminate"
+    >().default("created").notNull(),
+    rowVersion: bigint("row_version", { mode: "number" }).default(0).notNull(),
+    responseObservationId: bigint("response_observation_id", { mode: "number" }),
+    responseObservationReceivedAt: timestamp("response_observation_received_at", { withTimezone: true }),
+    httpOutcome: text("http_outcome").$type<OfapiHttpOutcome>(),
+    errorCode: text("error_code"),
+    policyVersion: text("policy_version").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    principalCreatedIdx: index("ofapi_interactive_requests_principal_created_idx")
+      .on(table.principalUserId, table.createdAt.desc()),
+    incompleteIdx: index("ofapi_interactive_requests_incomplete_idx")
+      .on(table.updatedAt)
+      .where(sql`${table.state} in ('created', 'attempt_reserved', 'response_captured')`),
+  }),
+);
+
+export const ofapiRequestAttempts = pgTable(
+  "ofapi_request_attempts",
+  {
+    id: uuid("id").primaryKey(),
+    ownerKind: text("owner_kind").$type<OfapiAttemptOwnerKind>().notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    captureJobId: uuid("capture_job_id")
+      .references(() => ofapiCaptureJobs.id, { onDelete: "restrict" }),
+    interactiveRequestId: uuid("interactive_request_id")
+      .references(() => ofapiInteractiveRequests.id, { onDelete: "restrict" }),
+    ownerAttemptNo: integer("owner_attempt_no").notNull(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    ofapiAccountId: text("ofapi_account_id").notNull(),
+    originPrincipalId: bigint("origin_principal_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
+    budgetScope: text("budget_scope").$type<OfapiBudgetScope>().notNull(),
+    reservationDay: date("reservation_day").notNull(),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+    admissionSnapshot: jsonb("admission_snapshot").$type<Record<string, unknown>>().notNull(),
+    operation: text("operation").notNull(),
+    endpointClass: text("endpoint_class").notNull(),
+    egressKey: text("egress_key").notNull(),
+    method: text("method").$type<"GET" | "POST" | "DELETE" | "PATCH">().notNull(),
+    requestSemantics: text("request_semantics").$type<"safe_read" | "stateful">().notNull(),
+    requestFingerprint: char("request_fingerprint", { length: 64 }).notNull(),
+    isFloorProbe: boolean("is_floor_probe").default(false).notNull(),
+    principalWindowStartedAt: timestamp("principal_window_started_at", { withTimezone: true }),
+    state: text("state").$type<OfapiRequestAttemptState>().default("reserved").notNull(),
+    dispatchOutcome: text("dispatch_outcome").$type<
+      "response_received" | "vendor_slow" | "transport" | "capture_uncommitted"
+    >(),
+    httpOutcome: text("http_outcome").$type<OfapiHttpOutcome>(),
+    parserOutcome: text("parser_outcome").$type<OfapiParserOutcome>().default("pending").notNull(),
+    rawCount: bigint("raw_count", { mode: "number" }).default(0).notNull(),
+    acceptedCount: bigint("accepted_count", { mode: "number" }).default(0).notNull(),
+    boundaryDuplicateCount: bigint("boundary_duplicate_count", { mode: "number" }).default(0).notNull(),
+    explicitlyIrrelevantCount: bigint("explicitly_irrelevant_count", { mode: "number" }).default(0).notNull(),
+    rejectedCount: bigint("rejected_count", { mode: "number" }).default(0).notNull(),
+    creditState: text("credit_state").$type<"reserved" | "settled" | "released" | "indeterminate">()
+      .default("reserved").notNull(),
+    reservedCredits: integer("reserved_credits").notNull(),
+    settledCredits: integer("settled_credits"),
+    creditEstimated: boolean("credit_estimated"),
+    balanceAfter: integer("balance_after"),
+    responseObservationId: bigint("response_observation_id", { mode: "number" }),
+    responseObservationReceivedAt: timestamp("response_observation_received_at", { withTimezone: true }),
+    fenceToken: uuid("fence_token").notNull(),
+    jobLeaseToken: uuid("job_lease_token"),
+    surface: text("surface"),
+    servingMode: text("serving_mode").$type<"vendor_only" | "shadow" | "db_fallback" | "db_only">(),
+    fallbackReason: text("fallback_reason").$type<
+      | "surface_not_cutover"
+      | "no_certificate"
+      | "stale_head"
+      | "gap"
+      | "projection_lag"
+      | "shadow_probe"
+    >(),
+    policyVersion: text("policy_version").notNull(),
+    sourceContractVersion: text("source_contract_version").notNull(),
+    parserVersion: text("parser_version").notNull(),
+    reservedAt: timestamp("reserved_at", { withTimezone: true }).defaultNow().notNull(),
+    dispatchStartedAt: timestamp("dispatch_started_at", { withTimezone: true }),
+    responseCapturedAt: timestamp("response_captured_at", { withTimezone: true }),
+    responseObservedAt: timestamp("response_observed_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    certaintyResolvedAt: timestamp("certainty_resolved_at", { withTimezone: true }),
+    certaintyResolution: text("certainty_resolution"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    ownerAttemptUniq: uniqueIndex("ofapi_request_attempts_owner_attempt_uniq")
+      .on(table.ownerKind, table.ownerId, table.ownerAttemptNo),
+    activeOwnerUniq: uniqueIndex("ofapi_request_attempts_active_owner_uniq")
+      .on(table.ownerKind, table.ownerId)
+      .where(sql`${table.state} in ('reserved', 'dispatching') or (${table.state} = 'indeterminate' and ${table.certaintyResolvedAt} is null)`),
+    activeFloorProbeUniq: uniqueIndex("ofapi_request_attempts_active_floor_probe_uniq")
+      .on(table.isFloorProbe)
+      .where(sql`${table.isFloorProbe} = true and (${table.state} in ('reserved', 'dispatching') or (${table.state} = 'indeterminate' and ${table.certaintyResolvedAt} is null))`),
+    observationUniq: uniqueIndex("ofapi_request_attempts_observation_uniq")
+      .on(table.responseObservationId, table.responseObservationReceivedAt)
+      .where(sql`${table.responseObservationId} is not null`),
+    jobReservedIdx: index("ofapi_request_attempts_job_reserved_idx")
+      .on(table.captureJobId, table.reservedAt),
+    budgetIdx: index("ofapi_request_attempts_budget_idx")
+      .on(table.reservationDay, table.budgetScope, table.pageId),
+    endpointHealthIdx: index("ofapi_request_attempts_endpoint_health_idx")
+      .on(table.pageId, table.endpointClass, table.finishedAt.desc()),
+    principalIdx: index("ofapi_request_attempts_principal_idx")
+      .on(table.originPrincipalId, table.reservedAt.desc())
+      .where(sql`${table.originPrincipalId} is not null`),
+    indeterminateIdx: index("ofapi_request_attempts_indeterminate_idx")
+      .on(table.finishedAt)
+      .where(sql`${table.state} = 'indeterminate' and ${table.certaintyResolvedAt} is null`),
+  }),
+);
+
+export const ofapiBudgetDenialDaily = pgTable(
+  "ofapi_budget_denial_daily",
+  {
+    day: date("day").notNull(),
+    scope: text("scope").$type<OfapiBudgetScope>().notNull(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    principalKey: text("principal_key").notNull(),
+    principalUserId: bigint("principal_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
+    reason: text("reason").notNull(),
+    deniedCount: bigint("denied_count", { mode: "number" }).default(0).notNull(),
+    thresholdCrossings: bigint("threshold_crossings", { mode: "number" }).default(0).notNull(),
+    firstDeniedAt: timestamp("first_denied_at", { withTimezone: true }).notNull(),
+    lastDeniedAt: timestamp("last_denied_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "ofapi_budget_denial_daily_pkey",
+      columns: [table.day, table.scope, table.pageId, table.principalKey, table.reason],
+    }),
+  }),
+);
+
+export const ofapiPrincipalBudgetState = pgTable("ofapi_principal_budget_state", {
+  principalUserId: bigint("principal_user_id", { mode: "number" })
+    .primaryKey()
+    .references(() => users.id, { onDelete: "restrict" }),
+  windowStartedAt: timestamp("window_started_at", { withTimezone: true }).notNull(),
+  usedCalls: integer("used_calls").default(0).notNull(),
+  usedCredits: integer("used_credits").default(0).notNull(),
+  consecutiveBudgetDenials: integer("consecutive_budget_denials").default(0).notNull(),
+  blockedUntil: timestamp("blocked_until", { withTimezone: true }),
+  lastDenialReason: text("last_denial_reason"),
+  lastDenialAt: timestamp("last_denial_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const ofapiCaptureControls = pgTable("ofapi_capture_controls", {
+  controlKey: text("control_key").primaryKey(),
+  paused: boolean("paused").default(false).notNull(),
+  reason: text("reason"),
+  version: bigint("version", { mode: "number" }).default(0).notNull(),
+  actorUserId: bigint("actor_user_id", { mode: "number" })
+    .references(() => users.id, { onDelete: "restrict" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const ofapiCaptureOperatorActions = pgTable(
+  "ofapi_capture_operator_actions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetRef: text("target_ref").notNull(),
+    expectedState: text("expected_state"),
+    previousState: jsonb("previous_state").$type<Record<string, unknown>>(),
+    resultingState: jsonb("resulting_state").$type<Record<string, unknown>>(),
+    dryRun: boolean("dry_run").notNull(),
+    actorUserId: bigint("actor_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
+    reason: text("reason").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+);
 
 export const OFAPI_CREDIT_LEDGER_SOURCES = [
   "rest",
@@ -2310,6 +2638,12 @@ export const ofapiCreditLedger = pgTable(
     // Stage 9: acting principal for gateway reads; NULL = system spend.
     actorUserId: bigint("actor_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "set null" }),
+    // OF mirror governed calls settle exactly once against their durable
+    // physical attempt. Legacy lanes leave this null and keep their existing
+    // best-effort sink until migrated.
+    attemptId: uuid("attempt_id")
+      .references(() => ofapiRequestAttempts.id, { onDelete: "restrict" }),
+    attemptEntryPhase: text("attempt_entry_phase").$type<"settlement" | "certainty_adjustment">(),
   },
   (table) => ({
     occurredAtIdx: index("ofapi_credit_ledger_occurred_at_idx").on(table.occurredAt),
@@ -2329,6 +2663,9 @@ export const ofapiCreditLedger = pgTable(
     accrualDayUniq: uniqueIndex("ofapi_credit_ledger_accrual_day_uniq")
       .on(table.accrualDay)
       .where(sql`${table.source} = 'webhook_accrual'`),
+    attemptPhaseUniq: uniqueIndex("ofapi_credit_ledger_attempt_phase_uniq")
+      .on(table.attemptId, table.attemptEntryPhase)
+      .where(sql`${table.attemptId} is not null`),
   }),
 );
 
@@ -2576,6 +2913,7 @@ export const OBSERVATION_SOURCES = [
   "readthrough",
   "command_result",
   "operator",
+  "ofapi_capture",
 ] as const;
 export type ObservationSource = (typeof OBSERVATION_SOURCES)[number];
 
@@ -2606,7 +2944,7 @@ export const observations = pgTable(
     kindReceivedIdx: index("observations_kind_received_idx").on(table.kind, table.receivedAt),
     parseIdx: index("observations_parse_idx").on(table.parseVersion, table.receivedAt),
     sourceCheck: check("observations_source_check", sql`
-      ${table.source} in ('webhook','pull','client_capture','readthrough','command_result','operator')
+      ${table.source} in ('webhook','pull','client_capture','readthrough','command_result','operator','ofapi_capture')
     `),
   }),
 );

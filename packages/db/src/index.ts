@@ -25,6 +25,7 @@ export * from "./repositories/ai-personas.ts";
 export * from "./repositories/ai-restricted.ts";
 export * from "./repositories/erasure.ts";
 export * from "./repositories/ofapi.ts";
+export * from "./repositories/ofapi-capture.ts";
 export * from "./repositories/ofapi-commands.ts";
 export * from "./repositories/ofapi-sync-snapshot.ts";
 export * from "./repositories/onlyfans-public-profiles.ts";
