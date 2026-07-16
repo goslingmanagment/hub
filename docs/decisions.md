@@ -4441,3 +4441,60 @@ Tombstone (family anti-deletion law):
   generator path until the immediately-following regeneration commit rebuilds
   them from `docs/generated/REGENERATION-PROMPT.md` against this structural
   snapshot (generated docs are exempt from the family anti-deletion rule).
+
+**Decision #158 (2026-07-16, OnlyFans mirror is capture-before-parse and
+DB-first by proven surface; supersedes the REST-bootstrap transport in #49 and
+the webhook-only history boundary in #52):** The target is a durable local
+mirror of in-scope OnlyFans DM and campaign facts. Every governed vendor call
+belongs to exactly one durable `capture_job` or `interactive_request`; admission
+creates the attempt before dispatch, a CAS transition grants dispatch, and the
+exact response envelope is committed before parsing or serving. A captured
+response is parsed locally without another vendor call. `contract_rejected`
+freezes cursor and coverage; an adapter repair replays the saved envelope.
+History work is finite, page-qualified, frozen-target, budgeted, and
+intent-driven. A changed chat head is evidence, never permission to fan out
+paid pagination. The legacy OnlyFans `dm_messages` crawler is permanently
+retired in capabilities, durable state, executor dispatch, dashboard controls,
+and deploy rollback; Fansly remains unchanged.
+
+Correctness lives in append-only observations/domain events plus rebuildable
+projections, not in retained sync telemetry. Coverage is a terminal fact with
+explicit proof lineage and can be revoked; item presence or artifact checksum
+alone never proves continuous history. Campaign recipients are materialized
+only from explicit vendor identity evidence and `unknown` is not `false`.
+Bulk/import facts carry immutable provenance. Fanout is selected by a
+versioned profile bound to the resume cursor; hidden ranges advance through a
+server checkpoint and are not rescanned on reconnect. Reobservation of a fact
+already imported receives a new event sequence but is presented to compatible
+clients as the original actionable message kind, not as an unknown literal
+event. Campaign fanout remains capture-only until a canary proves an explicit
+campaign/queue association and a compatible invalidate contract.
+
+DB-first rollout is per surface: `chats_list`, `chat_messages_tail`,
+`chat_messages_history(first_id)`, and `chat_message_specific` each move
+`live → shadow → db_fallback → db_only` only when serving shape, freshness,
+coverage, projection high-water, and client compatibility are all proven.
+`GET .../messages` is not classified as a pure read: fielded Desktop uses its
+vendor mark-read side effect. Therefore history retrieval and explicit
+mark-read must be split in the client/protocol before any messages surface can
+become DB-only. The serving projection preserves native order/id, original
+HTML/text, read flags, reply/tip/media metadata, tombstones, provenance, and
+event sequence; media bytes and expiring signed URLs stay out of scope.
+Archive import uses a trusted historical timestamp policy rather than the
+generic pre-2024 timestamp clamp. All new producers and read modes ship
+default-off; production migration, live probes, cohort/export spending, and
+each DB-only cutover remain explicit rollout gates.
+
+**Decision #159 (2026-07-16, encrypted off-box recovery is required;
+supersedes #128's accepted no-backup risk):** The database, immutable mirror
+artifacts, runtime configuration required to interpret them, and encryption-key
+custody metadata must have encrypted off-box backups with declared retention,
+failure alerting, and a recurring restore drill into an isolated environment.
+An object bucket used for export capture is not by itself a PostgreSQL backup,
+and an untested upload is not recovery evidence. The implementation remains
+provider-neutral and default-off until the owner selects provider, region,
+retention, key custody, and budget; production activation is blocked until a
+restore drill proves schema, ledger/projection rebuild, artifact checksums, and
+documented recovery-time/recovery-point objectives. If those external choices
+are not provisioned, the risk stays visibly open rather than being described as
+closed by the mirror bucket.

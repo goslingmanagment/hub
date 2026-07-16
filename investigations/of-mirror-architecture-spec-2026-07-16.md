@@ -1,11 +1,21 @@
 # Спека: полный слепок OnlyFans (DM + кампании) — захват, доказуемая полнота, чтение из БД
 
-Статус: **draft v3.2 — ФИНАЛЬНАЯ РЕДАКЦИЯ на аппрув владельца; архитектурные ревью объявлены законченными обеими сторонами.** История версий v1→v3.2 в git (5 раундов взаимного ревью + 2 воркфлоу: 20-агентный adversarial + 14-агентный clean-room альтернатив; обе стороны независимо подтвердили: целиком лучшей архитектуры не существует — 5 школ переизобрели это же ядро). v3.2 = консолидация двух финальных прогонов: contract_rejected-граница адаптера (пустая форма ≠ EOF — ofapi.ts:474) + page-edge verifier + честное определение continuous_history + монотонный fleet-знаменатель + proof_revoked; page-qualified identity (P0: chat-id без page coalesce-ил аккаунты); recovery-матрица смерти воркера; SSE финал: провенанс в факте + версионируемый fanout-профиль + live_reobserved на дедуп-коллизию + bulk_completed/checkpoint + invalidate для живых кампаний; дверь вебхуков capture-first (карантин вместо потери, fact_conflict); упрощения: chat_paginate с типизированными goals (слиты 2 kind), account_export как kind (таблица export_operations упразднена), denied-агрегаты вместо denied-строк, blocked+reason_code вместо под-состояний, fallback-поля на попытке, 3 бюджет-скоупа (live|interactive|bulk) + page-ось; verification_probe c профилями coverage_gap|serving_parity (вместо anti-entropy + отдельного parity); endpoint-breaker (page, endpoint_class, egress); manifest-задание с формальной конечностью; кампании: захват+canary в S2 (события не зарегистрированы — ofapi-webhooks.ts:39), продуктовые проекции отложены в S3; S0 дополнен нейтрализацией легаси-ручек (dashboard Resume/messages_history — sync-blocks.ts:144/:468, deploy-rollback-guard); §14: хранение/replay (late-arrival партиция, proof-policy/layout-версии, полный backup+restore-дрилл), операционный контур (CAS-CLI, indeterminate-reconciler, budget-parked wake, экран долга), rebuild-аудит, дрейф-сенсоры (цена/схема/свип), deep-history контракт, vendor-death mode, приоритеты внедрения.
+Статус: **v3.2.1 — owner-approved для default-off реализации 16.07.2026; архитектурная фаза закрыта.**
+
+История v1→v3.2 сохранена в git. v3.2.1 — не новый дизайн, а
+implementation errata после финальной сверки с кодом: два владельца физического
+запроса (`capture_job | interactive_request`); явный терминал
+`released_pre_dispatch`; profile-bound SSE cursor; wire-представление
+`live_reobserved` как исходного actionable message-kind; capture-only fallback
+для кампаний при отрицательном canary; раздельные поверхности чтения;
+обязательный split истории и mark-read; full-material serving-проекция; trusted
+archive timestamp policy. Эти уточнения имеют приоритет над историческими
+формулировками v3.2 ниже.
 Дата: 2026-07-16
 Ревизия контекста: core `main @ 68b37a7`, прод `d08677c` (поведение обеих версий в DM-части идентично)
 База фактов: расследование `investigations/ofapi-dm-history-investigation-2026-07-12.md`
 (локальный untracked-документ; его ключевые факты перепроверены на проде 16.07 и продублированы здесь, спека самодостаточна)
-Related decisions: #49, #52 (транспортные части подлежат суперсиду — §12), #155 (PPV suppression; см. delivery_class §5.5), #128 (бэкапы — пересмотр ОТДЕЛЬНЫМ owner-решением, §10; bucket сам по себе не суперсид), #129 (erasure — остаётся в силе, §12.8)
+Related decisions: #49, #52 (транспортные части суперсидятся #158), #155 (PPV suppression; см. fanout-профиль §7), #128 (бэкапы суперсидятся отдельным owner-решением #159; bucket сам по себе не суперсид), #129 (erasure — остаётся в силе, §12.8)
 
 ---
 
@@ -65,7 +75,7 @@ worst-case «~125k кредитов» считался от глубины 200 �
 происходит ровно одно из трёх: (а) курсор действительно продвинулся; (б)
 выставлен `next_attempt_at > now()`; (в) задание перешло в `blocked | complete`.
 Немедленный возврат в `ready` при нулевом прогрессе запрещён; повтор того же
-курсора/страницы несколько попыток подряд = `blocked_protocol`, а не новая
+курсора/страницы несколько попыток подряд = `blocked(reason=protocol)`, а не новая
 итерация. **Interactive**-попытка (у неё нет job/курсора) терминальна сама по
 себе: `captured+served | captured_error | indeterminate` (§5.5/§5.6). I3 и I8
 ниже — следствия I0.
@@ -103,12 +113,13 @@ worst-case «~125k кредитов» считался от глубины 200 �
         в следующий манифест. Конечность формальна: членство не растёт,
         remaining_calls монотонно убывает; прогон планировщика, порождающий
         >K заданий, завершается ОТКАЗОМ с требованием owner-гейта,
-  target — ЗАМОРОЖЕН при создании:
-    chat_history:    (chat, anchor|depth) — фиксируется текущий head; новое сверху
-                     приходит вебхуками и НЕ двигает финишную черту,
-    tail_reconcile:  (chat, new_head, verified_anchor, max_pages, max_credits, reason) —
-                     anchor не достигнут в лимитах → результат `gap_open`
-                     (не ложная непрерывность и не рекурсивное новое задание),
+  target — ЗАМОРОЖЕН при создании и зависит от goal:
+    history_to_exhaustion: (chat, frozen_head, floor|depth, max_pages, max_credits) —
+                     новое сверху приходит вебхуками и НЕ двигает финишную черту,
+    connect_to_anchor: (chat, frozen_head, verified_anchor, max_pages, max_credits, reason) —
+                     anchor не достигнут в лимитах → результат `gap_open`,
+    bounded_tail:    (chat, frozen_head, max_pages, max_items, max_credits, reason) —
+                     без EOF/стыковки с anchor даёт только item_presence,
     campaign_snapshot: campaign_id,   head_repair: (chat, message_id),
   target_generation: версия цели (новая голова после 404-блока = новая generation —
           снимает блок, но задание НЕ создаёт: I6),
@@ -139,7 +150,7 @@ worst-case «~125k кредитов» считался от глубины 200 �
           строится; per-job CAS остаётся для повторной обработки awaiting_parse,
   lease_token + lease_until + CAS,  attempts + zero_progress_count,
   budget_credits + spent_credits (per-job),
-  created_by: owner | cohort_seed | product_signal | interactive_open | anti_entropy_sample,
+  created_by: owner | cohort_seed | product_signal | interactive_open | verification_probe,
   результат: принято/отброшено строк, причина завершения,
              terminal_observation(id, received_at) }
 ```
@@ -333,7 +344,7 @@ sync-run (interactive-гейтвей ранов не имеет), планово
 кредитного леджера уникально связана с попыткой; завершения защищены CAS.
 
 Единая таблица состояний ПОПЫТКИ (interactive-исходы §5.5 — проекции этих же
-состояний): `reserved → dispatching → response_captured | indeterminate` —
+состояний): `reserved → released_pre_dispatch | dispatching → response_captured | indeterminate` —
 попытка начинается с `reserved`, denied-СТРОК НЕТ (v3.2: отказ адмиссии — не
 физическая попытка; метрика budget_denied — агрегат
 `день × scope × page × principal × reason`, инкремент в той же транзакции
@@ -346,7 +357,8 @@ sync-run (interactive-гейтвей ранов не имеет), планово
 
 **Recovery-матрица смерти воркера (v3.2; существующий lease-reclaimer просто
 возвращает стрим в pending, не глядя на попытку — `page-sync.ts:1183`):**
-умер ДО `dispatching` → освободить резервацию, попытки не было; умер В
+умер ДО `dispatching` → CAS в `released_pre_dispatch` и освободить резервацию
+(HTTP-попытки не было, но durable lineage остаётся); умер В
 `dispatching` → попытка `indeterminate`, задание `blocked/reconcile`; ответ уже
 захвачен → только локальный разбор, вендора не трогать; stateful-операция в
 indeterminate → никакого автоматического POST; page-reclaimer освобождает
@@ -360,7 +372,7 @@ kill воркера в каждой точке протокола (приёмк�
 повторно (чинится парсер, перечитывается конверт). `captured+served =
 response_captured ∧ success`, `captured_error = response_captured ∧
 error-исход`. Каждая попытка ссылается на владельца из union I1
-(`capture_job | export_operation | interactive_request`). Состояние ЗАДАНИЯ
+(`capture_job | interactive_request`). Состояние ЗАДАНИЯ
 `awaiting_parse` — другая сущность (§5.1). Окно между dispatch и записью
 конверта неустранимо и закрывается `indeterminate`; GET после reconciliation
 допускает контролируемый повтор (лимит повторов — из бюджета владельца),
@@ -387,27 +399,28 @@ stateful-операции — нет (§5.5).
 - **Get Specific Chat Message** — новый метод клиента (в `OfapiClient`
   отсутствует): точечный ремонт известной отсутствующей/бедной головы,
   ~1 кредит, только `(chat, message_id)`-цель;
-- **bounded tail-reconcile** (v3; триггеры пересмотрены в v3.1 — сдвиг головы
+- **bounded `chat_paginate`** (`goal=connect_to_anchor | bounded_tail`; триггеры пересмотрены в v3.1 — сдвиг головы
   сам по себе работу НЕ создаёт, иначе одна рассылка на 8k чатов = 8k платных
   заданий, тот же fanout, от которого уходим): голова совпала ≠ дыр нет (вебхук
   101 потерян, 102 пришёл — голова сходится, 101 исчез навсегда, его id
   неизвестен и Specific Message не поможет). Сдвиг головы записывает только
-  head-факт (`item_presence`, бесплатно). Задание `tail_reconcile` (один
+  head-факт (`item_presence`, бесплатно). Задание `chat_paginate(goal=connect_to_anchor)` (один
   страничный проход до verified anchor, лимиты страниц/кредитов, `gap_open`
   при недостижении) создаётся ТОЛЬКО по независимому намерению: входящее от
   фана / открытие чата чаттером (interactive) / членство в когорте
-  spender-active / ручной запрос / sampled anti-entropy (≤K чатов/день).
+  spender-active / ручной запрос / `verification_probe(profile=coverage_gap)` (≤K чатов/день).
   Известный кампания-всплеск идёт в campaign-lane без per-chat fanout;
   неизвестный массовый всплеск голов проходит grace-окно и общий admission-cap.
   Повторные сдвиги одного чата coalesce в уже открытое задание (§5.1).
   Внутренний fanout «вебхук дошёл до всех хранилищ» не доказывает, что вендор
-  прислал все события — tail-reconcile это единственная дешёвая проверка.
+  прислал все события — bounded `chat_paginate(goal=connect_to_anchor)` это
+  единственная дешёвая проверка.
   Уточнения v3.1.1 к намерениям: (а) **открытие чата** порождает задание только
   если у чата НЕТ continuous-сертификата до текущей головы (иначе шаг 1 §7
   отвечает из БД и ничего не создаёт); постановка асинхронна, не блокирует
   ответ; действует coalesce и дневной cap — так выполняется обещание §11 про
-  стремящийся к нулю interactive-фон; (б) **anti-entropy-сэмплер**: домен =
-  несертифицированные чаты МИНУС (quarantined ∪ blocked_* ∪ недавний gap_open ∪
+  стремящийся к нулю interactive-фон; (б) **`verification_probe(profile=coverage_gap)`**: домен =
+  несертифицированные чаты МИНУС (quarantined ∪ blocked ∪ недавний gap_open ∪
   сэмплированные за N дней), исход — durable-запись, месячный под-бюджет внутри
   live-скоупа — иначе сэмплер по построению смещён в патологическую
   May-30-когорту и дожигает K×кредиты/день вечно. **v3.2: это единый механизм
@@ -418,7 +431,7 @@ stateful-операции — нет (§5.5).
   rollback-порога §7). Популяции и критерии разные, планировщик/задание/попытка
   общие; (в) **кросс-generation память
   провалов**: durable-счётчик по (chat, endpoint-класс), переживающий
-  generations — после M `blocked_protocol` подряд эскалирующий карантин
+  generations — после M `blocked(reason=protocol)` подряд эскалирующий карантин
   (день → неделя → owner-ревью) и owner-видимый debt — но НИКОГДА не
   автоматический перевод в `verified_unavailable`: его производит только
   строгий evidence-предикат §5.2 (404/410 на актуальной generation + отсутствие
@@ -489,8 +502,10 @@ stateful-операции — нет (§5.5).
 
 | Поверхность | Источник БД | Сигнал свежести |
 |---|---|---|
-| Список чатов | `page_dm_threads` | возраст последнего вебхука + последнего свипа |
-| Переписка | hot store + архив | голова БД == голове вебхука/List Chats; глубина — по сертификату |
+| `chats_list` | serving-проекция чатов | возраст последнего вебхука + последнего свипа |
+| `chat_messages_tail` | full-material serving-проекция | голова БД == голове вебхука/List Chats |
+| `chat_messages_history(first_id)` | hot store + архив | непрерывность нужной глубины по coverage-proof |
+| `chat_message_specific` | rich item-проекция либо live | item_presence + freshness; signed media URL может оставить поверхность live |
 | Профиль/транзакции/списки | существующие проекции | штатные ватермарки |
 
 Миграция — по поверхности за раз, флаг на поверхность, ритуал #70:
@@ -507,12 +522,24 @@ shadow (отдаём live, считаем из БД, логируем расхо
 достаточная shadow-выборка по каждой форме запроса; ноль критических
 расхождений (message id, порядок, PPV/цены, принадлежность странице); p95
 latency/error/DB-load в норме; автоматический rollback-порог. Ранними на db-only
-переходят List Chats и текущие головы; глубокая история — последней. db-only
+переходят List Chats и доказанно чистые текущие головы; глубокая история — последней. db-only
 относится к **in-scope поверхностям** (§2): vault/media/upload и прочие
 исключённые поверхности gateway продолжают обслуживаться live и не участвуют в
 cutover-метрике.
 
-Три дополнения v3.1.1 к слою чтения:
+Дополнения к слою чтения:
+- **Read ≠ mark-read (v3.2.1, P0):** vendor `GET .../messages` помечает чат
+  прочитанным, а текущий Desktop использует один и тот же вызов для открытия
+  чата и глубокой пагинации, не передавая gateway purpose. DB-only этого GET
+  до миграции запрещён. Desktop/Core сначала разводят pure history read и
+  явный `mark_chat_read_v1` (или эквивалентный подписанный read-intent);
+  совместимость старой и новой версии доказывается отдельным тестом.
+- **Full-material serving projection (v3.2.1):** редуцированный
+  `message_archive` недостаточен. Проекция хранит native numeric id/order,
+  исходный HTML/text, `isSentByMe`, цену, `isOpened`, `isNew`, tip/reply,
+  media metadata, tombstone, provenance и event seq. Временные signed URLs и
+  media bytes не зеркалируются. Каждая строка List Chats дополнительно несёт
+  serving-contract version, provenance и freshness.
 - **Watermark-гейт (уточнён в v3.1.2):** сравнение с seq самого терминального
   события имело дыру порядка — observations канонизируются независимо, и
   терминальное событие может получить МЕНЬШИЙ seq, чем запоздавшая пачка
@@ -544,6 +571,9 @@ cutover-метрике.
   это факт;
 - доставку решает **версионируемый fanout-профиль** на слое стрима:
   `classify(profile, event_type, origin) → business | invalidate | skip`,
+  profile id входит в подписанный сервером state/resume contract; смена
+  несовместимого профиля требует snapshot/rebaseline, поэтому новый профиль не
+  может молча пропустить событие, уже пройденное старым курсором;
   применяется индексированно ДО broadcast (partial index по скрываемым
   origin-классам — иначе буквальная адаптация текущего reader'а читает миллион
   скрытых строк на каждого клиента, `domain-events.ts:530`);
@@ -551,16 +581,19 @@ cutover-метрике.
   `domain-events.ts:83`): если импорт создал факт первым, а затем пришёл
   live-вебхук того же сообщения — старый факт НЕ мутируется; пишется честный
   факт `fact.live_reobserved.v1` с новым `account_seq` и ссылкой на
-  канонический, SSE сериализует его обычным business-кадром — live-fanout не
-  теряется;
+  канонический; presenter сериализует его как исходный
+  `message.received|message.sent`, а не как literal неизвестный desktop-kind —
+  live-fanout и UI-эффект не теряются;
 - bulk-импорт завершается `bulk_completed` + **один технический
   cursor-checkpoint** относительно предварительно замороженного high-water:
   клиентский курсор продвигается за скрытый диапазон, reconnect не
   перечитывает (десктоп персистит курсор валидного неизвестного типа —
   `hub-sync.ts:564`);
 - **живая массовая кампания**: одного checkpoint'а мало (курсор продвинется, а
-  UI не обновится) — профиль отдаёт один actionable `invalidate`-кадр на
-  затронутую поверхность, либо поверхность уже читается из БД;
+  UI не обновится) — профиль отдаёт один actionable `invalidate`-кадр только
+  после canary с явным campaign/queue id и релиза совместимого Desktop. При
+  отрицательном canary контур остаётся capture-only и не скрывает бездоказательно
+  message frames;
 - poison-обработка одиночного кадра остаётся на клиенте (D17-брейкер уже в
   десктопе — `hub-sync.ts:1138`; расширить только на malformed JSON/schema,
   которые сейчас молча дропаются); авто-dead-letter business-событий на
@@ -574,7 +607,7 @@ cutover-метрике.
 
 ## 8. Бюджеты и кредитная бухгалтерия
 
-**Четыре раздельных скоупа** вместо общего котла (сегодня: один глобальный
+**Три раздельных скоупа** вместо общего котла (сегодня: один глобальный
 счётчик; desktop-риды без гейта раздувают его — `ofapi-read-gateway.ts:426–439`,
 19.7k кредитов с 06.07 — а DM-воркер по нему голодает):
 
@@ -606,7 +639,7 @@ per-job бюджеты архива сами по себе не гарантир
 (реплей 14–15.07) выедает общий C5-котёл за часы и до UTC-полуночи ослепляет
 budget_denied'ом ВСЕХ легитимных чаттеров; (б) **анти-шторм**: K budget_denied
 подряд от одного актора → временный отказ на уровне gateway ДО создания
-durable-попытки + алерт (иначе шторм заливает таблицу попыток denied-строками);
+durable-попытки + алерт (иначе предыдущая схема заливала бы correctness-plane denied-строками);
 (в) **семантика floor**: существующий floor — probe-through и freshness-gated
 (на stale-балансе пропускает пробу; failed-попытки не несут `_meta` → баланс
 стареет именно во время инцидента). В новой адмиссии: probe-through разрешён
@@ -640,8 +673,8 @@ balance-окно 13.07 (−307 при известных 18.78; residual 288.22 
 **Историческая полнота** (информационное, НЕ инцидент и НЕ 503): % чатов с
 сертификатом; терминальная таксономия (continuous_history /
 verified_unavailable / explicit_open_debt — §5.2); gap_open-долг;
-несертифицированный объём; долг парсинга; отказы адмиссии (attempts в состоянии
-denied); ёмкостной headroom журнала; очередь заданий
+несертифицированный объём; долг парсинга; агрегаты отказов адмиссии
+`budget_denied`; ёмкостной headroom журнала; очередь заданий
 (running/backoff/quarantined/terminal, возраст старейшего); доля
 неатрибутированных кредитов (цель ~0 после конверта).
 
@@ -658,7 +691,7 @@ append-only и переживают любой откат.
 |---|---|---|
 | **0. Жгут** (без схемы) | Пауза обоих OF `dm_messages` — **постоянный kill switch**, не временная мера; выключатель ОТДЕЛЬНЫЙ и узкий (durable per-stream пауза + код-гард только легаси dm_messages-лейна), НЕ `OFAPI_DM_SYNC_ENABLED` — тот гейтит и List Chats (`executor-handlers.ts:2411/:2914`); **v3.2: нейтрализовать легаси-ручки** — дашборд-блок `messages_history` замаплен на запрещённый `dm_messages` и его Resume создаёт request и будит executor (`sync-blocks.ts:144/:468`) — убрать/перемапить ДО чего-либо ещё; deploy-rollback-guard: авто-откат имиджа требует доказательства durable-паузы (`deploy-production.sh:62`); типизация исходов + снятие 404-пина; 1 медленный запрос/чанк; failed-попытки в бюджет; метрика физических попыток | откатываются только новые компоненты; легаси-краулер не включается ни при каком откате (иначе противоречие §3) |
 | **1. Фундамент** | Единый capture-before-parse транспорт (§5.5) **с контрактной границей `contract_rejected` и recovery-матрицей §5.6 (v3.2)**; минимальные `ofapi_capture_jobs` + durable-попытки §5.6 — S2–S4 пользуются только ими; бюджет-иерархия §8 (3 скоупа + page-ось) + адмиссия (вкл. interactive-гейт C5); жизненный цикл кредитов + **balance-reconciler как обязательный гейт (он уже существует и ходит ежечасно — `ofapi-credits.ts:424` — но ledger по умолчанию выключен: включить)**; off-box bucket + диск-гейт; **минимальный operator-CLI**: status/explain, scoped pause, attempt/credit resolve, local parse replay — все мутации CAS с expected_state, dry-run по умолчанию | пофлагово |
-| **2. Живой контур** | Материализация lastMessage (сначала idempotent-реплей уже захваченных свипов — бесплатное пополнение); Specific Message + ремонт голов; bounded tail-reconcile ПО НЕЗАВИСИМОМУ НАМЕРЕНИЮ (§6.1: входящее/interactive-открытие/когорта/ручной/anti-entropy; сдвиг головы пишет только head-факт); `chat_queue.*` journal-only — всё через задания/попытки S1 | продюсеры off; факты остаются |
+| **2. Живой контур** | Материализация lastMessage (сначала idempotent-реплей уже захваченных свипов — бесплатное пополнение); Specific Message + ремонт голов; bounded `chat_paginate` ПО НЕЗАВИСИМОМУ НАМЕРЕНИЮ (§6.1: входящее/interactive-открытие/когорта/ручной/`verification_probe`; сдвиг головы пишет только head-факт); `chat_queue.*` capture-only — всё через задания/попытки S1 | продюсеры off; факты остаются |
 | **3. Кампании — продуктовый слой (v3.2: ЗАХВАТ уехал в S2, отложен только продукт)** | Захват `chat_queue.*` + canary — ОБЯЗАТЕЛЬНЫ в S2: события сейчас вообще не зарегистрированы в приёмнике (`ofapi-webhooks.ts:39`) — отложить захват значит не накопить историю; кампании можно отложить продуктово, но не архитектурно. Здесь остаются: агрегатные проекции кампаний; получатели ТОЛЬКО при явном user/chat-эвидансе; снимок рассылки 30 мая (агрегат); membership в воркборде/UI с provenance | флаг off; объекты остаются; журнал копится независимо |
 | **4. Чтения** | Счётчики fallback; shadow-сравнение; per-surface флипы `shadow → db+fallback → db-only` (#70) | флип поверхности обратно — мгновенный |
 | **5a. Архив: выбор бэкенда** | **v3.2: export-цикл — это задание `kind=account_export`** (создаётся ДО котировки и владеет всем циклом: состояние-фаза, vendor export ID, quote, approval, attempt-ссылки, артефакт; отдельная таблица export_operations упразднена); задание `export_import` создаётся только после `artifact_captured`. shadow-planner → fault-injection (crash/timeout/404/429/parse/диск/кредит) → 3 пробы → котировки экспорта (пилот 2–3 чата И полный хвост — для owner-решения по §2) → пилот → решение бэкенда. Цикл: `create_indeterminate → quote_calculating → quoted → owner_approved → start_indeterminate → in_progress → artifact_captured → imported`, плюс v3.1.1: `quote_ttl` (approve позже T → обязательный re-quote), терминальные `export_failed / artifact_lost` с явным кредитным исходом, немедленное скачивание артефакта в off-box bucket как условие `artifact_captured` (импорт только из своей копии). После indeterminate второй POST автоматически НЕ выполняется — webhook/status-reconciliation, неразрешённое → ручное решение (идемпотентности create/start вендор не документирует). Checksum + row-counts = `artifact_integrity + item_presence`; `continuous_history` — только после доказанной пилотом полноты сканера | стоп; ничего не потеряно |
@@ -762,7 +795,7 @@ append-only и переживают любой откат.
 - **S2:** ≥99% голов из List Chats материализованы фактами; 0 full-history
   запросов; ремонт головы ≤ 1 запрос; **fanout-тест**: 8 000 кампания-сдвигов
   голов → 8 000 head-фактов и НОЛЬ автоматических tail-заданий (либо ≤K
-  sampled anti-entropy); реплей материализации свипов → **0 business-кадров на
+  `verification_probe(profile=coverage_gap)`); реплей материализации свипов → **0 business-кадров на
   v2, ≤1 checkpoint, курсор продвинут, без перечитывания на reconnect**;
   сэмплер-тест: неделя на прод-подобном корпусе → burn ≤ под-бюджета, повторных
   сэмплов провальных чатов 0; transcript-parity: fill-grade media/PPV-головы не
@@ -817,10 +850,14 @@ Fansly-регрессия (candidate/checkpoint/retention/backfill сьюты) �
 партицию (`0077_domain_events_2024_2025_reopen.sql:3`). Требуются: постоянная
 late-arrival партиция; replay-адаптер, читающий один формат из hot Postgres и
 Parquet; `layout_version + columns-hash` в Parquet-манифесте;
+trusted archive timestamp policy сохраняет валидный исходный `occurred_at`
+многолетней истории и НЕ применяет общий clamp
+`occurredAt < 2024-01-01 → receivedAt` из `canonicalize-driver.ts`; исходное
+значение, решение валидатора и import-time хранятся раздельно;
 `proof_policy_version`/`min_accepted_proof_policy` по поверхности (§5.2);
 **полный off-box backup-набор** — Postgres + Parquet/манифесты +
 экспорт-артефакты + конфигурация + ключи — и **полный restore-дрилл**, не
-восстановление одной партиции (стыкуется с owner-решением по #128).
+восстановление одной партиции (решение #159, суперсид #128).
 
 **14.2. Операционный контур (соло-оператор, без дежурств).** Для каждого
 алерта фиксируется цепочка `signal → scope → auto-containment → inspect →
