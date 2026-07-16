@@ -525,10 +525,24 @@ describe("device-token adoption report (D116(c) foundation, desktop D19)", () =>
 
     await issueChatterApiKey(activeApp, { username: "keyonly" }, { source: "cli" });
 
+    // A second live-but-unused token with a LATER expiry must not leak its
+    // dates into the row: both token fields describe the freshest-used token.
+    await setup.testDb.pool.query(
+      "update device_tokens set expires_at = now() + interval '2 days' where user_id = $1",
+      [tokenized!.id],
+    );
+    await issueDeviceToken(
+      activeApp,
+      { userId: tokenized!.id, label: "machine-a-spare" },
+      { source: "cli" },
+    );
+
     const report = await deviceTokenAdoptionReport(activeApp);
     const rows = new Map(report.chatters.map((row) => [row.username, row]));
     expect(rows.get("tokenized")).toMatchObject({ hasFreshDeviceToken: true, activeApiKeys: 0 });
-    expect(rows.get("tokenized")!.deviceTokenExpiresAt).not.toBeNull();
+    const tokenizedExpiry = Date.parse(rows.get("tokenized")!.deviceTokenExpiresAt!);
+    // ~2 days (the used token), never ~90 days (the unused spare).
+    expect(tokenizedExpiry - Date.now()).toBeLessThan(3 * 24 * 60 * 60 * 1000);
     expect(rows.get("staletoken")).toMatchObject({ hasFreshDeviceToken: false });
     expect(rows.get("revokedtoken")).toMatchObject({
       hasFreshDeviceToken: false,

@@ -840,25 +840,30 @@ export async function deviceTokenAdoptionReport(app: AppContext, now = new Date(
     const liveTokens = tokens.filter(
       (token) => token.revokedAt === null && token.expiresAt > now,
     );
-    const lastTokenUse = liveTokens.reduce<Date | null>((max, token) => (
-      token.lastUsedAt && (max === null || token.lastUsedAt > max)
-        ? token.lastUsedAt
-        : max
-    ), null);
-    const latestExpiry = liveTokens.reduce<Date | null>((max, token) => (
-      max === null || token.expiresAt > max ? token.expiresAt : max
-    ), null);
+    // Both token fields describe ONE row: the live token most recently used.
+    // Multiple live tokens per user are routine (one per machine, issue never
+    // revokes siblings) — an independent max(expiresAt) could advertise a
+    // never-used sibling's 90 days while the token actually in daily use dies
+    // at its 365-day hard cap tomorrow (Stage 22 max lifetime).
+    const anchorToken = liveTokens.reduce<(typeof liveTokens)[number] | null>(
+      (best, token) => (
+        token.lastUsedAt !== null
+          && (best === null || token.lastUsedAt > best.lastUsedAt!)
+          ? token
+          : best
+      ),
+      null,
+    );
     const keys = await listApiKeys(app.db, [user.id]);
     const lastKeyUse = keys.reduce<Date | null>((max, key) => (
       key.lastUsedAt && (max === null || key.lastUsedAt > max) ? key.lastUsedAt : max
     ), null);
     chatters.push({
       username: user.username,
-      hasFreshDeviceToken: lastTokenUse !== null && lastTokenUse.getTime() >= freshFloor,
-      deviceTokenLastUsedAt: lastTokenUse?.toISOString() ?? null,
-      // The 365-day hard cap makes expiry the other half of "still viable":
-      // a token used yesterday can still die tomorrow (Stage 22 max lifetime).
-      deviceTokenExpiresAt: latestExpiry?.toISOString() ?? null,
+      hasFreshDeviceToken: anchorToken !== null
+        && anchorToken.lastUsedAt!.getTime() >= freshFloor,
+      deviceTokenLastUsedAt: anchorToken?.lastUsedAt?.toISOString() ?? null,
+      deviceTokenExpiresAt: anchorToken?.expiresAt.toISOString() ?? null,
       activeApiKeys: keys.filter((key) => key.revokedAt === null).length,
       apiKeyLastUsedAt: lastKeyUse?.toISOString() ?? null,
     });
