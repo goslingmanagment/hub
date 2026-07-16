@@ -3483,6 +3483,81 @@ export const ofapiCaptureSeedResponseSchema = z.object({
   })),
 });
 
+const ofapiExportQuoteCommonSchema = {
+  dryRun: z.boolean().default(true),
+  pageId: intId,
+  startDate: isoTimestamp,
+  endDate: isoTimestamp,
+  maxMessages: z.number().int().min(1).max(10_000_000).default(10_000_000),
+  quoteTtlMinutes: z.number().int().min(60).max(10_080).default(1_440),
+};
+
+export const ofapiExportQuoteBodySchema = z.discriminatedUnion("profile", [
+  z.object({
+    ...ofapiExportQuoteCommonSchema,
+    profile: z.literal("pilot_chats"),
+    chatIds: z.array(z.string().regex(/^\d+$/).max(30)).min(1).max(3),
+  }).strict(),
+  z.object({
+    ...ofapiExportQuoteCommonSchema,
+    profile: z.literal("fleet_tail"),
+  }).strict(),
+]);
+
+const ofapiExportQuoteJobStateSchema = z.enum([
+  "ready",
+  "leased",
+  "awaiting_parse",
+  "retry_wait",
+  "blocked",
+  "complete",
+  "cancelled",
+]);
+
+export const ofapiExportQuoteCreateResponseSchema = z.object({
+  dryRun: z.boolean(),
+  status: z.enum(["would_create", "would_coalesce", "created", "coalesced"]),
+  jobId: z.string().uuid().nullable(),
+  pageId: intId,
+  profile: z.enum(["pilot_chats", "fleet_tail"]),
+  targetHash: z.string().regex(/^[0-9a-f]{64}$/),
+  state: ofapiExportQuoteJobStateSchema.nullable(),
+  reasonCode: z.string().nullable(),
+});
+
+export const ofapiExportQuoteParamsSchema = z.object({
+  jobId: z.string().uuid(),
+});
+
+export const ofapiExportQuoteCancelBodySchema = z.object({
+  expectedState: z.literal("blocked"),
+  reason: z.string().trim().min(1).max(500),
+}).strict();
+
+export const ofapiExportQuoteStatusResponseSchema = z.object({
+  jobId: z.string().uuid(),
+  pageId: intId,
+  profile: z.enum(["pilot_chats", "fleet_tail"]),
+  targetHash: z.string().regex(/^[0-9a-f]{64}$/),
+  state: ofapiExportQuoteJobStateSchema,
+  reasonCode: z.string().nullable(),
+  reasonMessage: z.string().nullable(),
+  attemptCount: z.number().int().nonnegative(),
+  dispatchCount: z.number().int().nonnegative(),
+  spentCredits: z.number().int().nonnegative(),
+  createdAt: isoTimestamp,
+  updatedAt: isoTimestamp,
+  quote: z.object({
+    vendorExportId: z.string(),
+    vendorStatus: z.string(),
+    totalRows: z.number().int().nonnegative().nullable(),
+    creditCost: z.number().int().nonnegative().nullable(),
+    pollCount: z.number().int().nonnegative(),
+    quotedAt: isoTimestamp.nullable(),
+    expiresAt: isoTimestamp.nullable(),
+  }).nullable(),
+});
+
 export const ofapiWebhookRegisterResponseSchema = z.object({
   externalWebhookId: z.string().nullable(),
   endpointUrl: z.string(),
@@ -4469,6 +4544,53 @@ export const routeSchemas = {
     body: ofapiCaptureSeedBodySchema,
     response: {
       200: ofapiCaptureSeedResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiExportQuotesCreate: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Dry-run or create a bounded OFAPI chat-export quote",
+    description: "Creates one page-scoped account_export intent before any vendor request. "
+      + "The worker may create and poll a quote, but this surface cannot approve, start, "
+      + "retry, download, or import an export. auto_start is always false.",
+    body: ofapiExportQuoteBodySchema,
+    response: {
+      200: ofapiExportQuoteCreateResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiExportQuoteStatus: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Inspect a durable OFAPI export quote without signed URLs",
+    params: ofapiExportQuoteParamsSchema,
+    response: {
+      200: ofapiExportQuoteStatusResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  adminOfapiExportQuoteCancel: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Cancel a blocked quote-only OFAPI export intent",
+    description: "CAS-cancels only a fully captured quote or explicit vendor calculation "
+      + "failure. This frees the single page export slot and never calls OFAPI. Any other "
+      + "blocked outcome requires independent vendor reconciliation first.",
+    params: ofapiExportQuoteParamsSchema,
+    body: ofapiExportQuoteCancelBodySchema,
+    response: {
+      200: ofapiExportQuoteStatusResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -6393,6 +6515,12 @@ export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusRespon
 export type OfapiWebhookReconcileBody = z.infer<typeof ofapiWebhookReconcileBodySchema>;
 export type OfapiCaptureSeedBody = z.infer<typeof ofapiCaptureSeedBodySchema>;
 export type OfapiCaptureSeedResponse = z.infer<typeof ofapiCaptureSeedResponseSchema>;
+export type OfapiExportQuoteBody = z.infer<typeof ofapiExportQuoteBodySchema>;
+export type OfapiExportQuoteCreateResponse =
+  z.infer<typeof ofapiExportQuoteCreateResponseSchema>;
+export type OfapiExportQuoteStatusResponse =
+  z.infer<typeof ofapiExportQuoteStatusResponseSchema>;
+export type OfapiExportQuoteCancelBody = z.infer<typeof ofapiExportQuoteCancelBodySchema>;
 export type OfapiCreditsSummaryResponse = z.infer<typeof ofapiCreditsSummaryResponseSchema>;
 export type OfapiCreditsChatterSummaryResponse =
   z.infer<typeof ofapiCreditsChatterSummaryResponseSchema>;

@@ -73,6 +73,11 @@ import {
 } from "../../services/ofapi-credit-report.ts";
 import { getOfapiDmColdArchiveStatus } from "../../services/ofapi-dm-archive.ts";
 import { seedOwnerOfapiCaptureJobs } from "../../services/ofapi-capture-seed.ts";
+import {
+  cancelOwnerOfapiExportQuote,
+  createOwnerOfapiExportQuote,
+  getOwnerOfapiExportQuoteStatus,
+} from "../../services/ofapi-export-quotes.ts";
 import { getOfapiSpendComparison } from "../../services/ofapi-spend-comparison.ts";
 import { getPageSummary } from "../../services/reporting.ts";
 import { getStatusDetail, listStatus } from "../../services/sync.ts";
@@ -221,6 +226,63 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         },
       });
     }
+    return result;
+  });
+
+  server.post("/api/v1/admin/ofapi/export-quotes", {
+    schema: routeSchemas.adminOfapiExportQuotesCreate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await createOwnerOfapiExportQuote(appContext, {
+      ...request.body,
+      actorUserId: principal.user.id,
+    });
+    if (!result.dryRun) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_export_quote_created",
+        metadata: {
+          jobId: result.jobId,
+          pageId: result.pageId,
+          profile: result.profile,
+          targetHash: result.targetHash,
+          status: result.status,
+        },
+      });
+    }
+    return result;
+  });
+
+  server.get("/api/v1/admin/ofapi/export-quotes/:jobId", {
+    schema: routeSchemas.adminOfapiExportQuoteStatus,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return getOwnerOfapiExportQuoteStatus(appContext, request.params.jobId);
+  });
+
+  server.post("/api/v1/admin/ofapi/export-quotes/:jobId/cancel", {
+    schema: routeSchemas.adminOfapiExportQuoteCancel,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await cancelOwnerOfapiExportQuote(appContext, {
+      jobId: request.params.jobId,
+      actorUserId: principal.user.id,
+      reason: request.body.reason,
+    });
+    await recordAudit(appContext, {
+      ...auditCtx(principal),
+      eventType: "admin.ofapi_export_quote_cancelled",
+      metadata: {
+        jobId: result.jobId,
+        pageId: result.pageId,
+        profile: result.profile,
+        expectedState: request.body.expectedState,
+        reason: request.body.reason,
+      },
+    });
     return result;
   });
 

@@ -21,7 +21,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `any` | any authenticated principal |
 
-## Routes (163)
+## Routes (166)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -58,6 +58,9 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/ofapi/credits/ledger.csv` | `adminOfapiCreditsLedgerCsv` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/credits/summary` | `adminOfapiCreditsSummary` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/dm-archive/status` | `adminOfapiDmColdArchiveStatus` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/export-quotes` | `adminOfapiExportQuotesCreate` | `owner-session` | — | — |
+| GET | `/api/v1/admin/ofapi/export-quotes/:jobId` | `adminOfapiExportQuoteStatus` | `owner-session` | — | — |
+| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` | `adminOfapiExportQuoteCancel` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — |
 | GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — |
 | POST | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookRegister` | `owner-session` | — | — |

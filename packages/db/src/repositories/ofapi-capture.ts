@@ -1465,12 +1465,17 @@ export async function markOfapiAttemptIndeterminate(
     outcome: OfapiIndeterminateOutcome;
     responseObservedAt?: Date | null;
     details?: Record<string, unknown>;
+    /** Safe reads may be retried after recording the uncertain billed attempt. */
+    retrySafeReadAt?: Date | null;
     now?: Date;
   },
 ) {
   const now = input.now ?? new Date();
   if (input.outcome === "capture_uncommitted" && !input.responseObservedAt) {
     throw new OfapiCaptureInvariantError("capture_uncommitted requires responseObservedAt");
+  }
+  if (input.retrySafeReadAt && input.retrySafeReadAt <= now) {
+    throw new OfapiCaptureInvariantError("Safe-read retry must be scheduled in the future");
   }
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
@@ -1480,6 +1485,9 @@ export async function markOfapiAttemptIndeterminate(
       return false;
     }
     const reservedCredits = asNumber(attempt.reserved_credits, "reserved_credits");
+    if (input.retrySafeReadAt && attempt.request_semantics !== "safe_read") {
+      throw new OfapiCaptureInvariantError("Stateful indeterminate attempts cannot auto-retry");
+    }
     // The hourly balance reconciler must see possibly billed dispatches as
     // known spend immediately. A later resolution appends an adjustment;
     // there is never a second settlement row for the attempt.
@@ -1515,20 +1523,46 @@ export async function markOfapiAttemptIndeterminate(
       update ofapi_request_attempts
       set state = 'indeterminate',
           dispatch_outcome = ${input.outcome},
-          credit_state = 'indeterminate',
+          credit_state = ${input.retrySafeReadAt ? "settled" : "indeterminate"},
+          settled_credits = ${input.retrySafeReadAt ? reservedCredits : null},
+          credit_estimated = ${input.retrySafeReadAt ? "true" : "false"}::boolean,
           response_observed_at = ${input.responseObservedAt ?? null},
           finished_at = ${now},
+          certainty_resolved_at = ${input.retrySafeReadAt ? now : null},
+          certainty_resolution = ${input.retrySafeReadAt
+            ? "safe_read_retry_assumed_billed"
+            : null},
           updated_at = ${now}
       where id = ${input.attemptId}::uuid
         and state = 'dispatching'
         and fence_token = ${input.fenceToken}::uuid
     `);
+    if (input.retrySafeReadAt) {
+      // A safe GET can be repeated, but its first dispatch may still have
+      // consumed the reserved credit. Resolve it conservatively as billed so
+      // it no longer occupies the owner's active-attempt fence while every
+      // budget counter continues to include the charge.
+      await database.execute(sql`
+        update ofapi_credit_state
+        set governed_unsettled_credits = greatest(
+              0,
+              governed_unsettled_credits - ${reservedCredits}
+            ),
+            updated_at = ${now}
+        where id = 1
+      `);
+    }
     if (attempt.owner_kind === "capture_job") {
       await database.execute(sql`
         update ofapi_capture_jobs
-        set state = 'blocked',
-            reason_code = 'indeterminate',
+        set state = ${input.retrySafeReadAt ? "retry_wait" : "blocked"},
+            next_attempt_at = coalesce(${input.retrySafeReadAt ?? null}, next_attempt_at),
+            reason_code = ${input.retrySafeReadAt
+              ? "indeterminate_safe_read_retry"
+              : "indeterminate"},
             reason_message = ${`Dispatch certainty unresolved: ${input.outcome}`},
+            spent_credits = spent_credits + ${reservedCredits},
+            dispatch_count = dispatch_count + 1,
             lease_owner = null,
             lease_token = null,
             lease_until = null,
@@ -2042,11 +2076,15 @@ export type OfapiCaptureParseDisposition =
     nextAttemptAt: Date;
     reasonCode: string;
     reasonMessage?: string | null;
+    /** Optional monotone protocol state captured from this response. */
+    cursor?: Record<string, unknown>;
   }
   | {
     kind: "blocked";
     reasonCode: string;
     reasonMessage?: string | null;
+    /** Final local protocol state that explains why owner action is needed. */
+    cursor?: Record<string, unknown>;
   }
   | {
     kind: "complete";
@@ -2194,11 +2232,18 @@ export async function settleOfapiCaptureParse(
         `);
         break;
       }
-      case "retry":
+      case "retry": {
+        const nextCursor = input.disposition.cursor ?? null;
+        const nextCursorHash = nextCursor === null ? null : hashOfapiCaptureValue(nextCursor);
+        if (nextCursorHash !== null && nextCursorHash === job.cursorHash) {
+          throw new OfapiCaptureInvariantError("I0 retry outcome did not change the cursor");
+        }
         await database.execute(sql`
           update ofapi_capture_jobs
           set state = 'retry_wait',
               next_attempt_at = ${input.disposition.nextAttemptAt},
+              cursor = coalesce(${nextCursor === null ? null : JSON.stringify(nextCursor)}::jsonb, cursor),
+              cursor_hash = coalesce(${nextCursorHash}, cursor_hash),
               pending_observation_id = null,
               pending_observation_received_at = null,
               zero_progress_count = zero_progress_count + 1,
@@ -2212,10 +2257,18 @@ export async function settleOfapiCaptureParse(
           where id = ${input.jobId}::uuid
         `);
         break;
-      case "blocked":
+      }
+      case "blocked": {
+        const nextCursor = input.disposition.cursor ?? null;
+        const nextCursorHash = nextCursor === null ? null : hashOfapiCaptureValue(nextCursor);
+        if (nextCursorHash !== null && nextCursorHash === job.cursorHash) {
+          throw new OfapiCaptureInvariantError("I0 blocked outcome did not change the cursor");
+        }
         await database.execute(sql`
           update ofapi_capture_jobs
           set state = 'blocked',
+              cursor = coalesce(${nextCursor === null ? null : JSON.stringify(nextCursor)}::jsonb, cursor),
+              cursor_hash = coalesce(${nextCursorHash}, cursor_hash),
               pending_observation_id = null,
               pending_observation_received_at = null,
               zero_progress_count = zero_progress_count + 1,
@@ -2229,6 +2282,7 @@ export async function settleOfapiCaptureParse(
           where id = ${input.jobId}::uuid
         `);
         break;
+      }
       case "complete": {
         const terminal = await insertObservation(database, {
           source: "ofapi_capture",
@@ -2566,6 +2620,71 @@ export async function setOfapiCaptureControl(
       )
     `);
     return { previous, next, executed: input.execute === true };
+  });
+}
+
+export async function cancelBlockedOfapiExportQuoteJob(
+  db: Database,
+  input: {
+    jobId: string;
+    actorUserId: number;
+    reason: string;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const current = await database.execute<Record<string, unknown>>(sql`
+      select *
+      from ofapi_capture_jobs
+      where id = ${input.jobId}::uuid
+      for update
+    `);
+    const row = current.rows[0];
+    if (!row) return { cancelled: false, currentState: null };
+    const job = mapCaptureJob(row);
+    if (
+      job.kind !== "account_export"
+      || job.state !== "blocked"
+      || !["owner_approval_required", "export_quote_failed"].includes(job.reasonCode ?? "")
+    ) {
+      return { cancelled: false, currentState: job.state };
+    }
+    await database.execute(sql`
+      update ofapi_capture_jobs
+      set state = 'cancelled',
+          reason_code = 'owner_cancelled',
+          reason_message = ${input.reason},
+          completed_at = ${now},
+          lease_owner = null,
+          lease_token = null,
+          lease_until = null,
+          row_version = row_version + 1,
+          updated_at = ${now}
+      where id = ${input.jobId}::uuid
+        and kind = 'account_export'
+        and state = 'blocked'
+        and reason_code in ('owner_approval_required', 'export_quote_failed')
+    `);
+    await database.execute(sql`
+      insert into ofapi_capture_operator_actions (
+        action, target_type, target_ref, expected_state,
+        previous_state, resulting_state, dry_run, actor_user_id, reason, occurred_at
+      ) values (
+        'cancel_export_quote',
+        'job',
+        ${input.jobId},
+        'blocked',
+        ${JSON.stringify({ state: job.state, reasonCode: job.reasonCode })}::jsonb,
+        ${JSON.stringify({ state: "cancelled" })}::jsonb,
+        false,
+        ${input.actorUserId},
+        ${input.reason},
+        ${now}
+      )
+    `);
+    return { cancelled: true, currentState: "cancelled" as const };
   });
 }
 

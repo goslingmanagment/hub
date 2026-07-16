@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelBlockedOfapiExportQuoteJob,
   captureOfapiAttemptResponse,
   completeOfapiInteractiveRequest,
   createModel,
@@ -27,6 +28,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { executeOfapiCaptureJobChunk } from "../apps/runtime/src/services/ofapi-capture-jobs.ts";
+import { OfapiGovernedRequestError } from "../apps/runtime/src/services/ofapi.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
@@ -210,6 +212,51 @@ async function createCaptureExecutionFixture(input: {
     now,
   });
   return { ...seeded, app, dispatchGovernedRaw, job: created.job };
+}
+
+async function createExportQuoteExecutionFixture(
+  dispatchGovernedRaw: ReturnType<typeof vi.fn>,
+) {
+  const seeded = await seed();
+  const now = new Date();
+  await testDb!.pool.query(`
+    update ofapi_credit_state
+    set last_balance = 1000, last_balance_at = $1, updated_at = $1
+    where id = 1
+  `, [now]);
+  const app = createTestAppContext(testDb!, {
+    ofapi: { dispatchGovernedRaw } as never,
+    ofapiMirrorBackgroundCaptureEnabled: true,
+    ofapiDmDailyCreditBudget: 100,
+    ofapiBackfillDailyCreditBudget: 100,
+    ofapiCreditFloor: 10,
+  });
+  await saveProxy(app, seeded.page.id, { url: "http://127.0.0.1:65535" });
+  const created = await createOrGetOfapiCaptureJob(testDb!.db, {
+    pageId: seeded.page.id,
+    ofapiAccountId: seeded.accountId,
+    kind: "account_export",
+    activeSlotKey: `page:${seeded.page.id}:export`,
+    target: {
+      profile: "fleet_tail",
+      type: "chat_messages",
+      accountIds: [seeded.accountId],
+      startDate: "2016-01-01T00:00:00.000Z",
+      endDate: "2026-07-16T00:00:00.000Z",
+      fileType: "csv",
+      maxMessages: 10_000_000,
+      quoteTtlMinutes: 1_440,
+      chatIds: [],
+      autoStart: false,
+    },
+    budgetScope: "bulk",
+    originPrincipalId: seeded.owner.id,
+    createdBy: "owner",
+    maxCalls: 31,
+    maxCredits: 5,
+    now,
+  });
+  return { ...seeded, app, job: created.job };
 }
 
 describe("OFAPI capture correctness repository", () => {
@@ -1022,5 +1069,353 @@ describe("OFAPI capture correctness repository", () => {
       leaseTtlMs: 60_000,
       now: NOW,
     })).toBeNull();
+  });
+
+  it("quotes an account export but never starts it", async () => {
+    if (!testDb) return;
+    const calls: Array<{
+      method: string;
+      pathname: string;
+      body: Record<string, unknown> | null;
+    }> = [];
+    const responses: Array<Record<string, unknown>> = [];
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: {
+        method: string;
+        pathname: string;
+        bodyBytes?: Buffer | null;
+        beforeDispatch: () => Promise<boolean>;
+      },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      calls.push({
+        method: request.method,
+        pathname: request.pathname,
+        body: request.bodyBytes ? JSON.parse(request.bodyBytes.toString("utf8")) : null,
+      });
+      const body = responses.shift();
+      if (!body) throw new Error("unexpected extra export request");
+      return {
+        status: 200,
+        bodyBytes: Buffer.from(JSON.stringify(body)),
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw);
+    responses.push(
+      {
+        data: {
+          id: "data_export_quote123",
+          type: "chat_messages",
+          status: "calculating_credits",
+          start_date: "2016-01-01T00:00:00.000Z",
+          end_date: "2026-07-16T00:00:00.000Z",
+          file_type: "csv",
+        },
+        _meta: { _credits: { used: 0, balance: 1000 } },
+      },
+      {
+        data: {
+          id: "data_export_quote123",
+          type: "chat_messages",
+          status: "calculating_credits_completed",
+          start_date: "2016-01-01T00:00:00.000Z",
+          end_date: "2026-07-16T00:00:00.000Z",
+          file_type: "csv",
+          accounts: [{ id: fixture.accountId }],
+          total_rows: 2460,
+          credit_cost: 123,
+        },
+        _meta: { _credits: { used: 0, balance: 1000 } },
+      },
+    );
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "retry_wait",
+      cursor: {
+        phase: "quote_calculating",
+        vendorExportId: "data_export_quote123",
+      },
+    });
+    await testDb.pool.query(
+      "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+      [fixture.job.id],
+    );
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ method: "POST", pathname: "/data-exports" });
+    expect(calls[0]?.body).toMatchObject({
+      type: "chat_messages",
+      auto_start: false,
+      options: { maxMessages: 10_000_000, skipMassMessages: false },
+    });
+    expect(calls[1]).toEqual({
+      method: "GET",
+      pathname: "/data-exports/data_export_quote123",
+      body: null,
+    });
+    expect(calls.every((call) => !call.pathname.endsWith("/start"))).toBe(true);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "owner_approval_required",
+      cursor: {
+        phase: "quoted",
+        vendorExportId: "data_export_quote123",
+        totalRows: 2460,
+        creditCost: 123,
+      },
+    });
+    expect(await cancelBlockedOfapiExportQuoteJob(testDb.db, {
+      jobId: fixture.job.id,
+      actorUserId: fixture.owner.id,
+      reason: "quote recorded; release slot for the next profile",
+    })).toEqual({ cancelled: true, currentState: "cancelled" });
+    const next = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: fixture.page.id,
+      ofapiAccountId: fixture.accountId,
+      kind: "account_export",
+      activeSlotKey: `page:${fixture.page.id}:export`,
+      target: {
+        profile: "pilot_chats",
+        type: "chat_messages",
+        accountIds: [fixture.accountId],
+        startDate: "2016-01-01T00:00:00.000Z",
+        endDate: "2026-07-16T00:00:00.000Z",
+        fileType: "csv",
+        maxMessages: 100,
+        quoteTtlMinutes: 1_440,
+        chatIds: ["42"],
+        autoStart: false,
+      },
+      budgetScope: "bulk",
+      originPrincipalId: fixture.owner.id,
+      createdBy: "owner",
+      maxCalls: 31,
+      maxCredits: 5,
+    });
+    expect(next.created).toBe(true);
+  });
+
+  it("never repeats an indeterminate export-create POST", async () => {
+    if (!testDb) return;
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: { beforeDispatch: () => Promise<boolean> },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      throw new OfapiGovernedRequestError(
+        "scripted uncertain export create",
+        "post_dispatch",
+        "transport",
+      );
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw);
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("failed");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "indeterminate",
+      attemptCount: 1,
+      dispatchCount: 1,
+      spentCredits: 1,
+    });
+    expect(await cancelBlockedOfapiExportQuoteJob(testDb.db, {
+      jobId: fixture.job.id,
+      actorUserId: fixture.owner.id,
+      reason: "must not free an uncertain stateful slot",
+    })).toEqual({ cancelled: false, currentState: "blocked" });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+    expect(dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a null-cost quote and keeps the stateful create slot fenced", async () => {
+    if (!testDb) return;
+    let expectedAccountId = "";
+    let dispatchNo = 0;
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: { method: string; beforeDispatch: () => Promise<boolean> },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      dispatchNo += 1;
+      const body = request.method === "POST"
+        ? {
+          data: {
+            id: "data_export_null_cost",
+            type: "chat_messages",
+            status: "calculating_credits",
+            start_date: "2016-01-01T00:00:00.000Z",
+            end_date: "2026-07-16T00:00:00.000Z",
+            file_type: "csv",
+          },
+          _meta: { _credits: { used: 0, balance: 1000 } },
+        }
+        : {
+          data: {
+            id: "data_export_null_cost",
+            type: "chat_messages",
+            status: "calculating_credits_completed",
+            start_date: "2016-01-01T00:00:00.000Z",
+            end_date: "2026-07-16T00:00:00.000Z",
+            file_type: "csv",
+            accounts: [{ id: expectedAccountId }],
+            total_rows: null,
+            credit_cost: null,
+          },
+          _meta: { _credits: { used: 0, balance: 1000 } },
+        };
+      return {
+        status: 200,
+        bodyBytes: Buffer.from(JSON.stringify(body)),
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw);
+    expectedAccountId = fixture.accountId;
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    await testDb.pool.query(
+      "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+      [fixture.job.id],
+    );
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "export_quote_missing_cost",
+    });
+    expect(await cancelBlockedOfapiExportQuoteJob(testDb.db, {
+      jobId: fixture.job.id,
+      actorUserId: fixture.owner.id,
+      reason: "must not turn a malformed quote into a new create",
+    })).toEqual({ cancelled: false, currentState: "blocked" });
+    expect(dispatchNo).toBe(2);
+  });
+
+  it("retries an indeterminate export-status GET without repeating export creation", async () => {
+    if (!testDb) return;
+    const calls: Array<{ method: string; pathname: string }> = [];
+    let statusDispatches = 0;
+    let expectedAccountId = "";
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: {
+        method: string;
+        pathname: string;
+        beforeDispatch: () => Promise<boolean>;
+      },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      calls.push({ method: request.method, pathname: request.pathname });
+      if (request.method === "GET") {
+        statusDispatches += 1;
+        if (statusDispatches === 1) {
+          throw new OfapiGovernedRequestError(
+            "scripted uncertain status read",
+            "post_dispatch",
+            "transport",
+          );
+        }
+      }
+      const body = request.method === "POST"
+        ? {
+          data: {
+            id: "data_export_quote_retry",
+            type: "chat_messages",
+            status: "calculating_credits",
+            start_date: "2016-01-01T00:00:00.000Z",
+            end_date: "2026-07-16T00:00:00.000Z",
+            file_type: "csv",
+          },
+          _meta: { _credits: { used: 0, balance: 1000 } },
+        }
+        : {
+          data: {
+            id: "data_export_quote_retry",
+            type: "chat_messages",
+            status: "calculating_credits_completed",
+            start_date: "2016-01-01T00:00:00.000Z",
+            end_date: "2026-07-16T00:00:00.000Z",
+            file_type: "csv",
+            accounts: [{ id: expectedAccountId }],
+            total_rows: 42,
+            credit_cost: 3,
+          },
+          _meta: { _credits: { used: 0, balance: 1000 } },
+        };
+      return {
+        status: 200,
+        bodyBytes: Buffer.from(JSON.stringify(body)),
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw);
+    expectedAccountId = fixture.accountId;
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    await testDb.pool.query(
+      "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+      [fixture.job.id],
+    );
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("failed");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "retry_wait",
+      reasonCode: "indeterminate_safe_read_retry",
+      attemptCount: 2,
+      dispatchCount: 2,
+      spentCredits: 1,
+    });
+    const uncertainRead = await testDb.pool.query<{
+      state: string;
+      credit_state: string;
+      settled_credits: number | null;
+      certainty_resolution: string | null;
+    }>(`
+      select state, credit_state, settled_credits, certainty_resolution
+      from ofapi_request_attempts
+      where capture_job_id = $1
+      order by owner_attempt_no desc
+      limit 1
+    `, [fixture.job.id]);
+    expect(uncertainRead.rows[0]).toEqual({
+      state: "indeterminate",
+      credit_state: "settled",
+      settled_credits: 1,
+      certainty_resolution: "safe_read_retry_assumed_billed",
+    });
+    await testDb.pool.query(
+      "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+      [fixture.job.id],
+    );
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "GET")).toHaveLength(2);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "owner_approval_required",
+      attemptCount: 3,
+      dispatchCount: 3,
+      spentCredits: 1,
+      cursor: {
+        phase: "quoted",
+        vendorExportId: "data_export_quote_retry",
+        totalRows: 42,
+        creditCost: 3,
+      },
+    });
   });
 });

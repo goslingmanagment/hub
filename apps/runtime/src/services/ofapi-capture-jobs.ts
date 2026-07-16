@@ -24,6 +24,11 @@ import {
 } from "./ofapi-capture-contract.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import {
+  buildOfapiExportQuoteRequest,
+  parseCapturedOfapiExportQuote,
+  type OfapiExportQuoteRequestPlan,
+} from "./ofapi-export-quotes.ts";
+import {
   OfapiGovernedRequestError,
   type OfapiGovernedRawResponse,
 } from "./ofapi.ts";
@@ -304,6 +309,23 @@ async function parseCapturedJob(
     });
   }
 
+  if (job.kind === "account_export") {
+    const result = await parseCapturedOfapiExportQuote(app, {
+      job,
+      attemptId: observation.attemptId,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      status: captured.status,
+      headers: captured.headers,
+      parsedJson,
+    });
+    return { kind: result, pageId: job.pageId, jobId: job.id };
+  }
+  if (job.kind !== "chat_paginate") {
+    await blockJob(app, job, "unsupported_job_kind", `Unsupported job kind ${job.kind}`);
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+
   const status = captured.status;
   if (status < 200 || status >= 300) {
     const retryable = status === 429 || status >= 500;
@@ -577,16 +599,65 @@ export async function executeOfapiCaptureJobChunk(
   if (job.state === "awaiting_parse") {
     return parseCapturedJob(app, job);
   }
-  if (job.kind !== "chat_paginate") {
-    await blockJob(app, job, "unsupported_job_kind", `Unsupported job kind ${job.kind}`);
-    return { kind: "blocked", pageId, jobId: job.id };
-  }
-  const target = parseTarget(job);
-  if (!target || !job.leaseToken) {
-    await blockJob(app, job, "target_invalid", "chat_paginate target is invalid");
+  if (!job.leaseToken) {
+    await blockJob(app, job, "lease_missing", "Capture job lease token is missing");
     return { kind: "blocked", pageId, jobId: job.id };
   }
   const leaseToken = job.leaseToken;
+  let requestPlan: OfapiExportQuoteRequestPlan | {
+    operation: "ofapi_capture_chat_messages";
+    endpointClass: "chat_messages";
+    method: "GET";
+    requestSemantics: "safe_read";
+    pathname: string;
+    query: Record<string, string>;
+    bodyBytes: null;
+    contentType: null;
+    request: Record<string, unknown>;
+    observationKind: "ofapi.chat_messages_page.v1";
+    reservedCredits: 1;
+    timeoutMs: number;
+    maxResponseBytes: number;
+  } | null = null;
+  if (job.kind === "chat_paginate") {
+    const target = parseTarget(job);
+    if (target) {
+      const firstId = cursorField(job, "firstId") ?? target.frozenHeadId;
+      const query = {
+        limit: String(target.limit),
+        order: "desc",
+        first_id: firstId,
+      };
+      requestPlan = {
+        operation: "ofapi_capture_chat_messages",
+        endpointClass: "chat_messages",
+        method: "GET",
+        requestSemantics: "safe_read",
+        pathname: `/${encodeURIComponent(job.ofapiAccountId)}/chats/${encodeURIComponent(target.chatId)}/messages`,
+        query,
+        bodyBytes: null,
+        contentType: null,
+        request: { chatId: target.chatId, query },
+        observationKind: "ofapi.chat_messages_page.v1",
+        reservedCredits: 1,
+        timeoutMs: 65_000,
+        maxResponseBytes: 10 * 1024 * 1024,
+      };
+    }
+  } else if (job.kind === "account_export") {
+    requestPlan = buildOfapiExportQuoteRequest(job);
+  }
+  if (!requestPlan) {
+    await blockJob(
+      app,
+      job,
+      job.kind === "chat_paginate" || job.kind === "account_export"
+        ? "target_invalid"
+        : "unsupported_job_kind",
+      `Capture request cannot be built for ${job.kind}`,
+    );
+    return { kind: "blocked", pageId, jobId: job.id };
+  }
   if (!app.ofapi?.dispatchGovernedRaw) {
     await blockJob(app, job, "transport_unavailable", "OFAPI client is not configured");
     return { kind: "blocked", pageId, jobId: job.id };
@@ -609,13 +680,6 @@ export async function executeOfapiCaptureJobChunk(
   }
 
   try {
-    const currentCursor = cursorField(job, "firstId");
-    const firstId = currentCursor ?? target.frozenHeadId;
-    const query = {
-      limit: String(target.limit),
-      order: "desc",
-      first_id: firstId,
-    };
     const deadlineAt = new Date(Date.now() + 65_000);
     const globalDailyCap = Math.max(1, app.config.ofapiDmDailyCreditBudget ?? 500);
     const reservation = await reserveOfapiRequestAttempt(app.db, {
@@ -625,13 +689,13 @@ export async function executeOfapiCaptureJobChunk(
       ofapiAccountId: job.ofapiAccountId,
       originPrincipalId: job.originPrincipalId,
       budgetScope: job.budgetScope,
-      operation: "ofapi_capture_chat_messages",
-      endpointClass: "chat_messages",
+      operation: requestPlan.operation,
+      endpointClass: requestPlan.endpointClass,
       egressKey: egress.egressKey,
-      method: "GET",
-      requestSemantics: "safe_read",
-      requestShape: { chatId: target.chatId, query },
-      reservedCredits: 1,
+      method: requestPlan.method,
+      requestSemantics: requestPlan.requestSemantics,
+      requestShape: requestPlan.request,
+      reservedCredits: requestPlan.reservedCredits,
       globalDailyCap,
       scopeDailyCap: job.budgetScope === "bulk"
         ? Math.min(globalDailyCap, app.config.ofapiBackfillDailyCreditBudget ?? 200)
@@ -653,6 +717,9 @@ export async function executeOfapiCaptureJobChunk(
     }
 
     let raw: OfapiGovernedRawResponse;
+    const indeterminateRetryAt = requestPlan.operation === "ofapi_export_quote_status"
+      ? new Date(Date.now() + 60_000)
+      : null;
     try {
       raw = await app.ofapi.dispatchGovernedRaw({
         pageId: job.pageId,
@@ -660,12 +727,16 @@ export async function executeOfapiCaptureJobChunk(
         egressKey: egress.egressKey,
       }, {
         attemptId: reservation.attemptId,
-        operation: "ofapi_capture_chat_messages",
-        method: "GET",
-        pathname: `/${encodeURIComponent(job.ofapiAccountId)}/chats/${encodeURIComponent(target.chatId)}/messages`,
-        query,
+        operation: requestPlan.operation,
+        method: requestPlan.method,
+        pathname: requestPlan.pathname,
+        query: requestPlan.query,
+        bodyBytes: requestPlan.bodyBytes,
+        contentType: requestPlan.contentType,
         priorityClass: job.budgetScope === "bulk" ? "bulk" : "interactive",
         deadlineAt,
+        timeoutMs: requestPlan.timeoutMs,
+        maxResponseBytes: requestPlan.maxResponseBytes,
         beforeDispatch: async () =>
           isOfapiBackgroundCaptureRunnable(app.config) &&
           await markOfapiAttemptDispatching(app.db, {
@@ -688,6 +759,7 @@ export async function executeOfapiCaptureJobChunk(
           fenceToken: reservation.fenceToken,
           outcome: "transport",
           details: { error: error instanceof Error ? error.message : String(error) },
+          retrySafeReadAt: indeterminateRetryAt,
         });
       }
       return { kind: "failed", pageId, jobId: job.id };
@@ -705,9 +777,9 @@ export async function executeOfapiCaptureJobChunk(
           httpOutcome: httpOutcome(raw.status),
           responseHeaders: raw.headers,
           bodyBytes: raw.bodyBytes,
-          request: { chatId: target.chatId, query },
+          request: requestPlan.request,
           producer: "ofapi-mirror-background",
-          observationKind: "ofapi.chat_messages_page.v1",
+          observationKind: requestPlan.observationKind,
         });
         captured = true;
         break;
@@ -725,6 +797,7 @@ export async function executeOfapiCaptureJobChunk(
         details: {
           error: captureError instanceof Error ? captureError.message : String(captureError),
         },
+        retrySafeReadAt: indeterminateRetryAt,
       }).catch(() => undefined);
       return { kind: "failed", pageId, jobId: job.id };
     }

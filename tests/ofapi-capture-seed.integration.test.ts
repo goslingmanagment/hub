@@ -349,3 +349,98 @@ describe("owner bounded OFAPI capture seed", () => {
     expect((await testDb.pool.query("select id from ofapi_capture_jobs")).rows).toHaveLength(0);
   });
 });
+
+describe("owner OFAPI export quote boundary", () => {
+  it("defaults to dry-run and exposes quote-only status plus CAS cancellation", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPageAndChat({ chatId: "42" });
+    const owner = await login("owner", "owner");
+    const payload = {
+      pageId: seeded.page.id,
+      profile: "pilot_chats",
+      chatIds: ["42"],
+      startDate: "2016-01-01T00:00:00.000Z",
+      endDate: "2026-07-15T00:00:00.000Z",
+      maxMessages: 100,
+      quoteTtlMinutes: 1_440,
+    };
+    const dryRun = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/export-quotes",
+      headers: { cookie: owner.cookie },
+      payload,
+    });
+    expect(dryRun.statusCode, dryRun.body).toBe(200);
+    expect(dryRun.json()).toMatchObject({
+      dryRun: true,
+      status: "would_create",
+      jobId: null,
+      pageId: seeded.page.id,
+      profile: "pilot_chats",
+    });
+    expect((await testDb.pool.query("select id from ofapi_capture_jobs")).rows).toHaveLength(0);
+
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/export-quotes",
+      headers: { cookie: owner.cookie },
+      payload: { ...payload, dryRun: false },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const jobId = (created.json() as { jobId: string }).jobId;
+    expect(created.json()).toMatchObject({ dryRun: false, status: "created", jobId });
+    const configured = await testDb.pool.query<{ max_calls: number }>(
+      "select max_calls from ofapi_capture_jobs where id = $1",
+      [jobId],
+    );
+    expect(configured.rows[0]?.max_calls).toBe(97);
+
+    const status = await server.inject({
+      method: "GET",
+      url: `/api/v1/admin/ofapi/export-quotes/${jobId}`,
+      headers: { cookie: owner.cookie },
+    });
+    expect(status.statusCode, status.body).toBe(200);
+    expect(status.json()).toMatchObject({
+      jobId,
+      state: "ready",
+      quote: null,
+      attemptCount: 0,
+      dispatchCount: 0,
+    });
+
+    await testDb.pool.query(`
+      update ofapi_capture_jobs
+      set state = 'blocked', reason_code = 'export_contract_rejected'
+      where id = $1
+    `, [jobId]);
+    const unsafeCancel = await server.inject({
+      method: "POST",
+      url: `/api/v1/admin/ofapi/export-quotes/${jobId}/cancel`,
+      headers: { cookie: owner.cookie },
+      payload: { expectedState: "blocked", reason: "must reconcile vendor object first" },
+    });
+    expect(unsafeCancel.statusCode, unsafeCancel.body).toBe(409);
+
+    await testDb.pool.query(`
+      update ofapi_capture_jobs
+      set state = 'blocked', reason_code = 'owner_approval_required'
+      where id = $1
+    `, [jobId]);
+    const cancelled = await server.inject({
+      method: "POST",
+      url: `/api/v1/admin/ofapi/export-quotes/${jobId}/cancel`,
+      headers: { cookie: owner.cookie },
+      payload: { expectedState: "blocked", reason: "quote recorded" },
+    });
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.json()).toMatchObject({
+      jobId,
+      state: "cancelled",
+      reasonCode: "owner_cancelled",
+    });
+  });
+});

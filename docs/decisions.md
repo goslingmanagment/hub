@@ -4485,6 +4485,15 @@ generic pre-2024 timestamp clamp. All new producers and read modes ship
 default-off; production migration, live probes, cohort/export spending, and
 each DB-only cutover remain explicit rollout gates.
 
+The first S5a implementation is deliberately quote-only: an owner-created
+`account_export` job may issue one captured create with `auto_start=false` and
+captured status GETs bounded to a 15-minute cadence and one day. It exposes no
+approve/start/download/import path; stateful uncertainty or contract drift
+keeps the single page export slot blocked until independent vendor
+reconciliation. Only a fully bound captured quote or explicit vendor
+calculation failure may release that slot. The operating sequence is pinned in
+`docs/runbooks/ofapi-export-quote.md`.
+
 **Decision #159 (2026-07-16, encrypted off-box recovery is required;
 supersedes #128's accepted no-backup risk):** The database, immutable mirror
 artifacts, runtime configuration required to interpret them, and encryption-key
