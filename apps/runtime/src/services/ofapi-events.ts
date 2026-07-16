@@ -50,6 +50,7 @@ import {
   type OfapiWebhookEnvelope,
 } from "./ofapi-payloads.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { finalizeOfapiWebhookRaw } from "./ofapi-webhook-capture.ts";
 
 export { ofapiWebhookEnvelopeSchema, type OfapiWebhookEnvelope } from "./ofapi-payloads.ts";
 
@@ -278,7 +279,11 @@ export async function sendOfapiEventProcessJob(
  * can never block, fail, or reorder the settle/fanout path.
  */
 export async function processOfapiWebhookEvent(app: AppContext, eventId: number) {
-  const row = await getOfapiWebhookEventById(app.db, eventId);
+  let row = await getOfapiWebhookEventById(app.db, eventId);
+  if (row?.captureState === "raw_captured") {
+    await finalizeOfapiWebhookRaw(app, eventId);
+    row = await getOfapiWebhookEventById(app.db, eventId);
+  }
   if (!row || row.status !== "pending") {
     return;
   }

@@ -11,9 +11,12 @@ import {
   pages,
   transactions,
   type OFAPI_CREDIT_LEDGER_SOURCES,
+  type OfapiWebhookPendingRegistration,
 } from "../schema.ts";
 
 const OFAPI_SPEND_TRANSACTION_PAGE_LOCK_NAMESPACE = 9_003_001;
+const OFAPI_WEBHOOK_REGISTRATION_LOCK_KEY = 9_003_002;
+const OFAPI_WEBHOOK_DISPATCH_STALE_MS = 5 * 60 * 1_000;
 export const OFAPI_SYNC_EVENT_CHANNEL = "ofapi_sync_events";
 
 export async function withOfapiSpendTransactionPageLock<T>(
@@ -61,6 +64,116 @@ export async function insertOfapiWebhookEvent(
     .returning({ id: ofapiWebhookEvents.id });
 
   return created ?? null;
+}
+
+export type OfapiWebhookCaptureState =
+  | "raw_captured"
+  | "accepted"
+  | "quarantined_malformed";
+
+export interface OfapiWebhookRawClaim {
+  id: number;
+  created: boolean;
+  captureState: OfapiWebhookCaptureState;
+  payloadHash: Buffer | null;
+}
+
+/** Claims the vendor idempotency key while retaining the signed byte stream.
+ * JSON/envelope parsing deliberately happens only after this statement commits. */
+export async function claimOfapiWebhookRaw(
+  db: Database,
+  input: {
+    idempotencyKey: string;
+    rawBody: Buffer;
+    payloadHash: Buffer;
+    captureHeaders: Record<string, string>;
+  },
+): Promise<OfapiWebhookRawClaim> {
+  const created = await db.execute<{ id: string }>(sql`
+    insert into ofapi_webhook_events (
+      idempotency_key, event_type, payload, raw_body, payload_hash,
+      capture_headers, capture_state, projection_status, status
+    ) values (
+      ${input.idempotencyKey}, '__raw__', '{}'::jsonb, ${input.rawBody},
+      ${input.payloadHash}, ${JSON.stringify(input.captureHeaders)}::jsonb,
+      'raw_captured', 'none', 'pending'
+    )
+    on conflict (idempotency_key) do nothing
+    returning id::text
+  `);
+  const row = await db.execute<{
+    id: string;
+    capture_state: string;
+    payload_hash: Buffer | null;
+  }>(sql`
+    select id::text, capture_state, payload_hash
+    from ofapi_webhook_events
+    where idempotency_key = ${input.idempotencyKey}
+  `);
+  const existing = row.rows[0];
+  if (!existing) {
+    throw new Error("OFAPI raw webhook claim disappeared");
+  }
+  if (
+    existing.capture_state !== "raw_captured" &&
+    existing.capture_state !== "accepted" &&
+    existing.capture_state !== "quarantined_malformed"
+  ) {
+    throw new Error(`Unknown OFAPI webhook capture state ${existing.capture_state}`);
+  }
+  return {
+    id: Number(existing.id),
+    created: created.rows.length > 0,
+    captureState: existing.capture_state,
+    payloadHash: existing.payload_hash,
+  };
+}
+
+/** Promotes byte-exact raw intake to the ordinary parsed event journal. */
+export async function acceptOfapiWebhookRaw(
+  db: Database,
+  input: {
+    id: number;
+    payloadHash: Buffer;
+    eventType: string;
+    ofapiAccountId: string | null;
+    payload: Record<string, unknown>;
+    projectionStatus: "pending" | "none";
+  },
+) {
+  const accepted = await db.execute<{ id: string }>(sql`
+    update ofapi_webhook_events
+    set event_type = ${input.eventType},
+        ofapi_account_id = ${input.ofapiAccountId},
+        payload = ${JSON.stringify(input.payload)}::jsonb,
+        projection_status = ${input.projectionStatus},
+        capture_state = 'accepted'
+    where id = ${input.id}
+      and capture_state = 'raw_captured'
+      and payload_hash = ${input.payloadHash}
+    returning id::text
+  `);
+  return accepted.rows.length > 0;
+}
+
+/** Terminal local outcome for signed bytes that violate the current envelope
+ * contract. They remain retained and can be reparsed without vendor delivery. */
+export async function quarantineMalformedOfapiWebhookRaw(
+  db: Database,
+  input: { id: number; payloadHash: Buffer; reason: string; processedAt?: Date },
+) {
+  const quarantined = await db.execute<{ id: string }>(sql`
+    update ofapi_webhook_events
+    set capture_state = 'quarantined_malformed',
+        status = 'skipped',
+        error = ${input.reason},
+        processed_at = ${input.processedAt ?? new Date()}
+    where id = ${input.id}
+      and capture_state = 'raw_captured'
+      and payload_hash = ${input.payloadHash}
+    returning id::text
+  `);
+  return quarantined.rows.length > 0;
 }
 
 export async function getOfapiWebhookEventById(db: Database, id: number) {
@@ -2029,6 +2142,375 @@ export async function getOfapiWebhookConfig(db: Database) {
   }) ?? null;
 }
 
+export type OfapiWebhookRegistrationOperation = "create" | "update";
+
+export type OfapiWebhookRegistrationPreparation =
+  | { kind: "noop"; encryptedSigningSecret: string }
+  | {
+    kind: "ready";
+    operation: OfapiWebhookRegistrationOperation;
+    operationId: string;
+    externalWebhookId: string | null;
+    endpointUrl: string;
+    events: string[];
+    encryptedSigningSecret: string;
+  }
+  | {
+    kind: "blocked";
+    reason: "create_indeterminate" | "operation_in_flight" | "target_conflict" | "invalid_state";
+  };
+
+function sameWebhookRegistrationTarget(
+  target: { endpointUrl: string; accountScope: string; events: string[] },
+  desired: { endpointUrl: string; accountScope: "global"; events: string[] },
+) {
+  return target.endpointUrl === desired.endpointUrl &&
+    target.accountScope === desired.accountScope &&
+    target.events.length === desired.events.length &&
+    target.events.every((event, index) => event === desired.events[index]);
+}
+
+export async function prepareOfapiWebhookRegistration(
+  db: Database,
+  input: {
+    operationId: string;
+    endpointUrl: string;
+    events: string[];
+    candidateEncryptedSigningSecret: string;
+    now?: Date;
+  },
+): Promise<OfapiWebhookRegistrationPreparation> {
+  const now = input.now ?? new Date();
+  const desired = {
+    endpointUrl: input.endpointUrl,
+    accountScope: "global" as const,
+    events: input.events,
+  };
+  return db.transaction(async (tx) => {
+    const database = tx as Database;
+    await database.execute(sql`select pg_advisory_xact_lock(${OFAPI_WEBHOOK_REGISTRATION_LOCK_KEY})`);
+    const existing = await database.query.ofapiWebhookConfig.findFirst({
+      where: eq(ofapiWebhookConfig.id, 1),
+    }) ?? null;
+    if (!existing) {
+      const pending: OfapiWebhookPendingRegistration = {
+        operationId: input.operationId,
+        operation: "create",
+        externalWebhookId: null,
+        ...desired,
+        preparedAt: now.toISOString(),
+      };
+      await database.insert(ofapiWebhookConfig).values({
+        id: 1,
+        externalWebhookId: null,
+        endpointUrl: input.endpointUrl,
+        accountScope: "global",
+        events: input.events,
+        encryptedSigningSecret: input.candidateEncryptedSigningSecret,
+        registrationState: "create_prepared",
+        pendingRegistration: pending,
+        pendingEncryptedSigningSecret: input.candidateEncryptedSigningSecret,
+      });
+      return {
+        kind: "ready",
+        operation: "create",
+        operationId: pending.operationId,
+        externalWebhookId: null,
+        endpointUrl: pending.endpointUrl,
+        events: pending.events,
+        encryptedSigningSecret: input.candidateEncryptedSigningSecret,
+      };
+    }
+
+    if (existing.registrationState === "stable") {
+      if (existing.externalWebhookId && sameWebhookRegistrationTarget(existing, desired)) {
+        return { kind: "noop", encryptedSigningSecret: existing.encryptedSigningSecret };
+      }
+      const operation: OfapiWebhookRegistrationOperation = existing.externalWebhookId
+        ? "update"
+        : "create";
+      const pending: OfapiWebhookPendingRegistration = {
+        operationId: input.operationId,
+        operation,
+        externalWebhookId: existing.externalWebhookId,
+        ...desired,
+        preparedAt: now.toISOString(),
+      };
+      await database.update(ofapiWebhookConfig).set({
+        registrationState: `${operation}_prepared`,
+        pendingRegistration: pending,
+        pendingEncryptedSigningSecret: input.candidateEncryptedSigningSecret,
+        registrationError: null,
+        updatedAt: now,
+      }).where(eq(ofapiWebhookConfig.id, 1));
+      return {
+        kind: "ready",
+        operation,
+        operationId: pending.operationId,
+        externalWebhookId: pending.externalWebhookId,
+        endpointUrl: pending.endpointUrl,
+        events: pending.events,
+        encryptedSigningSecret: input.candidateEncryptedSigningSecret,
+      };
+    }
+
+    if (existing.registrationState === "create_failed") {
+      const pending: OfapiWebhookPendingRegistration = {
+        operationId: input.operationId,
+        operation: "create",
+        externalWebhookId: null,
+        ...desired,
+        preparedAt: now.toISOString(),
+      };
+      await database.update(ofapiWebhookConfig).set({
+        endpointUrl: input.endpointUrl,
+        accountScope: "global",
+        events: input.events,
+        encryptedSigningSecret: input.candidateEncryptedSigningSecret,
+        registrationState: "create_prepared",
+        pendingRegistration: pending,
+        pendingEncryptedSigningSecret: input.candidateEncryptedSigningSecret,
+        registrationError: null,
+        updatedAt: now,
+      }).where(eq(ofapiWebhookConfig.id, 1));
+      return {
+        kind: "ready",
+        operation: "create",
+        operationId: pending.operationId,
+        externalWebhookId: null,
+        endpointUrl: pending.endpointUrl,
+        events: pending.events,
+        encryptedSigningSecret: input.candidateEncryptedSigningSecret,
+      };
+    }
+
+    const pending = existing.pendingRegistration;
+    const pendingSecret = existing.pendingEncryptedSigningSecret;
+    if (!pending || !pendingSecret) {
+      return { kind: "blocked", reason: "invalid_state" };
+    }
+    if (!sameWebhookRegistrationTarget(pending, desired)) {
+      return { kind: "blocked", reason: "target_conflict" };
+    }
+    if (existing.registrationState === "create_indeterminate") {
+      return { kind: "blocked", reason: "create_indeterminate" };
+    }
+    if (existing.registrationState === "create_dispatching") {
+      if (now.getTime() - existing.updatedAt.getTime() < OFAPI_WEBHOOK_DISPATCH_STALE_MS) {
+        return { kind: "blocked", reason: "operation_in_flight" };
+      }
+      await database.update(ofapiWebhookConfig).set({
+        registrationState: "create_indeterminate",
+        registrationError: "process exited while initial webhook creation was dispatching",
+        updatedAt: now,
+      }).where(eq(ofapiWebhookConfig.id, 1));
+      return { kind: "blocked", reason: "create_indeterminate" };
+    }
+    if (existing.registrationState === "update_dispatching") {
+      if (now.getTime() - existing.updatedAt.getTime() < OFAPI_WEBHOOK_DISPATCH_STALE_MS) {
+        return { kind: "blocked", reason: "operation_in_flight" };
+      }
+      await database.update(ofapiWebhookConfig).set({
+        registrationState: "update_prepared",
+        registrationError: "retrying identical PUT after stale dispatch",
+        updatedAt: now,
+      }).where(eq(ofapiWebhookConfig.id, 1));
+      return {
+        kind: "ready",
+        operation: pending.operation,
+        operationId: pending.operationId,
+        externalWebhookId: pending.externalWebhookId,
+        endpointUrl: pending.endpointUrl,
+        events: pending.events,
+        encryptedSigningSecret: pendingSecret,
+      };
+    }
+    if (existing.registrationState === "update_indeterminate") {
+      await database.update(ofapiWebhookConfig).set({
+        registrationState: "update_prepared",
+        registrationError: null,
+        updatedAt: now,
+      }).where(eq(ofapiWebhookConfig.id, 1));
+    }
+    if (
+      existing.registrationState !== "create_prepared" &&
+      existing.registrationState !== "update_prepared" &&
+      existing.registrationState !== "update_indeterminate"
+    ) {
+      return { kind: "blocked", reason: "invalid_state" };
+    }
+    return {
+      kind: "ready",
+      operation: pending.operation,
+      operationId: pending.operationId,
+      externalWebhookId: pending.externalWebhookId,
+      endpointUrl: pending.endpointUrl,
+      events: pending.events,
+      encryptedSigningSecret: pendingSecret,
+    };
+  });
+}
+
+export async function markOfapiWebhookRegistrationDispatching(
+  db: Database,
+  input: { operation: OfapiWebhookRegistrationOperation; operationId: string },
+) {
+  const updated = await db.execute<{ id: number }>(sql`
+    update ofapi_webhook_config
+    set registration_state = ${`${input.operation}_dispatching`},
+        updated_at = now()
+    where id = 1
+      and registration_state = ${`${input.operation}_prepared`}
+      and pending_registration->>'operationId' = ${input.operationId}
+    returning id
+  `);
+  return updated.rows.length > 0;
+}
+
+export async function markOfapiWebhookRegistrationIndeterminate(
+  db: Database,
+  input: { operation: OfapiWebhookRegistrationOperation; operationId: string; error: string },
+) {
+  const updated = await db.execute<{ id: number }>(sql`
+    update ofapi_webhook_config
+    set registration_state = ${`${input.operation}_indeterminate`},
+        registration_error = ${input.error},
+        updated_at = now()
+    where id = 1
+      and registration_state = ${`${input.operation}_dispatching`}
+      and pending_registration->>'operationId' = ${input.operationId}
+    returning id
+  `);
+  return updated.rows.length > 0;
+}
+
+export async function rejectOfapiWebhookRegistration(
+  db: Database,
+  input: { operation: OfapiWebhookRegistrationOperation; operationId: string; error: string },
+) {
+  const nextState = input.operation === "create" ? "create_failed" : "stable";
+  const updated = await db.execute<{ id: number }>(sql`
+    update ofapi_webhook_config
+    set registration_state = ${nextState},
+        pending_registration = null,
+        pending_encrypted_signing_secret = null,
+        registration_error = ${input.error},
+        updated_at = now()
+    where id = 1
+      and registration_state = ${`${input.operation}_dispatching`}
+      and pending_registration->>'operationId' = ${input.operationId}
+    returning id
+  `);
+  return updated.rows.length > 0;
+}
+
+/** Owner reconciliation after independently finding the webhook created by an
+ * indeterminate initial POST. The pending target and candidate secret are
+ * promoted atomically; no second vendor request is issued. */
+export async function reconcileOfapiWebhookRegistrationAdopt(
+  db: Database,
+  input: { operationId: string; externalWebhookId: string },
+) {
+  const updated = await db.execute<{ id: number }>(sql`
+    update ofapi_webhook_config
+    set external_webhook_id = ${input.externalWebhookId},
+        endpoint_url = pending_registration->>'endpointUrl',
+        account_scope = pending_registration->>'accountScope',
+        events = pending_registration->'events',
+        encrypted_signing_secret = pending_encrypted_signing_secret,
+        previous_encrypted_signing_secret = null,
+        registration_state = 'stable',
+        pending_registration = null,
+        pending_encrypted_signing_secret = null,
+        registration_error = null,
+        updated_at = now()
+    where id = 1
+      and registration_state in ('create_dispatching', 'create_indeterminate')
+      and pending_registration->>'operation' = 'create'
+      and pending_registration->>'operationId' = ${input.operationId}
+      and pending_encrypted_signing_secret is not null
+    returning id
+  `);
+  return updated.rows.length > 0;
+}
+
+/** Owner reconciliation after independently proving that an indeterminate
+ * initial POST did not create a webhook. A fresh owner registration may then
+ * prepare a new create operation. */
+export async function reconcileOfapiWebhookRegistrationNotCreated(
+  db: Database,
+  input: { operationId: string; reason: string; now?: Date },
+) {
+  const now = input.now ?? new Date();
+  const staleBefore = new Date(now.getTime() - OFAPI_WEBHOOK_DISPATCH_STALE_MS);
+  const updated = await db.execute<{ id: number }>(sql`
+    update ofapi_webhook_config
+    set registration_state = 'create_failed',
+        pending_registration = null,
+        pending_encrypted_signing_secret = null,
+        registration_error = ${`owner confirmed webhook was not created: ${input.reason}`},
+        updated_at = ${now}
+    where id = 1
+      and pending_registration->>'operation' = 'create'
+      and pending_registration->>'operationId' = ${input.operationId}
+      and (
+        registration_state = 'create_indeterminate'
+        or (registration_state = 'create_dispatching' and updated_at <= ${staleBefore})
+      )
+    returning id
+  `);
+  return updated.rows.length > 0;
+}
+
+export async function completeOfapiWebhookRegistration(
+  db: Database,
+  input: {
+    operation: OfapiWebhookRegistrationOperation;
+    operationId: string;
+    returnedExternalWebhookId: string | null;
+  },
+) {
+  return db.transaction(async (tx) => {
+    const database = tx as Database;
+    await database.execute(sql`select pg_advisory_xact_lock(${OFAPI_WEBHOOK_REGISTRATION_LOCK_KEY})`);
+    const current = await database.query.ofapiWebhookConfig.findFirst({
+      where: eq(ofapiWebhookConfig.id, 1),
+    });
+    const pending = current?.pendingRegistration;
+    const pendingSecret = current?.pendingEncryptedSigningSecret;
+    if (
+      !current ||
+      current.registrationState !== `${input.operation}_dispatching` ||
+      !pending ||
+      pending.operationId !== input.operationId ||
+      pending.operation !== input.operation ||
+      !pendingSecret
+    ) {
+      return null;
+    }
+    const externalWebhookId = input.operation === "create"
+      ? input.returnedExternalWebhookId
+      : input.returnedExternalWebhookId ?? pending.externalWebhookId;
+    if (!externalWebhookId) return null;
+    const [completed] = await database.update(ofapiWebhookConfig).set({
+      externalWebhookId,
+      endpointUrl: pending.endpointUrl,
+      accountScope: pending.accountScope,
+      events: pending.events,
+      encryptedSigningSecret: pendingSecret,
+      previousEncryptedSigningSecret: input.operation === "update"
+        ? current.encryptedSigningSecret
+        : null,
+      registrationState: "stable",
+      pendingRegistration: null,
+      pendingEncryptedSigningSecret: null,
+      registrationError: null,
+      updatedAt: new Date(),
+    }).where(eq(ofapiWebhookConfig.id, 1)).returning();
+    return completed ?? null;
+  });
+}
+
 export async function upsertOfapiWebhookConfig(
   db: Database,
   input: {
@@ -2050,6 +2532,10 @@ export async function upsertOfapiWebhookConfig(
       events: input.events,
       encryptedSigningSecret: input.encryptedSigningSecret,
       previousEncryptedSigningSecret: input.previousEncryptedSigningSecret ?? null,
+      registrationState: "stable",
+      pendingRegistration: null,
+      pendingEncryptedSigningSecret: null,
+      registrationError: null,
     })
     .onConflictDoUpdate({
       target: ofapiWebhookConfig.id,
@@ -2060,6 +2546,10 @@ export async function upsertOfapiWebhookConfig(
         events: input.events,
         encryptedSigningSecret: input.encryptedSigningSecret,
         previousEncryptedSigningSecret: input.previousEncryptedSigningSecret ?? null,
+        registrationState: "stable",
+        pendingRegistration: null,
+        pendingEncryptedSigningSecret: null,
+        registrationError: null,
         updatedAt: sql`now()`,
       },
     })

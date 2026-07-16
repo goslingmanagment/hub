@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   createModel,
   createOnlyFansPage,
+  claimOfapiWebhookRaw,
   getOfapiWebhookConfig,
   getOfapiWebhookEventById,
   listPendingOfapiWebhookEventIds,
@@ -24,7 +25,7 @@ import {
   processOfapiWebhookEvent,
 } from "../apps/runtime/src/services/ofapi-events.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
-import type { OfapiClient } from "../apps/runtime/src/services/ofapi.ts";
+import { OfapiApiError, type OfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -173,6 +174,8 @@ describe("OFAPI webhook receiver", () => {
     expect(row.eventType).toBe("messages.received");
     expect(row.ofapiAccountId).toBe("acct_01000000000000000000000000000000");
     expect(row.status).toBe("pending");
+    expect(row.captureState).toBe("accepted");
+    expect(row.rawBody).toEqual(Buffer.from(body));
     expect(row.payload).toEqual(JSON.parse(body));
 
     const duplicate = await postWebhook({ body, idempotencyKey });
@@ -265,7 +268,7 @@ describe("OFAPI webhook receiver", () => {
     });
   });
 
-  it("rejects tampered bodies, bad signatures, missing headers, and malformed payloads", async (context) => {
+  it("rejects untrusted deliveries but retains every signed invalid envelope", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -290,16 +293,137 @@ describe("OFAPI webhook receiver", () => {
     expect(notHex.statusCode).toBe(401);
 
     const missingKey = await postWebhook({ body, idempotencyKey: null });
-    expect(missingKey.statusCode).toBe(400);
+    expect(missingKey.statusCode).toBe(200);
+    expect(missingKey.json()).toEqual({ received: true, duplicate: false });
+    const repeatedMissingKey = await postWebhook({ body, idempotencyKey: null });
+    expect(repeatedMissingKey.json()).toEqual({ received: true, duplicate: true });
+
+    const oversizedBody = body.replace("users.typing", "users.online");
+    const oversizedKey = await postWebhook({
+      body: oversizedBody,
+      signature: sign(oversizedBody),
+      idempotencyKey: "x".repeat(256),
+    });
+    expect(oversizedKey.statusCode).toBe(200);
+    expect(oversizedKey.json()).toEqual({ received: true, duplicate: false });
 
     const invalidJson = await postWebhook({ body: "{not json", signature: sign("{not json") });
-    expect(invalidJson.statusCode).toBe(400);
+    expect(invalidJson.statusCode).toBe(200);
+    expect(invalidJson.json()).toEqual({ received: true, duplicate: false });
 
     const notEnvelope = JSON.stringify({ hello: "world" });
     const badEnvelope = await postWebhook({ body: notEnvelope, signature: sign(notEnvelope) });
-    expect(badEnvelope.statusCode).toBe(400);
+    expect(badEnvelope.statusCode).toBe(200);
 
-    expect(await appContext.db.select().from(ofapiWebhookEvents)).toHaveLength(0);
+    const captured = await appContext.db
+      .select()
+      .from(ofapiWebhookEvents)
+      .orderBy(ofapiWebhookEvents.id);
+    expect(captured).toHaveLength(4);
+    expect(captured.map((row) => row.captureState)).toEqual([
+      "quarantined_malformed",
+      "quarantined_malformed",
+      "quarantined_malformed",
+      "quarantined_malformed",
+    ]);
+    expect(captured.map((row) => row.status)).toEqual([
+      "skipped",
+      "skipped",
+      "skipped",
+      "skipped",
+    ]);
+    expect(captured[0]?.rawBody).toEqual(Buffer.from(body));
+    expect(captured[1]?.rawBody).toEqual(Buffer.from(oversizedBody));
+    expect(captured[2]?.rawBody).toEqual(Buffer.from("{not json"));
+    expect(captured[3]?.rawBody).toEqual(Buffer.from(notEnvelope));
+    const invalidIdentity = await testDb.pool.query<{
+      kind: string;
+      payload: Record<string, unknown>;
+    }>(`
+      select kind, payload
+      from observations
+      where source = 'webhook' and kind = 'ofapi.webhook.invalid_identity'
+      order by id
+    `);
+    expect(invalidIdentity.rows).toHaveLength(2);
+    expect(invalidIdentity.rows[0]?.payload).toMatchObject({
+      reason: "signed_webhook_invalid_identity_header",
+      providedIdempotencyKey: null,
+      body: Buffer.from(body).toString("base64"),
+    });
+    expect(invalidIdentity.rows[1]?.payload).toMatchObject({
+      reason: "signed_webhook_invalid_identity_header",
+      providedIdempotencyKey: "x".repeat(256),
+      body: Buffer.from(oversizedBody).toString("base64"),
+    });
+    const malformed = await testDb.pool.query<{ kind: string; payload: Record<string, unknown> }>(`
+      select kind, payload
+      from observations
+      where source = 'webhook' and kind = 'ofapi.webhook.malformed'
+      order by id
+    `);
+    expect(malformed.rows).toHaveLength(2);
+    expect(malformed.rows[0]?.payload).toMatchObject({
+      reason: "signed_webhook_invalid_json",
+      body: Buffer.from("{not json").toString("base64"),
+    });
+  });
+
+  it("quarantines an idempotency key reused for different signed bytes", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    await seedWebhookConfig();
+    const body = await fixtureBody("users_typing.json");
+    const idempotencyKey = nextIdempotencyKey();
+    expect((await postWebhook({ body, idempotencyKey })).statusCode).toBe(200);
+    const conflictingBody = body.replace("users.typing", "users.online");
+    const conflict = await postWebhook({
+      body: conflictingBody,
+      signature: sign(conflictingBody),
+      idempotencyKey,
+    });
+    expect(conflict.statusCode).toBe(200);
+    expect(conflict.json()).toEqual({ received: true, duplicate: false });
+    expect(await appContext.db.select().from(ofapiWebhookEvents)).toHaveLength(1);
+    const facts = await testDb.pool.query<{ payload: Record<string, unknown> }>(`
+      select payload
+      from observations
+      where source = 'webhook' and kind = 'ofapi.webhook.fact_conflict'
+    `);
+    expect(facts.rows).toHaveLength(1);
+    expect(facts.rows[0]?.payload).toMatchObject({
+      idempotencyKey,
+      body: Buffer.from(conflictingBody).toString("base64"),
+    });
+  });
+
+  it("finishes a raw capture left behind by a receiver crash", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const body = await fixtureBody("messages_received.json");
+    const rawBody = Buffer.from(body);
+    const claimed = await claimOfapiWebhookRaw(appContext.db, {
+      idempotencyKey: nextIdempotencyKey(),
+      rawBody,
+      payloadHash: createHash("sha256").update(rawBody).digest(),
+      captureHeaders: {},
+    });
+    expect(claimed.captureState).toBe("raw_captured");
+    await processOfapiWebhookEvent(appContext, claimed.id);
+    const recovered = await getOfapiWebhookEventById(appContext.db, claimed.id);
+    expect(recovered).toMatchObject({
+      captureState: "accepted",
+      eventType: "messages.received",
+      status: "skipped",
+    });
+    const observation = await testDb.pool.query<{ kind: string }>(`
+      select kind from observations where source = 'webhook'
+    `);
+    expect(observation.rows).toEqual([{ kind: "messages.received" }]);
   });
 
   it("returns 503 before a webhook registration exists", async (context) => {
@@ -378,6 +502,50 @@ describe("OFAPI event processing", () => {
       receivedBefore: new Date(Date.now() + 1000),
       limit: 10,
     })).toEqual([]);
+  });
+
+  it("captures campaign queue events without inferring recipients or fanning out", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    await seedWebhookConfig();
+    await seedOnlyFansPage({
+      label: "campaign-capture",
+      ofapiAccountId: "acct_campaign_capture",
+    });
+    for (const event of ["chat_queue.updated", "chat_queue.finished"]) {
+      const body = JSON.stringify({
+        event,
+        account_id: "acct_campaign_capture",
+        payload: { queue_id: "queue-opaque", sentCount: 7 },
+      });
+      expect((await postWebhook({ body, signature: sign(body) })).statusCode).toBe(200);
+    }
+    const rows = await appContext.db
+      .select()
+      .from(ofapiWebhookEvents)
+      .orderBy(ofapiWebhookEvents.id);
+    expect(rows.map((row) => row.eventType)).toEqual([
+      "chat_queue.updated",
+      "chat_queue.finished",
+    ]);
+    for (const row of rows) {
+      await processOfapiWebhookEvent(appContext, row.id);
+    }
+    const settled = await appContext.db
+      .select()
+      .from(ofapiWebhookEvents)
+      .orderBy(ofapiWebhookEvents.id);
+    expect(settled.map((row) => ({
+      status: row.status,
+      fanoutSeq: row.fanoutSeq,
+      syncEvent: row.syncEvent,
+      projectionStatus: row.projectionStatus,
+    }))).toEqual([
+      { status: "skipped", fanoutSeq: null, syncEvent: null, projectionStatus: "none" },
+      { status: "skipped", fanoutSeq: null, syncEvent: null, projectionStatus: "none" },
+    ]);
   });
 
   it("retains a consumed replay row when an older row blocks the contiguous prune prefix", async (context) => {
@@ -555,13 +723,24 @@ describe("OFAPI webhook admin flow", () => {
     });
     expect(delivery.statusCode).toBe(200);
 
-    // Re-registration goes through updateWebhook with the stored external id.
+    // An identical owner retry is mapping-only: no remote call and no needless
+    // secret rotation after a partial account-mapping failure.
     const updateMock = ofapi.updateWebhook as ReturnType<typeof vi.fn>;
-    const reRegister = await server.inject({
+    const sameTarget = await server.inject({
       method: "POST",
       url: "/api/v1/admin/ofapi/webhook",
       headers: { cookie },
       payload: { endpointUrl: "https://hub.example.com/api/v1/ofapi/webhook" },
+    });
+    expect(sameTarget.statusCode).toBe(200);
+    expect(updateMock).toHaveBeenCalledTimes(0);
+
+    // A changed target goes through fenced updateWebhook with the stored id.
+    const reRegister = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload: { endpointUrl: "https://hub.example.com/api/v1/ofapi/webhook-v2" },
     });
     expect(reRegister.statusCode).toBe(200);
     expect(updateMock).toHaveBeenCalledTimes(1);
@@ -621,6 +800,239 @@ describe("OFAPI webhook admin flow", () => {
         lastEventAgeSeconds: null,
       },
     ]);
+  });
+
+  it("keeps old and pending secrets live across an indeterminate PUT and retries identically", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    await seedWebhookConfig();
+    const updateWebhook = vi.fn()
+      .mockRejectedValueOnce(new Error("connection lost after dispatch"))
+      .mockResolvedValueOnce({ id: "wh_test" });
+    const ofapi = fakeOfapiClient({ updateWebhook });
+    appContext = createTestAppContext(testDb, { ofapi });
+    await server.close();
+    server = await buildApiServer(appContext);
+    await server.ready();
+    const cookie = await loginOwnerCookie();
+    const target = "https://hub.example.com/api/v1/ofapi/webhook-v2";
+
+    const failed = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload: { endpointUrl: target },
+    });
+    expect(failed.statusCode).toBe(503);
+    const pending = await getOfapiWebhookConfig(appContext.db);
+    expect(pending?.registrationState).toBe("update_indeterminate");
+    const pendingSecret = decryptJsonWithKeyVersion<string>(
+      pending!.pendingEncryptedSigningSecret!,
+      new Map([[1, ENCRYPTION_KEY]]),
+    );
+    const body = await fixtureBody("users_typing.json");
+    expect((await postWebhook({ body, signature: sign(body, SIGNING_SECRET) })).statusCode).toBe(200);
+    expect((await postWebhook({ body, signature: sign(body, pendingSecret) })).statusCode).toBe(200);
+
+    const retry = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload: { endpointUrl: target },
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(updateWebhook).toHaveBeenCalledTimes(2);
+    const firstRegistration = updateWebhook.mock.calls[0]?.[1] as { signingSecret: string };
+    const secondRegistration = updateWebhook.mock.calls[1]?.[1] as { signingSecret: string };
+    expect(secondRegistration.signingSecret).toBe(firstRegistration.signingSecret);
+    const stable = await getOfapiWebhookConfig(appContext.db);
+    expect(stable).toMatchObject({ registrationState: "stable", externalWebhookId: "wh_test" });
+    expect(stable?.pendingEncryptedSigningSecret).toBeNull();
+  });
+
+  it("never repeats an indeterminate initial POST", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const createWebhook = vi.fn(async () => {
+      throw new Error("connection lost after create dispatch");
+    });
+    const ofapi = fakeOfapiClient({ createWebhook });
+    appContext = createTestAppContext(testDb, { ofapi });
+    await server.close();
+    server = await buildApiServer(appContext);
+    await server.ready();
+    const cookie = await loginOwnerCookie();
+    const payload = { endpointUrl: "https://hub.example.com/api/v1/ofapi/webhook" };
+
+    const first = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload,
+    });
+    expect(first.statusCode).toBe(503);
+    const pending = await getOfapiWebhookConfig(appContext.db);
+    expect(pending?.registrationState).toBe("create_indeterminate");
+
+    const status = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({
+      configured: false,
+      registrationState: "create_indeterminate",
+      registrationError: "connection lost after create dispatch",
+      pendingRegistration: {
+        operationId: pending!.pendingRegistration!.operationId,
+        operation: "create",
+        endpointUrl: payload.endpointUrl,
+      },
+    });
+
+    const second = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload,
+    });
+    expect(second.statusCode).toBe(503);
+    expect(createWebhook).toHaveBeenCalledTimes(1);
+
+    // If the remote POST did apply, its candidate secret is already accepted.
+    const pendingSecret = decryptJsonWithKeyVersion<string>(
+      pending!.pendingEncryptedSigningSecret!,
+      new Map([[1, ENCRYPTION_KEY]]),
+    );
+    const body = await fixtureBody("users_typing.json");
+    expect((await postWebhook({ body, signature: sign(body, pendingSecret) })).statusCode).toBe(200);
+
+    const adopted = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook/reconcile",
+      headers: { cookie },
+      payload: {
+        action: "adopt",
+        operationId: pending!.pendingRegistration!.operationId,
+        externalWebhookId: "wh_found_remotely",
+      },
+    });
+    expect(adopted.statusCode).toBe(200);
+    expect(adopted.json()).toMatchObject({
+      configured: true,
+      registrationState: "stable",
+      registrationError: null,
+      pendingRegistration: null,
+      externalWebhookId: "wh_found_remotely",
+    });
+    const stable = await getOfapiWebhookConfig(appContext.db);
+    expect(stable?.pendingEncryptedSigningSecret).toBeNull();
+    expect(decryptJsonWithKeyVersion<string>(
+      stable!.encryptedSigningSecret,
+      new Map([[1, ENCRYPTION_KEY]]),
+    )).toBe(pendingSecret);
+  });
+
+  it("lets an owner confirm an indeterminate create did not happen before retrying", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const createWebhook = vi.fn()
+      .mockRejectedValueOnce(new Error("connection lost after create dispatch"))
+      .mockResolvedValueOnce({ id: "wh_after_reconcile" });
+    appContext = createTestAppContext(testDb, {
+      ofapi: fakeOfapiClient({ createWebhook }),
+    });
+    await server.close();
+    server = await buildApiServer(appContext);
+    await server.ready();
+    const cookie = await loginOwnerCookie();
+    const payload = { endpointUrl: "https://hub.example.com/api/v1/ofapi/webhook" };
+
+    expect((await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload,
+    })).statusCode).toBe(503);
+    const pending = await getOfapiWebhookConfig(appContext.db);
+    expect(pending?.registrationState).toBe("create_indeterminate");
+
+    const reconciled = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook/reconcile",
+      headers: { cookie },
+      payload: {
+        action: "confirm_not_created",
+        operationId: pending!.pendingRegistration!.operationId,
+        reason: "remote webhook list checked by owner",
+      },
+    });
+    expect(reconciled.statusCode).toBe(200);
+    expect(reconciled.json()).toMatchObject({
+      configured: false,
+      registrationState: "create_failed",
+      pendingRegistration: null,
+    });
+
+    const retry = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload,
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(createWebhook).toHaveBeenCalledTimes(2);
+    expect(await getOfapiWebhookConfig(appContext.db)).toMatchObject({
+      registrationState: "stable",
+      externalWebhookId: "wh_after_reconcile",
+    });
+  });
+
+  it("treats a rejected 429 create as retryable owner work, not an indeterminate POST", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const createWebhook = vi.fn()
+      .mockRejectedValueOnce(new OfapiApiError("rate limited", 429, null))
+      .mockResolvedValueOnce({ id: "wh_after_rate_limit" });
+    appContext = createTestAppContext(testDb, {
+      ofapi: fakeOfapiClient({ createWebhook }),
+    });
+    await server.close();
+    server = await buildApiServer(appContext);
+    await server.ready();
+    const cookie = await loginOwnerCookie();
+    const payload = { endpointUrl: "https://hub.example.com/api/v1/ofapi/webhook" };
+
+    const rejected = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload,
+    });
+    expect(rejected.statusCode).toBe(503);
+    expect((await getOfapiWebhookConfig(appContext.db))?.registrationState).toBe("create_failed");
+
+    const retry = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook",
+      headers: { cookie },
+      payload,
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(createWebhook).toHaveBeenCalledTimes(2);
+    expect(await getOfapiWebhookConfig(appContext.db)).toMatchObject({
+      registrationState: "stable",
+      externalWebhookId: "wh_after_rate_limit",
+    });
   });
 
   it("requires an owner session and a configured OFAPI key", async (context) => {

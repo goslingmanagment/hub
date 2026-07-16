@@ -23,6 +23,7 @@ import { executeOfapiReadGatewayRequest } from "../../services/ofapi-read-gatewa
 import {
   getOfapiWebhookStatus,
   receiveOfapiWebhook,
+  reconcileOfapiWebhookRegistration,
   registerOfapiWebhook,
 } from "../../services/ofapi-webhooks.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -131,6 +132,15 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     requireOwner(principal);
 
     return registerOfapiWebhook(appContext, { endpointUrl: request.body.endpointUrl });
+  });
+
+  server.post("/api/v1/admin/ofapi/webhook/reconcile", {
+    schema: routeSchemas.adminOfapiWebhookReconcile,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+
+    return reconcileOfapiWebhookRegistration(appContext, request.body);
   });
 
   server.get("/api/v1/ofapi/read/*", {

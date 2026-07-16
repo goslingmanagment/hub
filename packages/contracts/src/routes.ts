@@ -3375,8 +3375,32 @@ export const ofapiPageMappingSchema = z.object({
   lastEventAgeSeconds: z.number().int().nullable(),
 });
 
+export const ofapiWebhookRegistrationStateSchema = z.enum([
+  "stable",
+  "create_prepared",
+  "create_dispatching",
+  "create_indeterminate",
+  "create_failed",
+  "update_prepared",
+  "update_dispatching",
+  "update_indeterminate",
+]);
+
+export const ofapiWebhookPendingRegistrationSchema = z.object({
+  operationId: z.string().min(1),
+  operation: z.enum(["create", "update"]),
+  externalWebhookId: z.string().nullable(),
+  endpointUrl: z.string(),
+  accountScope: z.literal("global"),
+  events: z.array(z.string()),
+  preparedAt: isoTimestamp,
+});
+
 export const ofapiWebhookStatusResponseSchema = z.object({
   configured: z.boolean(),
+  registrationState: ofapiWebhookRegistrationStateSchema.nullable(),
+  registrationError: z.string().nullable(),
+  pendingRegistration: ofapiWebhookPendingRegistrationSchema.nullable(),
   endpointUrl: z.string().nullable(),
   externalWebhookId: z.string().nullable(),
   accountScope: z.string().nullable(),
@@ -3396,6 +3420,19 @@ export const ofapiWebhookRegisterBodySchema = z.object({
   // Public URL OFAPI should deliver to, e.g. https://hub.example.com/api/v1/ofapi/webhook
   endpointUrl: z.string().url().max(2000),
 });
+
+export const ofapiWebhookReconcileBodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("adopt"),
+    operationId: z.string().min(1),
+    externalWebhookId: z.string().min(1).max(500),
+  }),
+  z.object({
+    action: z.literal("confirm_not_created"),
+    operationId: z.string().min(1),
+    reason: z.string().trim().min(1).max(500),
+  }),
+]);
 
 export const ofapiWebhookRegisterResponseSchema = z.object({
   externalWebhookId: z.string().nullable(),
@@ -4356,6 +4393,21 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       503: errorResponseSchema,
+    },
+  },
+  adminOfapiWebhookReconcile: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Resolve an indeterminate initial OFAPI webhook creation",
+    description: "Owner-only recovery after independently checking OFAPI: either "
+      + "adopt the created remote webhook id or confirm that creation did not happen.",
+    body: ofapiWebhookReconcileBodySchema,
+    response: {
+      200: ofapiWebhookStatusResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      409: errorResponseSchema,
     },
   },
   ofapiCreditsChatterSummary: {
@@ -6270,6 +6322,7 @@ export type NormalizedSyncMessage = z.infer<typeof normalizedSyncMessageSchema>;
 export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSchema>;
 export type OfapiPageMapping = z.infer<typeof ofapiPageMappingSchema>;
 export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusResponseSchema>;
+export type OfapiWebhookReconcileBody = z.infer<typeof ofapiWebhookReconcileBodySchema>;
 export type OfapiCreditsSummaryResponse = z.infer<typeof ofapiCreditsSummaryResponseSchema>;
 export type OfapiCreditsChatterSummaryResponse =
   z.infer<typeof ofapiCreditsChatterSummaryResponseSchema>;

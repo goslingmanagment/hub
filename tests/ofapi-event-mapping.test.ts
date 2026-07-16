@@ -326,6 +326,13 @@ describe("mapOfapiEventToSyncEvent", () => {
   });
 
   it("returns null for unknown events, missing account ids, and malformed payloads", () => {
+    for (const event of ["chat_queue.updated", "chat_queue.finished"]) {
+      expect(mapOfapiEventToSyncEvent({
+        event,
+        account_id: "acct_test",
+        payload: { queue_id: "opaque" },
+      })).toBeNull();
+    }
     expect(mapOfapiEventToSyncEvent({
       event: "posts.liked",
       account_id: "acct_test",

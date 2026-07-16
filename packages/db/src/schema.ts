@@ -2235,6 +2235,16 @@ export const wbLlmUsageDaily = pgTable(
 // Singleton registration record for the onlyfansapi.com webhook (signing secret is
 // an encryptJson envelope, same custody model as telegram_settings.encrypted_bot_token).
 // The previous secret is kept so deliveries signed during a rotation keep verifying.
+export interface OfapiWebhookPendingRegistration {
+  operationId: string;
+  operation: "create" | "update";
+  externalWebhookId: string | null;
+  endpointUrl: string;
+  accountScope: "global";
+  events: string[];
+  preparedAt: string;
+}
+
 export const ofapiWebhookConfig = pgTable("ofapi_webhook_config", {
   id: integer("id").primaryKey().default(1),
   externalWebhookId: text("external_webhook_id"),
@@ -2243,6 +2253,11 @@ export const ofapiWebhookConfig = pgTable("ofapi_webhook_config", {
   events: jsonb("events").$type<string[]>().default([]).notNull(),
   encryptedSigningSecret: text("encrypted_signing_secret").notNull(),
   previousEncryptedSigningSecret: text("previous_encrypted_signing_secret"),
+  registrationState: text("registration_state").default("stable").notNull(),
+  pendingRegistration: jsonb("pending_registration")
+    .$type<OfapiWebhookPendingRegistration>(),
+  pendingEncryptedSigningSecret: text("pending_encrypted_signing_secret"),
+  registrationError: text("registration_error"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -2751,6 +2766,13 @@ export const ofapiWebhookEvents = pgTable(
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "set null" }),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    rawBody: bytea("raw_body"),
+    payloadHash: bytea("payload_hash"),
+    captureHeaders: jsonb("capture_headers")
+      .$type<Record<string, string>>()
+      .default({})
+      .notNull(),
+    captureState: text("capture_state").default("accepted").notNull(),
     syncEvent: jsonb("sync_event").$type<Record<string, unknown>>(),
     fanoutSeq: bigint("fanout_seq", { mode: "number" }),
     status: text("status").default("pending").notNull(),
@@ -2788,6 +2810,16 @@ export const ofapiWebhookEvents = pgTable(
     replayIdx: index("ofapi_webhook_events_replay_idx")
       .on(table.platformAccountId, table.fanoutSeq)
       .where(sql`${table.fanoutSeq} is not null`),
+    rawCaptureIdx: index("ofapi_webhook_events_raw_capture_idx")
+      .on(table.id)
+      .where(sql`${table.captureState} = 'raw_captured'`),
+    captureStateCheck: check("ofapi_webhook_events_capture_state_check", sql`
+      ${table.captureState} in ('raw_captured', 'accepted', 'quarantined_malformed')
+    `),
+    rawCaptureCheck: check("ofapi_webhook_events_raw_capture_check", sql`
+      ${table.captureState} = 'accepted'
+      or (${table.rawBody} is not null and ${table.payloadHash} is not null)
+    `),
     archiveStatusCheck: check("ofapi_webhook_events_archive_status_check", sql`
       ${table.archiveStatus} in ('none', 'pending', 'archived', 'skipped', 'failed')
     `),

@@ -1,20 +1,25 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 import type {
   OfapiWebhookAckResponse,
+  OfapiWebhookReconcileBody,
   OfapiWebhookRegisterResponse,
   OfapiWebhookStatusResponse,
 } from "@agency_hub_core/contracts";
 import {
+  completeOfapiWebhookRegistration,
   getLatestOfapiEventTimesForPages,
   getOfapiCreditState,
   getOfapiWebhookConfig,
-  insertObservation,
-  insertOfapiWebhookEvent,
   listOfapiMappedPages,
   listOnlyFansPagesForOfapiMapping,
+  markOfapiWebhookRegistrationDispatching,
+  markOfapiWebhookRegistrationIndeterminate,
+  prepareOfapiWebhookRegistration,
+  reconcileOfapiWebhookRegistrationAdopt,
+  reconcileOfapiWebhookRegistrationNotCreated,
+  rejectOfapiWebhookRegistration,
   setPageOfapiAccountId,
-  upsertOfapiWebhookConfig,
 } from "@agency_hub_core/db";
 import {
   decryptJsonWithKeyVersion,
@@ -25,16 +30,17 @@ import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
-  BadRequestError,
+  ConflictError,
   ServiceUnavailableError,
   UnauthorizedError,
 } from "./errors.ts";
 import { createOfapiCreditSpendSink } from "./ofapi-credits.ts";
-import { isOfapiDmProjectionEventType } from "./ofapi-dm-projection.ts";
-import { isOfapiPresenceProjectionEventType } from "./ofapi-presence-projection.ts";
-import { isOfapiSubscriptionProjectionEventType } from "./ofapi-subscription-projection.ts";
-import { ofapiWebhookEnvelopeSchema, sendOfapiEventProcessJob } from "./ofapi-events.ts";
+import { sendOfapiEventProcessJob } from "./ofapi-events.ts";
 import { OfapiApiError, createOfapiClient, type OfapiClient } from "./ofapi.ts";
+import {
+  captureInvalidIdentityOfapiWebhookRaw,
+  captureOfapiWebhookRaw,
+} from "./ofapi-webhook-capture.ts";
 
 // Subscribed event set per ChatGoose PRD F8: everything the desktop's sync engine
 // consumes plus journal-only analytics (transactions.new) and account auth states.
@@ -56,6 +62,8 @@ export const OFAPI_WEBHOOK_EVENTS = [
   "accounts.authentication_failed",
   "accounts.otp_code_required",
   "accounts.face_otp_required",
+  "chat_queue.updated",
+  "chat_queue.finished",
 ] as const;
 
 const SIGNATURE_HEX_PATTERN = /^[0-9a-f]{64}$/i;
@@ -124,6 +132,9 @@ export async function receiveOfapiWebhook(
     ...(config.previousEncryptedSigningSecret
       ? [decryptSigningSecret(app, config.previousEncryptedSigningSecret)]
       : []),
+    ...(config.pendingEncryptedSigningSecret
+      ? [decryptSigningSecret(app, config.pendingEncryptedSigningSecret)]
+      : []),
   ];
   const signatureValid = signature !== null && signingSecrets.some(
     (secret) => verifyOfapiSignature(input.rawBody, signature, secret),
@@ -141,78 +152,47 @@ export async function receiveOfapiWebhook(
 
   const idempotencyKey = headerString(input.idempotencyKeyHeader);
   if (!idempotencyKey || idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
-    throw new BadRequestError("Missing or invalid x-ofapi-idempotency-key header");
-  }
-
-  let parsedBody: unknown;
-  try {
-    parsedBody = JSON.parse(input.rawBody.toString("utf8")) as unknown;
-  } catch {
-    throw new BadRequestError("Webhook body is not valid JSON");
-  }
-
-  const envelope = ofapiWebhookEnvelopeSchema.safeParse(parsedBody);
-  if (!envelope.success) {
-    throw new BadRequestError("Webhook body is not an OFAPI event envelope");
-  }
-
-  // One transaction for the journal row AND its observation (Stage 7,
-  // producer 1): a missing observation partition rolls back both -> 5xx ->
-  // OFAPI retries — never an acked-but-unobserved delivery. Journaling is
-  // unconditional (no capture flags, by construction); mapping is not
-  // consulted, so unmapped-account deliveries are captured too.
-  const created = await app.db.transaction(async (tx) => {
-    const dbTx = tx as typeof app.db;
-    const inserted = await insertOfapiWebhookEvent(dbTx, {
-      idempotencyKey,
-      eventType: envelope.data.event,
-      ofapiAccountId: envelope.data.account_id ?? null,
-      // Journal the full envelope so processing/replay never depends on parse-time choices.
-      payload: parsedBody as Record<string, unknown>,
-      // DM, subscription, and presence events are stamped as projection
-      // candidates regardless of their flags, so turning the respective flag on
-      // later lets the sweep project the journal rows still inside the retention
-      // window.
-      projectionStatus: isOfapiDmProjectionEventType(envelope.data.event) ||
-          isOfapiSubscriptionProjectionEventType(envelope.data.event) ||
-          isOfapiPresenceProjectionEventType(envelope.data.event)
-        ? "pending"
-        : "none",
+    const quarantined = await captureInvalidIdentityOfapiWebhookRaw(app, {
+      rawBody: input.rawBody,
+      signature: signature!,
+      providedIdempotencyKey: idempotencyKey,
     });
-    if (!inserted) {
-      // Same idempotent delivery, same fact — one observation per delivery
-      // attempt is NOT kept.
-      return null;
-    }
-    await insertObservation(dbTx, {
-      source: "webhook",
-      producer: "ofapi:webhook",
-      platform: "onlyfans",
-      nativeAccountRef: envelope.data.account_id ?? null,
-      kind: envelope.data.event,
-      payload: parsedBody,
-      payloadHash: createHash("sha256").update(input.rawBody).digest(),
+    return { received: true, duplicate: quarantined.duplicate };
+  }
+
+  // Capture-before-parse: once the signature is trusted, exact bytes commit
+  // before JSON or envelope interpretation. Signed malformed
+  // deliveries are quarantined locally and acknowledged, never discarded.
+  const captured = await captureOfapiWebhookRaw(app, {
+    rawBody: input.rawBody,
+    idempotencyKey,
+    captureHeaders: {
+      signature,
       idempotencyKey,
-    });
-    return inserted;
+    },
   });
-
-  if (!created) {
-    return { received: true, duplicate: true };
+  if (!captured.accepted) {
+    return { received: true, duplicate: captured.duplicate };
   }
 
   // Best effort: the minutely sweep job re-enqueues any row left pending.
   try {
     if (boss) {
-      await sendOfapiEventProcessJob(boss, created.id);
+      await sendOfapiEventProcessJob(boss, captured.eventId);
     } else {
-      app.logger.warn({ eventId: created.id }, "OFAPI event journaled without job queue; sweep will process it");
+      app.logger.warn(
+        { eventId: captured.eventId },
+        "OFAPI event journaled without job queue; sweep will process it",
+      );
     }
   } catch (error) {
-    app.logger.warn({ err: error, eventId: created.id }, "Failed to enqueue OFAPI event processing; sweep will retry");
+    app.logger.warn(
+      { err: error, eventId: captured.eventId },
+      "Failed to enqueue OFAPI event processing; sweep will retry",
+    );
   }
 
-  return { received: true, duplicate: false };
+  return { received: true, duplicate: captured.duplicate };
 }
 
 function resolveOfapiClient(app: AppContext): OfapiClient {
@@ -291,43 +271,91 @@ export async function registerOfapiWebhook(
   input: { endpointUrl: string },
 ): Promise<OfapiWebhookRegisterResponse> {
   const client = resolveOfapiClient(app);
-  const existing = await getOfapiWebhookConfig(app.db);
-  const signingSecret = randomToken(32);
-  const registration = {
+  const candidateSecret = randomToken(32);
+  const candidateEncryptedSecret = JSON.stringify(encryptJson(
+    candidateSecret,
+    app.config.encryptionKey,
+    app.config.encryptionKeyVersion,
+  ));
+  const prepared = await prepareOfapiWebhookRegistration(app.db, {
+    operationId: randomUUID(),
     endpointUrl: input.endpointUrl,
-    signingSecret,
     events: [...OFAPI_WEBHOOK_EVENTS],
+    candidateEncryptedSigningSecret: candidateEncryptedSecret,
+  });
+  if (prepared.kind === "blocked") {
+    const message = prepared.reason === "create_indeterminate"
+      ? "Initial OFAPI webhook creation is indeterminate; reconcile the remote webhook before retrying"
+      : `OFAPI webhook registration is blocked: ${prepared.reason}`;
+    throw new ServiceUnavailableError(message);
+  }
+  const signingSecret = decryptSigningSecret(app, prepared.encryptedSigningSecret);
+  const registration = {
+    endpointUrl: prepared.kind === "ready" ? prepared.endpointUrl : input.endpointUrl,
+    signingSecret,
+    events: prepared.kind === "ready" ? prepared.events : [...OFAPI_WEBHOOK_EVENTS],
     accountScope: "global" as const,
   };
 
   let externalWebhookId: string | null;
-  try {
-    if (existing?.externalWebhookId) {
-      const updated = await client.updateWebhook(existing.externalWebhookId, registration);
-      externalWebhookId = updated.id ?? existing.externalWebhookId;
-    } else {
-      externalWebhookId = (await client.createWebhook(registration)).id;
+  if (prepared.kind === "ready") {
+    const dispatching = await markOfapiWebhookRegistrationDispatching(app.db, {
+      operation: prepared.operation,
+      operationId: prepared.operationId,
+    });
+    if (!dispatching) {
+      throw new ServiceUnavailableError("OFAPI webhook registration dispatch fence was lost");
     }
-  } catch (error) {
-    if (error instanceof OfapiApiError) {
-      throw new ServiceUnavailableError(`OFAPI webhook registration failed: ${error.message}`);
+    try {
+      if (prepared.operation === "update") {
+        if (!prepared.externalWebhookId) {
+          throw new Error("Prepared OFAPI webhook update has no external id");
+        }
+        const updated = await client.updateWebhook(prepared.externalWebhookId, registration);
+        externalWebhookId = updated.id ?? prepared.externalWebhookId;
+      } else {
+        externalWebhookId = (await client.createWebhook(registration)).id;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const definitelyRejected = error instanceof OfapiApiError &&
+        error.status !== null &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 408;
+      if (definitelyRejected) {
+        await rejectOfapiWebhookRegistration(app.db, {
+          operation: prepared.operation,
+          operationId: prepared.operationId,
+          error: message,
+        });
+      } else {
+        await markOfapiWebhookRegistrationIndeterminate(app.db, {
+          operation: prepared.operation,
+          operationId: prepared.operationId,
+          error: message,
+        });
+      }
+      throw new ServiceUnavailableError(`OFAPI webhook registration failed: ${message}`);
     }
-    throw error;
+    const completed = await completeOfapiWebhookRegistration(app.db, {
+      operation: prepared.operation,
+      operationId: prepared.operationId,
+      returnedExternalWebhookId: externalWebhookId,
+    });
+    if (!completed) {
+      await markOfapiWebhookRegistrationIndeterminate(app.db, {
+        operation: prepared.operation,
+        operationId: prepared.operationId,
+        error: "OFAPI returned no usable webhook id",
+      });
+      throw new ServiceUnavailableError(
+        "OFAPI webhook registration returned no usable id; reconciliation is required",
+      );
+    }
+  } else {
+    externalWebhookId = (await getOfapiWebhookConfig(app.db))?.externalWebhookId ?? null;
   }
-
-  await upsertOfapiWebhookConfig(app.db, {
-    externalWebhookId,
-    endpointUrl: input.endpointUrl,
-    accountScope: "global",
-    events: [...OFAPI_WEBHOOK_EVENTS],
-    encryptedSigningSecret: JSON.stringify(encryptJson(
-      signingSecret,
-      app.config.encryptionKey,
-      app.config.encryptionKeyVersion,
-    )),
-    // Grace window: deliveries already signed with the outgoing secret keep verifying.
-    previousEncryptedSigningSecret: existing?.encryptedSigningSecret ?? null,
-  });
 
   let mapping: Awaited<ReturnType<typeof mapOfapiAccountsToPages>>;
   try {
@@ -344,12 +372,33 @@ export async function registerOfapiWebhook(
 
   return {
     externalWebhookId,
-    endpointUrl: input.endpointUrl,
+    endpointUrl: registration.endpointUrl,
     accountScope: "global",
-    events: [...OFAPI_WEBHOOK_EVENTS],
+    events: registration.events,
     signingSecretMask: maskSecret(signingSecret),
     mapping,
   };
+}
+
+export async function reconcileOfapiWebhookRegistration(
+  app: AppContext,
+  input: OfapiWebhookReconcileBody,
+): Promise<OfapiWebhookStatusResponse> {
+  const reconciled = input.action === "adopt"
+    ? await reconcileOfapiWebhookRegistrationAdopt(app.db, {
+      operationId: input.operationId,
+      externalWebhookId: input.externalWebhookId,
+    })
+    : await reconcileOfapiWebhookRegistrationNotCreated(app.db, {
+      operationId: input.operationId,
+      reason: input.reason,
+    });
+  if (!reconciled) {
+    throw new ConflictError(
+      "OFAPI webhook registration state or operation id changed; refresh status before reconciling",
+    );
+  }
+  return getOfapiWebhookStatus(app);
 }
 
 export async function getOfapiWebhookStatus(
@@ -369,7 +418,12 @@ export async function getOfapiWebhookStatus(
   const mappedById = new Map(mappedPages.map((page) => [page.id, page] as const));
 
   return {
-    configured: config !== null,
+    configured: Boolean(config?.externalWebhookId),
+    registrationState: config
+      ? config.registrationState as OfapiWebhookStatusResponse["registrationState"]
+      : null,
+    registrationError: config?.registrationError ?? null,
+    pendingRegistration: config?.pendingRegistration ?? null,
     endpointUrl: config?.endpointUrl ?? null,
     externalWebhookId: config?.externalWebhookId ?? null,
     accountScope: config?.accountScope ?? null,

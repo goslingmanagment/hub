@@ -38,6 +38,7 @@ export const kernelOperations = {
   adminOfapiCreditsSummary: { method: "GET", path: "/api/v1/admin/ofapi/credits/summary" },
   adminOfapiDmColdArchiveStatus: { method: "GET", path: "/api/v1/admin/ofapi/dm-archive/status" },
   adminOfapiSpendComparison: { method: "GET", path: "/api/v1/admin/ofapi/spend/comparison" },
+  adminOfapiWebhookReconcile: { method: "POST", path: "/api/v1/admin/ofapi/webhook/reconcile" },
   adminOfapiWebhookRegister: { method: "POST", path: "/api/v1/admin/ofapi/webhook" },
   adminOfapiWebhookStatus: { method: "GET", path: "/api/v1/admin/ofapi/webhook" },
   adminPages: { method: "GET", path: "/api/v1/admin/pages" },

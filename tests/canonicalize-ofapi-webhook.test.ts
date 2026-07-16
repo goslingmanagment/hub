@@ -208,6 +208,14 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
     // users.typing: ephemeral, unmapped by design.
     expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has("users.typing")).toBe(false);
     expect(canonicalizeOfapiWebhookObservation(observation("users_typing"))).toEqual([]);
+    for (const kind of ["chat_queue.updated", "chat_queue.finished"]) {
+      expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has(kind)).toBe(false);
+      expect(canonicalizeOfapiWebhookObservation({
+        ...observation("users_typing"),
+        kind,
+        payload: { event: kind, account_id: "acct_test", payload: {} },
+      })).toEqual([]);
+    }
   });
 
   it("yields zero events on malformed payloads instead of throwing", () => {
