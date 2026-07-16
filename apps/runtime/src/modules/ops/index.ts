@@ -72,6 +72,7 @@ import {
   getOfapiCreditsSummary,
 } from "../../services/ofapi-credit-report.ts";
 import { getOfapiDmColdArchiveStatus } from "../../services/ofapi-dm-archive.ts";
+import { seedOwnerOfapiCaptureJobs } from "../../services/ofapi-capture-seed.ts";
 import { getOfapiSpendComparison } from "../../services/ofapi-spend-comparison.ts";
 import { getPageSummary } from "../../services/reporting.ts";
 import { getStatusDetail, listStatus } from "../../services/sync.ts";
@@ -194,6 +195,33 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return getChatterOfapiCreditsSummary(appContext, {
       pageIds: principal.assignedPageIds,
     });
+  });
+
+  server.post("/api/v1/admin/ofapi/capture-jobs/seed", {
+    schema: routeSchemas.adminOfapiCaptureJobsSeed,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await seedOwnerOfapiCaptureJobs(appContext, {
+      actorUserId: principal.user.id,
+      dryRun: request.body.dryRun,
+      targets: request.body.targets,
+    });
+    if (!result.dryRun) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_capture_jobs_seed",
+        metadata: {
+          seedId: result.seedId,
+          pageIds: [...new Set(result.results.map((item) => item.pageId))],
+          requested: result.results.length,
+          created: result.created,
+          coalesced: result.coalesced,
+          skipped: result.skipped,
+        },
+      });
+    }
+    return result;
   });
 
   server.get("/api/v1/admin/ofapi/credits/summary", {

@@ -1,0 +1,351 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  createModel,
+  createOnlyFansPage,
+  getOfapiCaptureJob,
+  insertObservation,
+  OFAPI_CAPTURE_PROOF_POLICY_VERSION,
+  setPageOfapiAccountId,
+  upsertPageDmConversation,
+} from "@agency_hub_core/db";
+
+import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import {
+  resetIntegrationDatabase,
+  startIntegrationTestDatabase,
+  type StartedTestDatabase,
+} from "./helpers/db.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
+
+let testDb: StartedTestDatabase | null = null;
+let appContext: AppContext;
+let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
+
+async function login(username: string, role: "owner" | "team_lead") {
+  const user = await createUserAccount(appContext, {
+    username,
+    role,
+    password: "test-password",
+  }, { source: "cli" });
+  const response = await server!.inject({
+    method: "POST",
+    url: "/api/v1/auth/login",
+    payload: { username, password: "test-password" },
+  });
+  const header = response.headers["set-cookie"];
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!value || typeof value !== "string") throw new Error("Expected owner session cookie");
+  return { cookie: value.split(";")[0]!, userId: user!.id };
+}
+
+async function seedPageAndChat(input?: {
+  chatId?: string;
+  headId?: string;
+  anchorId?: string;
+}) {
+  const chatId = input?.chatId ?? "chat-1";
+  const headId = input?.headId ?? "102";
+  const anchorId = input?.anchorId ?? "100";
+  const model = await createModel(appContext.db, {
+    slug: `capture-seed-${chatId}`,
+    name: `Capture Seed ${chatId}`,
+  });
+  if (!model) throw new Error("Expected capture seed model");
+  const page = await createOnlyFansPage(appContext.db, {
+    modelId: model.id,
+    label: `capture-seed-${chatId}`,
+  });
+  if (!page) throw new Error("Expected capture seed page");
+  const ofapiAccountId = `acct-${chatId}`;
+  await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId });
+  await upsertPageDmConversation(appContext.db, {
+    platformAccountId: page.id,
+    fanId: null,
+    platformConversationId: chatId,
+    partnerPlatformUserId: "fan-1",
+    partnerUsername: "fan",
+    partnerDisplayName: "Fan",
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: headId,
+    lastUnreadMessageId: null,
+    lastMessageAt: new Date("2026-07-16T12:00:00.000Z"),
+    lastMessageSenderId: "fan-1",
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: "head",
+    lastSeenGeneration: 1,
+  });
+  await testDb!.pool.query(`
+    insert into ofapi_message_coverage (
+      page_id, chat_id, classification, source, frozen_head_id,
+      oldest_message_id, target, target_hash, page_chain_hash,
+      raw_count, accepted_count, boundary_duplicate_count,
+      explicitly_irrelevant_count, rejected_count, parse_debt,
+      required_serving_high_water, proof_observation_id,
+      proof_observation_received_at, proof_policy_version,
+      source_contract_version, parser_version, source_account_seq
+    ) values (
+      $1, $2, 'continuous_history', 'pagination_exhausted', $3,
+      '1', '{}'::jsonb, $4, $5,
+      1, 1, 0, 0, 0, 0,
+      0, 1, now(), $6, 'ofapi-capture-v1', 'ofapi-capture-parser-v1', 1
+    )
+  `, [
+    page.id,
+    chatId,
+    anchorId,
+    "a".repeat(64),
+    "b".repeat(64),
+    OFAPI_CAPTURE_PROOF_POLICY_VERSION,
+  ]);
+  return { page, chatId, headId, anchorId, ofapiAccountId };
+}
+
+beforeAll(async () => {
+  testDb = await startIntegrationTestDatabase();
+}, 120_000);
+
+beforeEach(async (context) => {
+  if (!testDb) {
+    context.skip();
+    return;
+  }
+  await resetIntegrationDatabase(testDb.pool);
+  appContext = createTestAppContext(testDb);
+  await server?.close();
+  server = await buildApiServer(appContext);
+  await server.ready();
+});
+
+afterAll(async () => {
+  await server?.close();
+  await testDb?.stop();
+});
+
+describe("owner bounded OFAPI capture seed", () => {
+  it("dry-runs, creates only explicit targets, and coalesces without changing the target", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPageAndChat();
+    await upsertPageDmConversation(appContext.db, {
+      platformAccountId: seeded.page.id,
+      fanId: null,
+      platformConversationId: "not-requested",
+      partnerPlatformUserId: "fan-2",
+      partnerUsername: "other",
+      partnerDisplayName: "Other",
+      conversationFlags: 0,
+      unreadCount: 0,
+      subscriptionTierId: null,
+      lastMessageId: "999",
+      lastUnreadMessageId: null,
+      lastMessageAt: new Date("2026-07-16T12:01:00.000Z"),
+      lastMessageSenderId: "fan-2",
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "other",
+      lastSeenGeneration: 1,
+    });
+    const owner = await login("owner", "owner");
+    const target = {
+      pageId: seeded.page.id,
+      chatId: seeded.chatId,
+      anchorMessageId: seeded.anchorId,
+    };
+
+    const dryRun = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: owner.cookie },
+      payload: { targets: [target] },
+    });
+    expect(dryRun.statusCode).toBe(200);
+    expect(dryRun.json()).toMatchObject({
+      dryRun: true,
+      created: 1,
+      coalesced: 0,
+      skipped: 0,
+      limits: {
+        maxTargets: 20,
+        maxPagesPerJob: 3,
+        maxCallsPerJob: 3,
+        maxCreditsPerJob: 3,
+        maxItemsPerJob: 300,
+      },
+      results: [{
+        ...target,
+        frozenHeadId: seeded.headId,
+        status: "would_create",
+        jobId: null,
+      }],
+    });
+    expect((await testDb.pool.query("select id from ofapi_capture_jobs")).rows).toHaveLength(0);
+
+    const executed = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: owner.cookie },
+      payload: { dryRun: false, targets: [target] },
+    });
+    expect(executed.statusCode).toBe(200);
+    const executedBody = executed.json() as {
+      results: Array<{ jobId: string; status: string }>;
+    };
+    expect(executedBody.results[0]?.status).toBe("created");
+    const job = await getOfapiCaptureJob(appContext.db, executedBody.results[0]!.jobId);
+    expect(job).toMatchObject({
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.ofapiAccountId,
+      goal: "connect_to_anchor",
+      activeSlotKey: `page:${seeded.page.id}:chat:${seeded.chatId}`,
+      target: {
+        chatId: seeded.chatId,
+        frozenHeadId: seeded.headId,
+        anchorMessageId: seeded.anchorId,
+        limit: 100,
+        reason: "owner_manual",
+      },
+      budgetScope: "bulk",
+      originPrincipalId: owner.userId,
+      createdBy: "owner",
+      maxCalls: 3,
+      maxCredits: 3,
+      maxPages: 3,
+      maxItems: 300,
+    });
+    expect((job?.manifest?.targetSlotKeys as string[])).toEqual([
+      `page:${seeded.page.id}:chat:${seeded.chatId}`,
+    ]);
+    expect((await testDb.pool.query("select id from ofapi_capture_jobs")).rows).toHaveLength(1);
+
+    const repeated = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: owner.cookie },
+      payload: { dryRun: false, targets: [target] },
+    });
+    expect(repeated.statusCode).toBe(200);
+    expect(repeated.json()).toMatchObject({
+      created: 0,
+      coalesced: 1,
+      results: [{ status: "coalesced", jobId: job!.id }],
+    });
+    expect((await getOfapiCaptureJob(appContext.db, job!.id))?.target).toEqual(job?.target);
+    expect((await testDb.pool.query("select id from ofapi_capture_jobs")).rows).toHaveLength(1);
+
+    await testDb.pool.query(`
+      update page_dm_threads
+      set last_message_id = '103', last_message_at = '2026-07-16T12:02:00.000Z'
+      where platform_account_id = $1 and platform_conversation_id = $2
+    `, [seeded.page.id, seeded.chatId]);
+    const shiftedHead = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: owner.cookie },
+      payload: { dryRun: false, targets: [target] },
+    });
+    expect(shiftedHead.statusCode).toBe(409);
+    expect((await getOfapiCaptureJob(appContext.db, job!.id))?.target).toEqual(job?.target);
+
+    await testDb.pool.query(`
+      update page_dm_threads
+      set last_message_id = $3,
+          last_message_at = '2026-07-16T12:00:00.000Z'
+      where platform_account_id = $1 and platform_conversation_id = $2
+    `, [seeded.page.id, seeded.chatId, seeded.headId]);
+    const terminal = await insertObservation(appContext.db, {
+      source: "ofapi_capture",
+      producer: "seed-test",
+      platform: "onlyfans",
+      accountId: seeded.page.id,
+      kind: "ofapi.capture_completed.v1",
+      payload: { jobId: job!.id, classification: "connected_to_anchor" },
+      payloadHash: Buffer.alloc(32, 1),
+      idempotencyKey: `seed-test-complete:${job!.id}`,
+    });
+    await testDb.pool.query(`
+      update ofapi_capture_jobs
+      set state = 'complete',
+          terminal_observation_id = $2,
+          terminal_observation_received_at = $3,
+          completed_at = now(),
+          updated_at = now()
+      where id = $1
+    `, [job!.id, terminal.observationId, terminal.receivedAt]);
+    const completedRepeat = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: owner.cookie },
+      payload: { dryRun: false, targets: [target] },
+    });
+    expect(completedRepeat.statusCode).toBe(200);
+    expect(completedRepeat.json()).toMatchObject({
+      created: 0,
+      coalesced: 0,
+      skipped: 1,
+      results: [{ status: "already_captured", jobId: job!.id, state: "complete" }],
+    });
+    expect((await testDb.pool.query("select id from ofapi_capture_jobs")).rows).toHaveLength(1);
+
+    const audit = await testDb.pool.query<{ event_type: string }>(`
+      select event_type from audit_events
+      where event_type = 'admin.ofapi_capture_jobs_seed'
+      order by id
+    `);
+    expect(audit.rows).toHaveLength(3);
+  });
+
+  it("rejects unauthorized, duplicate, and unverified targets before creating jobs", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPageAndChat();
+    const target = {
+      pageId: seeded.page.id,
+      chatId: seeded.chatId,
+      anchorMessageId: seeded.anchorId,
+    };
+    const anonymous = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      payload: { targets: [target] },
+    });
+    expect(anonymous.statusCode).toBe(401);
+
+    const lead = await login("lead", "team_lead");
+    const forbidden = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: lead.cookie },
+      payload: { targets: [target] },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const owner = await login("owner", "owner");
+    const duplicate = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: owner.cookie },
+      payload: { dryRun: false, targets: [target, target] },
+    });
+    expect(duplicate.statusCode).toBe(400);
+
+    const badAnchor = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/capture-jobs/seed",
+      headers: { cookie: owner.cookie },
+      payload: {
+        dryRun: false,
+        targets: [{ ...target, anchorMessageId: "arbitrary" }],
+      },
+    });
+    expect(badAnchor.statusCode).toBe(409);
+    expect((await testDb.pool.query("select id from ofapi_capture_jobs")).rows).toHaveLength(0);
+  });
+});

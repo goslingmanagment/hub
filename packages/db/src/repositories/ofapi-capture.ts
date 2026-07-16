@@ -287,9 +287,7 @@ export async function createOrGetOfapiCaptureJob(
         ${now},
         ${now}
       )
-      on conflict (active_slot_key)
-        where state in ('ready', 'leased', 'awaiting_parse', 'retry_wait', 'blocked')
-      do nothing
+      on conflict do nothing
       returning *
     `);
     if (inserted.rows[0]) {
@@ -304,13 +302,63 @@ export async function createOrGetOfapiCaptureJob(
       for update
     `);
     const row = existing.rows[0];
-    if (!row) {
-      throw new OfapiCaptureInvariantError(
-        `Active slot ${input.activeSlotKey} conflicted but no active job exists`,
-      );
+    if (row) {
+      return { created: false, job: mapCaptureJob(row) };
     }
-    return { created: false, job: mapCaptureJob(row) };
+
+    // The exact target may have completed between the insert conflict and the
+    // active-slot lookup. Treat a successful historical instance as the same
+    // durable intent instead of creating another paid job.
+    const completed = await findCompletedOfapiCaptureJobByTarget(database, {
+      activeSlotKey: input.activeSlotKey,
+      targetHash,
+      kind: input.kind,
+      goal: input.goal ?? null,
+    });
+    if (completed) {
+      return { created: false, job: completed };
+    }
+    throw new OfapiCaptureInvariantError(
+      `Slot ${input.activeSlotKey} conflicted but no matching job exists`,
+    );
   });
+}
+
+export async function findActiveOfapiCaptureJobBySlot(
+  db: Database,
+  activeSlotKey: string,
+) {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select *
+    from ofapi_capture_jobs
+    where active_slot_key = ${activeSlotKey}
+      and state in ('ready', 'leased', 'awaiting_parse', 'retry_wait', 'blocked')
+    limit 1
+  `);
+  return result.rows[0] ? mapCaptureJob(result.rows[0]) : null;
+}
+
+export async function findCompletedOfapiCaptureJobByTarget(
+  db: Database,
+  input: {
+    activeSlotKey: string;
+    targetHash: string;
+    kind: OfapiCaptureJobKind;
+    goal: OfapiCaptureJobGoal | null;
+  },
+) {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select *
+    from ofapi_capture_jobs
+    where active_slot_key = ${input.activeSlotKey}
+      and target_hash = ${input.targetHash}
+      and kind = ${input.kind}
+      and goal is not distinct from ${input.goal}
+      and state = 'complete'
+    order by completed_at desc nulls last, created_at desc
+    limit 1
+  `);
+  return result.rows[0] ? mapCaptureJob(result.rows[0]) : null;
 }
 
 export interface CreateOfapiInteractiveRequestInput {

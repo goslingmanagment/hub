@@ -3434,6 +3434,55 @@ export const ofapiWebhookReconcileBodySchema = z.discriminatedUnion("action", [
   }),
 ]);
 
+export const ofapiCaptureSeedBodySchema = z.object({
+  dryRun: z.boolean().default(true),
+  targets: z.array(z.object({
+    pageId: intId,
+    chatId: z.string().trim().min(1).max(200),
+    anchorMessageId: z.string().trim().min(1).max(200),
+  })).min(1).max(20),
+});
+
+export const ofapiCaptureSeedResponseSchema = z.object({
+  dryRun: z.boolean(),
+  seedId: z.string().uuid(),
+  limits: z.object({
+    maxTargets: z.literal(20),
+    maxPagesPerJob: z.literal(3),
+    maxCallsPerJob: z.literal(3),
+    maxCreditsPerJob: z.literal(3),
+    maxItemsPerJob: z.literal(300),
+  }),
+  created: z.number().int().nonnegative(),
+  coalesced: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  results: z.array(z.object({
+    pageId: intId,
+    chatId: z.string(),
+    frozenHeadId: z.string(),
+    anchorMessageId: z.string(),
+    status: z.enum([
+      "would_create",
+      "would_coalesce",
+      "created",
+      "coalesced",
+      "already_covered",
+      "already_captured",
+    ]),
+    jobId: z.string().uuid().nullable(),
+    state: z.enum([
+      "ready",
+      "leased",
+      "awaiting_parse",
+      "retry_wait",
+      "blocked",
+      "complete",
+      "cancelled",
+    ]).nullable(),
+    reasonCode: z.string().nullable(),
+  })),
+});
+
 export const ofapiWebhookRegisterResponseSchema = z.object({
   externalWebhookId: z.string().nullable(),
   endpointUrl: z.string(),
@@ -4407,6 +4456,23 @@ export const routeSchemas = {
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiCaptureJobsSeed: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Dry-run or seed a bounded explicit OFAPI chat cohort",
+    description: "Creates no more than 20 explicitly listed connect-to-anchor jobs. "
+      + "The current chat head and a verified continuous anchor are resolved from Core; "
+      + "no chat discovery or automatic fanout occurs.",
+    body: ofapiCaptureSeedBodySchema,
+    response: {
+      200: ofapiCaptureSeedResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
       409: errorResponseSchema,
     },
   },
@@ -6323,6 +6389,8 @@ export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSche
 export type OfapiPageMapping = z.infer<typeof ofapiPageMappingSchema>;
 export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusResponseSchema>;
 export type OfapiWebhookReconcileBody = z.infer<typeof ofapiWebhookReconcileBodySchema>;
+export type OfapiCaptureSeedBody = z.infer<typeof ofapiCaptureSeedBodySchema>;
+export type OfapiCaptureSeedResponse = z.infer<typeof ofapiCaptureSeedResponseSchema>;
 export type OfapiCreditsSummaryResponse = z.infer<typeof ofapiCreditsSummaryResponseSchema>;
 export type OfapiCreditsChatterSummaryResponse =
   z.infer<typeof ofapiCreditsChatterSummaryResponseSchema>;

@@ -153,6 +153,7 @@ async function createCaptureExecutionFixture(input: {
   maxCalls?: number;
   maxCredits?: number;
   maxPages?: number;
+  maxItems?: number;
 }) {
   const seeded = await seed();
   const now = new Date();
@@ -205,6 +206,7 @@ async function createCaptureExecutionFixture(input: {
     maxCalls: input.maxCalls ?? 1,
     maxCredits: input.maxCredits ?? 1,
     maxPages: input.maxPages ?? 5,
+    maxItems: input.maxItems ?? null,
     now,
   });
   return { ...seeded, app, dispatchGovernedRaw, job: created.job };
@@ -722,6 +724,40 @@ describe("OFAPI capture correctness repository", () => {
       acceptedPages: 0,
     });
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks an oversized accepted page before materialization", async () => {
+    if (!testDb) return;
+    const data = Array.from({ length: 301 }, (_value, index) => ({
+      id: String(100 - index),
+      isSentByMe: index % 2 === 0,
+      createdAt: new Date(Date.parse("2026-07-16T11:59:00.000Z") - index * 1_000).toISOString(),
+      text: `message-${index}`,
+    }));
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: Buffer.from(JSON.stringify({
+        data,
+        _pagination: { next_page: "older" },
+        _meta: { _credits: { used: 1, balance: 999 } },
+      })),
+      maxItems: 300,
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "item_cap_exceeded",
+      acceptedItems: 0,
+      acceptedPages: 0,
+    });
+    const material = await testDb.pool.query<{ n: string }>(`
+      select count(*)::text as n
+      from domain_events
+      where account_id = $1 and type = 'message.material_observed'
+    `, [fixture.page.id]);
+    expect(material.rows[0]?.n).toBe("0");
     expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
   });
 

@@ -32,6 +32,7 @@ export const kernelOperations = {
   adminListUsers: { method: "GET", path: "/api/v1/admin/users" },
   adminLogs: { method: "GET", path: "/api/v1/admin/logs" },
   adminModels: { method: "GET", path: "/api/v1/admin/models" },
+  adminOfapiCaptureJobsSeed: { method: "POST", path: "/api/v1/admin/ofapi/capture-jobs/seed" },
   adminOfapiCreditsDaily: { method: "GET", path: "/api/v1/admin/ofapi/credits/daily" },
   adminOfapiCreditsLedger: { method: "GET", path: "/api/v1/admin/ofapi/credits/ledger" },
   adminOfapiCreditsLedgerCsv: { method: "GET", path: "/api/v1/admin/ofapi/credits/ledger.csv" },

@@ -382,6 +382,28 @@ async function parseCapturedJob(
     return { kind: "blocked", pageId: job.pageId, jobId: job.id };
   }
 
+  if (job.maxItems !== null && job.acceptedItems + page.items.length > job.maxItems) {
+    await settleOfapiCaptureParse(app.db, {
+      jobId: job.id,
+      attemptId: observation.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+      parserOutcome: "contract_rejected",
+      rawCount: page.rawCount,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: page.rawCount,
+      disposition: {
+        kind: "blocked",
+        reasonCode: "item_cap_exceeded",
+        reasonMessage: `Captured page would exceed job item cap ${job.maxItems}`,
+      },
+    });
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+
   const itemIds = page.items.flatMap((item) => {
     const id = stringField(item.id) ??
       (typeof item.id === "number" && Number.isFinite(item.id) ? String(item.id) : null);
