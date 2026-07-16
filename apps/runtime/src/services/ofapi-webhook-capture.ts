@@ -65,6 +65,39 @@ export async function finalizeOfapiWebhookRaw(
   const rawBody = initial.rawBody;
   const payloadHash = initial.payloadHash;
 
+  if (initial.captureHeaders["identityStatus"] === "invalid") {
+    await app.db.transaction(async (tx) => {
+      const db = tx as AppContext["db"];
+      const won = await quarantineMalformedOfapiWebhookRaw(db, {
+        id: initial.id,
+        payloadHash,
+        reason: "signed_webhook_invalid_identity_header",
+      });
+      if (!won) return;
+      const storedIdentity = initial.captureHeaders["idempotencyKey"];
+      const providedIdempotencyKey = storedIdentity === "<missing>"
+        ? null
+        : storedIdentity ?? null;
+      const observation = await insertObservation(db, {
+        source: "webhook",
+        producer: "ofapi:webhook-raw",
+        platform: "onlyfans",
+        kind: "ofapi.webhook.invalid_identity",
+        payload: {
+          reason: "signed_webhook_invalid_identity_header",
+          providedIdempotencyKey,
+          bodyEncoding: "base64",
+          body: rawBody.toString("base64"),
+          headers: initial.captureHeaders,
+        },
+        payloadHash,
+        idempotencyKey: `${initial.idempotencyKey}:quarantine`,
+      });
+      await assertObservationHash(db, observation, payloadHash);
+    });
+    return { eventId, state: "quarantined_malformed" };
+  }
+
   let parsedBody: unknown;
   let malformedReason: string | null = null;
   try {
@@ -167,6 +200,7 @@ export async function captureInvalidIdentityOfapiWebhookRaw(
     captureHeaders: {
       signature: input.signature,
       idempotencyKey: input.providedIdempotencyKey ?? "<missing>",
+      identityStatus: "invalid",
     },
   });
   if (!claim.payloadHash?.equals(payloadHash)) {
@@ -175,38 +209,10 @@ export async function captureInvalidIdentityOfapiWebhookRaw(
   if (claim.captureState === "accepted") {
     throw new Error("OFAPI invalid-identity capture collided with an accepted delivery");
   }
-  if (claim.captureState === "quarantined_malformed") {
-    return { eventId: claim.id, duplicate: true };
+  const finalized = await finalizeOfapiWebhookRaw(app, claim.id);
+  if (finalized.state !== "quarantined_malformed") {
+    throw new Error("OFAPI invalid-identity delivery escaped quarantine");
   }
-
-  await app.db.transaction(async (tx) => {
-    const db = tx as AppContext["db"];
-    const won = await quarantineMalformedOfapiWebhookRaw(db, {
-      id: claim.id,
-      payloadHash,
-      reason: "signed_webhook_invalid_identity_header",
-    });
-    if (!won) return;
-    const observation = await insertObservation(db, {
-      source: "webhook",
-      producer: "ofapi:webhook-raw",
-      platform: "onlyfans",
-      kind: "ofapi.webhook.invalid_identity",
-      payload: {
-        reason: "signed_webhook_invalid_identity_header",
-        providedIdempotencyKey: input.providedIdempotencyKey,
-        bodyEncoding: "base64",
-        body: input.rawBody.toString("base64"),
-        headers: {
-          signature: input.signature,
-          idempotencyKey: input.providedIdempotencyKey,
-        },
-      },
-      payloadHash,
-      idempotencyKey: `${localIdentity}:quarantine`,
-    });
-    await assertObservationHash(db, observation, payloadHash);
-  });
   return { eventId: claim.id, duplicate: !claim.created };
 }
 

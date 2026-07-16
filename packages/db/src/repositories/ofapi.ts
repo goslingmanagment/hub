@@ -2409,8 +2409,10 @@ export async function rejectOfapiWebhookRegistration(
  * promoted atomically; no second vendor request is issued. */
 export async function reconcileOfapiWebhookRegistrationAdopt(
   db: Database,
-  input: { operationId: string; externalWebhookId: string },
+  input: { operationId: string; externalWebhookId: string; now?: Date },
 ) {
+  const now = input.now ?? new Date();
+  const staleBefore = new Date(now.getTime() - OFAPI_WEBHOOK_DISPATCH_STALE_MS);
   const updated = await db.execute<{ id: number }>(sql`
     update ofapi_webhook_config
     set external_webhook_id = ${input.externalWebhookId},
@@ -2418,17 +2420,19 @@ export async function reconcileOfapiWebhookRegistrationAdopt(
         account_scope = pending_registration->>'accountScope',
         events = pending_registration->'events',
         encrypted_signing_secret = pending_encrypted_signing_secret,
-        previous_encrypted_signing_secret = null,
         registration_state = 'stable',
         pending_registration = null,
         pending_encrypted_signing_secret = null,
         registration_error = null,
-        updated_at = now()
+        updated_at = ${now}
     where id = 1
-      and registration_state in ('create_dispatching', 'create_indeterminate')
       and pending_registration->>'operation' = 'create'
       and pending_registration->>'operationId' = ${input.operationId}
       and pending_encrypted_signing_secret is not null
+      and (
+        registration_state = 'create_indeterminate'
+        or (registration_state = 'create_dispatching' and updated_at <= ${staleBefore})
+      )
     returning id
   `);
   return updated.rows.length > 0;

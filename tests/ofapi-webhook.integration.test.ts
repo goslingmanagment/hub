@@ -426,6 +426,47 @@ describe("OFAPI webhook receiver", () => {
     expect(observation.rows).toEqual([{ kind: "messages.received" }]);
   });
 
+  it("keeps an invalid-identity delivery quarantined when the receiver crashes after raw claim", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const body = await fixtureBody("messages_received.json");
+    const rawBody = Buffer.from(body);
+    const payloadHash = createHash("sha256").update(rawBody).digest();
+    const claimed = await claimOfapiWebhookRaw(appContext.db, {
+      idempotencyKey: `invalid-identity:${payloadHash.toString("hex")}`,
+      rawBody,
+      payloadHash,
+      captureHeaders: {
+        signature: sign(body),
+        idempotencyKey: "<missing>",
+        identityStatus: "invalid",
+      },
+    });
+    expect(claimed.captureState).toBe("raw_captured");
+
+    await processOfapiWebhookEvent(appContext, claimed.id);
+
+    const recovered = await getOfapiWebhookEventById(appContext.db, claimed.id);
+    expect(recovered).toMatchObject({
+      captureState: "quarantined_malformed",
+      status: "skipped",
+      fanoutSeq: null,
+    });
+    const observations = await testDb.pool.query<{ kind: string; payload: Record<string, unknown> }>(`
+      select kind, payload from observations where source = 'webhook'
+    `);
+    expect(observations.rows).toHaveLength(1);
+    expect(observations.rows[0]).toMatchObject({
+      kind: "ofapi.webhook.invalid_identity",
+      payload: {
+        reason: "signed_webhook_invalid_identity_header",
+        providedIdempotencyKey: null,
+      },
+    });
+  });
+
   it("returns 503 before a webhook registration exists", async (context) => {
     if (!testDb || !server) {
       context.skip();
@@ -912,6 +953,36 @@ describe("OFAPI webhook admin flow", () => {
     const body = await fixtureBody("users_typing.json");
     expect((await postWebhook({ body, signature: sign(body, pendingSecret) })).statusCode).toBe(200);
 
+    // A live dispatch cannot be reconciled concurrently. A legacy grace secret
+    // is retained when the eventual indeterminate create is adopted.
+    const previousEncryptedSecret = JSON.stringify(encryptJson(
+      "legacy-previous-secret",
+      ENCRYPTION_KEY,
+      1,
+    ));
+    await testDb.pool.query(
+      `update ofapi_webhook_config
+       set registration_state = 'create_dispatching',
+           previous_encrypted_signing_secret = $1,
+           updated_at = now()
+       where id = 1`,
+      [previousEncryptedSecret],
+    );
+    const racedAdopt = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/webhook/reconcile",
+      headers: { cookie },
+      payload: {
+        action: "adopt",
+        operationId: pending!.pendingRegistration!.operationId,
+        externalWebhookId: "wh_found_too_early",
+      },
+    });
+    expect(racedAdopt.statusCode).toBe(409);
+    await testDb.pool.query(
+      "update ofapi_webhook_config set registration_state = 'create_indeterminate' where id = 1",
+    );
+
     const adopted = await server.inject({
       method: "POST",
       url: "/api/v1/admin/ofapi/webhook/reconcile",
@@ -932,6 +1003,7 @@ describe("OFAPI webhook admin flow", () => {
     });
     const stable = await getOfapiWebhookConfig(appContext.db);
     expect(stable?.pendingEncryptedSigningSecret).toBeNull();
+    expect(stable?.previousEncryptedSigningSecret).toBe(previousEncryptedSecret);
     expect(decryptJsonWithKeyVersion<string>(
       stable!.encryptedSigningSecret,
       new Map([[1, ENCRYPTION_KEY]]),
