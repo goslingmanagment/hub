@@ -10,6 +10,7 @@ import {
   changeOwnPassword,
   createUserAccount,
   deactivateUser,
+  deviceTokenAdoptionReport,
   getAuthenticatedUserByUsername,
   grantModelToUser,
   issueChatterApiKey,
@@ -348,6 +349,14 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return revokeDeviceTokensForUsername(appContext, {
       username: request.params.username,
     }, auditCtx(principal));
+  });
+
+  server.get("/api/v1/admin/device-token-adoption", {
+    schema: routeSchemas.adminDeviceTokenAdoption,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return deviceTokenAdoptionReport(appContext);
   });
 
   server.post("/api/v1/admin/users/:username/models", {

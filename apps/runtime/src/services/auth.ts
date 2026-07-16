@@ -818,6 +818,68 @@ export async function listApiKeysForUsers(
   return listApiKeys(app.db, userIds);
 }
 
+/** D116(c) fleet-gate foundation (desktop D19). Per ACTIVE chatter: does a
+ * live device token exist whose last_used_at is fresher than the window, and
+ * how many API keys remain active. Read-only. Probe/script automation shares
+ * the chatter role (no schema flag yet), so this deliberately publishes
+ * summary COUNTS instead of an all-chatters go/no-go boolean — that flag
+ * would be permanently false until the service-account split classifies
+ * accounts; phase-2 CI applies policy over the rows then. apiKeyLastUsedAt
+ * deliberately spans revoked keys (rotation moves the real last use onto a
+ * revoked row — same idiom as getAdminUserById). */
+export const DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS = 14;
+
+export async function deviceTokenAdoptionReport(app: AppContext, now = new Date()) {
+  const freshFloor = now.getTime()
+    - DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const users = await listUsers(app.db);
+  const chatters = [];
+  for (const user of users) {
+    if (user.role !== "chatter" || user.disabledAt) continue;
+    const tokens = await listDeviceTokensForUser(app.db, user.id);
+    const liveTokens = tokens.filter(
+      (token) => token.revokedAt === null && token.expiresAt > now,
+    );
+    // Both token fields describe ONE row: the live token most recently used.
+    // Multiple live tokens per user are routine (one per machine, issue never
+    // revokes siblings) — an independent max(expiresAt) could advertise a
+    // never-used sibling's 90 days while the token actually in daily use dies
+    // at its 365-day hard cap tomorrow (Stage 22 max lifetime).
+    const anchorToken = liveTokens.reduce<(typeof liveTokens)[number] | null>(
+      (best, token) => (
+        token.lastUsedAt !== null
+          && (best === null || token.lastUsedAt > best.lastUsedAt!)
+          ? token
+          : best
+      ),
+      null,
+    );
+    const keys = await listApiKeys(app.db, [user.id]);
+    const lastKeyUse = keys.reduce<Date | null>((max, key) => (
+      key.lastUsedAt && (max === null || key.lastUsedAt > max) ? key.lastUsedAt : max
+    ), null);
+    chatters.push({
+      username: user.username,
+      hasFreshDeviceToken: anchorToken !== null
+        && anchorToken.lastUsedAt!.getTime() >= freshFloor,
+      deviceTokenLastUsedAt: anchorToken?.lastUsedAt?.toISOString() ?? null,
+      deviceTokenExpiresAt: anchorToken?.expiresAt.toISOString() ?? null,
+      activeApiKeys: keys.filter((key) => key.revokedAt === null).length,
+      apiKeyLastUsedAt: lastKeyUse?.toISOString() ?? null,
+    });
+  }
+  return {
+    generatedAt: now.toISOString(),
+    freshWindowDays: DEVICE_TOKEN_ADOPTION_FRESH_WINDOW_DAYS,
+    chatters,
+    summary: {
+      activeChatters: chatters.length,
+      onFreshTokens: chatters.filter((row) => row.hasFreshDeviceToken).length,
+      withActiveApiKeys: chatters.filter((row) => row.activeApiKeys > 0).length,
+    },
+  };
+}
+
 export async function cleanupExpiredSessions(app: AppContext, now = new Date()) {
   await Promise.all([
     deleteExpiredAuthSessions(app.db, now),

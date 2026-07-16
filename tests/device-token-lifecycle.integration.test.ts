@@ -12,6 +12,8 @@ import {
   changeOwnPassword,
   createUserAccount,
   deactivateUser,
+  deviceTokenAdoptionReport,
+  issueChatterApiKey,
   issueDeviceToken,
   revokeDeviceTokensForUsername,
   setUserPassword,
@@ -452,5 +454,152 @@ describe("legacy/admin issuance authority races", () => {
       url: "/api/v1/auth/login",
       payload: { username: "anton", password: "second-new-secret" },
     })).statusCode).toBe(401);
+  });
+});
+
+describe("device-token adoption report (D116(c) foundation, desktop D19)", () => {
+  it("reports per-chatter token viability and summary counts", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const activeApp = setup.app;
+
+    for (const username of ["tokenized", "keyonly", "staletoken", "revokedtoken", "expiredtoken"]) {
+      await createUserAccount(activeApp, { username, role: "chatter" }, { source: "cli" });
+    }
+
+    // Fresh use travels the REAL producer chain: issued bearer -> /auth/me
+    // (authenticateDeviceToken bumps last_used_at) -> report.
+    const tokenized = await findUserByUsername(activeApp.db, "tokenized");
+    const fresh = await issueDeviceToken(
+      activeApp,
+      { userId: tokenized!.id, label: "machine-a" },
+      { source: "cli" },
+    );
+    const me = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { authorization: `Bearer ${fresh.token}` },
+    });
+    expect(me.statusCode).toBe(200);
+
+    // Stale: live token whose last use predates the 14-day window.
+    const stale = await findUserByUsername(activeApp.db, "staletoken");
+    const staleIssued = await issueDeviceToken(
+      activeApp,
+      { userId: stale!.id, label: "machine-b" },
+      { source: "cli" },
+    );
+    await setup.testDb.pool.query(
+      "update device_tokens set last_used_at = now() - interval '20 days' where id = $1",
+      [staleIssued.id],
+    );
+
+    // Revoked-with-recent-use and expired-with-recent-use must NOT count:
+    // "once had a working token" is exactly what the gate must not accept.
+    const revoked = await findUserByUsername(activeApp.db, "revokedtoken");
+    const revokedIssued = await issueDeviceToken(
+      activeApp,
+      { userId: revoked!.id, label: "machine-c" },
+      { source: "cli" },
+    );
+    await setup.testDb.pool.query(
+      "update device_tokens set last_used_at = now() where id = $1",
+      [revokedIssued.id],
+    );
+    await revokeDeviceTokensForUsername(
+      activeApp,
+      { username: "revokedtoken" },
+      { source: "cli" },
+    );
+
+    const expired = await findUserByUsername(activeApp.db, "expiredtoken");
+    const expiredIssued = await issueDeviceToken(
+      activeApp,
+      { userId: expired!.id, label: "machine-d" },
+      { source: "cli" },
+    );
+    await setup.testDb.pool.query(
+      "update device_tokens set last_used_at = now(), expires_at = now() - interval '1 hour' where id = $1",
+      [expiredIssued.id],
+    );
+
+    await issueChatterApiKey(activeApp, { username: "keyonly" }, { source: "cli" });
+
+    // A second live-but-unused token with a LATER expiry must not leak its
+    // dates into the row: both token fields describe the freshest-used token.
+    await setup.testDb.pool.query(
+      "update device_tokens set expires_at = now() + interval '2 days' where user_id = $1",
+      [tokenized!.id],
+    );
+    await issueDeviceToken(
+      activeApp,
+      { userId: tokenized!.id, label: "machine-a-spare" },
+      { source: "cli" },
+    );
+
+    const report = await deviceTokenAdoptionReport(activeApp);
+    const rows = new Map(report.chatters.map((row) => [row.username, row]));
+    expect(rows.get("tokenized")).toMatchObject({ hasFreshDeviceToken: true, activeApiKeys: 0 });
+    const tokenizedExpiry = Date.parse(rows.get("tokenized")!.deviceTokenExpiresAt!);
+    // ~2 days (the used token), never ~90 days (the unused spare).
+    expect(tokenizedExpiry - Date.now()).toBeLessThan(3 * 24 * 60 * 60 * 1000);
+    expect(rows.get("staletoken")).toMatchObject({ hasFreshDeviceToken: false });
+    expect(rows.get("revokedtoken")).toMatchObject({
+      hasFreshDeviceToken: false,
+      deviceTokenLastUsedAt: null,
+      deviceTokenExpiresAt: null,
+    });
+    expect(rows.get("expiredtoken")).toMatchObject({
+      hasFreshDeviceToken: false,
+      deviceTokenLastUsedAt: null,
+      deviceTokenExpiresAt: null,
+    });
+    expect(rows.get("keyonly")).toMatchObject({ hasFreshDeviceToken: false, activeApiKeys: 1 });
+    expect(rows.get("keyonly")!.apiKeyLastUsedAt).toBeNull();
+    // owner and the team_lead fixture are not chatters and never appear
+    expect(rows.has("owner")).toBe(false);
+    expect(rows.has("anton")).toBe(false);
+    expect(report.freshWindowDays).toBe(14);
+    expect(report.summary).toEqual({
+      activeChatters: 5,
+      onFreshTokens: 1,
+      withActiveApiKeys: 1,
+    });
+
+    // Deactivation removes a chatter from the denominator entirely.
+    await deactivateUser(activeApp, { username: "keyonly" }, { source: "cli" });
+    const after = await deviceTokenAdoptionReport(activeApp);
+    expect(after.chatters.some((row) => row.username === "keyonly")).toBe(false);
+    expect(after.summary.activeChatters).toBe(4);
+  });
+
+  it("returns zero counts for an empty fleet", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const report = await deviceTokenAdoptionReport(setup.app);
+    expect(report.chatters).toEqual([]);
+    expect(report.summary).toEqual({
+      activeChatters: 0,
+      onFreshTokens: 0,
+      withActiveApiKeys: 0,
+    });
+  });
+
+  it("is owner-only over HTTP", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const response = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/admin/device-token-adoption",
+      headers: { cookie: await login(setup.server, "anton", "chatter-secret") },
+    });
+    expect(response.statusCode).toBe(403);
+    const ok = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/admin/device-token-adoption",
+      headers: { cookie: await login(setup.server, "owner", "owner-secret") },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json<{ freshWindowDays: number }>().freshWindowDays).toBe(14);
   });
 });

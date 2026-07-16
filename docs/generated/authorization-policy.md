@@ -21,7 +21,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `any` | any authenticated principal |
 
-## Routes (160)
+## Routes (161)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -36,6 +36,7 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/admin/connections` | `adminConnections` | `owner-session` | — | — |
 | POST | `/api/v1/admin/credentials/verify` | `adminVerifyCredentials` | `owner-session` | — | — |
 | GET | `/api/v1/admin/db/stats` | `adminDbStats` | `owner-session` | — | — |
+| GET | `/api/v1/admin/device-token-adoption` | `adminDeviceTokenAdoption` | `owner-session` | — | — |
 | GET | `/api/v1/admin/incidents` | `adminIncidents` | `owner-session` | — | — |
 | GET | `/api/v1/admin/logs` | `adminLogs` | `owner-session` | — | — |
 | GET | `/api/v1/admin/models` | `adminModels` | `owner-session` | — | — |
