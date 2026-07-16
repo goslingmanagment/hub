@@ -445,20 +445,27 @@ create index ofapi_request_attempts_principal_idx
 create index ofapi_request_attempts_indeterminate_idx
   on ofapi_request_attempts(finished_at)
   where state = 'indeterminate' and certainty_resolved_at is null;
+create index ofapi_request_attempts_recovery_deadline_idx
+  on ofapi_request_attempts(deadline_at, owner_kind)
+  where state in ('reserved', 'dispatching');
 
 alter table ofapi_credit_ledger
-  add column attempt_id uuid references ofapi_request_attempts(id) on delete restrict,
+  add column attempt_id uuid,
   add column attempt_entry_phase text,
   add constraint ofapi_credit_ledger_attempt_shape_check check (
     (attempt_id is null and attempt_entry_phase is null)
     or (
       attempt_id is not null
       and attempt_entry_phase in ('settlement', 'certainty_adjustment')
-    )
-  );
-create unique index ofapi_credit_ledger_attempt_phase_uniq
-  on ofapi_credit_ledger(attempt_id, attempt_entry_phase)
-  where attempt_id is not null;
+      )
+  ) not valid,
+  add constraint ofapi_credit_ledger_attempt_fk
+    foreign key (attempt_id) references ofapi_request_attempts(id) on delete restrict
+    not valid;
+
+-- The partial unique index is built concurrently in 0104. Both new columns
+-- are null for legacy rows and all OF Mirror producers remain default-off
+-- until the complete migration prefix has landed.
 
 alter table observations drop constraint observations_source_check;
 alter table observations add constraint observations_source_check check (
@@ -466,7 +473,7 @@ alter table observations add constraint observations_source_check check (
     'webhook', 'pull', 'client_capture', 'readthrough',
     'command_result', 'operator', 'ofapi_capture'
   )
-);
+) not valid;
 
 create table ofapi_budget_denial_daily (
   day date not null,
@@ -542,6 +549,6 @@ create table ofapi_capture_operator_actions (
   reason text not null,
   occurred_at timestamptz not null default now(),
   constraint ofapi_capture_operator_actions_target_check check (
-    target_type in ('job', 'attempt', 'control', 'credit', 'observation')
+    target_type in ('job', 'attempt', 'control', 'credit', 'observation', 'coverage')
   )
 );

@@ -262,21 +262,40 @@ export async function startWorkerServices(
   });
 
   await boss.work(MESSAGE_ARCHIVE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
-    const result = await runMessageArchiveProjection(app);
-    if (result.eventsSeen > 0) {
-      app.logger.info(result, "Message-archive projection sweep complete");
+    try {
+      const result = await runMessageArchiveProjection(app);
+      if (result.eventsSeen > 0) {
+        app.logger.info(result, "Message-archive projection sweep complete");
+      }
+    } catch (error) {
+      app.logger.error({ error }, "Message-archive projection sweep failed");
     }
-    const coverage = await runOfapiMessageCoverageProjection(app);
-    if (coverage.projected > 0) {
-      app.logger.info(coverage, "OFAPI message-coverage projection sweep complete");
+    try {
+      const coverage = await runOfapiMessageCoverageProjection(app);
+      if (coverage.projected > 0) {
+        app.logger.info(coverage, "OFAPI message-coverage projection sweep complete");
+      }
+    } catch (error) {
+      // Each projection owns its watermark. A poison coverage fact must stay
+      // retryable without starving unrelated earnings/acceptance consumers
+      // that happen to share this pg-boss tick.
+      app.logger.error({ error }, "OFAPI message-coverage projection sweep failed");
     }
-    const earnings = await runFanEarningsProjection(app);
-    if (earnings.upserted > 0) {
-      app.logger.info(earnings, "Fan-earnings projection sweep complete");
+    try {
+      const earnings = await runFanEarningsProjection(app);
+      if (earnings.upserted > 0) {
+        app.logger.info(earnings, "Fan-earnings projection sweep complete");
+      }
+    } catch (error) {
+      app.logger.error({ error }, "Fan-earnings projection sweep failed");
     }
-    const acceptance = await runAiAcceptanceProjection(app);
-    if (acceptance.projected > 0) {
-      app.logger.info(acceptance, "AI acceptance projection sweep complete");
+    try {
+      const acceptance = await runAiAcceptanceProjection(app);
+      if (acceptance.projected > 0) {
+        app.logger.info(acceptance, "AI acceptance projection sweep complete");
+      }
+    } catch (error) {
+      app.logger.error({ error }, "AI acceptance projection sweep failed");
     }
   });
 

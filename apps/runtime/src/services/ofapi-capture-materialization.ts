@@ -76,7 +76,10 @@ function capturedMessagePage(payload: unknown) {
   }
   const page = parseStrictOfapiMessagePage(decoded.body, {
     requiredBoundaryCursor: asString(query.first_id),
-    boundaryIsDuplicate: false,
+    // Background pagination uses an inclusive cursor after page one. The
+    // producer records this parse fact in the captured request so every local
+    // replay applies the exact same boundary rule as the job parser.
+    boundaryIsDuplicate: request.boundaryIsDuplicate === true,
   });
   if (!page.accepted) {
     return { kind: "rejected" as const, reason: page.reason };

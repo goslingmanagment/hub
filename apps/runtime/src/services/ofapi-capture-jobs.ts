@@ -7,6 +7,7 @@ import {
   getComposableOfapiMessageCoverageProof,
   leaseNextOfapiCaptureJob,
   loadOfapiCaptureObservation,
+  markObservationParsed,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
   reconcileOfapiCapturedAttemptCredit,
@@ -25,6 +26,7 @@ import {
   parseStrictOfapiMessagePage,
 } from "./ofapi-capture-contract.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
+import { OFAPI_CAPTURE_MATERIALIZER_VERSION } from "./ofapi-capture-materialization.ts";
 import {
   buildOfapiExportQuoteRequest,
   parseCapturedOfapiExportQuote,
@@ -477,6 +479,11 @@ async function parseCapturedJob(
       items: page.items,
     });
     materialHighWater = material.highWater;
+    await markObservationParsed(app.db, {
+      observationId: observation.id,
+      receivedAt: observation.receivedAt,
+      parseVersion: OFAPI_CAPTURE_MATERIALIZER_VERSION,
+    });
   } catch (error) {
     app.logger.error(
       { err: error, jobId: job.id, observationId: observation.id },
@@ -717,7 +724,11 @@ export async function executeOfapiCaptureJobChunk(
         query,
         bodyBytes: null,
         contentType: null,
-        request: { chatId: target.chatId, query },
+        request: {
+          chatId: target.chatId,
+          query,
+          boundaryIsDuplicate: cursorField(job, "firstId") !== null,
+        },
         observationKind: "ofapi.chat_messages_page.v1",
         reservedCredits: 1,
         timeoutMs: 65_000,

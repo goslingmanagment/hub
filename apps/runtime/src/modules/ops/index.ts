@@ -76,7 +76,9 @@ import { seedOwnerOfapiCaptureJobs } from "../../services/ofapi-capture-seed.ts"
 import {
   getOwnerOfapiCaptureOperatorStatus,
   reconcileOwnerOfapiExportCreate,
+  replayOwnerOfapiCaptureJob,
   resolveOwnerOfapiCaptureAttempt,
+  revokeOwnerOfapiMessageCoverage,
   setOwnerOfapiCaptureControl,
 } from "../../services/ofapi-capture-operator.ts";
 import {
@@ -288,6 +290,58 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           captureJobId: result.attempt.captureJobId,
           resolution: result.attempt.certaintyResolution,
           settledCredits: result.attempt.settledCredits,
+        },
+      });
+    }
+    return result;
+  });
+
+  server.post("/api/v1/admin/ofapi/capture/jobs/:jobId/replay", {
+    schema: routeSchemas.adminOfapiCaptureJobReplay,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await replayOwnerOfapiCaptureJob(appContext, {
+      ...request.body,
+      jobId: request.params.jobId,
+      actorUserId: principal.user.id,
+    });
+    if (!result.dryRun) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_capture_job_replayed",
+        metadata: {
+          jobId: result.jobId,
+          attemptId: result.attemptId,
+          observationId: result.next.observationId,
+          previousReasonCode: result.previous.reasonCode,
+        },
+      });
+    }
+    return result;
+  });
+
+  server.post("/api/v1/admin/ofapi/capture/coverage/:pageId/:chatId/revoke", {
+    schema: routeSchemas.adminOfapiCoverageRevoke,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await revokeOwnerOfapiMessageCoverage(appContext, {
+      ...request.body,
+      pageId: request.params.pageId,
+      chatId: request.params.chatId,
+      actorUserId: principal.user.id,
+    });
+    if (!result.dryRun && result.status === "revoked") {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_coverage_revoked",
+        platformAccountId: result.pageId,
+        metadata: {
+          pageId: result.pageId,
+          chatId: result.chatId,
+          sourceAccountSeq: result.sourceAccountSeq,
+          revokedAt: result.revokedAt,
         },
       });
     }

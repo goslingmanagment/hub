@@ -3,7 +3,11 @@ import type {
   OfapiCaptureAttemptResolveResponse,
   OfapiCaptureControlBody,
   OfapiCaptureControlResponse,
+  OfapiCaptureJobReplayBody,
+  OfapiCaptureJobReplayResponse,
   OfapiCaptureOperatorStatusResponse,
+  OfapiCoverageRevokeBody,
+  OfapiCoverageRevokeResponse,
   OfapiExportCreateReconcileBody,
   OfapiExportCreateReconcileResponse,
 } from "@agency_hub_core/contracts";
@@ -11,7 +15,10 @@ import {
   getOfapiCaptureOperatorAttempt,
   getOfapiCaptureOperatorStatus,
   OfapiCaptureInvariantError,
+  OfapiMessageCoverageOperatorConflictError,
   reconcileOfapiExportCreate,
+  replayOfapiCaptureJobParse,
+  revokeOfapiMessageCoverage,
   resolveOfapiIndeterminateAttempt,
   setOfapiCaptureControl,
   type OfapiCaptureOperatorAttemptRecord,
@@ -150,6 +157,72 @@ export async function resolveOwnerOfapiCaptureAttempt(
   const attempt = await getOfapiCaptureOperatorAttempt(app.db, input.attemptId);
   if (!attempt) throw new NotFoundError(`OFAPI attempt ${input.attemptId} was not found`);
   return { dryRun: false, status: "resolved", attempt: serializeAttempt(attempt) };
+}
+
+export async function replayOwnerOfapiCaptureJob(
+  app: Pick<AppContext, "db">,
+  input: OfapiCaptureJobReplayBody & { jobId: string; actorUserId: number },
+): Promise<OfapiCaptureJobReplayResponse> {
+  try {
+    const result = await replayOfapiCaptureJobParse(app.db, {
+      jobId: input.jobId,
+      expectedState: input.expectedState,
+      expectedReasonCode: input.expectedReasonCode,
+      expectedJobRowVersion: input.expectedJobRowVersion,
+      actorUserId: input.actorUserId,
+      reason: input.reason,
+      execute: input.dryRun === false,
+    });
+    if (!result) throw new NotFoundError(`OFAPI capture job ${input.jobId} was not found`);
+    return {
+      ...result,
+      next: {
+        ...result.next,
+        observationReceivedAt: result.next.observationReceivedAt.toISOString(),
+      },
+    };
+  } catch (error) {
+    if (error instanceof OfapiCaptureInvariantError) {
+      throw new ConflictError(error.message);
+    }
+    throw error;
+  }
+}
+
+export async function revokeOwnerOfapiMessageCoverage(
+  app: Pick<AppContext, "db">,
+  input: OfapiCoverageRevokeBody & {
+    pageId: number;
+    chatId: string;
+    actorUserId: number;
+  },
+): Promise<OfapiCoverageRevokeResponse> {
+  try {
+    const result = await revokeOfapiMessageCoverage(app.db, {
+      actionId: input.actionId,
+      pageId: input.pageId,
+      chatId: input.chatId,
+      expectedSourceAccountSeq: input.expectedSourceAccountSeq,
+      actorUserId: input.actorUserId,
+      reason: input.reason,
+      execute: input.dryRun === false,
+    });
+    if (!result) {
+      throw new NotFoundError(
+        `OFAPI coverage for page ${input.pageId}, chat ${input.chatId} was not found`,
+      );
+    }
+    return {
+      dryRun: input.dryRun !== false,
+      ...result,
+      revokedAt: result.revokedAt?.toISOString() ?? null,
+    };
+  } catch (error) {
+    if (error instanceof OfapiMessageCoverageOperatorConflictError) {
+      throw new ConflictError(error.message);
+    }
+    throw error;
+  }
 }
 
 export async function reconcileOwnerOfapiExportCreate(

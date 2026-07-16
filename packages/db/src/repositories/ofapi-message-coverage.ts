@@ -1,11 +1,16 @@
+import { createHash } from "node:crypto";
+
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { appendProjectionOnlyDomainEventsInTransaction } from "./domain-events.ts";
 import { MESSAGE_ARCHIVE_PROJECTION } from "./message-archive.ts";
+import { insertObservation } from "./observations.ts";
 
 export const OFAPI_MESSAGE_COVERAGE_PROJECTION = "ofapi_message_coverage_v1";
 
-export interface OfapiMessageCoverageProjectionEvent {
+export interface OfapiMessageCoverageProofEvent {
+  kind: "proof";
   pageId: number;
   chatId: string;
   classification: "continuous_history" | "verified_unavailable" | "explicit_open_debt";
@@ -31,6 +36,18 @@ export interface OfapiMessageCoverageProjectionEvent {
   supersedes: OfapiMessageCoverageProofReference | null;
 }
 
+export interface OfapiMessageCoverageRevocationEvent {
+  kind: "revocation";
+  pageId: number;
+  chatId: string;
+  revokedAt: Date;
+  sourceAccountSeq: number;
+}
+
+export type OfapiMessageCoverageProjectionEvent =
+  | OfapiMessageCoverageProofEvent
+  | OfapiMessageCoverageRevocationEvent;
+
 export interface OfapiMessageCoverageProofReference {
   proofObservationId: number;
   proofObservationReceivedAt: Date;
@@ -52,6 +69,7 @@ export interface OfapiMessageCoverageProofReference {
 }
 
 function assertContinuousProof(event: OfapiMessageCoverageProjectionEvent) {
+  if (event.kind !== "proof") return;
   if (event.classification !== "continuous_history") return;
   if (
     event.parseDebt !== 0 ||
@@ -71,6 +89,20 @@ export async function applyOfapiMessageCoverageEvents(
     const database = tx as unknown as Database;
     let projected = 0;
     for (const event of events) {
+      if (event.kind === "revocation") {
+        const result = await database.execute<{ page_id: unknown }>(sql`
+          update ofapi_message_coverage
+          set revoked_at = ${event.revokedAt},
+              source_account_seq = ${event.sourceAccountSeq},
+              updated_at = now()
+          where page_id = ${event.pageId}
+            and chat_id = ${event.chatId}
+            and source_account_seq <= ${event.sourceAccountSeq}
+          returning page_id
+        `);
+        projected += result.rows.length;
+        continue;
+      }
       assertContinuousProof(event);
       if (event.supersedes !== null) {
         const current = await database.execute<Record<string, unknown>>(sql`
@@ -236,6 +268,218 @@ function mapProofReference(row: Record<string, unknown>): OfapiMessageCoveragePr
     sourceContractVersion: String(row.source_contract_version),
     parserVersion: String(row.parser_version),
   };
+}
+
+export class OfapiMessageCoverageOperatorConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OfapiMessageCoverageOperatorConflictError";
+  }
+}
+
+export async function revokeOfapiMessageCoverage(
+  db: Database,
+  input: {
+    actionId: string;
+    pageId: number;
+    chatId: string;
+    expectedSourceAccountSeq: number;
+    actorUserId: number;
+    reason: string;
+    execute?: boolean;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const idempotencyKey = `ofapi-coverage-revoke:${input.actionId}`;
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const currentResult = await database.execute<Record<string, unknown>>(sql`
+      select *
+      from ofapi_message_coverage
+      where page_id = ${input.pageId} and chat_id = ${input.chatId}
+      for update
+    `);
+    const current = currentResult.rows[0];
+    if (!current) return null;
+
+    const existing = await database.execute<{
+      payload: unknown;
+    }>(sql`
+      select payload
+      from observations
+      where source = 'operator'
+        and producer = 'ofapi-coverage-operator'
+        and kind = 'ofapi.coverage_revoked.v1'
+        and idempotency_key = ${idempotencyKey}
+      order by received_at desc
+      limit 1
+    `);
+    if (existing.rows[0]) {
+      const payload = existing.rows[0].payload as Record<string, unknown>;
+      if (payload.pageId !== input.pageId || payload.chatId !== input.chatId) {
+        throw new OfapiMessageCoverageOperatorConflictError(
+          `Coverage revocation action ${input.actionId} belongs to another proof`,
+        );
+      }
+      return {
+        status: "already_reconciled" as const,
+        pageId: input.pageId,
+        chatId: input.chatId,
+        sourceAccountSeq: Number(current.source_account_seq),
+        revokedAt: current.revoked_at === null
+          ? null
+          : new Date(current.revoked_at as string | Date),
+      };
+    }
+
+    const currentSeq = Number(current.source_account_seq);
+    if (!Number.isSafeInteger(currentSeq) || currentSeq !== input.expectedSourceAccountSeq) {
+      throw new OfapiMessageCoverageOperatorConflictError(
+        `Coverage source sequence ${String(current.source_account_seq)} does not match `
+          + `${input.expectedSourceAccountSeq}`,
+      );
+    }
+    if (current.revoked_at !== null) {
+      throw new OfapiMessageCoverageOperatorConflictError(
+        `Coverage proof was already revoked at ${new Date(
+          current.revoked_at as string | Date,
+        ).toISOString()}`,
+      );
+    }
+
+    const previous = {
+      sourceAccountSeq: currentSeq,
+      proofObservationId: Number(current.proof_observation_id),
+      proofObservationReceivedAt: new Date(
+        current.proof_observation_received_at as string | Date,
+      ).toISOString(),
+      frozenHeadId: String(current.frozen_head_id),
+      proofPolicyVersion: String(current.proof_policy_version),
+    };
+    if (input.execute !== true) {
+      await database.execute(sql`
+        insert into ofapi_capture_operator_actions (
+          action, target_type, target_ref, expected_state,
+          previous_state, resulting_state, dry_run,
+          actor_user_id, reason, occurred_at
+        ) values (
+          'revoke_coverage',
+          'coverage',
+          ${`page:${input.pageId}:chat:${input.chatId}`},
+          ${String(input.expectedSourceAccountSeq)},
+          ${JSON.stringify(previous)}::jsonb,
+          ${JSON.stringify({ revokedAt: now.toISOString() })}::jsonb,
+          true,
+          ${input.actorUserId},
+          ${input.reason},
+          ${now}
+        )
+      `);
+      return {
+        status: "would_revoke" as const,
+        pageId: input.pageId,
+        chatId: input.chatId,
+        sourceAccountSeq: currentSeq,
+        revokedAt: now,
+      };
+    }
+
+    const payload = {
+      actionId: input.actionId,
+      pageId: input.pageId,
+      chatId: input.chatId,
+      reason: input.reason,
+      actorUserId: input.actorUserId,
+      revokes: previous,
+    };
+    const observation = await insertObservation(database, {
+      source: "operator",
+      producer: "ofapi-coverage-operator",
+      platform: "onlyfans",
+      accountId: input.pageId,
+      kind: "ofapi.coverage_revoked.v1",
+      payload,
+      payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+      idempotencyKey,
+      observedAt: now,
+      actorPrincipalId: input.actorUserId,
+      receivedAt: now,
+    });
+    const appended = await appendProjectionOnlyDomainEventsInTransaction(
+      database,
+      input.pageId,
+      [{
+        type: "capture.coverage_revoked",
+        occurredAt: now,
+        conversationRef: input.chatId,
+        data: payload,
+        schemaVersion: 1,
+        observationId: observation.observationId,
+        dedupKey: `coverage-revoke:${input.actionId}`,
+      }],
+      {
+        occurredAt: now,
+        observationId: observation.observationId,
+        dedupKey: `projection-checkpoint:coverage-revoke:${input.actionId}`,
+        data: { profile: OFAPI_MESSAGE_COVERAGE_PROJECTION },
+      },
+    );
+    const eventId = appended.events[0]?.eventId;
+    if (!eventId) {
+      throw new Error("Coverage revocation event identity is missing");
+    }
+    const sequence = await database.execute<{ account_seq: unknown }>(sql`
+      select account_seq
+      from domain_events
+      where id = ${eventId}
+    `);
+    const sourceAccountSeq = Number(sequence.rows[0]?.account_seq);
+    if (!Number.isSafeInteger(sourceAccountSeq)) {
+      throw new Error("Coverage revocation account sequence is missing");
+    }
+    const updated = await database.execute<{ page_id: unknown }>(sql`
+      update ofapi_message_coverage
+      set revoked_at = ${now},
+          source_account_seq = ${sourceAccountSeq},
+          updated_at = ${now}
+      where page_id = ${input.pageId}
+        and chat_id = ${input.chatId}
+        and source_account_seq = ${currentSeq}
+        and revoked_at is null
+      returning page_id
+    `);
+    if (updated.rows.length !== 1) {
+      throw new OfapiMessageCoverageOperatorConflictError(
+        "Coverage proof changed during revocation",
+      );
+    }
+    await database.execute(sql`
+      insert into ofapi_capture_operator_actions (
+        action, target_type, target_ref, expected_state,
+        previous_state, resulting_state, dry_run,
+        actor_user_id, reason, occurred_at
+      ) values (
+        'revoke_coverage',
+        'coverage',
+        ${`page:${input.pageId}:chat:${input.chatId}`},
+        ${String(input.expectedSourceAccountSeq)},
+        ${JSON.stringify(previous)}::jsonb,
+        ${JSON.stringify({ revokedAt: now.toISOString(), sourceAccountSeq })}::jsonb,
+        false,
+        ${input.actorUserId},
+        ${input.reason},
+        ${now}
+      )
+    `);
+    return {
+      status: "revoked" as const,
+      pageId: input.pageId,
+      chatId: input.chatId,
+      sourceAccountSeq,
+      revokedAt: now,
+    };
+  });
 }
 
 export interface OfapiMessageCoverageServingState {

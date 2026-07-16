@@ -54,6 +54,7 @@ export interface ProjectionCheckpointInput {
 const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "message.material_observed",
   "capture.coverage_observed",
+  "capture.coverage_revoked",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {
@@ -391,7 +392,11 @@ export async function listDomainEventContiguousReplayEnds(
           on event.account_id = normalized.account_id
          and event.account_seq > normalized.base_seq
          and event.account_seq <= normalized.through_seq
-         and event.type not in ('message.material_observed', 'capture.coverage_observed')
+         and event.type not in (
+           'message.material_observed',
+           'capture.coverage_observed',
+           'capture.coverage_revoked'
+         )
       ), classified as (
         select *,
                case
@@ -709,7 +714,11 @@ export async function listEventsSince(
       and de.account_seq > ${input.afterSeq}
       ${input.throughSeq === undefined ? sql`` : sql`and de.account_seq <= ${input.throughSeq}`}
       ${input.excludeProjectionOnly === true
-        ? sql`and de.type not in ('message.material_observed', 'capture.coverage_observed')`
+        ? sql`and de.type not in (
+            'message.material_observed',
+            'capture.coverage_observed',
+            'capture.coverage_revoked'
+          )`
         : sql``}
     order by de.account_seq asc
     limit ${limit}

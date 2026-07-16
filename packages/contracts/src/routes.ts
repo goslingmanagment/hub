@@ -3700,6 +3700,75 @@ export const ofapiCaptureAttemptResolveResponseSchema = z.object({
   attempt: ofapiCaptureOperatorAttemptSchema,
 });
 
+export const ofapiCaptureJobParamsSchema = z.object({
+  jobId: z.string().uuid(),
+});
+
+export const ofapiCaptureJobReplayBodySchema = z.object({
+  expectedState: z.enum(["blocked", "awaiting_parse"]),
+  expectedReasonCode: z.enum([
+    "parser_failed",
+    "contract_rejected",
+    "capture_envelope_invalid",
+    "invalid_json",
+    "export_contract_rejected",
+  ]),
+  expectedJobRowVersion: z.number().int().nonnegative(),
+  reason: z.string().trim().min(1).max(500),
+  dryRun: z.boolean().default(true),
+}).strict().superRefine((value, ctx) => {
+  const expectedState = value.expectedReasonCode === "parser_failed"
+    ? "awaiting_parse"
+    : "blocked";
+  if (value.expectedState !== expectedState) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["expectedState"],
+      message: `${value.expectedReasonCode} requires ${expectedState}`,
+    });
+  }
+});
+
+export const ofapiCaptureJobReplayResponseSchema = z.object({
+  dryRun: z.boolean(),
+  status: z.enum(["would_replay", "replayed"]),
+  jobId: z.string().uuid(),
+  attemptId: z.string().uuid(),
+  previous: z.object({
+    state: z.enum(["blocked", "awaiting_parse"]),
+    reasonCode: z.string().nullable(),
+    rowVersion: z.number().int().nonnegative(),
+  }),
+  next: z.object({
+    state: z.literal("awaiting_parse"),
+    reasonCode: z.null(),
+    rowVersion: z.number().int().nonnegative(),
+    observationId: z.number().int().positive(),
+    observationReceivedAt: isoTimestamp,
+  }),
+});
+
+export const ofapiCoverageRevokeParamsSchema = z.object({
+  pageId: intId,
+  chatId: z.string().trim().min(1).max(200),
+});
+
+export const ofapiCoverageRevokeBodySchema = z.object({
+  actionId: z.string().uuid(),
+  expectedSourceAccountSeq: z.number().int().nonnegative(),
+  reason: z.string().trim().min(1).max(500),
+  dryRun: z.boolean().default(true),
+}).strict();
+
+export const ofapiCoverageRevokeResponseSchema = z.object({
+  dryRun: z.boolean(),
+  status: z.enum(["would_revoke", "revoked", "already_reconciled"]),
+  pageId: intId,
+  chatId: z.string(),
+  sourceAccountSeq: z.number().int().nonnegative(),
+  revokedAt: isoTimestamp.nullable(),
+});
+
 export const ofapiExportCreateReconcileBodySchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("confirm_not_created"),
@@ -4765,6 +4834,40 @@ export const routeSchemas = {
     body: ofapiCaptureAttemptResolveBodySchema,
     response: {
       200: ofapiCaptureAttemptResolveResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiCaptureJobReplay: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Dry-run or locally replay one captured OFAPI response",
+    description: "CAS-clears a parser/contract quarantine and reuses the already captured "
+      + "observation. It never dispatches another vendor request.",
+    params: ofapiCaptureJobParamsSchema,
+    body: ofapiCaptureJobReplayBodySchema,
+    response: {
+      200: ofapiCaptureJobReplayResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiCoverageRevoke: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Dry-run or revoke one OFAPI history proof",
+    description: "Appends an operator observation and projection-only revocation fact. "
+      + "It never deletes captured evidence or calls OFAPI.",
+    params: ofapiCoverageRevokeParamsSchema,
+    body: ofapiCoverageRevokeBodySchema,
+    response: {
+      200: ofapiCoverageRevokeResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -6761,6 +6864,11 @@ export type OfapiCaptureAttemptResolveBody =
   z.infer<typeof ofapiCaptureAttemptResolveBodySchema>;
 export type OfapiCaptureAttemptResolveResponse =
   z.infer<typeof ofapiCaptureAttemptResolveResponseSchema>;
+export type OfapiCaptureJobReplayBody = z.infer<typeof ofapiCaptureJobReplayBodySchema>;
+export type OfapiCaptureJobReplayResponse =
+  z.infer<typeof ofapiCaptureJobReplayResponseSchema>;
+export type OfapiCoverageRevokeBody = z.infer<typeof ofapiCoverageRevokeBodySchema>;
+export type OfapiCoverageRevokeResponse = z.infer<typeof ofapiCoverageRevokeResponseSchema>;
 export type OfapiExportCreateReconcileBody =
   z.infer<typeof ofapiExportCreateReconcileBodySchema>;
 export type OfapiExportCreateReconcileResponse =

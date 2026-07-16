@@ -153,6 +153,7 @@ function parseCoverageEvent(event: DomainEventRow): OfapiMessageCoverageProjecti
     throw new Error("Invalid coverage proofObservationReceivedAt");
   }
   return {
+    kind: "proof",
     pageId: event.accountId,
     chatId,
     classification: "continuous_history",
@@ -185,6 +186,23 @@ function parseCoverageEvent(event: DomainEventRow): OfapiMessageCoverageProjecti
   };
 }
 
+function parseCoverageRevocationEvent(
+  event: DomainEventRow,
+): OfapiMessageCoverageProjectionEvent {
+  const data = record(event.data, "data");
+  const chatId = string(data.chatId, "chatId");
+  if (event.conversationRef !== chatId || data.pageId !== event.accountId) {
+    throw new Error("Coverage revocation scope does not match its event identity");
+  }
+  return {
+    kind: "revocation",
+    pageId: event.accountId,
+    chatId,
+    revokedAt: event.occurredAt,
+    sourceAccountSeq: event.accountSeq,
+  };
+}
+
 export interface OfapiMessageCoverageProjectionResult {
   accounts: number;
   eventsSeen: number;
@@ -212,9 +230,15 @@ export async function runOfapiMessageCoverageProjection(
       });
       if (events.length === 0) break;
       totals.eventsSeen += events.length;
-      const coverageEvents = events
-        .filter((event) => event.type === "capture.coverage_observed")
-        .map(parseCoverageEvent);
+      const coverageEvents = events.flatMap((event) => {
+        if (event.type === "capture.coverage_observed") {
+          return [parseCoverageEvent(event)];
+        }
+        if (event.type === "capture.coverage_revoked") {
+          return [parseCoverageRevocationEvent(event)];
+        }
+        return [];
+      });
       const applied = await applyOfapiMessageCoverageEvents(app.db, coverageEvents);
       totals.projected += applied.projected;
       watermark = events.at(-1)!.accountSeq;

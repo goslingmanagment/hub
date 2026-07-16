@@ -84,6 +84,18 @@ const messageArchiveMocks = vi.hoisted(() => ({
   runMessageArchiveProjection: vi.fn(),
 }));
 
+const coverageProjectionMocks = vi.hoisted(() => ({
+  runOfapiMessageCoverageProjection: vi.fn(),
+}));
+
+const fanEarningsMocks = vi.hoisted(() => ({
+  runFanEarningsProjection: vi.fn(),
+}));
+
+const aiAcceptanceMocks = vi.hoisted(() => ({
+  runAiAcceptanceProjection: vi.fn(),
+}));
+
 vi.mock("@agency_hub_core/db", () => dbMocks);
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
   createAppContext: vi.fn(),
@@ -101,9 +113,12 @@ vi.mock("../apps/runtime/src/services/db-disk-alert.ts", () => dbDiskAlertMocks)
 vi.mock("../apps/runtime/src/services/observations-partitions.ts", () => observationsPartitionMocks);
 vi.mock("../apps/runtime/src/services/canonicalize-driver.ts", () => canonicalizeDriverMocks);
 vi.mock("../apps/runtime/src/services/projections/message-archive.ts", () => messageArchiveMocks);
-vi.mock("../apps/runtime/src/services/projections/fan-earnings.ts", () => ({
-  runFanEarningsProjection: vi.fn(),
-}));
+vi.mock(
+  "../apps/runtime/src/services/projections/ofapi-message-coverage.ts",
+  () => coverageProjectionMocks,
+);
+vi.mock("../apps/runtime/src/services/projections/fan-earnings.ts", () => fanEarningsMocks);
+vi.mock("../apps/runtime/src/services/projections/ai-acceptance.ts", () => aiAcceptanceMocks);
 vi.mock("../apps/runtime/src/services/ofapi-chargebacks-sync.ts", () => ({
   OFAPI_CHARGEBACKS_RECONCILE_QUEUE: "ofapi.chargebacks.reconcile",
   ensureOfapiChargebacksQueue: vi.fn(),
@@ -165,6 +180,22 @@ function getRawPayloadCleanupHandler(boss: {
   return handler;
 }
 
+function getMessageArchiveSweepHandler(boss: {
+  work: ReturnType<typeof vi.fn>;
+}) {
+  const workCalls = boss.work.mock.calls as unknown as Array<[
+    string,
+    unknown,
+    () => Promise<unknown>,
+  ]>;
+  const workCall = workCalls.find(
+    ([queueName]) => queueName === "projections.message-archive.sweep",
+  );
+  const handler = workCall?.[2];
+  if (!handler) throw new Error("Expected message-archive sweep handler to be registered");
+  return handler;
+}
+
 describe("worker startup", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -203,6 +234,10 @@ describe("worker startup", () => {
     observationsPartitionMocks.runObservationsPartitionCheck.mockReset();
     observationsPartitionMocks.runObservationsPartitionCheck.mockResolvedValue({ ensured: [], leadMonths: 3, failed: false });
     plannerMocks.runSyncPlannerCycle.mockReset();
+    messageArchiveMocks.runMessageArchiveProjection.mockReset();
+    coverageProjectionMocks.runOfapiMessageCoverageProjection.mockReset();
+    fanEarningsMocks.runFanEarningsProjection.mockReset();
+    aiAcceptanceMocks.runAiAcceptanceProjection.mockReset();
 
     dbMocks.closeOrphanedSyncRuns.mockResolvedValue({
       totalCount: 2,
@@ -336,6 +371,46 @@ describe("worker startup", () => {
 
     expect(boss.stop).toHaveBeenCalledTimes(1);
     expect(app.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates a poison coverage event from unrelated projection consumers", async () => {
+    const app = {
+      db: {},
+      logger: { info: vi.fn(), error: vi.fn() },
+      config: {
+        syncObservabilityRetentionDays: 30,
+        telegramEnabled: false,
+        telegramReportHourUtc: 9,
+      },
+      close: vi.fn(async () => {}),
+    };
+    const boss = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      schedule: vi.fn(async () => {}),
+      work: vi.fn(async () => {}),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      fetch: vi.fn(),
+      send: vi.fn(),
+      touch: vi.fn(),
+    };
+    messageArchiveMocks.runMessageArchiveProjection.mockResolvedValue({ eventsSeen: 0 });
+    coverageProjectionMocks.runOfapiMessageCoverageProjection.mockRejectedValue(
+      new Error("poison coverage fact"),
+    );
+    fanEarningsMocks.runFanEarningsProjection.mockResolvedValue({ upserted: 1 });
+    aiAcceptanceMocks.runAiAcceptanceProjection.mockResolvedValue({ projected: 1 });
+
+    const runtime = await startWorkerServices(app as never, boss as never);
+    await expect(getMessageArchiveSweepHandler(boss)()).resolves.toBeUndefined();
+    expect(fanEarningsMocks.runFanEarningsProjection).toHaveBeenCalledTimes(1);
+    expect(aiAcceptanceMocks.runAiAcceptanceProjection).toHaveBeenCalledTimes(1);
+    expect(app.logger.error).toHaveBeenCalledWith(
+      { error: expect.any(Error) },
+      "OFAPI message-coverage projection sweep failed",
+    );
+    await runtime.shutdown();
   });
 
   it("registers the Telegram daily report schedule when Telegram is enabled", async () => {

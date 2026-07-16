@@ -137,4 +137,31 @@ describe("database migration invariants", () => {
     expect(index).toContain("create index concurrently if not exists %I");
     expect(index).toContain("alter index observations_harvest_machine_client_event_idx attach partition");
   });
+
+  it("keeps OF Mirror retained-table changes deploy-safe", async () => {
+    const correctness = await readFile(
+      "packages/db/migrations/0098_ofapi_capture_correctness_plane.sql",
+      "utf8",
+    );
+    const material = await readFile(
+      "packages/db/migrations/0099_ofapi_full_message_material.sql",
+      "utf8",
+    );
+    const indexes = await readFile(
+      "packages/db/migrations/0104_ofapi_existing_table_indexes_concurrently.sql",
+      "utf8",
+    );
+
+    expect(correctness).toMatch(/observations_source_check check \([\s\S]*?\) not valid;/);
+    expect(correctness).toContain("ofapi_credit_ledger_attempt_shape_check check");
+    expect(correctness).toContain("foreign key (attempt_id)");
+    expect(correctness).not.toContain("create unique index ofapi_credit_ledger_attempt_phase_uniq");
+    expect(material).not.toContain("CREATE INDEX");
+    expect(indexes.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(indexes).toContain("create index concurrently if not exists message_archive_ofapi_native_order_idx");
+    expect(indexes).toContain("create unique index concurrently if not exists ofapi_credit_ledger_attempt_phase_uniq");
+    expect(indexes).toContain("on only domain_events");
+    expect(indexes).toContain("create index concurrently if not exists %I");
+    expect(indexes).toContain("alter index domain_events_v2_deliverable_account_seq_idx attach partition");
+  });
 });

@@ -27,6 +27,9 @@ export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v1";
 export const OFAPI_STORAGE_HEALTH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 const OFAPI_STORAGE_HEALTH_RETRY_MS = 5 * 60 * 1000;
+const OFAPI_BUDGET_RECHECK_MS = 15 * 60 * 1000;
+const OFAPI_PAUSE_RECHECK_MS = 24 * 60 * 60 * 1000;
+const OFAPI_DEADLINE_RECHECK_MS = 60 * 1000;
 
 export class OfapiCaptureInvariantError extends Error {
   constructor(message: string) {
@@ -699,15 +702,20 @@ function resolveDenialRetryAt(
       return nextHour;
     }
     case "principal_storm_block":
-      return input.principalBlockedUntil ?? null;
+      return input.principalBlockedUntil ?? new Date(now.getTime() + OFAPI_BUDGET_RECHECK_MS);
     case "balance_stale":
-      return input.floorProbeNotBefore ?? null;
+      return input.floorProbeNotBefore ?? new Date(now.getTime() + OFAPI_BUDGET_RECHECK_MS);
     case "storage_unhealthy":
       return new Date(now.getTime() + OFAPI_STORAGE_HEALTH_RETRY_MS);
     case "credit_floor":
+      return new Date(now.getTime() + OFAPI_BUDGET_RECHECK_MS);
     case "persistent_pause":
+      // Resume wakes these rows immediately. The long fallback keeps an
+      // orphaned pause from becoming a permanent active-slot pin without
+      // creating a hot admission loop while an incident pause remains set.
+      return new Date(now.getTime() + OFAPI_PAUSE_RECHECK_MS);
     case "deadline":
-      return null;
+      return new Date(now.getTime() + OFAPI_DEADLINE_RECHECK_MS);
   }
 }
 
@@ -805,6 +813,7 @@ export async function reserveOfapiRequestAttempt(
   if (input.deadlineAt.getTime() <= now.getTime()) {
     return db.transaction(async (tx) => {
       const database = tx as unknown as Database;
+      const retryAt = resolveDenialRetryAt("deadline", now, {});
       await recordBudgetDenial(database, {
         day,
         scope: input.budgetScope,
@@ -814,8 +823,8 @@ export async function reserveOfapiRequestAttempt(
         thresholdCrossing: false,
         now,
       });
-      await parkDeniedOwner(database, input, "deadline", null, now);
-      return { admitted: false, reason: "deadline", retryAt: null };
+      await parkDeniedOwner(database, input, "deadline", retryAt, now);
+      return { admitted: false, reason: "deadline", retryAt };
     });
   }
 
@@ -1649,17 +1658,31 @@ export async function recoverStaleOfapiCaptureWork(
     id: string;
     fence_token: string;
     state: "reserved" | "dispatching";
+    owner_kind: "capture_job" | "interactive_request";
+    is_floor_probe: boolean;
+    request_semantics: "safe_read" | "stateful";
   }>(sql`
     select attempt.id::text as id,
            attempt.fence_token::text as fence_token,
-           attempt.state
-    from ofapi_capture_jobs job
-    join ofapi_request_attempts attempt
-      on attempt.capture_job_id = job.id
-    where job.state = 'leased'
-      and job.lease_until <= ${now}
+           attempt.state,
+           attempt.owner_kind,
+           attempt.is_floor_probe,
+           attempt.request_semantics
+    from ofapi_request_attempts attempt
+    left join ofapi_capture_jobs job
+      on job.id = attempt.capture_job_id
+    where (
+        (
+          attempt.owner_kind = 'capture_job'
+          and job.state = 'leased'
+          and job.lease_until <= ${now}
+        ) or (
+          attempt.owner_kind = 'interactive_request'
+          and attempt.deadline_at <= ${now}
+        )
+      )
       and attempt.state in ('reserved', 'dispatching')
-    order by job.lease_until, attempt.id
+    order by coalesce(job.lease_until, attempt.deadline_at), attempt.id
     limit ${limit}
   `);
 
@@ -1676,14 +1699,26 @@ export async function recoverStaleOfapiCaptureWork(
       })) {
         released += 1;
       }
-    } else if (await markOfapiAttemptIndeterminate(db, {
-      attemptId: attempt.id,
-      fenceToken: attempt.fence_token,
-      outcome: "transport",
-      details: { recovery: "expired_job_lease" },
-      now,
-    })) {
-      indeterminate += 1;
+    } else {
+      const safelyResolveFloorProbe = attempt.is_floor_probe &&
+        attempt.request_semantics === "safe_read";
+      if (await markOfapiAttemptIndeterminate(db, {
+        attemptId: attempt.id,
+        fenceToken: attempt.fence_token,
+        outcome: "transport",
+        details: {
+          recovery: attempt.owner_kind === "capture_job"
+            ? "expired_job_lease"
+            : "expired_interactive_deadline",
+          floorProbe: attempt.is_floor_probe,
+        },
+        ...(safelyResolveFloorProbe
+          ? { retrySafeReadAt: new Date(now.getTime() + OFAPI_DEADLINE_RECHECK_MS) }
+          : {}),
+        now,
+      })) {
+        indeterminate += 1;
+      }
     }
   }
 
@@ -2665,6 +2700,188 @@ export async function resolveOfapiIndeterminateAttempt(
   });
 }
 
+export const OFAPI_LOCAL_PARSE_REPLAY_REASONS = [
+  "parser_failed",
+  "contract_rejected",
+  "capture_envelope_invalid",
+  "invalid_json",
+  "export_contract_rejected",
+] as const;
+
+export type OfapiLocalParseReplayReason =
+  typeof OFAPI_LOCAL_PARSE_REPLAY_REASONS[number];
+
+export async function replayOfapiCaptureJobParse(
+  db: Database,
+  input: {
+    jobId: string;
+    expectedState: "blocked" | "awaiting_parse";
+    expectedReasonCode: OfapiLocalParseReplayReason;
+    expectedJobRowVersion: number;
+    actorUserId: number;
+    reason: string;
+    execute?: boolean;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const current = await database.execute<Record<string, unknown>>(sql`
+      select *
+      from ofapi_capture_jobs
+      where id = ${input.jobId}::uuid
+      for update
+    `);
+    const row = current.rows[0];
+    if (!row) return null;
+    const job = mapCaptureJob(row);
+    if (
+      job.state !== input.expectedState ||
+      job.reasonCode !== input.expectedReasonCode ||
+      job.rowVersion !== input.expectedJobRowVersion
+    ) {
+      throw new OfapiCaptureInvariantError(
+        `Capture job ${input.jobId} changed before local replay`,
+      );
+    }
+    if (
+      (input.expectedReasonCode === "parser_failed" && job.state !== "awaiting_parse") ||
+      (input.expectedReasonCode !== "parser_failed" && job.state !== "blocked")
+    ) {
+      throw new OfapiCaptureInvariantError(
+        `Capture job ${input.jobId} state does not match replay reason`,
+      );
+    }
+
+    const attemptResult = await database.execute<{
+      id: string;
+      parser_outcome: OfapiParserOutcome;
+      response_observation_id: unknown;
+      response_observation_received_at: string | Date;
+    }>(sql`
+      select id::text as id,
+             parser_outcome,
+             response_observation_id,
+             response_observation_received_at
+      from ofapi_request_attempts
+      where capture_job_id = ${input.jobId}::uuid
+        and state = 'response_captured'
+        and response_observation_id is not null
+        and response_observation_received_at is not null
+      order by owner_attempt_no desc
+      limit 1
+      for update
+    `);
+    const attempt = attemptResult.rows[0];
+    if (!attempt || !["failed", "contract_rejected"].includes(attempt.parser_outcome)) {
+      throw new OfapiCaptureInvariantError(
+        `Capture job ${input.jobId} has no failed captured response to replay`,
+      );
+    }
+    const observationId = asNumber(
+      attempt.response_observation_id,
+      "response_observation_id",
+    );
+    const observationReceivedAt = asDate(
+      attempt.response_observation_received_at,
+      "response_observation_received_at",
+    );
+    const observation = await database.execute<{ id: unknown }>(sql`
+      select id
+      from observations
+      where id = ${observationId}
+        and received_at = ${observationReceivedAt}
+        and source = 'ofapi_capture'
+      limit 1
+    `);
+    if (observation.rows.length !== 1) {
+      throw new OfapiCaptureInvariantError(
+        `Capture job ${input.jobId} response observation is unavailable`,
+      );
+    }
+
+    const previous = {
+      state: job.state,
+      reasonCode: job.reasonCode,
+      rowVersion: job.rowVersion,
+    };
+    const next = {
+      state: "awaiting_parse" as const,
+      reasonCode: null,
+      rowVersion: job.rowVersion + 1,
+      observationId,
+      observationReceivedAt,
+    };
+    if (input.execute === true) {
+      await database.execute(sql`
+        update ofapi_request_attempts
+        set parser_outcome = 'pending',
+            raw_count = 0,
+            accepted_count = 0,
+            boundary_duplicate_count = 0,
+            explicitly_irrelevant_count = 0,
+            rejected_count = 0,
+            updated_at = ${now}
+        where id = ${attempt.id}::uuid
+          and state = 'response_captured'
+      `);
+      const updated = await database.execute<{ id: string }>(sql`
+        update ofapi_capture_jobs
+        set state = 'awaiting_parse',
+            pending_observation_id = ${observationId},
+            pending_observation_received_at = ${observationReceivedAt},
+            reason_code = null,
+            reason_message = null,
+            lease_owner = null,
+            lease_token = null,
+            lease_until = null,
+            row_version = row_version + 1,
+            updated_at = ${now}
+        where id = ${input.jobId}::uuid
+          and state = ${input.expectedState}
+          and reason_code = ${input.expectedReasonCode}
+          and row_version = ${input.expectedJobRowVersion}
+        returning id::text as id
+      `);
+      if (updated.rows.length !== 1) {
+        throw new OfapiCaptureInvariantError(
+          `Capture job ${input.jobId} changed during local replay`,
+        );
+      }
+    }
+    await database.execute(sql`
+      insert into ofapi_capture_operator_actions (
+        action, target_type, target_ref, expected_state,
+        previous_state, resulting_state, dry_run,
+        actor_user_id, reason, occurred_at
+      ) values (
+        'replay_parse',
+        'job',
+        ${input.jobId},
+        ${`${input.expectedState}:${input.expectedReasonCode}:${input.expectedJobRowVersion}`},
+        ${JSON.stringify(previous)}::jsonb,
+        ${JSON.stringify({
+          ...next,
+          observationReceivedAt: observationReceivedAt.toISOString(),
+        })}::jsonb,
+        ${input.execute !== true},
+        ${input.actorUserId},
+        ${input.reason},
+        ${now}
+      )
+    `);
+    return {
+      dryRun: input.execute !== true,
+      status: input.execute === true ? "replayed" as const : "would_replay" as const,
+      jobId: input.jobId,
+      attemptId: attempt.id,
+      previous,
+      next,
+    };
+  });
+}
+
 export async function setOfapiCaptureControl(
   db: Database,
   input: {
@@ -2690,12 +2907,19 @@ export async function setOfapiCaptureControl(
       where control_key = ${input.controlKey}
       for update
     `);
-    const previous = current.rows[0] ?? {
-      paused: false,
-      reason: null,
-      version: 0,
-    };
-    const version = asNumber(previous.version, "version");
+    const currentRow = current.rows[0];
+    const previous = currentRow
+      ? {
+        paused: Boolean(currentRow.paused),
+        reason: currentRow.reason,
+        version: asNumber(currentRow.version, "version"),
+      }
+      : {
+        paused: false,
+        reason: null,
+        version: 0,
+      };
+    const version = previous.version;
     if (version !== input.expectedVersion) {
       throw new OfapiCaptureInvariantError(
         `Control ${input.controlKey} version ${version} does not match ${input.expectedVersion}`,
@@ -2726,6 +2950,22 @@ export async function setOfapiCaptureControl(
           updated_at = excluded.updated_at
         where ofapi_capture_controls.version = ${version}
       `);
+      if (!input.paused) {
+        // persistent_pause is reversible operator containment, never a
+        // terminal job outcome. Wake all such jobs; admission re-evaluates
+        // every still-active control before any physical dispatch.
+        await database.execute(sql`
+          update ofapi_capture_jobs
+          set state = 'ready',
+              next_attempt_at = ${now},
+              reason_code = null,
+              reason_message = null,
+              row_version = row_version + 1,
+              updated_at = ${now}
+          where state in ('blocked', 'retry_wait')
+            and reason_code = 'persistent_pause'
+        `);
+      }
     }
     await database.execute(sql`
       insert into ofapi_capture_operator_actions (
