@@ -132,39 +132,40 @@ describe("domain events append protocol (Stage 8)", () => {
     const material = [
       event({ dedupKey: "msg-material:m1:a", type: "message.material_observed" }),
       event({ dedupKey: "msg-material:m2:b", type: "message.material_observed" }),
+      event({ dedupKey: "coverage:chat-1", type: "capture.coverage_observed" }),
     ];
     const first = await appendProjectionOnlyDomainEvents(testDb.db, 17, material, {
       occurredAt: new Date("2026-06-15T12:01:00Z"),
       observationId: 91,
       dedupKey: "projection-checkpoint:91",
     });
-    expect(first).toMatchObject({ appended: 3, deduped: 0, highWater: 3 });
+    expect(first).toMatchObject({ appended: 4, deduped: 0, highWater: 4 });
 
     const visible = await listEventsSince(testDb.db, {
       accountId: 17,
       afterSeq: 0,
-      throughSeq: 3,
+      throughSeq: 4,
       excludeProjectionOnly: true,
     });
     expect(visible).toHaveLength(1);
     expect(visible[0]).toMatchObject({
-      accountSeq: 3,
+      accountSeq: 4,
       type: "stream.projection_checkpoint",
-      data: { hiddenCount: 2 },
+      data: { hiddenCount: 3 },
     });
     const ends = await listDomainEventContiguousReplayEnds(testDb.db, [{
       accountId: 17,
       afterSeq: 0,
-      throughSeq: 3,
+      throughSeq: 4,
     }], { excludeProjectionOnly: true });
-    expect(ends.get(17)).toBe(3);
+    expect(ends.get(17)).toBe(4);
 
     const replay = await appendProjectionOnlyDomainEvents(testDb.db, 17, material, {
       occurredAt: new Date("2026-06-15T12:01:00Z"),
       observationId: 91,
       dedupKey: "projection-checkpoint:91",
     });
-    expect(replay).toMatchObject({ appended: 0, deduped: 2, highWater: 3 });
+    expect(replay).toMatchObject({ appended: 0, deduped: 3, highWater: 4 });
   });
 
   it("routes historical occurred_at into the 2024/pre-2024 partitions", async (context) => {

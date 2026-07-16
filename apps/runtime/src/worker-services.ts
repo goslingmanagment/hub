@@ -31,6 +31,7 @@ import {
   ensureMessageArchiveQueues,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
+import { runOfapiMessageCoverageProjection } from "./services/projections/ofapi-message-coverage.ts";
 import {
   PROJECTION_DEBT_SWEEP_QUEUE,
   ensureProjectionDebtQueue,
@@ -259,6 +260,10 @@ export async function startWorkerServices(
     const result = await runMessageArchiveProjection(app);
     if (result.eventsSeen > 0) {
       app.logger.info(result, "Message-archive projection sweep complete");
+    }
+    const coverage = await runOfapiMessageCoverageProjection(app);
+    if (coverage.projected > 0) {
+      app.logger.info(coverage, "OFAPI message-coverage projection sweep complete");
     }
     const earnings = await runFanEarningsProjection(app);
     if (earnings.upserted > 0) {

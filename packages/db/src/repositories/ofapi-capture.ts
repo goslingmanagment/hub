@@ -13,6 +13,7 @@ import type {
   OfapiParserOutcome,
   OfapiRequestAttemptState,
 } from "../schema.ts";
+import { appendProjectionOnlyDomainEventsInTransaction } from "./domain-events.ts";
 import { insertObservation } from "./observations.ts";
 
 export const OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION = "ofapi-capture-v1";
@@ -2001,8 +2002,20 @@ export type OfapiCaptureParseDisposition =
   }
   | {
     kind: "complete";
-    terminalObservationId: number;
-    terminalObservationReceivedAt: Date;
+    terminal: {
+      producer: string;
+      kind: string;
+      payload: Record<string, unknown>;
+      payloadHash: Buffer;
+      idempotencyKey: string;
+      observedAt?: Date | null;
+      coverage?: {
+        conversationRef: string;
+        dedupKey: string;
+        checkpointDedupKey: string;
+        checkpointData?: Record<string, unknown>;
+      } | null;
+    };
     result?: Record<string, unknown> | null;
   }
   | {
@@ -2168,14 +2181,66 @@ export async function settleOfapiCaptureParse(
           where id = ${input.jobId}::uuid
         `);
         break;
-      case "complete":
+      case "complete": {
+        const terminal = await insertObservation(database, {
+          source: "ofapi_capture",
+          producer: input.disposition.terminal.producer,
+          platform: "onlyfans",
+          accountId: job.pageId,
+          nativeAccountRef: job.ofapiAccountId,
+          kind: input.disposition.terminal.kind,
+          payload: input.disposition.terminal.payload,
+          payloadHash: input.disposition.terminal.payloadHash,
+          idempotencyKey: input.disposition.terminal.idempotencyKey,
+          observedAt: input.disposition.terminal.observedAt ?? now,
+          actorPrincipalId: job.originPrincipalId,
+          receivedAt: now,
+        });
+        if (!terminal.inserted) {
+          const existingPayload = await database.execute<{ payload_hash: Buffer }>(sql`
+            select payload_hash
+            from observations
+            where id = ${terminal.observationId}
+              and received_at = ${terminal.receivedAt}
+          `);
+          if (!existingPayload.rows[0]?.payload_hash?.equals(
+            input.disposition.terminal.payloadHash,
+          )) {
+            throw new OfapiCaptureInvariantError(
+              `Terminal proof for job ${input.jobId} conflicts with a captured fact`,
+            );
+          }
+        }
+        const coverage = input.disposition.terminal.coverage ?? null;
+        if (coverage) {
+          await appendProjectionOnlyDomainEventsInTransaction(database, job.pageId, [{
+            type: "capture.coverage_observed",
+            occurredAt: terminal.receivedAt,
+            conversationRef: coverage.conversationRef,
+            data: {
+              ...input.disposition.terminal.payload,
+              proofObservationId: terminal.observationId,
+              proofObservationReceivedAt: terminal.receivedAt.toISOString(),
+            },
+            schemaVersion: 1,
+            observationId: terminal.observationId,
+            dedupKey: coverage.dedupKey,
+          }], {
+            occurredAt: terminal.receivedAt,
+            observationId: terminal.observationId,
+            dedupKey: coverage.checkpointDedupKey,
+            ...(coverage.checkpointData === undefined
+              ? {}
+              : { data: coverage.checkpointData }),
+          });
+        }
         await database.execute(sql`
           update ofapi_capture_jobs
           set state = 'complete',
               pending_observation_id = null,
               pending_observation_received_at = null,
-              terminal_observation_id = ${input.disposition.terminalObservationId},
-              terminal_observation_received_at = ${input.disposition.terminalObservationReceivedAt},
+              terminal_observation_id = ${terminal.observationId},
+              terminal_observation_received_at = ${terminal.receivedAt},
               result = ${JSON.stringify(input.disposition.result ?? {})}::jsonb,
               completed_at = ${now},
               reason_code = null,
@@ -2188,6 +2253,7 @@ export async function settleOfapiCaptureParse(
           where id = ${input.jobId}::uuid
         `);
         break;
+      }
       case "parser_failed":
         await database.execute(sql`
           update ofapi_capture_jobs

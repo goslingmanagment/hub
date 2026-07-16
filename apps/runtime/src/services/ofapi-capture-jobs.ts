@@ -4,7 +4,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   blockOfapiCaptureJobLease,
   captureOfapiAttemptResponse,
-  insertObservation,
   leaseNextOfapiCaptureJob,
   loadOfapiCaptureObservation,
   markOfapiAttemptDispatching,
@@ -106,6 +105,36 @@ function cursorPages(job: OfapiCaptureJobRecord) {
     : job.acceptedPages;
 }
 
+function cursorCount(job: OfapiCaptureJobRecord, field: string) {
+  const value = job.cursor?.[field];
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function advancePageChainHash(
+  job: OfapiCaptureJobRecord,
+  input: {
+    observationId: number;
+    observationReceivedAt: Date;
+    requestedBoundary: string;
+    bodyBytes: Buffer;
+    nextCursor: string | null;
+    terminal: boolean;
+  },
+) {
+  const previous = stringField(job.cursor?.pageChainHash) ??
+    createHash("sha256").update(`ofapi-page-chain-v1:${job.targetHash}`).digest("hex");
+  const bodyHash = createHash("sha256").update(input.bodyBytes).digest("hex");
+  return createHash("sha256").update(JSON.stringify({
+    previous,
+    observationId: input.observationId,
+    observationReceivedAt: input.observationReceivedAt.toISOString(),
+    requestedBoundary: input.requestedBoundary,
+    bodyHash,
+    nextCursor: input.nextCursor,
+    terminal: input.terminal,
+  })).digest("hex");
+}
+
 function httpOutcome(status: number): OfapiHttpOutcome {
   if (status >= 200 && status < 300) return "success";
   if (status === 404) return "not_found";
@@ -141,43 +170,87 @@ async function blockJob(
   });
 }
 
-async function terminalObservation(
-  app: AppContext,
+function terminalFact(
   job: OfapiCaptureJobRecord,
   input: {
     classification: "continuous_history" | "connected_to_anchor";
     lastMessageId: string | null;
     pages: number;
-    items: number;
+    rawCount: number;
+    acceptedCount: number;
+    boundaryDuplicateCount: number;
+    explicitlyIrrelevantCount: number;
+    rejectedCount: number;
+    pageChainHash: string;
+    lastPageObservationId: number;
+    lastPageObservationReceivedAt: Date;
     requiredServingHighWater: number;
   },
 ) {
+  const chatId = stringField(job.target.chatId);
+  if (!chatId) throw new Error("Terminal chat coverage is missing chatId");
   const payload = {
+    scope: "chat",
+    source: input.classification === "continuous_history"
+      ? "pagination_exhausted"
+      : "continuous_anchors",
     jobId: job.id,
     pageId: job.pageId,
+    chatId,
     ofapiAccountId: job.ofapiAccountId,
+    target: job.target,
     targetHash: job.targetHash,
     frozenHeadId: stringField(job.target.frozenHeadId),
     goal: job.goal,
-    ...input,
+    classification: input.classification,
+    range: {
+      fromMessageId: input.lastMessageId,
+      toFrozenHeadId: stringField(job.target.frozenHeadId),
+    },
+    evidence: {
+      kind: input.classification === "continuous_history" ? "vendor_eof" : "anchor_chain",
+      pageChainHash: input.pageChainHash,
+      pages: input.pages,
+      lastPageObservation: {
+        id: input.lastPageObservationId,
+        receivedAt: input.lastPageObservationReceivedAt.toISOString(),
+      },
+    },
+    counts: {
+      raw: input.rawCount,
+      accepted: input.acceptedCount,
+      boundaryDuplicate: input.boundaryDuplicateCount,
+      explicitlyIrrelevant: input.explicitlyIrrelevantCount,
+      rejected: input.rejectedCount,
+    },
+    lastMessageId: input.lastMessageId,
+    pages: input.pages,
+    requiredServingHighWater: input.requiredServingHighWater,
     sourceContractVersion: job.sourceContractVersion,
     parserVersion: job.parserVersion,
     proofPolicyVersion: job.proofPolicyVersion,
     parseDebt: 0,
+    supersedes: null,
   };
-  return insertObservation(app.db, {
-    source: "ofapi_capture",
+  return {
     producer: "ofapi-mirror-background",
-    platform: "onlyfans",
-    accountId: job.pageId,
-    nativeAccountRef: job.ofapiAccountId,
     kind: "ofapi.capture_completed.v1",
     payload,
     payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
     idempotencyKey: `capture-complete:${job.id}:${job.targetHash}`,
     observedAt: new Date(),
-    actorPrincipalId: job.originPrincipalId,
-  });
+    coverage: input.classification === "continuous_history"
+      ? {
+        conversationRef: chatId,
+        dedupKey: `capture-coverage:${job.id}:${job.targetHash}`,
+        checkpointDedupKey: `projection-checkpoint:capture-coverage:${job.id}:${job.targetHash}`,
+        checkpointData: {
+          profile: "ofapi_message_coverage_v1",
+          originClass: "capture_background",
+        },
+      }
+      : null,
+  };
 }
 
 async function parseCapturedJob(
@@ -351,6 +424,21 @@ async function parseCapturedJob(
   }
   const anchorReached = target.anchorMessageId !== null && itemIds.includes(target.anchorMessageId);
   const pages = cursorPages(job) + 1;
+  const rawCount = cursorCount(job, "rawCount") + page.rawCount;
+  const acceptedCount = job.acceptedItems + page.items.length;
+  const boundaryDuplicateCount = cursorCount(job, "boundaryDuplicateCount") +
+    page.boundaryDuplicateCount;
+  const explicitlyIrrelevantCount = cursorCount(job, "explicitlyIrrelevantCount");
+  const rejectedCount = cursorCount(job, "rejectedCount");
+  const lastMessageId = page.nextCursor ?? inclusiveCursor ?? target.frozenHeadId;
+  const pageChainHash = advancePageChainHash(job, {
+    observationId: observation.id,
+    observationReceivedAt: observation.receivedAt,
+    requestedBoundary: inclusiveCursor ?? target.frozenHeadId,
+    bodyBytes: captured.bodyBytes,
+    nextCursor: lastMessageId,
+    terminal: !page.hasNextPage,
+  });
   const maxPagesReached = job.maxPages !== null && pages >= job.maxPages;
   const continuousToEnd = !page.hasNextPage;
   const completes = job.goal === "history_to_exhaustion"
@@ -358,14 +446,21 @@ async function parseCapturedJob(
     : anchorReached || continuousToEnd;
 
   if (completes) {
-    const terminal = await terminalObservation(app, job, {
+    const terminal = terminalFact(job, {
       classification: continuousToEnd ? "continuous_history" : "connected_to_anchor",
-      lastMessageId: page.nextCursor,
+      lastMessageId,
       pages,
-      items: job.acceptedItems + page.items.length,
+      rawCount,
+      acceptedCount,
+      boundaryDuplicateCount,
+      explicitlyIrrelevantCount,
+      rejectedCount,
+      pageChainHash,
+      lastPageObservationId: observation.id,
+      lastPageObservationReceivedAt: observation.receivedAt,
       requiredServingHighWater: materialHighWater,
     });
-    await settleOfapiCaptureParse(app.db, {
+    const settled = await settleOfapiCaptureParse(app.db, {
       jobId: job.id,
       attemptId: observation.attemptId,
       leaseToken: job.leaseToken,
@@ -379,17 +474,17 @@ async function parseCapturedJob(
       rejectedCount: 0,
       disposition: {
         kind: "complete",
-        terminalObservationId: terminal.observationId,
-        terminalObservationReceivedAt: terminal.receivedAt,
+        terminal,
         result: {
           classification: continuousToEnd ? "continuous_history" : "connected_to_anchor",
-          lastMessageId: page.nextCursor,
+          lastMessageId,
           pages,
+          pageChainHash,
           requiredServingHighWater: materialHighWater,
         },
       },
     });
-    return { kind: "success", pageId: job.pageId, jobId: job.id };
+    return { kind: settled ? "success" : "failed", pageId: job.pageId, jobId: job.id };
   }
 
   if (maxPagesReached || page.nextCursor === null) {
@@ -429,6 +524,11 @@ async function parseCapturedJob(
       cursor: {
         firstId: page.nextCursor,
         pages,
+        rawCount,
+        boundaryDuplicateCount,
+        explicitlyIrrelevantCount,
+        rejectedCount,
+        pageChainHash,
         requiredServingHighWater: materialHighWater,
       },
       acceptedItems: page.items.length,

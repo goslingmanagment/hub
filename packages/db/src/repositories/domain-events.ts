@@ -51,6 +51,15 @@ export interface ProjectionCheckpointInput {
   data?: Record<string, unknown>;
 }
 
+const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
+  "message.material_observed",
+  "capture.coverage_observed",
+]);
+
+export function isProjectionOnlyDomainEventType(type: string) {
+  return PROJECTION_ONLY_DOMAIN_EVENT_TYPES.has(type);
+}
+
 /**
  * Appends a batch of canonical events for ONE account. Self-transactional:
  * the counter-row lock spans the whole batch, so concurrent appenders for the
@@ -76,10 +85,25 @@ export async function appendProjectionOnlyDomainEvents(
   events: readonly DomainEventInput[],
   checkpoint: ProjectionCheckpointInput,
 ): Promise<AppendDomainEventsResult> {
-  if (events.some((event) => event.type !== "message.material_observed")) {
-    throw new Error("Projection-only append accepts only message.material_observed events");
+  if (events.some((event) => !isProjectionOnlyDomainEventType(event.type))) {
+    throw new Error("Projection-only append received a deliverable domain event");
   }
   return appendDomainEventsBatch(db, accountId, events, checkpoint);
+}
+
+/** Same append protocol when the caller already owns the surrounding DB
+ * transaction. Used when a projection-only fact must commit atomically with
+ * the state transition that authorizes it. */
+export async function appendProjectionOnlyDomainEventsInTransaction(
+  db: Database,
+  accountId: number,
+  events: readonly DomainEventInput[],
+  checkpoint: ProjectionCheckpointInput,
+): Promise<AppendDomainEventsResult> {
+  if (events.some((event) => !isProjectionOnlyDomainEventType(event.type))) {
+    throw new Error("Projection-only append received a deliverable domain event");
+  }
+  return appendDomainEventsBatchInTransaction(db, accountId, events, checkpoint);
 }
 
 async function appendDomainEventsBatch(
@@ -93,113 +117,122 @@ async function appendDomainEventsBatch(
     return { appended: 0, deduped: 0, highWater, events: [] };
   }
 
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`
-      insert into domain_event_seq (account_id) values (${accountId})
-      on conflict (account_id) do nothing
+  return db.transaction(async (tx) =>
+    appendDomainEventsBatchInTransaction(tx as unknown as Database, accountId, events, checkpoint)
+  );
+}
+
+async function appendDomainEventsBatchInTransaction(
+  db: Database,
+  accountId: number,
+  events: readonly DomainEventInput[],
+  checkpoint: ProjectionCheckpointInput | null,
+): Promise<AppendDomainEventsResult> {
+  await db.execute(sql`
+    insert into domain_event_seq (account_id) values (${accountId})
+    on conflict (account_id) do nothing
+  `);
+  const locked = await db.execute<{ next_seq: string }>(sql`
+    select next_seq::text from domain_event_seq
+    where account_id = ${accountId}
+    for update
+  `);
+  let nextSeq = Number(locked.rows[0]!.next_seq);
+  let appended = 0;
+  let deduped = 0;
+  const outcomes: AppendedDomainEventOutcome[] = [];
+
+  const appendOne = async (event: DomainEventInput) => {
+    const allocated = await db.execute<{ id: string }>(sql`
+      select nextval(pg_get_serial_sequence('domain_events', 'id'))::text as id
     `);
-    const locked = await tx.execute<{ next_seq: string }>(sql`
-      select next_seq::text from domain_event_seq
-      where account_id = ${accountId}
-      for update
+    const eventId = Number(allocated.rows[0]!.id);
+
+    const claimed = await db.execute(sql`
+      insert into domain_event_keys (account_id, dedup_key, event_id, occurred_at)
+      values (${accountId}, ${event.dedupKey}, ${eventId}, ${event.occurredAt})
+      on conflict (account_id, dedup_key) do nothing
+      returning event_id
     `);
-    let nextSeq = Number(locked.rows[0]!.next_seq);
-    let appended = 0;
-    let deduped = 0;
-    const outcomes: AppendedDomainEventOutcome[] = [];
-
-    const appendOne = async (event: DomainEventInput) => {
-      const allocated = await tx.execute<{ id: string }>(sql`
-        select nextval(pg_get_serial_sequence('domain_events', 'id'))::text as id
+    if (claimed.rows.length === 0) {
+      deduped += 1;
+      // Surface the EXISTING claim's event id — the dedup outcome is a
+      // resolution, not a black hole (Wave 2 linkage).
+      const existing = await db.execute<{ event_id: string }>(sql`
+        select event_id::text from domain_event_keys
+        where account_id = ${accountId} and dedup_key = ${event.dedupKey}
       `);
-      const eventId = Number(allocated.rows[0]!.id);
-
-      const claimed = await tx.execute(sql`
-        insert into domain_event_keys (account_id, dedup_key, event_id, occurred_at)
-        values (${accountId}, ${event.dedupKey}, ${eventId}, ${event.occurredAt})
-        on conflict (account_id, dedup_key) do nothing
-        returning event_id
-      `);
-      if (claimed.rows.length === 0) {
-        deduped += 1;
-        // Surface the EXISTING claim's event id — the dedup outcome is a
-        // resolution, not a black hole (Wave 2 linkage).
-        const existing = await tx.execute<{ event_id: string }>(sql`
-          select event_id::text from domain_event_keys
-          where account_id = ${accountId} and dedup_key = ${event.dedupKey}
-        `);
-        outcomes.push({
-          dedupKey: event.dedupKey,
-          eventId: Number(existing.rows[0]!.event_id),
-          appended: false,
-        });
-        return false;
-      }
-      outcomes.push({ dedupKey: event.dedupKey, eventId, appended: true });
-
-      await tx.execute(sql`
-        insert into domain_events (
-          id, account_id, account_seq, type, occurred_at, fan_identity_ref,
-          conversation_ref, message_ref, transaction_ref, data, schema_version,
-          observation_id, dedup_key
-        ) overriding system value values (
-          ${eventId},
-          ${accountId},
-          ${nextSeq},
-          ${event.type},
-          ${event.occurredAt},
-          ${event.fanIdentityRef ?? null},
-          ${event.conversationRef ?? null},
-          ${event.messageRef ?? null},
-          ${event.transactionRef ?? null},
-          ${JSON.stringify(event.data)}::jsonb,
-          ${event.schemaVersion},
-          ${event.observationId},
-          ${event.dedupKey}
-        )
-      `);
-      nextSeq += 1;
-      appended += 1;
-      return true;
-    };
-
-    for (const event of events) {
-      await appendOne(event);
-    }
-
-    const hiddenAppended = appended;
-    if (checkpoint !== null && hiddenAppended > 0) {
-      const checkpointAppended = await appendOne({
-        type: "stream.projection_checkpoint",
-        occurredAt: checkpoint.occurredAt,
-        data: {
-          ...(checkpoint.data ?? {}),
-          hiddenCount: hiddenAppended,
-        },
-        schemaVersion: 1,
-        observationId: checkpoint.observationId,
-        dedupKey: checkpoint.dedupKey,
+      outcomes.push({
+        dedupKey: event.dedupKey,
+        eventId: Number(existing.rows[0]!.event_id),
+        appended: false,
       });
-      if (!checkpointAppended) {
-        throw new Error("Projection checkpoint was already claimed for newly appended material");
-      }
+      return false;
     }
+    outcomes.push({ dedupKey: event.dedupKey, eventId, appended: true });
 
-    if (appended > 0) {
-      await tx.execute(sql`
-        update domain_event_seq set next_seq = ${nextSeq}
-        where account_id = ${accountId}
-      `);
-      // Stage 21 fan-out: one wake-up per (account, batch), fired on COMMIT.
-      // The payload is advisory — the hub drains forward from its own
-      // watermark, never builds frames from notifications.
-      await tx.execute(sql`
-        select pg_notify(${DOMAIN_EVENTS_APPENDED_CHANNEL}, ${`${accountId}:${nextSeq - 1}`})
-      `);
+    await db.execute(sql`
+      insert into domain_events (
+        id, account_id, account_seq, type, occurred_at, fan_identity_ref,
+        conversation_ref, message_ref, transaction_ref, data, schema_version,
+        observation_id, dedup_key
+      ) overriding system value values (
+        ${eventId},
+        ${accountId},
+        ${nextSeq},
+        ${event.type},
+        ${event.occurredAt},
+        ${event.fanIdentityRef ?? null},
+        ${event.conversationRef ?? null},
+        ${event.messageRef ?? null},
+        ${event.transactionRef ?? null},
+        ${JSON.stringify(event.data)}::jsonb,
+        ${event.schemaVersion},
+        ${event.observationId},
+        ${event.dedupKey}
+      )
+    `);
+    nextSeq += 1;
+    appended += 1;
+    return true;
+  };
+
+  for (const event of events) {
+    await appendOne(event);
+  }
+
+  const hiddenAppended = appended;
+  if (checkpoint !== null && hiddenAppended > 0) {
+    const checkpointAppended = await appendOne({
+      type: "stream.projection_checkpoint",
+      occurredAt: checkpoint.occurredAt,
+      data: {
+        ...(checkpoint.data ?? {}),
+        hiddenCount: hiddenAppended,
+      },
+      schemaVersion: 1,
+      observationId: checkpoint.observationId,
+      dedupKey: checkpoint.dedupKey,
+    });
+    if (!checkpointAppended) {
+      throw new Error("Projection checkpoint was already claimed for newly appended material");
     }
+  }
 
-    return { appended, deduped, highWater: nextSeq - 1, events: outcomes };
-  });
+  if (appended > 0) {
+    await db.execute(sql`
+      update domain_event_seq set next_seq = ${nextSeq}
+      where account_id = ${accountId}
+    `);
+    // Stage 21 fan-out: one wake-up per (account, batch), fired on COMMIT.
+    // The payload is advisory — the hub drains forward from its own
+    // watermark, never builds frames from notifications.
+    await db.execute(sql`
+      select pg_notify(${DOMAIN_EVENTS_APPENDED_CHANNEL}, ${`${accountId}:${nextSeq - 1}`})
+    `);
+  }
+
+  return { appended, deduped, highWater: nextSeq - 1, events: outcomes };
 }
 
 /** LISTEN/NOTIFY channel for domain-event appends (kernel Stage 21). */
@@ -358,7 +391,7 @@ export async function listDomainEventContiguousReplayEnds(
           on event.account_id = normalized.account_id
          and event.account_seq > normalized.base_seq
          and event.account_seq <= normalized.through_seq
-         and event.type <> 'message.material_observed'
+         and event.type not in ('message.material_observed', 'capture.coverage_observed')
       ), classified as (
         select *,
                case
@@ -676,7 +709,7 @@ export async function listEventsSince(
       and de.account_seq > ${input.afterSeq}
       ${input.throughSeq === undefined ? sql`` : sql`and de.account_seq <= ${input.throughSeq}`}
       ${input.excludeProjectionOnly === true
-        ? sql`and de.type <> 'message.material_observed'`
+        ? sql`and de.type not in ('message.material_observed', 'capture.coverage_observed')`
         : sql``}
     order by de.account_seq asc
     limit ${limit}

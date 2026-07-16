@@ -3073,6 +3073,47 @@ export const messageArchive = pgTable(
   }),
 );
 
+// OF mirror S2: latest rebuildable view of append-only per-chat coverage
+// proofs. Serving must additionally verify the message_archive watermark.
+export const ofapiMessageCoverage = pgTable(
+  "ofapi_message_coverage",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    chatId: text("chat_id").notNull(),
+    classification: text("classification").notNull(),
+    source: text("source").notNull(),
+    frozenHeadId: text("frozen_head_id").notNull(),
+    oldestMessageId: text("oldest_message_id"),
+    target: jsonb("target").$type<Record<string, unknown>>().notNull(),
+    targetHash: char("target_hash", { length: 64 }).notNull(),
+    pageChainHash: char("page_chain_hash", { length: 64 }).notNull(),
+    rawCount: integer("raw_count").notNull(),
+    acceptedCount: integer("accepted_count").notNull(),
+    boundaryDuplicateCount: integer("boundary_duplicate_count").notNull(),
+    explicitlyIrrelevantCount: integer("explicitly_irrelevant_count").notNull(),
+    rejectedCount: integer("rejected_count").notNull(),
+    parseDebt: integer("parse_debt").notNull(),
+    requiredServingHighWater: bigint("required_serving_high_water", { mode: "number" }).notNull(),
+    proofObservationId: bigint("proof_observation_id", { mode: "number" }).notNull(),
+    proofObservationReceivedAt: timestamp("proof_observation_received_at", { withTimezone: true }).notNull(),
+    proofPolicyVersion: text("proof_policy_version").notNull(),
+    sourceContractVersion: text("source_contract_version").notNull(),
+    parserVersion: text("parser_version").notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.chatId] }),
+    classificationIdx: index("ofapi_message_coverage_classification_idx").on(
+      table.classification,
+      table.pageId,
+    ),
+  }),
+);
+
 // The standard per-account event high-water (spec name projection_watermarks
 // was taken by the spender rebuild-timestamps table — recorded deviation).
 export const projectionSeqWatermarks = pgTable(

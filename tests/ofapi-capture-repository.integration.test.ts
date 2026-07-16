@@ -10,8 +10,10 @@ import {
   createOnlyFansPage,
   createOrGetOfapiCaptureJob,
   createUser,
+  evaluateOfapiHistoryCoverage,
   getOfapiCaptureJob,
   getOfapiRequestAttempt,
+  insertObservation,
   leaseNextOfapiCaptureJob,
   listRunnableOfapiCapturePages,
   markOfapiAttemptDispatching,
@@ -26,6 +28,10 @@ import {
 
 import { executeOfapiCaptureJobChunk } from "../apps/runtime/src/services/ofapi-capture-jobs.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
+import {
+  runOfapiMessageCoverageProjection,
+} from "../apps/runtime/src/services/projections/ofapi-message-coverage.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   resetIntegrationDatabase,
@@ -550,6 +556,41 @@ describe("OFAPI capture correctness repository", () => {
       acceptedItems: 1,
       zeroProgressCount: 0,
     });
+
+    // A stale worker cannot leave an orphan terminal proof: the journal fact
+    // is inserted only after the lease/job CAS has been validated in the same
+    // transaction.
+    expect(await settleOfapiCaptureParse(testDb.db, {
+      jobId: leased.id,
+      attemptId: reservation.attemptId,
+      leaseToken: leased.leaseToken,
+      observationId: captured.observationId,
+      observationReceivedAt: captured.receivedAt,
+      parserOutcome: "accepted",
+      rawCount: 1,
+      acceptedCount: 1,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: {
+        kind: "complete",
+        terminal: {
+          producer: "stale-test-worker",
+          kind: "ofapi.capture_completed.v1",
+          payload: { stale: true },
+          payloadHash: Buffer.alloc(32),
+          idempotencyKey: `stale-proof:${leased.id}`,
+          coverage: null,
+        },
+      },
+      now: new Date(NOW.getTime() + 5_000),
+    })).toBe(false);
+    const orphanProof = await testDb.pool.query<{ n: string }>(`
+      select count(*)::text as n
+      from observations
+      where source = 'ofapi_capture' and kind = 'ofapi.capture_completed.v1'
+    `);
+    expect(orphanProof.rows[0]?.n).toBe("0");
   });
 
   it("captures a paid page before parsing and never calls the vendor again after capture", async () => {
@@ -585,10 +626,79 @@ describe("OFAPI capture correctness repository", () => {
       select payload from observations where id = $1
     `, [completed?.terminalObservationId]);
     expect(terminal.rows[0]?.payload).toMatchObject({
+      chatId: "42",
       classification: "continuous_history",
       pages: 1,
       parseDebt: 0,
+      source: "pagination_exhausted",
+      counts: {
+        raw: 2,
+        accepted: 2,
+        boundaryDuplicate: 0,
+        explicitlyIrrelevant: 0,
+        rejected: 0,
+      },
+      evidence: {
+        kind: "vendor_eof",
+        pages: 1,
+      },
     });
+    expect(await evaluateOfapiHistoryCoverage(testDb.db, {
+      pageId: fixture.page.id,
+      chatId: "42",
+      expectedCurrentHeadId: "100",
+      requestedFirstId: "100",
+      acceptedProofPolicyVersions: [fixture.job.proofPolicyVersion],
+    })).toEqual({ eligible: false, reason: "no_certificate" });
+
+    await runOfapiMessageCoverageProjection(fixture.app, { accountId: fixture.page.id });
+    expect(await evaluateOfapiHistoryCoverage(testDb.db, {
+      pageId: fixture.page.id,
+      chatId: "42",
+      expectedCurrentHeadId: "100",
+      requestedFirstId: "100",
+      acceptedProofPolicyVersions: [fixture.job.proofPolicyVersion],
+    })).toEqual({ eligible: false, reason: "projection_lag" });
+
+    await runMessageArchiveProjection(fixture.app, { accountId: fixture.page.id });
+    expect(await evaluateOfapiHistoryCoverage(testDb.db, {
+      pageId: fixture.page.id,
+      chatId: "42",
+      expectedCurrentHeadId: "100",
+      requestedFirstId: "99",
+      acceptedProofPolicyVersions: [fixture.job.proofPolicyVersion],
+    })).toMatchObject({
+      eligible: true,
+      coverage: {
+        pageId: fixture.page.id,
+        chatId: "42",
+        classification: "continuous_history",
+      },
+    });
+    expect(await evaluateOfapiHistoryCoverage(testDb.db, {
+      pageId: fixture.page.id,
+      chatId: "42",
+      expectedCurrentHeadId: "101",
+      requestedFirstId: "99",
+      acceptedProofPolicyVersions: [fixture.job.proofPolicyVersion],
+    })).toEqual({ eligible: false, reason: "stale_head" });
+    expect(await evaluateOfapiHistoryCoverage(testDb.db, {
+      pageId: fixture.page.id,
+      chatId: "42",
+      expectedCurrentHeadId: "100",
+      requestedFirstId: "98",
+      acceptedProofPolicyVersions: [fixture.job.proofPolicyVersion],
+    })).toEqual({ eligible: false, reason: "range_unproven" });
+
+    const coverageEvents = await testDb.pool.query<{ type: string; account_seq: string }>(`
+      select type, account_seq::text
+      from domain_events
+      where account_id = $1
+        and type in ('capture.coverage_observed', 'stream.projection_checkpoint')
+      order by account_seq
+    `, [fixture.page.id]);
+    expect(coverageEvents.rows.at(-2)?.type).toBe("capture.coverage_observed");
+    expect(coverageEvents.rows.at(-1)?.type).toBe("stream.projection_checkpoint");
     const attempts = await testDb.pool.query<{ count: string }>(`
       select count(*)::text as count
       from ofapi_request_attempts
@@ -613,6 +723,39 @@ describe("OFAPI capture correctness repository", () => {
     });
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
     expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a terminal idempotency conflict without publishing coverage", async () => {
+    if (!testDb) return;
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: messagePage({ nextPage: null }),
+    });
+    await insertObservation(testDb.db, {
+      source: "ofapi_capture",
+      producer: "conflict-fixture",
+      platform: "onlyfans",
+      accountId: fixture.page.id,
+      nativeAccountRef: fixture.accountId,
+      kind: "ofapi.capture_completed.v1",
+      payload: { conflicting: true },
+      payloadHash: Buffer.alloc(32, 7),
+      idempotencyKey: `capture-complete:${fixture.job.id}:${fixture.job.targetHash}`,
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    await expect(
+      executeOfapiCaptureJobChunk(fixture.app, fixture.page.id),
+    ).rejects.toThrow(/conflicts with a captured fact/);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "awaiting_parse",
+      terminalObservationId: null,
+    });
+    const coverage = await testDb.pool.query<{ n: string }>(`
+      select count(*)::text as n
+      from domain_events
+      where account_id = $1 and type = 'capture.coverage_observed'
+    `, [fixture.page.id]);
+    expect(coverage.rows[0]?.n).toBe("0");
   });
 
   it("reconciles exact credits from the captured response after a process crash", async () => {
