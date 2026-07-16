@@ -11,8 +11,10 @@ import {
   createModel,
   createOnlyFansPage,
   deleteProxyConfig,
+  OFAPI_CAPTURE_PROOF_POLICY_VERSION,
   setPageOfapiAccountId,
   storeProxyConfig,
+  upsertPageDmConversation,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -238,12 +240,99 @@ beforeEach(async (context) => {
   await apiServer.ready();
 });
 
-function inject(path: string) {
+function inject(path: string, readIntent?: string) {
   return apiServer!.inject({
     method: "GET",
     url: `/api/v1/ofapi/read/${path}`,
-    headers: { authorization: `Bearer ${chatterKey}` },
+    headers: {
+      authorization: `Bearer ${chatterKey}`,
+      ...(readIntent ? { "x-agency-hub-read-intent": readIntent } : {}),
+    },
   });
+}
+
+async function seedCertifiedHistory(chatId = "123") {
+  appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+  appContext.config.ofapiMessageHistoryShadowEnabled = true;
+  appContext.config.ofapiMessageHistoryDbFallbackEnabled = true;
+  await upsertPageDmConversation(appContext.db, {
+    platformAccountId: assignedPageId,
+    fanId: null,
+    platformConversationId: chatId,
+    partnerPlatformUserId: chatId,
+    partnerUsername: "certified-fan",
+    partnerDisplayName: "Certified Fan",
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: "103",
+    lastUnreadMessageId: null,
+    lastMessageAt: new Date("2026-07-16T12:03:00.000Z"),
+    lastMessageSenderId: chatId,
+    lastMessageSenderRole: "fan",
+    lastMessagePreview: "message-103",
+    lastSeenGeneration: 1,
+  });
+  await testDb!.pool.query(`
+    insert into message_archive (
+      account_id, platform, conversation_ref, message_ref,
+      native_message_id, fan_native_id, sender_role, is_sent_by_me,
+      occurred_at, text_plain, text_html, price_mills, is_opened, is_new,
+      is_tip, tip_amount_mills, tip_text_plain, reply_metadata, media_metadata,
+      origin_class, material_observed_at, source_account_seq,
+      serving_contract_version, content_pending
+    )
+    select $1, 'onlyfans', $2, id::text,
+           id, $2, case when id % 2 = 0 then 'model' else 'fan' end,
+           id % 2 = 0,
+           '2026-07-16T12:00:00.000Z'::timestamptz
+             + ((id - 100)::text || ' minutes')::interval,
+           'message-' || id::text, '<p>message-' || id::text || '</p>',
+           case when id = 102 then 1500 else 0 end,
+           case when id = 102 then true else false end,
+           false,
+           id = 100, case when id = 100 then 5000 else 0 end,
+           case when id = 100 then 'thank you' else null end,
+           case when id = 101 then jsonb_build_object(
+             'messageId', '102', 'textHtml', '<p>reply</p>', 'isSentByMe', true
+           ) else null end,
+           '[]'::jsonb, 'capture_background', now(), id - 99, 1, false
+    from unnest(array[100, 101, 102, 103]::bigint[]) as id
+  `, [assignedPageId, chatId]);
+  await testDb!.pool.query(`
+    insert into projection_seq_watermarks (projection, account_id, high_seq)
+    values ('message_archive', $1, 4)
+    on conflict (projection, account_id) do update set high_seq = excluded.high_seq
+  `, [assignedPageId]);
+  await testDb!.pool.query(`
+    insert into ofapi_message_coverage (
+      page_id, chat_id, classification, source, frozen_head_id,
+      oldest_message_id, target, target_hash, page_chain_hash,
+      raw_count, accepted_count, boundary_duplicate_count,
+      explicitly_irrelevant_count, rejected_count, parse_debt,
+      required_serving_high_water, proof_observation_id,
+      proof_observation_received_at, proof_policy_version,
+      source_contract_version, parser_version, source_account_seq
+    ) values (
+      $1, $2, 'continuous_history', 'pagination_exhausted', '103',
+      '100', '{}'::jsonb, $3, $4,
+      4, 4, 0, 0, 0, 0,
+      4, 1, now(), $5, 'ofapi-capture-v1', 'ofapi-capture-parser-v1', 5
+    )
+  `, [
+    assignedPageId,
+    chatId,
+    "a".repeat(64),
+    "b".repeat(64),
+    OFAPI_CAPTURE_PROOF_POLICY_VERSION,
+  ]);
+  await testDb!.pool.query(
+    `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+     values (1, current_date, 9000, now())
+     on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+  );
 }
 
 describe("OFAPI read gateway integration", () => {
@@ -432,6 +521,156 @@ describe("OFAPI read gateway integration", () => {
     });
     expect(unauthenticated.statusCode, unauthenticated.body).toBe(401);
     expect(upstreamRequests).toHaveLength(0);
+  });
+
+  it("serves only explicit certified backward history from the DB", async () => {
+    await seedCertifiedHistory();
+    // A certified DB hit must survive vendor-death mode and spend nothing.
+    appContext.ofapi = undefined;
+
+    const first = await inject(
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
+      "deep-history-v1",
+    );
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.headers["x-agency-hub-read-source"]).toBe("db");
+    expect(first.headers["x-ofapi-credits-used"]).toBe("0");
+    expect(first.json()).toMatchObject({
+      data: [
+        {
+          id: 102,
+          text: "<p>message-102</p>",
+          price: 1.5,
+          isOpened: true,
+          isSentByMe: true,
+        },
+        {
+          id: 101,
+          text: "<p>message-101</p>",
+          replyToMessage: { id: 102, text: "<p>reply</p>", isSentByMe: true },
+          isSentByMe: false,
+        },
+      ],
+      _pagination: {
+        next_page: `/${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=101&skip_users=all`,
+      },
+    });
+
+    const last = await inject(
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=101&skip_users=all`,
+      "deep-history-v1",
+    );
+    expect(last.statusCode, last.body).toBe(200);
+    expect(last.json().data.map((item: { id: number }) => item.id)).toEqual([101, 100]);
+    expect(last.json()._pagination.next_page).toBeNull();
+    expect(upstreamRequests).toHaveLength(0);
+    expect(proxyRequests).toHaveLength(0);
+    const attempts = await testDb!.pool.query<{ count: string }>(
+      "select count(*)::text as count from ofapi_request_attempts",
+    );
+    expect(attempts.rows[0]?.count).toBe("0");
+  });
+
+  it("keeps old clients and non-certified history on one capture-first vendor fallback", async () => {
+    await seedCertifiedHistory();
+    scriptedResponses.push(
+      {
+        status: 200,
+        body: { data: [{ id: 102 }], _pagination: { next_page: null } },
+      },
+      {
+        status: 200,
+        body: { data: [{ id: 102 }], _pagination: { next_page: null } },
+      },
+    );
+
+    // No intent means no DB cutover, even though the query happens to contain first_id.
+    const legacy = await inject(
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
+    );
+    expect(legacy.statusCode, legacy.body).toBe(200);
+    expect(legacy.headers["x-agency-hub-read-source"]).toBe("vendor");
+    expect(legacy.headers["x-agency-hub-read-fallback"]).toBe("surface_not_cutover");
+
+    // An independent head advance invalidates the proof and takes exactly one live GET.
+    await testDb!.pool.query(
+      "update page_dm_threads set last_message_id = '104' where platform_account_id = $1",
+      [assignedPageId],
+    );
+    const stale = await inject(
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
+      "deep-history-v1",
+    );
+    expect(stale.statusCode, stale.body).toBe(200);
+    expect(stale.headers["x-agency-hub-read-source"]).toBe("vendor");
+    expect(stale.headers["x-agency-hub-read-fallback"]).toBe("stale_head");
+    expect(upstreamRequests).toHaveLength(2);
+
+    const attempts = await testDb!.pool.query<{
+      serving_mode: string;
+      fallback_reason: string;
+      state: string;
+    }>(`
+      select serving_mode, fallback_reason, state
+      from ofapi_request_attempts
+      order by reserved_at, id
+    `);
+    expect(attempts.rows).toEqual([
+      { serving_mode: "db_fallback", fallback_reason: "surface_not_cutover", state: "response_captured" },
+      { serving_mode: "db_fallback", fallback_reason: "stale_head", state: "response_captured" },
+    ]);
+  });
+
+  it("falls back instead of returning a partial page or false EOF", async () => {
+    await seedCertifiedHistory();
+    await testDb!.pool.query(
+      "delete from message_archive where account_id = $1 and message_ref = '100'",
+      [assignedPageId],
+    );
+    scriptedResponses.push({
+      status: 200,
+      body: { data: [{ id: 101 }, { id: 100 }], _pagination: { next_page: null } },
+    });
+
+    const response = await inject(
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=101&skip_users=all`,
+      "deep-history-v1",
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers["x-agency-hub-read-source"]).toBe("vendor");
+    expect(response.headers["x-agency-hub-read-fallback"]).toBe("gap");
+    expect(response.json().data.map((item: { id: number }) => item.id)).toEqual([101, 100]);
+    expect(upstreamRequests).toHaveLength(1);
+  });
+
+  it("shadows certified ids without changing the vendor response", async () => {
+    await seedCertifiedHistory();
+    appContext.config.ofapiMessageHistoryDbFallbackEnabled = false;
+    scriptedResponses.push({
+      status: 200,
+      body: {
+        data: [{ id: 102 }, { id: 101 }],
+        _pagination: { next_page: "vendor-next" },
+      },
+    });
+
+    const response = await inject(
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
+      "deep-history-v1",
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers["x-agency-hub-read-source"]).toBe("vendor");
+    expect(response.headers["x-agency-hub-history-shadow"]).toBe("match");
+    expect(response.json()._pagination.next_page).toBe("vendor-next");
+    expect(upstreamRequests).toHaveLength(1);
+    const attempt = await testDb!.pool.query<{
+      serving_mode: string;
+      fallback_reason: string;
+    }>("select serving_mode, fallback_reason from ofapi_request_attempts");
+    expect(attempt.rows).toEqual([{
+      serving_mode: "shadow",
+      fallback_reason: "shadow_probe",
+    }]);
   });
 
   it("tees a gateway 200 into the journal with principal and template kind (Stage 9)", async () => {

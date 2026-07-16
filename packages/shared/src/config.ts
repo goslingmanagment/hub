@@ -152,6 +152,11 @@ const envSchema = z.object({
   // old read path remains an immediate rollback until the canary is proven.
   OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED: booleanSchema.default(false),
   OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED: booleanSchema.default(false),
+  // One narrow S4 surface: certified backward chat-history pages. Separate
+  // booleans use the repo's existing staged-config machinery; there is
+  // intentionally no db_only flag until fleet coverage is closed in S5b.
+  OFAPI_MESSAGE_HISTORY_SHADOW_ENABLED: booleanSchema.default(false),
+  OFAPI_MESSAGE_HISTORY_DB_FALLBACK_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED: booleanSchema.default(false),
   // W3.2 (decision #125): queued-only outbox rows older than this expire to
@@ -309,6 +314,8 @@ export interface AppConfig {
   ofapiDesktopReadGatewayEnabled?: boolean;
   ofapiMirrorInteractiveCaptureEnabled?: boolean;
   ofapiMirrorBackgroundCaptureEnabled?: boolean;
+  ofapiMessageHistoryShadowEnabled?: boolean;
+  ofapiMessageHistoryDbFallbackEnabled?: boolean;
   ofapiDesktopCommandOutboxEnabled?: boolean;
   ofapiDesktopCommandExecutionEnabled?: boolean;
   /** Fast-reply freshness PR4: readthrough reconcile (boot flag). */
@@ -488,6 +495,8 @@ export function loadConfig(
     ofapiDesktopReadGatewayEnabled: parsed.OFAPI_DESKTOP_READ_GATEWAY_ENABLED,
     ofapiMirrorInteractiveCaptureEnabled: parsed.OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED,
     ofapiMirrorBackgroundCaptureEnabled: parsed.OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED,
+    ofapiMessageHistoryShadowEnabled: parsed.OFAPI_MESSAGE_HISTORY_SHADOW_ENABLED,
+    ofapiMessageHistoryDbFallbackEnabled: parsed.OFAPI_MESSAGE_HISTORY_DB_FALLBACK_ENABLED,
     ofapiDesktopCommandOutboxEnabled: parsed.OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED,
     ofapiDesktopCommandExecutionEnabled: parsed.OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED,
     ofapiDmReadthroughReconcileEnabled: parsed.OFAPI_DM_READTHROUGH_RECONCILE_ENABLED,

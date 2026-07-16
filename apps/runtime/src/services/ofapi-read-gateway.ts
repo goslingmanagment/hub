@@ -2,6 +2,14 @@ import { listOfapiMappedPages } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AuthPrincipal } from "./auth.ts";
+import {
+  compareOfapiHistoryShadow,
+  isExplicitOfapiDeepHistoryRead,
+  mapOfapiHistoryMissToFallback,
+  OFAPI_DEEP_HISTORY_READ_INTENT,
+  readCertifiedOfapiHistoryResponse,
+  type OfapiHistoryFallbackReason,
+} from "./ofapi-certified-history-read.ts";
 import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import { executeCaptureFirstInteractiveRead } from "./ofapi-capture-transport.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
@@ -369,20 +377,24 @@ export async function executeOfapiReadGatewayRequest(
   input: {
     rawPath: string;
     rawQuery: RawQuery;
+    readIntent?: string | null;
   },
 ): Promise<OfapiReadGatewayResponse> {
   if (app.config.ofapiDesktopReadGatewayEnabled !== true) {
     throw new ServiceUnavailableError("OFAPI desktop read gateway is disabled");
   }
-  if (app.config.ofapiCreditLedgerEnabled !== true) {
-    throw new ServiceUnavailableError("OFAPI desktop read gateway requires the credit ledger");
-  }
   const captureFirst = app.config.ofapiMirrorInteractiveCaptureEnabled === true;
-  if (
-    !app.ofapi ||
-    (captureFirst ? !app.ofapi.dispatchGovernedRaw : !app.ofapi.proxyRead)
-  ) {
-    throw new ServiceUnavailableError("OFAPI client is not configured");
+  const historyShadow = app.config.ofapiMessageHistoryShadowEnabled === true;
+  const historyDbFallback = app.config.ofapiMessageHistoryDbFallbackEnabled === true;
+  if (historyDbFallback && !historyShadow) {
+    throw new ServiceUnavailableError(
+      "OFAPI history DB fallback requires the shadow stage",
+    );
+  }
+  const historyMode = historyDbFallback ? "db_fallback" : historyShadow ? "shadow" : "vendor";
+  const readIntent = input.readIntent?.trim() || null;
+  if (readIntent !== null && readIntent !== OFAPI_DEEP_HISTORY_READ_INTENT) {
+    throw new BadRequestError("Unsupported OFAPI read intent");
   }
 
   const request = resolveOfapiReadGatewayRequest(input.rawPath, input.rawQuery);
@@ -424,6 +436,55 @@ export async function executeOfapiReadGatewayRequest(
     throw new NotFoundError("OFAPI account is not assigned to this chatter");
   }
 
+  if (readIntent !== null && request.chatId === undefined) {
+    throw new BadRequestError("Deep-history intent is valid only for chat messages");
+  }
+  if (historyMode !== "vendor" && !captureFirst) {
+    throw new ServiceUnavailableError(
+      "OFAPI certified history modes require capture-first fallback",
+    );
+  }
+
+  let fallbackReason: OfapiHistoryFallbackReason | null = null;
+  let shadowCandidate: { messageIds: string[] } | null = null;
+  const explicitHistory = request.chatId !== undefined
+    && isExplicitOfapiDeepHistoryRead({
+      chatId: request.chatId,
+      accountId: request.accountId,
+      pathname: request.pathname,
+      query: request.query,
+    }, readIntent);
+  if (historyMode !== "vendor") {
+    if (!explicitHistory) {
+      fallbackReason = "surface_not_cutover";
+    } else {
+      const certified = await readCertifiedOfapiHistoryResponse(app, {
+        pageId: page.id,
+        chatId: request.chatId!,
+        accountId: request.accountId,
+        pathname: request.pathname,
+        query: request.query,
+      });
+      if (certified.kind === "hit") {
+        if (historyMode === "db_fallback") return certified.response;
+        shadowCandidate = { messageIds: certified.messageIds };
+        fallbackReason = "shadow_probe";
+      } else {
+        fallbackReason = mapOfapiHistoryMissToFallback(certified.reason);
+      }
+    }
+  }
+
+  if (app.config.ofapiCreditLedgerEnabled !== true) {
+    throw new ServiceUnavailableError("OFAPI desktop read gateway requires the credit ledger");
+  }
+  if (
+    !app.ofapi ||
+    (captureFirst ? !app.ofapi.dispatchGovernedRaw : !app.ofapi.proxyRead)
+  ) {
+    throw new ServiceUnavailableError("OFAPI client is not configured");
+  }
+
   const egress = await resolveOfapiEgressContext(app, {
     pageId: page.id,
     ofapiAccountId: request.accountId,
@@ -441,6 +502,8 @@ export async function executeOfapiReadGatewayRequest(
         pathname: request.pathname,
         query: request.query,
         fallbackCredits: request.fallbackCredits,
+        servingMode: historyMode === "vendor" ? "vendor_only" : historyMode,
+        fallbackReason,
       })
       : await app.ofapi.proxyRead!({
         pageId: page.id,
@@ -481,7 +544,27 @@ export async function executeOfapiReadGatewayRequest(
           : {}),
       });
     }
-    return response;
+    if (historyMode === "vendor") return response;
+    const headers: Record<string, string> = {
+      ...response.headers,
+      "x-agency-hub-read-source": "vendor",
+      ...(fallbackReason === null
+        ? {}
+        : { "x-agency-hub-read-fallback": fallbackReason }),
+    };
+    if (historyMode === "shadow" && shadowCandidate !== null) {
+      const comparison = compareOfapiHistoryShadow(shadowCandidate.messageIds, response.body);
+      headers["x-agency-hub-history-shadow"] = comparison.matches ? "match" : "mismatch";
+      if (!comparison.matches) {
+        app.logger.warn({
+          pageId: page.id,
+          chatId: request.chatId,
+          dbMessageIds: shadowCandidate.messageIds,
+          vendorMessageIds: comparison.vendorIds,
+        }, "OFAPI certified history shadow mismatch");
+      }
+    }
+    return { ...response, headers };
   } catch (error) {
     if (error instanceof OfapiApiError && error.status === null) {
       throw new ServiceUnavailableError("OFAPI upstream is unavailable");

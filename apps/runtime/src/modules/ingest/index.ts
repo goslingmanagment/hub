@@ -158,6 +158,9 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     const response = await executeOfapiReadGatewayRequest(appContext, principal, {
       rawPath: request.params["*"],
       rawQuery: request.query as Record<string, unknown>,
+      readIntent: typeof request.headers["x-agency-hub-read-intent"] === "string"
+        ? request.headers["x-agency-hub-read-intent"]
+        : null,
     });
     for (const [name, value] of Object.entries(response.headers)) {
       reply.header(name, value);

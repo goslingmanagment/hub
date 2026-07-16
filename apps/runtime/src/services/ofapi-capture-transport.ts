@@ -69,6 +69,15 @@ export async function executeCaptureFirstInteractiveRead(
     pathname: string;
     query: Record<string, string>;
     fallbackCredits: number;
+    servingMode?: "vendor_only" | "shadow" | "db_fallback";
+    fallbackReason?:
+      | "surface_not_cutover"
+      | "no_certificate"
+      | "stale_head"
+      | "gap"
+      | "projection_lag"
+      | "shadow_probe"
+      | null;
   },
 ): Promise<OfapiRawResponse> {
   if (!app.ofapi?.dispatchGovernedRaw) {
@@ -106,7 +115,8 @@ export async function executeCaptureFirstInteractiveRead(
       query: input.query,
     },
     surface: input.surface,
-    servingMode: "vendor_only",
+    servingMode: input.servingMode ?? "vendor_only",
+    fallbackReason: input.fallbackReason ?? null,
     reservedCredits: Math.max(1, Math.trunc(input.fallbackCredits)),
     globalDailyCap,
     scopeDailyCap: Math.min(globalDailyCap, INTERACTIVE_SCOPE_DAILY_CAP),

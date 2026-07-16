@@ -18,6 +18,8 @@ import { describe, expect, it } from "vitest";
 //   - pg-boss's own archival tables
 // The Stage 28 erasure module is the one sanctioned NON-scheduled deleter:
 // owner-initiated, dry-run default, tombstoned in erasure_log.
+// Projection reset helpers are also sanctioned: they only clear rebuildable
+// state and are never scheduled retention work.
 const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/cli.ts",
   "apps/runtime/src/services/erasure/index.ts",
@@ -38,6 +40,7 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/message-archive.ts",
   "packages/db/src/repositories/observations.ts",
   "packages/db/src/repositories/ofapi-commands.ts",
+  "packages/db/src/repositories/ofapi-message-coverage.ts",
   "packages/db/src/repositories/ofapi.ts",
   "packages/db/src/repositories/ops-metrics.ts",
   "packages/db/src/repositories/page-dm.ts",

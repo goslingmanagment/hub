@@ -4498,6 +4498,8 @@ export const routeSchemas = {
       + "`/api/v1/ofapi/read`. It preserves the desktop OFAPI GET paths and JSON "
       + "shapes, but accepts only the documented desktop read allowlist. `/accounts` "
       + "is synthesized from assigned core page mappings and `/whoami` is sanitized. "
+      + "The optional `x-agency-hub-read-intent: deep-history-v1` header identifies "
+      + "backward user scrollback that may be served from certified DB history. "
       + "No POST, DELETE, send, mark-read, typing, or upload operation is exposed.",
     params: ofapiReadGatewayParamsSchema,
     response: {

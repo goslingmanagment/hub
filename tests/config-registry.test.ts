@@ -109,6 +109,8 @@ describe("config registry", () => {
     "ofapiDesktopReadGatewayEnabled",
     "ofapiMirrorInteractiveCaptureEnabled",
     "ofapiMirrorBackgroundCaptureEnabled",
+    "ofapiMessageHistoryShadowEnabled",
+    "ofapiMessageHistoryDbFallbackEnabled",
     "ofapiDesktopCommandOutboxEnabled",
     "ofapiDesktopCommandExecutionEnabled",
     "chatMuseAiGatewayEnabled",
@@ -122,7 +124,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the sixteen live keys, the twenty-one boot keys, and nothing else", () => {
+  it("wires exactly the sixteen live keys, the twenty-three boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);
@@ -153,6 +155,12 @@ describe("config registry", () => {
     expect(req("ofapiSpendProjectionShadowEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
     expect(req("ofapiSpendTransactionIngestEnabled")).toEqual(["ofapiSpendProjectionShadowEnabled"]);
     expect(req("ofapiDesktopReadGatewayEnabled")).toEqual(["ofapiCreditLedgerEnabled"]);
+    expect(req("ofapiMessageHistoryShadowEnabled")).toEqual([
+      "ofapiMirrorInteractiveCaptureEnabled",
+    ]);
+    expect(req("ofapiMessageHistoryDbFallbackEnabled")).toEqual([
+      "ofapiMessageHistoryShadowEnabled",
+    ]);
     expect(req("ofapiDesktopCommandOutboxEnabled")).toEqual(["ofapiDesktopReadGatewayEnabled"]);
     expect(req("ofapiDesktopCommandExecutionEnabled")).toEqual([
       "ofapiDesktopCommandOutboxEnabled",
@@ -189,6 +197,8 @@ describe("config registry", () => {
     expect(order("ofapiSpendTransactionIngestEnabled")).toBe(2);
     expect(order("ofapiDmColdArchiveEnabled")).toBe(1);
     expect(order("ofapiDesktopReadGatewayEnabled")).toBe(1);
+    expect(order("ofapiMessageHistoryShadowEnabled")).toBe(3);
+    expect(order("ofapiMessageHistoryDbFallbackEnabled")).toBe(4);
     expect(order("ofapiDesktopCommandOutboxEnabled")).toBe(1);
     expect(order("ofapiDesktopCommandExecutionEnabled")).toBe(1);
     expect(order("chatMuseAiGatewayEnabled")).toBe(1);
