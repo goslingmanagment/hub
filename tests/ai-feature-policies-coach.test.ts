@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+// Boundary rule (eslint no-restricted-imports): reach the migrated prompt unit
+// through the ai module index, not a deep prompts/* path.
 import {
   FEATURE_POLICIES,
   DEFAULT_FEATURE_MODELS,
   DEFAULT_FEATURE_REASONING,
-} from "../apps/runtime/src/modules/ai/prompts/feature-policies.js";
+} from "../apps/runtime/src/modules/ai/index.ts";
 
 describe("coach-chat feature policy", () => {
   it("registers coach-chat with the agreed policy", () => {
