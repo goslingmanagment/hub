@@ -65,9 +65,10 @@ function asRecordArray(value: unknown): Array<Record<string, unknown>> | null {
 }
 
 /**
- * One deliberately narrow serving surface: inclusive backward OFAPI message
- * scrollback. The whole proof and page are read in one snapshot so a head or
- * projection advance cannot turn a stale certificate into a DB hit.
+ * One deliberately narrow serving surface: exclusive backward OFAPI message
+ * scrollback. OFAPI treats first_id as the already-seen boundary and returns
+ * only older messages. The whole proof and page are read in one snapshot so a
+ * head or projection advance cannot turn a stale certificate into a DB hit.
  */
 export async function readCertifiedOfapiChatHistoryPage(
   db: Database,
@@ -131,19 +132,22 @@ export async function readCertifiedOfapiChatHistoryPage(
         and native_message_id is not null
         and deleted_at is null
       order by native_message_id desc
-      limit ${limit + 1}
+      limit ${limit + 2}
     `);
 
     if (String(result.rows[0]?.native_message_id ?? "") !== input.firstId) {
       return { kind: "miss", reason: "boundary_missing" };
     }
 
-    const hasExtra = result.rows.length > limit;
+    // Keep the boundary check fail-closed, but never return the boundary: the
+    // live OFAPI contract is exclusive. One further row proves continuation.
+    const pageRows = result.rows.slice(1);
+    const hasExtra = pageRows.length > limit;
     const parsed: CertifiedOfapiHistoryMessage[] = [];
     // The extra row proves continuation only. Its material (for example an
     // expiring media URL) belongs to the next request and must not force this
     // otherwise-complete page back to the paid vendor path.
-    for (const row of result.rows.slice(0, limit)) {
+    for (const row of pageRows.slice(0, limit)) {
       const nativeMessageId = String(row.native_message_id ?? "");
       const numericId = Number(nativeMessageId);
       const mediaMetadata = asRecordArray(row.media_metadata);
@@ -204,7 +208,9 @@ export async function readCertifiedOfapiChatHistoryPage(
     const messages = parsed;
     if (!hasExtra) {
       const lastId = messages.at(-1)?.nativeMessageId ?? null;
-      if (lastId !== coverage.coverage.oldestMessageId) {
+      const reachedOldest = lastId === coverage.coverage.oldestMessageId
+        || (lastId === null && input.firstId === coverage.coverage.oldestMessageId);
+      if (!reachedOldest) {
         return { kind: "miss", reason: "false_eof_guard" };
       }
     }

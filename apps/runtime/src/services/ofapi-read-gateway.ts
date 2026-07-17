@@ -472,6 +472,12 @@ export async function executeOfapiReadGatewayRequest(
         fallbackReason = "shadow_probe";
       } else {
         fallbackReason = mapOfapiHistoryMissToFallback(certified.reason);
+        app.logger.info({
+          pageId: page.id,
+          chatId: request.chatId,
+          certifiedHistoryMissReason: certified.reason,
+          fallbackReason,
+        }, "OFAPI certified history read missed");
         if (fallbackReason === "stale_head" || fallbackReason === "no_certificate") {
           try {
             await enqueueExplicitOfapiHistoryRepair(app, {

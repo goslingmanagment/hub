@@ -560,7 +560,7 @@ describe("OFAPI read gateway integration", () => {
     appContext.ofapi = undefined;
 
     const first = await inject(
-      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=103&skip_users=all`,
       "deep-history-v1",
     );
     expect(first.statusCode, first.body).toBe(200);
@@ -592,7 +592,7 @@ describe("OFAPI read gateway integration", () => {
       "deep-history-v1",
     );
     expect(last.statusCode, last.body).toBe(200);
-    expect(last.json().data.map((item: { id: number }) => item.id)).toEqual([101, 100]);
+    expect(last.json().data.map((item: { id: number }) => item.id)).toEqual([100]);
     expect(last.json()._pagination.next_page).toBeNull();
     expect(upstreamRequests).toHaveLength(0);
     expect(proxyRequests).toHaveLength(0);
@@ -756,7 +756,7 @@ describe("OFAPI read gateway integration", () => {
     );
     scriptedResponses.push({
       status: 200,
-      body: { data: [{ id: 101 }, { id: 100 }], _pagination: { next_page: null } },
+      body: { data: [{ id: 100 }], _pagination: { next_page: null } },
     });
 
     const response = await inject(
@@ -766,7 +766,7 @@ describe("OFAPI read gateway integration", () => {
     expect(response.statusCode, response.body).toBe(200);
     expect(response.headers["x-agency-hub-read-source"]).toBe("vendor");
     expect(response.headers["x-agency-hub-read-fallback"]).toBe("gap");
-    expect(response.json().data.map((item: { id: number }) => item.id)).toEqual([101, 100]);
+    expect(response.json().data.map((item: { id: number }) => item.id)).toEqual([100]);
     expect(upstreamRequests).toHaveLength(1);
     expect((await testDb!.pool.query(
       "select 1 from ofapi_capture_jobs",
@@ -785,7 +785,7 @@ describe("OFAPI read gateway integration", () => {
     });
 
     const response = await inject(
-      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=103&skip_users=all`,
       "deep-history-v1",
     );
     expect(response.statusCode, response.body).toBe(200);
