@@ -65,6 +65,7 @@ export const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   // Stage 29: the closing classifier's gateway lane (classification, not
   // generation — its own direct-SDK constants carried over).
   "workboard-closing": 1536,
+  "coach-chat": 2500,
 };
 
 const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
@@ -77,6 +78,7 @@ const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
   "ping": 0.65,
   "hi-greeting": 0.7,
   "workboard-closing": 0,
+  "coach-chat": 0.5,
 };
 
 const ANTHROPIC_ADAPTIVE_THINKING_MODELS = new Set([
@@ -97,6 +99,7 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "ping": 8000,
   "hi-greeting": 8000,
   "workboard-closing": 8000,
+  "coach-chat": 16000,
 };
 
 const APPROX_CHARS_PER_TOKEN = 4;

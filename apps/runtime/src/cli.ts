@@ -718,7 +718,7 @@ export function buildProgram() {
   program
     .command("ai:feature-smoke")
     .description("Stage 30: exercise a kernel AI feature end-to-end against this environment (spends provider budget)")
-    .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting")
+    .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting | coach-chat")
     .requiredOption("--page <label>", "page label")
     .requiredOption("--conversation <ref>", "fan conversation ref (OF: the fan id)")
     .requiredOption("--as <username>", "chatter/owner user the generation is attributed to")
