@@ -629,7 +629,7 @@ describe("audience stream plumbing", () => {
 
     await requestPageSyncRows(appContext.db, {
       pageId: page.id,
-      streams: ["light", "transactions", "dm_conversations", "dm_messages"],
+      streams: ["light", "transactions", "dm_conversations"],
       source: "manual",
       dependencyOptions: { onlyFansOfapiDmSyncEnabled: true },
     });
@@ -643,14 +643,12 @@ describe("audience stream plumbing", () => {
     expect(byStream.get("subscribers")?.status).toBe("paused");
     // OFAPI-fed OnlyFans DM must not wait on legacy light/financial/audience
     // streams: these pages can intentionally run without stored platform creds.
+    // The legacy dm_messages crawler is permanently retired by S0 and new
+    // OnlyFans pages deliberately have no state row for it.
     expect(byStream.get("dm_conversations")?.status).toBe("pending");
     expect(byStream.get("dm_conversations")?.blockerMessage).toBeNull();
-    expect(byStream.get("dm_messages")?.status).toBe("blocked");
-    expect(byStream.get("dm_messages")?.blockerMessage).toBe("Waiting for dm_conversations");
-    expect(byStream.get("dm_messages")?.blockerMessage ?? "").not.toContain("light");
-    expect(byStream.get("dm_messages")?.blockerMessage ?? "").not.toContain("transactions");
+    expect(byStream.has("dm_messages")).toBe(false);
     expect(byStream.get("dm_conversations")?.blockerMessage ?? "").not.toContain("subscribers");
-    expect(byStream.get("dm_messages")?.blockerMessage ?? "").not.toContain("subscribers");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("clears stale legacy dependency blockers from OFAPI DM conversations", async (context) => {
