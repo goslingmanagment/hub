@@ -514,4 +514,92 @@ describe("owner OFAPI export quote boundary", () => {
       reasonCode: "owner_cancelled",
     });
   });
+
+  it("dry-runs and CAS-approves only a bounded pilot", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPageAndChat({ chatId: "84" });
+    const owner = await login("owner", "owner");
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/export-quotes",
+      headers: { cookie: owner.cookie },
+      payload: {
+        pageId: seeded.page.id,
+        profile: "pilot_chats",
+        chatIds: ["84"],
+        startDate: "2016-11-01T00:00:00.000Z",
+        endDate: "2026-07-15T00:00:00.000Z",
+        maxMessages: 100,
+        quoteTtlMinutes: 1_440,
+        dryRun: false,
+      },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const jobId = (created.json() as { jobId: string }).jobId;
+    await testDb.pool.query(`
+      update ofapi_capture_jobs
+      set state = 'blocked',
+          reason_code = 'export_quote_requires_start',
+          cursor = jsonb_build_object(
+            'phase', 'quote_unavailable',
+            'vendorExportId', 'data_export_route_pilot',
+            'vendorStatus', 'calculating_credits_completed',
+            'pollCount', 0,
+            'quoteRequestedAt', '2026-07-16T00:00:00.000Z',
+            'lastStatusAt', '2026-07-16T00:00:00.000Z',
+            'totalRows', null,
+            'creditCost', null,
+            'quotedAt', null,
+            'expiresAt', null,
+            'lastObservationId', 1,
+            'lastObservationReceivedAt', '2026-07-16T00:00:00.000Z'
+          ),
+          row_version = row_version + 1
+      where id = $1
+    `, [jobId]);
+    const before = await testDb.pool.query<{ row_version: number }>(
+      "select row_version from ofapi_capture_jobs where id = $1",
+      [jobId],
+    );
+    const expectedRowVersion = Number(before.rows[0]!.row_version);
+
+    const preview = await server.inject({
+      method: "POST",
+      url: `/api/v1/admin/ofapi/export-quotes/${jobId}/approve-pilot`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        expectedRowVersion,
+        approvedMaxCredits: 5,
+        reason: "bounded route pilot",
+      },
+    });
+    expect(preview.statusCode, preview.body).toBe(200);
+    expect(preview.json()).toMatchObject({
+      dryRun: true,
+      jobId,
+      requiredMaxCredits: 5,
+      nextState: "ready",
+    });
+    expect((await testDb.pool.query(
+      "select state from ofapi_capture_jobs where id = $1",
+      [jobId],
+    )).rows[0]?.state).toBe("blocked");
+
+    const approved = await server.inject({
+      method: "POST",
+      url: `/api/v1/admin/ofapi/export-quotes/${jobId}/approve-pilot`,
+      headers: { cookie: owner.cookie },
+      payload: {
+        expectedRowVersion,
+        approvedMaxCredits: 5,
+        reason: "bounded route pilot",
+        dryRun: false,
+      },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+    expect(approved.json()).toMatchObject({ dryRun: false, jobId, nextState: "ready" });
+  });
 });

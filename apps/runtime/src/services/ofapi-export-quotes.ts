@@ -1,15 +1,19 @@
 import type {
+  OfapiExportPilotApprovalBody,
+  OfapiExportPilotApprovalResponse,
   OfapiExportQuoteBody,
   OfapiExportQuoteCreateResponse,
   OfapiExportQuoteStatusResponse,
 } from "@agency_hub_core/contracts";
 import {
+  approveBlockedOfapiExportPilotJob,
   cancelBlockedOfapiExportQuoteJob,
   createOrGetOfapiCaptureJob,
   findActiveOfapiCaptureJobBySlot,
   findPageById,
   getOfapiCaptureJob,
   hashOfapiCaptureValue,
+  reconcileOfapiCapturedAttemptCredit,
   settleOfapiCaptureParse,
   type OfapiCaptureJobRecord,
 } from "@agency_hub_core/db";
@@ -24,6 +28,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 const QUOTE_MAX_CALLS = 97;
 const QUOTE_MAX_CREDITS = 5;
 const QUOTE_POLL_INTERVAL_MS = 15 * 60_000;
+const EXPORT_POLL_INTERVAL_MS = 5 * 60_000;
 const EXPORT_EARLIEST_START_MS = Date.parse("2016-11-01T00:00:00.000Z");
 
 type ExportQuoteProfile = "pilot_chats" | "fleet_tail";
@@ -46,7 +51,10 @@ interface ExportQuoteCursor extends Record<string, unknown> {
     | "quote_calculating"
     | "quoted"
     | "quote_unavailable"
-    | "vendor_started_unexpectedly";
+    | "vendor_started_unexpectedly"
+    | "owner_approved"
+    | "in_progress"
+    | "artifact_pending";
   vendorExportId: string;
   vendorStatus: string;
   pollCount: number;
@@ -60,10 +68,21 @@ interface ExportQuoteCursor extends Record<string, unknown> {
   // captured status GET replaces both nulls with real observation provenance.
   lastObservationId: number | null;
   lastObservationReceivedAt: string | null;
+  approvedMaxCredits: number | null;
+  approvedAt: string | null;
+  approvedByUserId: number | null;
+  approvalReason: string | null;
+  startAttemptId: string | null;
+  rowsProcessed: number | null;
+  failedDownloads: number | null;
+  downloadUrl: string | null;
 }
 
 export interface OfapiExportQuoteRequestPlan {
-  operation: "ofapi_export_quote_create" | "ofapi_export_quote_status";
+  operation:
+    | "ofapi_export_quote_create"
+    | "ofapi_export_quote_status"
+    | "ofapi_export_start";
   endpointClass: "data_exports";
   method: "GET" | "POST";
   requestSemantics: "safe_read" | "stateful";
@@ -72,8 +91,11 @@ export interface OfapiExportQuoteRequestPlan {
   bodyBytes: Buffer | null;
   contentType: string | null;
   request: Record<string, unknown>;
-  observationKind: "ofapi.data_export_create.v1" | "ofapi.data_export_status.v1";
-  reservedCredits: 1;
+  observationKind:
+    | "ofapi.data_export_create.v1"
+    | "ofapi.data_export_status.v1"
+    | "ofapi.data_export_start.v1";
+  reservedCredits: number;
   timeoutMs: number;
   maxResponseBytes: number;
 }
@@ -189,6 +211,9 @@ function parseCursor(job: OfapiCaptureJobRecord): ExportQuoteCursor | null {
       || cursor.phase === "quoted"
       || cursor.phase === "quote_unavailable"
       || cursor.phase === "vendor_started_unexpectedly"
+      || cursor.phase === "owner_approved"
+      || cursor.phase === "in_progress"
+      || cursor.phase === "artifact_pending"
     ? cursor.phase
     : null;
   if (
@@ -222,6 +247,24 @@ function parseCursor(job: OfapiCaptureJobRecord): ExportQuoteCursor | null {
       ? null
       : nonnegativeInteger(cursor.lastObservationId)!,
     lastObservationReceivedAt: cursor.lastObservationReceivedAt,
+    approvedMaxCredits: cursor.approvedMaxCredits === null
+        || cursor.approvedMaxCredits === undefined
+      ? null
+      : nonnegativeInteger(cursor.approvedMaxCredits),
+    approvedAt: typeof cursor.approvedAt === "string" ? cursor.approvedAt : null,
+    approvedByUserId: cursor.approvedByUserId === null
+        || cursor.approvedByUserId === undefined
+      ? null
+      : nonnegativeInteger(cursor.approvedByUserId),
+    approvalReason: typeof cursor.approvalReason === "string" ? cursor.approvalReason : null,
+    startAttemptId: typeof cursor.startAttemptId === "string" ? cursor.startAttemptId : null,
+    rowsProcessed: cursor.rowsProcessed === null || cursor.rowsProcessed === undefined
+      ? null
+      : nonnegativeInteger(cursor.rowsProcessed),
+    failedDownloads: cursor.failedDownloads === null || cursor.failedDownloads === undefined
+      ? null
+      : nonnegativeInteger(cursor.failedDownloads),
+    downloadUrl: typeof cursor.downloadUrl === "string" ? cursor.downloadUrl : null,
   };
 }
 
@@ -363,6 +406,7 @@ export async function getOwnerOfapiExportQuoteStatus(
     attemptCount: job.attemptCount,
     dispatchCount: job.dispatchCount,
     spentCredits: job.spentCredits,
+    rowVersion: job.rowVersion,
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
     quote: cursor === null
@@ -375,7 +419,57 @@ export async function getOwnerOfapiExportQuoteStatus(
         pollCount: cursor.pollCount,
         quotedAt: cursor.quotedAt,
         expiresAt: cursor.expiresAt,
+        approvedMaxCredits: cursor.approvedMaxCredits,
+        approvedAt: cursor.approvedAt,
+        rowsProcessed: cursor.rowsProcessed,
+        failedDownloads: cursor.failedDownloads,
+        artifactPending: cursor.phase === "artifact_pending",
       },
+  };
+}
+
+export async function approveOwnerOfapiExportPilot(
+  app: AppContext,
+  input: OfapiExportPilotApprovalBody & {
+    jobId: string;
+    actorUserId: number;
+    now?: Date;
+  },
+): Promise<OfapiExportPilotApprovalResponse> {
+  const result = await approveBlockedOfapiExportPilotJob(app.db, {
+    jobId: input.jobId,
+    expectedRowVersion: input.expectedRowVersion,
+    approvedMaxCredits: input.approvedMaxCredits,
+    actorUserId: input.actorUserId,
+    reason: input.reason,
+    execute: !input.dryRun,
+    ...(input.now ? { now: input.now } : {}),
+  });
+  if (result.outcome === "not_found") {
+    throw new NotFoundError(`OFAPI export quote job ${input.jobId} was not found`);
+  }
+  if (result.outcome === "quote_expired") {
+    throw new ConflictError(`OFAPI export quote ${input.jobId} expired and must be recreated`);
+  }
+  if (result.outcome === "budget_too_low") {
+    throw new BadRequestError(
+      `approvedMaxCredits must be between ${result.requiredMaxCredits} and 50`,
+    );
+  }
+  if (result.outcome === "conflict") {
+    throw new ConflictError(
+      `OFAPI export quote ${input.jobId} changed or is not an approvable bounded pilot`,
+    );
+  }
+  return {
+    dryRun: result.outcome === "would_approve",
+    jobId: input.jobId,
+    previousState: "blocked",
+    nextState: result.next.state,
+    expectedRowVersion: input.expectedRowVersion,
+    nextRowVersion: result.next.rowVersion,
+    approvedMaxCredits: result.next.approvedMaxCredits,
+    requiredMaxCredits: result.next.requiredMaxCredits,
   };
 }
 
@@ -437,14 +531,45 @@ export function buildOfapiExportQuoteRequest(
       maxResponseBytes: 1024 * 1024,
     };
   }
-  if (cursor.phase !== "quote_calculating") return null;
+  if (cursor.phase === "owner_approved") {
+    if (
+      cursor.approvedMaxCredits === null
+      || cursor.approvedMaxCredits < 1
+      || cursor.approvedMaxCredits > 50
+      || cursor.startAttemptId !== null
+    ) {
+      return null;
+    }
+    return {
+      operation: "ofapi_export_start",
+      endpointClass: "data_exports",
+      method: "POST",
+      requestSemantics: "stateful",
+      pathname: `/data-exports/${encodeURIComponent(cursor.vendorExportId)}/start`,
+      query: {},
+      bodyBytes: null,
+      contentType: null,
+      request: {
+        vendorExportId: cursor.vendorExportId,
+        approvedMaxCredits: cursor.approvedMaxCredits,
+      },
+      observationKind: "ofapi.data_export_start.v1",
+      // Scraping-backed chat exports charge only after processing finishes.
+      // We conservatively hold the complete owner-approved ceiling from the
+      // stateful start until a captured terminal status reports exact cost.
+      reservedCredits: cursor.approvedMaxCredits,
+      timeoutMs: 30_000,
+      maxResponseBytes: 1024 * 1024,
+    };
+  }
+  if (cursor.phase !== "quote_calculating" && cursor.phase !== "in_progress") return null;
   return {
     operation: "ofapi_export_quote_status",
     endpointClass: "data_exports",
     method: "GET",
     requestSemantics: "safe_read",
     pathname: `/data-exports/${encodeURIComponent(cursor.vendorExportId)}`,
-    query: {},
+    query: cursor.phase === "in_progress" ? { download_url_expires_in: "60" } : {},
     bodyBytes: null,
     contentType: null,
     request: { vendorExportId: cursor.vendorExportId },
@@ -511,7 +636,10 @@ export async function parseCapturedOfapiExportQuote(
   if (!job.leaseToken) return "failed";
   const target = parseTarget(job);
   const priorCursor = parseCursor(job);
-  const isStatusPoll = priorCursor?.phase === "quote_calculating";
+  const isStart = priorCursor?.phase === "owner_approved";
+  const isQuoteStatusPoll = priorCursor?.phase === "quote_calculating";
+  const isExportStatusPoll = priorCursor?.phase === "in_progress";
+  const isStatusPoll = isQuoteStatusPoll || isExportStatusPoll;
   const settle = (args: Parameters<typeof settleOfapiCaptureParse>[1]) =>
     settleOfapiCaptureParse(app.db, args);
 
@@ -520,7 +648,7 @@ export async function parseCapturedOfapiExportQuote(
     // A captured 422 is a definitive validation rejection: no export object
     // was created, so the page slot is safe to release and retry with a
     // corrected frozen target. Stateful transport ambiguity remains fenced.
-    const createValidationRejected = !isStatusPoll && input.status === 422;
+    const createValidationRejected = priorCursor === null && input.status === 422;
     await settle({
       jobId: job.id,
       attemptId: input.attemptId,
@@ -536,14 +664,18 @@ export async function parseCapturedOfapiExportQuote(
       disposition: retryable
         ? {
           kind: "retry",
-          nextAttemptAt: new Date(now.getTime() + QUOTE_POLL_INTERVAL_MS),
+          nextAttemptAt: new Date(now.getTime() + (
+            isExportStatusPoll ? EXPORT_POLL_INTERVAL_MS : QUOTE_POLL_INTERVAL_MS
+          )),
           reasonCode: input.status === 429 ? "rate_limited" : "vendor_5xx",
         }
         : {
           kind: "blocked",
           reasonCode: createValidationRejected
             ? "export_quote_failed"
-            : isStatusPoll
+            : isStart
+              ? `export_start_http_${input.status}`
+              : isStatusPoll
               ? `export_status_http_${input.status}`
               : `export_create_http_${input.status}`,
           reasonMessage: createValidationRejected
@@ -553,6 +685,70 @@ export async function parseCapturedOfapiExportQuote(
       now,
     });
     return retryable ? "failed" : "blocked";
+  }
+
+  if (isStart) {
+    const root = input.parsedJson.validJson ? asRecord(input.parsedJson.body) : null;
+    const data = asRecord(root?.data);
+    const id = typeof data?.id === "string" ? data.id : null;
+    const status = typeof data?.status === "string" ? data.status : null;
+    if (
+      !priorCursor
+      || id !== priorCursor.vendorExportId
+      || !status
+      || !["pending", "in_progress", "completed"].includes(status)
+      || priorCursor.approvedMaxCredits === null
+      || priorCursor.approvedMaxCredits < 1
+      || priorCursor.approvedMaxCredits > 50
+    ) {
+      await settle({
+        jobId: job.id,
+        attemptId: input.attemptId,
+        leaseToken: job.leaseToken,
+        observationId: input.observationId,
+        observationReceivedAt: input.observationReceivedAt,
+        parserOutcome: "contract_rejected",
+        rawCount: 1,
+        acceptedCount: 0,
+        boundaryDuplicateCount: 0,
+        explicitlyIrrelevantCount: 0,
+        rejectedCount: 1,
+        disposition: { kind: "blocked", reasonCode: "export_start_contract_rejected" },
+        now,
+      });
+      return "blocked";
+    }
+    const cursor: ExportQuoteCursor = {
+      ...priorCursor,
+      phase: "in_progress",
+      vendorStatus: status,
+      lastStatusAt: now.toISOString(),
+      lastObservationId: input.observationId,
+      lastObservationReceivedAt: input.observationReceivedAt.toISOString(),
+      startAttemptId: input.attemptId,
+      downloadUrl: null,
+    };
+    await settle({
+      jobId: job.id,
+      attemptId: input.attemptId,
+      leaseToken: job.leaseToken,
+      observationId: input.observationId,
+      observationReceivedAt: input.observationReceivedAt,
+      parserOutcome: "accepted",
+      rawCount: 1,
+      acceptedCount: 1,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: {
+        kind: "retry",
+        nextAttemptAt: new Date(now.getTime() + EXPORT_POLL_INTERVAL_MS),
+        reasonCode: "export_in_progress",
+        cursor,
+      },
+      now,
+    });
+    return "success";
   }
 
   const identity = input.parsedJson.validJson && target
@@ -589,7 +785,214 @@ export async function parseCapturedOfapiExportQuote(
     expiresAt: priorCursor?.expiresAt ?? null,
     lastObservationId: input.observationId,
     lastObservationReceivedAt: input.observationReceivedAt.toISOString(),
+    approvedMaxCredits: priorCursor?.approvedMaxCredits ?? null,
+    approvedAt: priorCursor?.approvedAt ?? null,
+    approvedByUserId: priorCursor?.approvedByUserId ?? null,
+    approvalReason: priorCursor?.approvalReason ?? null,
+    startAttemptId: priorCursor?.startAttemptId ?? null,
+    rowsProcessed: priorCursor?.rowsProcessed ?? null,
+    failedDownloads: priorCursor?.failedDownloads ?? null,
+    downloadUrl: priorCursor?.downloadUrl ?? null,
   };
+  if (isExportStatusPoll) {
+    const totalRows = nonnegativeInteger(identity.data.total_rows);
+    const rowsProcessed = nonnegativeInteger(identity.data.rows_processed);
+    const creditCost = nonnegativeInteger(identity.data.credit_cost);
+    const failedDownloads = nonnegativeInteger(identity.data.failed_downloads);
+    const approvedMaxCredits = priorCursor?.approvedMaxCredits ?? null;
+    const startAttemptId = priorCursor?.startAttemptId ?? null;
+    if (
+      approvedMaxCredits === null
+      || approvedMaxCredits < 1
+      || approvedMaxCredits > 50
+      || startAttemptId === null
+      || !/^[0-9a-f-]{36}$/i.test(startAttemptId)
+      || (creditCost !== null && creditCost > approvedMaxCredits)
+      || (totalRows !== null && totalRows > target.maxMessages)
+      || (rowsProcessed !== null && totalRows !== null && rowsProcessed > totalRows)
+    ) {
+      await settle({
+        jobId: job.id,
+        attemptId: input.attemptId,
+        leaseToken: job.leaseToken,
+        observationId: input.observationId,
+        observationReceivedAt: input.observationReceivedAt,
+        parserOutcome: "contract_rejected",
+        rawCount: 1,
+        acceptedCount: 0,
+        boundaryDuplicateCount: 0,
+        explicitlyIrrelevantCount: 0,
+        rejectedCount: 1,
+        disposition: {
+          kind: "blocked",
+          reasonCode: creditCost !== null && creditCost > (approvedMaxCredits ?? 0)
+            ? "export_budget_exceeded"
+            : "export_progress_contract_rejected",
+        },
+        now,
+      });
+      return "blocked";
+    }
+    const progressCursor: ExportQuoteCursor = {
+      ...baseCursor,
+      phase: "in_progress",
+      totalRows,
+      creditCost,
+      rowsProcessed,
+      failedDownloads,
+      downloadUrl: null,
+    };
+    if (identity.status === "pending" || identity.status === "in_progress") {
+      await settle({
+        jobId: job.id,
+        attemptId: input.attemptId,
+        leaseToken: job.leaseToken,
+        observationId: input.observationId,
+        observationReceivedAt: input.observationReceivedAt,
+        parserOutcome: "accepted",
+        rawCount: 1,
+        acceptedCount: 1,
+        boundaryDuplicateCount: 0,
+        explicitlyIrrelevantCount: 0,
+        rejectedCount: 0,
+        disposition: {
+          kind: "retry",
+          nextAttemptAt: new Date(now.getTime() + EXPORT_POLL_INTERVAL_MS),
+          reasonCode: "export_in_progress",
+          cursor: progressCursor,
+        },
+        now,
+      });
+      return "success";
+    }
+    if (identity.status === "failed") {
+      if (creditCost !== null) {
+        await reconcileOfapiCapturedAttemptCredit(app.db, {
+          attemptId: startAttemptId,
+          actualCredits: creditCost,
+          balanceAfter: input.parsedJson.balanceAfter,
+        });
+      }
+      await settle({
+        jobId: job.id,
+        attemptId: input.attemptId,
+        leaseToken: job.leaseToken,
+        observationId: input.observationId,
+        observationReceivedAt: input.observationReceivedAt,
+        parserOutcome: "accepted",
+        rawCount: 1,
+        acceptedCount: 1,
+        boundaryDuplicateCount: 0,
+        explicitlyIrrelevantCount: 0,
+        rejectedCount: 0,
+        disposition: {
+          kind: "blocked",
+          reasonCode: "export_failed",
+          reasonMessage: typeof identity.data.failed_reason === "string"
+            ? identity.data.failed_reason.slice(0, 500)
+            : "Vendor export failed after start",
+          cursor: progressCursor,
+        },
+        now,
+      });
+      return "blocked";
+    }
+    if (identity.status === "completed") {
+      const downloadUrl = typeof identity.data.download_url === "string"
+        ? identity.data.download_url
+        : null;
+      const safeDownloadUrl = (() => {
+        try {
+          return downloadUrl !== null
+            && downloadUrl.length <= 8_192
+            && new URL(downloadUrl).protocol === "https:";
+        } catch {
+          return false;
+        }
+      })();
+      if (
+        totalRows === null
+        || rowsProcessed === null
+        || creditCost === null
+        || failedDownloads === null
+        || rowsProcessed !== totalRows
+        || failedDownloads !== 0
+        || !safeDownloadUrl
+      ) {
+        await settle({
+          jobId: job.id,
+          attemptId: input.attemptId,
+          leaseToken: job.leaseToken,
+          observationId: input.observationId,
+          observationReceivedAt: input.observationReceivedAt,
+          parserOutcome: "contract_rejected",
+          rawCount: 1,
+          acceptedCount: 0,
+          boundaryDuplicateCount: 0,
+          explicitlyIrrelevantCount: 0,
+          rejectedCount: 1,
+          disposition: {
+            kind: "blocked",
+            reasonCode: "export_completion_contract_rejected",
+          },
+          now,
+        });
+        return "blocked";
+      }
+      const creditReconciled = await reconcileOfapiCapturedAttemptCredit(app.db, {
+        attemptId: startAttemptId,
+        actualCredits: creditCost,
+        balanceAfter: input.parsedJson.balanceAfter,
+      });
+      if (!creditReconciled) {
+        await settle({
+          jobId: job.id,
+          attemptId: input.attemptId,
+          leaseToken: job.leaseToken,
+          observationId: input.observationId,
+          observationReceivedAt: input.observationReceivedAt,
+          parserOutcome: "failed",
+          rawCount: 1,
+          acceptedCount: 0,
+          boundaryDuplicateCount: 0,
+          explicitlyIrrelevantCount: 0,
+          rejectedCount: 1,
+          disposition: {
+            kind: "blocked",
+            reasonCode: "export_credit_reconcile_failed",
+          },
+          now,
+        });
+        return "blocked";
+      }
+      const artifactCursor: ExportQuoteCursor = {
+        ...progressCursor,
+        phase: "artifact_pending",
+        downloadUrl,
+      };
+      await settle({
+        jobId: job.id,
+        attemptId: input.attemptId,
+        leaseToken: job.leaseToken,
+        observationId: input.observationId,
+        observationReceivedAt: input.observationReceivedAt,
+        parserOutcome: "accepted",
+        rawCount: 1,
+        acceptedCount: 1,
+        boundaryDuplicateCount: 0,
+        explicitlyIrrelevantCount: 0,
+        rejectedCount: 0,
+        disposition: {
+          kind: "blocked",
+          reasonCode: "artifact_capture_required",
+          reasonMessage: "Export completed; capture the temporary artifact before import",
+          cursor: artifactCursor,
+        },
+        now,
+      });
+      return "blocked";
+    }
+  }
   if (identity.status === "calculating_credits") {
     const cursor: ExportQuoteCursor = { ...baseCursor, phase: "quote_calculating" };
     await settle({

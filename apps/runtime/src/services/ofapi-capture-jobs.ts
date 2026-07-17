@@ -339,7 +339,9 @@ async function parseCapturedJob(
   // parsing. The capture chunk also attempts this eagerly, but a process may
   // die after the response transaction commits and before that correction.
   const parsedJson = parseOfapiJsonBytes(captured.bodyBytes);
-  if (parsedJson.creditsUsed !== null) {
+  const holdsExportStartCeiling = job.kind === "account_export"
+    && job.cursor?.phase === "owner_approved";
+  if (parsedJson.creditsUsed !== null && !holdsExportStartCeiling) {
     await reconcileOfapiCapturedAttemptCredit(app.db, {
       attemptId: observation.attemptId,
       actualCredits: parsedJson.creditsUsed,
@@ -901,7 +903,7 @@ export async function executeOfapiCaptureJobChunk(
     }
 
     const parsed = parseOfapiJsonBytes(raw.bodyBytes);
-    if (parsed.creditsUsed !== null) {
+    if (parsed.creditsUsed !== null && requestPlan.operation !== "ofapi_export_start") {
       await reconcileOfapiCapturedAttemptCredit(app.db, {
         attemptId: reservation.attemptId,
         actualCredits: parsed.creditsUsed,

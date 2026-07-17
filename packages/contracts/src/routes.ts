@@ -3554,6 +3554,24 @@ export const ofapiExportQuoteCancelBodySchema = z.object({
   reason: z.string().trim().min(1).max(500),
 }).strict();
 
+export const ofapiExportPilotApprovalBodySchema = z.object({
+  expectedRowVersion: z.number().int().nonnegative(),
+  approvedMaxCredits: z.number().int().min(1).max(50),
+  reason: z.string().trim().min(1).max(500),
+  dryRun: z.boolean().default(true),
+}).strict();
+
+export const ofapiExportPilotApprovalResponseSchema = z.object({
+  dryRun: z.boolean(),
+  jobId: z.string().uuid(),
+  previousState: z.literal("blocked"),
+  nextState: z.literal("ready"),
+  expectedRowVersion: z.number().int().nonnegative(),
+  nextRowVersion: z.number().int().nonnegative(),
+  approvedMaxCredits: z.number().int().min(1).max(50),
+  requiredMaxCredits: z.number().int().min(1).max(50),
+});
+
 export const ofapiExportQuoteStatusResponseSchema = z.object({
   jobId: z.string().uuid(),
   pageId: intId,
@@ -3565,6 +3583,7 @@ export const ofapiExportQuoteStatusResponseSchema = z.object({
   attemptCount: z.number().int().nonnegative(),
   dispatchCount: z.number().int().nonnegative(),
   spentCredits: z.number().int().nonnegative(),
+  rowVersion: z.number().int().nonnegative(),
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
   quote: z.object({
@@ -3575,6 +3594,11 @@ export const ofapiExportQuoteStatusResponseSchema = z.object({
     pollCount: z.number().int().nonnegative(),
     quotedAt: isoTimestamp.nullable(),
     expiresAt: isoTimestamp.nullable(),
+    approvedMaxCredits: z.number().int().nonnegative().nullable(),
+    approvedAt: isoTimestamp.nullable(),
+    rowsProcessed: z.number().int().nonnegative().nullable(),
+    failedDownloads: z.number().int().nonnegative().nullable(),
+    artifactPending: z.boolean(),
   }).nullable(),
 });
 
@@ -4919,6 +4943,23 @@ export const routeSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+    },
+  },
+  adminOfapiExportPilotApprove: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Dry-run or approve one bounded OFAPI chat-export pilot",
+    description: "CAS-approves only a 1-3 chat pilot capped at 1,000 rows and 50 credits. "
+      + "The worker performs one stateful start; an uncertain start is never retried automatically.",
+    params: ofapiExportQuoteParamsSchema,
+    body: ofapiExportPilotApprovalBodySchema,
+    response: {
+      200: ofapiExportPilotApprovalResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
     },
   },
   adminOfapiExportQuoteCancel: {
@@ -6879,6 +6920,10 @@ export type OfapiExportQuoteCreateResponse =
 export type OfapiExportQuoteStatusResponse =
   z.infer<typeof ofapiExportQuoteStatusResponseSchema>;
 export type OfapiExportQuoteCancelBody = z.infer<typeof ofapiExportQuoteCancelBodySchema>;
+export type OfapiExportPilotApprovalBody =
+  z.infer<typeof ofapiExportPilotApprovalBodySchema>;
+export type OfapiExportPilotApprovalResponse =
+  z.infer<typeof ofapiExportPilotApprovalResponseSchema>;
 export type OfapiCreditsSummaryResponse = z.infer<typeof ofapiCreditsSummaryResponseSchema>;
 export type OfapiCreditsChatterSummaryResponse =
   z.infer<typeof ofapiCreditsChatterSummaryResponseSchema>;

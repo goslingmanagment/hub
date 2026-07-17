@@ -3071,6 +3071,155 @@ export async function cancelBlockedOfapiExportQuoteJob(
   });
 }
 
+export async function approveBlockedOfapiExportPilotJob(
+  db: Database,
+  input: {
+    jobId: string;
+    expectedRowVersion: number;
+    approvedMaxCredits: number;
+    actorUserId: number;
+    reason: string;
+    execute?: boolean;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const approvedMaxCredits = normalizeCredits(input.approvedMaxCredits);
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const current = await database.execute<Record<string, unknown>>(sql`
+      select *
+      from ofapi_capture_jobs
+      where id = ${input.jobId}::uuid
+      for update
+    `);
+    const row = current.rows[0];
+    if (!row) return { outcome: "not_found" as const };
+    const job = mapCaptureJob(row);
+    const targetMaxMessages = Number(job.target.maxMessages);
+    const targetChatIds = job.target.chatIds;
+    const cursor = job.cursor;
+    const cursorPhase = cursor?.phase;
+    const quotedCredits = cursor?.creditCost === null || cursor?.creditCost === undefined
+      ? null
+      : Number(cursor.creditCost);
+    const quoteExpiresAt = typeof cursor?.expiresAt === "string"
+      ? new Date(cursor.expiresAt)
+      : null;
+    const requiredMaxCredits = Number.isSafeInteger(targetMaxMessages)
+      ? Math.ceil(targetMaxMessages / 20)
+      : Number.NaN;
+    if (
+      job.kind !== "account_export"
+      || job.state !== "blocked"
+      || job.rowVersion !== input.expectedRowVersion
+      || !["export_quote_requires_start", "owner_approval_required"].includes(
+        job.reasonCode ?? "",
+      )
+      || job.target.profile !== "pilot_chats"
+      || !Array.isArray(targetChatIds)
+      || targetChatIds.length < 1
+      || targetChatIds.length > 3
+      || !Number.isSafeInteger(targetMaxMessages)
+      || targetMaxMessages < 1
+      || targetMaxMessages > 1_000
+      || !cursor
+      || !["quote_unavailable", "quoted"].includes(String(cursorPhase))
+      || (quotedCredits !== null
+        && (!Number.isSafeInteger(quotedCredits) || quotedCredits < 0))
+    ) {
+      return { outcome: "conflict" as const, job };
+    }
+    if (
+      cursorPhase === "quoted"
+      && (!quoteExpiresAt || !Number.isFinite(quoteExpiresAt.getTime()) || quoteExpiresAt <= now)
+    ) {
+      return { outcome: "quote_expired" as const, job };
+    }
+    if (
+      approvedMaxCredits < requiredMaxCredits
+      || approvedMaxCredits > 50
+      || (quotedCredits !== null && approvedMaxCredits < quotedCredits)
+    ) {
+      return {
+        outcome: "budget_too_low" as const,
+        job,
+        requiredMaxCredits,
+      };
+    }
+    const nextCursor = {
+      ...cursor,
+      phase: "owner_approved",
+      approvedMaxCredits,
+      approvedAt: now.toISOString(),
+      approvedByUserId: input.actorUserId,
+      approvalReason: input.reason,
+      startAttemptId: null,
+      rowsProcessed: null,
+      failedDownloads: null,
+      artifact: null,
+    };
+    const nextCursorHash = hashOfapiCaptureValue(nextCursor);
+    const next = {
+      state: "ready" as const,
+      reasonCode: null,
+      rowVersion: job.rowVersion + 1,
+      approvedMaxCredits,
+      requiredMaxCredits,
+    };
+    if (input.execute === true) {
+      const updated = await database.execute<{ id: string }>(sql`
+        update ofapi_capture_jobs
+        set state = 'ready',
+            next_attempt_at = ${now},
+            cursor = ${JSON.stringify(nextCursor)}::jsonb,
+            cursor_hash = ${nextCursorHash},
+            max_credits = greatest(
+              coalesce(max_credits, 0),
+              spent_credits + ${approvedMaxCredits} + 1
+            ),
+            reason_code = null,
+            reason_message = null,
+            row_version = row_version + 1,
+            updated_at = ${now}
+        where id = ${input.jobId}::uuid
+          and row_version = ${input.expectedRowVersion}
+          and state = 'blocked'
+        returning id::text as id
+      `);
+      if (updated.rows.length !== 1) {
+        return { outcome: "conflict" as const, job };
+      }
+    }
+    await database.execute(sql`
+      insert into ofapi_capture_operator_actions (
+        action, target_type, target_ref, expected_state,
+        previous_state, resulting_state, dry_run, actor_user_id, reason, occurred_at
+      ) values (
+        'approve_export_pilot',
+        'job',
+        ${input.jobId},
+        ${`blocked@${input.expectedRowVersion}`},
+        ${JSON.stringify({
+          state: job.state,
+          reasonCode: job.reasonCode,
+          rowVersion: job.rowVersion,
+        })}::jsonb,
+        ${JSON.stringify(next)}::jsonb,
+        ${input.execute !== true},
+        ${input.actorUserId},
+        ${input.reason},
+        ${now}
+      )
+    `);
+    return {
+      outcome: input.execute === true ? "approved" as const : "would_approve" as const,
+      previous: job,
+      next,
+    };
+  });
+}
+
 export async function getOfapiCaptureJob(db: Database, jobId: string) {
   const result = await db.execute<Record<string, unknown>>(sql`
     select * from ofapi_capture_jobs where id = ${jobId}::uuid

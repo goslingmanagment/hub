@@ -4550,3 +4550,21 @@ remains blocked. Local replay upgrades the job's contract/parser versions and
 reuses the already-paid response; it never dispatches OFAPI. The proof policy
 itself is unchanged: the frozen head remains an item-presence fact from the
 List-Chats/live projection and pagination proves the older range.
+
+**Decision #163 (2026-07-17, one bounded scraping-backed OFAPI export pilot
+may start; narrows the quote-only boundary in #158):** The owner authorizes an
+explicitly approved S5a pilot for one OnlyFans page, one to three frozen chat
+IDs, at most 1,000 exported messages, and at most 50 credits. Fleet exports
+remain quote-only. Approval is an owner-audited CAS transition from a captured
+`owner_approval_required` or `export_quote_requires_start` state, defaults to
+dry-run, and names both the current job row version and maximum credits. It
+permits one stateful `POST .../start`; an indeterminate start is never retried
+automatically. The complete ceiling stays conservatively settled against that
+attempt until a captured terminal status supplies the exact cost, after which
+the ledger and job spend are reconciled once. Status GETs are safe, bounded,
+and may retry. A completion is usable only when `total_rows = rows_processed`,
+`failed_downloads = 0`, the row and cost caps hold, and a temporary HTTPS
+download URL is present. The job then stops at `artifact_capture_required`:
+no import, coverage proof, or larger cohort is authorized until the artifact
+is copied into our controlled storage, checksummed, and its real CSV contract
+passes a pilot review.

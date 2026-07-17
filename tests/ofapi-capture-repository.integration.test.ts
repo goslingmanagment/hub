@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  approveBlockedOfapiExportPilotJob,
   cancelBlockedOfapiExportQuoteJob,
   captureOfapiAttemptResponse,
   completeOfapiInteractiveRequest,
@@ -264,6 +265,11 @@ async function createCaptureExecutionFixture(input: {
 
 async function createExportQuoteExecutionFixture(
   dispatchGovernedRaw: ReturnType<typeof vi.fn>,
+  options: {
+    profile?: "pilot_chats" | "fleet_tail";
+    maxMessages?: number;
+    chatIds?: string[];
+  } = {},
 ) {
   const seeded = await seed();
   const now = new Date();
@@ -286,15 +292,15 @@ async function createExportQuoteExecutionFixture(
     kind: "account_export",
     activeSlotKey: `page:${seeded.page.id}:export`,
     target: {
-      profile: "fleet_tail",
+      profile: options.profile ?? "fleet_tail",
       type: "chat_messages",
       accountIds: [seeded.accountId],
       startDate: "2016-11-01T00:00:00.000Z",
       endDate: "2026-07-16T00:00:00.000Z",
       fileType: "csv",
-      maxMessages: 10_000_000,
+      maxMessages: options.maxMessages ?? 10_000_000,
       quoteTtlMinutes: 1_440,
-      chatIds: [],
+      chatIds: options.chatIds ?? [],
       autoStart: false,
     },
     budgetScope: "bulk",
@@ -2189,6 +2195,216 @@ describe("OFAPI capture correctness repository", () => {
       actorUserId: fixture.owner.id,
       reason: "unstarted scraping export has no preflight price",
     })).toEqual({ cancelled: true, currentState: "cancelled" });
+  });
+
+  it("starts one owner-approved bounded pilot and reconciles its terminal cost", async () => {
+    if (!testDb) return;
+    const calls: Array<{ method: string; pathname: string }> = [];
+    const responses: Array<Record<string, unknown>> = [];
+    let expectedAccountId = "";
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: {
+        method: string;
+        pathname: string;
+        beforeDispatch: () => Promise<boolean>;
+      },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      calls.push({ method: request.method, pathname: request.pathname });
+      const body = responses.shift();
+      if (!body) throw new Error("unexpected extra export request");
+      return {
+        status: 200,
+        bodyBytes: Buffer.from(JSON.stringify(body)),
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw, {
+      profile: "pilot_chats",
+      maxMessages: 1_000,
+      chatIds: ["42"],
+    });
+    expectedAccountId = fixture.accountId;
+    const fullStatus = (status: "in_progress" | "completed") => ({
+      data: {
+        id: "data_export_pilot_start",
+        type: "chat_messages",
+        status,
+        start_date: "2016-11-01T00:00:00.000Z",
+        end_date: "2026-07-16T00:00:00.000Z",
+        file_type: "csv",
+        accounts: [{ id: expectedAccountId }],
+        total_rows: 40,
+        rows_processed: status === "completed" ? 40 : 20,
+        failed_downloads: 0,
+        credit_cost: 2,
+        ...(status === "completed"
+          ? { download_url: "https://exports.example.test/pilot.csv?signature=secret" }
+          : {}),
+      },
+      _meta: { _credits: { used: 0, balance: 998 } },
+    });
+    responses.push(
+      {
+        data: {
+          id: "data_export_pilot_start",
+          type: "chat_messages",
+          status: "calculating_credits_completed",
+          start_date: "2016-11-01T00:00:00.000Z",
+          end_date: "2026-07-16T00:00:00.000Z",
+          file_type: "csv",
+          requires_scraping: true,
+          auto_started: false,
+          effective_options: {
+            maxMessages: 1_000,
+            skipMassMessages: false,
+            chatIds: [42],
+          },
+        },
+        _meta: { _credits: { used: 0, balance: 1_000 } },
+      },
+      {
+        data: {
+          id: "data_export_pilot_start",
+          status: "pending",
+          message: "Data export has been started.",
+        },
+        _meta: { _credits: { used: 0, balance: 1_000 } },
+      },
+      fullStatus("in_progress"),
+      fullStatus("completed"),
+    );
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    const quoted = await getOfapiCaptureJob(testDb.db, fixture.job.id);
+    expect(quoted).toMatchObject({
+      state: "blocked",
+      reasonCode: "export_quote_requires_start",
+      cursor: { phase: "quote_unavailable" },
+    });
+    expect(await approveBlockedOfapiExportPilotJob(testDb.db, {
+      jobId: fixture.job.id,
+      expectedRowVersion: quoted!.rowVersion,
+      approvedMaxCredits: 50,
+      actorUserId: fixture.owner.id,
+      reason: "bounded integration pilot",
+      execute: true,
+    })).toMatchObject({ outcome: "approved" });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "awaiting_parse",
+      spentCredits: 50,
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "retry_wait",
+      spentCredits: 50,
+      cursor: { phase: "in_progress" },
+    });
+
+    for (const expectedKind of ["success", "blocked"] as const) {
+      await testDb.pool.query(
+        "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+        [fixture.job.id],
+      );
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe(expectedKind);
+    }
+
+    expect(calls.filter((call) => call.pathname.endsWith("/start"))).toHaveLength(1);
+    expect(calls).toEqual([
+      { method: "POST", pathname: "/data-exports" },
+      { method: "POST", pathname: "/data-exports/data_export_pilot_start/start" },
+      { method: "GET", pathname: "/data-exports/data_export_pilot_start" },
+      { method: "GET", pathname: "/data-exports/data_export_pilot_start" },
+    ]);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "artifact_capture_required",
+      spentCredits: 2,
+      cursor: {
+        phase: "artifact_pending",
+        totalRows: 40,
+        rowsProcessed: 40,
+        creditCost: 2,
+        failedDownloads: 0,
+      },
+    });
+  });
+
+  it("never repeats an indeterminate owner-approved export start", async () => {
+    if (!testDb) return;
+    const calls: string[] = [];
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: {
+        pathname: string;
+        beforeDispatch: () => Promise<boolean>;
+      },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      calls.push(request.pathname);
+      if (request.pathname.endsWith("/start")) {
+        throw new OfapiGovernedRequestError(
+          "scripted uncertain export start",
+          "post_dispatch",
+          "transport",
+        );
+      }
+      return {
+        status: 200,
+        bodyBytes: Buffer.from(JSON.stringify({
+          data: {
+            id: "data_export_uncertain_start",
+            type: "chat_messages",
+            status: "calculating_credits_completed",
+            start_date: "2016-11-01T00:00:00.000Z",
+            end_date: "2026-07-16T00:00:00.000Z",
+            file_type: "csv",
+            requires_scraping: true,
+            auto_started: false,
+            effective_options: {
+              maxMessages: 1_000,
+              skipMassMessages: false,
+              chatIds: [42],
+            },
+          },
+          _meta: { _credits: { used: 0, balance: 1_000 } },
+        })),
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw, {
+      profile: "pilot_chats",
+      maxMessages: 1_000,
+      chatIds: ["42"],
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    const quoted = await getOfapiCaptureJob(testDb.db, fixture.job.id);
+    expect(await approveBlockedOfapiExportPilotJob(testDb.db, {
+      jobId: fixture.job.id,
+      expectedRowVersion: quoted!.rowVersion,
+      approvedMaxCredits: 50,
+      actorUserId: fixture.owner.id,
+      reason: "indeterminate-start regression",
+      execute: true,
+    })).toMatchObject({ outcome: "approved" });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("failed");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "indeterminate",
+      spentCredits: 50,
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+    expect(calls.filter((pathname) => pathname.endsWith("/start"))).toHaveLength(1);
   });
 
   it("never repeats an indeterminate export-create POST", async () => {

@@ -82,6 +82,7 @@ import {
   setOwnerOfapiCaptureControl,
 } from "../../services/ofapi-capture-operator.ts";
 import {
+  approveOwnerOfapiExportPilot,
   cancelOwnerOfapiExportQuote,
   createOwnerOfapiExportQuote,
   getOwnerOfapiExportQuoteStatus,
@@ -406,6 +407,33 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     return getOwnerOfapiExportQuoteStatus(appContext, request.params.jobId);
+  });
+
+  server.post("/api/v1/admin/ofapi/export-quotes/:jobId/approve-pilot", {
+    schema: routeSchemas.adminOfapiExportPilotApprove,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await approveOwnerOfapiExportPilot(appContext, {
+      ...request.body,
+      jobId: request.params.jobId,
+      actorUserId: principal.user.id,
+    });
+    if (!result.dryRun) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_export_pilot_approved",
+        metadata: {
+          jobId: result.jobId,
+          approvedMaxCredits: result.approvedMaxCredits,
+          requiredMaxCredits: result.requiredMaxCredits,
+          expectedRowVersion: result.expectedRowVersion,
+          nextRowVersion: result.nextRowVersion,
+          reason: request.body.reason,
+        },
+      });
+    }
+    return result;
   });
 
   server.post("/api/v1/admin/ofapi/export-quotes/:jobId/cancel", {
