@@ -4568,3 +4568,26 @@ download URL is present. The job then stops at `artifact_capture_required`:
 no import, coverage proof, or larger cohort is authorized until the artifact
 is copied into our controlled storage, checksummed, and its real CSV contract
 passes a pilot review.
+
+**Decision #164 (2026-07-17, the checked pilot artifact may be imported as
+item presence only):** The first bounded export completed with 707 records for
+the three frozen chats at an exact cost of 36 credits. Its RFC-4180 CSV has 33
+stable columns, no duplicate message IDs, and no malformed records. However,
+despite a 2016 start date, the delivered records cover only the most recent
+seven days. Therefore the artifact is useful message material but is not
+evidence of continuous history and cannot produce or upgrade an
+`ofapi.capture_completed.v1` fact.
+
+An owner may register only `<account_export job UUID>.csv` from the configured
+read-only artifact directory. The route defaults to dry-run and rechecks the
+terminal row count, exact header, account, frozen chat set, date bounds, unique
+message IDs, byte limit, and SHA-256 before journaling one pointer observation
+and creating one local `export_import` job. The worker repeats the size,
+checksum, and contract checks before materialization; it performs no OFAPI
+request and spends no credits. Imported message material is projection-only
+and yields bounded cursor checkpoints, never business SSE frames. Because the
+CSV omits reply and full media identities, those fields are marked unobserved
+and cannot erase richer live material during an upsert. A successful import is
+terminal `item_presence` with `continuousHistory=false`; fleet export/import
+still requires a separate bounded decision after this vertical slice is
+verified in production.

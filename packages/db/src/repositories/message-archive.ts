@@ -158,6 +158,10 @@ export async function applyMessageEventsToArchive(
       if (!event.messageRef) continue;
       const head = recordField(event.data, "head");
       if (!head || typeof head.isSentByMe !== "boolean") continue;
+      const fieldPresence = recordField(head, "fieldPresence");
+      const observesMedia = fieldPresence?.media !== false;
+      const observesReply = fieldPresence?.reply !== false;
+      const observesTipText = fieldPresence?.tipText !== false;
       const reply = typeof head.reply === "object" && head.reply !== null && !Array.isArray(head.reply)
         ? head.reply as Record<string, unknown>
         : null;
@@ -224,10 +228,22 @@ export async function applyMessageEventsToArchive(
           is_new = excluded.is_new,
           is_tip = excluded.is_tip,
           tip_amount_mills = excluded.tip_amount_mills,
-          tip_text_plain = excluded.tip_text_plain,
-          in_reply_to_ref = excluded.in_reply_to_ref,
-          reply_metadata = excluded.reply_metadata,
-          media_metadata = excluded.media_metadata,
+          tip_text_plain = case
+            when ${observesTipText} then excluded.tip_text_plain
+            else ${target}.tip_text_plain
+          end,
+          in_reply_to_ref = case
+            when ${observesReply} then excluded.in_reply_to_ref
+            else ${target}.in_reply_to_ref
+          end,
+          reply_metadata = case
+            when ${observesReply} then excluded.reply_metadata
+            else ${target}.reply_metadata
+          end,
+          media_metadata = case
+            when ${observesMedia} then excluded.media_metadata
+            else ${target}.media_metadata
+          end,
           origin_class = excluded.origin_class,
           material_observed_at = excluded.material_observed_at,
           vendor_changed_at = excluded.vendor_changed_at,

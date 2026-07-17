@@ -13,6 +13,7 @@ interface MaterialPageInput {
   chatId: string;
   originClass: "capture_background" | "capture_interactive" | "export_import" | "harvest_import";
   items: readonly Record<string, unknown>[];
+  checkpointDedupKey?: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -84,6 +85,7 @@ function materialDraft(
   const fanId = asString(counterpart?.id);
   const isTip = item.isTip === true;
   const priceMills = millsString(item.price);
+  const declaredPresence = asRecord(item.materialPresence);
   const head = {
     nativeMessageId: messageId,
     textHtml: typeof item.text === "string" ? item.text : "",
@@ -98,6 +100,11 @@ function materialDraft(
     tipTextPlain: typeof item.tipText === "string" ? item.tipText : null,
     reply: replyMetadata(item.replyToMessage),
     media: stableMedia(item.media),
+    fieldPresence: {
+      media: declaredPresence?.media !== false,
+      reply: declaredPresence?.reply !== false,
+      tipText: declaredPresence?.tipText !== false,
+    },
     vendorChangedAt: asDateString(item.changedAt),
     materialObservedAt: input.observationReceivedAt.toISOString(),
     originClass: input.originClass,
@@ -131,13 +138,13 @@ export async function appendOfapiMessageMaterialPage(
     return appendProjectionOnlyDomainEvents(db, input.accountId, [], {
       occurredAt: input.observationReceivedAt,
       observationId: input.observationId,
-      dedupKey: `projection-checkpoint:${input.observationId}`,
+      dedupKey: input.checkpointDedupKey ?? `projection-checkpoint:${input.observationId}`,
     });
   }
   return appendProjectionOnlyDomainEvents(db, input.accountId, drafts, {
     occurredAt: input.observationReceivedAt,
     observationId: input.observationId,
-    dedupKey: `projection-checkpoint:${input.observationId}`,
+    dedupKey: input.checkpointDedupKey ?? `projection-checkpoint:${input.observationId}`,
     data: {
       profile: "ofapi_message_material_v1",
       originClass: input.originClass,

@@ -152,6 +152,8 @@ const envSchema = z.object({
   // old read path remains an immediate rollback until the canary is proven.
   OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED: booleanSchema.default(false),
   OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED: booleanSchema.default(false),
+  OFAPI_EXPORT_ARTIFACT_DIR: z.string().min(1)
+    .default("/var/lib/agency-hub/ofapi-export-artifacts"),
   // One narrow S4 surface: certified backward chat-history pages. Separate
   // booleans use the repo's existing staged-config machinery; there is
   // intentionally no db_only flag until fleet coverage is closed in S5b.
@@ -314,6 +316,7 @@ export interface AppConfig {
   ofapiDesktopReadGatewayEnabled?: boolean;
   ofapiMirrorInteractiveCaptureEnabled?: boolean;
   ofapiMirrorBackgroundCaptureEnabled?: boolean;
+  ofapiExportArtifactDir?: string;
   ofapiMessageHistoryShadowEnabled?: boolean;
   ofapiMessageHistoryDbFallbackEnabled?: boolean;
   ofapiDesktopCommandOutboxEnabled?: boolean;
@@ -495,6 +498,7 @@ export function loadConfig(
     ofapiDesktopReadGatewayEnabled: parsed.OFAPI_DESKTOP_READ_GATEWAY_ENABLED,
     ofapiMirrorInteractiveCaptureEnabled: parsed.OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED,
     ofapiMirrorBackgroundCaptureEnabled: parsed.OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED,
+    ofapiExportArtifactDir: parsed.OFAPI_EXPORT_ARTIFACT_DIR,
     ofapiMessageHistoryShadowEnabled: parsed.OFAPI_MESSAGE_HISTORY_SHADOW_ENABLED,
     ofapiMessageHistoryDbFallbackEnabled: parsed.OFAPI_MESSAGE_HISTORY_DB_FALLBACK_ENABLED,
     ofapiDesktopCommandOutboxEnabled: parsed.OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED,

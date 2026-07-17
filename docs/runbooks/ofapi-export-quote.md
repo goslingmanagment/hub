@@ -33,6 +33,12 @@ can be checked before an importer or larger cohort exists.
   the slot blocked until vendor reconciliation.
 - A completed quote is accepted only when its type, dates, file type, exact
   account, row count, and cost match the frozen request contract.
+- A downloaded pilot is named `<jobId>.csv` in
+  `OFAPI_EXPORT_ARTIFACT_HOST_DIR`. The API and worker see it through a
+  read-only bind mount. `capture-artifact` verifies it twice (registration and
+  import), stores only a journal pointer plus checksum, and creates a local
+  `export_import` job. Import emits projection-only material and certifies only
+  item presence; it never proves continuous history.
 - The live 2026-07-17 `chat_messages` contract normalizes `end_date` to the end
   of the requested UTC day. For scraping-backed exports it can also return
   `calculating_credits_completed` with `requires_scraping: true`,
@@ -74,11 +80,23 @@ charges the calculated credits only when the separate start operation runs.
    `ceil(maxMessages / 20)`, never above 50), and an audit reason. Monitor until
    `artifact_capture_required`; do not approve a second pilot until its
    artifact and charged credits are reconciled.
-6. When a quote will not be piloted, cancel the blocked quote job
+6. Immediately download the signed URL into
+   `OFAPI_EXPORT_ARTIFACT_HOST_DIR/<jobId>.csv`, mode `0600`, then record its
+   SHA-256, byte size, and CSV record count. Preview and execute
+   `/api/v1/admin/ofapi/export-quotes/:jobId/capture-artifact` with the current
+   `expectedRowVersion`, the independently calculated `expectedSha256`, and an
+   audit reason. The route never accepts a caller path or URL. Monitor the
+   created `export_import` job until `complete`; its
+   result must say `classification=item_presence` and
+   `continuousHistory=false`.
+7. Verify message-archive projection high-water, imported row count, zero new
+   continuous-history certificates, and no business SSE frames before any
+   larger export decision.
+8. When a quote will not be piloted, cancel the blocked quote job
    through `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` with
    `{ "expectedState": "blocked", "reason": "..." }` to release the one
    page export slot.
-7. Repeat quote-only for `profile: "fleet_tail"` without `chatIds`. This is the number used
+9. Repeat quote-only for `profile: "fleet_tail"` without `chatIds`. This is the number used
    for the backend/coverage owner decision; do not extrapolate from the pilot.
 
 Example dry-run body:

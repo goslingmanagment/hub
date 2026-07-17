@@ -50,6 +50,7 @@ export function createTestAppContext(
     ofapiDesktopReadGatewayEnabled?: boolean;
     ofapiMirrorInteractiveCaptureEnabled?: boolean;
     ofapiMirrorBackgroundCaptureEnabled?: boolean;
+    ofapiExportArtifactDir?: string;
     ofapiMessageHistoryShadowEnabled?: boolean;
     ofapiMessageHistoryDbFallbackEnabled?: boolean;
     ofapiDesktopCommandOutboxEnabled?: boolean;
@@ -146,6 +147,8 @@ export function createTestAppContext(
         overrides?.ofapiMirrorInteractiveCaptureEnabled ?? false,
       ofapiMirrorBackgroundCaptureEnabled:
         overrides?.ofapiMirrorBackgroundCaptureEnabled ?? false,
+      ofapiExportArtifactDir:
+        overrides?.ofapiExportArtifactDir ?? "/var/lib/agency-hub/ofapi-export-artifacts",
       ofapiMessageHistoryShadowEnabled:
         overrides?.ofapiMessageHistoryShadowEnabled ?? false,
       ofapiMessageHistoryDbFallbackEnabled:

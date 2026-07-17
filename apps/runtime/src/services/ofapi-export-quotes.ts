@@ -33,7 +33,7 @@ const EXPORT_EARLIEST_START_MS = Date.parse("2016-11-01T00:00:00.000Z");
 
 type ExportQuoteProfile = "pilot_chats" | "fleet_tail";
 
-interface ExportQuoteTarget extends Record<string, unknown> {
+export interface ExportQuoteTarget extends Record<string, unknown> {
   profile: ExportQuoteProfile;
   type: "chat_messages";
   accountIds: [string];
@@ -46,7 +46,7 @@ interface ExportQuoteTarget extends Record<string, unknown> {
   autoStart: false;
 }
 
-interface ExportQuoteCursor extends Record<string, unknown> {
+export interface ExportQuoteCursor extends Record<string, unknown> {
   phase:
     | "quote_calculating"
     | "quoted"
@@ -54,7 +54,8 @@ interface ExportQuoteCursor extends Record<string, unknown> {
     | "vendor_started_unexpectedly"
     | "owner_approved"
     | "in_progress"
-    | "artifact_pending";
+    | "artifact_pending"
+    | "artifact_captured";
   vendorExportId: string;
   vendorStatus: string;
   pollCount: number;
@@ -156,7 +157,7 @@ function effectiveOptionsMatch(target: ExportQuoteTarget, data: Record<string, u
   return chatIds.map(String).sort().join(",") === [...target.chatIds].sort().join(",");
 }
 
-function parseTarget(job: OfapiCaptureJobRecord): ExportQuoteTarget | null {
+export function parseOfapiExportTarget(job: OfapiCaptureJobRecord): ExportQuoteTarget | null {
   const target = job.target;
   const profile = target.profile === "pilot_chats" || target.profile === "fleet_tail"
     ? target.profile
@@ -204,7 +205,7 @@ function parseTarget(job: OfapiCaptureJobRecord): ExportQuoteTarget | null {
   };
 }
 
-function parseCursor(job: OfapiCaptureJobRecord): ExportQuoteCursor | null {
+export function parseOfapiExportCursor(job: OfapiCaptureJobRecord): ExportQuoteCursor | null {
   const cursor = job.cursor;
   if (!cursor) return null;
   const phase = cursor.phase === "quote_calculating"
@@ -214,6 +215,7 @@ function parseCursor(job: OfapiCaptureJobRecord): ExportQuoteCursor | null {
       || cursor.phase === "owner_approved"
       || cursor.phase === "in_progress"
       || cursor.phase === "artifact_pending"
+      || cursor.phase === "artifact_captured"
     ? cursor.phase
     : null;
   if (
@@ -392,9 +394,9 @@ export async function getOwnerOfapiExportQuoteStatus(
   if (!job || job.kind !== "account_export") {
     throw new NotFoundError(`OFAPI export quote job ${jobId} was not found`);
   }
-  const target = parseTarget(job);
+  const target = parseOfapiExportTarget(job);
   if (!target) throw new ConflictError(`OFAPI export quote job ${jobId} has an invalid target`);
-  const cursor = parseCursor(job);
+  const cursor = parseOfapiExportCursor(job);
   return {
     jobId: job.id,
     pageId: job.pageId,
@@ -495,9 +497,9 @@ export function buildOfapiExportQuoteRequest(
   job: OfapiCaptureJobRecord,
 ): OfapiExportQuoteRequestPlan | null {
   if (job.state !== "leased") return null;
-  const target = parseTarget(job);
+  const target = parseOfapiExportTarget(job);
   if (!target) return null;
-  const cursor = parseCursor(job);
+  const cursor = parseOfapiExportCursor(job);
   if (cursor === null && job.cursor !== null) return null;
   if (cursor === null) {
     const body = {
@@ -634,8 +636,8 @@ export async function parseCapturedOfapiExportQuote(
   const { job } = input;
   const now = input.now ?? new Date();
   if (!job.leaseToken) return "failed";
-  const target = parseTarget(job);
-  const priorCursor = parseCursor(job);
+  const target = parseOfapiExportTarget(job);
+  const priorCursor = parseOfapiExportCursor(job);
   const isStart = priorCursor?.phase === "owner_approved";
   const isQuoteStatusPoll = priorCursor?.phase === "quote_calculating";
   const isExportStatusPoll = priorCursor?.phase === "in_progress";

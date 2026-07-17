@@ -3572,6 +3572,34 @@ export const ofapiExportPilotApprovalResponseSchema = z.object({
   requiredMaxCredits: z.number().int().min(1).max(50),
 });
 
+export const ofapiExportArtifactCaptureBodySchema = z.object({
+  expectedRowVersion: z.number().int().nonnegative(),
+  expectedSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string().trim().min(1).max(500),
+  dryRun: z.boolean().default(true),
+}).strict();
+
+export const ofapiExportArtifactCaptureResponseSchema = z.object({
+  dryRun: z.boolean(),
+  status: z.enum(["would_capture", "captured"]),
+  jobId: z.string().uuid(),
+  pageId: intId,
+  expectedRowVersion: z.number().int().nonnegative(),
+  nextRowVersion: z.number().int().nonnegative(),
+  importJobId: z.string().uuid().nullable(),
+  importJobState: ofapiExportQuoteJobStateSchema.nullable(),
+  classification: z.literal("item_presence"),
+  artifact: z.object({
+    fileName: z.string(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    byteSize: z.number().int().positive(),
+    rowCount: z.number().int().nonnegative().max(1_000),
+    chatCount: z.number().int().nonnegative().max(3),
+    minCreatedAt: isoTimestamp.nullable(),
+    maxCreatedAt: isoTimestamp.nullable(),
+  }),
+});
+
 export const ofapiExportQuoteStatusResponseSchema = z.object({
   jobId: z.string().uuid(),
   pageId: intId,
@@ -4955,6 +4983,25 @@ export const routeSchemas = {
     body: ofapiExportPilotApprovalBodySchema,
     response: {
       200: ofapiExportPilotApprovalResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminOfapiExportArtifactCapture: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Verify and register one downloaded OFAPI pilot artifact",
+    description: "Reads only <jobId>.csv from the configured read-only artifact directory, "
+      + "checks checksum/schema/account/chat/row invariants, journals a pointer, and creates "
+      + "one local export_import job. It performs no OFAPI request and certifies item presence, "
+      + "not continuous history.",
+    params: ofapiExportQuoteParamsSchema,
+    body: ofapiExportArtifactCaptureBodySchema,
+    response: {
+      200: ofapiExportArtifactCaptureResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -6924,6 +6971,10 @@ export type OfapiExportPilotApprovalBody =
   z.infer<typeof ofapiExportPilotApprovalBodySchema>;
 export type OfapiExportPilotApprovalResponse =
   z.infer<typeof ofapiExportPilotApprovalResponseSchema>;
+export type OfapiExportArtifactCaptureBody =
+  z.infer<typeof ofapiExportArtifactCaptureBodySchema>;
+export type OfapiExportArtifactCaptureResponse =
+  z.infer<typeof ofapiExportArtifactCaptureResponseSchema>;
 export type OfapiCreditsSummaryResponse = z.infer<typeof ofapiCreditsSummaryResponseSchema>;
 export type OfapiCreditsChatterSummaryResponse =
   z.infer<typeof ofapiCreditsChatterSummaryResponseSchema>;

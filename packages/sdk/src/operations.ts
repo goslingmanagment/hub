@@ -43,6 +43,7 @@ export const kernelOperations = {
   adminOfapiCreditsLedgerCsv: { method: "GET", path: "/api/v1/admin/ofapi/credits/ledger.csv" },
   adminOfapiCreditsSummary: { method: "GET", path: "/api/v1/admin/ofapi/credits/summary" },
   adminOfapiDmColdArchiveStatus: { method: "GET", path: "/api/v1/admin/ofapi/dm-archive/status" },
+  adminOfapiExportArtifactCapture: { method: "POST", path: "/api/v1/admin/ofapi/export-quotes/:jobId/capture-artifact" },
   adminOfapiExportCreateReconcile: { method: "POST", path: "/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create" },
   adminOfapiExportPilotApprove: { method: "POST", path: "/api/v1/admin/ofapi/export-quotes/:jobId/approve-pilot" },
   adminOfapiExportQuoteCancel: { method: "POST", path: "/api/v1/admin/ofapi/export-quotes/:jobId/cancel" },

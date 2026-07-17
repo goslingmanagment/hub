@@ -82,6 +82,9 @@ import {
   setOwnerOfapiCaptureControl,
 } from "../../services/ofapi-capture-operator.ts";
 import {
+  captureOwnerOfapiExportArtifact,
+} from "../../services/ofapi-export-artifact.ts";
+import {
   approveOwnerOfapiExportPilot,
   cancelOwnerOfapiExportQuote,
   createOwnerOfapiExportQuote,
@@ -429,6 +432,33 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           requiredMaxCredits: result.requiredMaxCredits,
           expectedRowVersion: result.expectedRowVersion,
           nextRowVersion: result.nextRowVersion,
+          reason: request.body.reason,
+        },
+      });
+    }
+    return result;
+  });
+
+  server.post("/api/v1/admin/ofapi/export-quotes/:jobId/capture-artifact", {
+    schema: routeSchemas.adminOfapiExportArtifactCapture,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    const result = await captureOwnerOfapiExportArtifact(appContext, {
+      ...request.body,
+      jobId: request.params.jobId,
+      actorUserId: principal.user.id,
+    });
+    if (!result.dryRun) {
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.ofapi_export_artifact_captured",
+        platformAccountId: result.pageId,
+        metadata: {
+          jobId: result.jobId,
+          importJobId: result.importJobId,
+          artifact: result.artifact,
+          classification: result.classification,
           reason: request.body.reason,
         },
       });

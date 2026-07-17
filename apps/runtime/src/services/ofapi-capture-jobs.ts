@@ -32,6 +32,7 @@ import {
   parseCapturedOfapiExportQuote,
   type OfapiExportQuoteRequestPlan,
 } from "./ofapi-export-quotes.ts";
+import { executeOfapiExportImportJob } from "./ofapi-export-artifact.ts";
 import {
   OfapiGovernedRequestError,
   type OfapiGovernedRawResponse,
@@ -692,6 +693,9 @@ export async function executeOfapiCaptureJobChunk(
   }
   if (job.state === "awaiting_parse") {
     return parseCapturedJob(app, job);
+  }
+  if (job.kind === "export_import") {
+    return executeOfapiExportImportJob(app, job);
   }
   if (!job.leaseToken) {
     await blockJob(app, job, "lease_missing", "Capture job lease token is missing");

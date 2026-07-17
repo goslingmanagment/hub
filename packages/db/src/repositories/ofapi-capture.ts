@@ -518,6 +518,90 @@ export async function blockOfapiCaptureJobLease(
   return result.rows.length === 1;
 }
 
+export async function markOfapiExportArtifactCaptured(
+  db: Database,
+  input: {
+    jobId: string;
+    expectedRowVersion: number;
+    cursor: Record<string, unknown>;
+    result: Record<string, unknown>;
+    observationId: number;
+    observationReceivedAt: Date;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const updated = await db.execute<Record<string, unknown>>(sql`
+    update ofapi_capture_jobs
+    set state = 'complete',
+        cursor = ${JSON.stringify(input.cursor)}::jsonb,
+        cursor_hash = ${hashOfapiCaptureValue(input.cursor)},
+        terminal_observation_id = ${input.observationId},
+        terminal_observation_received_at = ${input.observationReceivedAt},
+        result = ${JSON.stringify(input.result)}::jsonb,
+        reason_code = null,
+        reason_message = null,
+        lease_owner = null,
+        lease_token = null,
+        lease_until = null,
+        row_version = row_version + 1,
+        updated_at = ${now},
+        completed_at = ${now}
+    where id = ${input.jobId}::uuid
+      and kind = 'account_export'
+      and state = 'blocked'
+      and reason_code = 'artifact_capture_required'
+      and row_version = ${input.expectedRowVersion}
+    returning *
+  `);
+  return updated.rows[0] ? mapCaptureJob(updated.rows[0]) : null;
+}
+
+export async function completeOfapiExportImportJobLease(
+  db: Database,
+  input: {
+    jobId: string;
+    leaseToken: string;
+    cursor: Record<string, unknown>;
+    result: Record<string, unknown>;
+    observationId: number;
+    observationReceivedAt: Date;
+    acceptedItems: number;
+    acceptedBatches: number;
+    now?: Date;
+  },
+) {
+  const acceptedItems = Math.max(0, Math.trunc(input.acceptedItems));
+  const acceptedBatches = Math.max(0, Math.trunc(input.acceptedBatches));
+  const now = input.now ?? new Date();
+  const updated = await db.execute<Record<string, unknown>>(sql`
+    update ofapi_capture_jobs
+    set state = 'complete',
+        cursor = ${JSON.stringify(input.cursor)}::jsonb,
+        cursor_hash = ${hashOfapiCaptureValue(input.cursor)},
+        terminal_observation_id = ${input.observationId},
+        terminal_observation_received_at = ${input.observationReceivedAt},
+        result = ${JSON.stringify(input.result)}::jsonb,
+        accepted_items = ${acceptedItems},
+        accepted_pages = ${acceptedBatches},
+        reason_code = null,
+        reason_message = null,
+        lease_owner = null,
+        lease_token = null,
+        lease_until = null,
+        row_version = row_version + 1,
+        updated_at = ${now},
+        completed_at = ${now}
+    where id = ${input.jobId}::uuid
+      and kind = 'export_import'
+      and state = 'leased'
+      and lease_token = ${input.leaseToken}::uuid
+      and (max_items is null or max_items >= ${acceptedItems})
+    returning *
+  `);
+  return updated.rows[0] ? mapCaptureJob(updated.rows[0]) : null;
+}
+
 export async function loadOfapiCaptureObservation(
   db: Database,
   input: {

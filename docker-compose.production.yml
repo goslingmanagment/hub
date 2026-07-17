@@ -26,6 +26,8 @@ services:
       # base image ships a local timezone.
       TZ: UTC
     command: ["node", "apps/runtime/dist/startup.js", "api"]
+    volumes:
+      - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:-./ofapi-export-artifacts}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -90,6 +92,8 @@ services:
       WORKER_HEALTH_FILE: /tmp/agency-hub-worker-health.json
       TZ: UTC
     command: ["node", "apps/runtime/dist/startup.js", "worker"]
+    volumes:
+      - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:-./ofapi-export-artifacts}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
     depends_on:
       postgres:
         condition: service_healthy
