@@ -4655,3 +4655,9 @@ reusing the legacy DM-sync budget. The existing balance floor, durable
 reservation accounting, per-job bulk caps, and explicit incident pause remain
 unchanged. `OFAPI_DM_DAILY_CREDIT_BUDGET` continues to govern only the legacy
 DM-sync path.
+
+**Decision #168 (2026-07-18, owner adjustment to #167):** The per-principal
+governed mirror allowance is 7,000 calls and 7,000 reserved credits per UTC
+day. This supersedes only the 4,000/4,000 values in #167; its UTC-day window,
+40,000-credit global stop-loss, balance floor, and all other safeguards remain
+unchanged.
