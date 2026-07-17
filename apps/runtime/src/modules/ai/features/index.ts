@@ -1,13 +1,13 @@
 import type {
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
-  AiGatewayStreamBody,
 } from "@agency_hub_core/contracts";
 import { findAiPersonaByKey, findPageByLabel } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import {
   prepareAiGatewayStream,
+  type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
 import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
@@ -373,7 +373,7 @@ export async function prepareAiFeatureStream(
     replyMode: policy.supportsReplyMode ? body.replyMode : undefined,
   });
 
-  const gatewayBody: AiGatewayStreamBody = {
+  const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
     feature,
     pageLabel: body.pageLabel,
@@ -383,6 +383,18 @@ export async function prepareAiFeatureStream(
     model: body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature],
     reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,
+    // Two-slot recap selection (spec §5): only fan-summary rows carry the
+    // summaryMode/coverage/count provenance the recap reader filters on.
+    ...(feature === "fan-summary"
+      ? {
+        featureParams: {
+          summaryMode: body.summaryMode ?? "full",
+          transcriptCoverage: body.clientContext?.transcriptCoverage ?? null,
+          requestedCount: body.messageCount ?? null,
+          keptCount: body.clientContext?.messageCount ?? null,
+        },
+      }
+      : {}),
     prompt: {
       systemBlocks: prompt.systemBlocks,
       userBlocks: prompt.userBlocks,

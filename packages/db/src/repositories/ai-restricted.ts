@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { aiAcceptanceEvents, aiGenerationContent } from "../schema.ts";
@@ -77,6 +77,51 @@ export async function getAiGenerationContentByRef(db: Database, generationRef: s
     .where(eq(aiAcceptanceEvents.generationRef, generationRef))
     .orderBy(aiAcceptanceEvents.occurredAt);
   return { generation: row, acceptance };
+}
+
+export type AiGenerationContentRow = typeof aiGenerationContent.$inferSelect;
+
+export interface FreshestRecapsInput {
+  pageId: number;
+  conversationRefs: string[]; // canonical groupId first, legacy fanAccountId second
+}
+
+export interface FreshestRecaps {
+  full: AiGenerationContentRow | null;
+  short: AiGenerationContentRow | null;
+}
+
+/** Two-slot recap selection (spec §5): newest usable full + newest usable
+ * short for one conversation. Usable = completed outcome, non-empty
+ * completion, not output-exhausted, and modern params (summaryMode present —
+ * legacy rows are excluded from attach by design). The exhausted stop-reason
+ * literals mirror the shared `isOutputExhausted` predicate
+ * (packages/shared/src/ai-stop-reason.ts): Anthropic 'max_tokens',
+ * OpenRouter 'length'. Served by the existing
+ * ai_generation_content_page_conversation_idx (pageId, conversationRef). */
+export async function getFreshestUsableRecaps(
+  db: Database,
+  input: FreshestRecapsInput,
+): Promise<FreshestRecaps> {
+  const pick = async (mode: "full" | "short") => {
+    const rows = await db
+      .select()
+      .from(aiGenerationContent)
+      .where(and(
+        eq(aiGenerationContent.pageId, input.pageId),
+        inArray(aiGenerationContent.conversationRef, input.conversationRefs),
+        eq(aiGenerationContent.feature, "fan-summary"),
+        sql`${aiGenerationContent.params} ->> 'summaryMode' = ${mode}`,
+        sql`${aiGenerationContent.params} ->> 'outcome' = 'completed'`,
+        sql`coalesce(${aiGenerationContent.params} ->> 'stopReason', '') not in ('max_tokens', 'length')`,
+        sql`${aiGenerationContent.completion} <> ''`,
+      ))
+      .orderBy(desc(aiGenerationContent.createdAt), desc(aiGenerationContent.id))
+      .limit(1);
+    return rows[0] ?? null;
+  };
+  const [full, short] = await Promise.all([pick("full"), pick("short")]);
+  return { full, short };
 }
 
 /** Daily volume guard (DP 6 owner note: monitor, trim later if ever). */

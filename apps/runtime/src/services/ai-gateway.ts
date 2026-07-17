@@ -186,10 +186,20 @@ export interface AiGatewayStreamInternalOptions {
   personaDefinitionId?: string;
 }
 
+/** The feature service builds a stream input from the wire body plus optional
+ * server-derived provenance. `featureParams` is NEVER part of the wire
+ * contract (the raw gateway route passes a plain body and leaves it unset) —
+ * it is spread verbatim, additively, into the restricted generation record's
+ * params so fan-summary rows carry summaryMode/transcriptCoverage/counts for
+ * the two-slot recap selection (spec §5). */
+export type AiGatewayStreamInput = AiGatewayStreamBody & {
+  featureParams?: Record<string, unknown>;
+};
+
 export async function prepareAiGatewayStream(
   app: AppContext,
   principal: AuthPrincipal,
-  input: AiGatewayStreamBody,
+  input: AiGatewayStreamInput,
   internal?: AiGatewayStreamInternalOptions,
 ): Promise<PreparedAiGatewayStream> {
   if (!isChatMuseAiGatewayEnabled(app.config)) {
@@ -385,6 +395,9 @@ export async function prepareAiGatewayStream(
         ],
         completion: record.completionText,
         params: {
+          // Feature-derived provenance spreads FIRST so the canonical
+          // gateway keys below always win on any collision.
+          ...(input.featureParams ?? {}),
           maxTokens: input.maxTokens ?? null,
           temperature: input.temperature ?? null,
           reasoningEffort: input.reasoningEffort,
