@@ -602,6 +602,40 @@ describe("OFAPI read gateway integration", () => {
     expect(attempts.rows[0]?.count).toBe("0");
   });
 
+  it("orders certified bigint message ids numerically across digit lengths", async () => {
+    await seedCertifiedHistory();
+    await testDb!.pool.query(`
+      update message_archive
+      set native_message_id = case message_ref
+        when '100' then 9
+        when '101' then 10
+        when '102' then 11
+        when '103' then 12
+      end
+      where account_id = $1 and conversation_ref = '123'
+        and message_ref in ('100', '101', '102', '103')
+    `, [assignedPageId]);
+    await testDb!.pool.query(
+      "update page_dm_threads set last_message_id = '12' where platform_account_id = $1 and platform_conversation_id = '123'",
+      [assignedPageId],
+    );
+    await testDb!.pool.query(
+      "update ofapi_message_coverage set frozen_head_id = '12', oldest_message_id = '9' where page_id = $1 and chat_id = '123'",
+      [assignedPageId],
+    );
+    appContext.ofapi = undefined;
+
+    const response = await inject(
+      `${ACCOUNT_ONE}/chats/123/messages?limit=3&order=desc&first_id=12&skip_users=all`,
+      "deep-history-v1",
+    );
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers["x-agency-hub-read-source"]).toBe("db");
+    expect(response.json().data.map((item: { id: number }) => item.id)).toEqual([11, 10, 9]);
+    expect(response.json()._pagination.next_page).toBeNull();
+  });
+
   it("coalesces repeated explicit no-certificate misses into one bounded repair", async () => {
     await seedUncertifiedHistory();
     scriptedResponses.push(

@@ -124,14 +124,16 @@ export async function readCertifiedOfapiChatHistoryPage(
              content_pending,
              source_account_seq::text as source_account_seq,
              serving_contract_version
-      from message_archive
-      where account_id = ${input.pageId}
-        and platform = 'onlyfans'
-        and conversation_ref = ${input.chatId}
-        and native_message_id <= ${cursor}
-        and native_message_id is not null
-        and deleted_at is null
-      order by native_message_id desc
+      from message_archive archive
+      where archive.account_id = ${input.pageId}
+        and archive.platform = 'onlyfans'
+        and archive.conversation_ref = ${input.chatId}
+        and archive.native_message_id <= ${cursor}
+        and archive.native_message_id is not null
+        and archive.deleted_at is null
+      -- Qualify the bigint column: the unqualified name resolves to the
+      -- native_message_id::text output alias and sorts lexicographically.
+      order by archive.native_message_id desc
       limit ${limit + 2}
     `);
 
