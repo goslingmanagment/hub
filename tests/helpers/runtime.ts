@@ -28,6 +28,9 @@ export function createTestAppContext(
     ofapiDmColdArchiveRetentionDays?: number;
     ofapiDmBootstrapMaxRequestsPerRun?: number;
     ofapiDmDailyCreditBudget?: number;
+    ofapiMirrorGlobalDailyCreditBudget?: number;
+    ofapiMirrorPrincipalDailyCallCap?: number;
+    ofapiMirrorPrincipalDailyCreditCap?: number;
     ofapiCreditFloor?: number;
     ofapiDmReconcileIntervalMinutes?: number;
     ofapiAccountHealthEnabled?: boolean;
@@ -123,6 +126,12 @@ export function createTestAppContext(
       ofapiRestDelayMs: 0,
       ofapiDmBootstrapMaxRequestsPerRun: overrides?.ofapiDmBootstrapMaxRequestsPerRun ?? 25,
       ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
+      ofapiMirrorGlobalDailyCreditBudget:
+        overrides?.ofapiMirrorGlobalDailyCreditBudget ?? 40_000,
+      ofapiMirrorPrincipalDailyCallCap:
+        overrides?.ofapiMirrorPrincipalDailyCallCap ?? 4_000,
+      ofapiMirrorPrincipalDailyCreditCap:
+        overrides?.ofapiMirrorPrincipalDailyCreditCap ?? 4_000,
       ofapiCreditFloor: overrides?.ofapiCreditFloor ?? 500,
       ofapiDmReconcileIntervalMinutes: overrides?.ofapiDmReconcileIntervalMinutes ?? 360,
       ofapiAccountHealthEnabled: overrides?.ofapiAccountHealthEnabled ?? false,

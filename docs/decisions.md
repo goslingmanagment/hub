@@ -4641,3 +4641,17 @@ projection also refresh `pages.subscriber_count` from authoritative current
 `page_subscriptions`; previously both pages had thousands of current rows but
 the reporting cache stayed null forever, producing the dashboard's false
 `N/A`.
+
+**Decision #167 (2026-07-18, governed interactive OFAPI budgets are per user
+per UTC day):** The initial capture-first safety limits of 60 calls per UTC
+hour and 250 shared interactive credits per UTC day blocked ordinary desktop
+reads while the vendor remained healthy. Governed mirror reads now allow each
+origin principal up to 4,000 calls and 4,000 reserved credits per UTC day. The
+principal window and its retry boundary both reset at the next UTC day; the
+shared 250-credit ceiling is removed.
+
+Mirror capture uses its own 40,000-credit global daily stop-loss instead of
+reusing the legacy DM-sync budget. The existing balance floor, durable
+reservation accounting, per-job bulk caps, and explicit incident pause remain
+unchanged. `OFAPI_DM_DAILY_CREDIT_BUDGET` continues to govern only the legacy
+DM-sync path.

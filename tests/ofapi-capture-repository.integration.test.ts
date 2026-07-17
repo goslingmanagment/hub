@@ -459,6 +459,77 @@ describe("OFAPI capture correctness repository", () => {
     expect(denials.rows).toEqual([{ denied_count: "1", reason: "global_cap" }]);
   });
 
+  it("enforces principal call caps for the whole UTC day and resets at the next day", async () => {
+    if (!testDb) return;
+    const seeded = await seed();
+    await testDb.pool.query(`
+      insert into ofapi_principal_budget_state (
+        principal_user_id, window_started_at, used_calls, used_credits, updated_at
+      ) values ($1, $2, 1, 0, $3)
+    `, [seeded.owner.id, new Date("2026-07-16T00:00:00.000Z"), NOW]);
+
+    const reserveAt = async (now: Date) => {
+      const request = await createOfapiInteractiveRequest(testDb!.db, {
+        pageId: seeded.page.id,
+        ofapiAccountId: seeded.accountId,
+        principalUserId: seeded.owner.id,
+        operation: "list_messages",
+        surface: "messages",
+        target: { path: "/api2/v2/chats/42/messages", query: { limit: 20 } },
+        now,
+      });
+      return reserveOfapiRequestAttempt(testDb!.db, {
+        ownerKind: "interactive_request",
+        ownerId: request.id,
+        pageId: seeded.page.id,
+        ofapiAccountId: seeded.accountId,
+        originPrincipalId: seeded.owner.id,
+        budgetScope: "interactive",
+        operation: "list_messages",
+        endpointClass: "messages",
+        egressKey: `page:${seeded.page.id}`,
+        method: "GET",
+        requestSemantics: "safe_read",
+        requestShape: { path: "/api2/v2/chats/42/messages", query: { limit: 20 } },
+        surface: "messages",
+        servingMode: "vendor_only",
+        reservedCredits: 1,
+        globalDailyCap: 100,
+        scopeDailyCap: 100,
+        creditFloor: 10,
+        balanceMaxAgeMs: 48 * 60 * 60 * 1000,
+        principalCallCap: 1,
+        principalCreditCap: 100,
+        deadlineAt: new Date(now.getTime() + 60_000),
+        now,
+      });
+    };
+
+    const deniedAtNextHour = await reserveAt(new Date("2026-07-16T13:00:00.000Z"));
+    expect(deniedAtNextHour).toEqual({
+      admitted: false,
+      reason: "principal_call_cap",
+      retryAt: new Date("2026-07-17T00:00:00.000Z"),
+    });
+
+    const admittedNextDay = await reserveAt(new Date("2026-07-17T00:01:00.000Z"));
+    expect(admittedNextDay.admitted).toBe(true);
+    const principal = await testDb.pool.query<{
+      window_started_at: Date;
+      used_calls: number;
+      used_credits: number;
+    }>(`
+      select window_started_at, used_calls, used_credits
+      from ofapi_principal_budget_state
+      where principal_user_id = $1
+    `, [seeded.owner.id]);
+    expect(principal.rows[0]).toMatchObject({
+      window_started_at: new Date("2026-07-17T00:00:00.000Z"),
+      used_calls: 1,
+      used_credits: 1,
+    });
+  });
+
   it("temporarily denies missing, stale, or breached storage without punishing the principal", async () => {
     if (!testDb) return;
     const cases = [

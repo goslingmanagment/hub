@@ -127,6 +127,9 @@ const envSchema = z.object({
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
   OFAPI_DM_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(500),
+  OFAPI_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(40_000),
+  OFAPI_MIRROR_PRINCIPAL_DAILY_CALL_CAP: z.coerce.number().int().min(1).default(4_000),
+  OFAPI_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP: z.coerce.number().int().min(1).default(4_000),
   OFAPI_CREDIT_FLOOR: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_RECONCILE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(360),
   OFAPI_ACCOUNT_HEALTH_ENABLED: booleanSchema.default(false),
@@ -294,6 +297,9 @@ export interface AppConfig {
   ofapiQueuedCommandTtlMs?: number;
   ofapiDmBootstrapMaxRequestsPerRun?: number;
   ofapiDmDailyCreditBudget?: number;
+  ofapiMirrorGlobalDailyCreditBudget?: number;
+  ofapiMirrorPrincipalDailyCallCap?: number;
+  ofapiMirrorPrincipalDailyCreditCap?: number;
   ofapiCreditFloor?: number;
   ofapiDmReconcileIntervalMinutes?: number;
   ofapiAccountHealthEnabled?: boolean;
@@ -476,6 +482,9 @@ export function loadConfig(
     ofapiQueuedCommandTtlMs: parsed.OFAPI_QUEUED_COMMAND_TTL_MS,
     ofapiDmBootstrapMaxRequestsPerRun: parsed.OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN,
     ofapiDmDailyCreditBudget: parsed.OFAPI_DM_DAILY_CREDIT_BUDGET,
+    ofapiMirrorGlobalDailyCreditBudget: parsed.OFAPI_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET,
+    ofapiMirrorPrincipalDailyCallCap: parsed.OFAPI_MIRROR_PRINCIPAL_DAILY_CALL_CAP,
+    ofapiMirrorPrincipalDailyCreditCap: parsed.OFAPI_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP,
     ofapiCreditFloor: parsed.OFAPI_CREDIT_FLOOR,
     ofapiDmReconcileIntervalMinutes: parsed.OFAPI_DM_RECONCILE_INTERVAL_MINUTES,
     ofapiAccountHealthEnabled: parsed.OFAPI_ACCOUNT_HEALTH_ENABLED,

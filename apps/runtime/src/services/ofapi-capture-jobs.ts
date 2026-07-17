@@ -42,8 +42,9 @@ import { appendOfapiMessageMaterialPage } from "./ofapi-message-material.ts";
 const JOB_LEASE_TTL_MS = 120_000;
 const CAPTURE_COMMIT_ATTEMPTS = 3;
 const BALANCE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-const PRINCIPAL_HOURLY_CALL_CAP = 60;
-const PRINCIPAL_HOURLY_CREDIT_CAP = 60;
+const DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET = 40_000;
+const DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP = 4_000;
+const DEFAULT_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP = 4_000;
 
 export function isOfapiBackgroundCaptureRunnable(
   config: Pick<
@@ -784,7 +785,10 @@ export async function executeOfapiCaptureJobChunk(
 
   try {
     const deadlineAt = new Date(Date.now() + 65_000);
-    const globalDailyCap = Math.max(1, app.config.ofapiDmDailyCreditBudget ?? 500);
+    const globalDailyCap = Math.max(
+      1,
+      app.config.ofapiMirrorGlobalDailyCreditBudget ?? DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET,
+    );
     const reservation = await reserveOfapiRequestAttempt(app.db, {
       ownerKind: "capture_job",
       ownerId: job.id,
@@ -810,8 +814,14 @@ export async function executeOfapiCaptureJobChunk(
       ...(job.originPrincipalId === null
         ? {}
         : {
-          principalCallCap: PRINCIPAL_HOURLY_CALL_CAP,
-          principalCreditCap: PRINCIPAL_HOURLY_CREDIT_CAP,
+          principalCallCap: Math.max(
+            1,
+            app.config.ofapiMirrorPrincipalDailyCallCap ?? DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP,
+          ),
+          principalCreditCap: Math.max(
+            1,
+            app.config.ofapiMirrorPrincipalDailyCreditCap ?? DEFAULT_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP,
+          ),
         }),
       jobLeaseToken: leaseToken,
       deadlineAt,

@@ -25,9 +25,9 @@ import {
 } from "./ofapi.ts";
 import { parseOfapiJsonBytes } from "./ofapi-capture-contract.ts";
 
-const INTERACTIVE_SCOPE_DAILY_CAP = 250;
-const PRINCIPAL_HOURLY_CALL_CAP = 60;
-const PRINCIPAL_HOURLY_CREDIT_CAP = 60;
+const DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET = 40_000;
+const DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP = 4_000;
+const DEFAULT_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP = 4_000;
 const BALANCE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FLOOR_PROBE_COOLDOWN_MS = 60 * 60 * 1000;
 const CAPTURE_COMMIT_ATTEMPTS = 3;
@@ -97,7 +97,10 @@ export async function executeCaptureFirstInteractiveRead(
       query: input.query,
     },
   });
-  const globalDailyCap = Math.max(1, app.config.ofapiDmDailyCreditBudget ?? 500);
+  const globalDailyCap = Math.max(
+    1,
+    app.config.ofapiMirrorGlobalDailyCreditBudget ?? DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET,
+  );
   const reservation = await reserveOfapiRequestAttempt(app.db, {
     ownerKind: "interactive_request",
     ownerId: owner.id,
@@ -120,13 +123,19 @@ export async function executeCaptureFirstInteractiveRead(
     fallbackReason: input.fallbackReason ?? null,
     reservedCredits: Math.max(1, Math.trunc(input.fallbackCredits)),
     globalDailyCap,
-    scopeDailyCap: Math.min(globalDailyCap, INTERACTIVE_SCOPE_DAILY_CAP),
+    scopeDailyCap: globalDailyCap,
     creditFloor: Math.max(0, app.config.ofapiCreditFloor ?? 500),
     balanceMaxAgeMs: BALANCE_MAX_AGE_MS,
     allowFloorProbe: true,
     floorProbeCooldownMs: FLOOR_PROBE_COOLDOWN_MS,
-    principalCallCap: PRINCIPAL_HOURLY_CALL_CAP,
-    principalCreditCap: PRINCIPAL_HOURLY_CREDIT_CAP,
+    principalCallCap: Math.max(
+      1,
+      app.config.ofapiMirrorPrincipalDailyCallCap ?? DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP,
+    ),
+    principalCreditCap: Math.max(
+      1,
+      app.config.ofapiMirrorPrincipalDailyCreditCap ?? DEFAULT_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP,
+    ),
     deadlineAt,
   });
   if (!reservation.admitted) {

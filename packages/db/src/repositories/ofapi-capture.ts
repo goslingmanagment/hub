@@ -23,7 +23,7 @@ import { insertObservation } from "./observations.ts";
 export const OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION = "ofapi-capture-v2";
 export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v2";
 export const OFAPI_CAPTURE_PROOF_POLICY_VERSION = "ofapi-proof-v1";
-export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v1";
+export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v2";
 export const OFAPI_STORAGE_HEALTH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 const OFAPI_STORAGE_HEALTH_RETRY_MS = 5 * 60 * 1000;
@@ -92,10 +92,10 @@ function utcDay(now: Date) {
   return now.toISOString().slice(0, 10);
 }
 
-function utcHour(now: Date) {
-  const hour = new Date(now);
-  hour.setUTCMinutes(0, 0, 0);
-  return hour;
+function utcDayWindow(now: Date) {
+  const day = new Date(now);
+  day.setUTCHours(0, 0, 0, 0);
+  return day;
 }
 
 function nextUtcDay(now: Date) {
@@ -780,11 +780,8 @@ function resolveDenialRetryAt(
     case "manifest_cap":
       return null;
     case "principal_call_cap":
-    case "principal_credit_cap": {
-      const nextHour = utcHour(now);
-      nextHour.setUTCHours(nextHour.getUTCHours() + 1);
-      return nextHour;
-    }
+    case "principal_credit_cap":
+      return nextUtcDay(now);
     case "principal_storm_block":
       return input.principalBlockedUntil ?? new Date(now.getTime() + OFAPI_BUDGET_RECHECK_MS);
     case "balance_stale":
@@ -950,7 +947,7 @@ export async function reserveOfapiRequestAttempt(
       consecutive_budget_denials: unknown;
       blocked_until: string | Date | null;
     } | null = null;
-    const principalWindow = principalId === null ? null : utcHour(now);
+    const principalWindow = principalId === null ? null : utcDayWindow(now);
     if (principalId !== null && principalWindow) {
       await database.execute(sql`
         insert into ofapi_principal_budget_state (
