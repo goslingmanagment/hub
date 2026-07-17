@@ -1158,6 +1158,101 @@ describe("client-context path (Stage 32)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("coach-chat gates", () => {
+  // These gates fire in prepareAiFeatureStream BEFORE any page/context load,
+  // so they assert on the request shape alone — the seeded fansly page is used
+  // only to satisfy the chatter's access, never actually loaded here.
+  const fanslyPageLabel = "svc-fs";
+  const coachPayload = (over: Record<string, unknown> = {}) => ({
+    clientRequestId: randomUUID(),
+    pageLabel: fanslyPageLabel,
+    platform: "fansly",
+    conversationRef: "group-777",
+    fanRef: "fan-42",
+    clientContext: { transcript: "fan: hi", messageCount: 1, fanDisplayName: "Bob" },
+    ...over,
+  });
+
+  it("requires chatterQuestion for coach-chat", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload(),
+    });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().message).toMatch(/chatterQuestion/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects coach fields on other features", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({ chatterQuestion: "hm?" }),
+    });
+    expect(res.statusCode, res.body).toBe(400);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects summaryMode outside fan-summary", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/help-me",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({ summaryMode: "short" }),
+    });
+    expect(res.statusCode, res.body).toBe(400);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects oversized aggregate history", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({
+        chatterQuestion: "q",
+        coachHistory: Array.from({ length: 13 }, () => ({
+          question: "q".repeat(1000),
+          answer: "a".repeat(9000),
+        })), // 13 * 10000 = 130k > 120k
+      }),
+    });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().message).toMatch(/coachHistory/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects unknown features with a structured code", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/nope",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload(),
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("unknown_ai_feature");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("fan-dossier context (Decision #136)", () => {
   // Production shape: fan-summary writes RUSSIAN markdown (## N. ЗАГОЛОВОК).
   const DOSSIER_BODY = [

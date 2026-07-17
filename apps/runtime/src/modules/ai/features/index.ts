@@ -16,6 +16,7 @@ import {
   NotFoundError,
   PersonaDefinitionChangedError,
   ProductGateError,
+  UnknownAiFeatureError,
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
@@ -130,6 +131,12 @@ async function resolvePersona(
   };
 }
 
+// Coach conversation history is a client-carried scratchpad (this repo assembles
+// no history server-side). Bound the aggregate so a runaway client can't push an
+// unbounded prompt through the feature lane; per-entry caps live in the contract
+// schema, this caps their sum.
+const COACH_HISTORY_AGGREGATE_MAX_CHARS = 120_000;
+
 export async function prepareAiFeatureStream(
   app: AppContext,
   principal: AuthPrincipal,
@@ -138,13 +145,37 @@ export async function prepareAiFeatureStream(
   options?: { debugPromptEcho?: boolean },
 ): Promise<PreparedAiGatewayStream> {
   if (!(featureKey in FEATURE_POLICIES) || !isOperationFeature(featureKey as never)) {
-    throw new NotFoundError(`Unknown AI feature: ${featureKey}`);
+    throw new UnknownAiFeatureError(`Unknown AI feature: ${featureKey}`);
   }
   const feature = featureKey as OperationFeature;
   const policy = FEATURE_POLICIES[feature];
 
   if (policy.requiresDraft && !body.draftText?.trim()) {
     throw new ProductGateError(`${feature} requires draftText`, "gate_draft_required");
+  }
+
+  // Coach feature isolation (spec §7): coach-chat REQUIRES a question and bounds
+  // its client-carried history; every other feature REFUSES the coach fields so
+  // a stray field can never silently reshape a Reply/Ping/Summary prompt. The
+  // summaryMode toggle is likewise fan-summary-only.
+  if (feature === "coach-chat") {
+    if (!body.chatterQuestion?.trim()) {
+      throw new BadRequestError("coach-chat requires chatterQuestion");
+    }
+    const aggregate = (body.coachHistory ?? []).reduce(
+      (sum, entry) => sum + entry.question.length + entry.answer.length,
+      0,
+    );
+    if (aggregate > COACH_HISTORY_AGGREGATE_MAX_CHARS) {
+      throw new BadRequestError(
+        `coachHistory aggregate exceeds ${COACH_HISTORY_AGGREGATE_MAX_CHARS} chars`,
+      );
+    }
+  } else if (body.chatterQuestion !== undefined || body.coachHistory !== undefined) {
+    throw new BadRequestError(`${feature} does not accept coach fields`);
+  }
+  if (body.summaryMode !== undefined && feature !== "fan-summary") {
+    throw new BadRequestError(`${feature} does not accept summaryMode`);
   }
 
   // Access is checked HERE, before any context loads — a principal without
