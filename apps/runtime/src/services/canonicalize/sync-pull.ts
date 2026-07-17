@@ -26,7 +26,7 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-export const SYNC_PULL_CANONICALIZER_VERSION = 3;
+export const SYNC_PULL_CANONICALIZER_VERSION = 4;
 
 /** Per-run context: page -> own platform-native account id. Direction of a
  *  Fansly DM (sent vs received) is decidable only against the page's OWN
@@ -193,6 +193,7 @@ function fanslyDmMessages(
       dedupKey: `msg:${direction}:${messageId}`,
     });
   }
+  events.push(...fanslyPurchaseEvents(observation));
   return events;
 }
 
@@ -322,7 +323,7 @@ function fanslyEarningsObserved(
 /** PPV order-history rows carry NO order id (extension-proven shape) — the
  *  dedup key is the composite (fan, media/bundle, createdAt); recorded
  *  deviation from the spec's `ppv:<order_id>` ideal. */
-function fanslyPurchaseHistory(observation: CanonicalizableObservation): CanonicalEventDraft[] {
+function fanslyPurchaseEvents(observation: CanonicalizableObservation): CanonicalEventDraft[] {
   if (!isRecord(observation.payload)) {
     return [];
   }
@@ -331,6 +332,8 @@ function fanslyPurchaseHistory(observation: CanonicalizableObservation): Canonic
     : {};
   const rows = Array.isArray(observation.payload.accountMediaOrderHistory)
     ? observation.payload.accountMediaOrderHistory
+    : Array.isArray(observation.payload.accountMediaOrders)
+      ? observation.payload.accountMediaOrders
     : Array.isArray(aggregation.accountMediaOrders)
       ? aggregation.accountMediaOrders
       : null;
@@ -339,16 +342,25 @@ function fanslyPurchaseHistory(observation: CanonicalizableObservation): Canonic
   }
 
   const events: CanonicalEventDraft[] = [];
+  const dedupKeys = new Set<string>();
   for (const row of rows) {
     if (!isRecord(row)) {
       continue;
     }
     const fan = asString(row.accountId);
-    const mediaRef = asString(row.accountMediaId) ?? asString(row.accountMediaBundleId);
+    const mediaRef = asString(row.accountMediaBundleId) ?? asString(row.accountMediaId);
     if (!fan || !mediaRef) {
       continue;
     }
-    const occurredAt = asDate(row.createdAt, observation.receivedAt);
+    // Production order rows use epoch SECONDS (verified against captured DM
+    // observations). Treating them as milliseconds would silently materialize
+    // PPV unlocks in 1970.
+    const occurredAt = asFanslyTimestamp(row.createdAt, observation.receivedAt);
+    const dedupKey = `ppv:${fan}:${mediaRef}:${occurredAt.toISOString()}`;
+    if (dedupKeys.has(dedupKey)) {
+      continue;
+    }
+    dedupKeys.add(dedupKey);
     events.push({
       type: "message.ppv_unlocked",
       occurredAt,
@@ -359,8 +371,12 @@ function fanslyPurchaseHistory(observation: CanonicalizableObservation): Canonic
         orderType: asNumber(row.type),
       },
       schemaVersion: 1,
-      dedupKey: `ppv:${fan}:${mediaRef}:${occurredAt.toISOString()}`,
+      dedupKey,
     });
   }
   return events;
+}
+
+function fanslyPurchaseHistory(observation: CanonicalizableObservation): CanonicalEventDraft[] {
+  return fanslyPurchaseEvents(observation);
 }

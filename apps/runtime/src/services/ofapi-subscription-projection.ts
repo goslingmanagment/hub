@@ -12,6 +12,7 @@ import {
   findPageSubscription,
   listOfapiWebhookEventsForDmProjection,
   markOfapiWebhookEventProjection,
+  refreshPageSubscriberCount,
   upsertFanPageExternalPresences,
   upsertFanPages,
   upsertFans,
@@ -215,6 +216,7 @@ async function projectOfapiSubscriptionEvent(
       subscriptionExpiresAt: existing?.endsAt ?? null,
       autoRenew: existing?.autoRenew ?? null,
     }]);
+    await refreshPageSubscriberCount(tx, page.id);
 
     if (parsed.lastSeenAt) {
       await upsertFanPageExternalPresences(tx, [{

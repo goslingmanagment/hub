@@ -1,6 +1,6 @@
-// Stage 16 purchase-history keyset walk (pre-merge review regression
-// coverage): per-fan failure isolation — one dead fan account never wedges
-// the walk — and flags-off egress inertness for the Monday flags-off deploy.
+// Stage 16 media-scoped purchase-history regression coverage. Fansly requires
+// accountMediaId/accountMediaBundleId; accountIds is only an optional buyer
+// filter. Captured DM pages are the durable discovery source.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,14 +10,14 @@ import {
   ensurePageSyncStates,
   findPageById,
   getCheckpoint,
+  insertRawPayload,
   startSyncRun,
-  upsertFanPages,
-  upsertFans,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
+import { FanslyPurchaseHistoryContractError } from "../apps/runtime/src/services/sync/errors.ts";
 import { executePurchaseHistoryChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import {
   resetIntegrationDatabase,
@@ -57,20 +57,54 @@ function fakeTelemetry() {
   };
 }
 
-async function seedPageWithFans(fanPlatformIds: string[]) {
+async function seedPage() {
   const model = await createModel(appContext.db, { slug: "ph-model", name: "PH" });
+  if (!model) {
+    throw new Error("failed to create test model");
+  }
   const page = await createFanslyPage(appContext.db, { modelId: model.id, label: "ph-fansly" });
+  if (!page) {
+    throw new Error("failed to create test page");
+  }
   await ensurePageSyncStates(appContext.db, { pageId: page.id });
-  const fans = await upsertFans(appContext.db, fanPlatformIds.map((platformUserId) => ({
-    platform: "fansly" as const,
-    platformUserId,
-    username: `u${platformUserId}`,
-  })));
-  await upsertFanPages(appContext.db, fans.map((fan) => ({
-    fanId: fan.id,
-    platformAccountId: page.id,
-  })));
   return page;
+}
+
+async function captureDmPage(pageId: number, responsePayload: unknown) {
+  await insertRawPayload(appContext.db, {
+    platformAccountId: pageId,
+    endpoint: "dm_messages",
+    requestParams: { groupId: "group-1" },
+    responsePayload,
+    mapperVersion: "test",
+    payloadKind: "dm_messages",
+    retainUntil: new Date("2126-01-01T00:00:00Z"),
+  });
+}
+
+function ppvDmPayload() {
+  return {
+    messages: [{
+      id: "message-1",
+      attachments: [
+        { contentType: 1, contentId: "media-1" },
+        { contentType: 2, contentId: "bundle-1" },
+        { contentType: 1, contentId: "free-media" },
+      ],
+    }],
+    accountMedia: [
+      { id: "media-1", permissions: { permissionFlags: [{ flags: 1 }] } },
+      { id: "free-media", permissions: { permissionFlags: [] } },
+    ],
+    accountMediaBundles: [
+      { id: "bundle-1", permissions: { permissionFlags: [{ flags: 1 }] } },
+    ],
+    accountMediaOrders: [{
+      accountId: "buyer-1",
+      accountMediaId: "ordered-media",
+      createdAt: 1_780_000_000,
+    }],
+  };
 }
 
 async function buildChunkInput(page: { id: number }, telemetry: ReturnType<typeof fakeTelemetry>) {
@@ -79,6 +113,9 @@ async function buildChunkInput(page: { id: number }, telemetry: ReturnType<typeo
     stream: "purchase_history",
     trigger: "manual",
   });
+  if (!run) {
+    throw new Error("failed to create test sync run");
+  }
   const stored = await findPageById(appContext.db, page.id);
   if (!stored) {
     throw new Error(`page ${page.id} missing`);
@@ -98,27 +135,22 @@ async function buildChunkInput(page: { id: number }, telemetry: ReturnType<typeo
   };
 }
 
-describe("Stage 16 purchase-history walk", () => {
-  it("skips a fan-scoped 404 and completes the walk instead of wedging on it", async (context) => {
+describe("Stage 16 media-scoped purchase-history walk", () => {
+  it("discovers PPV media from captured DMs and never sends accountIds", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    const page = await seedPageWithFans(["ph-1", "ph-2", "ph-3"]);
+    const page = await seedPage();
+    await captureDmPage(page.id, ppvDmPayload());
 
-    const requested: string[] = [];
+    const requested: Array<Record<string, unknown>> = [];
     appContext = {
       ...appContext,
       adapter: {
-        async getMediaOrderHistoryPage(
-          _requestContext: unknown,
-          params: { accountIds: string },
-        ) {
-          requested.push(params.accountIds);
-          if (params.accountIds === "ph-2") {
-            throw new FanslyApiError("account gone", 404);
-          }
-          return { raw: { response: { orders: [] } } };
+        async getMediaOrderHistoryPage(_requestContext: unknown, params: Record<string, unknown>) {
+          requested.push(params);
+          return { items: [], raw: { accountMediaOrderHistory: [] } };
         },
       } as never,
     };
@@ -129,114 +161,151 @@ describe("Stage 16 purchase-history walk", () => {
       await buildChunkInput(page, telemetry),
     );
 
-    // Every fan attempted; the dead one skipped; the walk COMPLETED.
-    expect(requested).toEqual(["ph-1", "ph-2", "ph-3"]);
+    expect(requested).toEqual([
+      { accountMediaBundleId: "bundle-1", limit: 100 },
+      { accountMediaId: "media-1", limit: 100 },
+      { accountMediaId: "ordered-media", limit: 100 },
+    ]);
+    expect(requested.every((params) => !("accountIds" in params))).toBe(true);
     expect(result).toMatchObject({
       satisfied: true,
-      stats: { fansFetched: 2, fansSkipped: 1, walkCompleted: true },
+      stats: { targetsFetched: 3, orderRowsCaptured: 0, walkCompleted: true },
     });
-    expect(telemetry.addAnomaly).toHaveBeenCalledTimes(1);
-    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
-      code: "purchase_history_fan_rejected",
-    }));
 
-    // Only successful fetches persisted; completion checkpoint reset.
-    const payloads = await testDb.pool.query<{ n: string }>(
-      "select count(*)::text as n from sync_raw_payloads where endpoint = 'purchase_history'",
+    const captures = await testDb.pool.query<{ request_params: Record<string, unknown> }>(
+      "select request_params from sync_raw_payloads where endpoint = 'purchase_history' order by id",
     );
-    expect(payloads.rows).toEqual([{ n: "2" }]);
-    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
-    expect(checkpoint?.state).toMatchObject({ cursorFanId: 0 });
+    expect(captures.rows.map((row) => row.request_params)).toEqual(requested);
+
+    // The raw-row high-water and target captures make the steady-state pass
+    // local and idempotent: no second vendor call for the same media.
+    requested.length = 0;
+    const second = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, telemetry),
+    );
+    expect(second.satisfied).toBe(true);
+    expect(requested).toEqual([]);
   });
 
-  it("makes zero adapter calls with the flag off (Monday ships flags-off)", async (context) => {
+  it("captures and skips one deleted media target instead of wedging", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await captureDmPage(page.id, ppvDmPayload());
+    appContext = {
+      ...appContext,
+      adapter: {
+        async getMediaOrderHistoryPage(_context: unknown, params: Record<string, unknown>) {
+          if (params.accountMediaBundleId === "bundle-1") {
+            throw new FanslyApiError("media gone", 404);
+          }
+          return { items: [], raw: { accountMediaOrderHistory: [] } };
+        },
+      } as never,
+    };
+
+    const telemetry = fakeTelemetry();
+    const result = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, telemetry),
+    );
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: { targetsFetched: 2, targetsSkipped: 1, walkCompleted: true },
+    });
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "purchase_history_media_rejected",
+    }));
+    const rejected = await testDb.pool.query<{ status_code: number; error_message: string }>(
+      "select status_code, error_message from sync_raw_payloads where endpoint = 'purchase_history' and status_code = 404",
+    );
+    expect(rejected.rows).toEqual([{ status_code: 404, error_message: "media gone" }]);
+  });
+
+  it("makes zero adapter calls with the feature flag off", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     appContext = createTestAppContext(testDb, { fanslyPurchaseHistorySyncEnabled: false });
-    const page = await seedPageWithFans(["ph-9"]);
-    const adapterSpy = vi.fn(async () => ({ raw: {} }));
+    const page = await seedPage();
+    await captureDmPage(page.id, ppvDmPayload());
+    const adapterSpy = vi.fn(async () => ({ items: [], raw: {} }));
     appContext = {
       ...appContext,
       adapter: { getMediaOrderHistoryPage: adapterSpy } as never,
     };
 
-    const telemetry = fakeTelemetry();
     const result = await executePurchaseHistoryChunk(
       appContext,
-      await buildChunkInput(page, telemetry),
+      await buildChunkInput(page, fakeTelemetry()),
     );
     expect(result).toMatchObject({ satisfied: true, stats: { skipped: "flag_off" } });
     expect(adapterSpy).not.toHaveBeenCalled();
   });
 
-  it("propagates page-scoped auth errors instead of skipping the fan", async (context) => {
+  it.each([99, 12])("treats Fansly HTTP 400 code %s as systemic contract drift", async (code, context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    const page = await seedPageWithFans(["ph-1"]);
+    const page = await seedPage();
+    await captureDmPage(page.id, ppvDmPayload());
     appContext = {
       ...appContext,
       adapter: {
         async getMediaOrderHistoryPage() {
-          throw new FanslyApiError("session dead", 401);
+          throw new FanslyApiError("invalid params", 400, code);
         },
       } as never,
     };
 
-    const telemetry = fakeTelemetry();
     await expect(
-      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, telemetry)),
-    ).rejects.toThrow("session dead");
-    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
-  });
-
-  it("treats Fansly code 99 (invalid params) as systemic, never a fan skip", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPageWithFans(["ph-1", "ph-2"]);
-    appContext = {
-      ...appContext,
-      adapter: {
-        async getMediaOrderHistoryPage() {
-          throw new FanslyApiError("invalid params", 400, 99);
-        },
-      } as never,
-    };
-
-    const telemetry = fakeTelemetry();
-    await expect(
-      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, telemetry)),
+      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, fakeTelemetry())),
     ).rejects.toThrow("invalid params");
-    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
+    expect(checkpoint?.state).toMatchObject({
+      version: 2,
+      pendingTargets: expect.arrayContaining([
+        { kind: "bundle", contentId: "bundle-1" },
+      ]),
+    });
   });
 
-  it("refuses to stamp completion when EVERY fan was skipped (mass-skip breaker)", async (context) => {
+  it("captures but blocks an unknown success shape without refetching it", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    const page = await seedPageWithFans(["ph-1", "ph-2", "ph-3"]);
+    const page = await seedPage();
+    await captureDmPage(page.id, {
+      messages: [{ attachments: [{ contentType: 1, contentId: "media-1" }] }],
+      accountMedia: [{
+        id: "media-1",
+        permissions: { permissionFlags: [{ flags: 1 }] },
+      }],
+    });
     appContext = {
       ...appContext,
       adapter: {
         async getMediaOrderHistoryPage() {
-          throw new FanslyApiError("account gone", 404);
+          return { items: [], raw: { unexpected: [] } };
         },
       } as never,
     };
 
-    const telemetry = fakeTelemetry();
     await expect(
-      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, telemetry)),
-    ).rejects.toThrow("skipped all 3 fans");
-    // No false-success checkpoint: the walk stays resumable and visibly
-    // failing instead of repeating a zero-capture "success" every cadence.
+      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, fakeTelemetry())),
+    ).rejects.toBeInstanceOf(FanslyPurchaseHistoryContractError);
+    const captures = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from sync_raw_payloads where endpoint = 'purchase_history'",
+    );
+    expect(captures.rows).toEqual([{ n: "1" }]);
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
-    expect(checkpoint?.state ?? null).toBeNull();
+    expect(checkpoint?.state).toMatchObject({ pendingTargets: [] });
   });
 });

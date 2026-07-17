@@ -1308,6 +1308,29 @@ describe("sync executor", () => {
     }));
   });
 
+  it("retries one follower snapshot that moved during a live paginated scan", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockRejectedValue(new FollowersReconcileConsistencyError({
+      code: "followers_reconcile_snapshot_drift",
+      message: "Follower count moved during the scan",
+      retryable: true,
+    }));
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      retryKind: "followers_reconcile_snapshot_drift",
+    }));
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+  });
+
   it("keeps long-running chunks alive with a worker heartbeat", async () => {
     vi.useFakeTimers();
 

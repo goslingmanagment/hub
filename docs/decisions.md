@@ -4591,3 +4591,53 @@ and cannot erase richer live material during an upsert. A successful import is
 terminal `item_presence` with `continuousHistory=false`; fleet export/import
 still requires a separate bounded decision after this vertical slice is
 verified in production.
+
+**Decision #165 (2026-07-17, Fansly purchase history is a media-scoped walk
+over captured DM evidence):** The production failure was a contract error in
+our client, not a reason to disable the product permanently. Fansly's
+`/media/orderhistory` requires exactly one observed `accountMediaId` or
+`accountMediaBundleId`; `accountIds` is only an optional buyer filter. A live
+read-only probe with one Lilly media id returned HTTP 200, while the old
+fan-only request returned HTTP 400/code 99 `missing accountMediaId`.
+
+The replacement creates no second queue or media table. It keyset-scans the
+already retained `sync_raw_payloads(endpoint='dm_messages')`, extracts only PPV
+attachments plus media ids proven by inline `accountMediaOrders`, and stores
+the raw-row high-water and bounded pending targets in the existing sync
+checkpoint before egress. A target-specific `purchase_history` raw capture is
+the durable dedupe fact; a crash after capture is reconciled locally without a
+second vendor request. HTTP 404/410 is target-local and captured; every HTTP
+400, auth/rate-limit/server failure, an unknown successful response shape, or
+a response at the cursorless 100-row cap fails visibly rather than certifying
+false completeness. There is never a fan×media cartesian walk.
+
+Sync-pull canonicalizer v4 also emits `message.ppv_unlocked` from
+`accountMediaOrders` embedded in newly captured DM pages, so new purchases do
+not wait for the historical walk. Production observations prove their
+`createdAt` values are epoch seconds; v4 uses the Fansly seconds/milliseconds
+codec, preventing 1970 events. Existing historical DM observations are locally
+replayable under v4. The stream remains feature-gated for a bounded ramp, but
+the corrected implementation is now eligible to replace the 2026-07-06
+temporary disablement recorded in Stage 16.
+
+**Decision #166 (2026-07-17, page health reports actionable freshness; a
+moving Fansly follower list gets one bounded restart):** Fansly follower pages
+are a live list, not a transactional snapshot. If a complete reconcile walk
+differs from the headline count, the first mismatch starts one fresh generation
+and records that restart in the checkpoint. A second mismatch blocks exactly as
+before, and neither mismatch may deactivate rows. This repairs transient
+one-row drift without converting it into an unbounded provider loop.
+
+The dashboard page-level health summary now evaluates only streams applicable
+to that page under the current feature gates. `fan_earnings` and
+`purchase_history` are bulk enrichment and remain fully visible in the detailed
+sync monitor, but no longer paint otherwise-current Fansly page data red.
+OnlyFans compatibility/no-op rows (`light`, legacy `transactions`, retired
+`dm_messages`) and disabled audience/DM/top-spender/identity lanes are likewise
+excluded; enabled OFAPI lanes still participate and can require attention.
+This changes only the summary signal, never scheduling, capture, detailed
+observability, or stored data. The OFAPI audience sweep and live subscription
+projection also refresh `pages.subscriber_count` from authoritative current
+`page_subscriptions`; previously both pages had thousands of current rows but
+the reporting cache stayed null forever, producing the dashboard's false
+`N/A`.

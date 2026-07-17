@@ -23,6 +23,7 @@ type FollowersReconcileCursorState = {
   observedCount: number;
   pageCount: number;
   sourceFollowerCount: number;
+  snapshotRestartCount: number;
 };
 
 type DmConversationCursorState = {
@@ -221,12 +222,14 @@ export function parseFollowersReconcileCursorState(
   const observedCount = asNumber(state.observedCount) ?? offset;
   const pageCount = asNumber(state.pageCount);
   const sourceFollowerCount = asNumber(state.sourceFollowerCount);
+  const snapshotRestartCount = asNumber(state.snapshotRestartCount) ?? 0;
   if (
     generation === null ||
     offset === null ||
     observedCount === null ||
     pageCount === null ||
-    sourceFollowerCount === null
+    sourceFollowerCount === null ||
+    snapshotRestartCount < 0
   ) {
     return null;
   }
@@ -238,6 +241,7 @@ export function parseFollowersReconcileCursorState(
     observedCount,
     pageCount,
     sourceFollowerCount,
+    snapshotRestartCount,
   };
 }
 

@@ -41,13 +41,26 @@ export class SyncPayloadPersistenceError extends Error {
 
 export class FollowersReconcileConsistencyError extends Error {
   readonly code: string;
+  readonly retryable: boolean;
 
   constructor(input: {
     code: string;
     message: string;
+    retryable?: boolean;
   }) {
     super(input.message);
     this.name = "FollowersReconcileConsistencyError";
+    this.code = input.code;
+    this.retryable = input.retryable ?? false;
+  }
+}
+
+export class FanslyPurchaseHistoryContractError extends Error {
+  readonly code: string;
+
+  constructor(input: { code: string; message: string }) {
+    super(input.message);
+    this.name = "FanslyPurchaseHistoryContractError";
     this.code = input.code;
   }
 }

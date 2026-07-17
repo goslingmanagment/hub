@@ -337,6 +337,7 @@ describe("OFAPI audience sweep", () => {
     expect(fanPageById.get("101")?.is_subscriber).toBe(true);
     expect(fanPageById.get("101")?.external_presence_at).not.toBeNull();
     expect(fanPageById.get("999")?.is_subscriber).toBe(false);
+    expect((await findPageById(appContext.db, page!.id))?.page.subscriberCount).toBe(3);
 
     // Checkpoint records the completed sweep; credits were recorded per request.
     const checkpoint = await getCheckpoint(appContext.db, page.id, "subscribers");
@@ -365,10 +366,16 @@ describe("OFAPI audience sweep", () => {
     const first = await executeOfapiAudienceChunk(appContext, await buildChunkInput(page));
     expect(first.satisfied).toBe(true);
 
+    await testDb.pool.query(
+      "update pages set subscriber_count = null where id = $1",
+      [page!.id],
+    );
+
     const second = await executeOfapiAudienceChunk(appContext, await buildChunkInput(page));
     expect(second.satisfied).toBe(true);
     expect(second.stats).toMatchObject({ skipped: "sweep_not_due" });
     expect(listActiveFans).toHaveBeenCalledTimes(1);
+    expect((await findPageById(appContext.db, page!.id))?.page.subscriberCount).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("yields on the audience request cap and resumes the walk mid-sweep", async (context) => {
@@ -485,6 +492,7 @@ describe("OFAPI live subscription projection", () => {
       isCurrent: true,
     });
     expect(subscription?.sourceCreatedAt).toEqual(new Date("2026-06-10T18:40:00+00:00"));
+    expect((await findPageById(appContext.db, page!.id))?.page.subscriberCount).toBe(1);
 
     // The journal row is marked projected (audience flag on).
     const { rows } = await testDb.pool.query<{ projection_status: string }>(

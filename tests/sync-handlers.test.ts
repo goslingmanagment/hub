@@ -1103,7 +1103,7 @@ it("guards against empty first-page follower reconcile wipes when active followe
   expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
 });
 
-it("guards against destructive finalization when the unique reconcile generation is incomplete", async () => {
+it("restarts one live follower snapshot before blocking an incomplete generation", async () => {
   const telemetry = createTelemetry();
   const db = {
     transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback({})),
@@ -1163,7 +1163,10 @@ it("guards against destructive finalization when the unique reconcile generation
     syncRunId: 102,
     telemetry: telemetry as never,
     budget: new SyncChunkBudget(),
-  } as never)).rejects.toThrow("refusing destructive finalization");
+  } as never)).rejects.toMatchObject({
+    code: "followers_reconcile_snapshot_drift",
+    retryable: true,
+  });
 
   expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
     code: "followers_reconcile_generation_guard",
@@ -1180,6 +1183,15 @@ it("guards against destructive finalization when the unique reconcile generation
   expect(dbMocks.refreshFanPageFollowerState).not.toHaveBeenCalled();
   expect(dbMocks.rebuildFollowerRollups).not.toHaveBeenCalled();
   expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+  expect(dbMocks.upsertCheckpointProgress).toHaveBeenLastCalledWith(db, {
+    platformAccountId: 13,
+    stream: "followers_reconcile",
+    state: {
+      generation: 1,
+      snapshotRestartCount: 1,
+      restartReason: "snapshot_mismatch",
+    },
+  });
 });
 
 it("finalizes follower reconcile when offset drift duplicates raw rows but the unique generation is complete", async () => {

@@ -6,6 +6,7 @@ import {
   listVisiblePages,
   SYNC_STREAM_POLICY,
   type PageSyncState,
+  type SyncStream,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -15,6 +16,9 @@ import {
 } from "./ofapi-account-health.ts";
 import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
+import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
+import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
+import { filterOnlyFansTopSpendersStreams } from "./sync/onlyfans-top-spenders.ts";
 import {
   buildPageSyncUx,
   buildStreamSyncUx,
@@ -178,12 +182,42 @@ function buildPageSummarySyncUx(
     return actionRequired;
   }
 
-  const supportedStreams = new Set(filterOnlyFansAudienceStreams(
+  let applicableStreams: SyncStream[] = getSyncStreamsForPlatform(page.platform)
+    // Stage 16 bulk enrichment streams remain visible on the detailed sync
+    // monitor, but never make an otherwise-current page look broken/off.
+    .filter((stream) => stream !== "fan_earnings" && stream !== "purchase_history");
+  applicableStreams = filterOnlyFansAudienceStreams(
     page.platform,
-    getSyncStreamsForPlatform(page.platform),
+    applicableStreams,
     app.config,
     page,
-  ));
+  );
+  applicableStreams = filterOnlyFansDmPollingStreams(
+    page.platform,
+    applicableStreams,
+    app.config,
+    page,
+  );
+  applicableStreams = filterOnlyFansTopSpendersStreams(
+    page.platform,
+    applicableStreams,
+    app.config,
+  );
+  if (page.platform !== "fansly") {
+    applicableStreams = applicableStreams.filter((stream) => {
+      // These rows are compatibility placeholders: OnlyFans identity metadata
+      // is static and transaction truth arrives through captured webhooks.
+      if (stream === "light" || stream === "transactions") {
+        return false;
+      }
+      if (stream === "fan_identities") {
+        return isOfapiFanIdentitiesEligiblePage(app.config, page);
+      }
+      return true;
+    });
+  }
+
+  const supportedStreams = new Set(applicableStreams);
   const streamSummaries = taskRows
     .filter((task) => supportedStreams.has(task.stream))
     .map((task) => toStreamSyncUx(task, now));

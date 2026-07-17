@@ -102,6 +102,12 @@ describe("sync summary service", () => {
       buildTaskRow({ stream: "light" }),
       buildTaskRow({ stream: "followers" }),
       buildTaskRow({ stream: "transactions" }),
+      buildTaskRow({
+        stream: "purchase_history",
+        status: "blocked",
+        succeededAt: null,
+        blockerCode: "purchase_history_contract_rejected",
+      }),
     ]);
 
     const snapshot = await getSyncStatusSummarySnapshot({
@@ -144,7 +150,7 @@ describe("sync summary service", () => {
     });
   });
 
-  it("does not require legacy credentials for OFAPI-mapped OnlyFans pages without action auth", async () => {
+  it("judges OFAPI pages by enabled OFAPI streams, not retired compatibility rows", async () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
       platform: "onlyfans",
@@ -158,12 +164,21 @@ describe("sync summary service", () => {
         status: "paused",
         succeededAt: null,
       }),
+      buildTaskRow({
+        stream: "transactions",
+        status: "paused",
+        succeededAt: null,
+      }),
+      buildTaskRow({ stream: "subscribers" }),
+      buildTaskRow({ stream: "dm_conversations" }),
     ]);
 
     const snapshot = await getSyncStatusSummarySnapshot({
       db: {},
       config: {
         ofapiAccountHealthEnabled: true,
+        ofapiAudienceSyncEnabled: true,
+        ofapiDmSyncEnabled: true,
       },
     } as never, {
       pageIds: [7],
@@ -172,7 +187,8 @@ describe("sync summary service", () => {
 
     expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
     expect(snapshot.pages[0]?.syncUx).toMatchObject({
-      state: "off",
+      state: "healthy",
+      headline: "Up to date",
       requiresAction: false,
     });
   });

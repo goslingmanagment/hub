@@ -13,6 +13,8 @@ import {
   getCheckpoint,
   getCurrentSubscribers,
   listPageDmConversationsByPlatformConversationIds,
+  listCapturedFanslyPurchaseHistoryTargetKeys,
+  listFanslyDmRawPayloadsAfterId,
   markPageDmConversationsInvisibleByGeneration,
   PAGE_DM_LIVE_BACKFILL_CAP,
   PageSyncLeaseLostError,
@@ -125,6 +127,13 @@ import {
   syncOfapiFanIdentities,
 } from "./ofapi-fan-identities.ts";
 import { fanslyNewStreamAllowed } from "./fansly-stream-gate.ts";
+import {
+  countFanslyPurchaseHistoryRows,
+  extractFanslyPurchaseHistoryTargets,
+  fanslyPurchaseHistoryTargetKey,
+  parseFanslyPurchaseHistoryCursorState,
+  type FanslyPurchaseHistoryCursorState,
+} from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
   dmRetentionDate,
@@ -138,7 +147,10 @@ import {
 } from "./shared.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage, type HydrationCaptureContext } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
-import { FollowersReconcileConsistencyError } from "./errors.ts";
+import {
+  FanslyPurchaseHistoryContractError,
+  FollowersReconcileConsistencyError,
+} from "./errors.ts";
 
 export type ExecutorRequestContext = {
   budget: SyncChunkBudget;
@@ -147,6 +159,9 @@ export type ExecutorRequestContext = {
 };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
+const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
+const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
+const PURCHASE_HISTORY_RESULT_LIMIT = 100;
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
@@ -1745,6 +1760,7 @@ export async function fanslySubscribersChunk(
             state: {
               ...state,
               observedCount: finalObservedCount,
+              snapshotRestartCount: 0,
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -2102,7 +2118,10 @@ export async function executeFollowersReconcileChunk(
     checkpoint?.state,
     input.streamState.requestSeq,
   );
-  const previousGeneration = asNumber(asRecord(checkpoint?.state)?.generation) ?? 0;
+  const previousCheckpointState = asRecord(checkpoint?.state);
+  const previousGeneration = asNumber(previousCheckpointState?.generation) ?? 0;
+  const previousSnapshotRestartCount =
+    asNumber(previousCheckpointState?.snapshotRestartCount) ?? 0;
   let state: FollowersReconcileCursorState;
   if (existingState) {
     state = existingState;
@@ -2112,10 +2131,11 @@ export async function executeFollowersReconcileChunk(
       revision: input.streamState.requestSeq,
     generation: previousGeneration + 1,
     offset: 0,
-    observedCount: 0,
-    pageCount: 0,
-    sourceFollowerCount: accountMe.parsed.account.followCount,
-  };
+      observedCount: 0,
+      pageCount: 0,
+      sourceFollowerCount: accountMe.parsed.account.followCount,
+      snapshotRestartCount: previousSnapshotRestartCount,
+    };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "followers_reconcile",
@@ -2336,6 +2356,30 @@ export async function executeFollowersReconcileChunk(
           pageCount: state.pageCount,
         },
       });
+      if (state.snapshotRestartCount < 1) {
+        // A Fansly follower list is live, not a transactional snapshot. One
+        // follow/unfollow during a long paginated walk can make the starting
+        // headline count differ by one even though every returned page was
+        // valid. Restart the whole generation ONCE; a second mismatch blocks
+        // exactly as before, so provider drift can never create an endless
+        // paid/request loop.
+        await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "followers_reconcile",
+          state: {
+            generation: state.generation,
+            snapshotRestartCount: state.snapshotRestartCount + 1,
+            restartReason: "snapshot_mismatch",
+          },
+        });
+        throw new FollowersReconcileConsistencyError({
+          code: "followers_reconcile_snapshot_drift",
+          message:
+            `Follower reconcile moved during the scan (${pageWrite.generationObservedCount} unique rows ` +
+            `for starting count ${state.sourceFollowerCount}); restarting one fresh generation`,
+          retryable: true,
+        });
+      }
       throw new FollowersReconcileConsistencyError({
         code: "followers_reconcile_inconsistent_snapshot",
         message: `Follower reconcile generation contained ${pageWrite.generationObservedCount} unique rows for source count ${state.sourceFollowerCount}; refusing destructive finalization`,
@@ -3804,110 +3848,225 @@ export async function executePurchaseHistoryChunk(
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
 
-  // The order-history endpoint is per-fan and cursorless — the "back-scroll"
-  // is a checkpointed keyset walk over the page's fans; a completed walk
-  // resets the cursor so the next cadence refreshes incrementally.
+  // Fansly requires a concrete accountMediaId/accountMediaBundleId. accountIds
+  // is only an optional buyer filter, so the old per-fan walk could never be
+  // valid. Captured /message pages are the durable source of PPV media ids;
+  // their raw-row keyset is the incremental cursor and target-specific
+  // purchase_history captures are the durable dedupe set.
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "purchase_history");
-  const state = checkpoint?.state as { cursorFanId?: number } | null;
-  let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
-  let fansFetched = 0;
-  let fansSkipped = 0;
+  let state: FanslyPurchaseHistoryCursorState =
+    parseFanslyPurchaseHistoryCursorState(checkpoint?.state) ?? {
+      version: 2,
+      rawPayloadCursorId: 0,
+      pendingTargets: [],
+    };
+  const capturedTargetKeys = new Set(
+    await listCapturedFanslyPurchaseHistoryTargetKeys(app.db, input.pageContext.page.id),
+  );
+  // A crash after raw capture but before checkpoint advance is reconciled
+  // locally: the captured key removes the stale pending item without another
+  // vendor request.
+  state = {
+    ...state,
+    pendingTargets: state.pendingTargets.filter(
+      (target) => !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)),
+    ),
+  };
+
+  let scannedRawPages = 0;
+  let scanBatches = 0;
+  let targetsFetched = 0;
+  let targetsSkipped = 0;
+  let orderRowsCaptured = 0;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
-    const fans = await listPageFanNativeIds(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      afterFanId: cursorFanId,
-      limit: 1,
-    });
-    const fan = fans[0];
-    if (!fan) {
-      // Mass-skip circuit breaker: a walk that skipped EVERY fan it touched
-      // is a systemic failure (param-contract drift), not a string of dead
-      // accounts — refuse to stamp completion (which would repeat the
-      // zero-capture "success" every cadence, invisibly) and fail loudly so
-      // the executor's retry/incident machinery engages.
-      if (fansFetched === 0 && fansSkipped > 0) {
-        throw new Error(
-          `purchase_history walk skipped all ${fansSkipped} fans without one success`,
-        );
+    if (state.pendingTargets.length === 0) {
+      if (scanBatches >= PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK) {
+        return {
+          satisfied: false,
+          yieldReason: null,
+          stats: {
+            rawPayloadCursorId: state.rawPayloadCursorId,
+            scannedRawPages,
+            scanBatches,
+            targetsFetched,
+            targetsSkipped,
+            orderRowsCaptured,
+          },
+        };
       }
-      await upsertCheckpoint(app.db, {
+
+      const rawPages = await listFanslyDmRawPayloadsAfterId(app.db, {
+        pageId: input.pageContext.page.id,
+        afterId: state.rawPayloadCursorId,
+        limit: PURCHASE_HISTORY_RAW_BATCH_SIZE,
+      });
+      scanBatches += 1;
+      scannedRawPages += rawPages.length;
+      if (rawPages.length === 0) {
+        await upsertCheckpoint(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "purchase_history",
+          cursorTimestamp: new Date(),
+          state: {
+            ...state,
+            pendingTargets: [],
+            completedAt: new Date().toISOString(),
+          },
+          lastSuccessfulRunId: input.syncRunId,
+        });
+        return {
+          satisfied: true,
+          yieldReason: null,
+          stats: {
+            rawPayloadCursorId: state.rawPayloadCursorId,
+            scannedRawPages,
+            scanBatches,
+            targetsFetched,
+            targetsSkipped,
+            orderRowsCaptured,
+            walkCompleted: true,
+          },
+        };
+      }
+
+      const discovered = extractFanslyPurchaseHistoryTargets(
+        rawPages.map((row) => row.responsePayload),
+      ).filter((target) => !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)));
+      state = {
+        version: 2,
+        rawPayloadCursorId: rawPages.at(-1)!.id,
+        pendingTargets: discovered,
+      };
+      // Advance discovery and persist the whole pending batch BEFORE egress.
+      // A worker crash can therefore only replay a safe GET, never lose a
+      // discovered media target.
+      const progressCheckpoint = await upsertCheckpointProgress(app.db, {
         platformAccountId: input.pageContext.page.id,
         stream: "purchase_history",
-        cursorTimestamp: new Date(),
-        state: { cursorFanId: 0, completedAt: new Date().toISOString() },
-        lastSuccessfulRunId: input.syncRunId,
+        state,
       });
-      return {
-        satisfied: true,
-        yieldReason: null,
-        stats: { fansFetched, fansSkipped, walkCompleted: true },
-      };
+      await input.telemetry.recordCheckpointAdvanced(
+        "purchase_history",
+        summarizeCheckpoint(progressCheckpoint),
+      );
+      if (state.pendingTargets.length === 0) {
+        continue;
+      }
     }
 
-    let page;
+    const target = state.pendingTargets[0]!;
+    const requestParams = target.kind === "single"
+      ? { accountMediaId: target.contentId, limit: PURCHASE_HISTORY_RESULT_LIMIT }
+      : { accountMediaBundleId: target.contentId, limit: PURCHASE_HISTORY_RESULT_LIMIT };
+    let page: Awaited<ReturnType<AppContext["adapter"]["getMediaOrderHistoryPage"]>>;
     try {
-      page = await app.adapter.getMediaOrderHistoryPage(requestContext, {
-        accountIds: fan.platformUserId,
-        limit: 100,
-      });
+      page = await app.adapter.getMediaOrderHistoryPage(requestContext, requestParams);
     } catch (error) {
-      // Per-fan isolation: a fan-scoped client rejection (deleted/suspended
-      // account) skips THAT fan and keeps walking — without this, the retry
-      // path restarts at the same failing fan forever and the walk never
-      // passes it. Page-scoped responses still propagate: auth (401/403),
-      // rate-limit (429), and Fansly application code 99 (invalid params —
-      // a CONTRACT failure, probe-proven, never a property of one fan).
-      const fanScoped = error instanceof FanslyApiError &&
+      // A deleted media item is target-local. Capture the terminal outcome and
+      // move on; auth/rate-limit/server failures and code-99 parameter drift
+      // remain stream-level and fail loudly.
+      const targetScoped = error instanceof FanslyApiError &&
         typeof error.status === "number" &&
-        [400, 404, 410].includes(error.status) &&
-        error.code !== 99;
-      if (!fanScoped) {
+        [404, 410].includes(error.status);
+      if (!targetScoped) {
         throw error;
       }
+      await persistRawPayload(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        syncRunId: input.syncRunId,
+        endpoint: "purchase_history",
+        requestParams,
+        responsePayload: {
+          error: {
+            status: error.status,
+            code: error.code ?? null,
+          },
+        },
+        mapperVersion: FANSLY_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        statusCode: error.status,
+        errorMessage: error.message,
+        retainUntil: retentionDate(),
+      }, { action: "capturing rejected purchase_history target", platform: "fansly" });
       await input.telemetry.addAnomaly({
-        code: "purchase_history_fan_rejected",
+        code: "purchase_history_media_rejected",
         severity: "warn",
-        message: `Skipped purchase-history fan after HTTP ${error.status}`,
+        message: `Skipped purchase-history media after HTTP ${error.status}`,
         details: {
-          fanId: fan.fanId,
-          platformUserId: fan.platformUserId,
+          mediaKind: target.kind,
+          contentId: target.contentId,
           status: error.status,
           fanslyCode: error.code ?? null,
         },
       });
-      fansSkipped += 1;
-      // LOCAL advance only: the walk moves past the fan this run, but the
-      // persisted cursor stays behind so a failed run resumes (and the
-      // circuit breaker above can refire) instead of sealing the skips in.
-      cursorFanId = fan.fanId;
+      targetsSkipped += 1;
+      capturedTargetKeys.add(fanslyPurchaseHistoryTargetKey(target));
+      state = { ...state, pendingTargets: state.pendingTargets.slice(1) };
+      const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        stream: "purchase_history",
+        state,
+      });
+      await input.telemetry.recordCheckpointAdvanced(
+        "purchase_history",
+        summarizeCheckpoint(progressCheckpoint),
+      );
       continue;
     }
     await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
       endpoint: "purchase_history",
-      requestParams: { accountIds: fan.platformUserId, limit: 100 },
+      requestParams,
       responsePayload: page.raw,
       mapperVersion: FANSLY_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
     }, { action: "inserting purchase_history raw payload", platform: "fansly" });
 
-    cursorFanId = fan.fanId;
-    fansFetched += 1;
-    await upsertCheckpointProgress(app.db, {
+    const orderRows = countFanslyPurchaseHistoryRows(page.raw);
+    capturedTargetKeys.add(fanslyPurchaseHistoryTargetKey(target));
+    state = { ...state, pendingTargets: state.pendingTargets.slice(1) };
+    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "purchase_history",
-      state: { cursorFanId },
+      state,
     });
+    await input.telemetry.recordCheckpointAdvanced(
+      "purchase_history",
+      summarizeCheckpoint(progressCheckpoint),
+    );
+
+    if (orderRows === null) {
+      throw new FanslyPurchaseHistoryContractError({
+        code: "purchase_history_contract_rejected",
+        message: "Fansly purchase-history response omitted both supported order arrays; captured response requires local parser repair",
+      });
+    }
+    if (orderRows >= PURCHASE_HISTORY_RESULT_LIMIT) {
+      throw new FanslyPurchaseHistoryContractError({
+        code: "purchase_history_result_truncated",
+        message: `Fansly purchase-history returned ${orderRows} rows at the ${PURCHASE_HISTORY_RESULT_LIMIT}-row cap; refusing false completeness`,
+      });
+    }
+    targetsFetched += 1;
+    orderRowsCaptured += orderRows;
   }
 
   return {
     satisfied: false,
     yieldReason: input.budget.resolveYieldReason(),
-    stats: { fansFetched, cursorFanId },
+    stats: {
+      rawPayloadCursorId: state.rawPayloadCursorId,
+      pendingTargets: state.pendingTargets.length,
+      scannedRawPages,
+      scanBatches,
+      targetsFetched,
+      targetsSkipped,
+      orderRowsCaptured,
+    },
   };
 }
 

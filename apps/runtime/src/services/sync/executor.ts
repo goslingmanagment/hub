@@ -48,6 +48,7 @@ import {
 } from "../sync-queue.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import {
+  FanslyPurchaseHistoryContractError,
   FollowersReconcileConsistencyError,
   normalizeSyncError,
 } from "./errors.ts";
@@ -227,6 +228,21 @@ function classifyTaskFailure(
   }
 
   if (error instanceof FollowersReconcileConsistencyError) {
+    if (error.retryable) {
+      return {
+        mode: "retry",
+        retryClass: "followers_reconcile_snapshot_drift",
+      };
+    }
+    return {
+      mode: "blocked",
+      blockerType: "provider_bad_data",
+      blockerCode: error.code,
+      blockerReason: failure.summary,
+    };
+  }
+
+  if (error instanceof FanslyPurchaseHistoryContractError) {
     return {
       mode: "blocked",
       blockerType: "provider_bad_data",

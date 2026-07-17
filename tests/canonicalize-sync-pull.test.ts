@@ -143,9 +143,18 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
             createdAt: Date.parse("2026-06-21T09:01:00Z"),
           },
         ],
+        // Fansly includes newly observed PPV purchases inline on DM pages.
+        // v4 materializes them immediately; purchase_history then backfills
+        // older buyers for the same media id.
+        accountMediaOrders: [{
+          accountId: "fansly-fan-7",
+          accountMediaId: "media-99",
+          createdAt: Math.floor(Date.parse("2026-06-21T09:02:00Z") / 1000),
+          type: 1,
+        }],
       },
     }), context);
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(3);
     expect(events[0]).toMatchObject({
       type: "message.received",
       fanIdentityRef: "fansly-fan-7",
@@ -158,6 +167,11 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
       fanIdentityRef: null,
       dedupKey: "msg:sent:fm-11",
     });
+    expect(events[2]).toMatchObject({
+      type: "message.ppv_unlocked",
+      fanIdentityRef: "fansly-fan-7",
+      dedupKey: "ppv:fansly-fan-7:media-99:2026-06-21T09:02:00.000Z",
+    });
 
     // Without the page's own ref the observation stays undecidable → zero events.
     expect(canonicalizeSyncPullObservation(observation({
@@ -165,6 +179,27 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
       kind: "dm_messages",
       payload: { messages: [{ id: "fm-12" }] },
     }))).toEqual([]);
+  });
+
+  it("canonicalizes a media-scoped purchase-history response", () => {
+    const events = canonicalizeSyncPullObservation(observation({
+      kind: "purchase_history",
+      payload: {
+        accountMediaOrderHistory: [{
+          accountId: "fansly-fan-8",
+          accountMediaBundleId: "bundle-44",
+          createdAt: Math.floor(Date.parse("2026-06-22T10:00:00Z") / 1000),
+          type: 2,
+        }],
+      },
+    }));
+
+    expect(events).toEqual([expect.objectContaining({
+      type: "message.ppv_unlocked",
+      fanIdentityRef: "fansly-fan-8",
+      dedupKey: "ppv:fansly-fan-8:bundle-44:2026-06-22T10:00:00.000Z",
+      data: expect.objectContaining({ accountMediaBundleId: "bundle-44" }),
+    })]);
   });
 
   // W8.2 / A49 gate (cross-review): the proposed workboard-recompute fallback

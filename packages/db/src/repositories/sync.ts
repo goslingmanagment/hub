@@ -450,6 +450,90 @@ export async function getCheckpoint(
   })) ?? null;
 }
 
+export interface FanslyDmRawPayloadCursorRow {
+  id: number;
+  responsePayload: unknown;
+}
+
+/**
+ * Durable source cursor for the media-scoped Fansly purchase-history walk.
+ * The raw page is already captured before this reader sees it; keyset paging
+ * keeps steady-state work bounded to newly captured /message pages.
+ */
+export async function listFanslyDmRawPayloadsAfterId(
+  db: Database,
+  input: {
+    pageId: number;
+    afterId: number;
+    limit?: number;
+  },
+): Promise<FanslyDmRawPayloadCursorRow[]> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select rp.id::text as id,
+           rp.response_payload as "responsePayload"
+    from ${syncRawPayloads} rp
+    where rp.page_id = ${input.pageId}
+      and rp.endpoint = 'dm_messages'
+      and rp.id > ${input.afterId}
+    order by rp.id asc
+    limit ${input.limit ?? 500}
+  `);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    responsePayload: row.responsePayload,
+  }));
+}
+
+/** Successful and terminal target-specific captures are both complete work
+ * items. Error captures carry the same media key so a deleted item cannot
+ * wedge the walk forever; systemic contract errors are never swallowed by the
+ * handler and therefore never reach this set. */
+export async function listCapturedFanslyPurchaseHistoryTargetKeys(
+  db: Database,
+  pageId: number,
+): Promise<string[]> {
+  const result = await db.execute<{ target_key: string }>(sql`
+    select distinct case
+      when nullif(rp.request_params ->> 'accountMediaId', '') is not null
+        then 'single:' || (rp.request_params ->> 'accountMediaId')
+      when nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
+        then 'bundle:' || (rp.request_params ->> 'accountMediaBundleId')
+      else null
+    end as target_key
+    from ${syncRawPayloads} rp
+    where rp.page_id = ${pageId}
+      and rp.endpoint = 'purchase_history'
+      and (
+        nullif(rp.request_params ->> 'accountMediaId', '') is not null
+        or nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
+      )
+  `);
+  return result.rows.map((row) => row.target_key);
+}
+
+/** Refreshes the page-level reporting cache from the authoritative current
+ * subscription projection. This is intentionally local: no provider read and
+ * no second source of truth. */
+export async function refreshPageSubscriberCount(
+  db: Database,
+  platformAccountId: number,
+): Promise<number | null> {
+  const result = await db.execute<{ subscriberCount: number }>(sql`
+    update ${pages} p
+    set subscriber_count = (
+          select count(*)::int
+          from ${pageSubscriptions} ps
+          where ps.platform_account_id = ${platformAccountId}
+            and ps.is_current = true
+        ),
+        updated_at = now()
+    where p.id = ${platformAccountId}
+    returning p.subscriber_count as "subscriberCount"
+  `);
+  const row = result.rows[0];
+  return row ? normalizeNumber(row.subscriberCount, "subscriberCount") : null;
+}
+
 async function upsertCheckpointRow(
   db: Database,
   input: {

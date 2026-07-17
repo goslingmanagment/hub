@@ -17,6 +17,7 @@ import {
   listPagesByPlatform,
   pausePageSync,
   rebuildSubscriberRollups,
+  refreshPageSubscriberCount,
   refreshFanPageSubscriberState,
   upsertCheckpoint,
   upsertCheckpointProgress,
@@ -311,6 +312,9 @@ export async function executeOfapiAudienceChunk(
     const sweepDue = Number.isNaN(lastCompletedMs) ||
       Date.now() - lastCompletedMs >= sweepIntervalMs;
     if (!sweepDue) {
+      // Repair the reporting cache locally even when the paid daily sweep is
+      // not due (this also heals pre-fix pages immediately after deploy).
+      await refreshPageSubscriberCount(app.db, input.pageContext.page.id);
       return {
         satisfied: true,
         yieldReason: null,
@@ -528,6 +532,7 @@ export async function executeOfapiAudienceChunk(
         });
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
+        await refreshPageSubscriberCount(dbTx, input.pageContext.page.id);
         return upsertCheckpoint(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "subscribers",

@@ -263,3 +263,31 @@ The ramp did its job twice:
 
 Allowlist opened fleet-wide (all 5 fansly pages) after the lilly-1
 verification, 2026-07-06 ~19:05 UTC (owner-approved).
+
+## Progress addendum — 2026-07-17 (media-scoped repair)
+
+The open `purchase_history` item above is resolved in code (Decision #165).
+A production read-only probe against Lilly proved the actual contract:
+`accountMediaId=<observed media>` alone returns HTTP 200; the old
+`accountIds=<fan>` request returns HTTP 400/code 99 because a media id is
+mandatory. The replacement therefore never walks fans and never constructs a
+fan×media product.
+
+The durable discovery source is the retained `dm_messages` raw capture already
+present in `sync_raw_payloads`. A keyset checkpoint scans new raw rows, extracts
+PPV attachments (permission flag bit 1) and media ids from inline orders, and
+persists a bounded pending target set before each media-scoped GET. Captured
+target request params are the restart dedupe. Deleted targets (404/410) are
+captured and skipped; all 400s, unknown success shapes, and the cursorless
+100-row ceiling block without false completion. Target counts measured before
+the ramp are bounded (50 lilly-1, 414 lilly-2, 94/107/59 on lora-1/2/3), so the
+repair uses the existing chunk budget and needs no new table or scheduler.
+
+Canonicalizer v4 consumes the 311 inline `accountMediaOrders` already observed
+in production DM captures and future ones directly. Their captured timestamps
+are epoch seconds (observed range 1,738,772,315–1,784,311,920), so the Fansly
+timestamp codec is mandatory. The rollout gate is: focused integration tests,
+single-page Lilly ramp, no contract block/request loop, then fleet enable and
+runtime observation. The detailed sync monitor retains per-stream visibility;
+page-level health treats this stream as enrichment rather than primary page
+freshness (Decision #166).
