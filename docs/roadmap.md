@@ -251,9 +251,11 @@ The owner receives daily revenue summaries and immediate alerts for sync and con
 
 ---
 
-## Phase 6: Backups + Ops — **At Risk** (partially complete)
+## Phase 6: Ops — **On Track** (external backups are an accepted non-goal)
 
-The system is production-ready with automated backups, restore verification, and operational monitoring.
+The system is production-ready with operational monitoring. Recurring off-server
+database backups and disaster-recovery restore drills were explicitly removed
+from the product requirements by owner Decision #161.
 
 **Implemented:**
 - ✅ Health check endpoints (`/health`, `/health/sync`) for uptime monitoring
@@ -263,14 +265,15 @@ The system is production-ready with automated backups, restore verification, and
 - ✅ Connection status verification (active/stale/error/expired/never_synced/unverified)
 - ✅ DB stats endpoint for table sizes and row counts
 
-**Missing — blocks production deploy:**
-- ❌ Nightly full database backup stored off-server
-- ❌ Periodic restore drills to verify backup integrity
-- ❌ Backup monitoring/alerting (backup failed → Telegram notification)
+**Explicit non-goal (Decision #161):**
+- Recurring off-server database backups
+- Disaster-recovery restore drills
+- Backup-provider monitoring and alerting
 
-**Depends on:** None technically, but must be completed before production deploy
+**Depends on:** None
 
-**Milestone:** Restore a backup to a clean environment and verify all revenue and fan data is intact. **Not met — backups not automated.**
+**Milestone:** Runtime health, sync recovery, queue visibility, and storage
+diagnostics are operational. **Met.**
 
 ---
 

@@ -4495,7 +4495,7 @@ calculation failure may release that slot. The operating sequence is pinned in
 `docs/runbooks/ofapi-export-quote.md`.
 
 **Decision #159 (2026-07-16, encrypted off-box recovery is required;
-supersedes #128's accepted no-backup risk):** The database, immutable mirror
+superseded by #161 on 2026-07-17):** The database, immutable mirror
 artifacts, runtime configuration required to interpret them, and encryption-key
 custody metadata must have encrypted off-box backups with declared retention,
 failure alerting, and a recurring restore drill into an isolated environment.
@@ -4520,3 +4520,17 @@ background mirror executor may run beside those product lanes without a
 non-atomic overspend window or disabling subscription/identity/chargeback
 freshness. The background flag still creates no work: only explicit durable
 capture intents are drained.
+
+**Decision #161 (2026-07-17, recurring/off-box backups are not an OF Mirror
+requirement; supersedes #159 and reaffirms #128):** The owner explicitly
+withdraws the encrypted off-box PostgreSQL backup, backup-provider selection,
+retention/alerting, and recurring disaster-recovery restore drill from the
+project. None of them gates S1/S2, archive cohorts, DB-first serving, tiering,
+or production activation. Loss of the VPS or its storage may therefore cause
+permanent loss of locally captured history; that consequence is accepted and
+must not be reopened as an implementation blocker without a new owner
+decision. The export-artifact bucket remains in scope as the primary durable
+copy of a temporary vendor export needed for import, not as a database backup.
+Checksums and replay/round-trip checks that protect an actual import or
+destructive tier/drop remain data-movement correctness checks, not a backup
+program. No runtime flag or code path may depend on backup availability.
