@@ -21,6 +21,13 @@ export.
   the slot blocked until vendor reconciliation.
 - A completed quote is accepted only when its type, dates, file type, exact
   account, row count, and cost match the frozen request contract.
+- The live 2026-07-17 `chat_messages` contract normalizes `end_date` to the end
+  of the requested UTC day. For scraping-backed exports it can also return
+  `calculating_credits_completed` with `requires_scraping: true`,
+  `auto_started: false`, and no row count or cost. Core records that terminally
+  as `export_quote_requires_start`; it does not pretend a quote exists and may
+  release the local slot because the captured response proves the export never
+  started. Starting such an unquoted export is outside this quote-only slice.
 - An indeterminate create remains blocked until an owner independently checks
   the vendor. Reconciliation can either adopt the verified vendor export ID or
   confirm that no export was created; it never repeats the create POST.

@@ -3017,6 +3017,10 @@ export async function cancelBlockedOfapiExportQuoteJob(
       || ![
         "owner_approval_required",
         "export_quote_failed",
+        // Strictly parsed create response proved auto_started=false. The
+        // vendor cannot quote scraping exports until start, so releasing the
+        // local slot cannot abandon a running or billed export.
+        "export_quote_requires_start",
         // Compatibility for the first production quote made before the
         // parser classified a captured HTTP 422 as export_quote_failed.
         // A validation rejection proves no stateful export object exists.
@@ -3042,6 +3046,7 @@ export async function cancelBlockedOfapiExportQuoteJob(
         and reason_code in (
           'owner_approval_required',
           'export_quote_failed',
+          'export_quote_requires_start',
           'export_create_http_422'
         )
     `);

@@ -2136,6 +2136,61 @@ describe("OFAPI capture correctness repository", () => {
     })).toEqual({ cancelled: true, currentState: "cancelled" });
   });
 
+  it("records a scraping export whose price is unavailable until start", async () => {
+    if (!testDb) return;
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: { beforeDispatch: () => Promise<boolean> },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      return {
+        status: 200,
+        bodyBytes: Buffer.from(JSON.stringify({
+          data: {
+            id: "data_export_scrape_quote",
+            type: "chat_messages",
+            status: "calculating_credits_completed",
+            start_date: "2016-11-01T00:00:00+00:00",
+            end_date: "2026-07-16T23:59:59+00:00",
+            file_type: "csv",
+            requires_scraping: true,
+            auto_started: false,
+            credit_calculation_note: "Credits are calculated after scraping completes.",
+            effective_options: {
+              maxMessages: 10_000_000,
+              skipMassMessages: false,
+              chatIds: [],
+            },
+          },
+          _meta: { _credits: { used: 0, balance: 1000 } },
+        })),
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw);
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    expect(dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "export_quote_requires_start",
+      spentCredits: 0,
+      cursor: {
+        phase: "quote_unavailable",
+        vendorExportId: "data_export_scrape_quote",
+        totalRows: null,
+        creditCost: null,
+      },
+    });
+    expect(await cancelBlockedOfapiExportQuoteJob(testDb.db, {
+      jobId: fixture.job.id,
+      actorUserId: fixture.owner.id,
+      reason: "unstarted scraping export has no preflight price",
+    })).toEqual({ cancelled: true, currentState: "cancelled" });
+  });
+
   it("never repeats an indeterminate export-create POST", async () => {
     if (!testDb) return;
     const dispatchGovernedRaw = vi.fn(async (

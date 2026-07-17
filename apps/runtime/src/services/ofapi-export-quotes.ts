@@ -42,7 +42,11 @@ interface ExportQuoteTarget extends Record<string, unknown> {
 }
 
 interface ExportQuoteCursor extends Record<string, unknown> {
-  phase: "quote_calculating" | "quoted" | "vendor_started_unexpectedly";
+  phase:
+    | "quote_calculating"
+    | "quoted"
+    | "quote_unavailable"
+    | "vendor_started_unexpectedly";
   vendorExportId: string;
   vendorStatus: string;
   pollCount: number;
@@ -94,6 +98,40 @@ function sameInstant(value: unknown, expected: string) {
   const actualMs = new Date(value).getTime();
   const expectedMs = new Date(expected).getTime();
   return Number.isFinite(actualMs) && actualMs === expectedMs;
+}
+
+function sameInstantOrNormalizedUtcDayEnd(value: unknown, expected: string) {
+  if (sameInstant(value, expected)) return true;
+  if (typeof value !== "string") return false;
+  const actual = new Date(value);
+  const requested = new Date(expected);
+  return Number.isFinite(actual.getTime())
+    && Number.isFinite(requested.getTime())
+    && actual.getUTCFullYear() === requested.getUTCFullYear()
+    && actual.getUTCMonth() === requested.getUTCMonth()
+    && actual.getUTCDate() === requested.getUTCDate()
+    && actual.getUTCHours() === 23
+    && actual.getUTCMinutes() === 59
+    && actual.getUTCSeconds() === 59;
+}
+
+function effectiveOptionsMatch(target: ExportQuoteTarget, data: Record<string, unknown>) {
+  const options = asRecord(data.effective_options);
+  if (!options) return true;
+  if (
+    nonnegativeInteger(options.maxMessages) !== target.maxMessages
+    || options.skipMassMessages !== false
+  ) {
+    return false;
+  }
+  const rawChatIds = options.chatIds;
+  const chatIds = rawChatIds === null || rawChatIds === undefined
+    ? []
+    : Array.isArray(rawChatIds)
+      ? rawChatIds.map(nonnegativeInteger)
+      : null;
+  if (chatIds === null || chatIds.some((id) => id === null)) return false;
+  return chatIds.map(String).sort().join(",") === [...target.chatIds].sort().join(",");
 }
 
 function parseTarget(job: OfapiCaptureJobRecord): ExportQuoteTarget | null {
@@ -149,6 +187,7 @@ function parseCursor(job: OfapiCaptureJobRecord): ExportQuoteCursor | null {
   if (!cursor) return null;
   const phase = cursor.phase === "quote_calculating"
       || cursor.phase === "quoted"
+      || cursor.phase === "quote_unavailable"
       || cursor.phase === "vendor_started_unexpectedly"
     ? cursor.phase
     : null;
@@ -435,7 +474,8 @@ function responseIdentity(
     || data.type !== target.type
     || data.file_type !== target.fileType
     || !sameInstant(data.start_date, target.startDate)
-    || !sameInstant(data.end_date, target.endDate)
+    || !sameInstantOrNormalizedUtcDayEnd(data.end_date, target.endDate)
+    || !effectiveOptionsMatch(target, data)
   ) {
     return null;
   }
@@ -578,6 +618,44 @@ export async function parseCapturedOfapiExportQuote(
   if (identity.status === "calculating_credits_completed") {
     const totalRows = nonnegativeInteger(identity.data.total_rows);
     const creditCost = nonnegativeInteger(identity.data.credit_cost);
+    if (
+      totalRows === null
+      && creditCost === null
+      && identity.data.requires_scraping === true
+      && identity.data.auto_started === false
+    ) {
+      const cursor: ExportQuoteCursor = {
+        ...baseCursor,
+        phase: "quote_unavailable",
+        totalRows: null,
+        creditCost: null,
+        quotedAt: null,
+        expiresAt: null,
+      };
+      await settle({
+        jobId: job.id,
+        attemptId: input.attemptId,
+        leaseToken: job.leaseToken,
+        observationId: input.observationId,
+        observationReceivedAt: input.observationReceivedAt,
+        parserOutcome: "accepted",
+        rawCount: 1,
+        acceptedCount: 1,
+        boundaryDuplicateCount: 0,
+        explicitlyIrrelevantCount: 0,
+        rejectedCount: 0,
+        disposition: {
+          kind: "blocked",
+          reasonCode: "export_quote_requires_start",
+          reasonMessage: typeof identity.data.credit_calculation_note === "string"
+            ? identity.data.credit_calculation_note.slice(0, 500)
+            : "Vendor cannot calculate this chat export before scraping starts",
+          cursor,
+        },
+        now,
+      });
+      return "blocked";
+    }
     if (totalRows === null || creditCost === null) {
       await settle({
         jobId: job.id,
