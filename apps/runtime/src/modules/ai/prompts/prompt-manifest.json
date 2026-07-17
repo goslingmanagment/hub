@@ -14,9 +14,9 @@
     },
     "builder.ts": {
       "sourceSha256": "3f90eabc80214ac66f25990d2face2ff9456141046c8624f094fd1f935ef8ad5",
-      "coreSha256": "362c2a263032b46b8217bf63202a7c01eb8a31dfb9da0914db98d115db8f41cf",
+      "coreSha256": "c22944c56fae5b1b0f9c442ce3f6a8c1483987591d77e31a0cfebc343270fef2",
       "byteIdenticalToSource": false,
-      "note": "Stage 32: applyPlatformWording added (named platform substitution; the frozen desktop sourceSha256 stays the historical record). Decision #136: fanProfile input + fanProfileSection substitution (stored fan dossier). Decision #136 addendum: fanProfileSection disclaimer strengthened (volatile sections kept, not age-dropped; framed as possibly-stale history by generation date). Decision #156: preferSplit requests 2-3 parts and removes the single-message opt-out; output cardinality remains provider-controlled rather than parser-enforced."
+      "note": "Stage 32: applyPlatformWording added (named platform substitution; the frozen desktop sourceSha256 stays the historical record). Decision #136: fanProfile input + fanProfileSection substitution (stored fan dossier). Decision #136 addendum: fanProfileSection disclaimer strengthened (volatile sections kept, not age-dropped; framed as possibly-stale history by generation date). Decision #156: preferSplit requests 2-3 parts and removes the single-message opt-out; output cardinality remains provider-controlled rather than parser-enforced. Coach feature: placeholder coach-chat entries in PROMPT_POLICIES/DEFAULT_TEMPLATES to keep the exhaustive Record<PromptFeature> maps compiling (Task 7 replaces the placeholder template)."
     },
     "templates.ts": {
       "sourceSha256": "cf40a9ecb86834a4d4c1fa4bd742687244df49eac6a9be6058a8341c5a7bf922",
@@ -31,8 +31,9 @@
     },
     "types.ts": {
       "sourceSha256": "0fee9bac7a324960c4ef60186405289972a3d786fd1b98d86a7a97487ad3fb00",
-      "coreSha256": "026a82d3f18aa2258a5df3f00b8c8127de8139f8c53872621e6b00e0820c98d7",
-      "byteIdenticalToSource": false
+      "coreSha256": "bde930230b1fa9be79a7527b034b990ee7fc8f3a5b137c70d5d6a7ea0db7b535",
+      "byteIdenticalToSource": false,
+      "note": "Coach feature: 'coach-chat' added to FeatureType + ModelSelectableFeature; ResultKind gains 'text' (free-text coach output). The frozen desktop sourceSha256 stays the historical record."
     },
     "output/reply-output.ts": {
       "sourceSha256": "f88c93bef9be368f8cc4b6542102ee88739700249c166cdc1799ce6fd2bec985",
@@ -130,9 +131,9 @@
     },
     "feature-policies.ts": {
       "sourceSha256": "832ff495138694e0a05d8c8b5c8010befdadf1e5331df2b3c803bc58e47c6e80",
-      "coreSha256": "85bc15e3afe3ca5e44a3cc743cf6f40039e1349f6456469ba8b96b8684149959",
+      "coreSha256": "6acd8702c840e3de9c6a10a574e1d389406ad4ad6998c440d14bdc20743cea33",
       "byteIdenticalToSource": false,
-      "note": "Decision #136: usesFanProfile flag (dossier injection gate)."
+      "note": "Decision #136: usesFanProfile flag (dossier injection gate). Coach feature: includesFanBio policy flag (true for hi-greeting/help-me/coach-chat) replaces the hard-coded bio check; coach-chat registered in OPERATION_FEATURES/FEATURE_POLICIES + model/reasoning defaults."
     }
   }
 }
