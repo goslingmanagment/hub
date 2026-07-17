@@ -254,6 +254,7 @@ DEPLOY_RUN_ID=""
 ROLLBACK_IMAGE_TAG=""
 IMAGE_CANDIDATE_TAG=""
 DIST_BASE_TAG=""
+LOCAL_BUILD_CACHE_TAG=""
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
 ROLLBACK_RELEASE_FILES_RESTORED=0
@@ -353,9 +354,11 @@ initialize_deploy_metadata_and_tags() {
   IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate-${source_tag_component}-${DEPLOY_RUN_ID}"
   DIST_BASE_TAG="${IMAGE_TAG}-dist-base-${source_tag_component}-${DEPLOY_RUN_ID}"
   ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback-${source_tag_component}-${DEPLOY_RUN_ID}"
+  LOCAL_BUILD_CACHE_TAG="${IMAGE_TAG}-build-cache-$(sanitize_tag_component "$BUILD_PLATFORM")"
 
   log "Build metadata: revision=${APP_SOURCE_REVISION}, dependency_checksum=${APP_DEPENDENCY_CHECKSUM}, run_id=${DEPLOY_RUN_ID}"
   log "Deploy image tags: candidate=${IMAGE_CANDIDATE_TAG}, rollback=${ROLLBACK_IMAGE_TAG}, dist_base=${DIST_BASE_TAG}"
+  log "Local rolling build cache: ${LOCAL_BUILD_CACHE_TAG}"
 }
 
 acquire_local_deploy_lock() {
@@ -1001,14 +1004,120 @@ ensure_node_base_image() {
 build_full_candidate_image() {
   ensure_node_base_image || return 1
 
+  local cache_args=()
+  if docker image inspect "$LOCAL_BUILD_CACHE_TAG" >/dev/null 2>&1; then
+    cache_args+=(--cache-from "$LOCAL_BUILD_CACHE_TAG")
+    log "Using verified-deploy build cache ${LOCAL_BUILD_CACHE_TAG}"
+  else
+    log "No verified-deploy build cache found; this build will seed ${LOCAL_BUILD_CACHE_TAG} after successful deployment"
+  fi
+
   log "Building ${IMAGE_CANDIDATE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
-  docker build \
+  DOCKER_BUILDKIT=1 docker build \
+    "${cache_args[@]}" \
     --platform="${BUILD_PLATFORM}" \
+    --build-arg "BUILDKIT_INLINE_CACHE=1" \
     --build-arg "NODE_BASE_IMAGE=${NODE_BASE_IMAGE}" \
     --build-arg "APP_DEPENDENCY_CHECKSUM=${APP_DEPENDENCY_CHECKSUM}" \
     --build-arg "APP_SOURCE_REVISION=${APP_SOURCE_REVISION}" \
     -t "$IMAGE_CANDIDATE_TAG" \
     "$ROOT_DIR"
+}
+
+promote_local_build_cache() {
+  if ! docker image inspect "$IMAGE_CANDIDATE_TAG" >/dev/null 2>&1; then
+    log "Local candidate ${IMAGE_CANDIDATE_TAG} is absent (dist-only build); leaving ${LOCAL_BUILD_CACHE_TAG} unchanged"
+    return 0
+  fi
+
+  if ! docker tag "$IMAGE_CANDIDATE_TAG" "$LOCAL_BUILD_CACHE_TAG"; then
+    log "warning: unable to advance local build cache ${LOCAL_BUILD_CACHE_TAG}; production is already verified"
+    return 0
+  fi
+
+  log "Advanced local build cache ${LOCAL_BUILD_CACHE_TAG} to verified candidate ${IMAGE_CANDIDATE_TAG}"
+}
+
+prune_local_candidate_tags() {
+  local retention_count=2
+  local candidate_rows
+  local candidates=()
+  local candidate
+
+  if ! candidate_rows="$(docker image ls \
+    --filter "reference=${IMAGE_TAG}-candidate-*" \
+    --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' \
+    | LC_ALL=C sort -r)"; then
+    log "warning: unable to list local candidate images for retention; production is already verified"
+    return 0
+  fi
+
+  while IFS='|' read -r _created candidate; do
+    [[ -n "$candidate" ]] && candidates+=("$candidate")
+  done <<<"$candidate_rows"
+
+  if (( ${#candidates[@]} <= retention_count )); then
+    log "Local candidate retention: ${#candidates[@]} tag(s), nothing to prune"
+    return 0
+  fi
+
+  local container_ids=()
+  local used_image_ids=()
+  local container_id_rows
+  local used_image_id_rows
+  local container_id
+  local used_image_id
+
+  if ! container_id_rows="$(docker container ls --all --quiet --no-trunc)"; then
+    log "warning: unable to inventory local containers; skipping candidate cleanup rather than risk removing an in-use image"
+    return 0
+  fi
+  while IFS= read -r container_id; do
+    [[ -n "$container_id" ]] && container_ids+=("$container_id")
+  done <<<"$container_id_rows"
+
+  if (( ${#container_ids[@]} > 0 )); then
+    if ! used_image_id_rows="$(docker container inspect --format '{{.Image}}' "${container_ids[@]}")"; then
+      log "warning: unable to resolve local container images; skipping candidate cleanup rather than risk removing an in-use image"
+      return 0
+    fi
+    while IFS= read -r used_image_id; do
+      [[ -n "$used_image_id" ]] && used_image_ids+=("$used_image_id")
+    done <<<"$used_image_id_rows"
+  fi
+
+  local index=0
+  local image_id
+  local image_in_use
+  for candidate in "${candidates[@]}"; do
+    index=$((index + 1))
+    (( index <= retention_count )) && continue
+
+    if ! image_id="$(docker image inspect --format '{{.Id}}' "$candidate" 2>/dev/null)"; then
+      log "warning: unable to inspect stale candidate ${candidate}; leaving it in place"
+      continue
+    fi
+
+    image_in_use=0
+    for used_image_id in "${used_image_ids[@]}"; do
+      if [[ "$used_image_id" == "$image_id" ]]; then
+        image_in_use=1
+        break
+      fi
+    done
+    if [[ "$image_in_use" == "1" ]]; then
+      log "Keeping stale candidate ${candidate}: image ${image_id} is referenced by a local container"
+      continue
+    fi
+
+    if docker image rm "$candidate" >/dev/null; then
+      log "Removed stale local candidate tag ${candidate}"
+    else
+      log "warning: unable to remove stale candidate tag ${candidate}; leaving it in place"
+    fi
+  done
+
+  return 0
 }
 
 load_candidate_image() {
@@ -1375,5 +1484,7 @@ grep -qi '<!doctype html>' "$DASHBOARD_FILE" || fail "Dashboard route did not re
 grep -q 'id="root"' "$DASHBOARD_FILE" || fail "Dashboard HTML is missing the root mount"
 
 log "Deployment verified successfully"
+promote_local_build_cache
+prune_local_candidate_tags
 log "API health: ${VERIFY_URL%/}/api/v1/health"
 log "Sync health: ${VERIFY_URL%/}/api/v1/health/sync (status ${SYNC_STATUS_CODE})"

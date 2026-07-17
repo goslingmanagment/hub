@@ -4550,3 +4550,18 @@ remains blocked. Local replay upgrades the job's contract/parser versions and
 reuses the already-paid response; it never dispatches OFAPI. The proof policy
 itself is unchanged: the frozen head remains an item-presence fact from the
 List-Chats/live projection and pagination proves the older range.
+
+**Decision #163 (2026-07-17, Docker memory hygiene is opt-in locally and
+cache-safe in deploys):** The development and local-test Postgres Compose
+services no longer have an `unless-stopped` policy: local work starts them
+explicitly, and an idle checkout must not keep Docker Desktop's VM alive. All
+local Compose services use Docker's rotating `local` log driver (`10m` × 3).
+Production restart policies are
+unchanged. Production builds keep target-architecture pnpm/corepack caches
+separate from the native build-stage caches, and Playwright installs only the
+headless Chromium shell used by runtime. The deploy helper reads a stable,
+platform-specific cache tag but advances it only after all production health
+and delivery gates pass. At that same post-verification point it retains the
+two newest local candidate tags; older tags whose image is referenced by any
+local container are never removed. Cleanup failure is informational after a
+verified deploy and cannot trigger a production rollback.

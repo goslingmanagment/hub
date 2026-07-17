@@ -185,6 +185,8 @@ By default the script uses `--mode full`:
 - the canonical `node:22-bookworm-slim` base image is validated for `linux/amd64` and used unchanged by BuildKit, so a local alias cannot be mistaken for a private Docker Hub namespace
 - every built runtime image is labeled with the dependency checksum and source revision
 - after health checks, the running API, scheduler, and worker images must have labels matching the source revision and dependency checksum for this deploy
+- the last verified full build is retained under a stable, platform-specific local cache tag; failed or rolled-back deploys never advance it
+- after every fully verified deploy, local per-run candidate tags are trimmed to the newest two; an older tag is preserved when any local container still references its image
 
 Older deploy wrappers may still pass `--node-base-cache-image` or set
 `DEPLOY_NODE_BASE_CACHE_IMAGE`. Both forms remain accepted as deprecated
@@ -213,6 +215,12 @@ What the script does:
 - if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured and `schema_migrations` did not change during the failed deploy, then prints `docker compose ps` plus recent `postgres`, `api`, `scheduler`, and `worker` logs automatically
 
 The script assumes the remote server already has `/opt/agency-hub/.env.production` populated.
+
+The development and local-test `postgres` services deliberately have no restart
+policy. Start the development DB with `pnpm dev:db` (or as part of `pnpm dev`)
+and stop local stacks when they are not needed so Docker Desktop can enter
+Resource Saver. Local Compose logs use Docker's rotating `local` driver (`10m`
+× 3 files per container).
 
 ## Backups
 

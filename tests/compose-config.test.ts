@@ -58,6 +58,41 @@ describe("compose config", () => {
     });
   }
 
+  for (const composePath of ["docker-compose.yml", "docker-compose.test.yml"]) {
+    it(`${composePath} keeps local services opt-in and bounds their logs`, async () => {
+      const text = await readComposeFile(composePath);
+      const postgres = getServiceBlock(text, "postgres");
+
+      expect(text).toContain("x-local-logging: &local-logging");
+      expect(text).toContain("driver: local");
+      expect(text).toContain('max-size: "10m"');
+      expect(text).toContain('max-file: "3"');
+      expect(postgres).not.toContain("restart: unless-stopped");
+
+      for (const service of ["postgres", "migrator", "api", "worker"]) {
+        expect(getServiceBlock(text, service)).toContain("logging: *local-logging");
+      }
+    });
+  }
+
+  it("Dockerfile separates native and target package caches and installs only headless Chromium", async () => {
+    const dockerfile = await readComposeFile("Dockerfile");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const sourceCopyIndex = dockerfile.indexOf("COPY apps ./apps");
+
+    expect(dockerfile.startsWith("# syntax=docker/dockerfile:1.7\n")).toBe(true);
+    expect(dockerfile).toContain("ARG TARGETARCH");
+    expect(dockerfile).toContain("ARG BUILDARCH");
+    expect(dockerfile).toContain("id=agency-hub-corepack-target-${TARGETARCH}");
+    expect(dockerfile).toContain("id=agency-hub-pnpm-target-${TARGETARCH}");
+    expect(dockerfile).toContain("id=agency-hub-corepack-build-${BUILDARCH}");
+    expect(dockerfile).toContain("id=agency-hub-pnpm-build-${BUILDARCH}");
+    expect(dockerfile).toContain("target=/pnpm/store,sharing=locked");
+    expect(dockerfile).toContain("install --with-deps --only-shell chromium");
+    expect(dockerfile).not.toContain("install --with-deps chromium");
+    expect(sourceCopyIndex).toBeGreaterThan(installIndex);
+  });
+
   it("docker-compose.production.yml keeps the API behind loopback and uses worker readiness health", async () => {
     const text = await readComposeFile("docker-compose.production.yml");
     const postgres = getServiceBlock(text, "postgres");
@@ -140,6 +175,37 @@ describe("compose config", () => {
     expect(initializer).toContain('ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback-${source_tag_component}-${DEPLOY_RUN_ID}"');
     expect(text).not.toContain('IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate"');
     expect(text).not.toContain('DIST_BASE_TAG="${IMAGE_TAG}-dist-base"');
+  });
+
+  it("deploy-production.sh advances rolling cache and prunes candidates only after verification", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const buildFull = getShellFunction(text, "build_full_candidate_image");
+    const promoteCache = getShellFunction(text, "promote_local_build_cache");
+    const pruneCandidates = getShellFunction(text, "prune_local_candidate_tags");
+    const cleanup = getShellFunction(text, "cleanup_deploy");
+    const verifiedIndex = text.indexOf('log "Deployment verified successfully"');
+    const promoteIndex = text.indexOf("promote_local_build_cache", verifiedIndex);
+    const pruneIndex = text.indexOf("prune_local_candidate_tags", verifiedIndex);
+
+    expect(text).toContain(
+      'LOCAL_BUILD_CACHE_TAG="${IMAGE_TAG}-build-cache-$(sanitize_tag_component "$BUILD_PLATFORM")"',
+    );
+    expect(buildFull).toContain('docker image inspect "$LOCAL_BUILD_CACHE_TAG"');
+    expect(buildFull).toContain('--cache-from "$LOCAL_BUILD_CACHE_TAG"');
+    expect(buildFull).toContain('DOCKER_BUILDKIT=1 docker build');
+    expect(buildFull).toContain('--build-arg "BUILDKIT_INLINE_CACHE=1"');
+    expect(promoteCache).toContain('docker tag "$IMAGE_CANDIDATE_TAG" "$LOCAL_BUILD_CACHE_TAG"');
+    expect(pruneCandidates).toContain("local retention_count=2");
+    expect(pruneCandidates).toContain('--filter "reference=${IMAGE_TAG}-candidate-*"');
+    expect(pruneCandidates).toContain("docker container ls --all --quiet --no-trunc");
+    expect(pruneCandidates).toContain("docker container inspect --format '{{.Image}}'");
+    expect(pruneCandidates).toContain("skipping candidate cleanup rather than risk removing an in-use image");
+    expect(pruneCandidates).toContain('docker image rm "$candidate"');
+    expect(pruneCandidates).not.toContain("--force");
+    expect(cleanup).not.toContain("prune_local_candidate_tags");
+    expect(verifiedIndex).toBeGreaterThan(-1);
+    expect(promoteIndex).toBeGreaterThan(verifiedIndex);
+    expect(pruneIndex).toBeGreaterThan(promoteIndex);
   });
 
   it("deploy-production.sh validates and builds from the same canonical Node base image", async () => {

@@ -1,7 +1,13 @@
+x-local-logging: &local-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16
-    restart: unless-stopped
+    logging: *local-logging
     environment:
       POSTGRES_DB: agency_hub_core
       POSTGRES_USER: postgres
@@ -19,6 +25,7 @@ services:
   migrator:
     build: .
     image: agency_hub_core/runtime:local
+    logging: *local-logging
     command: ["node", "packages/db/dist/migrate.js"]
     env_file: .env.docker
     volumes:
@@ -31,6 +38,7 @@ services:
   api:
     build: .
     image: agency_hub_core/runtime:local
+    logging: *local-logging
     command: ["node", "apps/runtime/dist/startup.js", "api"]
     ports:
       - "3000:3000"
@@ -46,6 +54,7 @@ services:
 
   worker:
     image: agency_hub_core/runtime:local
+    logging: *local-logging
     command: ["node", "apps/runtime/dist/startup.js", "worker"]
     env_file: .env.docker
     volumes:
