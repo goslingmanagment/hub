@@ -4507,3 +4507,16 @@ restore drill proves schema, ledger/projection rebuild, artifact checksums, and
 documented recovery-time/recovery-point objectives. If those external choices
 are not provisioned, the risk stays visibly open rather than being described as
 closed by the mirror bucket.
+
+**Decision #160 (2026-07-17, legacy OFAPI budget lanes and governed mirror
+share one atomic physical cap):** Audience, fan-identity, and chargeback reads
+retain their dedicated day ceilings, but each pre-dispatch reservation now
+increments that dedicated counter and the global OFAPI counter in one
+conditional `ofapi_credit_state` statement. The response ledger sink records
+the actual global spend; settlement adjusts the dedicated estimate to actual
+and releases the temporary global estimate. A crash between settlement steps
+can only leave a conservative reservation until UTC rollover. Consequently the
+background mirror executor may run beside those product lanes without a
+non-atomic overspend window or disabling subscription/identity/chargeback
+freshness. The background flag still creates no work: only explicit durable
+capture intents are drained.

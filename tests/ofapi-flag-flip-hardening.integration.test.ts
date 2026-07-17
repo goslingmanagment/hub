@@ -161,6 +161,54 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       expect(credit.spentToday).toBe(0);
       expect(credit.lastBalance).toBe(750);
     }, INTEGRATION_TEST_TIMEOUT_MS);
+
+    it("reserves a dedicated lane and the shared physical cap atomically", async () => {
+      const outcomes = await Promise.all(Array.from({ length: 10 }, () =>
+        reserveOfapiDayCredits(appContext.db, {
+          scope: "audience",
+          estimate: 1,
+          budget: 10,
+          globalBudget: 5,
+        })));
+
+      expect(outcomes.filter(Boolean)).toHaveLength(5);
+      const credit = await getOfapiCreditState(appContext.db);
+      expect(credit.spentToday).toBe(5);
+      expect(credit.audienceSpentToday).toBe(5);
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+
+    it("settles a dedicated reservation without double-counting the ledger sink", async () => {
+      const guard = createOfapiRestGuard(appContext, {
+        dailyCreditBudget: 10,
+        budgetScope: "audience",
+      });
+      expect(await guard.resolveBlock()).toBeNull();
+
+      let credit = await getOfapiCreditState(appContext.db);
+      expect(credit.spentToday).toBe(1);
+      expect(credit.audienceSpentToday).toBe(1);
+
+      await recordOfapiCreditSpend(appContext.db, {
+        operation: "ofapi_fans_active",
+        credits: 3,
+        balanceAfter: 747,
+      });
+      await guard.recordResponse({
+        items: [],
+        hasNextPage: false,
+        meta: {
+          creditsUsed: 3,
+          creditBalance: 747,
+          isCached: false,
+          rateRemainingMinute: null,
+        },
+      });
+
+      credit = await getOfapiCreditState(appContext.db);
+      expect(credit.spentToday).toBe(3);
+      expect(credit.audienceSpentToday).toBe(3);
+      expect(credit.lastBalance).toBe(747);
+    }, INTEGRATION_TEST_TIMEOUT_MS);
   });
 
   describe("F7 — credit-floor park recovery", () => {

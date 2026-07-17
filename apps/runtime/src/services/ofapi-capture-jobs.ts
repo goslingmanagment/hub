@@ -47,19 +47,10 @@ const PRINCIPAL_HOURLY_CREDIT_CAP = 60;
 export function isOfapiBackgroundCaptureRunnable(
   config: Pick<
     AppContext["config"],
-    | "ofapiMirrorBackgroundCaptureEnabled"
-    | "ofapiAudienceSyncEnabled"
-    | "ofapiChargebacksReconcileEnabled"
-    | "ofapiFanIdentitiesSyncEnabled"
+    "ofapiMirrorBackgroundCaptureEnabled"
   > | undefined,
 ) {
-  // The legacy dedicated lanes reserve only their own counters. Until they
-  // join the governed global reservation transaction, running them beside
-  // background mirror work would make the physical hard cap non-atomic.
-  return config?.ofapiMirrorBackgroundCaptureEnabled === true &&
-    config.ofapiAudienceSyncEnabled !== true &&
-    config.ofapiChargebacksReconcileEnabled !== true &&
-    config.ofapiFanIdentitiesSyncEnabled !== true;
+  return config?.ofapiMirrorBackgroundCaptureEnabled === true;
 }
 
 export interface OfapiCaptureChunkResult {

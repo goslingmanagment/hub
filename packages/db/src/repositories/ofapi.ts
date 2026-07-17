@@ -1339,6 +1339,12 @@ export async function reserveOfapiDayCredits(
     scope: OfapiDayBudgetScope;
     estimate: number;
     budget: number;
+    /**
+     * Dedicated legacy lanes also reserve the shared physical cap. The two
+     * counters move in one statement so governed mirror admission can safely
+     * run beside audience/backfill work without a check-then-dispatch race.
+     */
+    globalBudget?: number;
     now?: Date;
   },
 ): Promise<boolean> {
@@ -1353,6 +1359,57 @@ export async function reserveOfapiDayCredits(
   const columns = OFAPI_DAY_COUNTER_COLUMNS[input.scope];
   const dayColumn = sql.raw(columns.day);
   const creditsColumn = sql.raw(columns.credits);
+  if (input.scope !== "global" && input.globalBudget !== undefined) {
+    const globalBudget = Math.round(input.globalBudget);
+    if (estimate > globalBudget) {
+      return false;
+    }
+    const reserved = await db.execute(sql`
+      insert into ofapi_credit_state (
+        id,
+        spend_day,
+        spent_credits,
+        ${dayColumn},
+        ${creditsColumn},
+        updated_at
+      ) values (
+        1,
+        ${day}::date,
+        ${estimate},
+        ${day}::date,
+        ${estimate},
+        ${now}::timestamptz
+      )
+      on conflict (id) do update set
+        spent_credits = case
+          when ofapi_credit_state.spend_day = ${day}::date
+            then ofapi_credit_state.spent_credits + ${estimate}
+          else ${estimate}
+        end,
+        spend_day = ${day}::date,
+        ${creditsColumn} = case
+          when ofapi_credit_state.${dayColumn} = ${day}::date
+            then ofapi_credit_state.${creditsColumn} + ${estimate}
+          else ${estimate}
+        end,
+        ${dayColumn} = ${day}::date,
+        updated_at = ${now}::timestamptz
+      where (case
+          when ofapi_credit_state.spend_day = ${day}::date
+            then ofapi_credit_state.spent_credits
+          else 0
+        end) + ${estimate} <= ${globalBudget}
+        and (case
+          when ofapi_credit_state.${dayColumn} = ${day}::date
+            then ofapi_credit_state.${creditsColumn}
+          else 0
+        end) + ${estimate} <= ${budget}
+      returning id
+    `);
+
+    return reserved.rows.length > 0;
+  }
+
   const reserved = await db.execute(sql`
     insert into ofapi_credit_state (id, ${dayColumn}, ${creditsColumn}, updated_at)
     values (1, ${day}::date, ${estimate}, ${now}::timestamptz)

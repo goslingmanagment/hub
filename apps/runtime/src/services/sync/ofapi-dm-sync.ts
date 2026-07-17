@@ -166,9 +166,9 @@ export function isOfapiCreditFloorBlocking(input: {
  * D4/D6 budget guard, checked before every REST request. The per-chunk request
  * cap yields like a normal budget exhaustion; daily-budget and floor blocks add
  * a retry delay so the stream parks instead of spinning. Streams with their own
- * ceiling (audience, D6) pass `budgetScope: "audience"` so their budget counts
- * only their own spend (its dedicated day counter with the ledger on, the
- * global day counter fallback otherwise, per decision #50).
+ * ceiling (audience, D6) pass `budgetScope: "audience"`. With the ledger on,
+ * dedicated lanes atomically reserve both their own counter and the shared
+ * physical cap; without it they fall back to the global day counter.
  *
  * Audit F9: the day-budget check is reserve-before-request — the comparison
  * and the counter increment are one conditional update, so concurrent streams
@@ -192,11 +192,15 @@ export function createOfapiRestGuard(app: AppContext, options?: {
     options?.dailyCreditBudget ??
       app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
   );
+  const globalDailyCreditBudget = Math.max(
+    1,
+    app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
+  );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
-  // A dedicated counter (audience per decision #50, backfill per Stage 14)
-  // mirrors its ledger-attributed spend, so it applies only with the ledger
-  // on; off, both fall back to the shared global day counter exactly as
-  // before.
+  // Dedicated counters (audience per decision #50, backfill per Stage 14)
+  // mirror ledger-attributed spend. With the ledger on they are reserved in
+  // the same statement as the shared cap; off, both fall back to that global
+  // counter exactly as before.
   const scope: OfapiDayBudgetScope =
     (options?.budgetScope === "audience" || options?.budgetScope === "backfill") &&
       isOfapiCreditLedgerEnabled(app.config)
@@ -226,6 +230,7 @@ export function createOfapiRestGuard(app: AppContext, options?: {
         scope,
         estimate: OFAPI_REQUEST_CREDIT_ESTIMATE,
         budget: dailyCreditBudget,
+        ...(scope === "global" ? {} : { globalBudget: globalDailyCreditBudget }),
       });
       return reserved ? null : "ofapi_daily_credit_budget";
     },
@@ -234,11 +239,12 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       const actualCredits = page.meta?.creditsUsed ?? OFAPI_REQUEST_CREDIT_ESTIMATE;
       // With the ledger on, the client's onCreditSpend sink already recorded
       // the actuals (ledger row + global day counter + balance, one
-      // transaction) before the response reached us — only the reservation
-      // remains to release. Dedicated counters (audience, backfill) settle to
-      // actuals because the sink maintains only the global one. Flag off keeps
-      // the pre-ledger accounting (uncached reads cost 1 credit; trust _meta
-      // when present), applied as a settle against the reservation.
+      // transaction) before the response reached us. Dedicated counters
+      // (audience, backfill) settle to actuals because the sink maintains only
+      // the global one, then their shared-cap reservation is released. A crash
+      // between these settlements remains conservative until UTC rollover.
+      // Flag off keeps the pre-ledger accounting (uncached reads cost 1 credit;
+      // trust _meta when present), applied as a settle against the reservation.
       if (isOfapiCreditLedgerEnabled(app.config)) {
         await settleOfapiDayCreditReservation(app.db, {
           scope,
@@ -246,6 +252,12 @@ export function createOfapiRestGuard(app: AppContext, options?: {
             ? -OFAPI_REQUEST_CREDIT_ESTIMATE
             : actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE,
         });
+        if (scope !== "global") {
+          await settleOfapiDayCreditReservation(app.db, {
+            scope: "global",
+            creditsDelta: -OFAPI_REQUEST_CREDIT_ESTIMATE,
+          });
+        }
         return;
       }
       await settleOfapiDayCreditReservation(app.db, {
