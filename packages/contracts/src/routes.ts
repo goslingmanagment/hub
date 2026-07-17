@@ -2026,6 +2026,17 @@ export const aiFeatureStreamBodySchema = z.object({
   messageCount: z.number().int().min(5).max(3000).optional(),
   draftText: z.string().min(1).max(20_000).optional(),
   isRegeneration: z.boolean().optional(),
+  chatterQuestion: z.string().min(1).max(2_000).optional(),
+  coachHistory: z
+    .array(
+      z.object({
+        question: z.string().min(1).max(2_000),
+        answer: z.string().min(1).max(10_000),
+      }).strict(),
+    )
+    .max(20)
+    .optional(),
+  summaryMode: z.literal("short").optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at
@@ -2041,6 +2052,7 @@ export const aiFeatureStreamBodySchema = z.object({
     fanSubscriptionData: z.string().max(20_000).default(""),
     fanBio: z.string().max(5_000).optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
+    transcriptCoverage: z.enum(["full-history", "window"]).optional(),
   }).strict().optional(),
 }).strict();
 

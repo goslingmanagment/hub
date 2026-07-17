@@ -77,6 +77,9 @@ export interface AiFeatureRequestBody {
   messageCount?: number;
   draftText?: string;
   isRegeneration?: boolean;
+  chatterQuestion?: string;
+  coachHistory?: Array<{ question: string; answer: string }>;
+  summaryMode?: "short";
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
    * the extension reads the conversation live at generation time). */
@@ -88,6 +91,7 @@ export interface AiFeatureRequestBody {
     fanSubscriptionData: string;
     fanBio?: string;
     pingSegment?: PingSegment;
+    transcriptCoverage?: "full-history" | "window";
   };
 }
 
