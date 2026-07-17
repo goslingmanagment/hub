@@ -422,7 +422,7 @@ describe("owner OFAPI export quote boundary", () => {
       pageId: seeded.page.id,
       profile: "pilot_chats",
       chatIds: ["42"],
-      startDate: "2016-01-01T00:00:00.000Z",
+      startDate: "2016-11-01T00:00:00.000Z",
       endDate: "2026-07-15T00:00:00.000Z",
       maxMessages: 100,
       quoteTtlMinutes: 1_440,
@@ -442,6 +442,17 @@ describe("owner OFAPI export quote boundary", () => {
       profile: "pilot_chats",
     });
     expect((await testDb.pool.query("select id from ofapi_capture_jobs")).rows).toHaveLength(0);
+
+    const tooEarly = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ofapi/export-quotes",
+      headers: { cookie: owner.cookie },
+      payload: { ...payload, startDate: "2016-10-31T23:59:59.999Z" },
+    });
+    expect(tooEarly.statusCode, tooEarly.body).toBe(400);
+    expect(tooEarly.json()).toMatchObject({
+      message: "OFAPI export quote startDate cannot be before 2016-11-01T00:00:00.000Z",
+    });
 
     const created = await server.inject({
       method: "POST",
@@ -487,14 +498,14 @@ describe("owner OFAPI export quote boundary", () => {
 
     await testDb.pool.query(`
       update ofapi_capture_jobs
-      set state = 'blocked', reason_code = 'owner_approval_required'
+      set state = 'blocked', reason_code = 'export_create_http_422'
       where id = $1
     `, [jobId]);
     const cancelled = await server.inject({
       method: "POST",
       url: `/api/v1/admin/ofapi/export-quotes/${jobId}/cancel`,
       headers: { cookie: owner.cookie },
-      payload: { expectedState: "blocked", reason: "quote recorded" },
+      payload: { expectedState: "blocked", reason: "captured validation rejection" },
     });
     expect(cancelled.statusCode, cancelled.body).toBe(200);
     expect(cancelled.json()).toMatchObject({

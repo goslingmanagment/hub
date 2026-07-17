@@ -3014,7 +3014,14 @@ export async function cancelBlockedOfapiExportQuoteJob(
     if (
       job.kind !== "account_export"
       || job.state !== "blocked"
-      || !["owner_approval_required", "export_quote_failed"].includes(job.reasonCode ?? "")
+      || ![
+        "owner_approval_required",
+        "export_quote_failed",
+        // Compatibility for the first production quote made before the
+        // parser classified a captured HTTP 422 as export_quote_failed.
+        // A validation rejection proves no stateful export object exists.
+        "export_create_http_422",
+      ].includes(job.reasonCode ?? "")
     ) {
       return { cancelled: false, currentState: job.state };
     }
@@ -3032,7 +3039,11 @@ export async function cancelBlockedOfapiExportQuoteJob(
       where id = ${input.jobId}::uuid
         and kind = 'account_export'
         and state = 'blocked'
-        and reason_code in ('owner_approval_required', 'export_quote_failed')
+        and reason_code in (
+          'owner_approval_required',
+          'export_quote_failed',
+          'export_create_http_422'
+        )
     `);
     await database.execute(sql`
       insert into ofapi_capture_operator_actions (

@@ -24,6 +24,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 const QUOTE_MAX_CALLS = 97;
 const QUOTE_MAX_CREDITS = 5;
 const QUOTE_POLL_INTERVAL_MS = 15 * 60_000;
+const EXPORT_EARLIEST_START_MS = Date.parse("2016-11-01T00:00:00.000Z");
 
 type ExportQuoteProfile = "pilot_chats" | "fleet_tail";
 
@@ -190,6 +191,11 @@ function validateDateRange(input: OfapiExportQuoteBody, now: Date) {
   const end = new Date(input.endDate);
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) {
     throw new BadRequestError("OFAPI export quote requires startDate before endDate");
+  }
+  if (start.getTime() < EXPORT_EARLIEST_START_MS) {
+    throw new BadRequestError(
+      "OFAPI export quote startDate cannot be before 2016-11-01T00:00:00.000Z",
+    );
   }
   if (end.getTime() > now.getTime() + 5 * 60_000) {
     throw new BadRequestError("OFAPI export quote endDate cannot be in the future");
@@ -471,6 +477,10 @@ export async function parseCapturedOfapiExportQuote(
 
   if (input.status < 200 || input.status >= 300) {
     const retryable = isStatusPoll && (input.status === 429 || input.status >= 500);
+    // A captured 422 is a definitive validation rejection: no export object
+    // was created, so the page slot is safe to release and retry with a
+    // corrected frozen target. Stateful transport ambiguity remains fenced.
+    const createValidationRejected = !isStatusPoll && input.status === 422;
     await settle({
       jobId: job.id,
       attemptId: input.attemptId,
@@ -491,10 +501,14 @@ export async function parseCapturedOfapiExportQuote(
         }
         : {
           kind: "blocked",
-          reasonCode: isStatusPoll
-            ? `export_status_http_${input.status}`
-            : `export_create_http_${input.status}`,
-          reasonMessage: "Captured export response requires owner review; no POST was retried",
+          reasonCode: createValidationRejected
+            ? "export_quote_failed"
+            : isStatusPoll
+              ? `export_status_http_${input.status}`
+              : `export_create_http_${input.status}`,
+          reasonMessage: createValidationRejected
+            ? "Vendor rejected the export quote request with HTTP 422; no export was created"
+            : "Captured export response requires owner review; no POST was retried",
         },
       now,
     });

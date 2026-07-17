@@ -289,7 +289,7 @@ async function createExportQuoteExecutionFixture(
       profile: "fleet_tail",
       type: "chat_messages",
       accountIds: [seeded.accountId],
-      startDate: "2016-01-01T00:00:00.000Z",
+      startDate: "2016-11-01T00:00:00.000Z",
       endDate: "2026-07-16T00:00:00.000Z",
       fileType: "csv",
       maxMessages: 10_000_000,
@@ -2008,7 +2008,7 @@ describe("OFAPI capture correctness repository", () => {
           id: "data_export_quote123",
           type: "chat_messages",
           status: "calculating_credits",
-          start_date: "2016-01-01T00:00:00.000Z",
+          start_date: "2016-11-01T00:00:00.000Z",
           end_date: "2026-07-16T00:00:00.000Z",
           file_type: "csv",
         },
@@ -2019,7 +2019,7 @@ describe("OFAPI capture correctness repository", () => {
           id: "data_export_quote123",
           type: "chat_messages",
           status: "calculating_credits_completed",
-          start_date: "2016-01-01T00:00:00.000Z",
+          start_date: "2016-11-01T00:00:00.000Z",
           end_date: "2026-07-16T00:00:00.000Z",
           file_type: "csv",
           accounts: [{ id: fixture.accountId }],
@@ -2083,7 +2083,7 @@ describe("OFAPI capture correctness repository", () => {
         profile: "pilot_chats",
         type: "chat_messages",
         accountIds: [fixture.accountId],
-        startDate: "2016-01-01T00:00:00.000Z",
+        startDate: "2016-11-01T00:00:00.000Z",
         endDate: "2026-07-16T00:00:00.000Z",
         fileType: "csv",
         maxMessages: 100,
@@ -2098,6 +2098,42 @@ describe("OFAPI capture correctness repository", () => {
       maxCredits: 5,
     });
     expect(next.created).toBe(true);
+  });
+
+  it("treats a captured export-create 422 as a safely cancellable failure", async () => {
+    if (!testDb) return;
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: { beforeDispatch: () => Promise<boolean> },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      return {
+        status: 422,
+        bodyBytes: Buffer.from(JSON.stringify({
+          message: "The start date is outside the supported range.",
+          errors: { start_date: ["outside the supported range"] },
+        })),
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw);
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    expect(dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "export_quote_failed",
+      attemptCount: 1,
+      dispatchCount: 1,
+      spentCredits: 1,
+    });
+    expect(await cancelBlockedOfapiExportQuoteJob(testDb.db, {
+      jobId: fixture.job.id,
+      actorUserId: fixture.owner.id,
+      reason: "captured validation rejection; retry with corrected target",
+    })).toEqual({ cancelled: true, currentState: "cancelled" });
   });
 
   it("never repeats an indeterminate export-create POST", async () => {
@@ -2166,7 +2202,7 @@ describe("OFAPI capture correctness repository", () => {
             id: "data_export_null_cost",
             type: "chat_messages",
             status: "calculating_credits",
-            start_date: "2016-01-01T00:00:00.000Z",
+            start_date: "2016-11-01T00:00:00.000Z",
             end_date: "2026-07-16T00:00:00.000Z",
             file_type: "csv",
           },
@@ -2177,7 +2213,7 @@ describe("OFAPI capture correctness repository", () => {
             id: "data_export_null_cost",
             type: "chat_messages",
             status: "calculating_credits_completed",
-            start_date: "2016-01-01T00:00:00.000Z",
+            start_date: "2016-11-01T00:00:00.000Z",
             end_date: "2026-07-16T00:00:00.000Z",
             file_type: "csv",
             accounts: [{ id: expectedAccountId }],
@@ -2248,7 +2284,7 @@ describe("OFAPI capture correctness repository", () => {
             id: "data_export_quote_retry",
             type: "chat_messages",
             status: "calculating_credits",
-            start_date: "2016-01-01T00:00:00.000Z",
+            start_date: "2016-11-01T00:00:00.000Z",
             end_date: "2026-07-16T00:00:00.000Z",
             file_type: "csv",
           },
@@ -2259,7 +2295,7 @@ describe("OFAPI capture correctness repository", () => {
             id: "data_export_quote_retry",
             type: "chat_messages",
             status: "calculating_credits_completed",
-            start_date: "2016-01-01T00:00:00.000Z",
+            start_date: "2016-11-01T00:00:00.000Z",
             end_date: "2026-07-16T00:00:00.000Z",
             file_type: "csv",
             accounts: [{ id: expectedAccountId }],

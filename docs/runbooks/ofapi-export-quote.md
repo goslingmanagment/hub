@@ -63,7 +63,7 @@ Example dry-run body:
   "pageId": 123,
   "profile": "pilot_chats",
   "chatIds": ["10001", "10002"],
-  "startDate": "2016-01-01T00:00:00.000Z",
+  "startDate": "2016-11-01T00:00:00.000Z",
   "endDate": "2026-07-16T00:00:00.000Z",
   "maxMessages": 10000000,
   "quoteTtlMinutes": 1440
