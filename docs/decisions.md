@@ -4564,4 +4564,8 @@ platform-specific cache tag but advances it only after all production health
 and delivery gates pass. At that same post-verification point it retains the
 two newest local candidate tags; older tags whose image is referenced by any
 local container are never removed. Cleanup failure is informational after a
-verified deploy and cannot trigger a production rollback.
+verified deploy and cannot trigger a production rollback. Nested workspace
+dependencies and build outputs are excluded from the Docker context, and the
+final runtime image must launch its bundled Chromium Headless Shell in CI. The
+Dockerfile deliberately does not launch target-architecture Chromium during
+the build, preserving cross-platform builds on Apple Silicon without Rosetta.

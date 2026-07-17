@@ -77,6 +77,8 @@ describe("compose config", () => {
 
   it("Dockerfile separates native and target package caches and installs only headless Chromium", async () => {
     const dockerfile = await readComposeFile("Dockerfile");
+    const dockerignore = await readComposeFile(".dockerignore");
+    const ciWorkflow = await readComposeFile(".github/workflows/ci.yml");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const sourceCopyIndex = dockerfile.indexOf("COPY apps ./apps");
 
@@ -90,6 +92,14 @@ describe("compose config", () => {
     expect(dockerfile).toContain("target=/pnpm/store,sharing=locked");
     expect(dockerfile).toContain("install --with-deps --only-shell chromium");
     expect(dockerfile).not.toContain("install --with-deps chromium");
+    expect(dockerfile).toContain(
+      "COPY scripts/smoke-playwright-runtime.mjs ./scripts/smoke-playwright-runtime.mjs",
+    );
+    expect(dockerignore).toContain("**/node_modules");
+    expect(dockerignore).toContain("packages/**/dist");
+    expect(ciWorkflow).toContain(
+      "docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs",
+    );
     expect(sourceCopyIndex).toBeGreaterThan(installIndex);
   });
 

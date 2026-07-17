@@ -187,6 +187,7 @@ By default the script uses `--mode full`:
 - after health checks, the running API, scheduler, and worker images must have labels matching the source revision and dependency checksum for this deploy
 - the last verified full build is retained under a stable, platform-specific local cache tag; failed or rolled-back deploys never advance it
 - after every fully verified deploy, local per-run candidate tags are trimmed to the newest two; an older tag is preserved when any local container still references its image
+- nested host `node_modules` and built `dist` trees never enter the Docker context, and CI must launch the bundled Chromium Headless Shell from the final runtime container; the Dockerfile does not launch target-architecture Chromium during the build, so cross-platform builds remain usable without Rosetta
 
 Older deploy wrappers may still pass `--node-base-cache-image` or set
 `DEPLOY_NODE_BASE_CACHE_IMAGE`. Both forms remain accepted as deprecated
