@@ -602,6 +602,35 @@ describe("OFAPI read gateway integration", () => {
     expect(attempts.rows[0]?.count).toBe("0");
   });
 
+  it("uses an incomplete webhook head only as the exclusive DB boundary", async () => {
+    await seedCertifiedHistory();
+    await testDb!.pool.query(
+      `update message_archive
+       set native_message_id = null,
+           source_account_seq = null,
+           serving_contract_version = 0,
+           text_html = null,
+           content_pending = true
+       where account_id = $1
+         and conversation_ref = '123'
+         and message_ref = '103'`,
+      [assignedPageId],
+    );
+    appContext.ofapi = undefined;
+
+    const response = await inject(
+      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=103&skip_users=all`,
+      "deep-history-v1",
+    );
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers["x-agency-hub-read-source"]).toBe("db");
+    expect(response.headers["x-ofapi-credits-used"]).toBe("0");
+    expect(response.json().data.map((item: { id: number }) => item.id)).toEqual([102, 101]);
+    expect(upstreamRequests).toHaveLength(0);
+    expect(proxyRequests).toHaveLength(0);
+  });
+
   it("orders certified bigint message ids numerically across digit lengths", async () => {
     await seedCertifiedHistory();
     await testDb!.pool.query(`

@@ -107,7 +107,13 @@ export async function readCertifiedOfapiChatHistoryPage(
     }
     const limit = Math.max(1, Math.min(100, Math.trunc(input.limit)));
     const result = await database.execute<Record<string, unknown>>(sql`
-      select native_message_id::text as native_message_id,
+      select coalesce(
+               archive.native_message_id,
+               case
+                 when archive.message_ref = ${input.firstId} then ${cursor}::bigint
+                 else null
+               end
+             )::text as native_message_id,
              text_html,
              is_sent_by_me,
              occurred_at,
@@ -128,12 +134,21 @@ export async function readCertifiedOfapiChatHistoryPage(
       where archive.account_id = ${input.pageId}
         and archive.platform = 'onlyfans'
         and archive.conversation_ref = ${input.chatId}
-        and archive.native_message_id <= ${cursor}
-        and archive.native_message_id is not null
+        and (
+          archive.native_message_id <= ${cursor}
+          or (
+            archive.native_message_id is null
+            and archive.message_ref = ${input.firstId}
+          )
+        )
         and archive.deleted_at is null
-      -- Qualify the bigint column: the unqualified name resolves to the
-      -- native_message_id::text output alias and sorts lexicographically.
-      order by archive.native_message_id desc
+      -- A webhook can create the current-head row before the paid capture
+      -- observes its complete material. The row is still a valid exclusive
+      -- cursor boundary; only rows returned below it must pass the strict
+      -- material contract. Existing native ids stay authoritative, so a
+      -- conflicting non-null id still fails closed instead of being masked.
+      order by coalesce(archive.native_message_id, ${cursor}::bigint) desc,
+               (archive.message_ref = ${input.firstId}) desc
       limit ${limit + 2}
     `);
 
