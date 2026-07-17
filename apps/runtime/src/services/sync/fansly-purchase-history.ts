@@ -55,7 +55,25 @@ export function fanslyPurchaseHistoryTargetKey(target: FanslyPurchaseHistoryTarg
 export function extractFanslyPurchaseHistoryTargets(
   payloads: readonly unknown[],
 ): FanslyPurchaseHistoryTarget[] {
-  const targets = new Map<string, FanslyPurchaseHistoryTarget>();
+  // Fansly content ids are global, but historical DM payloads can describe a
+  // bundle order through `accountMediaId` while the attachment and metadata
+  // correctly identify the same id as a bundle. Keep one target per content
+  // id and let concrete attachment/metadata evidence override the weaker
+  // inline-order inference. Otherwise the same bundle is fetched once
+  // correctly and then again as a single media item, which Fansly rejects.
+  const targets = new Map<
+    string,
+    { target: FanslyPurchaseHistoryTarget; evidencePriority: number }
+  >();
+  const recordTarget = (
+    target: FanslyPurchaseHistoryTarget,
+    evidencePriority: number,
+  ) => {
+    const current = targets.get(target.contentId);
+    if (!current || evidencePriority > current.evidencePriority) {
+      targets.set(target.contentId, { target, evidencePriority });
+    }
+  };
 
   for (const payloadValue of payloads) {
     const payload = asRecord(payloadValue);
@@ -87,10 +105,15 @@ export function extractFanslyPurchaseHistoryTargets(
       const target = bundleId
         ? { kind: "bundle" as const, contentId: bundleId }
         : mediaId
-          ? { kind: "single" as const, contentId: mediaId }
+          ? {
+            kind: bundlesById.has(mediaId) && !mediaById.has(mediaId)
+              ? "bundle" as const
+              : "single" as const,
+            contentId: mediaId,
+          }
           : null;
       if (target) {
-        targets.set(fanslyPurchaseHistoryTargetKey(target), target);
+        recordTarget(target, bundleId ? 3 : 1);
       }
     }
 
@@ -132,12 +155,12 @@ export function extractFanslyPurchaseHistoryTargets(
         }
 
         const target = { kind: candidate.kind, contentId };
-        targets.set(fanslyPurchaseHistoryTargetKey(target), target);
+        recordTarget(target, 2);
       }
     }
   }
 
-  return [...targets.values()].sort((left, right) =>
+  return [...targets.values()].map(({ target }) => target).sort((left, right) =>
     fanslyPurchaseHistoryTargetKey(left).localeCompare(
       fanslyPurchaseHistoryTargetKey(right),
       "en",

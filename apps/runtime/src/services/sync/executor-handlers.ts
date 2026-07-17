@@ -3863,13 +3863,23 @@ export async function executePurchaseHistoryChunk(
   const capturedTargetKeys = new Set(
     await listCapturedFanslyPurchaseHistoryTargetKeys(app.db, input.pageContext.page.id),
   );
+  const capturedContentIds = new Set(
+    [...capturedTargetKeys].flatMap((key) => {
+      const separator = key.indexOf(":");
+      return separator >= 0 ? [key.slice(separator + 1)] : [];
+    }),
+  );
   // A crash after raw capture but before checkpoint advance is reconciled
-  // locally: the captured key removes the stale pending item without another
-  // vendor request.
+  // locally: the captured content id removes the stale pending item without
+  // another vendor request. Content-level reconciliation also repairs legacy
+  // checkpoints where one Fansly bundle was inferred once as bundle and once
+  // as single media from contradictory fields in the same DM payload.
   state = {
     ...state,
     pendingTargets: state.pendingTargets.filter(
-      (target) => !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)),
+      (target) =>
+        !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
+        !capturedContentIds.has(target.contentId),
     ),
   };
 
@@ -3933,7 +3943,10 @@ export async function executePurchaseHistoryChunk(
 
       const discovered = extractFanslyPurchaseHistoryTargets(
         rawPages.map((row) => row.responsePayload),
-      ).filter((target) => !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)));
+      ).filter((target) =>
+        !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
+        !capturedContentIds.has(target.contentId)
+      );
       state = {
         version: 2,
         rawPayloadCursorId: rawPages.at(-1)!.id,
@@ -4003,6 +4016,7 @@ export async function executePurchaseHistoryChunk(
       });
       targetsSkipped += 1;
       capturedTargetKeys.add(fanslyPurchaseHistoryTargetKey(target));
+      capturedContentIds.add(target.contentId);
       state = { ...state, pendingTargets: state.pendingTargets.slice(1) };
       const progressCheckpoint = await upsertCheckpointProgress(app.db, {
         platformAccountId: input.pageContext.page.id,
@@ -4028,6 +4042,7 @@ export async function executePurchaseHistoryChunk(
 
     const orderRows = countFanslyPurchaseHistoryRows(page.raw);
     capturedTargetKeys.add(fanslyPurchaseHistoryTargetKey(target));
+    capturedContentIds.add(target.contentId);
     state = { ...state, pendingTargets: state.pendingTargets.slice(1) };
     const progressCheckpoint = await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,

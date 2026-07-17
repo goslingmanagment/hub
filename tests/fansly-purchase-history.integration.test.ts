@@ -12,6 +12,7 @@ import {
   getCheckpoint,
   insertRawPayload,
   startSyncRun,
+  upsertCheckpointProgress,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
@@ -224,6 +225,67 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
       "select status_code, error_message from sync_raw_payloads where endpoint = 'purchase_history' and status_code = 404",
     );
     expect(rejected.rows).toEqual([{ status_code: 404, error_message: "media gone" }]);
+  });
+
+  it("prefers bundle evidence and repairs a stale alternate-kind checkpoint locally", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await captureDmPage(page.id, {
+      messages: [{
+        id: "message-bundle",
+        attachments: [{ contentType: 2, contentId: "shared-content-id" }],
+      }],
+      accountMedia: [],
+      accountMediaBundles: [{
+        id: "shared-content-id",
+        permissions: { permissionFlags: [{ flags: 1 }] },
+      }],
+      // Live Fansly payloads sometimes use accountMediaId even though the
+      // attachment and metadata identify this exact id as a bundle.
+      accountMediaOrders: [{ accountMediaId: "shared-content-id" }],
+    });
+
+    const requested: Array<Record<string, unknown>> = [];
+    appContext = {
+      ...appContext,
+      adapter: {
+        async getMediaOrderHistoryPage(_context: unknown, params: Record<string, unknown>) {
+          requested.push(params);
+          return { items: [], raw: { accountMediaOrderHistory: [] } };
+        },
+      } as never,
+    };
+
+    const first = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    );
+    expect(first.satisfied).toBe(true);
+    expect(requested).toEqual([{
+      accountMediaBundleId: "shared-content-id",
+      limit: 100,
+    }]);
+
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "purchase_history",
+      state: {
+        version: 2,
+        rawPayloadCursorId: Number(checkpoint?.state.rawPayloadCursorId ?? 0),
+        pendingTargets: [{ kind: "single", contentId: "shared-content-id" }],
+      },
+    });
+
+    const second = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    );
+    expect(second.satisfied).toBe(true);
+    expect(requested).toHaveLength(1);
   });
 
   it("makes zero adapter calls with the feature flag off", async (context) => {
