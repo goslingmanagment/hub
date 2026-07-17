@@ -1449,6 +1449,7 @@ async function executeOnlyFansTopSpendersChunk(
 export async function executeFanIdentitiesChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
+    streamState: PageSyncLease;
     syncRunId: number;
   },
 ) {
@@ -1468,6 +1469,7 @@ export async function executeFanIdentitiesChunk(
       pageContext: input.pageContext,
       budget: input.budget,
       telemetry: input.telemetry,
+      requestSeq: input.streamState.leasedSeq ?? input.streamState.requestSeq,
     });
     return {
       satisfied: ofapiResult.satisfied,

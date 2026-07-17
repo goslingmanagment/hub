@@ -107,7 +107,13 @@ async function seedMappedPage(label = "links-of") {
     slug: `model-${label}`,
     name: `Model ${label}`,
   });
+  if (!model) {
+    throw new Error(`failed to create model for ${label}`);
+  }
   const page = await createOnlyFansPage(appContext.db, { modelId: model.id, label });
+  if (!page) {
+    throw new Error(`failed to create page ${label}`);
+  }
   await setPageOfapiAccountId(appContext.db, { pageId: page.id, ofapiAccountId: OFAPI_ACCOUNT });
   return page;
 }
@@ -127,6 +133,7 @@ async function buildInput(page: { id: number }) {
     } as never,
     telemetry: fakeTelemetry(),
     budget: new SyncChunkBudget(50, 60_000),
+    requestSeq: 1,
   };
 }
 
@@ -225,5 +232,69 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     );
     // The prefix fetched before the cap (42:subscribers) is kept.
     expect(rows).toEqual([{ n: "1" }]);
+  });
+
+  it("resumes after completed targets and within a paginated target", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext = createTestAppContext(testDb, {
+      ofapiFanIdentitiesSyncEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiAudienceMaxRequestsPerRun: 4,
+    });
+    const page = await seedMappedPage("links-resume-of");
+    const calls: string[] = [];
+    const hundredUsers = Array.from({ length: 100 }, (_, index) =>
+      linkUser(300000 + index, `resume${index}`, `Resume ${index}`)
+    );
+    appContext = {
+      ...appContext,
+      ofapi: {
+        listTrackingLinks: vi.fn(async () => {
+          calls.push("tracking-links");
+          return listPage([{ id: 42 }, { id: 43 }]);
+        }),
+        listTrialLinks: vi.fn(async () => {
+          calls.push("trial-links");
+          return listPage([]);
+        }),
+        listTrackingLinkUsers: vi.fn(async (
+          _context: unknown,
+          _accountId: string,
+          linkId: string,
+          kind: string,
+          options: { offset?: number },
+        ) => {
+          const offset = options.offset ?? 0;
+          calls.push(`tracking:${linkId}:${kind}:${offset}`);
+          if (linkId === "42" && kind === "spenders" && offset === 0) {
+            return listPage(hundredUsers);
+          }
+          return listPage([linkUser(Number(linkId) * 100 + offset, `u${linkId}`, `U ${linkId}`)]);
+        }),
+        listTrialLinkSubscribers: vi.fn(async () => listPage([])),
+      } as unknown as OfapiClient,
+    };
+
+    const first = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(first.satisfied).toBe(false);
+    expect(first.stats).toMatchObject({
+      completedTargets: 1,
+      activeTargetKey: "tracking:42:spenders",
+      activeOffset: 100,
+    });
+
+    const second = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(second.satisfied).toBe(false);
+    expect(second.stats).toMatchObject({ completedTargets: 3 });
+
+    const third = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(third.satisfied).toBe(true);
+    expect(calls.filter((call) => call === "tracking:42:subscribers:0")).toHaveLength(1);
+    expect(calls.filter((call) => call === "tracking:42:spenders:0")).toHaveLength(1);
+    expect(calls.filter((call) => call === "tracking:42:spenders:100")).toHaveLength(1);
   });
 });
