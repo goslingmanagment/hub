@@ -127,11 +127,11 @@ export function createTestAppContext(
       ofapiDmBootstrapMaxRequestsPerRun: overrides?.ofapiDmBootstrapMaxRequestsPerRun ?? 25,
       ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
       ofapiMirrorGlobalDailyCreditBudget:
-        overrides?.ofapiMirrorGlobalDailyCreditBudget ?? 40_000,
+        overrides?.ofapiMirrorGlobalDailyCreditBudget ?? 7_000,
       ofapiMirrorPrincipalDailyCallCap:
-        overrides?.ofapiMirrorPrincipalDailyCallCap ?? 7_000,
+        overrides?.ofapiMirrorPrincipalDailyCallCap ?? 4_000,
       ofapiMirrorPrincipalDailyCreditCap:
-        overrides?.ofapiMirrorPrincipalDailyCreditCap ?? 7_000,
+        overrides?.ofapiMirrorPrincipalDailyCreditCap ?? 4_000,
       ofapiCreditFloor: overrides?.ofapiCreditFloor ?? 500,
       ofapiDmReconcileIntervalMinutes: overrides?.ofapiDmReconcileIntervalMinutes ?? 360,
       ofapiAccountHealthEnabled: overrides?.ofapiAccountHealthEnabled ?? false,

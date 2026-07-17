@@ -4661,3 +4661,10 @@ governed mirror allowance is 7,000 calls and 7,000 reserved credits per UTC
 day. This supersedes only the 4,000/4,000 values in #167; its UTC-day window,
 40,000-credit global stop-loss, balance floor, and all other safeguards remain
 unchanged.
+
+**Decision #169 (2026-07-18, owner clarification to #167 and #168):** The
+governed mirror budget is 4,000 calls and 4,000 reserved credits per origin
+principal per UTC day, with a 7,000-credit global ceiling across all
+principals for that UTC day. This supersedes the numeric allowances in #167
+and #168; their UTC-day reset, balance floor, and remaining safeguards are
+unchanged.
