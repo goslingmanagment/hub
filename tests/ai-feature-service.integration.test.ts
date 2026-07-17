@@ -1251,6 +1251,42 @@ describe("coach-chat gates", () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe("unknown_ai_feature");
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("streams coach-chat and carries the question into the assembled prompt", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({
+        chatterQuestion: "как продать ppv?",
+        coachHistory: [{ question: "с чего начать?", answer: "нащупай боль" }],
+        clientContext: {
+          transcript: "[10:00] Fan: hey babe",
+          messageCount: 3,
+          fanDisplayName: "Bob",
+          fanSpendingData: "Total: $42.00",
+          fanSubscriptionData: "Subscribed: yes",
+          transcriptCoverage: "window",
+        },
+      }),
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const frames = aiFrames(res.body);
+    expect(frames.find((frame) => frame.type === "meta")?.feature).toBe("coach-chat");
+    expect(frames.at(-1)?.type).toBe("done");
+    // The capturing provider saw the assembled prompt with the question and the
+    // coverage note (the extension's coach question rode client-side context).
+    const prompt = JSON.stringify(capture.input);
+    expect(prompt).toContain("как продать ppv?");
+    expect(prompt).toContain("нащупай боль");
+    expect(prompt).toContain("most recent window only");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
 describe("fan-dossier context (Decision #136)", () => {

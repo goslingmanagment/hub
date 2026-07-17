@@ -2,7 +2,11 @@ import type {
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
 } from "@agency_hub_core/contracts";
-import { findAiPersonaByKey, findPageByLabel } from "@agency_hub_core/db";
+import {
+  findAiPersonaByKey,
+  findPageByLabel,
+  getFreshestUsableRecaps,
+} from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import {
@@ -45,6 +49,7 @@ import {
   type OperationFeature,
   type Personality,
   type PingSegment,
+  type RecapAttach,
   type ReplyMode,
   type ReplyTone,
 } from "../prompts/index.ts";
@@ -355,6 +360,57 @@ export async function prepareAiFeatureStream(
     };
   }
 
+  // Two-slot recap attach (spec §5): coach-chat pulls the freshest usable full
+  // and short fan-summary recaps for this conversation and dates them into the
+  // prompt. Fail-open like the dossier — a recap-lookup hiccup degrades to "no
+  // recaps", never to a failed coach answer.
+  let recapAttach: RecapAttach | undefined;
+  if (feature === "coach-chat") {
+    try {
+      const conversationRefs = [
+        body.conversationRef,
+        ...(body.fanRef ? [body.fanRef] : []),
+      ];
+      const found = await getFreshestUsableRecaps(app.db, {
+        pageId,
+        conversationRefs,
+      });
+      const fullAt = found.full?.createdAt?.getTime() ?? null;
+      const shortAt = found.short?.createdAt?.getTime() ?? null;
+      const now = Date.now();
+      // Attach rule (spec §5): the full recap is attached whenever present; the
+      // short recap only when it is strictly newer than the full (an older short
+      // adds nothing the fuller, fresher recap does not already carry).
+      recapAttach = {
+        full: found.full
+          ? { body: found.full.completion, ageMs: now - fullAt! }
+          : null,
+        short:
+          found.short && (fullAt === null || shortAt! > fullAt)
+            ? { body: found.short.completion, ageMs: now - shortAt! }
+            : null,
+      };
+      // Dossier dedupe: when the injected dossier is byte-identical to the full
+      // recap, keep the dated dossier section and drop the duplicate recap.
+      if (recapAttach.full && fanProfile?.body === recapAttach.full.body) {
+        recapAttach.full = null;
+      }
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        recapAttach: {
+          full: recapAttach.full ? fullAt : null,
+          short: recapAttach.short ? shortAt : null,
+        },
+      };
+    } catch (error) {
+      app.logger.warn({ err: error }, "coach-chat recap attach failed open");
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        recapAttach: { lookupFailed: true },
+      };
+    }
+  }
+
   const prompt = buildPrompt({
     feature,
     personality: persona.personality,
@@ -371,6 +427,13 @@ export async function prepareAiFeatureStream(
     pingSegment: contextValues.pingSegment,
     replyTone: policy.supportsReplyTone ? body.replyTone : undefined,
     replyMode: policy.supportsReplyMode ? body.replyMode : undefined,
+    chatterQuestion: feature === "coach-chat" ? body.chatterQuestion : undefined,
+    coachHistory: feature === "coach-chat" ? body.coachHistory : undefined,
+    recapAttach,
+    transcriptCoverage:
+      feature === "coach-chat" || feature === "fan-summary"
+        ? body.clientContext?.transcriptCoverage
+        : undefined,
   });
 
   const gatewayBody: AiGatewayStreamInput = {

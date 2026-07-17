@@ -17,6 +17,7 @@ import type {
 import { escapeForPrompt } from './escape.ts';
 import {
   CHAT_REVIEW_TEMPLATE,
+  COACH_CHAT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
@@ -51,6 +52,21 @@ export function applyPlatformWording(text: string, platform: PromptPlatform): st
   return platform === "fansly" ? text.replaceAll("OnlyFans", "Fansly") : text;
 }
 
+/** One prior coach turn: the chatter's question and the coach's answer. The
+ * extension carries this dialog scratchpad; this repo assembles no history. */
+export interface CoachHistoryEntry {
+  question: string;
+  answer: string;
+}
+
+/** Two-slot recap attach (spec §5): the dated full/short fan-summary recaps the
+ * feature service selected. `ageMs` is measured from the recap's generation
+ * time; either slot may be null. */
+export interface RecapAttach {
+  full: { body: string; ageMs: number } | null;
+  short: { body: string; ageMs: number } | null;
+}
+
 export interface PromptBuildInput {
   feature: PromptFeature;
   personality: Personality;
@@ -68,6 +84,15 @@ export interface PromptBuildInput {
   pingSegment?: PingSegment | undefined;
   replyMode?: ReplyMode | undefined;
   replyTone?: ReplyTone | undefined;
+  /** coach-chat: the chatter's current question (the {chatterQuestion} slot). */
+  chatterQuestion?: string | undefined;
+  /** coach-chat: prior coach dialog, oldest-first; sheds oldest over budget. */
+  coachHistory?: CoachHistoryEntry[] | undefined;
+  /** coach-chat: dated recap slots for the {recapSection}. */
+  recapAttach?: RecapAttach | undefined;
+  /** coach-chat / fan-summary: whether the transcript covers the whole history
+   * or just a recent window (drives the {transcriptCoverageNote}). */
+  transcriptCoverage?: 'full-history' | 'window' | undefined;
 }
 
 export interface PromptPayload {
@@ -98,13 +123,6 @@ const ANALYSIS_POLICY: PromptFeaturePolicy = {
   promptMode: 'analysis',
 };
 
-// Task 7 replaces this — a minimal placeholder so the coach-chat prompt
-// feature (registered this task in FeatureType/FEATURE_POLICIES) keeps the
-// exhaustive PROMPT_POLICIES / DEFAULT_TEMPLATES maps compiling. The real
-// coach template + its manifest entry land with Task 7, not here.
-const COACH_CHAT_TEMPLATE_PLACEHOLDER =
-  '## Conversation Transcript\n<transcript>\n{transcript}\n</transcript>\n\n## Your Task\n{chatterQuestion}';
-
 const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true },
   'improve-draft': { ...REPLY_POLICY, requiresDraft: true },
@@ -113,7 +131,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true },
   'hi-greeting': REPLY_POLICY,
-  'coach-chat': ANALYSIS_POLICY, // Task 7 replaces this placeholder
+  'coach-chat': ANALYSIS_POLICY,
 };
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
@@ -124,7 +142,7 @@ const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
   'chat-review': CHAT_REVIEW_TEMPLATE,
   ping: PING_TEMPLATE,
   'hi-greeting': HI_GREETING_TEMPLATE,
-  'coach-chat': COACH_CHAT_TEMPLATE_PLACEHOLDER, // Task 7 replaces this placeholder
+  'coach-chat': COACH_CHAT_TEMPLATE,
 };
 
 export const REPLY_SAFETY_PREAMBLE = `You are roleplaying as a specific model on OnlyFans. You must stay in character at all times.
@@ -268,6 +286,91 @@ ${escapeForPrompt(trimmed)}
 </fan_dossier>`;
 }
 
+// Coach dialog can grow unbounded across a session; shed the oldest exchanges
+// so the assembled prompt stays inside a sane budget. The feature service caps
+// the aggregate BEFORE this (contract-level); this is the prompt-side floor.
+const COACH_PROMPT_HISTORY_BUDGET_CHARS = 60_000;
+// Per recap slot. The oldest recap text is itself a summary — hard-truncate the
+// TAIL beyond this and keep the head (recap sections lead with the most
+// load-bearing facts).
+const RECAP_ATTACH_MAX_CHARS = 30_000;
+
+/** Renders the coach dialog so far, newest exchanges kept whole and oldest shed
+ * first when the aggregate would blow the budget. Every value is escaped. */
+function coachHistorySection(history: CoachHistoryEntry[] | undefined): string {
+  if (!history?.length) {
+    return '(no prior coach dialog — this is the first question)';
+  }
+  const kept: CoachHistoryEntry[] = [];
+  let used = 0;
+  for (const entry of [...history].reverse()) {
+    const size = entry.question.length + entry.answer.length;
+    if (used + size > COACH_PROMPT_HISTORY_BUDGET_CHARS && kept.length > 0) {
+      break;
+    }
+    kept.unshift(entry);
+    used += size;
+  }
+  return kept
+    .map(
+      (entry, index) =>
+        `<coach_exchange n="${index + 1}">\n<chatter>${escapeForPrompt(entry.question)}</chatter>\n<coach>${escapeForPrompt(entry.answer)}</coach>\n</coach_exchange>`,
+    )
+    .join('\n');
+}
+
+/** Coarse human age label for a dated recap ("10 min ago", "3 days ago"). */
+function formatAge(ageMs: number): string {
+  const minutes = Math.round(ageMs / 60_000);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) {
+    return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+  return `${Math.round(hours / 24)} days ago`;
+}
+
+/** The dated "## Fan Recaps" section. Each present slot is labeled with its age
+ * before the escaped recap body; the label carries "Full recap"/"Short recap"
+ * so the reader knows which summary it is reading and how stale it is. */
+function recapSection(attach: RecapAttach | undefined): string {
+  if (!attach || (!attach.full && !attach.short)) {
+    return '';
+  }
+  const bounded = (body: string): string =>
+    body.length > RECAP_ATTACH_MAX_CHARS
+      ? body.slice(0, RECAP_ATTACH_MAX_CHARS) + '\n[recap truncated]'
+      : body;
+  const parts: string[] = ['## Fan Recaps\n'];
+  if (attach.full) {
+    parts.push(
+      `Full recap — generated ${formatAge(attach.full.ageMs)}:\n<full_recap>\n${escapeForPrompt(bounded(attach.full.body))}\n</full_recap>`,
+    );
+  }
+  if (attach.short) {
+    parts.push(
+      `Short recap — generated ${formatAge(attach.short.ageMs)}:\n<short_recap>\n${escapeForPrompt(bounded(attach.short.body))}\n</short_recap>`,
+    );
+  }
+  return parts.join('\n');
+}
+
+/** Honest framing of how much of the conversation the transcript shows (spec
+ * §5) — an empty note when the coverage is unknown. */
+function transcriptCoverageNote(
+  coverage: 'full-history' | 'window' | undefined,
+): string {
+  if (coverage === 'full-history') {
+    return '(the transcript below covers the ENTIRE conversation history)';
+  }
+  if (coverage === 'window') {
+    return '(the transcript below is the most recent window only — the history is longer)';
+  }
+  return '';
+}
+
 function toneInstructions(policy: PromptFeaturePolicy, replyTone: ReplyTone | undefined): string {
   const tone = policy.supportsReplyTone ? (replyTone ?? 'none') : 'none';
   if (tone === 'none') {
@@ -320,6 +423,10 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     splitReplyInstructions: splitReplyInstructions(policy, input.replyMode),
     toneInstructions: toneInstructions(policy, input.replyTone),
     segmentInstructions: segmentInstructions(policy, input.pingSegment),
+    coachHistorySection: coachHistorySection(input.coachHistory),
+    chatterQuestion: escapeForPrompt(input.chatterQuestion ?? ''),
+    recapSection: recapSection(input.recapAttach),
+    transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage),
   };
 }
 
