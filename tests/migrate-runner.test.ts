@@ -6,12 +6,24 @@ import { describe, expect, it, vi } from "vitest";
 
 import { runMigrations } from "../packages/db/src/migrate-runner.ts";
 
+const TRY_MIGRATION_LOCK_SQL = "select pg_try_advisory_lock($1, $2) as locked";
+
+function migrationDbMock(run: (text: string) => unknown) {
+  return {
+    query: vi.fn(async (text: string) => {
+      if (text === TRY_MIGRATION_LOCK_SQL) {
+        return { rowCount: 1, rows: [{ locked: true }] };
+      }
+      return run(text);
+    }),
+  };
+}
+
 describe("runMigrations", () => {
   it("prefers cwd-relative migrations when packages/db/migrations exists", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-cwd-"));
     const originalCwd = process.cwd();
-    const db = {
-      query: vi.fn(async (text: string) => {
+    const db = migrationDbMock((text) => {
         if (text.includes("select 1 from schema_migrations where id = $1")) {
           return {
             rowCount: 1,
@@ -23,8 +35,7 @@ describe("runMigrations", () => {
           rowCount: 0,
           rows: [],
         };
-      }),
-    };
+      });
 
     try {
       const migrationsDir = path.join(tempDir, "packages/db/migrations");
@@ -46,8 +57,7 @@ describe("runMigrations", () => {
 
   it("acquires and releases the advisory lock around direct migration runs", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-lock-"));
-    const db = {
-      query: vi.fn(async (text: string) => {
+    const db = migrationDbMock((text) => {
         if (text.includes("select 1 from schema_migrations where id = $1")) {
           return {
             rowCount: 1,
@@ -59,8 +69,7 @@ describe("runMigrations", () => {
           rowCount: 0,
           rows: [],
         };
-      }),
-    };
+      });
 
     try {
       await writeFile(path.join(tempDir, "0001_lock_probe.sql"), "select 1;\n");
@@ -70,8 +79,36 @@ describe("runMigrations", () => {
         migrationsDir: tempDir,
       })).resolves.toBeUndefined();
 
-      expect(db.query).toHaveBeenCalledWith("select pg_advisory_lock($1, $2)", [31415, 27182]);
+      expect(db.query).toHaveBeenCalledWith(TRY_MIGRATION_LOCK_SQL, [31415, 27182]);
       expect(db.query).toHaveBeenCalledWith("select pg_advisory_unlock($1, $2)", [31415, 27182]);
+      expect(db.query).not.toHaveBeenCalledWith("select pg_advisory_lock($1, $2)", [31415, 27182]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("polls without a blocking advisory-lock transaction when another runner owns the lock", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-lock-wait-"));
+    let attempts = 0;
+    const db = {
+      query: vi.fn(async (text: string) => {
+        if (text === TRY_MIGRATION_LOCK_SQL) {
+          attempts += 1;
+          return { rowCount: 1, rows: [{ locked: attempts > 1 }] };
+        }
+        if (text.includes("select 1 from schema_migrations where id = $1")) {
+          return { rowCount: 1, rows: [] };
+        }
+        return { rowCount: 0, rows: [] };
+      }),
+    };
+
+    try {
+      await writeFile(path.join(tempDir, "0001_lock_wait_probe.sql"), "select 1;\n");
+      await expect(runMigrations({ db: db as never, migrationsDir: tempDir }))
+        .resolves.toBeUndefined();
+      expect(attempts).toBe(2);
+      expect(db.query).not.toHaveBeenCalledWith("select pg_advisory_lock($1, $2)", [31415, 27182]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -82,11 +119,9 @@ describe("runMigrations", () => {
     const migration = "-- agency-hub:no-transaction\n"
       + "-- agency-hub:statement\nselect 1;\n"
       + "-- agency-hub:statement\n-- agency-hub:execute-returned-statements\nselect 'generated' as statement;\n";
-    const db = {
-      query: vi.fn(async (text: string) => text === "select 'generated' as statement;"
+    const db = migrationDbMock((text) => text === "select 'generated' as statement;"
         ? { rowCount: 1, rows: [{ statement: "create index concurrently if not exists probe_idx on probe(id);" }] }
-        : { rowCount: 0, rows: [] }),
-    };
+        : { rowCount: 0, rows: [] });
 
     try {
       await writeFile(path.join(tempDir, "0001_concurrent.sql"), migration);
@@ -112,9 +147,7 @@ describe("runMigrations", () => {
 
   it("applies an exact bounded prefix for a pre-recreate long migration", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-through-"));
-    const db = {
-      query: vi.fn(async (text: string) => ({ rowCount: 0, rows: [], command: text })),
-    };
+    const db = migrationDbMock((text) => ({ rowCount: 0, rows: [], command: text }));
 
     try {
       await writeFile(path.join(tempDir, "0001_first.sql"), "select 1;\n");
@@ -141,8 +174,7 @@ describe("runMigrations", () => {
 
   it("ignores dotfile SQL metadata in migrations directories", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-dotfiles-"));
-    const db = {
-      query: vi.fn(async (text: string) => {
+    const db = migrationDbMock((text) => {
         if (text.includes("select 1 from schema_migrations where id = $1")) {
           return {
             rowCount: 1,
@@ -154,8 +186,7 @@ describe("runMigrations", () => {
           rowCount: 0,
           rows: [],
         };
-      }),
-    };
+      });
 
     try {
       await writeFile(path.join(tempDir, "._0001_real.sql"), "select broken;\n");
@@ -186,12 +217,10 @@ describe("runMigrations", () => {
     "0034foo.sql",
   ])("fails loudly for malformed visible migration filename %s", async (filename) => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-invalid-"));
-    const db = {
-      query: vi.fn(async () => ({
+    const db = migrationDbMock(() => ({
         rowCount: 0,
         rows: [],
-      })),
-    };
+      }));
 
     try {
       await writeFile(path.join(tempDir, filename), "select 1;\n");
@@ -210,8 +239,7 @@ describe("runMigrations", () => {
   it("falls back to module-relative migrations when cwd has no packages/db/migrations", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-migrations-fallback-"));
     const originalCwd = process.cwd();
-    const db = {
-      query: vi.fn(async (text: string) => {
+    const db = migrationDbMock((text) => {
         if (text.includes("select 1 from schema_migrations where id = $1")) {
           return {
             rowCount: 1,
@@ -223,8 +251,7 @@ describe("runMigrations", () => {
           rowCount: 0,
           rows: [],
         };
-      }),
-    };
+      });
 
     try {
       process.chdir(tempDir);
@@ -242,12 +269,10 @@ describe("runMigrations", () => {
 
   it("fails loudly when the resolved migrations directory has no SQL files", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-empty-migrations-"));
-    const db = {
-      query: vi.fn(async () => ({
+    const db = migrationDbMock(() => ({
         rowCount: 0,
         rows: [],
-      })),
-    };
+      }));
 
     try {
       await expect(runMigrations({
@@ -262,12 +287,10 @@ describe("runMigrations", () => {
   it("fails directly when an explicit migrationsDir does not exist", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "agency-hub-missing-migrations-"));
     const missingDir = path.join(tempDir, "missing");
-    const db = {
-      query: vi.fn(async () => ({
+    const db = migrationDbMock(() => ({
         rowCount: 0,
         rows: [],
-      })),
-    };
+      }));
 
     try {
       await expect(runMigrations({

@@ -289,7 +289,7 @@ describe("health service", () => {
     });
   });
 
-  it("does not require legacy OnlyFans credentials when OFAPI account health covers the connection", async () => {
+  it("does not degrade an OFAPI page for retired legacy OnlyFans coverage debt", async () => {
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
         id: 9,
@@ -341,6 +341,9 @@ describe("health service", () => {
         },
       }],
     });
+    healthMocks.countConversationSyncFailuresByAccount.mockResolvedValueOnce([
+      { platformAccountId: 9, failingConversationCount: 4 },
+    ]);
 
     const result = await getPublicSyncHealth({
       config: {
@@ -593,13 +596,13 @@ describe("health service", () => {
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
         id: 8,
-        label: "lora-of",
-        platform: "onlyfans",
+        label: "lora-fansly",
+        platform: "fansly",
         modelSlug: "lora",
         modelName: "Lora",
         connectionStatus: "active",
         lastLightSyncAt: "2026-03-23T12:00:00.000Z",
-        lastFollowerSyncAt: null,
+        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
         lastSyncError: null,
       },
     ]);
@@ -607,8 +610,8 @@ describe("health service", () => {
       generatedAt: "2026-03-23T12:00:00.000Z",
       pages: [{
         pageId: 8,
-        pageLabel: "lora-of",
-        platform: "onlyfans",
+        pageLabel: "lora-fansly",
+        platform: "fansly",
         modelSlug: "lora",
         modelName: "Lora",
         blocks: {

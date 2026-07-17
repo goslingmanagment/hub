@@ -224,6 +224,7 @@ export async function getPublicSyncHealth(
   const pages = Array.from(allPageIds, (pageId) => {
     const page = snapshotPagesById.get(pageId);
     const connection = connectionsById.get(pageId);
+    const platform = page?.platform ?? connection?.platform ?? "fansly";
     const blocks = page ? Object.values(page.blocks).filter((block) => block.state !== "not_available") : [];
     const healthBlocks = blocks.filter((block) => !isDeepBackfillOnlyDelay(block));
     const connectionBlock = page?.blocks.connection;
@@ -287,7 +288,11 @@ export async function getPublicSyncHealth(
       issues.push("projection_debt");
     }
 
-    if ((coverageDebtByPageId.get(pageId) ?? 0) > 0) {
+    // page_dm_message_sync_health belongs to the permanently retired legacy
+    // OnlyFans dm_messages crawler. Its historical breaker rows are not mirror
+    // coverage debt and must not keep /health/sync at 503 after the retirement
+    // fence. Fansly still uses this table, so its signal remains unchanged.
+    if (platform !== "onlyfans" && (coverageDebtByPageId.get(pageId) ?? 0) > 0) {
       issues.push("dm_messages:coverage_degraded");
     }
 
@@ -296,7 +301,7 @@ export async function getPublicSyncHealth(
     return {
       pageId,
       pageLabel: page?.pageLabel ?? connection?.label ?? "unknown",
-      platform: page?.platform ?? connection?.platform ?? "fansly",
+      platform,
       modelSlug: page?.modelSlug ?? connection?.modelSlug ?? "unknown",
       modelName: page?.modelName ?? connection?.modelName ?? "unknown",
       status,

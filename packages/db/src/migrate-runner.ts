@@ -9,6 +9,7 @@ import { resolveMigrationFiles } from "./migrations-dir.ts";
 
 const MIGRATION_LOCK_KEY_1 = 31415;
 const MIGRATION_LOCK_KEY_2 = 27182;
+const MIGRATION_LOCK_RETRY_MS = 100;
 const NO_TRANSACTION_MARKER = "-- agency-hub:no-transaction";
 const NO_TRANSACTION_STATEMENT_MARKER = "-- agency-hub:statement";
 const EXECUTE_RETURNED_STATEMENTS_MARKER = "-- agency-hub:execute-returned-statements";
@@ -90,10 +91,25 @@ async function withMigrationLock<T>(
   db: MigrationDb,
   run: () => Promise<T>,
 ) {
-  await db.query("select pg_advisory_lock($1, $2)", [
-    MIGRATION_LOCK_KEY_1,
-    MIGRATION_LOCK_KEY_2,
-  ]);
+  // Do not wait inside pg_advisory_lock(). A session blocked there still owns
+  // a virtual transaction, and CREATE INDEX CONCURRENTLY waits for that
+  // transaction while holding the migration lock: the two sessions deadlock.
+  // Polling try-lock queries finish immediately, so concurrent runtime starts
+  // never become transactions that a no-transaction migration must await.
+  for (;;) {
+    const result = await db.query(
+      "select pg_try_advisory_lock($1, $2) as locked",
+      [MIGRATION_LOCK_KEY_1, MIGRATION_LOCK_KEY_2],
+    );
+    const locked = result.rows[0]?.locked;
+    if (locked === true) {
+      break;
+    }
+    if (locked !== false) {
+      throw new Error("Migration advisory lock query returned an invalid result");
+    }
+    await new Promise((resolve) => setTimeout(resolve, MIGRATION_LOCK_RETRY_MS));
+  }
 
   try {
     return await run();

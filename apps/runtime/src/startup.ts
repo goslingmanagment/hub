@@ -12,28 +12,17 @@ import {
 import { PUBLIC_RUNTIME_CAPABILITIES } from "./services/public-capabilities.ts";
 import { runWorkerRuntime } from "./worker-runtime.ts";
 
-const MIGRATION_LOCK_KEY_1 = 31415;
-const MIGRATION_LOCK_KEY_2 = 27182;
-
 async function runStartupMigrations() {
   const config = loadConfig();
   const pool = createPool(config.databaseUrl);
   const client = await pool.connect();
 
   try {
-    await client.query("select pg_advisory_lock($1, $2)", [
-      MIGRATION_LOCK_KEY_1,
-      MIGRATION_LOCK_KEY_2,
-    ]);
     await runMigrations({
       databaseUrl: config.databaseUrl,
       db: client,
     });
   } finally {
-    await client.query("select pg_advisory_unlock($1, $2)", [
-      MIGRATION_LOCK_KEY_1,
-      MIGRATION_LOCK_KEY_2,
-    ]).catch(() => undefined);
     client.release();
     await pool.end().catch(() => undefined);
   }
