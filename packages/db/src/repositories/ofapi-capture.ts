@@ -20,8 +20,8 @@ import {
 } from "./ofapi-message-coverage.ts";
 import { insertObservation } from "./observations.ts";
 
-export const OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION = "ofapi-capture-v1";
-export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v1";
+export const OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION = "ofapi-capture-v2";
+export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v2";
 export const OFAPI_CAPTURE_PROOF_POLICY_VERSION = "ofapi-proof-v1";
 export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v1";
 export const OFAPI_STORAGE_HEALTH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
@@ -2836,6 +2836,8 @@ export async function replayOfapiCaptureJobParse(
             lease_owner = null,
             lease_token = null,
             lease_until = null,
+            source_contract_version = ${OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION},
+            parser_version = ${OFAPI_CAPTURE_PARSER_VERSION},
             row_version = row_version + 1,
             updated_at = ${now}
         where id = ${input.jobId}::uuid

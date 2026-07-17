@@ -98,6 +98,11 @@ function cursorField(job: OfapiCaptureJobRecord, field: string) {
   return stringField(job.cursor?.[field]);
 }
 
+function cursorBoundarySemantics(job: OfapiCaptureJobRecord) {
+  const value = job.cursor?.boundarySemantics;
+  return value === "inclusive" || value === "exclusive" ? value : null;
+}
+
 function cursorPages(job: OfapiCaptureJobRecord) {
   const pages = job.cursor?.pages;
   return typeof pages === "number" && Number.isInteger(pages) && pages >= 0
@@ -116,6 +121,7 @@ function advancePageChainHash(
     observationId: number;
     observationReceivedAt: Date;
     requestedBoundary: string;
+    boundarySemantics: "inclusive" | "exclusive" | null;
     bodyBytes: Buffer;
     nextCursor: string | null;
     terminal: boolean;
@@ -129,6 +135,7 @@ function advancePageChainHash(
     observationId: input.observationId,
     observationReceivedAt: input.observationReceivedAt.toISOString(),
     requestedBoundary: input.requestedBoundary,
+    boundarySemantics: input.boundarySemantics,
     bodyHash,
     nextCursor: input.nextCursor,
     terminal: input.terminal,
@@ -186,6 +193,7 @@ function terminalFact(
     lastPageObservationId: number;
     lastPageObservationReceivedAt: Date;
     requiredServingHighWater: number;
+    boundarySemantics: "inclusive" | "exclusive" | null;
   },
 ) {
   const chatId = stringField(job.target.chatId);
@@ -216,6 +224,7 @@ function terminalFact(
       protocol: "ofapi-anchor-chain-v1",
       pageChainHash: input.pageChainHash,
       inheritedProof: inheritedEvidence,
+      boundarySemantics: input.boundarySemantics,
     })).digest("hex");
   const oldestMessageId = inherited?.oldestMessageId ?? input.lastMessageId;
   const requiredServingHighWater = Math.max(
@@ -240,6 +249,7 @@ function terminalFact(
     },
     evidence: {
       kind: input.evidenceKind,
+      boundarySemantics: input.boundarySemantics,
       pageChainHash,
       capturedPageChainHash: input.pageChainHash,
       pages: input.pages,
@@ -409,6 +419,7 @@ async function parseCapturedJob(
   const page = parseStrictOfapiMessagePage(parsedJson.body, {
     requiredBoundaryCursor: inclusiveCursor ?? target.frozenHeadId,
     boundaryIsDuplicate: inclusiveCursor !== null,
+    expectedBoundarySemantics: cursorBoundarySemantics(job),
   });
   if (!page.accepted) {
     await settleOfapiCaptureParse(app.db, {
@@ -512,6 +523,7 @@ async function parseCapturedJob(
     observationId: observation.id,
     observationReceivedAt: observation.receivedAt,
     requestedBoundary: inclusiveCursor ?? target.frozenHeadId,
+    boundarySemantics: page.boundarySemantics,
     bodyBytes: captured.bodyBytes,
     nextCursor: lastMessageId,
     terminal: !page.hasNextPage,
@@ -566,6 +578,7 @@ async function parseCapturedJob(
       lastPageObservationId: observation.id,
       lastPageObservationReceivedAt: observation.receivedAt,
       requiredServingHighWater: materialHighWater,
+      boundarySemantics: page.boundarySemantics,
     });
     const settled = await settleOfapiCaptureParse(app.db, {
       jobId: job.id,
@@ -651,6 +664,7 @@ async function parseCapturedJob(
         explicitlyIrrelevantCount,
         rejectedCount,
         pageChainHash,
+        boundarySemantics: page.boundarySemantics,
         requiredServingHighWater: materialHighWater,
       },
       acceptedItems: page.items.length,
@@ -719,6 +733,7 @@ export async function executeOfapiCaptureJobChunk(
           chatId: target.chatId,
           query,
           boundaryIsDuplicate: cursorField(job, "firstId") !== null,
+          expectedBoundarySemantics: cursorBoundarySemantics(job),
         },
         observationKind: "ofapi.chat_messages_page.v1",
         reservedCredits: 1,

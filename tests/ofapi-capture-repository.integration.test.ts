@@ -21,6 +21,8 @@ import {
   listRunnableOfapiCapturePages,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
+  OFAPI_CAPTURE_PARSER_VERSION,
+  OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION,
   releaseOfapiAttemptPreDispatch,
   recoverStaleOfapiCaptureWork,
   replayOfapiCaptureJobParse,
@@ -1456,6 +1458,38 @@ describe("OFAPI capture correctness repository", () => {
       where account_id = $1 and type = 'message.material_observed'
     `, [fixture.page.id]);
     expect(material.rows[0]?.n).toBe("3");
+  });
+
+  it("certifies the production-observed exclusive first_id response", async () => {
+    if (!testDb) return;
+    const fixture = await createCaptureExecutionFixture({
+      bodyBytes: Buffer.from(JSON.stringify({
+        data: [
+          { id: "99", isSentByMe: false, createdAt: "2026-07-16T11:59:00.000Z" },
+          { id: "98", isSentByMe: true, createdAt: "2026-07-16T11:58:00.000Z" },
+        ],
+        _pagination: { next_page: null },
+        _meta: { _credits: { used: 1, balance: 999 } },
+      })),
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "complete",
+      sourceContractVersion: OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION,
+      parserVersion: OFAPI_CAPTURE_PARSER_VERSION,
+    });
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+
+    const terminal = await testDb.pool.query<{ semantics: string }>(`
+      select payload->'evidence'->>'boundarySemantics' as semantics
+      from observations
+      where source = 'ofapi_capture'
+        and kind = 'ofapi.capture_completed.v1'
+        and payload->>'jobId' = $1
+    `, [fixture.job.id]);
+    expect(terminal.rows).toEqual([{ semantics: "exclusive" }]);
   });
 
   it("captures valid JSON contract drift but freezes the cursor and does not retry the vendor", async () => {

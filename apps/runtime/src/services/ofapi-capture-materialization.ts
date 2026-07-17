@@ -18,7 +18,7 @@ import {
 import type { ReadthroughReconcileRunResult } from "./ofapi-dm-readthrough.ts";
 import { appendOfapiMessageMaterialPage } from "./ofapi-message-material.ts";
 
-export const OFAPI_CAPTURE_MATERIALIZER_VERSION = 1;
+export const OFAPI_CAPTURE_MATERIALIZER_VERSION = 2;
 const SWEEP_PAGE_SIZE = 100;
 const SWEEP_MAX_PAGES = 10;
 const SWEEP_ITEM_BUDGET = 5_000;
@@ -80,6 +80,10 @@ function capturedMessagePage(payload: unknown) {
     // producer records this parse fact in the captured request so every local
     // replay applies the exact same boundary rule as the job parser.
     boundaryIsDuplicate: request.boundaryIsDuplicate === true,
+    expectedBoundarySemantics: request.expectedBoundarySemantics === "inclusive" ||
+        request.expectedBoundarySemantics === "exclusive"
+      ? request.expectedBoundarySemantics
+      : null,
   });
   if (!page.accepted) {
     return { kind: "rejected" as const, reason: page.reason };

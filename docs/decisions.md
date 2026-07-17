@@ -4534,3 +4534,19 @@ copy of a temporary vendor export needed for import, not as a database backup.
 Checksums and replay/round-trip checks that protect an actual import or
 destructive tier/drop remain data-movement correctness checks, not a backup
 program. No runtime flag or code path may depend on backup availability.
+
+**Decision #162 (2026-07-17, OFAPI message cursor semantics are verified per
+captured page):** The first production S2 pilot proved that OFAPI now treats
+`first_id` as exclusive: two non-empty responses started at the message older
+than the requested frozen head, and the one-message chat returned an empty
+terminal page. This contradicts the inclusive behavior recorded in #49 and
+caused all three bounded pilot jobs to stop safely as `contract_rejected`
+without advancing coverage. The v2 capture contract therefore infers
+inclusive versus exclusive behavior from each saved response, persists the
+inferred mode in the job cursor, and rejects a mid-chain mode change. An
+exclusive page is accepted only when every returned numeric message id is
+strictly older than the requested boundary; an unverifiable or wrong-side edge
+remains blocked. Local replay upgrades the job's contract/parser versions and
+reuses the already-paid response; it never dispatches OFAPI. The proof policy
+itself is unchanged: the frozen head remains an item-presence fact from the
+List-Chats/live projection and pagination proves the older range.

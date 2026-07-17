@@ -17,7 +17,42 @@ describe("strict OFAPI message-page contract", () => {
     }, {
       requiredBoundaryCursor: "100",
       boundaryIsDuplicate: false,
-    })).toMatchObject({ accepted: true, nextCursor: "99" });
+    })).toMatchObject({
+      accepted: true,
+      boundarySemantics: "inclusive",
+      nextCursor: "99",
+    });
+  });
+
+  it("accepts the production-observed exclusive cursor without inventing a gap", () => {
+    expect(parseStrictOfapiMessagePage({
+      data: [
+        item("99", "2026-07-16T11:59:00.000Z"),
+        item("98", "2026-07-16T11:58:00.000Z"),
+      ],
+      _pagination: { next_page: "next" },
+    }, {
+      requiredBoundaryCursor: "100",
+      boundaryIsDuplicate: false,
+    })).toMatchObject({
+      accepted: true,
+      boundarySemantics: "exclusive",
+      boundaryDuplicateCount: 0,
+      nextCursor: "98",
+    });
+  });
+
+  it("rejects an exclusive page containing an item newer than its boundary", () => {
+    expect(parseStrictOfapiMessagePage({
+      data: [item("101", "2026-07-16T12:01:00.000Z")],
+      _pagination: { next_page: null },
+    }, {
+      requiredBoundaryCursor: "100",
+      boundaryIsDuplicate: false,
+    })).toMatchObject({
+      accepted: false,
+      reason: "exclusive_boundary_order_invalid",
+    });
   });
 
   it.each([

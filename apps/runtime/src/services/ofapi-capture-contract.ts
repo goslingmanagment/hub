@@ -86,6 +86,7 @@ export type StrictOfapiMessagePage =
     rawCount: number;
     items: Record<string, unknown>[];
     boundaryDuplicateCount: number;
+    boundarySemantics: "inclusive" | "exclusive" | null;
     nextCursor: string | null;
     hasNextPage: boolean;
   }
@@ -107,6 +108,7 @@ export function parseStrictOfapiMessagePage(
   input: {
     requiredBoundaryCursor: string | null;
     boundaryIsDuplicate: boolean;
+    expectedBoundarySemantics?: "inclusive" | "exclusive" | null;
   },
 ): StrictOfapiMessagePage {
   const root = asRecord(body);
@@ -134,6 +136,7 @@ export function parseStrictOfapiMessagePage(
 
   const items: Record<string, unknown>[] = [];
   const seenIds = new Set<string>();
+  const parsedIds: string[] = [];
   let boundaryDuplicateCount = 0;
   let rejectedCount = 0;
   let boundaryCount = 0;
@@ -163,6 +166,7 @@ export function parseStrictOfapiMessagePage(
       };
     }
     seenIds.add(id);
+    parsedIds.push(id);
     const createdAtMs = createdAt.getTime();
     if (previousCreatedAtMs !== null && createdAtMs > previousCreatedAtMs) {
       return {
@@ -198,15 +202,40 @@ export function parseStrictOfapiMessagePage(
       reason: "message_item_invalid",
     };
   }
-  if (input.requiredBoundaryCursor !== null && boundaryCount !== 1) {
-    return {
-      accepted: false,
-      rawCount: root.data.length,
-      rejectedCount: 1,
-      reason: boundaryCount === 0
-        ? "requested_boundary_missing"
-        : "requested_boundary_duplicate",
-    };
+  let boundarySemantics: "inclusive" | "exclusive" | null = null;
+  if (input.requiredBoundaryCursor !== null) {
+    boundarySemantics = boundaryCount === 1 ? "inclusive" : "exclusive";
+    if (
+      input.expectedBoundarySemantics != null &&
+      input.expectedBoundarySemantics !== boundarySemantics
+    ) {
+      return {
+        accepted: false,
+        rawCount: root.data.length,
+        rejectedCount: 1,
+        reason: "cursor_semantics_changed",
+      };
+    }
+    if (boundarySemantics === "exclusive" && parsedIds.length > 0) {
+      const boundary = input.requiredBoundaryCursor;
+      if (!/^\d+$/.test(boundary) || parsedIds.some((id) => !/^\d+$/.test(id))) {
+        return {
+          accepted: false,
+          rawCount: root.data.length,
+          rejectedCount: 1,
+          reason: "exclusive_boundary_order_unverifiable",
+        };
+      }
+      const boundaryId = BigInt(boundary);
+      if (parsedIds.some((id) => BigInt(id) >= boundaryId)) {
+        return {
+          accepted: false,
+          rawCount: root.data.length,
+          rejectedCount: 1,
+          reason: "exclusive_boundary_order_invalid",
+        };
+      }
+    }
   }
 
   const hasNextPage = typeof nextPage === "string";
@@ -224,6 +253,7 @@ export function parseStrictOfapiMessagePage(
     rawCount: root.data.length,
     items,
     boundaryDuplicateCount,
+    boundarySemantics,
     nextCursor,
     hasNextPage,
   };

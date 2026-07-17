@@ -105,6 +105,13 @@ function parseCoverageEvent(event: DomainEventRow): OfapiMessageCoverageProjecti
     throw new Error("Unsupported coverage proof classification");
   }
   const evidenceKind = evidence.kind;
+  const boundarySemantics = evidence.boundarySemantics;
+  if (
+    boundarySemantics !== undefined && boundarySemantics !== null &&
+    boundarySemantics !== "inclusive" && boundarySemantics !== "exclusive"
+  ) {
+    throw new Error("Coverage proof has invalid boundary semantics");
+  }
   const supersedes = data.supersedes === null
     ? null
     : proofReference(data.supersedes, "supersedes");
@@ -138,6 +145,9 @@ function parseCoverageEvent(event: DomainEventRow): OfapiMessageCoverageProjecti
       protocol: "ofapi-anchor-chain-v1",
       pageChainHash: capturedPageChainHash,
       inheritedProof: serializedProof(inherited),
+      ...(boundarySemantics === "inclusive" || boundarySemantics === "exclusive"
+        ? { boundarySemantics }
+        : {}),
     })).digest("hex");
     if (evidence.pageChainHash !== expectedHash) {
       throw new Error("Anchor-chain coverage hash is invalid");
