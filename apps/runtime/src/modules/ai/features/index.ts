@@ -205,7 +205,7 @@ export async function prepareAiFeatureStream(
       fanSpendingData: policy.includesEarnings ? clientContext.fanSpendingData : "",
       fanSubscriptionData: policy.includesEarnings ? clientContext.fanSubscriptionData : "",
       fanDisplayName: clientContext.fanDisplayName,
-      fanBio: feature === "hi-greeting" ? clientContext.fanBio : undefined,
+      fanBio: policy.includesFanBio ? clientContext.fanBio : undefined,
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
     };
   } else {
@@ -244,7 +244,7 @@ export async function prepareAiFeatureStream(
       fanSpendingData: spending?.block ?? "",
       fanSubscriptionData: subscription?.block ?? "",
       fanDisplayName: await loadFanDisplayName(app, { pageId, fanRef, platform: stored.page.platform }),
-      fanBio: feature === "hi-greeting"
+      fanBio: policy.includesFanBio
         ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
         : undefined,
       pingSegment: policy.usesPingSegment

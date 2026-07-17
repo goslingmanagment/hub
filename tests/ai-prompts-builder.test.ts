@@ -64,6 +64,10 @@ const TEMPLATES: Record<PromptFeature, string> = {
   'chat-review': CHAT_REVIEW_TEMPLATE,
   ping: PING_TEMPLATE,
   'hi-greeting': HI_GREETING_TEMPLATE,
+  // Placeholder to satisfy the exhaustive Record<PromptFeature, …>; the
+  // parity loops iterate FEATURES (which omits coach-chat), so this row is
+  // never exercised. Task 7 lands the real coach template.
+  'coach-chat': '## Conversation Transcript\n{transcript}\n\n## Your Task\n{chatterQuestion}',
 };
 const PING_SEGMENT_INSTRUCTIONS = {
   'segment-a':

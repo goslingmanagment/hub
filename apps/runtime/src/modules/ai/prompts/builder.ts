@@ -98,6 +98,13 @@ const ANALYSIS_POLICY: PromptFeaturePolicy = {
   promptMode: 'analysis',
 };
 
+// Task 7 replaces this — a minimal placeholder so the coach-chat prompt
+// feature (registered this task in FeatureType/FEATURE_POLICIES) keeps the
+// exhaustive PROMPT_POLICIES / DEFAULT_TEMPLATES maps compiling. The real
+// coach template + its manifest entry land with Task 7, not here.
+const COACH_CHAT_TEMPLATE_PLACEHOLDER =
+  '## Conversation Transcript\n<transcript>\n{transcript}\n</transcript>\n\n## Your Task\n{chatterQuestion}';
+
 const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true },
   'improve-draft': { ...REPLY_POLICY, requiresDraft: true },
@@ -106,6 +113,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true },
   'hi-greeting': REPLY_POLICY,
+  'coach-chat': ANALYSIS_POLICY, // Task 7 replaces this placeholder
 };
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
@@ -116,6 +124,7 @@ const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
   'chat-review': CHAT_REVIEW_TEMPLATE,
   ping: PING_TEMPLATE,
   'hi-greeting': HI_GREETING_TEMPLATE,
+  'coach-chat': COACH_CHAT_TEMPLATE_PLACEHOLDER, // Task 7 replaces this placeholder
 };
 
 export const REPLY_SAFETY_PREAMBLE = `You are roleplaying as a specific model on OnlyFans. You must stay in character at all times.
