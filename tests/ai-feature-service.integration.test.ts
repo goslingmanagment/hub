@@ -1848,3 +1848,161 @@ describe("prompt migration manifest (Stage 30)", () => {
     }
   });
 });
+
+describe("recap-status read (Task 9)", () => {
+  // Metadata-only read (spec §3): surfaces the freshest usable full + short
+  // recap for one conversation — no generation, no AI spend. Rows are seeded as
+  // the fan-summary gateway writes them (featureParams spread at the top level
+  // of `params`), under the canonical conversationRef the reader searches first.
+  const fanslyPageLabel = "svc-fs";
+  const conversationRef = "group-777";
+  const fanRef = "fan-42";
+
+  async function svcFsPageId(): Promise<number> {
+    const { rows } = await testDb!.pool.query<{ id: string }>(
+      `select id::text as id from pages where label = 'svc-fs'`,
+    );
+    return Number(rows[0]!.id);
+  }
+
+  async function seedRecap(input: {
+    pageId: number;
+    mode: "full" | "short";
+    completion: string;
+    createdAt: Date;
+    params?: Record<string, unknown>;
+  }): Promise<void> {
+    const generationRef = randomUUID();
+    await insertAiGenerationContent(testDb!.db, {
+      usageEventId: null,
+      generationRef,
+      feature: "fan-summary",
+      model: "m",
+      provider: "anthropic",
+      userId: null,
+      pageId: input.pageId,
+      conversationRef,
+      promptBlocks: [],
+      completion: input.completion,
+      params: {
+        summaryMode: input.mode,
+        outcome: "completed",
+        stopReason: "end_turn",
+        ...input.params,
+      },
+    });
+    // insertAiGenerationContent has no createdAt input; set it directly so the
+    // ageMs the endpoint reports is deterministic and non-zero.
+    await testDb!.pool.query(
+      `update ai_generation_content set created_at = $1 where generation_ref = $2`,
+      [input.createdAt.toISOString(), generationRef],
+    );
+  }
+
+  it("returns both slots with metadata and creates no generation", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    const before = await testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from ai_generation_content",
+    );
+    await seedRecap({
+      pageId,
+      mode: "full",
+      completion: "FULL_BODY",
+      createdAt: new Date(Date.now() - 5 * 60 * 1000),
+      params: { transcriptCoverage: "full-history", requestedCount: 200, keptCount: 180 },
+    });
+    await seedRecap({
+      pageId,
+      mode: "short",
+      completion: "SHORT_BODY",
+      createdAt: new Date(Date.now() - 2 * 60 * 1000),
+      params: { transcriptCoverage: "window", requestedCount: 40, keptCount: 35 },
+    });
+
+    const res = await apiServer!.inject({
+      method: "GET",
+      url: `/api/v1/ai/recap-status?pageLabel=${fanslyPageLabel}&conversationRef=${conversationRef}&fanRef=${fanRef}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json();
+    expect(body.full?.generatedAt).toBeTruthy();
+    expect(typeof body.full?.ageMs).toBe("number");
+    expect(body.full.ageMs).toBeGreaterThan(0);
+    expect(body.full.transcriptCoverage).toBe("full-history");
+    expect(body.full.requestedCount).toBe(200);
+    expect(body.full.keptCount).toBe(180);
+    expect(body.short).toBeDefined();
+    expect(body.short.transcriptCoverage).toBe("window");
+    expect(body.short.requestedCount).toBe(40);
+    expect(body.short.keptCount).toBe(35);
+
+    // §3 invariant: a metadata read spends nothing — no new generation row.
+    const after = await testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from ai_generation_content",
+    );
+    expect(Number(after.rows[0]!.count)).toBe(Number(before.rows[0]!.count) + 2);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("returns null slots (not an error) when no usable recap exists", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const res = await apiServer!.inject({
+      method: "GET",
+      url: `/api/v1/ai/recap-status?pageLabel=${fanslyPageLabel}&conversationRef=no-such-convo`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ full: null, short: null });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("404s an unknown page label", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const res = await apiServer!.inject({
+      method: "GET",
+      url: "/api/v1/ai/recap-status?pageLabel=nope&conversationRef=g",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(res.statusCode).toBe(404);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("404s a page the chatter cannot access (indistinguishable from unknown)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const otherModel = await createModel(appContext.db, { slug: "other-svc", name: "Other Svc" });
+    const otherPage = await createFanslyPage(appContext.db, {
+      modelId: otherModel!.id,
+      label: "other-fs",
+    });
+    expect(otherPage).not.toBeNull();
+    const res = await apiServer!.inject({
+      method: "GET",
+      url: `/api/v1/ai/recap-status?pageLabel=other-fs&conversationRef=${conversationRef}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(res.statusCode).toBe(404);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects an anonymous caller", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const res = await apiServer!.inject({
+      method: "GET",
+      url: `/api/v1/ai/recap-status?pageLabel=${fanslyPageLabel}&conversationRef=${conversationRef}`,
+    });
+    expect(res.statusCode).toBe(401);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});

@@ -1962,6 +1962,28 @@ export const aiPersonaCatalogResponseSchema = z.object({
   personas: z.array(aiPersonaCatalogItemSchema),
 });
 
+// Recap-status metadata read (spec §3/§5): the freshest usable full + short
+// fan-summary recap for one conversation, metadata only — NO generation, NO AI
+// spend. Backs the extension's "recap status line".
+export const aiRecapStatusQuerySchema = z.object({
+  pageLabel: z.string().min(1).max(120),
+  conversationRef: z.string().min(1).max(255),
+  fanRef: z.string().min(1).max(255).optional(),
+}).strict();
+
+const aiRecapSlotSchema = z.object({
+  generatedAt: z.string(),
+  ageMs: z.number().int().min(0),
+  transcriptCoverage: z.enum(["full-history", "window"]).nullable(),
+  requestedCount: z.number().int().nullable(),
+  keptCount: z.number().int().nullable(),
+}).strict();
+
+export const aiRecapStatusResponseSchema = z.object({
+  full: aiRecapSlotSchema.nullable(),
+  short: aiRecapSlotSchema.nullable(),
+}).strict();
+
 const adminAiPersonaCreateKeySchema = z.string()
   .trim()
   .min(1)
@@ -6006,6 +6028,19 @@ export const routeSchemas = {
       200: aiPersonaCatalogResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  aiRecapStatus: {
+    auth: { kind: "apiKey" },
+    tags: ["usage"],
+    summary: "Freshest usable recap metadata (full + short slots) for one conversation",
+    querystring: aiRecapStatusQuerySchema,
+    response: {
+      200: aiRecapStatusResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
     },
   },
   aiPersonaUpsert: {

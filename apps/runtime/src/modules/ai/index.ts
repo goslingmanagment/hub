@@ -11,9 +11,11 @@ export * from "./context/index.ts";
 export * from "./features/index.ts";
 import {
   getAiGenerationContentByRef,
+  getFreshestUsableRecaps,
   listAiGenerationContent,
   archiveAiPersona,
   AiPersonaVersionConflictError,
+  findPageByLabel,
   listAiPersonaStates,
   listAiPersonas,
   upsertAiPersona,
@@ -25,7 +27,7 @@ import {
 } from "../../services/ai-gateway.ts";
 import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
-import { requireApiKeyUser, requireOwner } from "../../services/auth.ts";
+import { canAccessPage, requireApiKeyUser, requireOwner } from "../../services/auth.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { hasDebugInputCapability } from "./prompt-debug-echo.ts";
@@ -127,6 +129,42 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
         status: persona.archivedAt === null ? "active" as const : "archived" as const,
       })),
     };
+  });
+
+  // Recap-status metadata read (spec §3): the extension's "recap status line"
+  // source. Same apiKey lane and page resolution as the feature stream, but
+  // metadata ONLY — it reads the freshest usable recap rows and returns their
+  // provenance; it never generates and never spends. Access is checked exactly
+  // like the stream (findPageByLabel + canAccessPage): an unknown page and an
+  // unauthorized page are the same 404 to the caller.
+  server.get("/api/v1/ai/recap-status", {
+    schema: routeSchemas.aiRecapStatus,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const { pageLabel, conversationRef, fanRef } = request.query;
+    const stored = await findPageByLabel(appContext.db, pageLabel);
+    if (!stored || !canAccessPage(principal, stored.page.id)) {
+      throw new NotFoundError("Page not found");
+    }
+    const conversationRefs = [conversationRef, ...(fanRef ? [fanRef] : [])];
+    const found = await getFreshestUsableRecaps(appContext.db, {
+      pageId: stored.page.id,
+      conversationRefs,
+    });
+    const now = Date.now();
+    const slot = (row: typeof found.full) =>
+      row === null
+        ? null
+        : {
+          generatedAt: row.createdAt.toISOString(),
+          ageMs: Math.max(0, now - row.createdAt.getTime()),
+          transcriptCoverage:
+            (row.params["transcriptCoverage"] as "full-history" | "window" | null) ?? null,
+          requestedCount: (row.params["requestedCount"] as number | null) ?? null,
+          keptCount: (row.params["keptCount"] as number | null) ?? null,
+        };
+    return { full: slot(found.full), short: slot(found.short) };
   });
 
   // Transitional legacy write lane. Omitted expectedVersion retains the
