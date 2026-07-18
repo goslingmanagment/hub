@@ -667,6 +667,9 @@ describe("OFAPI capture correctness repository", () => {
 
     const admittedNextDay = await reserveAt(new Date("2026-07-17T00:01:00.000Z"));
     expect(admittedNextDay.admitted).toBe(true);
+    await expect(
+      reserveAt(new Date("2026-07-16T23:59:00.000Z")),
+    ).rejects.toThrow("cannot move backward during admission");
     const principal = await testDb.pool.query<{
       window_started_at: Date;
       used_calls: number;

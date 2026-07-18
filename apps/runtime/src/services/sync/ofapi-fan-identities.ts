@@ -176,6 +176,7 @@ export async function syncOfapiFanIdentities(
   const requestContext: OfapiRequestContext = {
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     pageId: input.pageContext.page.id,
+    creditBudgetScope: "audience",
   };
   // Spec: runs under the AUDIENCE day budget (this is audience-class work).
   const guard = createOfapiRestGuard(app, {

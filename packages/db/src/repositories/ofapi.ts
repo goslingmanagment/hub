@@ -1304,19 +1304,42 @@ export async function recordOfapiCreditUsage(
       spent_credits = case
         when ofapi_credit_state.spend_day = ${day}::date
           then ofapi_credit_state.spent_credits + ${creditsUsed}
-        else ${creditsUsed}
+        when ofapi_credit_state.spend_day is null
+          or ofapi_credit_state.spend_day < ${day}::date
+          then ${creditsUsed}
+        else ofapi_credit_state.spent_credits
       end,
-      spend_day = ${day}::date,
-      last_balance = coalesce(${balance}::int, ofapi_credit_state.last_balance),
+      spend_day = case
+        when ofapi_credit_state.spend_day is null
+          or ofapi_credit_state.spend_day < ${day}::date
+          then ${day}::date
+        else ofapi_credit_state.spend_day
+      end,
+      last_balance = case
+        when ${balance}::int is null then ofapi_credit_state.last_balance
+        when ofapi_credit_state.last_balance_at is null
+          or ofapi_credit_state.last_balance_at <= ${now}::timestamptz
+          then ${balance}::int
+        else ofapi_credit_state.last_balance
+      end,
       last_balance_at = case
         when ${balance}::int is null then ofapi_credit_state.last_balance_at
-        else ${now}::timestamptz
+        when ofapi_credit_state.last_balance_at is null
+          or ofapi_credit_state.last_balance_at <= ${now}::timestamptz
+          then ${now}::timestamptz
+        else ofapi_credit_state.last_balance_at
       end,
-      updated_at = ${now}::timestamptz
+      updated_at = greatest(ofapi_credit_state.updated_at, ${now}::timestamptz)
   `);
 }
 
 export type OfapiDayBudgetScope = "global" | "audience" | "backfill";
+
+export interface OfapiDayCreditReservationReceipt {
+  scope: OfapiDayBudgetScope;
+  reservationDay: string;
+  estimate: number;
+}
 
 const OFAPI_DAY_COUNTER_COLUMNS = {
   global: { day: "spend_day", credits: "spent_credits" },
@@ -1328,7 +1351,7 @@ const OFAPI_DAY_COUNTER_COLUMNS = {
  * Atomically reserves `estimate` credits against the scope's UTC-day counter
  * (audit F9): the budget comparison and the counter increment are one
  * conditional update, so concurrent streams near the cap can never pass the
- * check together and overspend. Returns false when the reservation would
+ * check together and overspend. Returns null when the reservation would
  * exceed `budget`. Callers settle the estimate to the server-reported actuals
  * via settleOfapiDayCreditReservation; a crash in between leaks at most the
  * estimate until the UTC-day rollover (conservative direction).
@@ -1347,111 +1370,113 @@ export async function reserveOfapiDayCredits(
     globalBudget?: number;
     now?: Date;
   },
-): Promise<boolean> {
-  const now = input.now ?? new Date();
-  const day = utcDayOf(now);
+): Promise<OfapiDayCreditReservationReceipt | null> {
+  const startedAt = input.now ?? new Date();
   const estimate = Math.max(0, Math.round(input.estimate));
   const budget = Math.round(input.budget);
   if (estimate > budget) {
-    return false;
+    return null;
   }
 
   const columns = OFAPI_DAY_COUNTER_COLUMNS[input.scope];
   const dayColumn = sql.raw(columns.day);
   const creditsColumn = sql.raw(columns.credits);
-  if (input.scope !== "global" && input.globalBudget !== undefined) {
-    const globalBudget = Math.round(input.globalBudget);
-    if (estimate > globalBudget) {
-      return false;
-    }
-    const reserved = await db.execute(sql`
-      insert into ofapi_credit_state (
-        id,
-        spend_day,
-        spent_credits,
-        ${dayColumn},
-        ${creditsColumn},
-        updated_at
-      ) values (
-        1,
-        ${day}::date,
-        ${estimate},
-        ${day}::date,
-        ${estimate},
-        ${now}::timestamptz
-      )
-      on conflict (id) do update set
-        spent_credits = case
-          when ofapi_credit_state.spend_day = ${day}::date
-            then ofapi_credit_state.spent_credits + ${estimate}
-          else ${estimate}
-        end,
-        spend_day = ${day}::date,
-        ${creditsColumn} = case
-          when ofapi_credit_state.${dayColumn} = ${day}::date
-            then ofapi_credit_state.${creditsColumn} + ${estimate}
-          else ${estimate}
-        end,
-        ${dayColumn} = ${day}::date,
-        updated_at = ${now}::timestamptz
-      where (case
-          when ofapi_credit_state.spend_day = ${day}::date
-            then ofapi_credit_state.spent_credits
-          else 0
-        end) + ${estimate} <= ${globalBudget}
-        and (case
-          when ofapi_credit_state.${dayColumn} = ${day}::date
-            then ofapi_credit_state.${creditsColumn}
-          else 0
-        end) + ${estimate} <= ${budget}
-      returning id
-    `);
-
-    return reserved.rows.length > 0;
+  const globalBudget = input.scope !== "global" && input.globalBudget !== undefined
+    ? Math.round(input.globalBudget)
+    : null;
+  if (globalBudget !== null && estimate > globalBudget) {
+    return null;
   }
 
-  const reserved = await db.execute(sql`
-    insert into ofapi_credit_state (id, ${dayColumn}, ${creditsColumn}, updated_at)
-    values (1, ${day}::date, ${estimate}, ${now}::timestamptz)
-    on conflict (id) do update set
-      ${creditsColumn} = case
-        when ofapi_credit_state.${dayColumn} = ${day}::date
-          then ofapi_credit_state.${creditsColumn} + ${estimate}
-        else ${estimate}
-      end,
-      ${dayColumn} = ${day}::date,
-      updated_at = ${now}::timestamptz
-    where (case
-        when ofapi_credit_state.${dayColumn} = ${day}::date
-          then ofapi_credit_state.${creditsColumn}
-        else 0
-      end) + ${estimate} <= ${budget}
-    returning id
-  `);
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    await database.execute(sql`
+      insert into ofapi_credit_state (id, updated_at)
+      values (1, ${startedAt}::timestamptz)
+      on conflict (id) do nothing
+    `);
+    const locked = await database.execute<{
+      scope_day: string | Date | null;
+      scope_credits: unknown;
+      spend_day: string | Date | null;
+      spent_credits: unknown;
+    }>(sql`
+      select ${dayColumn} as scope_day,
+             ${creditsColumn} as scope_credits,
+             spend_day,
+             spent_credits
+      from ofapi_credit_state
+      where id = 1
+      for update
+    `);
+    const row = locked.rows[0];
+    if (!row) throw new Error("OFAPI credit singleton disappeared during reservation");
 
-  return reserved.rows.length > 0;
+    // Capture admission time only after the singleton lock. Injected `now` is
+    // retained for deterministic tests, while production callers cannot carry
+    // a pre-lock day across UTC midnight.
+    const admittedAt = input.now ?? new Date();
+    const day = utcDayOf(admittedAt);
+    const scopeDay = row.scope_day === null
+      ? null
+      : utcDayOf(row.scope_day instanceof Date ? row.scope_day : new Date(row.scope_day));
+    const globalDay = row.spend_day === null
+      ? null
+      : utcDayOf(row.spend_day instanceof Date ? row.spend_day : new Date(row.spend_day));
+    if (scopeDay !== null && scopeDay > day) return null;
+    if (globalBudget !== null && globalDay !== null && globalDay > day) return null;
+
+    const scopeSpent = scopeDay === day ? Number(row.scope_credits) : 0;
+    const globalSpent = globalDay === day ? Number(row.spent_credits) : 0;
+    if (!Number.isFinite(scopeSpent) || scopeSpent + estimate > budget) return null;
+    if (
+      globalBudget !== null &&
+      (!Number.isFinite(globalSpent) || globalSpent + estimate > globalBudget)
+    ) return null;
+
+    if (globalBudget !== null) {
+      await database.execute(sql`
+        update ofapi_credit_state
+        set spend_day = ${day}::date,
+            spent_credits = ${globalSpent + estimate},
+            ${dayColumn} = ${day}::date,
+            ${creditsColumn} = ${scopeSpent + estimate},
+            updated_at = greatest(updated_at, ${admittedAt}::timestamptz)
+        where id = 1
+      `);
+    } else {
+      await database.execute(sql`
+        update ofapi_credit_state
+        set ${dayColumn} = ${day}::date,
+            ${creditsColumn} = ${scopeSpent + estimate},
+            updated_at = greatest(updated_at, ${admittedAt}::timestamptz)
+        where id = 1
+      `);
+    }
+
+    return { scope: input.scope, reservationDay: day, estimate };
+  });
 }
 
 /**
  * Settles a reservation made by reserveOfapiDayCredits to the server-reported
- * actuals: applies `creditsDelta` (actual minus estimate, or minus the whole
- * estimate when the ledger sink already recorded the actuals) to the scope's
- * day counter, clamped at zero — a reservation that straddled the UTC-day
- * rollover settles against the new day. Optionally records the response's
- * balance observation, exactly like recordOfapiCreditUsage.
+ * actuals against the day named by its receipt. A response arriving after UTC
+ * rollover never rewinds a newer counter window. Optionally records the
+ * response's balance observation, exactly like recordOfapiCreditUsage.
  */
 export async function settleOfapiDayCreditReservation(
   db: Database,
   input: {
     scope: OfapiDayBudgetScope;
+    receipt: OfapiDayCreditReservationReceipt;
     creditsDelta: number;
     balance?: number | null;
     now?: Date;
   },
 ) {
   const now = input.now ?? new Date();
-  const day = utcDayOf(now);
   const delta = Math.round(input.creditsDelta);
+  const actual = Math.max(0, input.receipt.estimate + delta);
   const balance = typeof input.balance === "number" && Number.isFinite(input.balance)
     ? Math.round(input.balance)
     : null;
@@ -1463,26 +1488,84 @@ export async function settleOfapiDayCreditReservation(
     insert into ofapi_credit_state (id, ${dayColumn}, ${creditsColumn}, last_balance, last_balance_at, updated_at)
     values (
       1,
-      ${day}::date,
-      greatest(0, ${delta}),
+      ${input.receipt.reservationDay}::date,
+      ${actual},
       ${balance},
       case when ${balance}::int is null then null else ${now}::timestamptz end,
       ${now}::timestamptz
     )
     on conflict (id) do update set
-      ${creditsColumn} = greatest(0, case
-        when ofapi_credit_state.${dayColumn} = ${day}::date
-          then ofapi_credit_state.${creditsColumn} + ${delta}
-        else ${delta}
-      end),
-      ${dayColumn} = ${day}::date,
-      last_balance = coalesce(${balance}::int, ofapi_credit_state.last_balance),
+      ${creditsColumn} = case
+        when ofapi_credit_state.${dayColumn} = ${input.receipt.reservationDay}::date
+          then greatest(0, ofapi_credit_state.${creditsColumn} + ${delta})
+        when ofapi_credit_state.${dayColumn} is null
+          or ofapi_credit_state.${dayColumn} < ${input.receipt.reservationDay}::date
+          then ${actual}
+        else ofapi_credit_state.${creditsColumn}
+      end,
+      ${dayColumn} = case
+        when ofapi_credit_state.${dayColumn} is null
+          or ofapi_credit_state.${dayColumn} < ${input.receipt.reservationDay}::date
+          then ${input.receipt.reservationDay}::date
+        else ofapi_credit_state.${dayColumn}
+      end,
+      last_balance = case
+        when ${balance}::int is null then ofapi_credit_state.last_balance
+        when ofapi_credit_state.last_balance_at is null
+          or ofapi_credit_state.last_balance_at <= ${now}::timestamptz
+          then ${balance}::int
+        else ofapi_credit_state.last_balance
+      end,
       last_balance_at = case
         when ${balance}::int is null then ofapi_credit_state.last_balance_at
-        else ${now}::timestamptz
+        when ofapi_credit_state.last_balance_at is null
+          or ofapi_credit_state.last_balance_at <= ${now}::timestamptz
+          then ${now}::timestamptz
+        else ofapi_credit_state.last_balance_at
       end,
-      updated_at = ${now}::timestamptz
+      updated_at = greatest(ofapi_credit_state.updated_at, ${now}::timestamptz)
   `);
+}
+
+export interface RecordOfapiPhysicalCreditUsageInput {
+  creditsUsed: number;
+  balance?: number | null;
+  budgetScope?: Exclude<OfapiDayBudgetScope, "global"> | null;
+  now?: Date;
+}
+
+async function applyOfapiPhysicalCreditUsage(
+  db: Database,
+  input: RecordOfapiPhysicalCreditUsageInput,
+) {
+  const now = input.now ?? new Date();
+  const creditsUsed = Math.max(0, Math.round(input.creditsUsed));
+  await recordOfapiCreditUsage(db, {
+    creditsUsed,
+    balance: input.balance ?? null,
+    now,
+  });
+  if (input.budgetScope) {
+    await settleOfapiDayCreditReservation(db, {
+      scope: input.budgetScope,
+      receipt: {
+        scope: input.budgetScope,
+        reservationDay: utcDayOf(now),
+        estimate: 0,
+      },
+      creditsDelta: creditsUsed,
+      now,
+    });
+  }
+}
+
+/** Records physical spend in the shared ceiling and its optional dedicated
+ * lane atomically. Used as the fail-closed fallback when the ledger is down. */
+export async function recordOfapiPhysicalCreditUsage(
+  db: Database,
+  input: RecordOfapiPhysicalCreditUsageInput,
+) {
+  await db.transaction((tx) => applyOfapiPhysicalCreditUsage(tx, input));
 }
 
 export interface OfapiCreditState {
@@ -1569,6 +1652,24 @@ export interface RecordOfapiCreditSpendInput {
   requestId?: string | null;
   details?: Record<string, unknown> | null;
   actorUserId?: number | null;
+  budgetScope?: Exclude<OfapiDayBudgetScope, "global"> | null;
+}
+
+/** Rare ambiguous-COMMIT probe for the legacy sink. A logical requestId is
+ * shared by HTTP retries, so the physical identity includes attemptNumber. */
+export async function hasOfapiCreditSpendRequestAttempt(
+  db: Database,
+  input: { requestId: string; attemptNumber: number },
+) {
+  const result = await db.execute<{ recorded: boolean }>(sql`
+    select true as recorded
+    from ofapi_credit_ledger
+    where source = 'rest'
+      and request_id = ${input.requestId}
+      and details ->> 'attemptNumber' = ${String(input.attemptNumber)}
+    limit 1
+  `);
+  return result.rows[0]?.recorded === true;
 }
 
 /**
@@ -1595,9 +1696,10 @@ export async function recordOfapiCreditSpend(
       details: input.details ?? null,
       actorUserId: input.actorUserId ?? null,
     });
-    await recordOfapiCreditUsage(tx, {
+    await applyOfapiPhysicalCreditUsage(tx, {
       creditsUsed: input.credits,
       balance: input.balanceAfter ?? null,
+      budgetScope: input.budgetScope ?? null,
       now: occurredAt,
     });
   });

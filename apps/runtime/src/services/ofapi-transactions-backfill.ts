@@ -895,6 +895,7 @@ export async function runOfapiTransactionsBackfill(
           pageId: stored.page.id,
           dispatcher,
           egressKey: resolveStoredProxyEgressKey(stored.proxy),
+          creditBudgetScope: "backfill",
         },
         from: input.from,
         to,

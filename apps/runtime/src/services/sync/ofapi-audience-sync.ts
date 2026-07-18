@@ -281,6 +281,7 @@ export async function executeOfapiAudienceChunk(
   const requestContext: OfapiRequestContext = {
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     pageId: input.pageContext.page.id,
+    creditBudgetScope: "audience",
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "subscribers");
   await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));

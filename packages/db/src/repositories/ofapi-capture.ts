@@ -880,8 +880,8 @@ export async function reserveOfapiRequestAttempt(
   db: Database,
   input: ReserveOfapiRequestAttemptInput,
 ): Promise<ReserveOfapiRequestAttemptResult> {
-  const now = input.now ?? new Date();
-  const day = utcDay(now);
+  let now = input.now ?? new Date();
+  let day = utcDay(now);
   const attemptId = input.attemptId ?? randomUUID();
   const fenceToken = randomUUID();
   const estimate = normalizeCredits(input.reservedCredits);
@@ -950,7 +950,7 @@ export async function reserveOfapiRequestAttempt(
       consecutive_budget_denials: unknown;
       blocked_until: string | Date | null;
     } | null = null;
-    const principalWindow = principalId === null ? null : utcDayWindow(now);
+    let principalWindow = principalId === null ? null : utcDayWindow(now);
     if (principalId !== null && principalWindow) {
       await database.execute(sql`
         insert into ofapi_principal_budget_state (
@@ -975,26 +975,6 @@ export async function reserveOfapiRequestAttempt(
       if (!principal) {
         throw new OfapiCaptureInvariantError("Principal budget row disappeared");
       }
-      const storedWindow = asDate(principal.window_started_at, "window_started_at");
-      if (storedWindow.getTime() !== principalWindow.getTime()) {
-        await database.execute(sql`
-          update ofapi_principal_budget_state
-          set window_started_at = ${principalWindow},
-              used_calls = 0,
-              used_credits = 0,
-              consecutive_budget_denials = 0,
-              blocked_until = null,
-              updated_at = ${now}
-          where principal_user_id = ${principalId}
-        `);
-        principal = {
-          window_started_at: principalWindow,
-          used_calls: 0,
-          used_credits: 0,
-          consecutive_budget_denials: 0,
-          blocked_until: null,
-        };
-      }
     }
 
     let job: OfapiCaptureJobRecord | null = null;
@@ -1006,6 +986,10 @@ export async function reserveOfapiRequestAttempt(
         throw new OfapiCaptureInvariantError(`Capture job ${input.ownerId} not found`);
       }
       job = mapCaptureJob(jobResult.rows[0]);
+      if (input.now === undefined) {
+        now = new Date();
+        day = utcDay(now);
+      }
       if (
         job.pageId !== input.pageId ||
         job.ofapiAccountId !== input.ofapiAccountId ||
@@ -1032,6 +1016,10 @@ export async function reserveOfapiRequestAttempt(
         for update
       `);
       const row = request.rows[0];
+      if (input.now === undefined) {
+        now = new Date();
+        day = utcDay(now);
+      }
       if (
         !row ||
         asNumber(row.page_id, "page_id") !== input.pageId ||
@@ -1042,6 +1030,47 @@ export async function reserveOfapiRequestAttempt(
         input.budgetScope !== "interactive"
       ) {
         throw new OfapiCaptureInvariantError("Interactive request ownership changed before admission");
+      }
+    }
+
+    principalWindow = principalId === null ? null : utcDayWindow(now);
+    if (principalId !== null && principalWindow && principal) {
+      const storedWindow = asDate(principal.window_started_at, "window_started_at");
+      if (storedWindow.getTime() > principalWindow.getTime()) {
+        throw new OfapiCaptureInvariantError(
+          "Principal budget window cannot move backward during admission",
+        );
+      }
+      if (storedWindow.getTime() < principalWindow.getTime()) {
+        await database.execute(sql`
+          update ofapi_principal_budget_state
+          set window_started_at = ${principalWindow},
+              used_calls = 0,
+              used_credits = 0,
+              consecutive_budget_denials = 0,
+              blocked_until = null,
+              updated_at = ${now}
+          where principal_user_id = ${principalId}
+        `);
+        principal = {
+          window_started_at: principalWindow,
+          used_calls: 0,
+          used_credits: 0,
+          consecutive_budget_denials: 0,
+          blocked_until: null,
+        };
+      }
+    }
+
+    for (const [name, value] of [
+      ["spend_day", credit.spend_day],
+      ["governed_scope_day", credit.governed_scope_day],
+    ] as const) {
+      const storedDay = dateOnly(value);
+      if (storedDay !== null && storedDay > day) {
+        throw new OfapiCaptureInvariantError(
+          `${name} cannot move backward during OFAPI admission`,
+        );
       }
     }
 
@@ -1112,7 +1141,9 @@ export async function reserveOfapiRequestAttempt(
       activeFloorProbe.rows.length === 0 &&
       (!floorProbeNotBefore || floorProbeNotBefore.getTime() <= now.getTime());
     let denial: OfapiBudgetDenialReason | null = null;
-    if (paused.rows.length > 0) {
+    if (input.deadlineAt.getTime() <= now.getTime()) {
+      denial = "deadline";
+    } else if (paused.rows.length > 0) {
       denial = "persistent_pause";
     } else if (!storageHealthy) {
       denial = "storage_unhealthy";
@@ -1148,6 +1179,7 @@ export async function reserveOfapiRequestAttempt(
       let thresholdCrossing = false;
       if (
         denial !== "storage_unhealthy" &&
+        denial !== "deadline" &&
         !eligibleProbeBlockedByHardCap &&
         principalId !== null &&
         principal
