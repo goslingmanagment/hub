@@ -21,8 +21,16 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { aiUsageFeatures, fanFlagTypes, userRoles } from "@agency_hub_core/shared";
-import type { ConfigOverrideValue, RunningSnapshot } from "@agency_hub_core/shared";
+import {
+  aiUsageFeatures,
+  fanFlagTypes,
+  userRoles,
+} from "@agency_hub_core/shared";
+import type {
+  ConfigOverrideValue,
+  ofapiCaptureJobStates,
+  RunningSnapshot,
+} from "@agency_hub_core/shared";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType() {
@@ -2307,14 +2315,7 @@ export type OfapiCaptureJobGoal =
   | "history_to_exhaustion"
   | "connect_to_anchor"
   | "bounded_tail";
-export type OfapiCaptureJobState =
-  | "ready"
-  | "leased"
-  | "awaiting_parse"
-  | "retry_wait"
-  | "blocked"
-  | "complete"
-  | "cancelled";
+export type OfapiCaptureJobState = (typeof ofapiCaptureJobStates)[number];
 export type OfapiBudgetScope = "live" | "interactive" | "bulk";
 export type OfapiCaptureCreatedBy =
   | "owner"

@@ -4,6 +4,9 @@ import {
   parseOfapiExportCsvTimestamp,
 } from "../apps/runtime/src/services/ofapi-export-artifact.ts";
 import {
+  ofapiDollarValueToMillsString,
+} from "../apps/runtime/src/services/ofapi-message-material.ts";
+import {
   effectiveOfapiExportEndDate,
 } from "../apps/runtime/src/services/ofapi-export-quotes.ts";
 
@@ -35,5 +38,15 @@ describe("OFAPI export date contract", () => {
       "2028-02-29 00:00:00",
       "onlyfans_created_at",
     )?.toISOString()).toBe("2028-02-29T00:00:00.000Z");
+  });
+});
+
+describe("OFAPI export money contract", () => {
+  it("preserves the exact signed-BIGINT boundary without parsing oversized decimals", () => {
+    expect(ofapiDollarValueToMillsString("9223372036854775.807"))
+      .toBe("9223372036854775807");
+    expect(() => ofapiDollarValueToMillsString("9223372036854775.808"))
+      .toThrow("exceeds the signed BIGINT mills range");
+    expect(ofapiDollarValueToMillsString("9".repeat(21))).toBeNull();
   });
 });

@@ -1,3 +1,5 @@
+import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
+
 import type { AppContext } from "../../apps/runtime/src/bootstrap.ts";
 import type { StartedTestDatabase } from "./db.ts";
 
@@ -127,11 +129,14 @@ export function createTestAppContext(
       ofapiDmBootstrapMaxRequestsPerRun: overrides?.ofapiDmBootstrapMaxRequestsPerRun ?? 25,
       ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
       ofapiMirrorGlobalDailyCreditBudget:
-        overrides?.ofapiMirrorGlobalDailyCreditBudget ?? 7_000,
+        overrides?.ofapiMirrorGlobalDailyCreditBudget
+          ?? OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
       ofapiMirrorPrincipalDailyCallCap:
-        overrides?.ofapiMirrorPrincipalDailyCallCap ?? 4_000,
+        overrides?.ofapiMirrorPrincipalDailyCallCap
+          ?? OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCallCap,
       ofapiMirrorPrincipalDailyCreditCap:
-        overrides?.ofapiMirrorPrincipalDailyCreditCap ?? 4_000,
+        overrides?.ofapiMirrorPrincipalDailyCreditCap
+          ?? OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCreditCap,
       ofapiCreditFloor: overrides?.ofapiCreditFloor ?? 500,
       ofapiDmReconcileIntervalMinutes: overrides?.ofapiDmReconcileIntervalMinutes ?? 360,
       ofapiAccountHealthEnabled: overrides?.ofapiAccountHealthEnabled ?? false,

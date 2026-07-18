@@ -1022,6 +1022,81 @@ describe("OFAPI read gateway integration", () => {
     }]);
   });
 
+  it("capture-first records but refuses a valid 2xx outside the operation envelope", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    scriptedResponses.push({ status: 200, body: {} });
+
+    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+
+    expect(response.statusCode, response.body).toBe(503);
+    expect(upstreamRequests).toHaveLength(1);
+    const attempt = await testDb!.pool.query<{
+      request_state: string;
+      parser_outcome: string;
+      raw_body: string;
+    }>(
+      `select request.state as request_state,
+              attempt.parser_outcome,
+              observation.payload #>> '{response,body}' as raw_body
+       from ofapi_interactive_requests request
+       join ofapi_request_attempts attempt
+         on attempt.interactive_request_id = request.id
+       join observations observation
+         on observation.id = attempt.response_observation_id
+        and observation.received_at = attempt.response_observation_received_at`,
+    );
+    expect(attempt.rows).toEqual([{
+      request_state: "failed",
+      parser_outcome: "contract_rejected",
+      raw_body: "{}",
+    }]);
+  });
+
+  it("capture-first accepts the data.list variant for registered list operations", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    scriptedResponses.push({
+      status: 200,
+      body: {
+        data: { list: [{ id: "tx-1" }], hasMore: false },
+        _meta: { _credits: { used: 1, balance: 8999 } },
+      },
+    });
+
+    const response = await inject(`${ACCOUNT_ONE}/transactions?limit=10`);
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      data: { list: [{ id: "tx-1" }], hasMore: false },
+    });
+    const attempt = await testDb!.pool.query<{
+      request_state: string;
+      parser_outcome: string;
+    }>(
+      `select request.state as request_state, attempt.parser_outcome
+       from ofapi_interactive_requests request
+       join ofapi_request_attempts attempt
+         on attempt.interactive_request_id = request.id`,
+    );
+    expect(attempt.rows).toEqual([{
+      request_state: "served",
+      parser_outcome: "accepted",
+    }]);
+  });
+
   it("fails open when the tee queue is full: serves 200, counts drops, raises the incident (Stage 9)", async () => {
     configureReadGatewayCaptureForTests({ queueCap: 0, dropIncidentThreshold: 1 });
     scriptedResponses.push({

@@ -16,6 +16,75 @@ function itemId(value: unknown) {
   return null;
 }
 
+const INTERACTIVE_LIST_ENVELOPES = new Map<string, "array" | "list" | "either">([
+  ["ofapi_gateway_chats", "array"],
+  ["ofapi_gateway_chat_messages", "array"],
+  ["ofapi_gateway_chat_media", "list"],
+  // Both variants are already accepted by the legacy clients for these
+  // surfaces, so capture-first must not narrow that compatibility during
+  // rollout.
+  ["ofapi_gateway_transactions", "either"],
+  ["ofapi_gateway_fans_all", "either"],
+  ["ofapi_gateway_fans_active", "either"],
+  ["ofapi_gateway_user_lists", "either"],
+  ["ofapi_gateway_user_list_users", "list"],
+  ["ofapi_gateway_vault_media", "list"],
+  ["ofapi_gateway_vault_lists", "list"],
+]);
+
+const INTERACTIVE_SINGLE_ITEM_OPERATIONS = new Set([
+  "ofapi_gateway_chat_message",
+  "ofapi_gateway_user",
+  "ofapi_gateway_vault_media_item",
+]);
+
+/**
+ * Checks only the stable top-level wire family consumed by the desktop. A
+ * list operation accepts both `{data: [...]}` and `{data: {list: [...]}}` only
+ * where both variants are already supported by the legacy client. Deep item
+ * validation stays with each consumer so additive field drift cannot fail
+ * every interactive read.
+ *
+ * Unknown operations fail closed. Adding a gateway surface therefore also
+ * requires choosing its response family instead of silently returning to
+ * syntax-only validation.
+ */
+export function validateOfapiInteractiveResponseShape(
+  operation: string,
+  body: unknown,
+): boolean {
+  const listEnvelope = INTERACTIVE_LIST_ENVELOPES.get(operation);
+  if (listEnvelope) {
+    const root = asRecord(body);
+    if (!root) return false;
+    const hasArray = Array.isArray(root.data);
+    const hasList = Array.isArray(asRecord(root.data)?.list);
+    if (listEnvelope === "array") return hasArray;
+    if (listEnvelope === "list") return hasList;
+    return hasArray || hasList;
+  }
+
+  if (INTERACTIVE_SINGLE_ITEM_OPERATIONS.has(operation)) {
+    const data = asRecord(asRecord(body)?.data);
+    return data !== null && itemId(data.id) !== null;
+  }
+
+  if (operation === "ofapi_gateway_users_list") {
+    const data = asRecord(asRecord(body)?.data);
+    return data !== null && Object.values(data).every((value) => {
+      const user = asRecord(value);
+      return user !== null && itemId(user.id) !== null;
+    });
+  }
+
+  if (operation === "ofapi_gateway_upload_status") {
+    const status = asRecord(body)?.status;
+    return typeof status === "string" && status.length > 0;
+  }
+
+  return false;
+}
+
 export interface ParsedOfapiJsonBody {
   validJson: boolean;
   body: unknown;

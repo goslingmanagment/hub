@@ -38,7 +38,10 @@ import {
   type OfapiDayBudgetScope,
   type PageSyncLease,
 } from "@agency_hub_core/db";
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import {
+  normalizeDmMessageText,
+  OFAPI_MIRROR_BUDGET_DEFAULTS,
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
@@ -73,7 +76,6 @@ const DM_PREVIEW_MAX_LENGTH = 280;
 
 const DEFAULT_MAX_REQUESTS_PER_RUN = 25;
 const DEFAULT_DAILY_CREDIT_BUDGET = 500;
-const DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET = 7_000;
 const DEFAULT_CREDIT_FLOOR = 500;
 const DEFAULT_RECONCILE_INTERVAL_MINUTES = 360;
 // Daily-budget / balance-floor blocks park the stream for a while instead of
@@ -199,7 +201,7 @@ export function createOfapiRestGuard(app: AppContext, options?: {
     // one physical stop-loss; the retired DM crawler's 500-credit cap is not
     // that shared ceiling.
     app.config.ofapiMirrorGlobalDailyCreditBudget ??
-      DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET,
+      OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
   );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
   // Dedicated counters (audience per decision #50, backfill per Stage 14)

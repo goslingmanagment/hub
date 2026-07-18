@@ -26,7 +26,10 @@ import {
   parseOfapiExportCursor,
   parseOfapiExportTarget,
 } from "./ofapi-export-quotes.ts";
-import { appendOfapiMessageMaterialPage } from "./ofapi-message-material.ts";
+import {
+  appendOfapiMessageMaterialPage,
+  ofapiDollarValueToMillsString,
+} from "./ofapi-message-material.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 
 const MAX_PILOT_ARTIFACT_BYTES = 16 * 1024 * 1024;
@@ -156,13 +159,18 @@ function strictBoolean(value: string, field: string) {
 }
 
 function nonnegativeMoney(value: string, field: string) {
-  if (value === "" && field === "tip_amount") return 0;
-  if (!/^(0|[1-9]\d*)(\.\d{1,2})?$/.test(value)) {
+  const normalized = value === "" && field === "tip_amount" ? "0" : value;
+  if (!/^(0|[1-9]\d*)(\.\d{1,2})?$/.test(normalized)) {
     throw new Error(`CSV ${field} is not non-negative decimal money`);
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`CSV ${field} is invalid`);
-  return parsed;
+  try {
+    if (ofapiDollarValueToMillsString(normalized) === null) {
+      throw new Error("invalid decimal");
+    }
+  } catch {
+    throw new Error(`CSV ${field} exceeds the signed BIGINT mills range`);
+  }
+  return normalized;
 }
 
 export function parseOfapiExportCsvTimestamp(value: string, field: string, nullable = false) {

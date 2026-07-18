@@ -108,6 +108,7 @@ async function seed() {
 }
 
 async function createAndReserveInteractive(input?: {
+  operation?: string;
   reservedCredits?: number;
   globalDailyCap?: number;
   scopeDailyCap?: number;
@@ -146,11 +147,12 @@ async function createAndReserveInteractive(input?: {
       input.storageHealth.error ?? null,
     ]);
   }
+  const operation = input?.operation ?? "list_messages";
   const request = await createOfapiInteractiveRequest(testDb!.db, {
     pageId: seeded.page.id,
     ofapiAccountId: seeded.accountId,
     principalUserId: seeded.owner.id,
-    operation: "list_messages",
+    operation,
     surface: "messages",
     target: { path: `/api2/v2/chats/42/messages`, query: { limit: 20 } },
     now: NOW,
@@ -162,7 +164,7 @@ async function createAndReserveInteractive(input?: {
     ofapiAccountId: seeded.accountId,
     originPrincipalId: seeded.owner.id,
     budgetScope: "interactive",
-    operation: "list_messages",
+    operation,
     endpointClass: "messages",
     egressKey: `page:${seeded.page.id}`,
     method: "GET",
@@ -2205,7 +2207,9 @@ describe("OFAPI capture correctness repository", () => {
 
   it("locally finalizes an expired captured interactive response without vendor egress", async () => {
     if (!testDb) return;
-    const crashed = await createAndReserveInteractive();
+    const crashed = await createAndReserveInteractive({
+      operation: "ofapi_gateway_chat_messages",
+    });
     if (!crashed.reservation.admitted) throw new Error("interactive reservation denied");
     expect(await markOfapiAttemptDispatching(testDb.db, {
       attemptId: crashed.reservation.attemptId,
@@ -2303,6 +2307,64 @@ describe("OFAPI capture correctness repository", () => {
       unavailable: 0,
       errors: 0,
     });
+    expect(dispatchGovernedRaw).not.toHaveBeenCalled();
+  });
+
+  it("recovery rejects a captured response outside its registered operation envelope", async () => {
+    if (!testDb) return;
+    const crashed = await createAndReserveInteractive({
+      operation: "ofapi_gateway_chat_messages",
+    });
+    if (!crashed.reservation.admitted) throw new Error("interactive reservation denied");
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId: crashed.reservation.attemptId,
+      fenceToken: crashed.reservation.fenceToken,
+      now: new Date(NOW.getTime() + 1_000),
+    })).toBe(true);
+    await captureOfapiAttemptResponse(testDb.db, {
+      attemptId: crashed.reservation.attemptId,
+      fenceToken: crashed.reservation.fenceToken,
+      responseObservedAt: new Date(NOW.getTime() + 2_000),
+      httpStatus: 200,
+      httpOutcome: "success",
+      responseHeaders: { "content-type": "application/json" },
+      bodyBytes: Buffer.from("{}"),
+      request: {
+        method: "GET",
+        pathname: "/v2/chats/42/messages",
+        query: { limit: "20" },
+      },
+      producer: "ofapi-mirror-interactive",
+      observationKind: "ofapi.interactive_response.v1",
+      now: new Date(NOW.getTime() + 3_000),
+    });
+    const dispatchGovernedRaw = vi.fn();
+    const app = createTestAppContext(testDb, {
+      ofapi: { dispatchGovernedRaw } as never,
+    });
+    const eligibleAt = new Date(
+      NOW.getTime() + 60_000 + OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
+    );
+
+    expect(await recoverExpiredOfapiInteractiveResponses(app, { now: eligibleAt })).toEqual({
+      scanned: 1,
+      terminalized: 1,
+      materialized: 0,
+      raced: 0,
+      unavailable: 0,
+      errors: 0,
+    });
+    expect(await getOfapiRequestAttempt(testDb.db, crashed.reservation.attemptId)).toMatchObject({
+      parser_outcome: "contract_rejected",
+    });
+    expect((await testDb.pool.query<{ state: string; error_code: string }>(`
+      select state, error_code
+      from ofapi_interactive_requests
+      where id = $1
+    `, [crashed.request.id])).rows).toEqual([{
+      state: "failed",
+      error_code: "response_delivery_interrupted",
+    }]);
     expect(dispatchGovernedRaw).not.toHaveBeenCalled();
   });
 

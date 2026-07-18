@@ -7,6 +7,7 @@ import {
   creatableUserRoles,
   fanFlagTypes,
   isValidBusinessDateString,
+  ofapiCaptureJobStates,
   platforms,
   transactionReportingBuckets,
   transactionStates,
@@ -3560,15 +3561,7 @@ export const ofapiCaptureSeedResponseSchema = z.object({
       "already_captured",
     ]),
     jobId: z.string().uuid().nullable(),
-    state: z.enum([
-      "ready",
-      "leased",
-      "awaiting_parse",
-      "retry_wait",
-      "blocked",
-      "complete",
-      "cancelled",
-    ]).nullable(),
+    state: z.enum(ofapiCaptureJobStates).nullable(),
     reasonCode: z.string().nullable(),
   })),
 });
@@ -3594,15 +3587,7 @@ export const ofapiExportQuoteBodySchema = z.discriminatedUnion("profile", [
   }).strict(),
 ]);
 
-const ofapiExportQuoteJobStateSchema = z.enum([
-  "ready",
-  "leased",
-  "awaiting_parse",
-  "retry_wait",
-  "blocked",
-  "complete",
-  "cancelled",
-]);
+const ofapiExportQuoteJobStateSchema = z.enum(ofapiCaptureJobStates);
 
 export const ofapiExportQuoteCreateResponseSchema = z.object({
   dryRun: z.boolean(),

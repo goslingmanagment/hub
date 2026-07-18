@@ -654,6 +654,7 @@ export async function loadOfapiCaptureObservation(
 export interface ExpiredOfapiInteractiveResponseCapture {
   requestId: string;
   attemptId: string;
+  operation: string;
   observationId: number;
   observationReceivedAt: Date;
   deadlineAt: Date;
@@ -677,6 +678,7 @@ export async function listExpiredOfapiInteractiveResponseCaptures(
   const result = await db.execute<{
     request_id: string;
     attempt_id: string;
+    operation: string;
     observation_id: unknown;
     observation_received_at: Date | string;
     deadline_at: Date | string;
@@ -684,6 +686,7 @@ export async function listExpiredOfapiInteractiveResponseCaptures(
   }>(sql`
     select request.id::text as request_id,
            attempt.id::text as attempt_id,
+           attempt.operation,
            attempt.response_observation_id as observation_id,
            attempt.response_observation_received_at as observation_received_at,
            attempt.deadline_at,
@@ -704,6 +707,7 @@ export async function listExpiredOfapiInteractiveResponseCaptures(
   return result.rows.map((row) => ({
     requestId: row.request_id,
     attemptId: row.attempt_id,
+    operation: row.operation,
     observationId: asNumber(row.observation_id, "interactive_recovery.observation_id"),
     observationReceivedAt: asDate(
       row.observation_received_at,

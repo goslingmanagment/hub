@@ -14,6 +14,7 @@ import {
   type OfapiHttpOutcome,
   type OfapiParserOutcome,
 } from "@agency_hub_core/db";
+import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -29,15 +30,13 @@ import {
 import {
   capturePayloadResponse,
   parseOfapiJsonBytes,
+  validateOfapiInteractiveResponseShape,
   type ParsedOfapiJsonBody,
 } from "./ofapi-capture-contract.ts";
 import {
   materializeOfapiCaptureObservation,
 } from "./ofapi-capture-materialization.ts";
 
-const DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET = 7_000;
-const DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP = 4_000;
-const DEFAULT_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP = 4_000;
 const BALANCE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FLOOR_PROBE_COOLDOWN_MS = 60 * 60 * 1000;
 const CAPTURE_COMMIT_ATTEMPTS = 3;
@@ -54,13 +53,18 @@ function httpOutcome(status: number): OfapiHttpOutcome {
 }
 
 function interactiveParserOutcome(
+  operation: string,
   status: number,
   parsed: ParsedOfapiJsonBody,
 ): OfapiParserOutcome {
   const successfulHttp = status >= 200 && status < 300;
-  return parsed.validJson || !successfulHttp
-    ? parsed.validJson ? "accepted" : "intentional_noop"
-    : "contract_rejected";
+  if (!parsed.validJson) {
+    return successfulHttp ? "contract_rejected" : "intentional_noop";
+  }
+  if (!successfulHttp) return "accepted";
+  return !validateOfapiInteractiveResponseShape(operation, parsed.body)
+    ? "contract_rejected"
+    : "accepted";
 }
 
 function denialError(reason: string) {
@@ -119,7 +123,8 @@ export async function executeCaptureFirstInteractiveRead(
   });
   const globalDailyCap = Math.max(
     1,
-    app.config.ofapiMirrorGlobalDailyCreditBudget ?? DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET,
+    app.config.ofapiMirrorGlobalDailyCreditBudget
+      ?? OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
   );
   const reservation = await reserveOfapiRequestAttempt(app.db, {
     ownerKind: "interactive_request",
@@ -150,11 +155,13 @@ export async function executeCaptureFirstInteractiveRead(
     floorProbeCooldownMs: FLOOR_PROBE_COOLDOWN_MS,
     principalCallCap: Math.max(
       1,
-      app.config.ofapiMirrorPrincipalDailyCallCap ?? DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP,
+      app.config.ofapiMirrorPrincipalDailyCallCap
+        ?? OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCallCap,
     ),
     principalCreditCap: Math.max(
       1,
-      app.config.ofapiMirrorPrincipalDailyCreditCap ?? DEFAULT_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP,
+      app.config.ofapiMirrorPrincipalDailyCreditCap
+        ?? OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCreditCap,
     ),
     deadlineAt,
   });
@@ -258,7 +265,7 @@ export async function executeCaptureFirstInteractiveRead(
     });
   }
 
-  const parserOutcome = interactiveParserOutcome(raw.status, parsed);
+  const parserOutcome = interactiveParserOutcome(input.operation, raw.status, parsed);
   const completed = await completeOfapiInteractiveRequest(app.db, {
     requestId: owner.id,
     attemptId: reservation.attemptId,
@@ -355,7 +362,7 @@ export async function recoverExpiredOfapiInteractiveResponses(
 
     const parserOutcome = captured === null
       ? "failed"
-      : interactiveParserOutcome(captured.status, parsed);
+      : interactiveParserOutcome(candidate.operation, captured.status, parsed);
     const completed = await completeOfapiInteractiveRequest(app.db, {
       requestId: candidate.requestId,
       attemptId: candidate.attemptId,
