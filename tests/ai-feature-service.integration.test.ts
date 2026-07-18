@@ -1394,6 +1394,7 @@ describe("coach-chat recap attach (spec §5)", () => {
       userId: null,
       pageId: input.pageId,
       conversationRef,
+      fanRef,
       promptBlocks: [],
       completion: input.completion,
       params: { summaryMode: input.mode, outcome: "completed", stopReason: "end_turn" },
@@ -1476,8 +1477,15 @@ describe("coach-chat recap attach (spec §5)", () => {
     expect(promptText).toContain("Short recap");
     expect(promptText).toContain("SHORTBODY_C");
     // (f) contextManifest.recapAttach is observable on the restricted-store row.
-    const { rows } = await testDb.pool.query<{ params: Record<string, unknown> }>(
-      `select params from ai_generation_content where feature = 'coach-chat' order by id desc limit 1`,
+    // The canonical Fansly shape also persists a SEPARATE fan_ref alongside the
+    // groupId conversation_ref (Blocker 1) so fan-scope erasure can reach it.
+    const { rows } = await testDb.pool.query<{
+      params: Record<string, unknown>;
+      conversation_ref: string | null;
+      fan_ref: string | null;
+    }>(
+      `select params, conversation_ref, fan_ref from ai_generation_content
+       where feature = 'coach-chat' order by id desc limit 1`,
     );
     const recapAttach = (
       rows[0]?.params as {
@@ -1486,6 +1494,8 @@ describe("coach-chat recap attach (spec §5)", () => {
     )?.contextManifest?.recapAttach;
     expect(typeof recapAttach?.full).toBe("number");
     expect(typeof recapAttach?.short).toBe("number");
+    expect(rows[0]?.conversation_ref).toBe(conversationRef);
+    expect(rows[0]?.fan_ref).toBe(fanRef);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(d) both exist, full newer -> full only", async (context) => {
@@ -1889,6 +1899,7 @@ describe("recap-status read (Task 9)", () => {
       userId: null,
       pageId: input.pageId,
       conversationRef,
+      fanRef,
       promptBlocks: [],
       completion: input.completion,
       params: {

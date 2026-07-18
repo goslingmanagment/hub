@@ -202,6 +202,12 @@ export type AiGatewayStreamInput = AiGatewayStreamBody & {
    * Anthropic provider so a tight maxTokens stays a pure output budget (the
    * fan-summary short recap sets it alongside maxTokens: 2048). */
   disableAdaptiveThinking?: boolean;
+  /** Off the wire (never on aiGatewayStreamBodySchema): the fan this generation
+   * is ABOUT, stored as the restricted record's fan_ref so a fan-scope Stage 28
+   * erasure reaches coach/recap rows whose conversation_ref is the canonical
+   * groupId (spec §5). The feature lane sets it to body.fanRef ?? null; the raw
+   * gateway and internal lanes leave it unset (null). */
+  fanRef?: string | null;
 };
 
 export async function prepareAiGatewayStream(
@@ -400,6 +406,7 @@ export async function prepareAiGatewayStream(
         userId: principal.user.id,
         pageId: page.id,
         conversationRef: input.conversationId ?? null,
+        fanRef: input.fanRef ?? null,
         promptBlocks: [
           { role: "system", blocks: input.prompt.systemBlocks },
           { role: "user", blocks: input.prompt.userBlocks },

@@ -202,6 +202,9 @@ export async function runGatewayCompletion(
       userId: null,
       pageId: input.pageId ?? null,
       conversationRef: input.conversationRef ?? null,
+      // System-initiated generations carry no separate fan scope; erasure
+      // reaches them (if ever needed) by conversation_ref.
+      fanRef: null,
       promptBlocks: [
         { role: "system", blocks: input.systemBlocks },
         { role: "user", blocks: input.userBlocks },

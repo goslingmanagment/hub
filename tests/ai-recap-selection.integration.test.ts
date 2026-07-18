@@ -33,6 +33,7 @@ const row = (
   userId: null,
   pageId: PAGE_ID,
   conversationRef: "group-1",
+  fanRef: null,
   promptBlocks: [],
   completion: "profile text",
   params: { summaryMode: "full", outcome: "completed", stopReason: "end_turn" },

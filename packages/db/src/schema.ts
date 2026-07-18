@@ -3240,6 +3240,10 @@ export const aiGenerationContent = pgTable(
     }),
     pageId: bigint("page_id", { mode: "number" }),
     conversationRef: text("conversation_ref"),
+    // The fan this generation is ABOUT (spec §5): coach/recap requests send a
+    // canonical conversation_ref (groupId) + separate fan_ref, so fan-scope
+    // erasure matches on either. NULL for legacy/raw-gateway rows.
+    fanRef: text("fan_ref"),
     promptBlocks: jsonb("prompt_blocks").$type<unknown[]>().notNull(),
     completion: text("completion").notNull(),
     params: jsonb("params").$type<Record<string, unknown>>().notNull(),
@@ -3254,6 +3258,9 @@ export const aiGenerationContent = pgTable(
       table.pageId,
       table.conversationRef,
     ),
+    pageFanIdx: index("ai_generation_content_page_fan_idx")
+      .on(table.pageId, table.fanRef)
+      .where(sql`${table.fanRef} is not null`),
   }),
 );
 

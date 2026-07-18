@@ -16,6 +16,10 @@ export interface InsertAiGenerationContentInput {
   userId: number | null;
   pageId: number | null;
   conversationRef: string | null;
+  /** The fan this generation is about (spec §5). NULL when the request carried
+   * no separate fanRef (legacy/raw-gateway/internal); Stage 28 fan erasure
+   * matches on conversation_ref OR fan_ref. */
+  fanRef: string | null;
   promptBlocks: unknown[];
   completion: string;
   params: Record<string, unknown>;

@@ -449,6 +449,12 @@ export async function prepareAiFeatureStream(
     platform: body.platform,
     platformUserId: fanRef,
     conversationId: body.conversationRef,
+    // Off-wire: the fan this generation is ABOUT, stored as the restricted
+    // record's fan_ref so fan-scope erasure reaches coach/recap rows whose
+    // conversation_ref is the canonical groupId (spec §5). Only the explicit
+    // wire fanRef counts — features that carry only conversationRef leave it
+    // null and stay reachable by conversation_ref = fanId.
+    fanRef: body.fanRef ?? null,
     model: body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature],
     reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,
