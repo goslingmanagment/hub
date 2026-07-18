@@ -69,7 +69,8 @@ COPY --from=prod-deps /app/packages/contracts/node_modules ./packages/contracts/
 COPY --from=prod-deps /app/packages/db/node_modules ./packages/db/node_modules
 COPY --from=prod-deps /app/packages/fansly/node_modules ./packages/fansly/node_modules
 COPY --from=prod-deps /app/packages/shared/node_modules ./packages/shared/node_modules
-RUN node apps/runtime/node_modules/playwright/cli.js install --with-deps chromium
+RUN node apps/runtime/node_modules/playwright/cli.js install --with-deps --only-shell chromium \
+    && rm -rf /var/lib/apt/lists/* /tmp/*
 COPY --from=build /app/apps/dashboard/dist ./apps/dashboard/dist
 COPY --from=build /app/apps/runtime/dist ./apps/runtime/dist
 COPY --from=build /app/packages/db/dist ./packages/db/dist

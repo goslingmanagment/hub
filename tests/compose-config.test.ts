@@ -130,16 +130,17 @@ describe("compose config", () => {
     expect(text).toContain("trap cleanup_deploy EXIT");
   });
 
-  it("deploy-production.sh derives candidate, dist-base, and rollback tags per deploy run", async () => {
+  it("deploy-production.sh derives per-run release tags and one dependency-keyed clean full base", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const initializer = getShellFunction(text, "initialize_deploy_metadata_and_tags");
 
     expect(initializer).toContain("DEPLOY_RUN_ID=");
     expect(initializer).toContain('IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate-${source_tag_component}-${DEPLOY_RUN_ID}"');
-    expect(initializer).toContain('DIST_BASE_TAG="${IMAGE_TAG}-dist-base-${source_tag_component}-${DEPLOY_RUN_ID}"');
+    expect(initializer).toContain('CLEAN_FULL_BASE_TAG="${IMAGE_TAG}-full-${APP_DEPENDENCY_CHECKSUM}"');
     expect(initializer).toContain('ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback-${source_tag_component}-${DEPLOY_RUN_ID}"');
     expect(text).not.toContain('IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate"');
-    expect(text).not.toContain('DIST_BASE_TAG="${IMAGE_TAG}-dist-base"');
+    expect(text).not.toContain("DIST_BASE_TAG");
+    expect(initializer).toContain("clean_full_base=${CLEAN_FULL_BASE_TAG}");
   });
 
   it("deploy-production.sh validates and builds from the same canonical Node base image", async () => {
@@ -467,17 +468,24 @@ describe("compose config", () => {
     const deploy = await readComposeFile("scripts/deploy-production.sh");
     const fullBuild = getShellFunction(deploy, "build_full_candidate_image");
     const distBuild = getShellFunction(deploy, "build_dist_only_candidate_image");
+    const publishCleanBase = getShellFunction(deploy, "publish_remote_clean_full_base_image");
 
     expect(dockerfile).toContain("ARG NODE_BASE_IMAGE=node:22-bookworm-slim");
     expect(dockerfile).toContain("FROM ${NODE_BASE_IMAGE} AS target-base");
     expect(dockerfile).toContain("LABEL agency-hub.dependency-checksum=");
     expect(dockerfile).toContain("LABEL agency-hub.source-revision=");
+    expect(dockerfile).toContain("install --with-deps --only-shell chromium");
+    expect(dockerfile).toContain("rm -rf /var/lib/apt/lists/* /tmp/*");
+    expect(dockerfile).not.toContain("install --with-deps chromium");
     expect(fullBuild).toContain('--build-arg "NODE_BASE_IMAGE=${NODE_BASE_IMAGE}"');
     expect(fullBuild).toContain('--build-arg "APP_DEPENDENCY_CHECKSUM=${APP_DEPENDENCY_CHECKSUM}"');
     expect(fullBuild).toContain('--build-arg "APP_SOURCE_REVISION=${APP_SOURCE_REVISION}"');
-    expect(distBuild).toContain("docker tag $(printf '%q' \"$ROLLBACK_IMAGE_TAG\") $(printf '%q' \"$DIST_BASE_TAG\")");
+    expect(distBuild).toContain("from pinned clean full image ${CLEAN_FULL_BASE_TAG}");
+    expect(distBuild).not.toContain("docker tag");
     expect(distBuild).toContain("--build-arg APP_DEPENDENCY_CHECKSUM=");
     expect(distBuild).toContain("--build-arg APP_SOURCE_REVISION=");
+    expect(publishCleanBase).toContain("CANDIDATE_IS_FULL_BUILD");
+    expect(publishCleanBase).toContain("docker tag $(printf '%q' \"$IMAGE_CANDIDATE_TAG\") $(printf '%q' \"$CLEAN_FULL_BASE_TAG\")");
   });
 
   it("deploy-production.sh guards dist-only fallback with dependency checksum labels", async () => {
@@ -488,7 +496,8 @@ describe("compose config", () => {
     const createContext = getShellFunction(text, "create_dist_overlay_context");
 
     expect(text).toContain("export COPYFILE_DISABLE=1");
-    expect(validator).toContain("read_remote_rollback_dependency_checksum");
+    expect(validator).toContain("read_remote_clean_full_base_dependency_checksum");
+    expect(validator).toContain('docker image inspect $(printf \'%q\' "$CLEAN_FULL_BASE_TAG")');
     expect(validator).toContain("ALLOW_UNLABELED_DIST_BASE");
     expect(validator).toContain("Dist-only deploy cannot prove dependency compatibility");
     expect(validator).toContain("Dist-only deploy refused: dependency checksum changed");
@@ -496,6 +505,43 @@ describe("compose config", () => {
     expect(pruneMetadata).toContain("-name '._*'");
     expect(pruneMetadata).toContain("-name '.DS_Store'");
     expect(createContext).toContain('prune_macos_metadata_files "$DIST_CONTEXT_DIR"');
+  });
+
+  it("deploy-production.sh keeps every dist-only image to one minimal overlay", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const createContext = getShellFunction(text, "create_dist_overlay_context");
+    const overlayBlock = text.match(/DIST_OVERLAY_PATHS=\(\n([\s\S]*?)\n\)/)?.[1] ?? "";
+    const overlayPaths = overlayBlock.trim().split(/\s+/).filter(Boolean);
+
+    expect(overlayPaths).toEqual([
+      "apps/dashboard/dist",
+      "apps/runtime/dist",
+      "packages/db/dist",
+      "packages/db/migrations",
+    ]);
+    expect(createContext).toContain("FROM ${CLEAN_FULL_BASE_TAG}");
+    expect(createContext).not.toContain("WORKDIR /app");
+    expect(createContext).toContain("COPY apps/dashboard/dist /app/apps/dashboard/dist");
+    expect(createContext).toContain("COPY apps/runtime/dist /app/apps/runtime/dist");
+    expect(createContext).toContain("COPY packages/db/dist /app/packages/db/dist");
+    expect(createContext).toContain("COPY packages/db/migrations /app/packages/db/migrations");
+    expect(createContext).not.toContain("packages/contracts/dist");
+    expect(createContext).not.toContain("packages/fansly/dist");
+    expect(createContext).not.toContain("packages/platform-core/dist");
+    expect(createContext).not.toContain("packages/shared/dist");
+  });
+
+  it("deploy-production.sh publishes the clean full base only after production verification", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const buildCandidate = getShellFunction(text, "build_candidate_image");
+    const dashboardIndex = text.indexOf('grep -q \'id="root"\' "$DASHBOARD_FILE"');
+    const publishIndex = text.lastIndexOf("publish_remote_clean_full_base_image");
+    const successIndex = text.indexOf('log "Deployment verified successfully"');
+
+    expect(buildCandidate).toContain("CANDIDATE_IS_FULL_BUILD=1");
+    expect(buildCandidate).toContain("CANDIDATE_IS_FULL_BUILD=0");
+    expect(publishIndex).toBeGreaterThan(dashboardIndex);
+    expect(successIndex).toBeGreaterThan(publishIndex);
   });
 
   it("deploy-production.sh allows rollback across known data-only migrations", async () => {

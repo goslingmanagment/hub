@@ -22,7 +22,7 @@ Options:
                         Deprecated compatibility option; accepted but ignored.
                         Use --node-base-image instead.
   --allow-unlabeled-dist-base
-                        Allow dist-only deploy from an existing production image
+                        Allow dist-only deploy from the pinned clean full image
                         without agency-hub dependency checksum labels.
   --port <port>          Remote loopback HTTP port used for verification. Default: 3000
   --verify-url <url>     Public HTTPS base URL to verify after deploy. Default: remote http://127.0.0.1:<port>
@@ -253,7 +253,8 @@ APP_SOURCE_REVISION=""
 DEPLOY_RUN_ID=""
 ROLLBACK_IMAGE_TAG=""
 IMAGE_CANDIDATE_TAG=""
-DIST_BASE_TAG=""
+CLEAN_FULL_BASE_TAG=""
+CANDIDATE_IS_FULL_BUILD=0
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
 ROLLBACK_RELEASE_FILES_RESTORED=0
@@ -320,12 +321,8 @@ DEPENDENCY_MANIFEST_FILES=(
 DIST_OVERLAY_PATHS=(
   apps/dashboard/dist
   apps/runtime/dist
-  packages/contracts/dist
   packages/db/dist
   packages/db/migrations
-  packages/fansly/dist
-  packages/platform-core/dist
-  packages/shared/dist
 )
 
 run_remote() {
@@ -351,11 +348,11 @@ initialize_deploy_metadata_and_tags() {
   source_tag_component="$(sanitize_tag_component "$APP_SOURCE_REVISION")"
 
   IMAGE_CANDIDATE_TAG="${IMAGE_TAG}-candidate-${source_tag_component}-${DEPLOY_RUN_ID}"
-  DIST_BASE_TAG="${IMAGE_TAG}-dist-base-${source_tag_component}-${DEPLOY_RUN_ID}"
+  CLEAN_FULL_BASE_TAG="${IMAGE_TAG}-full-${APP_DEPENDENCY_CHECKSUM}"
   ROLLBACK_IMAGE_TAG="${IMAGE_TAG}-rollback-${source_tag_component}-${DEPLOY_RUN_ID}"
 
   log "Build metadata: revision=${APP_SOURCE_REVISION}, dependency_checksum=${APP_DEPENDENCY_CHECKSUM}, run_id=${DEPLOY_RUN_ID}"
-  log "Deploy image tags: candidate=${IMAGE_CANDIDATE_TAG}, rollback=${ROLLBACK_IMAGE_TAG}, dist_base=${DIST_BASE_TAG}"
+  log "Deploy image tags: candidate=${IMAGE_CANDIDATE_TAG}, rollback=${ROLLBACK_IMAGE_TAG}, clean_full_base=${CLEAN_FULL_BASE_TAG}"
 }
 
 acquire_local_deploy_lock() {
@@ -375,6 +372,7 @@ acquire_local_deploy_lock() {
       printf 'dependency_checksum=%s\n' "$APP_DEPENDENCY_CHECKSUM"
       printf 'run_id=%s\n' "$DEPLOY_RUN_ID"
       printf 'candidate_tag=%s\n' "$IMAGE_CANDIDATE_TAG"
+      printf 'clean_full_base_tag=%s\n' "$CLEAN_FULL_BASE_TAG"
     } >"${LOCAL_DEPLOY_LOCK_DIR}/metadata"
     printf '%s\n' "$DEPLOY_RUN_ID" >"${LOCAL_DEPLOY_LOCK_DIR}/owner"
     log "Acquired local deploy lock ${LOCAL_DEPLOY_LOCK_DIR}"
@@ -449,6 +447,7 @@ if mkdir ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} 2>/dev/null; then
     printf 'run_id=%s\n' $(printf '%q' "$DEPLOY_RUN_ID")
     printf 'candidate_tag=%s\n' $(printf '%q' "$IMAGE_CANDIDATE_TAG")
     printf 'rollback_tag=%s\n' $(printf '%q' "$ROLLBACK_IMAGE_TAG")
+    printf 'clean_full_base_tag=%s\n' $(printf '%q' "$CLEAN_FULL_BASE_TAG")
   } > ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata
   printf '%s\n' $(printf '%q' "$DEPLOY_RUN_ID") > ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner
   exit 0
@@ -1016,36 +1015,40 @@ load_candidate_image() {
   docker save "$IMAGE_CANDIDATE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
 }
 
-read_remote_rollback_dependency_checksum() {
+read_remote_clean_full_base_dependency_checksum() {
   local template
   template='{{ index .Config.Labels "agency-hub.dependency-checksum" }}'
-  run_remote "set -euo pipefail; docker image inspect -f $(printf '%q' "$template") $(printf '%q' "$ROLLBACK_IMAGE_TAG")" 2>/dev/null || true
+  run_remote "set -euo pipefail; docker image inspect -f $(printf '%q' "$template") $(printf '%q' "$CLEAN_FULL_BASE_TAG")" 2>/dev/null || true
 }
 
 validate_dist_only_base() {
   if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
-    fail "Dist-only deploy requires a captured remote rollback image to use as the base"
+    fail "Dist-only deploy requires a captured remote rollback image for rollback and capability verification"
   fi
 
+  run_remote "set -euo pipefail; docker image inspect $(printf '%q' "$CLEAN_FULL_BASE_TAG") >/dev/null" \
+    >/dev/null 2>&1 \
+    || fail "Dist-only deploy requires pinned clean full image ${CLEAN_FULL_BASE_TAG}. Run a full deploy to establish it."
+
   local remote_checksum
-  remote_checksum="$(read_remote_rollback_dependency_checksum)"
+  remote_checksum="$(read_remote_clean_full_base_dependency_checksum)"
   if [[ "$remote_checksum" == "<no value>" ]]; then
     remote_checksum=""
   fi
 
   if [[ -z "$remote_checksum" ]]; then
     if [[ "$ALLOW_UNLABELED_DIST_BASE" == "1" ]]; then
-      log "Dist-only base image has no dependency checksum label; continuing because --allow-unlabeled-dist-base was set"
+      log "Pinned clean full image has no dependency checksum label; continuing because --allow-unlabeled-dist-base was set"
       return 0
     fi
-    fail "Dist-only deploy cannot prove dependency compatibility because the current production image is unlabeled. Re-run with --allow-unlabeled-dist-base only if package manifests, lockfile, and Dockerfile are compatible with the running image."
+    fail "Dist-only deploy cannot prove dependency compatibility because ${CLEAN_FULL_BASE_TAG} is unlabeled. Re-run with --allow-unlabeled-dist-base only if package manifests, lockfile, and Dockerfile are compatible with that clean full image."
   fi
 
   if [[ "$remote_checksum" != "$APP_DEPENDENCY_CHECKSUM" ]]; then
-    fail "Dist-only deploy refused: dependency checksum changed (${remote_checksum} -> ${APP_DEPENDENCY_CHECKSUM}). Use a full deploy after refreshing the Node base cache."
+    fail "Dist-only deploy refused: dependency checksum changed (${remote_checksum} -> ${APP_DEPENDENCY_CHECKSUM}). Run a full deploy to establish a compatible clean base."
   fi
 
-  log "Dist-only base dependency checksum matches ${APP_DEPENDENCY_CHECKSUM}"
+  log "Pinned clean full image ${CLEAN_FULL_BASE_TAG} matches dependency checksum ${APP_DEPENDENCY_CHECKSUM}"
 }
 
 copy_dist_overlay_path() {
@@ -1068,9 +1071,7 @@ create_dist_overlay_context() {
   mkdir -p "$DIST_CONTEXT_DIR"
 
   cat >"${DIST_CONTEXT_DIR}/Dockerfile" <<EOF
-FROM ${DIST_BASE_TAG}
-
-WORKDIR /app
+FROM ${CLEAN_FULL_BASE_TAG}
 
 ARG APP_DEPENDENCY_CHECKSUM=unknown
 ARG APP_SOURCE_REVISION=unknown
@@ -1078,14 +1079,10 @@ ARG APP_SOURCE_REVISION=unknown
 LABEL agency-hub.dependency-checksum="\${APP_DEPENDENCY_CHECKSUM}"
 LABEL agency-hub.source-revision="\${APP_SOURCE_REVISION}"
 
-COPY apps/dashboard/dist ./apps/dashboard/dist
-COPY apps/runtime/dist ./apps/runtime/dist
-COPY packages/contracts/dist ./packages/contracts/dist
-COPY packages/db/dist ./packages/db/dist
-COPY packages/db/migrations ./packages/db/migrations
-COPY packages/fansly/dist ./packages/fansly/dist
-COPY packages/platform-core/dist ./packages/platform-core/dist
-COPY packages/shared/dist ./packages/shared/dist
+COPY apps/dashboard/dist /app/apps/dashboard/dist
+COPY apps/runtime/dist /app/apps/runtime/dist
+COPY packages/db/dist /app/packages/db/dist
+COPY packages/db/migrations /app/packages/db/migrations
 EOF
 
   local path
@@ -1112,8 +1109,17 @@ build_dist_only_candidate_image() {
     "bash -lc $(printf '%q' "set -euo pipefail; rm -rf ${remote_context_escaped}; mkdir -p ${remote_context_escaped}; tar -xf - -C ${remote_context_escaped}")" \
     >/dev/null
 
-  log "Building ${IMAGE_CANDIDATE_TAG} on ${REMOTE} from current production image"
-  run_remote "set -euo pipefail; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$DIST_BASE_TAG"); docker build --platform=$(printf '%q' "$BUILD_PLATFORM") --build-arg APP_DEPENDENCY_CHECKSUM=$(printf '%q' "$APP_DEPENDENCY_CHECKSUM") --build-arg APP_SOURCE_REVISION=$(printf '%q' "$APP_SOURCE_REVISION") -t $(printf '%q' "$IMAGE_CANDIDATE_TAG") ${remote_context_escaped}; rm -rf ${remote_context_escaped}"
+  log "Building ${IMAGE_CANDIDATE_TAG} on ${REMOTE} from pinned clean full image ${CLEAN_FULL_BASE_TAG}"
+  run_remote "set -euo pipefail; docker build --platform=$(printf '%q' "$BUILD_PLATFORM") --build-arg APP_DEPENDENCY_CHECKSUM=$(printf '%q' "$APP_DEPENDENCY_CHECKSUM") --build-arg APP_SOURCE_REVISION=$(printf '%q' "$APP_SOURCE_REVISION") -t $(printf '%q' "$IMAGE_CANDIDATE_TAG") ${remote_context_escaped}; rm -rf ${remote_context_escaped}"
+}
+
+publish_remote_clean_full_base_image() {
+  if [[ "${CANDIDATE_IS_FULL_BUILD:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  log "Publishing clean full image base ${CLEAN_FULL_BASE_TAG}"
+  run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$CLEAN_FULL_BASE_TAG")"
 }
 
 build_candidate_image() {
@@ -1121,15 +1127,19 @@ build_candidate_image() {
     full)
       build_full_candidate_image || fail "Full Docker build failed"
       load_candidate_image || fail "Unable to load candidate image on remote"
+      CANDIDATE_IS_FULL_BUILD=1
       ;;
     dist-only)
+      CANDIDATE_IS_FULL_BUILD=0
       build_dist_only_candidate_image || fail "Dist-only candidate image build failed"
       ;;
     auto)
       if build_full_candidate_image; then
         load_candidate_image || fail "Unable to load candidate image on remote"
+        CANDIDATE_IS_FULL_BUILD=1
       else
         log "Full Docker build failed before release sync; attempting dist-only fallback because --mode auto was set"
+        CANDIDATE_IS_FULL_BUILD=0
         build_dist_only_candidate_image || fail "Dist-only candidate image build failed"
       fi
       ;;
@@ -1373,6 +1383,9 @@ DASHBOARD_STATUS_CODE="$(curl_status "$DASHBOARD_FILE" "${VERIFY_URL%/}/login" |
 [[ "$DASHBOARD_STATUS_CODE" == "200" ]] || fail "Unexpected /login status: ${DASHBOARD_STATUS_CODE}"
 grep -qi '<!doctype html>' "$DASHBOARD_FILE" || fail "Dashboard route did not return HTML"
 grep -q 'id="root"' "$DASHBOARD_FILE" || fail "Dashboard HTML is missing the root mount"
+
+publish_remote_clean_full_base_image \
+  || fail "Deployment is healthy but the pinned clean full image tag could not be published"
 
 log "Deployment verified successfully"
 log "API health: ${VERIFY_URL%/}/api/v1/health"

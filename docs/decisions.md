@@ -4685,3 +4685,24 @@ OnlyFans compatibility/no-op rows (`light`, legacy `transactions`, retired
 `dm_messages`) remain auditable but never manufacture a Resume action. This
 changes only operator copy and control reachability; applicability, scheduling,
 stored data, and Decision #166 page-health policy remain unchanged.
+
+**Decision #171 (2026-07-18, dist-only releases rebase on one pinned clean
+full image):** A production full build publishes a clean base alias keyed by
+the dependency checksum after the deployed candidate passes all
+health, capability, label, sync, and dashboard verification. A dist-only
+release must build from that pinned full image and refuses to run when the tag
+is absent, unlabeled without an explicit compatibility override, or labeled
+with a different dependency checksum. The running production image and its
+rollback snapshot are never retagged as a dist base. Consequently every
+dist-only image is the clean full image plus exactly one current artifact
+overlay instead of an unbounded chain of previous releases.
+
+The overlay mirrors the full runtime image and contains only dashboard,
+runtime, database bundle, and migration outputs. Internal contracts, Fansly,
+platform-core, and shared bundles are already incorporated into the runtime
+and database production bundles and are not copied as separate runtime paths.
+The full image installs only Playwright's Chromium headless shell, which is the
+binary used by both runtime launch sites, and removes package-manager indexes
+in the same layer. Image/tag garbage collection remains an explicit,
+owner-gated operation so current, rollback, and the checksum-pinned clean base
+cannot be deleted by an unscoped prune.
