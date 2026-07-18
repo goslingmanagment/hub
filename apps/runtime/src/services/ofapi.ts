@@ -1662,6 +1662,10 @@ export function createOfapiClient(input: {
     },
     async listChargebacks(context, accountId, params) {
       const limit = Math.min(params.limit ?? 100, 100);
+      // OFAPI treats end_date as part of a bounded range, not as a standalone
+      // upper bound. Keep the transport fail-safe even if a future caller
+      // accidentally supplies endDate without startDate.
+      const endDate = params.startDate === undefined ? undefined : params.endDate;
       return observedListRequest({
         context,
         operation: "ofapi_chargebacks",
@@ -1671,7 +1675,7 @@ export function createOfapiClient(input: {
           limit: String(limit),
           offset: params.offset != null ? String(params.offset) : undefined,
           start_date: params.startDate,
-          end_date: params.endDate,
+          end_date: endDate,
         },
         pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
         cursorPresent: false,
@@ -1679,6 +1683,7 @@ export function createOfapiClient(input: {
           limit,
           offset: params.offset ?? 0,
           hasStartDate: params.startDate != null,
+          hasEndDate: endDate != null,
         },
       });
     },

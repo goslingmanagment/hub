@@ -23,7 +23,8 @@ export type NotificationIncidentKind =
   | "read_gateway_capture"
   | "golden_signal_lag"
   | "scheduler_silent"
-  | "ops_sampler_silent";
+  | "ops_sampler_silent"
+  | "ofapi_chargebacks_reconcile_failed";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";

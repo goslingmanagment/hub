@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createModel,
   createOnlyFansPage,
+  listNotificationIncidents,
   listStalePendingOfapiTransactions,
   retireStalePendingTransactionsById,
   setPageOfapiAccountId,
@@ -20,7 +21,10 @@ import {
 import { runOfapiPendingReconcile } from "../apps/runtime/src/services/ofapi-pending-reconcile.ts";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { runOfapiChargebacksReconcile } from "../apps/runtime/src/services/ofapi-chargebacks-sync.ts";
+import {
+  runOfapiChargebacksReconcile,
+  startOfapiChargebacksWorker,
+} from "../apps/runtime/src/services/ofapi-chargebacks-sync.ts";
 import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
@@ -90,20 +94,28 @@ function chargebackItem(paymentId: string, fanId: string) {
   };
 }
 
+type ChargebacksCall = {
+  accountId: string;
+  offset: number;
+  startDate: string | undefined;
+  endDate: string | undefined;
+};
+
 function chargebacksClient(input: {
   itemsByAccount: Map<string, Record<string, unknown>[]>;
-  calls: Array<{ accountId: string; offset: number; startDate: string | undefined }>;
+  calls: ChargebacksCall[];
 }): OfapiClient {
   return {
     async listChargebacks(
       _context: unknown,
       accountId: string,
-      params: { offset?: number; startDate?: string },
+      params: { offset?: number; startDate?: string; endDate?: string },
     ): Promise<OfapiListPage> {
       input.calls.push({
         accountId,
         offset: params.offset ?? 0,
         startDate: params.startDate,
+        endDate: params.endDate,
       });
       return {
         items: input.itemsByAccount.get(accountId) ?? [],
@@ -140,7 +152,7 @@ describe("OFAPI chargebacks reconcile", () => {
       occurredAt: new Date("2026-06-15T10:00:00.000Z"),
     });
 
-    const calls: Array<{ accountId: string; offset: number; startDate: string | undefined }> = [];
+    const calls: ChargebacksCall[] = [];
     appContext = {
       ...appContext,
       ofapi: chargebacksClient({
@@ -154,6 +166,7 @@ describe("OFAPI chargebacks reconcile", () => {
     expect(first.pages[0]).toMatchObject({ status: "written", writtenRows: 1 });
     // First run on a page with no chargeback rows walks the FULL history.
     expect(calls[0]?.startDate).toBeUndefined();
+    expect(calls[0]?.endDate).toBeUndefined();
 
     const { rows } = await testDb.pool.query<{
       transaction_id: string;
@@ -201,6 +214,9 @@ describe("OFAPI chargebacks reconcile", () => {
     const second = await runOfapiChargebacksReconcile(appContext);
     expect(second.pages[0]).toMatchObject({ status: "written", writtenRows: 1 });
     expect(calls[1]?.startDate).toBeDefined();
+    expect(calls[1]?.endDate).toBeDefined();
+    expect(new Date(calls[1]!.endDate!.replace(" ", "T") + "Z").getTime())
+      .toBeGreaterThan(new Date(calls[1]!.startDate!.replace(" ", "T") + "Z").getTime());
     const { rows: countRows } = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from transactions where platform_account_id = $1",
       [page.id],
@@ -219,15 +235,20 @@ describe("OFAPI chargebacks reconcile", () => {
     // two requests to complete.
     const items = Array.from({ length: 101 }, (_, i) =>
       chargebackItem(`pay-t${i}`, String(600_000 + i)));
-    const calls: Array<{ accountId: string; offset: number; startDate: string | undefined }> = [];
+    const calls: ChargebacksCall[] = [];
     const pagedClient = {
       async listChargebacks(
         _context: unknown,
         accountId: string,
-        params: { limit?: number; offset?: number; startDate?: string },
+        params: { limit?: number; offset?: number; startDate?: string; endDate?: string },
       ): Promise<OfapiListPage> {
         const offset = params.offset ?? 0;
-        calls.push({ accountId, offset, startDate: params.startDate });
+        calls.push({
+          accountId,
+          offset,
+          startDate: params.startDate,
+          endDate: params.endDate,
+        });
         const slice = items.slice(offset, offset + (params.limit ?? 100));
         return {
           items: slice,
@@ -284,6 +305,103 @@ describe("OFAPI chargebacks reconcile", () => {
       [page.id],
     );
     expect(afterCompletion).toEqual([{ n: "101" }]);
+  });
+
+  it("isolates a failed page, keeps the worker failed, and resolves one global incident after a clean run", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const failedPage = await seedOfapiPage("a-cb-fail", "acct_cb_fail");
+    const healthyPage = await seedOfapiPage("b-cb-healthy", "acct_cb_healthy");
+    let vendorFailure = true;
+    const calls: ChargebacksCall[] = [];
+    appContext = {
+      ...appContext,
+      ofapi: {
+        async listChargebacks(
+          _context: unknown,
+          accountId: string,
+          params: { offset?: number; startDate?: string; endDate?: string },
+        ): Promise<OfapiListPage> {
+          calls.push({
+            accountId,
+            offset: params.offset ?? 0,
+            startDate: params.startDate,
+            endDate: params.endDate,
+          });
+          if (accountId === "acct_cb_fail" && vendorFailure) {
+            throw new Error("scripted OFAPI validation failure");
+          }
+          return {
+            items: accountId === "acct_cb_healthy"
+              ? [chargebackItem("pay-healthy", "555010")]
+              : [],
+            hasNextPage: false,
+            nextMarker: null,
+            nextPageUrl: null,
+            meta: null,
+          };
+        },
+      } as unknown as OfapiClient,
+    };
+
+    const first = await runOfapiChargebacksReconcile(appContext);
+    expect(first.pages).toEqual([
+      expect.objectContaining({
+        pageLabel: failedPage.label,
+        status: "failed",
+        reason: "scripted OFAPI validation failure",
+      }),
+      expect.objectContaining({
+        pageLabel: healthyPage.label,
+        status: "written",
+        writtenRows: 1,
+      }),
+    ]);
+    const { rows: healthyRows } = await testDb.pool.query<{ n: number }>(
+      "select count(*)::int as n from transactions where platform_account_id = $1 and transaction_id = 'pay-healthy:chargeback'",
+      [healthyPage.id],
+    );
+    expect(healthyRows).toEqual([{ n: 1 }]);
+
+    let incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
+      incidentKey: "ofapi_chargebacks_reconcile_failed:global",
+      kind: "ofapi_chargebacks_reconcile_failed",
+      platformAccountId: null,
+      status: "open",
+    });
+
+    // A second failing pass refreshes the same global latch. The worker still
+    // marks its pg-boss job failed, but only after the healthy page ran.
+    let workerHandler: (() => Promise<void>) | null = null;
+    await startOfapiChargebacksWorker(appContext, {
+      async work(_queue, _options, handler) {
+        workerHandler = handler;
+        return null;
+      },
+    });
+    expect(workerHandler).not.toBeNull();
+    await expect(workerHandler!()).rejects.toThrow(
+      "OFAPI chargebacks reconcile failed for 1 page(s)",
+    );
+    incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]!.status).toBe("open");
+    expect(calls.filter((call) => call.accountId === "acct_cb_healthy")).toHaveLength(2);
+
+    vendorFailure = false;
+    const recovered = await runOfapiChargebacksReconcile(appContext);
+    expect(recovered.pages.map((page) => page.status)).toEqual(["written", "written"]);
+    incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
+      kind: "ofapi_chargebacks_reconcile_failed",
+      status: "resolved",
+    });
   });
 
   // ——— W7.3 (A21+B4, decision #132): negation guards ———
@@ -620,7 +738,7 @@ describe("OFAPI chargebacks reconcile", () => {
       ofapiCreditLedgerEnabled: true,
     });
     await seedOfapiPage("cb-off-of", "acct_cb_off");
-    const calls: Array<{ accountId: string; offset: number; startDate: string | undefined }> = [];
+    const calls: ChargebacksCall[] = [];
     appContext = {
       ...appContext,
       ofapi: chargebacksClient({

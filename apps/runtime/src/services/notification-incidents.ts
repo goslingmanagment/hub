@@ -84,6 +84,8 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 Scheduler heartbeat silent — cron is not firing";
     case "ops_sampler_silent":
       return "🚨 Golden-signal sampler silent — ops telemetry is blind";
+    case "ofapi_chargebacks_reconcile_failed":
+      return "🚨 OFAPI chargebacks reconcile failed";
   }
 }
 
@@ -141,6 +143,8 @@ function resolveDetailForIncident(
       return "Scheduler heartbeat back; cron firing again";
     case "ops_sampler_silent":
       return "Golden-signal sampler emitting again";
+    case "ofapi_chargebacks_reconcile_failed":
+      return "OFAPI chargebacks reconcile recovered";
   }
 }
 
@@ -575,7 +579,8 @@ type GlobalIncidentKind =
   | "read_gateway_capture"
   | "golden_signal_lag"
   | "scheduler_silent"
-  | "ops_sampler_silent";
+  | "ops_sampler_silent"
+  | "ofapi_chargebacks_reconcile_failed";
 
 /** Process-global conditions (low credit balance, webhook silence, burn rate,
  * disk usage, partition lead, watchdog deadmen). W5.1 (A25): `subKey` splits

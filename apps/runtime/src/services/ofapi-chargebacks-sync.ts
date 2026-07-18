@@ -32,6 +32,10 @@ import {
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
 } from "./page-context.ts";
+import {
+  notifyOfapiGlobalIncident,
+  resolveOfapiGlobalIncident,
+} from "./notification-incidents.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
 import {
@@ -178,7 +182,7 @@ async function pageHasChargebackRows(db: Database, pageId: number) {
 
 export interface OfapiChargebacksPageResult {
   pageLabel: string;
-  status: "written" | "blocked" | "skipped";
+  status: "written" | "blocked" | "skipped" | "failed";
   reason: string | null;
   apiPages: number;
   rawRows: number;
@@ -242,9 +246,14 @@ async function reconcilePage(
     };
   }
 
+  const now = new Date();
   const startDate = (await pageHasChargebackRows(app.db, input.pageId))
-    ? formatOfapiDate(new Date(Date.now() - CHARGEBACKS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000))
+    ? formatOfapiDate(new Date(now.getTime() - CHARGEBACKS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000))
     : undefined;
+  // The vendor now rejects a lower-bounded range without end_date. The first
+  // full-history walk must still send neither boundary; trailing walks send
+  // the pair from one captured clock instant.
+  const endDate = startDate === undefined ? undefined : formatOfapiDate(now);
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);
   const dispatcher = proxy ? createProxyRequestDispatcher(proxy) : null;
@@ -277,7 +286,7 @@ async function reconcilePage(
       const page = await app.ofapi.listChargebacks(requestContext, input.ofapiAccountId, {
         limit: CHARGEBACKS_PAGE_LIMIT,
         offset,
-        startDate,
+        ...(startDate === undefined ? {} : { startDate, endDate }),
       });
       await input.guard.recordResponse(page);
       apiPages += 1;
@@ -407,12 +416,53 @@ export async function runOfapiChargebacksReconcile(app: AppContext) {
 
   const pages: OfapiChargebacksPageResult[] = [];
   for (const page of mapped) {
-    pages.push(await reconcilePage(app, {
-      pageId: page.id,
-      pageLabel: page.label,
-      ofapiAccountId: page.ofapiAccountId,
-      guard,
-    }));
+    try {
+      pages.push(await reconcilePage(app, {
+        pageId: page.id,
+        pageLabel: page.label,
+        ofapiAccountId: page.ofapiAccountId,
+        guard,
+      }));
+    } catch (error) {
+      // A failed request has no response with which to settle the reservation.
+      // Keep its DB estimate charged conservatively, but clear the in-memory
+      // lifecycle token so this page cannot prevent the next mapped page from
+      // using the shared guard.
+      guard.abandonPendingReservation();
+      const reason = error instanceof Error ? error.message : String(error);
+      pages.push({
+        pageLabel: page.label,
+        status: "failed",
+        reason,
+        apiPages: 0,
+        rawRows: 0,
+        writtenRows: 0,
+        skippedReasons: {},
+      });
+      app.logger.error({
+        err: error,
+        pageId: page.id,
+        pageLabel: page.label,
+      }, "OFAPI chargebacks reconcile failed for page; continuing with remaining pages");
+    }
+  }
+
+  const failed = pages.filter((page) => page.status === "failed");
+  if (failed.length > 0) {
+    const shown = failed.slice(0, 5)
+      .map((page) => `${page.pageLabel}: ${page.reason ?? "unknown error"}`)
+      .join("; ");
+    const remainder = failed.length > 5 ? `; +${failed.length - 5} more` : "";
+    await notifyOfapiGlobalIncident(app, {
+      kind: "ofapi_chargebacks_reconcile_failed",
+      errorSummary: `${failed.length} page(s) failed: ${shown}${remainder}`,
+    });
+  } else if (pages.length > 0 && pages.every((page) => page.status === "written")) {
+    // Do not resolve on a blocked/skipped pass: that is not positive evidence
+    // that the failed page recovered. A fully written fleet pass is.
+    await resolveOfapiGlobalIncident(app, {
+      kind: "ofapi_chargebacks_reconcile_failed",
+    });
   }
 
   const blocked = pages.filter((page) => page.status === "blocked");
@@ -468,6 +518,12 @@ export async function startOfapiChargebacksWorker(
   },
 ) {
   await boss.work(OFAPI_CHARGEBACKS_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
-    await runOfapiChargebacksReconcile(app);
+    const result = await runOfapiChargebacksReconcile(app);
+    const failed = result.pages.filter((page) => page.status === "failed");
+    if (failed.length > 0) {
+      // Page isolation lets the rest of the fleet converge first; throwing
+      // afterwards preserves pg-boss's terminal failed state for operators.
+      throw new Error(`OFAPI chargebacks reconcile failed for ${failed.length} page(s)`);
+    }
   });
 }
