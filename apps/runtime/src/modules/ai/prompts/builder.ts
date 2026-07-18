@@ -18,6 +18,7 @@ import { escapeForPrompt } from './escape.ts';
 import {
   CHAT_REVIEW_TEMPLATE,
   COACH_CHAT_TEMPLATE,
+  FAN_SUMMARY_SHORT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
@@ -93,6 +94,10 @@ export interface PromptBuildInput {
   /** coach-chat / fan-summary: whether the transcript covers the whole history
    * or just a recent window (drives the {transcriptCoverageNote}). */
   transcriptCoverage?: 'full-history' | 'window' | undefined;
+  /** fan-summary only: 'short' selects the compact-recap template (and the
+   * feature service caps its output at 2048 tokens). Ignored for other
+   * features. */
+  summaryMode?: 'short' | undefined;
 }
 
 export interface PromptPayload {
@@ -484,10 +489,15 @@ export function buildPrompt(
   templateOverrides?: Partial<Record<PromptFeature, string>>,
 ): PromptPayload {
   const platform = input.platform ?? "onlyfans";
-  const template = applyPlatformWording(
-    templateOverrides?.[input.feature] ?? DEFAULT_TEMPLATES[input.feature],
-    platform,
-  );
+  // fan-summary with summaryMode:'short' selects the compact-recap template; a
+  // test override still wins (anchor-fallback fixtures). Other features ignore
+  // summaryMode.
+  const selectedTemplate =
+    templateOverrides?.[input.feature]
+    ?? (input.feature === "fan-summary" && input.summaryMode === "short"
+      ? FAN_SUMMARY_SHORT_TEMPLATE
+      : DEFAULT_TEMPLATES[input.feature]);
+  const template = applyPlatformWording(selectedTemplate, platform);
   const systemBlocks = buildSystemBlocks(input.feature, input.personality, platform);
   const userBlocks = buildUserBlocks(input.feature, template, templateValues(input));
   return {

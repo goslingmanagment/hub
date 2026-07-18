@@ -1290,6 +1290,70 @@ describe("coach-chat gates", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("fan-summary short variant cap (Task 8)", () => {
+  // The compact recap rides the client-context (fansly) lane; messageCount 35
+  // clears fan-summary's deep-feature minimum without a seeded archive.
+  const shortContext = {
+    transcript: "[10:00] Fan: fresh beach message",
+    messageCount: 35,
+    fanDisplayName: "Charles",
+    fanSpendingData: "Total: $42.00",
+    fanSubscriptionData: "Subscribed: yes",
+    transcriptCoverage: "window" as const,
+  };
+
+  async function postFanSummary(over: Record<string, unknown> = {}) {
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fan-summary",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-fs",
+        platform: "fansly",
+        conversationRef: FAN,
+        clientContext: shortContext,
+        ...over,
+      },
+    });
+    return { res, capture };
+  }
+
+  it("caps output at 2048 tokens and selects the compact template", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { res, capture } = await postFanSummary({ summaryMode: "short" });
+    expect(res.statusCode, res.body).toBe(200);
+    // The 2048 cap reaches the provider on the gateway body (honored by both
+    // providers as input.maxTokens ?? tuning.maxTokens).
+    expect(capture.input!.body.maxTokens).toBe(2048);
+    const promptText = capture.input!.body.prompt.userBlocks
+      .map((block) => block.text)
+      .join("\n");
+    expect(promptText).toContain("COMPACT RECAP");
+    expect(promptText).toContain("fresh beach message");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("leaves maxTokens unset and uses the full template without summaryMode", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { res, capture } = await postFanSummary();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(capture.input!.body.maxTokens).toBeUndefined();
+    const promptText = capture.input!.body.prompt.userBlocks
+      .map((block) => block.text)
+      .join("\n");
+    expect(promptText).not.toContain("COMPACT RECAP");
+    expect(promptText).toContain("detailed fan profile review");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("coach-chat recap attach (spec §5)", () => {
   // Exercises the six attach branches in prepareAiFeatureStream by seeding
   // fan-summary recap rows (as the recap reader in ai-recap-selection does) and

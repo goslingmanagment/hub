@@ -14,15 +14,15 @@
     },
     "builder.ts": {
       "sourceSha256": "3f90eabc80214ac66f25990d2face2ff9456141046c8624f094fd1f935ef8ad5",
-      "coreSha256": "9ed21781befd563b8a9ddc25ba65be30da688bc5288ce32597e2810869f55661",
+      "coreSha256": "050176ecf9081eeedc0dc5db234fa71cfa799cbb62e798f9ca9a87f662f63f13",
       "byteIdenticalToSource": false,
-      "note": "Stage 32: applyPlatformWording added (named platform substitution; the frozen desktop sourceSha256 stays the historical record). Decision #136: fanProfile input + fanProfileSection substitution (stored fan dossier). Decision #136 addendum: fanProfileSection disclaimer strengthened (volatile sections kept, not age-dropped; framed as possibly-stale history by generation date). Decision #156: preferSplit requests 2-3 parts and removes the single-message opt-out; output cardinality remains provider-controlled rather than parser-enforced. Coach feature (Task 7): COACH_CHAT_TEMPLATE wired into PROMPT_POLICIES/DEFAULT_TEMPLATES (placeholder removed), CoachHistoryEntry/RecapAttach inputs, and the coachHistorySection (budget-shed, escaped), recapSection (dated two-slot attach, tail-bounded), and transcriptCoverageNote builders."
+      "note": "Stage 32: applyPlatformWording added (named platform substitution; the frozen desktop sourceSha256 stays the historical record). Decision #136: fanProfile input + fanProfileSection substitution (stored fan dossier). Decision #136 addendum: fanProfileSection disclaimer strengthened (volatile sections kept, not age-dropped; framed as possibly-stale history by generation date). Decision #156: preferSplit requests 2-3 parts and removes the single-message opt-out; output cardinality remains provider-controlled rather than parser-enforced. Coach feature (Task 7): COACH_CHAT_TEMPLATE wired into PROMPT_POLICIES/DEFAULT_TEMPLATES (placeholder removed), CoachHistoryEntry/RecapAttach inputs, and the coachHistorySection (budget-shed, escaped), recapSection (dated two-slot attach, tail-bounded), and transcriptCoverageNote builders. Task 8: summaryMode input added; fan-summary with summaryMode:'short' selects FAN_SUMMARY_SHORT_TEMPLATE (test template override still wins)."
     },
     "templates.ts": {
       "sourceSha256": "cf40a9ecb86834a4d4c1fa4bd742687244df49eac6a9be6058a8341c5a7bf922",
-      "coreSha256": "cf82983f2f6a1277b5e0be6ed1a1a245533ff3544f973416c9482e951c8b4441",
+      "coreSha256": "d153db727e16745eb973c2185076f4af94b3e6148a56cab80c63e9599cfa02ba",
       "byteIdenticalToSource": false,
-      "note": "Decision #136: {fanProfileSection} added to fast-reply/improve-draft/help-me/ping (templates-sync byte-equality). Coach feature (Task 7): COACH_CHAT_TEMPLATE added (kernel-native, byte-identical to templates/coach-chat.md); {fanBioSection} added to help-me so its includesFanBio policy actually renders (owner ruling, spec §7). Task 7 review fix: coach template reordered so the 1h static prefix is fan-agnostic (recaps/dossier/fan-data/coach-history moved after the transcript into the 5m dynamic block); intro wording corrected to \"the agency method you were given\"."
+      "note": "Decision #136: {fanProfileSection} added to fast-reply/improve-draft/help-me/ping (templates-sync byte-equality). Coach feature (Task 7): COACH_CHAT_TEMPLATE added (kernel-native, byte-identical to templates/coach-chat.md); {fanBioSection} added to help-me so its includesFanBio policy actually renders (owner ruling, spec §7). Task 7 review fix: coach template reordered so the 1h static prefix is fan-agnostic (recaps/dossier/fan-data/coach-history moved after the transcript into the 5m dynamic block); intro wording corrected to \"the agency method you were given\". Task 8: FAN_SUMMARY_SHORT_TEMPLATE added (kernel-native compact recap, byte-identical to templates/fan-summary-short.md; cache-safe layout with the transcript anchor ahead of the fan spending/subscription sections)."
     },
     "personalities.ts": {
       "sourceSha256": "ae445150784b3ef9c0b77092358645a82d2a09ae6a12bae54147bf9193c3dca6",
@@ -105,6 +105,12 @@
       "sourceSha256": "7da7bbe29d27132b49e1f3976ec767ed9f14956e833cdefa6cf690f549196988",
       "coreSha256": "7da7bbe29d27132b49e1f3976ec767ed9f14956e833cdefa6cf690f549196988",
       "byteIdenticalToSource": true
+    },
+    "templates/fan-summary-short.md": {
+      "sourceSha256": "b90ecc0068403f639e66ebed0c0fa80862e1cf2ab289ce7620f8f5d90337ada2",
+      "coreSha256": "b90ecc0068403f639e66ebed0c0fa80862e1cf2ab289ce7620f8f5d90337ada2",
+      "byteIdenticalToSource": false,
+      "note": "Task 8: kernel-native compact fan-summary recap template — postdates the Stage 30 freeze, so there is NO frozen desktop antecedent (same posture as coach-chat.md). sourceSha256 mirrors coreSha256 as a documented self-reference; byteIdenticalToSource is false because this is not a migrated desktop asset. fan-summary with summaryMode:'short' selects it and the feature service caps output at 2048 tokens. Held byte-identical to FAN_SUMMARY_SHORT_TEMPLATE by templates-sync.test.ts."
     },
     "templates/fast-reply.md": {
       "sourceSha256": "776186d38436dad30ec9cb0b772950386a9ec17c13f565e150466febbec499ac",

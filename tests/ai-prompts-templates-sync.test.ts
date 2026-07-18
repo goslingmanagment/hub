@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CHAT_REVIEW_TEMPLATE,
   COACH_CHAT_TEMPLATE,
+  FAN_SUMMARY_SHORT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
@@ -19,6 +20,7 @@ const TEMPLATE_FILES: ReadonlyArray<[file: string, constant: string]> = [
   ['improve-draft.md', IMPROVE_DRAFT_TEMPLATE],
   ['help-me.md', HELP_ME_TEMPLATE],
   ['fan-summary.md', FAN_SUMMARY_TEMPLATE],
+  ['fan-summary-short.md', FAN_SUMMARY_SHORT_TEMPLATE],
   ['chat-review.md', CHAT_REVIEW_TEMPLATE],
   ['ping.md', PING_TEMPLATE],
   ['hi-greeting.md', HI_GREETING_TEMPLATE],
@@ -37,7 +39,7 @@ describe('templates.ts ↔ templates/*.md byte-sync', () => {
   }
 
   it('covers every .md template file', () => {
-    expect(TEMPLATE_FILES).toHaveLength(8);
+    expect(TEMPLATE_FILES).toHaveLength(9);
   });
 
   for (const [file, constant] of TEMPLATE_FILES) {

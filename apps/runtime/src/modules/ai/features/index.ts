@@ -142,6 +142,11 @@ async function resolvePersona(
 // schema, this caps their sum.
 const COACH_HISTORY_AGGREGATE_MAX_CHARS = 120_000;
 
+// Fan-summary short variant (Task 8): the compact recap is deliberately capped
+// so it stays cheap and terse — the cap reaches the provider on the gateway
+// body (input.maxTokens ?? tuning.maxTokens, honored by both providers).
+const SHORT_SUMMARY_MAX_TOKENS = 2048;
+
 export async function prepareAiFeatureStream(
   app: AppContext,
   principal: AuthPrincipal,
@@ -434,6 +439,7 @@ export async function prepareAiFeatureStream(
       feature === "coach-chat" || feature === "fan-summary"
         ? body.clientContext?.transcriptCoverage
         : undefined,
+    summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
   });
 
   const gatewayBody: AiGatewayStreamInput = {
@@ -446,6 +452,11 @@ export async function prepareAiFeatureStream(
     model: body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature],
     reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,
+    // Short fan-summary caps output at 2048 tokens (Task 8); every other
+    // feature leaves maxTokens unset so the provider's per-feature tuning wins.
+    ...(feature === "fan-summary" && body.summaryMode === "short"
+      ? { maxTokens: SHORT_SUMMARY_MAX_TOKENS }
+      : {}),
     // Two-slot recap selection (spec §5): only fan-summary rows carry the
     // summaryMode/coverage/count provenance the recap reader filters on.
     ...(feature === "fan-summary"

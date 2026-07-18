@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPrompt,
   COACH_CHAT_TEMPLATE,
+  FAN_SUMMARY_SHORT_TEMPLATE,
   type PromptBuildInput,
 } from "../apps/runtime/src/modules/ai/index.ts";
 
@@ -77,5 +78,52 @@ describe("coach-chat prompt", () => {
     // The question stays in the uncached task block.
     expect(taskBlock?.cache).toBe("none");
     expect(taskBlock?.text).toContain("как продать ppv?");
+  });
+});
+
+describe("fan-summary short variant", () => {
+  const fanSummaryBase = {
+    feature: "fan-summary",
+    personality: { content: "PERSONA", id: "p1", name: "Persona", updatedAt: 1 },
+    platform: "fansly",
+    transcript: "fan: hi",
+    fanSpendingData: "",
+    fanSubscriptionData: "",
+    fanDisplayName: "Bob",
+  } satisfies PromptBuildInput;
+
+  it("selects the short template when summaryMode is 'short'", () => {
+    const built = buildPrompt({ ...fanSummaryBase, summaryMode: "short" });
+    expect(JSON.stringify(built.userBlocks)).toContain("COMPACT RECAP");
+  });
+
+  it("keeps the full template when summaryMode is unset", () => {
+    const built = buildPrompt(fanSummaryBase);
+    expect(JSON.stringify(built.userBlocks)).not.toContain("COMPACT RECAP");
+    // full fan-summary opens with the detailed profile framing
+    expect(JSON.stringify(built.userBlocks)).toContain("detailed fan profile review");
+  });
+
+  it("short template carries the cache anchors (fan-agnostic static prefix)", () => {
+    const built = buildPrompt({
+      ...fanSummaryBase,
+      summaryMode: "short",
+      transcript: "TRANSCRIPTBODY",
+      fanSpendingData: "SPENDBODY",
+      transcriptCoverage: "window",
+    });
+    expect(built.userBlocks).toHaveLength(3);
+    const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
+    expect(staticBlock?.cache).toBe("1h");
+    expect(staticBlock?.text).toContain("COMPACT RECAP");
+    expect(staticBlock?.text).not.toContain("TRANSCRIPTBODY");
+    expect(staticBlock?.text).not.toContain("SPENDBODY");
+    expect(dynamicBlock?.cache).toBe("5m");
+    expect(dynamicBlock?.text).toContain("TRANSCRIPTBODY");
+    expect(dynamicBlock?.text).toContain("SPENDBODY");
+    expect(dynamicBlock?.text).toContain("most recent window only");
+    expect(taskBlock?.cache).toBe("none");
+    // The template file constant is what the selection returns (Fansly wording).
+    expect(FAN_SUMMARY_SHORT_TEMPLATE).toContain("COMPACT RECAP");
   });
 });
