@@ -194,6 +194,34 @@ function capturingProvider(capture: {
   };
 }
 
+// Streams more visible output than the 64k coach transport ceiling. The pump
+// must abort mid-stream: error frame, NO done frame, failed terminal outcome —
+// the usage and done frames below are never reached.
+function overCeilingProvider(capture: { calls?: number }): AiGatewayProvider {
+  return {
+    provider: "anthropic",
+    async *stream() {
+      capture.calls = (capture.calls ?? 0) + 1;
+      yield { type: "content_delta", text: "OVERSTART" + "x".repeat(40_000) };
+      yield { type: "content_delta", text: "y".repeat(40_000) };
+      yield {
+        type: "usage",
+        providerResponseId: "msg_over",
+        cacheHit: false,
+        usage: {
+          inputTokens: 50,
+          outputTokens: 5,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          costMicroUsd: 100,
+          costApproximate: false,
+        },
+      };
+      yield { type: "done", stopReason: "end_turn" };
+    },
+  };
+}
+
 function aiFrames(body: string): Array<Record<string, unknown>> {
   return body
     .split("\n")
@@ -1217,25 +1245,73 @@ describe("coach-chat gates", () => {
     expect(res.statusCode, res.body).toBe(400);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("rejects oversized aggregate history", async (context) => {
+  it("accepts a large-answer history and replays only its projected head+tail", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
+    // Option "c": the 120k aggregate gate is GONE. A ~30k answer (well within
+    // the 64k transport ceiling) is accepted, and core projects it to a ≤10k
+    // head+tail before assembly — the mid-string sentinel never reaches the
+    // prompt, but the head and tail (and the omission marker) do.
+    const answer =
+      "HEADSENTINEL"
+      + "h".repeat(6_500)
+      + "MIDSENTINEL"
+      + "m".repeat(20_000)
+      + "t".repeat(4_000)
+      + "TAILSENTINEL";
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
     const res = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/features/coach-chat",
       headers: { authorization: `Bearer ${chatterKey}` },
       payload: coachPayload({
-        chatterQuestion: "q",
-        coachHistory: Array.from({ length: 13 }, () => ({
-          question: "q".repeat(1000),
-          answer: "a".repeat(9000),
-        })), // 13 * 10000 = 130k > 120k
+        chatterQuestion: "и что дальше?",
+        coachHistory: [{ question: "старый вопрос", answer }],
       }),
     });
-    expect(res.statusCode, res.body).toBe(400);
-    expect(res.json().message).toMatch(/coachHistory/);
+    expect(res.statusCode, res.body).toBe(200);
+    const prompt = capture.input!.body.prompt.userBlocks
+      .map((block) => block.text)
+      .join("\n");
+    expect(prompt).toContain("HEADSENTINEL");
+    expect(prompt).toContain("TAILSENTINEL");
+    expect(prompt).toContain("chars omitted");
+    expect(prompt).not.toContain("MIDSENTINEL");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("accepts a 20-entry maximal history and sheds deterministically, never rejects", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // 20 entries × a 60k answer ≈ 1.2MB body — over Fastify's 1MB default, so
+    // this also proves the scoped route bodyLimit. Every entry is schema-valid
+    // (≤64k) and the request is ACCEPTED (never a 400/413): projection + the
+    // 60k newest-first budget do the bounding.
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({
+        chatterQuestion: "финальный вопрос",
+        coachHistory: Array.from({ length: 20 }, (_, i) => ({
+          question: `вопрос ${i}`,
+          answer: `ANSWER${i} ` + "a".repeat(60_000),
+        })),
+      }),
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const prompt = capture.input!.body.prompt.userBlocks
+      .map((block) => block.text)
+      .join("\n");
+    // The newest entry survives; the oldest is shed under the 60k budget.
+    expect(prompt).toContain("ANSWER19");
+    expect(prompt).not.toContain("ANSWER0 ");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects unknown features with a structured code", async (context) => {
@@ -1287,6 +1363,40 @@ describe("coach-chat gates", () => {
     expect(prompt).toContain("как продать ppv?");
     expect(prompt).toContain("нащупай боль");
     expect(prompt).toContain("most recent window only");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("aborts a coach stream that crosses the transport ceiling: error, no done, failed outcome", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = overCeilingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({ chatterQuestion: "напиши мне роман" }),
+    });
+    expect(res.statusCode, res.body).toBe(200); // the SSE stream itself opened 200
+    const frames = aiFrames(res.body);
+    // The ceiling error is emitted, and the stream ends WITHOUT a done frame so
+    // no client can treat the over-ceiling answer as a committed result.
+    expect(
+      frames.some(
+        (frame) => frame.type === "error" && frame.code === "coach_output_too_long",
+      ),
+    ).toBe(true);
+    expect(frames.some((frame) => frame.type === "done")).toBe(false);
+
+    // The attempt is terminal-recorded as FAILED (never completed): it can never
+    // be attached/committed as a usable coach answer.
+    const { rows } = await testDb.pool.query<{ gateway_outcome: string }>(
+      `select u.gateway_outcome
+       from ai_generation_content g join ai_usage_events u on u.id = g.usage_event_id
+       order by g.id desc limit 1`,
+    );
+    expect(rows[0]!.gateway_outcome).toBe("failed");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

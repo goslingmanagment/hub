@@ -2,6 +2,7 @@ import type {
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
 } from "@agency_hub_core/contracts";
+import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
 import {
   findAiPersonaByKey,
   findPageByLabel,
@@ -136,12 +137,6 @@ async function resolvePersona(
   };
 }
 
-// Coach conversation history is a client-carried scratchpad (this repo assembles
-// no history server-side). Bound the aggregate so a runaway client can't push an
-// unbounded prompt through the feature lane; per-entry caps live in the contract
-// schema, this caps their sum.
-const COACH_HISTORY_AGGREGATE_MAX_CHARS = 120_000;
-
 // Fan-summary short variant (Task 8): the compact recap is deliberately capped
 // so it stays cheap and terse — the cap reaches the provider on the gateway
 // body (input.maxTokens ?? tuning.maxTokens, honored by both providers).
@@ -170,22 +165,18 @@ export async function prepareAiFeatureStream(
     throw new ProductGateError(`${feature} requires draftText`, "gate_draft_required");
   }
 
-  // Coach feature isolation (spec §7): coach-chat REQUIRES a question and bounds
-  // its client-carried history; every other feature REFUSES the coach fields so
-  // a stray field can never silently reshape a Reply/Ping/Summary prompt. The
-  // summaryMode toggle is likewise fan-summary-only.
+  // Coach feature isolation (spec §7): coach-chat REQUIRES a question; every
+  // other feature REFUSES the coach fields so a stray field can never silently
+  // reshape a Reply/Ping/Summary prompt. The summaryMode toggle is likewise
+  // fan-summary-only. There is deliberately NO aggregate-chars reject (option
+  // "c"): per-entry answers are transport-bounded by COACH_ANSWER_MAX_CHARS in
+  // the schema (and by the identical live-stream ceiling below), and prompt cost
+  // is bounded by core's ≤10k per-entry replay projection plus the newest-first
+  // 60k history budget in the prompt builder — a schema-valid client that trims
+  // to its window setting must never be rejected.
   if (feature === "coach-chat") {
     if (!body.chatterQuestion?.trim()) {
       throw new BadRequestError("coach-chat requires chatterQuestion");
-    }
-    const aggregate = (body.coachHistory ?? []).reduce(
-      (sum, entry) => sum + entry.question.length + entry.answer.length,
-      0,
-    );
-    if (aggregate > COACH_HISTORY_AGGREGATE_MAX_CHARS) {
-      throw new BadRequestError(
-        `coachHistory aggregate exceeds ${COACH_HISTORY_AGGREGATE_MAX_CHARS} chars`,
-      );
     }
   } else if (body.chatterQuestion !== undefined || body.coachHistory !== undefined) {
     throw new BadRequestError(`${feature} does not accept coach fields`);
@@ -480,6 +471,18 @@ export async function prepareAiFeatureStream(
     // inside max_tokens, so without it the recap truncates before it finishes.
     ...(feature === "fan-summary" && body.summaryMode === "short"
       ? { maxTokens: SHORT_SUMMARY_MAX_TOKENS, disableAdaptiveThinking: true }
+      : {}),
+    // Coach transport ceiling (spec §3/§7, option "c"): the coach keeps its
+    // adaptive 16k thinking budget (no output-token cap games), but the SSE pump
+    // aborts a coach generation whose accumulated visible output crosses
+    // COACH_ANSWER_MAX_CHARS — the SAME number the wire schema enforces on a
+    // replayed coachHistory answer. A crossing errors without a `done` frame and
+    // records a failed (never completed) outcome, so an over-ceiling answer can
+    // never be attached/committed, and every committed answer replays verbatim
+    // within schema. Off the wire (never on aiFeatureStreamBodySchema), coach
+    // only — mirrors the featureParams / disableAdaptiveThinking pattern.
+    ...(feature === "coach-chat"
+      ? { visibleOutputCeilingChars: COACH_ANSWER_MAX_CHARS }
       : {}),
     // Two-slot recap selection (spec §5): only fan-summary rows carry the
     // summaryMode/coverage/count provenance the recap reader filters on.

@@ -2033,6 +2033,17 @@ export const aiFeatureStreamParamsSchema = z.object({
   feature: z.string().min(1).max(40),
 });
 
+// Coach transport ceiling (spec §3/§7, option "c"): the single source of truth
+// for a coach answer's maximum size. It bounds BOTH the replayed
+// `coachHistory[].answer` wire field below AND the live coach-chat output stream
+// (the runtime aborts a generation whose accumulated visible output crosses this
+// same number). Because the stream enforces the identical bound, any committed
+// coach answer is always schema-valid on the next turn's replay. This is a
+// TRANSPORT bound, not a prompt bound — core projects each accepted history
+// answer to a far smaller ≤10k head+tail replay before prompt assembly. Exported
+// so the schema and the runtime stream check cannot drift apart.
+export const COACH_ANSWER_MAX_CHARS = 64_000;
+
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
   pageLabel: z.string().min(1).max(120),
@@ -2053,7 +2064,7 @@ export const aiFeatureStreamBodySchema = z.object({
     .array(
       z.object({
         question: z.string().min(1).max(2_000),
-        answer: z.string().min(1).max(10_000),
+        answer: z.string().min(1).max(COACH_ANSWER_MAX_CHARS),
       }).strict(),
     )
     .max(20)

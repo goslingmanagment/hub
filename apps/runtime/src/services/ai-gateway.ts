@@ -68,6 +68,12 @@ export interface PreparedAiGatewayStream {
   debugFrame?: AiFeatureDebugInputFrame;
   stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
   recordTerminal(input: AiGatewayTerminalRecordInput): Promise<boolean>;
+  /** Coach transport ceiling (spec §3/§7, option "c"): when set, the SSE pump
+   * aborts the generation if accumulated visible output (content_delta chars)
+   * crosses this bound, erroring WITHOUT a `done` frame so the attempt is
+   * terminal-recorded as failed and can never be committed/replayed. Off the
+   * wire (feature service sets it for coach-chat only); unset = no ceiling. */
+  visibleOutputCeilingChars?: number;
 }
 
 export interface AiGatewayTerminalRecordInput {
@@ -208,6 +214,12 @@ export type AiGatewayStreamInput = AiGatewayStreamBody & {
    * groupId (spec §5). The feature lane sets it to body.fanRef ?? null; the raw
    * gateway and internal lanes leave it unset (null). */
   fanRef?: string | null;
+  /** Server-derived, off the wire: the coach transport ceiling (spec §3/§7,
+   * option "c"). The feature service sets it to COACH_ANSWER_MAX_CHARS for
+   * coach-chat so the SSE pump enforces the same bound on the live stream that
+   * the wire schema enforces on a replayed answer. Propagated verbatim onto the
+   * prepared stream; the raw gateway and other features leave it unset. */
+  visibleOutputCeilingChars?: number;
 };
 
 export async function prepareAiGatewayStream(
@@ -347,6 +359,9 @@ export async function prepareAiGatewayStream(
       quota: quotaFrame,
     },
     ...(internal?.debugFrame ? { debugFrame: internal.debugFrame } : {}),
+    ...(input.visibleOutputCeilingChars !== undefined
+      ? { visibleOutputCeilingChars: input.visibleOutputCeilingChars }
+      : {}),
     stream(signal) {
       return provider.stream({
         requestId,

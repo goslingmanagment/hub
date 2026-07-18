@@ -20783,7 +20783,7 @@
                         "answer": {
                           "type": "string",
                           "minLength": 1,
-                          "maxLength": 10000
+                          "maxLength": 64000
                         }
                       },
                       "required": [

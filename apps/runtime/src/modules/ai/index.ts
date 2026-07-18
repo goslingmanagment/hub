@@ -307,6 +307,12 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // gateway internals; only the prompt is built here instead of the client.
   server.post("/api/v1/ai/features/:feature", {
     schema: routeSchemas.aiFeatureStream,
+    // Coach transport headroom (spec §7, option "c"): the worst-case coach body
+    // is ~20 history entries × (2k question + 64k answer) + a 300k transcript +
+    // spend/subscription/bio/draft + JSON escaping ≈ 1.7MB, well over Fastify's
+    // 1MB default. A SCOPED route bodyLimit (not a global raise) gives that
+    // worst case room; genuine transport abuse still 413s here.
+    bodyLimit: 4 * 1024 * 1024,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
@@ -342,6 +348,11 @@ export async function pipeAiGatewaySse(
     let terminalCacheHit = false;
     let streamedContent = false;
     let completionText = "";
+    // Coach transport ceiling (spec §3/§7): set true once accumulated visible
+    // output crosses the ceiling and we abort. It pins the terminal outcome to
+    // "failed" even if tearing down the aborted provider iterator rejects into
+    // the catch below (which would otherwise reclassify an abort as cancelled).
+    let ceilingExceeded = false;
     let terminalStopReason: string | null = null;
     let terminalDoneFrame: Parameters<typeof serializeAiGatewaySseFrame>[0] | null = null;
     raw.writeHead(200, {
@@ -375,6 +386,29 @@ export async function pipeAiGatewaySse(
         } else if (frame.type === "content_delta" && frame.text.length > 0) {
           streamedContent = true;
           completionText += frame.text;
+          // Coach transport ceiling (spec §3/§7, option "c"): a coach answer
+          // whose accumulated visible output crosses COACH_ANSWER_MAX_CHARS is
+          // aborted mid-stream and errors WITHOUT a `done` frame, so the attempt
+          // is terminal-recorded as failed (never completed) and can never be
+          // attached/committed. The client sees the partial content plus the
+          // error; a committed answer is therefore always ≤ the ceiling and
+          // replays verbatim within schema. Only coach-chat carries the ceiling.
+          if (
+            stream.visibleOutputCeilingChars !== undefined
+            && completionText.length > stream.visibleOutputCeilingChars
+          ) {
+            writeFrame(frame);
+            ceilingExceeded = true;
+            terminalOutcome = "failed";
+            writeFrame({
+              type: "error",
+              code: "coach_output_too_long",
+              message: "AI gateway output exceeded the coach transport ceiling",
+              retryAfterMs: null,
+            });
+            abortProvider();
+            break;
+          }
         } else if (frame.type === "error") {
           terminalOutcome = "failed";
         } else if (frame.type === "done") {
@@ -399,7 +433,12 @@ export async function pipeAiGatewaySse(
         writeFrame(terminalDoneFrame);
       }
     } catch (error) {
-      if (abort.signal.aborted) {
+      if (ceilingExceeded) {
+        // The ceiling handler already recorded failed, wrote the error frame,
+        // and aborted; a rejection while tearing down the aborted provider
+        // stream must not reclassify this as cancelled or double-write an error.
+        terminalOutcome = "failed";
+      } else if (abort.signal.aborted) {
         terminalOutcome = "cancelled";
       } else {
         terminalOutcome = "failed";

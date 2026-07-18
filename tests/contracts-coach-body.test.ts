@@ -29,9 +29,19 @@ describe("aiFeatureStream body — coach fields", () => {
       question: `q${i}`, answer: `a${i}`,
     }));
     expect(schema.safeParse({ ...base, coachHistory: tooMany }).success).toBe(false);
+    // Option "c": the answer bound is the 64k TRANSPORT ceiling, not the old
+    // 10k prompt bound — a 10k-plus answer replays verbatim within schema.
     expect(schema.safeParse({
       ...base,
       coachHistory: [{ question: "q", answer: "x".repeat(10_001) }],
+    }).success).toBe(true);
+    expect(schema.safeParse({
+      ...base,
+      coachHistory: [{ question: "q", answer: "x".repeat(64_000) }],
+    }).success).toBe(true);
+    expect(schema.safeParse({
+      ...base,
+      coachHistory: [{ question: "q", answer: "x".repeat(64_001) }],
     }).success).toBe(false);
   });
 

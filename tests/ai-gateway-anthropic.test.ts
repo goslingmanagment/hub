@@ -125,6 +125,24 @@ describe("Anthropic AI gateway request builder", () => {
     expect(request).toHaveProperty("output_config", { effort: "medium" });
   });
 
+  it("keeps adaptive 16k thinking for the default coach-chat path", () => {
+    // Option "c": the coach is NOT output-token-capped. It keeps its full
+    // adaptive budget (16k) and the summarized thinking block — no
+    // disableAdaptiveThinking flag is ever set for coach-chat. Serializability
+    // is enforced by the live stream ceiling, not by shrinking max_tokens.
+    const request = buildAnthropicGatewayStreamRequest(
+      body({
+        model: "anthropic:claude-sonnet-4-6",
+        feature: "coach-chat",
+        reasoningEffort: "medium",
+      }),
+    );
+
+    expect(request.max_tokens).toBe(16000);
+    expect(request).toHaveProperty("thinking", { type: "adaptive", display: "summarized" });
+    expect(request).toHaveProperty("output_config", { effort: "medium" });
+  });
+
   it("omits sampling params for Opus 4.8 even when reasoning is off", () => {
     const tuning = resolveAnthropicGatewayRequestTuning({
       providerModelId: "claude-opus-4-8",
