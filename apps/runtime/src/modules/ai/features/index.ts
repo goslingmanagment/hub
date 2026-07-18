@@ -509,15 +509,17 @@ export async function prepareAiFeatureStream(
     conversationId: body.conversationRef,
     // Off-wire: the fan this generation is ABOUT, stored as the restricted
     // record's fan_ref so fan-scope erasure reaches coach/recap rows whose
-    // conversation_ref is the canonical groupId (spec §5). Blocker 2 (P1-2b):
-    // on Fansly the conversationRef is NOT the fan (it is the groupId), so a
-    // row keyed only by conversation_ref survives fan erasure — fall back to
-    // conversationRef when fanRef is absent. Canonical Fansly clients always
-    // send fanRef; legacy Fansly clients send conversationRef = fanAccountId, so
-    // this fallback gives BOTH the correct fan identity. On OnlyFans the
-    // conversationRef IS the fan id, so the row already stays reachable by
-    // conversation_ref and needs no fallback (leave fan_ref null there).
-    fanRef: body.fanRef ?? (isFanslyRequest ? body.conversationRef : null),
+    // conversation_ref is the canonical Fansly groupId (spec §5). Round-4 P1-3
+    // dropped the old `isFanslyRequest ? conversationRef` fallback: a legacy row
+    // (conversationRef = fanAccountId) is ALREADY reachable through the erasure
+    // predicate's conversation_ref arm, so the fallback added nothing for it —
+    // while POISONING a canonical row by stamping its groupId into fan_ref (a
+    // non-fan id the erasure of some OTHER fan could never match, and the erasure
+    // of THIS fan already reaches via conversation_ref). Persist the real fan or
+    // NULL. The gate above already REQUIRES an explicit fanRef on the canonical
+    // writer paths (coach-chat / short fan-summary), so those rows always carry
+    // a true fan identity.
+    fanRef: body.fanRef ?? null,
     model: body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature],
     reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,

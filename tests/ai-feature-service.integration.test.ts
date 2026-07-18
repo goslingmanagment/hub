@@ -1622,15 +1622,18 @@ describe("fan-summary short variant cap (Task 8)", () => {
     expect(rows[0]?.fan_ref).toBe("fan-42");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("persists fan_ref from the conversationRef on the fansly lane when fanRef is absent (Blocker 2)", async (context) => {
+  it("persists a NULL fan_ref when a fansly request omits fanRef; erasure still reaches it via conversation_ref (P1-3)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    // P1-2b: a fansly fan-summary carrying only conversationRef must still be
-    // reachable by fan-scope erasure — the persisted fan_ref falls back to the
-    // conversationRef (which legacy clients set to the fanAccountId). Before the
-    // fix this row's fan_ref was NULL and the recap survived a fan erasure.
+    // Round-4 P1-3 reverses the old fallback: a legacy fansly request carrying
+    // only conversationRef (= the fanAccountId) persists fan_ref = NULL, not the
+    // conversationRef. The fallback added nothing — the erasure predicate's
+    // conversation_ref arm already reaches such a row — while poisoning canonical
+    // rows with a groupId in fan_ref. The erasure-repository test proves this
+    // exact legacy shape (conversation_ref = fanId, fan_ref = NULL) is still
+    // deleted via conversation_ref.
     const { res } = await postFanSummary(); // conversationRef = FAN, no fanRef
     expect(res.statusCode, res.body).toBe(200);
     const { rows } = await testDb.pool.query<{
@@ -1641,7 +1644,7 @@ describe("fan-summary short variant cap (Task 8)", () => {
        where feature = 'fan-summary' order by id desc limit 1`,
     );
     expect(rows[0]?.conversation_ref).toBe(FAN);
-    expect(rows[0]?.fan_ref).toBe(FAN);
+    expect(rows[0]?.fan_ref).toBeNull();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
