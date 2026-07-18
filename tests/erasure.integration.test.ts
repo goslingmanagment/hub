@@ -261,6 +261,28 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       );
     }
 
+    // Restricted AI generations (Stage 29). A's coach/recap row uses the
+    // CANONICAL shape (conversation_ref = groupId, fan_ref = A) — reachable
+    // only via fan_ref (Blocker 1); a legacy A row keyed by conversation_ref =
+    // A must still go; B's row (any shape) must survive. An acceptance event
+    // resolves through A's canonical generation and cascades with it.
+    for (const [genRef, convRef, fanRef] of [
+      ["gen-a-canonical", "group-A", FAN_A],
+      ["gen-a-legacy", FAN_A, null],
+      ["gen-b-canonical", "group-B", FAN_B],
+    ] as const) {
+      await testDb.pool.query(
+        `insert into ai_generation_content (generation_ref, feature, model, provider,
+           page_id, conversation_ref, fan_ref, prompt_blocks, completion, params)
+         values ($1, 'coach-chat', 'm', 'anthropic', $2, $3, $4, '[]'::jsonb, 'answer', '{}'::jsonb)`,
+        [genRef, pageId, convRef, fanRef],
+      );
+    }
+    await testDb.pool.query(
+      `insert into ai_acceptance_events (generation_ref, lifecycle, occurred_at)
+       values ('gen-a-canonical', 'shown', now())`,
+    );
+
     // ── Ledger (hot): exclusive, shared, payload-only, and bystander rows.
     const obsExclusive = await seedObservation({
       kind: "messages.received",
@@ -406,6 +428,10 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(planRows.get("hot:message_archive:delete")).toBe(2); // in + out
     expect(planRows.get("hot:dm_message_archive:delete")).toBe(1);
     expect(planRows.get("hot:ofapi_commands:delete")).toBe(1);
+    // A's canonical (via fan_ref) + legacy (via conversation_ref) generations;
+    // B's survives. The acceptance event resolves through A's generations.
+    expect(planRows.get("hot:ai_generation_content:delete")).toBe(2);
+    expect(planRows.get("hot:ai_acceptance_events:delete")).toBe(1);
     expect(planRows.get("hot:transactions:anonymize")).toBe(1);
     expect(planRows.get("hot:fan_notes:cascade")).toBe(1);
     expect(planRows.get("hot:page_fans:cascade")).toBe(1);
@@ -440,6 +466,21 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`message_archive`)).toBe(1);
     expect(await count(`dm_message_archive`)).toBe(0);
     expect(await count(`ofapi_commands`)).toBe(0);
+
+    // AI generations: A gone via BOTH fan_ref (canonical) and conversation_ref
+    // (legacy); its acceptance event cascaded; B's canonical row survives.
+    expect(await count(`ai_generation_content where fan_ref = '${FAN_A}'`)).toBe(0);
+    expect(await count(`ai_generation_content where conversation_ref = '${FAN_A}'`)).toBe(0);
+    expect(await count(`ai_generation_content where fan_ref = '${FAN_B}'`)).toBe(1);
+    expect(await count(`ai_acceptance_events`)).toBe(0);
+    // P1-1 (the case the report demanded, named explicitly): the CANONICAL shape
+    // — conversation_ref = a groupId that is NOT the fan, fan_ref = the fan — is
+    // deleted, reachable ONLY via fan_ref. This is exactly the row the writer now
+    // persists for coach-chat / short recaps on Fansly (fanRef required), so a
+    // fan's erasure provably reaches it and its groupId conversation_ref is gone.
+    expect(await count(`ai_generation_content where generation_ref = 'gen-a-canonical'`)).toBe(0);
+    expect(await count(`ai_generation_content where conversation_ref = 'group-A'`)).toBe(0);
+    expect(await count(`ai_generation_content where conversation_ref = 'group-B'`)).toBe(1);
 
     // A's transaction survives — anonymized; B's untouched.
     const txnA = await one<Record<string, unknown>>(

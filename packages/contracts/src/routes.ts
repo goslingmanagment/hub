@@ -1962,6 +1962,28 @@ export const aiPersonaCatalogResponseSchema = z.object({
   personas: z.array(aiPersonaCatalogItemSchema),
 });
 
+// Recap-status metadata read (spec §3/§5): the freshest usable full + short
+// fan-summary recap for one conversation, metadata only — NO generation, NO AI
+// spend. Backs the extension's "recap status line".
+export const aiRecapStatusQuerySchema = z.object({
+  pageLabel: z.string().min(1).max(120),
+  conversationRef: z.string().min(1).max(255),
+  fanRef: z.string().min(1).max(255).optional(),
+}).strict();
+
+const aiRecapSlotSchema = z.object({
+  generatedAt: z.string(),
+  ageMs: z.number().int().min(0),
+  transcriptCoverage: z.enum(["full-history", "window"]).nullable(),
+  requestedCount: z.number().int().nullable(),
+  keptCount: z.number().int().nullable(),
+}).strict();
+
+export const aiRecapStatusResponseSchema = z.object({
+  full: aiRecapSlotSchema.nullable(),
+  short: aiRecapSlotSchema.nullable(),
+}).strict();
+
 const adminAiPersonaCreateKeySchema = z.string()
   .trim()
   .min(1)
@@ -2011,6 +2033,42 @@ export const aiFeatureStreamParamsSchema = z.object({
   feature: z.string().min(1).max(40),
 });
 
+// Coach transport ceiling (spec §3/§7, option "c"): the single source of truth
+// for a coach answer's maximum size. It bounds BOTH the replayed
+// `coachHistory[].answer` wire field below AND the live coach-chat output stream
+// (the runtime aborts a generation whose accumulated visible output crosses this
+// same number). Because the stream enforces the identical bound, any committed
+// coach answer is always schema-valid on the next turn's replay. This is a
+// TRANSPORT bound, not a prompt bound — core projects each accepted history
+// answer to a far smaller ≤10k head+tail replay before prompt assembly. Exported
+// so the schema and the runtime stream check cannot drift apart.
+export const COACH_ANSWER_MAX_CHARS = 64_000;
+
+// Scoped body limit for POST /api/v1/ai/features/:feature (Blocker 4, P1-4).
+// Fastify's bodyLimit is a BYTE budget enforced BEFORE Zod, but the schema caps
+// are CHAR counts (z.string().max() counts UTF-16 code units). The limit must
+// therefore clear the largest byte count a schema-valid body can serialize to,
+// content-agnostic: this is a SIZE bound, NOT a content policy. Round-4 P2-4
+// reverted the control-char ban that briefly guarded a tighter number — it
+// regressed every live Fansly feature whose transcripts carry arbitrary fan
+// text (a stray control char 400'd the whole reply/help-me/ping request) and
+// was invisible in the generated OpenAPI anyway; the fields are plain bounded
+// strings again and the limit simply absorbs the true worst case. That
+// worst-case schema-valid coach body sums to ~1.69M UTF-16 code units --
+// coachHistory 20x(2k question + 64k answer) = 1.32M, transcript 300k, spending
+// 20k, subscription 20k, bio 5k, draft 20k, question 2k, plus the small scalar
+// fields. The TRUE per-code-unit worst case on the JSON wire is SIX bytes: a
+// lone surrogate (U+D800) or an ASCII control char is a legal JSON string value
+// that JSON.stringify escapes to a six-byte `\uXXXX` sequence, so ~1.69M x 6
+// ~= 10.1MB (a printable 3-byte-UTF-8 char like the CJK "no" is only the 3-byte
+// ceiling -> ~5.06MB, well under this). The former 4 MiB and 8 MiB limits both
+// 413'd this six-byte worst case before validation; 12 MiB (12,582,912) clears
+// ~10.1MB with headroom while genuine transport abuse still 413s. Kept in the
+// contract next to the schema so the limit and the field caps that drive it
+// cannot drift apart; asserted against the measured worst case in
+// tests/contracts-coach-body.test.ts.
+export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
+
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
   pageLabel: z.string().min(1).max(120),
@@ -2026,6 +2084,17 @@ export const aiFeatureStreamBodySchema = z.object({
   messageCount: z.number().int().min(5).max(3000).optional(),
   draftText: z.string().min(1).max(20_000).optional(),
   isRegeneration: z.boolean().optional(),
+  chatterQuestion: z.string().min(1).max(2_000).optional(),
+  coachHistory: z
+    .array(
+      z.object({
+        question: z.string().min(1).max(2_000),
+        answer: z.string().min(1).max(COACH_ANSWER_MAX_CHARS),
+      }).strict(),
+    )
+    .max(20)
+    .optional(),
+  summaryMode: z.literal("short").optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at
@@ -2041,6 +2110,7 @@ export const aiFeatureStreamBodySchema = z.object({
     fanSubscriptionData: z.string().max(20_000).default(""),
     fanBio: z.string().max(5_000).optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
+    transcriptCoverage: z.enum(["full-history", "window"]).optional(),
   }).strict().optional(),
 }).strict();
 
@@ -5994,6 +6064,19 @@ export const routeSchemas = {
       200: aiPersonaCatalogResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  aiRecapStatus: {
+    auth: { kind: "apiKey" },
+    tags: ["usage"],
+    summary: "Freshest usable recap metadata (full + short slots) for one conversation",
+    querystring: aiRecapStatusQuerySchema,
+    response: {
+      200: aiRecapStatusResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
     },
   },
   aiPersonaUpsert: {

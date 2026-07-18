@@ -189,6 +189,7 @@ The flirty message suggestion here. Written in the model's voice.
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanBioSection}
 {fanProfileSection}
 
 ## Your Task
@@ -279,6 +280,45 @@ Practical recommendations for the chatter:
 ## Your Task
 
 Generate the full fan profile review covering all sections above. Write in Russian. Skip sections with no data.
+`;
+
+// Fan-summary short variant (Task 8): kernel-native compact-recap template —
+// fan-summary with summaryMode:'short' selects it (builder.ts) and the feature
+// service caps its output at 2048 tokens. Postdates the Stage 30 freeze (no
+// desktop antecedent, like coach-chat); held byte-identical to
+// templates/fan-summary-short.md by templates-sync.test.ts.
+export const FAN_SUMMARY_SHORT_TEMPLATE = `You are building a COMPACT RECAP of one fan for the OnlyFans-agency chatter
+working them right now. 300 recent messages max are provided. Be dense: facts
+only, no prose padding. Hard limit: keep the whole recap under 350 words.
+
+## Rules
+
+- Only claims grounded in the transcript/data below; no speculation.
+- Money numbers verbatim from the spending data.
+- Write the recap in Russian. English terms are acceptable where they sound more natural (e.g. attachment style, churn risk, girlfriend experience).
+
+## Sections
+
+1. WHO — name/persona facts the fan revealed; how they address the model.
+2. SPEND PATTERN — recent purchases, tips, price points accepted/refused.
+3. TRIGGERS — what makes them engage, buy, or go cold.
+4. BOUNDARIES — stated limits, sore topics, things that annoyed them.
+5. ACTIVE THREADS — open loops, promises, scheduled events, running jokes.
+6. NEXT MOVE — the single most promising next action for the chatter.
+
+## Conversation Transcript
+
+{transcriptCoverageNote}
+<transcript>
+{transcript}
+</transcript>
+
+{fanSpendingSection}
+{fanSubscriptionSection}
+
+## Your Task
+
+Write the compact recap now, sections 1-6, under 350 words total. Write in Russian.
 `;
 
 export const CHAT_REVIEW_TEMPLATE = `You are a quality reviewer evaluating how well a OnlyFans chatter is handling a conversation. Rate and assess their performance.
@@ -445,4 +485,56 @@ Fan username: **{fanDisplayName}**
 ## Your Task
 
 Write 3 different greeting variants, separated by [VARIANT]. Each variant should use a different approach. If there are existing fan messages, respond to the conversation — don't start over. Output only the message text.
+`;
+
+// Coach feature (Task 7): kernel-native template — coach-chat postdates the
+// Stage 30 freeze, so there is no desktop antecedent. The runtime constant and
+// templates/coach-chat.md are held byte-identical by templates-sync.test.ts.
+export const COACH_CHAT_TEMPLATE = `You are an experienced OnlyFans-agency sales coach. A chatter working THIS fan
+conversation is asking you for advice. Answer the chatter (never the fan),
+concretely and directly, grounded in this fan's actual history and the agency
+method you were given.
+
+## Rules
+
+- Advise the chatter in the language they ask in.
+- Ground every recommendation in the transcript, the fan profile data, and the
+  recaps below. If the data contradicts a generic play, say so.
+- Respect the persona's voice and boundaries in any suggested wording.
+- Be specific: name the next message to send, the price to quote, the objection
+  to expect. No generic sales platitudes.
+- When you propose exact wording for a message TO THE FAN, wrap each proposal
+  in a fenced block that starts with \`\`\`draft and ends with \`\`\` — at most two
+  such blocks, each under 1500 characters. Advice text stays outside the
+  fences. Never put anything except the ready-to-send fan message inside a
+  draft fence.
+
+## Conversation Transcript
+
+{transcriptCoverageNote}
+<transcript>
+{transcript}
+</transcript>
+
+{recapSection}
+
+{fanProfileSection}
+
+{fanSpendingSection}
+{fanSubscriptionSection}
+{fanBioSection}
+
+## Coach Dialog So Far
+
+{coachHistorySection}
+
+## Your Task
+
+The chatter asks:
+
+<chatter_question>
+{chatterQuestion}
+</chatter_question>
+
+Answer the chatter now. Use a draft fence for any proposed fan message.
 `;

@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CHAT_REVIEW_TEMPLATE,
+  COACH_CHAT_TEMPLATE,
+  FAN_SUMMARY_SHORT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
@@ -18,9 +20,11 @@ const TEMPLATE_FILES: ReadonlyArray<[file: string, constant: string]> = [
   ['improve-draft.md', IMPROVE_DRAFT_TEMPLATE],
   ['help-me.md', HELP_ME_TEMPLATE],
   ['fan-summary.md', FAN_SUMMARY_TEMPLATE],
+  ['fan-summary-short.md', FAN_SUMMARY_SHORT_TEMPLATE],
   ['chat-review.md', CHAT_REVIEW_TEMPLATE],
   ['ping.md', PING_TEMPLATE],
   ['hi-greeting.md', HI_GREETING_TEMPLATE],
+  ['coach-chat.md', COACH_CHAT_TEMPLATE],
 ];
 
 function readTemplateFile(file: string): string {
@@ -35,7 +39,7 @@ describe('templates.ts ↔ templates/*.md byte-sync', () => {
   }
 
   it('covers every .md template file', () => {
-    expect(TEMPLATE_FILES).toHaveLength(7);
+    expect(TEMPLATE_FILES).toHaveLength(9);
   });
 
   for (const [file, constant] of TEMPLATE_FILES) {
@@ -44,6 +48,24 @@ describe('templates.ts ↔ templates/*.md byte-sync', () => {
       expect(constant).toContain('OnlyFans');
     });
   }
+});
+
+// Round-2 P2-7: the compact recap must pin its output language the way the full
+// recap does — otherwise the model answers in the template's own (English)
+// language and a Russian full recap sits beside an English short recap in the
+// same coach prompt (and in the extension UI).
+describe("fan-summary short template language pinning", () => {
+  it("carries the Russian directive in both the full recap's spots", () => {
+    // Mirrors fan-summary.md line 9 (the Rules directive) and line 83 (the task
+    // line) — both present so the compact recap is written in Russian.
+    expect(FAN_SUMMARY_SHORT_TEMPLATE).toContain(
+      "Write the recap in Russian. English terms are acceptable where they sound more natural",
+    );
+    expect(FAN_SUMMARY_SHORT_TEMPLATE).toContain("Write in Russian.");
+    // And the full recap keeps the same directive it always had (no drift).
+    expect(FAN_SUMMARY_TEMPLATE).toContain("Write the review in Russian.");
+    expect(FAN_SUMMARY_TEMPLATE).toContain("Write in Russian.");
+  });
 });
 
 // Legacy behavior facts about template content (re-expressed from the legacy

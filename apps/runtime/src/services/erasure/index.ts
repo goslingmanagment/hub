@@ -626,9 +626,11 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     run: (tx) => execCount(tx, sql`delete from ofapi_commands where ${commandPred}`),
   });
 
-  // Stage 29 restricted class: generations tied to the fan's conversation
-  // (acceptance rows resolve through them, so they go first).
-  const generationPred = sql`page_id in ${scope.pageIds} and conversation_ref = ${ref}`;
+  // Stage 29 restricted class: generations tied to the fan — by legacy
+  // conversation_ref = fanId OR the canonical fan_ref (coach/recap rows whose
+  // conversation_ref is the Fansly groupId, spec §5). Acceptance rows resolve
+  // through them, so they go first.
+  const generationPred = sql`page_id in ${scope.pageIds} and (conversation_ref = ${ref} or fan_ref = ${ref})`;
   targets.push({
     plane: "hot",
     target: "ai_acceptance_events",

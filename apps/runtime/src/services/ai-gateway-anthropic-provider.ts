@@ -179,7 +179,9 @@ export function createAnthropicAiGatewayProvider(
   return {
     provider: "anthropic",
     async *stream(input) {
-      const request = buildAnthropicGatewayStreamRequest(input.body);
+      const request = buildAnthropicGatewayStreamRequest(input.body, {
+        disableAdaptiveThinking: input.disableAdaptiveThinking,
+      });
       const clientResolution = await resolveClient(input);
       let providerResponseId: string | null = null;
       let stopReason: string | null = null;

@@ -4641,3 +4641,94 @@ projection also refresh `pages.subscriber_count` from authoritative current
 `page_subscriptions`; previously both pages had thousands of current rows but
 the reporting cache stayed null forever, producing the dashboard's false
 `N/A`.
+
+**Decision #167 (2026-07-18, coach-chat feature lane — stateless multi-turn
+coach, two-slot recap attach, short fan-summary variant, `includesFanBio`
+policy flag, recap-status read, and canonical coach/recap identity):** Core
+gains a new AI feature `coach-chat` on the feature lane (`POST
+/api/v1/ai/features/coach-chat`, SSE like every feature, fail-closed on
+transport truncation and on the normalized output-exhaustion signal). The
+coach is stateless server-side: the multi-turn dialog is client-held and
+replayed each turn as `coachHistory` (completed exchanges only, oldest first)
+alongside the required free-form `chatterQuestion`; the kernel keeps no
+session. `chatterQuestion` is 1–2000 chars, required for coach-chat and
+rejected for every other feature; `coachHistory` is coach-only with a hard
+ceiling of ≤20 entries, `question` ≤2000 chars, `answer` ≤64000 chars.
+Serializability follows the owner-approved option "c" (2026-07-18): the coach
+keeps its adaptive thinking budget (16k, no output-token cap games), and the
+`answer` bound is a TRANSPORT ceiling, not a prompt bound. The same
+`COACH_ANSWER_MAX_CHARS` (64000, one shared contract constant) is enforced
+identically on the live coach-chat output stream — a generation whose
+accumulated visible output crosses it errors WITHOUT a `done` frame and is
+terminal-recorded as failed, so it can never be attached/committed. Therefore
+every committed answer is ≤ the ceiling and replays verbatim within schema. The
+old 120k aggregate reject is REMOVED (a schema-valid-yet-gate-rejected zone was
+an API defect): a client trimming to its window setting is never rejected, and
+transport abuse is the route's job (a scoped 12 MiB body limit sized
+content-agnostically for the worst case, NOT a content policy: 20×66k history +
+a 300k transcript + the smaller free-text fields sum to ~1.69M UTF-16 code units,
+and the true per-code-unit worst case on the JSON wire is SIX bytes — a lone
+surrogate (U+D800) or an ASCII control char is a legal JSON string value that
+JSON.stringify escapes to a six-byte `\uXXXX` sequence — so ~1.69M × 6 ≈ 10.1MB
+(a printable 3-byte-UTF-8 char is only ~5.06MB, well under). Round-3 briefly
+banned control chars in the large fields to hold a 3-byte/char ceiling at 8 MiB,
+but round-4 (P2-4) REVERTED that ban: it regressed every live Fansly feature
+whose transcript carries arbitrary fan text (a stray control char 400'd the whole
+request) and was invisible in the generated OpenAPI, so the fields are plain
+bounded strings again and the limit was raised 8 MiB → 12 MiB to absorb the
+six-byte worst case with headroom while genuine transport abuse still 413s). The 2500-token base
+`max_tokens` is NOT a character-serializability guarantee and must not be
+described as one; prompt cost is bounded core-side instead. Before assembly core
+projects each accepted history answer to a ≤10k head+tail replay (6000 head +
+3800 tail + an explicit `[… N chars omitted …]` marker, code-point-safe), then
+the newest-first 60k history budget sheds on the EXACT rendered size (escaping +
+XML-wrapper overhead included), so an oversized newest entry can no longer
+overshoot the budget. The extension applies the same ≤10k projection only as a
+bandwidth optimization; correctness never depends on it. When the prompt still
+cannot fit the worst case, core sheds deterministically: protect the question,
+the safety/methodology system prompt, and the newest transcript, then drop
+oldest coach exchanges, then trim/dedupe recap and dossier. An unrecognized feature
+name returns the structured `unknown_ai_feature` error (not a bare 404) so the
+extension can distinguish "needs a newer Hub" from an unauthorized/missing
+page.
+
+Fan bio inclusion becomes a shared `includesFanBio` policy flag instead of the
+hard-coded `feature === "hi-greeting"` bio check — enabled for `hi-greeting`
+(unchanged), `help-me` (its prior absence was a bug), and `coach-chat`. The
+coach prompt template is laid out cache-safe: the stable, high-reuse sections
+(agency methodology / persona / fan context) precede the volatile ones
+(rolling history, then the current question) so the provider prompt-cache
+prefix survives turn-to-turn, and the prompt-manifest hashes were re-snapshot
+to match.
+
+Recap gains a short variant of `fan-summary`: an optional `summaryMode:
+'short'` (valid only for `fan-summary`, sent only for the short run — omitted
+means legacy full, so an older core never sees the field) drives a fixed
+300-message window and a compact template with a hard mode-specific output cap
+(full's adaptive reservation must not apply). A short recap is stored under a
+mode-qualified local cache key (legacy unqualified keys read as full) and is
+never pushed to the `fan_profiles` dossier, so a short run cannot overwrite the
+durable full profile. Truncation or output-exhaustion fails closed for coach
+and both recap sizes — a truncated recap is never cached, pushed as dossier, or
+attached.
+
+On every coach turn core selects two slots from the restricted generation
+store — the freshest usable full recap and the freshest usable short recap
+(terminal `completed`, non-empty, no exhaustion stop reason, `params` carrying
+`summaryMode`/coverage/requested-and-kept counts/persona so legacy rows are
+excluded, deterministic `ORDER BY created_at DESC, id DESC`) via a composite
+index. Attach rule: only one exists → attach it; both exist and the full is
+newer → attach the full only; the short is newer → attach BOTH, each labeled
+with age and role. Lookup failure fails open (coach proceeds recap-less,
+recorded in the context manifest); a recap identical to the injected dossier is
+injected once. A new metadata-only, page-scoped SDK read `GET
+/api/v1/ai/recap-status` (operation `aiRecapStatus`) returns both slots'
+generated-at/coverage/counts (or "none") with no generation and no AI spend,
+preserving the invariant that opening Coach incurs no AI cost. Coach and recap
+requests adopt the canonical identity `conversationRef = Fansly groupId` and
+`fanRef = fanAccountId` (the contract already separates these); during
+transition the attach lookup searches both the canonical and the legacy
+`fanAccountId ?? groupId` key. Extension spec: chatgoose
+`docs/superpowers/specs/2026-07-17-coach-chat-design.md` (§5 recap, §7 kernel
+contract); the `ai_usage_events.feature` enum gains `coach-chat` via a numbered
+forward migration and the Usage dashboard's fixed feature column list.

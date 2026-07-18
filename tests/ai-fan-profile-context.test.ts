@@ -242,10 +242,10 @@ describe('isFanProfileFeatureEnabled — runtime allowlist', () => {
 });
 
 describe('usesFanProfile policy mapping', () => {
-  it('is enabled for exactly fast-reply, improve-draft, help-me and ping', () => {
+  it('is enabled for exactly fast-reply, improve-draft, help-me, ping and coach-chat', () => {
     const enabled = OPERATION_FEATURES.filter(
       (feature) => FEATURE_POLICIES[feature].usesFanProfile,
     );
-    expect([...enabled].sort()).toEqual(['fast-reply', 'help-me', 'improve-draft', 'ping']);
+    expect([...enabled].sort()).toEqual(['coach-chat', 'fast-reply', 'help-me', 'improve-draft', 'ping']);
   });
 });
