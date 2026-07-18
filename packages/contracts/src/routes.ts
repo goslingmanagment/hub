@@ -2045,46 +2045,29 @@ export const aiFeatureStreamParamsSchema = z.object({
 export const COACH_ANSWER_MAX_CHARS = 64_000;
 
 // Scoped body limit for POST /api/v1/ai/features/:feature (Blocker 4, P1-4).
-// Fastify's bodyLimit is a BYTE budget enforced BEFORE Zod, but the schema
-// caps are CHAR counts, and a char can be up to 3 UTF-8 bytes (a BMP CJK code
-// unit is the per-code-unit worst case; astral chars are 2 code units → 4 bytes
-// = fewer bytes/unit). The worst-case schema-valid coach body sums to ~1.69M
-// chars — coachHistory 20×(2k question + 64k answer) = 1.32M, transcript 300k,
-// spending 20k, subscription 20k, bio 5k, draft 20k, question 2k, plus the small
-// scalar fields — which at 3 bytes/char serializes to ~5.06MB (≈5,062,461 bytes
-// with JSON framing). The former 4 MiB (4,194,304) limit 413'd that
-// contract-valid request before validation; 8 MiB clears it with headroom while
-// genuine transport abuse still 413s. Kept in the contract next to the schema
-// so the limit and the field caps that drive it cannot drift apart; asserted
-// against the measured worst case in tests/contracts-coach-body.test.ts.
-//
-// Round-3 P1-2: the 3-bytes/char ceiling only holds because the LARGE string
-// fields ban ASCII control chars (`noAsciiControl` below). Left unbanned, a
-// U+0000 is legal in a JSON string yet escapes to the six-byte `\u0000` on the
-// wire, so a fully-U+0000 worst case reaches ~11.8MB and 413s a contract-valid
-// body. With control chars rejected, the only remaining multi-byte legal chars
-// are 3-byte UTF-8 (×3, the ceiling) and the whitespace escapes \n \r \t
-// (→ two-byte `\n` etc., cheaper), so ~5.06MB stands and 8 MiB holds.
-export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
-
-// Reject ASCII control characters (< 0x20) EXCEPT the whitespace \t \n \r, which
-// JSON escapes cheaply (two bytes). Applied to the large free-text fields so the
-// pre-Zod byte-budget math above (3 UTF-8 bytes/char) cannot be defeated by
-// control chars that escape to six-byte `\uXXXX` sequences on the wire. Small
-// scalar fields (labels, refs, names) are left unrefined — they are not part of
-// the worst-case bulk and never carry legitimate control bytes.
-// Matching control characters is the whole point of this refinement, so the
-// no-control-regex lint is intentionally disabled for this pattern.
-// eslint-disable-next-line no-control-regex
-const ASCII_CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
-const NO_ASCII_CONTROL_MESSAGE =
-  "must not contain ASCII control characters (only tab, newline, and carriage return are allowed)";
-const noAsciiControl = (value: string): boolean => !ASCII_CONTROL_PATTERN.test(value);
-// Apply the control-char ban to a large free-text field. Callers keep .min()/.max()
-// on the base ZodString (the refine must come last on the string) and may still
-// chain .optional()/.default() after — both are valid on the resulting ZodEffects.
-const largeText = <T extends z.ZodString>(base: T) =>
-  base.refine(noAsciiControl, NO_ASCII_CONTROL_MESSAGE);
+// Fastify's bodyLimit is a BYTE budget enforced BEFORE Zod, but the schema caps
+// are CHAR counts (z.string().max() counts UTF-16 code units). The limit must
+// therefore clear the largest byte count a schema-valid body can serialize to,
+// content-agnostic: this is a SIZE bound, NOT a content policy. Round-4 P2-4
+// reverted the control-char ban that briefly guarded a tighter number — it
+// regressed every live Fansly feature whose transcripts carry arbitrary fan
+// text (a stray control char 400'd the whole reply/help-me/ping request) and
+// was invisible in the generated OpenAPI anyway; the fields are plain bounded
+// strings again and the limit simply absorbs the true worst case. That
+// worst-case schema-valid coach body sums to ~1.69M UTF-16 code units --
+// coachHistory 20x(2k question + 64k answer) = 1.32M, transcript 300k, spending
+// 20k, subscription 20k, bio 5k, draft 20k, question 2k, plus the small scalar
+// fields. The TRUE per-code-unit worst case on the JSON wire is SIX bytes: a
+// lone surrogate (U+D800) or an ASCII control char is a legal JSON string value
+// that JSON.stringify escapes to a six-byte `\uXXXX` sequence, so ~1.69M x 6
+// ~= 10.1MB (a printable 3-byte-UTF-8 char like the CJK "no" is only the 3-byte
+// ceiling -> ~5.06MB, well under this). The former 4 MiB and 8 MiB limits both
+// 413'd this six-byte worst case before validation; 12 MiB (12,582,912) clears
+// ~10.1MB with headroom while genuine transport abuse still 413s. Kept in the
+// contract next to the schema so the limit and the field caps that drive it
+// cannot drift apart; asserted against the measured worst case in
+// tests/contracts-coach-body.test.ts.
+export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
 
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
@@ -2099,14 +2082,14 @@ export const aiFeatureStreamBodySchema = z.object({
   replyTone: z.enum(["none", "casual", "flirty", "upsell", "spicy"]).optional(),
   replyMode: z.enum(["default", "preferSplit"]).optional(),
   messageCount: z.number().int().min(5).max(3000).optional(),
-  draftText: largeText(z.string().min(1).max(20_000)).optional(),
+  draftText: z.string().min(1).max(20_000).optional(),
   isRegeneration: z.boolean().optional(),
-  chatterQuestion: largeText(z.string().min(1).max(2_000)).optional(),
+  chatterQuestion: z.string().min(1).max(2_000).optional(),
   coachHistory: z
     .array(
       z.object({
-        question: largeText(z.string().min(1).max(2_000)),
-        answer: largeText(z.string().min(1).max(COACH_ANSWER_MAX_CHARS)),
+        question: z.string().min(1).max(2_000),
+        answer: z.string().min(1).max(COACH_ANSWER_MAX_CHARS),
       }).strict(),
     )
     .max(20)
@@ -2120,12 +2103,12 @@ export const aiFeatureStreamBodySchema = z.object({
   // land verbatim in the assembled prompt and are captured under the
   // Stage 29 restricted class exactly like archive-loaded context.
   clientContext: z.object({
-    transcript: largeText(z.string().min(1).max(300_000)),
+    transcript: z.string().min(1).max(300_000),
     messageCount: z.number().int().min(0).max(5000),
     fanDisplayName: z.string().max(200),
-    fanSpendingData: largeText(z.string().max(20_000)).default(""),
-    fanSubscriptionData: largeText(z.string().max(20_000)).default(""),
-    fanBio: largeText(z.string().max(5_000)).optional(),
+    fanSpendingData: z.string().max(20_000).default(""),
+    fanSubscriptionData: z.string().max(20_000).default(""),
+    fanBio: z.string().max(5_000).optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
     transcriptCoverage: z.enum(["full-history", "window"]).optional(),
   }).strict().optional(),

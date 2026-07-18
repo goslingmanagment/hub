@@ -55,118 +55,79 @@ describe("aiFeatureStream body — coach fields", () => {
   });
 });
 
-// Blocker 4 (P1-4): the scoped route bodyLimit is a BYTE budget enforced by
-// Fastify BEFORE Zod, but the schema caps are CHAR counts. A static-math proof
-// (not a 5MB upload) that the configured limit clears the worst-case
-// schema-valid body — built at the field maxes with a 3-byte UTF-8 char, the
-// per-code-unit worst case — and that the former 4 MiB limit did NOT.
+// Blocker 4 (P1-4) / round-4 P2-4: the scoped route bodyLimit is a BYTE budget
+// enforced by Fastify BEFORE Zod, but the schema caps are CHAR counts. A
+// static-math proof (not a multi-MB upload) that the configured limit clears the
+// worst-case schema-valid body. The large free-text fields are content-agnostic
+// plain bounded strings again -- the control-char ban was reverted (it regressed
+// live Fansly features and was invisible in the OpenAPI) -- so the true
+// per-code-unit worst case on the JSON wire is a SIX-byte "\uXXXX" escape.
 describe("aiFeatureStream body limit vs the worst-case schema-valid body", () => {
   const schema = routeSchemas.aiFeatureStream.body;
-  // "の" is 3 UTF-8 bytes and 1 UTF-16 code unit — the byte-per-char worst case
-  // for z.string().max() (astral chars are 2 code units → 4 bytes = fewer
-  // bytes/unit, so they never dominate).
-  const fill = (units: number) => "の".repeat(units);
 
-  it("8 MiB clears the worst case; 4 MiB did not", () => {
-    const worstCase = {
-      clientRequestId: "5f0c9d5e-3b6a-4d3e-9a10-6a3d2b1c0e9f",
-      pageLabel: fill(120),
-      platform: "fansly",
-      conversationRef: fill(255),
-      fanRef: fill(255),
-      personaKey: fill(120),
-      expectedPersonaDefinitionId: fill(100),
-      model: fill(100),
-      reasoningEffort: "max",
-      replyTone: "spicy",
-      replyMode: "preferSplit",
-      messageCount: 3000,
-      draftText: fill(20_000),
-      isRegeneration: true,
-      chatterQuestion: fill(2_000),
-      // 20 × (2k question + 64k answer) = the 1.32M-char bulk.
-      coachHistory: Array.from({ length: 20 }, () => ({
-        question: fill(2_000),
-        answer: fill(COACH_ANSWER_MAX_CHARS),
-      })),
-      summaryMode: "short",
-      clientContext: {
-        transcript: fill(300_000),
-        messageCount: 5000,
-        fanDisplayName: fill(200),
-        fanSpendingData: fill(20_000),
-        fanSubscriptionData: fill(20_000),
-        fanBio: fill(5_000),
-        pingSegment: "segment-a",
-        transcriptCoverage: "full-history",
-      },
-    };
-    // bodyLimit is enforced before validation, so the worst case that matters is
-    // any body the schema would accept (cross-field feature rules run later).
-    expect(schema.safeParse(worstCase).success, "worst case must be schema-valid").toBe(true);
+  const scalars = {
+    clientRequestId: "5f0c9d5e-3b6a-4d3e-9a10-6a3d2b1c0e9f",
+    platform: "fansly",
+    reasoningEffort: "max",
+    replyTone: "spicy",
+    replyMode: "preferSplit",
+    messageCount: 3000,
+    isRegeneration: true,
+    summaryMode: "short",
+  } as const;
 
+  // A body at EVERY field's max, each field filled with one code unit repeated,
+  // so the serialized size is the worst case for that unit.
+  const maxBodyFilledWith = (unit: string) => ({
+    ...scalars,
+    pageLabel: unit.repeat(120),
+    conversationRef: unit.repeat(255),
+    fanRef: unit.repeat(255),
+    personaKey: unit.repeat(120),
+    expectedPersonaDefinitionId: unit.repeat(100),
+    model: unit.repeat(100),
+    draftText: unit.repeat(20_000),
+    chatterQuestion: unit.repeat(2_000),
+    // 20 x (2k question + 64k answer) = the 1.32M-code-unit bulk.
+    coachHistory: Array.from({ length: 20 }, () => ({
+      question: unit.repeat(2_000),
+      answer: unit.repeat(COACH_ANSWER_MAX_CHARS),
+    })),
+    clientContext: {
+      transcript: unit.repeat(300_000),
+      messageCount: 5000,
+      fanDisplayName: unit.repeat(200),
+      fanSpendingData: unit.repeat(20_000),
+      fanSubscriptionData: unit.repeat(20_000),
+      fanBio: unit.repeat(5_000),
+      pingSegment: "segment-a",
+      transcriptCoverage: "full-history",
+    },
+  });
+
+  it("a 3-byte-UTF-8 (の) worst case is schema-valid and fits 12 MiB (>4 MiB)", () => {
+    // "の" is 3 UTF-8 bytes and 1 UTF-16 code unit -- the byte-per-char worst
+    // case among PRINTABLE chars for z.string().max() (astral chars are 2 code
+    // units -> 4 bytes = fewer bytes/unit, so they never dominate). ~5.06MB.
+    const worstCase = maxBodyFilledWith("の");
+    expect(schema.safeParse(worstCase).success, "の worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
-    // The historical 4 MiB limit 413'd this contract-valid request (the bug).
+    // The historical 4 MiB limit 413'd this contract-valid request.
     expect(bytes).toBeGreaterThan(4 * 1024 * 1024);
-    // The raised limit must clear it with headroom.
     expect(bytes).toBeLessThan(AI_FEATURE_STREAM_BODY_LIMIT_BYTES);
   });
 
-  // Round-3 P1-2: control chars are now BANNED in the large fields, so the
-  // 3-byte "の" ceiling above is the true worst case. Two guards keep it honest.
-  it("(a) a newline-heavy maximal body is schema-valid and still fits 8 MiB", () => {
-    // \n is an ALLOWED control char; it escapes to the two-byte "\\n" on the
-    // wire — cheaper per code unit than the 3-byte "の", so a fully-newline body
-    // sits comfortably under the same limit the "の" worst case clears.
-    const nl = (units: number) => "\n".repeat(units);
-    const newlineWorstCase = {
-      clientRequestId: "5f0c9d5e-3b6a-4d3e-9a10-6a3d2b1c0e9f",
-      pageLabel: "demo-page",
-      platform: "fansly",
-      conversationRef: "group-123",
-      draftText: nl(20_000),
-      chatterQuestion: nl(2_000),
-      coachHistory: Array.from({ length: 20 }, () => ({
-        question: nl(2_000),
-        answer: nl(COACH_ANSWER_MAX_CHARS),
-      })),
-      clientContext: {
-        transcript: nl(300_000),
-        messageCount: 5000,
-        fanDisplayName: "Bob",
-        fanSpendingData: nl(20_000),
-        fanSubscriptionData: nl(20_000),
-        fanBio: nl(5_000),
-      },
-    };
-    expect(schema.safeParse(newlineWorstCase).success, "newline body must be schema-valid").toBe(true);
-    const bytes = Buffer.byteLength(JSON.stringify(newlineWorstCase), "utf8");
+  it("a lone-high-surrogate (U+D800) worst case is schema-valid and fits 12 MiB (>8 MiB)", () => {
+    // Round-4 P2-4: with the control-char ban reverted, the TRUE worst case is a
+    // lone surrogate. "\ud800" is a legal JSON string value (1 UTF-16 code unit,
+    // so z.string().max() accepts it) that JSON.stringify escapes to a SIX-byte
+    // "\ud800" sequence -- ~1.69M units x 6 ~= 10.1MB. The former 8 MiB limit
+    // would have 413'd this contract-valid body; 12 MiB clears it with headroom.
+    const worstCase = maxBodyFilledWith("\ud800");
+    expect(schema.safeParse(worstCase).success, "surrogate worst case must be schema-valid").toBe(true);
+    const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
+    // Proves why 12 MiB was needed: the six-byte escape blows past the old 8 MiB.
+    expect(bytes).toBeGreaterThan(8 * 1024 * 1024);
     expect(bytes).toBeLessThan(AI_FEATURE_STREAM_BODY_LIMIT_BYTES);
-  });
-
-  it("(b) a body carrying ASCII control chars is REJECTED by the schema", () => {
-    const base = {
-      clientRequestId: "5f0c9d5e-3b6a-4d3e-9a10-6a3d2b1c0e9f",
-      pageLabel: "demo-page",
-      platform: "fansly",
-      conversationRef: "group-123",
-    };
-    // A NUL in any refined large field fails validation before the body limit
-    // even matters — this is the escape-expansion hole the report flagged.
-    expect(schema.safeParse({ ...base, draftText: "hello\u0000world" }).success).toBe(false);
-    expect(schema.safeParse({
-      ...base,
-      clientContext: {
-        transcript: "fan: hi\u0007", // BEL (0x07) — a control char
-        messageCount: 1,
-        fanDisplayName: "Bob",
-      },
-    }).success).toBe(false);
-    expect(schema.safeParse({
-      ...base,
-      coachHistory: [{ question: "q", answer: "a\u001Bb" }], // ESC (0x1B)
-    }).success).toBe(false);
-    // The allowed whitespace control chars stay accepted.
-    expect(schema.safeParse({ ...base, draftText: "line1\nline2\ttabbed\r" }).success).toBe(true);
   });
 });

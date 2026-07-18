@@ -4664,13 +4664,19 @@ terminal-recorded as failed, so it can never be attached/committed. Therefore
 every committed answer is ≤ the ceiling and replays verbatim within schema. The
 old 120k aggregate reject is REMOVED (a schema-valid-yet-gate-rejected zone was
 an API defect): a client trimming to its window setting is never rejected, and
-transport abuse is the route's job (a scoped 8 MiB body limit sized for the worst
-case: 20×66k history + a 300k transcript + the smaller free-text fields sum to
-~1.69M chars, which at 3 UTF-8 bytes/char serialize to ~5.06MB; the former 4 MiB
-limit 413'd that contract-valid body before validation, so it was raised to 8 MiB
-with headroom, and the large free-text fields reject ASCII control chars — except
-`\t \n \r` — so the 3-byte/char ceiling holds instead of a U+0000 escaping to a
-six-byte `\uXXXX` and inflating the wire to ~11.8MB). The 2500-token base
+transport abuse is the route's job (a scoped 12 MiB body limit sized
+content-agnostically for the worst case, NOT a content policy: 20×66k history +
+a 300k transcript + the smaller free-text fields sum to ~1.69M UTF-16 code units,
+and the true per-code-unit worst case on the JSON wire is SIX bytes — a lone
+surrogate (U+D800) or an ASCII control char is a legal JSON string value that
+JSON.stringify escapes to a six-byte `\uXXXX` sequence — so ~1.69M × 6 ≈ 10.1MB
+(a printable 3-byte-UTF-8 char is only ~5.06MB, well under). Round-3 briefly
+banned control chars in the large fields to hold a 3-byte/char ceiling at 8 MiB,
+but round-4 (P2-4) REVERTED that ban: it regressed every live Fansly feature
+whose transcript carries arbitrary fan text (a stray control char 400'd the whole
+request) and was invisible in the generated OpenAPI, so the fields are plain
+bounded strings again and the limit was raised 8 MiB → 12 MiB to absorb the
+six-byte worst case with headroom while genuine transport abuse still 413s). The 2500-token base
 `max_tokens` is NOT a character-serializability guarantee and must not be
 described as one; prompt cost is bounded core-side instead. Before assembly core
 projects each accepted history answer to a ≤10k head+tail replay (6000 head +
