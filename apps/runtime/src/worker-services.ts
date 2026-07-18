@@ -37,6 +37,12 @@ import {
   ensureProjectionDebtQueue,
   runProjectionDebtSweep,
 } from "./services/projection-debt-sweep.ts";
+import {
+  VOICE_NOTES_SWEEP_QUEUE,
+  ensureVoiceNotesSweepQueue,
+  runVoiceNotesNightlyRetention,
+  runVoiceNotesSweep,
+} from "./services/voice-notes-sweep.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
@@ -179,6 +185,7 @@ export async function startWorkerServices(
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureProjectionDebtQueue(boss, createdQueues);
+  await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   // Stage 25: cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
@@ -201,6 +208,12 @@ export async function startWorkerServices(
       app.db,
       new Date(now.getTime() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000),
     );
+    // Voice-notes retention rides the nightly cleanup: purge audio bytes older
+    // than 7 days and release the reservations of long-stale indeterminate rows.
+    const voiceRetention = await runVoiceNotesNightlyRetention(app, now);
+    if (voiceRetention.audioPurged > 0 || voiceRetention.budgetsReleased > 0) {
+      app.logger.info(voiceRetention, "Voice notes nightly retention complete");
+    }
   });
 
   await boss.work(WORKBOARD_RECOMPUTE_QUEUE, { batchSize: 1 }, async () => {
@@ -305,6 +318,15 @@ export async function startWorkerServices(
     const result = await runProjectionDebtSweep(app);
     if (result.scanned > 0) {
       app.logger.info(result, "Projection debt sweep complete");
+    }
+  });
+
+  await boss.work(VOICE_NOTES_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    // Minutely: reclaim abandoned queued + lease-expired dispatched voice-note
+    // renders to indeterminate, refunding certainly-unbilled reservations.
+    const result = await runVoiceNotesSweep(app);
+    if (result.abandonedQueued > 0 || result.leaseExpired > 0 || result.budgetsReleased > 0) {
+      app.logger.info(result, "Voice notes sweep complete");
     }
   });
 

@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, lt, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { voiceNotes, type VoiceNoteState, type VoiceProfileSettings } from "../schema.ts";
@@ -206,17 +206,38 @@ export async function settleVoiceNoteTerminal(
   return settled.length > 0;
 }
 
+/** The (page, chars, day) triple a swept row's budget release needs: `now` for
+ * the release MUST be the row's `createdAt` so the refund lands on the UTC-day
+ * counter the reservation was originally made against, not the sweep day. */
+export interface VoiceNoteBudgetReleaseRow {
+  platformAccountId: number;
+  scriptChars: number;
+  createdAt: Date;
+}
+
 /**
  * Recovery sweep. Moves lease-expired `dispatched` rows (lease_until < now) and
  * abandoned `queued` rows (created before the caller-supplied cutoff) to
  * `indeterminate`, returning a count for each. Omitting `queuedCutoff` sweeps
  * only expired leases — no queued row is abandoned without an explicit cutoff.
+ *
+ * The two classes differ in billing certainty, so `billed` diverges:
+ * - An abandoned `queued` row crashed BEFORE dispatch → certainly unbilled, so
+ *   the same UPDATE stamps `billed=false` (the released marker) and the row is
+ *   returned in `abandonedQueuedRows` for the caller to refund its reservation.
+ * - A lease-expired `dispatched` row may or may not have been billed at the
+ *   provider → `billed` is left NULL (billing unknown; the reservation stays,
+ *   the conservative direction). The nightly job releases these after 24h.
  */
 export async function sweepVoiceNotes(
   db: Database,
   now: Date,
   queuedCutoff?: Date,
-): Promise<{ abandonedQueued: number; leaseExpired: number }> {
+): Promise<{
+  abandonedQueued: number;
+  leaseExpired: number;
+  abandonedQueuedRows: VoiceNoteBudgetReleaseRow[];
+}> {
   const leaseExpired = await db
     .update(voiceNotes)
     .set({ state: "indeterminate", updatedAt: now })
@@ -227,22 +248,55 @@ export async function sweepVoiceNotes(
     ))
     .returning({ id: voiceNotes.id });
 
-  let abandonedQueued: { id: number }[] = [];
+  let abandonedQueuedRows: VoiceNoteBudgetReleaseRow[] = [];
   if (queuedCutoff !== undefined) {
-    abandonedQueued = await db
+    abandonedQueuedRows = await db
       .update(voiceNotes)
-      .set({ state: "indeterminate", updatedAt: now })
+      .set({ state: "indeterminate", billed: false, updatedAt: now })
       .where(and(
         eq(voiceNotes.state, "queued"),
         lt(voiceNotes.createdAt, queuedCutoff),
       ))
-      .returning({ id: voiceNotes.id });
+      .returning({
+        platformAccountId: voiceNotes.platformAccountId,
+        scriptChars: voiceNotes.scriptChars,
+        createdAt: voiceNotes.createdAt,
+      });
   }
 
   return {
-    abandonedQueued: abandonedQueued.length,
+    abandonedQueued: abandonedQueuedRows.length,
     leaseExpired: leaseExpired.length,
+    abandonedQueuedRows,
   };
+}
+
+/**
+ * Nightly conservative release for `indeterminate` rows whose billing was never
+ * resolved. One UPDATE stamps `billed=false` on `indeterminate` rows with
+ * `billed IS NULL` (never released, never settled) created before `cutoff`,
+ * RETURNING the (page, chars, day) each release needs. The `billed IS NULL`
+ * predicate makes it idempotent — a second run finds nothing because the first
+ * run already flipped the marker. The caller refunds each returned row against
+ * its own `createdAt` day.
+ */
+export async function releaseStaleIndeterminateVoiceBudgets(
+  db: Database,
+  cutoff: Date,
+): Promise<VoiceNoteBudgetReleaseRow[]> {
+  return db
+    .update(voiceNotes)
+    .set({ billed: false, updatedAt: new Date() })
+    .where(and(
+      eq(voiceNotes.state, "indeterminate"),
+      isNull(voiceNotes.billed),
+      lt(voiceNotes.createdAt, cutoff),
+    ))
+    .returning({
+      platformAccountId: voiceNotes.platformAccountId,
+      scriptChars: voiceNotes.scriptChars,
+      createdAt: voiceNotes.createdAt,
+    });
 }
 
 /**
