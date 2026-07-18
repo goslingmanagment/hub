@@ -4797,3 +4797,32 @@ binary used by both runtime launch sites, and removes package-manager indexes
 in the same layer. Image/tag garbage collection remains an explicit,
 owner-gated operation so current, rollback, and the checksum-pinned clean base
 cannot be deleted by an unscoped prune.
+
+**Decision #173 (2026-07-19, recovery generations stay monotonic and partial
+production failures stay visible):** Resetting a sync checkpoint does not
+reset the retained projection rows that carry generation numbers. Every fresh
+Fansly follower, Fansly/OFAPI subscriber, and Fansly DM-conversation sweep
+therefore starts at `max(checkpoint generation, retained-row generation) + 1`,
+including inactive or hidden rows. A valid in-progress cursor resumes without
+another high-water read, and finalization keeps the existing `< generation`
+retirement predicate. This makes the existing owner Reset operation safe after
+a consistency block without deleting facts or adding a migration.
+
+Public sync health degrades when any applicable task is terminal `failed`, even
+when an up-to-date or paused primary task hides that failure at block level.
+Only the task state is authoritative: `needsAttention`, dependency delays, and
+ordinary pauses do not trip the gate. Existing block-level counters retain
+their meaning; a hidden failure is reported as `failed_tasks` and supplies the
+public error summary.
+
+OFAPI chargeback reconciliation uses a full-history first walk with neither
+date boundary and paired start/end boundaries from one clock instant on
+trailing walks. An unexpected vendor or database failure is isolated to its
+page so the remaining fleet still converges; only after the fleet pass does the
+worker fail, and a single deduplicated global incident remains open until an
+all-written clean run. The queue is reconciled at startup to a zero retry
+limit, so one scheduled job performs exactly one fleet pass instead of
+repurchasing healthy pages. A request without a response keeps its durable
+credit estimate charged in
+the conservative direction while only its in-memory lifecycle token is
+released for the next page.
