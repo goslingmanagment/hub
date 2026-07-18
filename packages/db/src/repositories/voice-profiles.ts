@@ -63,6 +63,15 @@ export async function getVoiceProfile(
   return row ?? null;
 }
 
+/**
+ * Every configured voice binding. Used to batch the "does this page have a
+ * profile?" check when computing the `capabilities.voiceNotes` UI hint across a
+ * chatter's full page list, instead of one getVoiceProfile per page.
+ */
+export async function listVoiceProfiles(db: Database): Promise<VoiceProfileRow[]> {
+  return db.query.pageVoiceProfiles.findMany();
+}
+
 export async function clearVoiceProfile(
   db: Database,
   platformAccountId: number,

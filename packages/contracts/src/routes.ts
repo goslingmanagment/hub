@@ -558,6 +558,52 @@ export const pageConversationMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).default(25),
 });
 
+// ── Voice notes (Task 6) ──────────────────────────────────────────────────────
+// Three page-scoped routes on the chatter lane. The status/create views share
+// one projection (voiceNoteStatusSchema); the audio route returns raw bytes.
+export const voiceNoteParamsSchema = pageParamsSchema.extend({
+  // The render's numeric voice_notes.id. Coerced from the path segment; a
+  // foreign/unknown id is an indistinguishable 404 (page-scoped, service-side).
+  id: z.coerce.number().int().min(1),
+});
+
+// Content is bounded here only to cap the request; the substantive checks
+// (control-char refs, script length against the LIVE config max, source
+// eligibility) run service-side and answer with structured 400/409 codes.
+export const voiceNoteCreateBodySchema = z.object({
+  clientRequestId: z.string().min(1).max(200),
+  conversationRef: z.string().min(1).max(200),
+  sourceGenerationRef: z.string().min(1).max(200),
+  script: z.string().min(1).max(8000),
+});
+
+export const voiceNoteStateSchema = z.enum([
+  "queued",
+  "dispatched",
+  "completed",
+  "failed_definite",
+  "failed_after_dispatch",
+  "indeterminate",
+  "quota_denied",
+  "artifact_expired",
+]);
+
+// The client-facing projection (never carries audio bytes). `createdAt` is
+// REQUIRED — the takes list orders by it. `errorCode` is present only on a
+// terminal non-success state; its vocabulary is a SUPERSET of the HTTP error
+// codes (voice_failed_definite / voice_failed_after_dispatch /
+// voice_indeterminate / voice_quota_denied / artifact_expired).
+export const voiceNoteStatusSchema = z.object({
+  voiceNoteId: intId,
+  state: voiceNoteStateSchema,
+  scriptChars: z.number().int(),
+  billed: z.boolean().nullable(),
+  audioSha256: z.string().nullable(),
+  audioBytesLen: z.number().int().nullable(),
+  createdAt: isoTimestamp,
+  errorCode: z.string().optional(),
+});
+
 const pageMetricSchema = z.object({
   value: z.number().int().nullable(),
   available: z.boolean(),
@@ -573,6 +619,11 @@ export const assignedPageSchema = pageRefSchema.extend({
   subscriberCount: pageMetricSchema,
   lastLightSyncAt: isoTimestamp.nullable(),
   lastFollowerSyncAt: isoTimestamp.nullable(),
+  // OPTIONAL UI hint (Task 6). Present only when the voice-notes switch is live
+  // AND this page is allowlisted AND a voice profile exists — a missing field
+  // reads as disabled (old-kernel forward-compat). The flag never gates the
+  // render: `POST …/voice-notes` stays the authoritative admission.
+  capabilities: z.object({ voiceNotes: z.boolean() }).optional(),
 });
 
 export const modelListItemSchema = z.object({
@@ -5202,6 +5253,73 @@ export const routeSchemas = {
     response: {
       200: z.array(assignedPageSchema),
       401: errorResponseSchema,
+    },
+  },
+  voiceNoteCreate: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["voice"],
+    summary: "Admit (or idempotently replay) a voice-note render",
+    description:
+      "Admits at most one billable ElevenLabs render per (user, clientRequestId); "
+      + "returns 202 with the queued/dispatched view immediately (the synthesis runs "
+      + "detached). A replay of an already-admitted request re-runs no admission gate. "
+      + "Structured error codes (in the body `error` field): 400 voice_script_invalid / "
+      + "voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 "
+      + "idempotency_mismatch (same id, different request) / voice_no_profile; 429 "
+      + "voice_quota_denied; 503 voice_provider_unavailable (live flag on, provider not "
+      + "built at boot — restart required).",
+    params: pageParamsSchema,
+    body: voiceNoteCreateBodySchema,
+    response: {
+      202: voiceNoteStatusSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  voiceNoteStatus: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["voice"],
+    summary: "Read a voice-note render's status",
+    description:
+      "Page-scoped (id, page, user) lookup — a foreign or unknown voiceNoteId is an "
+      + "indistinguishable 404. 403 voice_retrieval_disabled when the retrieval incident "
+      + "switch is off.",
+    params: voiceNoteParamsSchema,
+    response: {
+      200: voiceNoteStatusSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  voiceNoteAudio: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["voice"],
+    summary: "Download a completed voice-note's audio bytes",
+    description:
+      "Returns the rendered artifact as binary `audio/mpeg` (headers: content-length, "
+      + "cache-control private/no-store, x-content-type-options nosniff). The handler "
+      + "writes the body directly; server OpenAPI generation rewrites the 200 media type "
+      + "to audio/mpeg (the Zod Fastify transformer only accepts a Zod schema here). "
+      + "Not-yet-ready and never-produced are indistinguishable 404s. A purged artifact "
+      + "is 410 with body code `artifact_expired`: DELIBERATELY no new SDK error category "
+      + "— clients match the structured body code (the existing gate-code pattern), and "
+      + "410 stays category `validation` in the SDK taxonomy.",
+    params: voiceNoteParamsSchema,
+    response: {
+      // The handler sets audio/mpeg and writes the bytes directly; OpenAPI
+      // generation rewrites this success media type to audio/mpeg because the
+      // Zod Fastify transformer only accepts Zod schemas here.
+      200: z.string().describe("Binary audio/mpeg — the rendered voice-note MP3 bytes"),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      410: errorResponseSchema,
     },
   },
   models: {

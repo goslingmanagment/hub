@@ -21,7 +21,9 @@ export type KernelOperationKey = keyof Schemas & string;
  * Operations without a plain request/JSON-response shape. The webhook is
  * HMAC-authenticated server intake; the two streams are SSE (dedicated
  * helpers); the read gateway is a wildcard proxy (passthrough helper); the
- * ledger CSV returns text/csv. All remain reachable via `client.raw(...)`.
+ * ledger CSV returns text/csv; the voice-note audio route returns binary
+ * audio/mpeg (dedicated `fetchVoiceNoteAudio` helper). All remain reachable via
+ * `client.raw(...)`.
  */
 export const SDK_EXCLUDED_OPERATIONS = [
   "ofapiWebhookReceive",
@@ -30,6 +32,7 @@ export const SDK_EXCLUDED_OPERATIONS = [
   "aiGatewayStream",
   "ofapiReadGateway",
   "adminOfapiCreditsLedgerCsv",
+  "voiceNoteAudio",
 ] as const;
 export type KernelSdkExcludedKey = (typeof SDK_EXCLUDED_OPERATIONS)[number];
 export type KernelSdkMethodKey = Exclude<KernelOperationKey, KernelSdkExcludedKey>;
@@ -661,6 +664,26 @@ export async function ofapiRead(options: KernelClientOptions, input: {
     options,
     query: input.query,
     headers: input.headers,
+  });
+}
+
+/**
+ * Fetch a completed voice-note's audio bytes (`GET
+ * /api/v1/pages/:pageLabel/voice-notes/:id/audio`, Task 6). The response is
+ * binary `audio/mpeg`, so there is no JSON shape to validate — the caller gets
+ * the raw Response (200 with the bytes on success). On failure the body carries
+ * a structured `{ error, message, statusCode }`; NOTE a 410 `artifact_expired`
+ * (the audio was purged) is matched on the body `error` code, NOT a distinct
+ * SDK error category — the existing gate-code pattern.
+ */
+export async function fetchVoiceNoteAudio(options: KernelClientOptions, input: {
+  pageLabel: string;
+  id: number;
+}): Promise<Response> {
+  return executeKernelRequest({
+    def: { method: "GET", path: "/api/v1/pages/:pageLabel/voice-notes/:id/audio" },
+    options,
+    params: { pageLabel: input.pageLabel, id: input.id },
   });
 }
 

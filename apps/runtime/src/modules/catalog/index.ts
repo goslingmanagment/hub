@@ -1,5 +1,6 @@
 import {
   routeSchemas,
+  type AssignedPage,
   type UpdateCredentialsBody,
 } from "@agency_hub_core/contracts";
 import {
@@ -13,6 +14,7 @@ import {
   getSyncStreamsForPlatform,
   listAdminModels,
   listAdminPages,
+  listVoiceProfiles,
   ModelHasPagesError,
   pausePageSync,
   updateModelBySlug,
@@ -35,6 +37,8 @@ import {
   requireOwner,
 } from "../../services/auth.ts";
 import { updatePageCredentials } from "../../services/connections.ts";
+import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import type { AppContext } from "../../bootstrap.ts";
 import {
   BadRequestError,
   ConflictError,
@@ -99,6 +103,52 @@ function serializeAssignedPage(page: {
     modelSlug: page.modelSlug,
     modelName: page.modelName,
   };
+}
+
+// The voice-notes page allowlist FAILS CLOSED: empty (or unset) = NO pages.
+// Mirrors isPageAllowlisted in services/voice-notes.ts — kept a local copy so
+// the two never drift on the empty-means-none rule.
+function parseVoiceAllowlist(csv: string | undefined): Set<string> {
+  if (!csv) {
+    return new Set();
+  }
+  return new Set(
+    csv
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+}
+
+/**
+ * Attach the OPTIONAL `capabilities.voiceNotes` UI hint to each assigned page.
+ * The field appears ONLY when all three hold: the live voiceNotesEnabled switch
+ * is on, the page label is in the (fail-closed) allowlist, AND a voice profile
+ * exists for the page. Any of them false → the field is omitted entirely (a
+ * missing field reads as disabled — old-kernel forward-compat). This is a hint
+ * only; `POST …/voice-notes` remains the authoritative admission gate. The
+ * profile lookups are batched into a single query.
+ */
+async function attachVoiceNoteCapabilities(
+  app: AppContext,
+  pages: AssignedPage[],
+): Promise<AssignedPage[]> {
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  if (effective.voiceNotesEnabled !== true) {
+    return pages;
+  }
+  const allowlist = parseVoiceAllowlist(effective.voiceNotesPageAllowlist);
+  if (allowlist.size === 0) {
+    return pages;
+  }
+  const profiledPageIds = new Set(
+    (await listVoiceProfiles(app.db)).map((profile) => profile.platformAccountId),
+  );
+  return pages.map((page) =>
+    allowlist.has(page.label) && profiledPageIds.has(page.id)
+      ? { ...page, capabilities: { voiceNotes: true } }
+      : page,
+  );
 }
 
 function rethrowAdminCatalogError(error: unknown): never {
@@ -189,7 +239,8 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.pages,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    return listPageSummaries(appContext, pageScopeFor(principal));
+    const pages = await listPageSummaries(appContext, pageScopeFor(principal));
+    return attachVoiceNoteCapabilities(appContext, pages);
   });
 
   server.get("/api/v1/models", {
