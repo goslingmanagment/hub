@@ -51,4 +51,31 @@ describe("coach-chat prompt", () => {
     expect(COACH_CHAT_TEMPLATE).toContain("## Your Task");
     expect(COACH_CHAT_TEMPLATE).toContain("```draft");
   });
+
+  it("keeps per-fan recaps, dossier and coach history out of the 1h static prefix", () => {
+    const built = buildPrompt({
+      ...baseInput,
+      transcript: "TRANSCRIPTBODY",
+      coachHistory: [{ question: "PRIORQ", answer: "PRIORA" }],
+      recapAttach: { full: { body: "FULLBODY", ageMs: 60_000 }, short: null },
+    });
+    expect(built.userBlocks).toHaveLength(3);
+    const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
+    // The 1h prefix must be fan-agnostic (builder invariant) — none of the
+    // per-fan / per-turn data may ride here or the breakpoint never re-hits.
+    expect(staticBlock?.cache).toBe("1h");
+    expect(staticBlock?.text).toContain("## Rules");
+    expect(staticBlock?.text).not.toContain("FULLBODY");
+    expect(staticBlock?.text).not.toContain("PRIORQ");
+    expect(staticBlock?.text).not.toContain("TRANSCRIPTBODY");
+    expect(staticBlock?.text).not.toContain("## Fan Recaps");
+    // Recaps + dossier + coach history ride the ephemeral dynamic block.
+    expect(dynamicBlock?.cache).toBe("5m");
+    expect(dynamicBlock?.text).toContain("TRANSCRIPTBODY");
+    expect(dynamicBlock?.text).toContain("FULLBODY");
+    expect(dynamicBlock?.text).toContain("PRIORQ");
+    // The question stays in the uncached task block.
+    expect(taskBlock?.cache).toBe("none");
+    expect(taskBlock?.text).toContain("как продать ppv?");
+  });
 });

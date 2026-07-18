@@ -20,9 +20,9 @@
     },
     "templates.ts": {
       "sourceSha256": "cf40a9ecb86834a4d4c1fa4bd742687244df49eac6a9be6058a8341c5a7bf922",
-      "coreSha256": "a3a10ae35e4320969b401aae026bb5440928bc67d03ecacda5f898026498e6a6",
+      "coreSha256": "cf82983f2f6a1277b5e0be6ed1a1a245533ff3544f973416c9482e951c8b4441",
       "byteIdenticalToSource": false,
-      "note": "Decision #136: {fanProfileSection} added to fast-reply/improve-draft/help-me/ping (templates-sync byte-equality). Coach feature (Task 7): COACH_CHAT_TEMPLATE added (kernel-native, byte-identical to templates/coach-chat.md); {fanBioSection} added to help-me so its includesFanBio policy actually renders (owner ruling, spec §7)."
+      "note": "Decision #136: {fanProfileSection} added to fast-reply/improve-draft/help-me/ping (templates-sync byte-equality). Coach feature (Task 7): COACH_CHAT_TEMPLATE added (kernel-native, byte-identical to templates/coach-chat.md); {fanBioSection} added to help-me so its includesFanBio policy actually renders (owner ruling, spec §7). Task 7 review fix: coach template reordered so the 1h static prefix is fan-agnostic (recaps/dossier/fan-data/coach-history moved after the transcript into the 5m dynamic block); intro wording corrected to \"the agency method you were given\"."
     },
     "personalities.ts": {
       "sourceSha256": "ae445150784b3ef9c0b77092358645a82d2a09ae6a12bae54147bf9193c3dca6",
@@ -96,8 +96,8 @@
       "byteIdenticalToSource": true
     },
     "templates/coach-chat.md": {
-      "sourceSha256": "369cb5096f0fa9c263ad9ebcba167690874742841155f5c2050f2c53112b6837",
-      "coreSha256": "369cb5096f0fa9c263ad9ebcba167690874742841155f5c2050f2c53112b6837",
+      "sourceSha256": "fe4a2f031ef615528fcb2477de71e3fbf73723ad011c21a37b957bc171406aaa",
+      "coreSha256": "fe4a2f031ef615528fcb2477de71e3fbf73723ad011c21a37b957bc171406aaa",
       "byteIdenticalToSource": false,
       "note": "Coach feature (Task 7): kernel-native prompt template — coach-chat postdates the Stage 30 freeze, so there is NO frozen desktop antecedent. sourceSha256 mirrors coreSha256 as a documented self-reference (the kernel file is the sole source of truth); byteIdenticalToSource is false because this is not a migrated desktop asset. Held byte-identical to COACH_CHAT_TEMPLATE by templates-sync.test.ts. Carries the ```draft fence grammar, the {recapSection} two-slot attach, the {coachHistorySection} coach dialog, and the {transcriptCoverageNote}."
     },

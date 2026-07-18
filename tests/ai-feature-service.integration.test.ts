@@ -13,6 +13,7 @@ import {
   createModel,
   createOnlyFansPage,
   findAiPersonaByKey,
+  insertAiGenerationContent,
   seedBundledAiPersona,
   storeProxyConfig,
   upsertAiPersona,
@@ -1286,6 +1287,186 @@ describe("coach-chat gates", () => {
     expect(prompt).toContain("как продать ppv?");
     expect(prompt).toContain("нащупай боль");
     expect(prompt).toContain("most recent window only");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("coach-chat recap attach (spec §5)", () => {
+  // Exercises the six attach branches in prepareAiFeatureStream by seeding
+  // fan-summary recap rows (as the recap reader in ai-recap-selection does) and
+  // asserting on the assembled prompt the capturing provider saw. The recap
+  // reader searches conversationRefs [conversationRef, fanRef]; rows are seeded
+  // under the conversationRef.
+  const conversationRef = "group-777";
+  const fanRef = "fan-42";
+  const daysAgo = (n: number): Date => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+
+  async function svcFsPageId(): Promise<number> {
+    const { rows } = await testDb!.pool.query<{ id: string }>(
+      `select id::text as id from pages where label = 'svc-fs'`,
+    );
+    return Number(rows[0]!.id);
+  }
+
+  async function seedRecap(input: {
+    pageId: number;
+    mode: "full" | "short";
+    completion: string;
+    createdAt: Date;
+  }): Promise<void> {
+    const generationRef = randomUUID();
+    await insertAiGenerationContent(testDb!.db, {
+      usageEventId: null,
+      generationRef,
+      feature: "fan-summary",
+      model: "m",
+      provider: "anthropic",
+      userId: null,
+      pageId: input.pageId,
+      conversationRef,
+      promptBlocks: [],
+      completion: input.completion,
+      params: { summaryMode: input.mode, outcome: "completed", stopReason: "end_turn" },
+    });
+    // insertAiGenerationContent has no createdAt input; set it directly so the
+    // full-vs-short recency the attach rule compares is deterministic.
+    await testDb!.pool.query(
+      `update ai_generation_content set created_at = $1 where generation_ref = $2`,
+      [input.createdAt.toISOString(), generationRef],
+    );
+  }
+
+  async function runCoach(over: Record<string, unknown> = {}) {
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-fs",
+        platform: "fansly",
+        conversationRef,
+        fanRef,
+        chatterQuestion: "как продать ppv?",
+        clientContext: {
+          transcript: "[10:00] Fan: hey babe",
+          messageCount: 3,
+          fanDisplayName: "Bob",
+          fanSpendingData: "Total: $42.00",
+          fanSubscriptionData: "Subscribed: yes",
+        },
+        ...over,
+      },
+    });
+    return { res, promptText: JSON.stringify(capture.input) };
+  }
+
+  it("(a) only a full recap exists -> full attached", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    await seedRecap({ pageId, mode: "full", completion: "FULL_ONLY_BODY", createdAt: daysAgo(2) });
+    const { res, promptText } = await runCoach();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(promptText).toContain("Full recap");
+    expect(promptText).toContain("FULL_ONLY_BODY");
+    expect(promptText).not.toContain("Short recap");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("(b) only a short recap exists -> short attached", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    await seedRecap({ pageId, mode: "short", completion: "SHORT_ONLY_BODY", createdAt: daysAgo(1) });
+    const { res, promptText } = await runCoach();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(promptText).toContain("Short recap");
+    expect(promptText).toContain("SHORT_ONLY_BODY");
+    expect(promptText).not.toContain("Full recap");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("(c) both exist, short newer -> BOTH attached, and (f) the manifest records both ages", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    await seedRecap({ pageId, mode: "full", completion: "FULLBODY_C", createdAt: daysAgo(5) });
+    await seedRecap({ pageId, mode: "short", completion: "SHORTBODY_C", createdAt: daysAgo(1) });
+    const { res, promptText } = await runCoach();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(promptText).toContain("Full recap");
+    expect(promptText).toContain("FULLBODY_C");
+    expect(promptText).toContain("Short recap");
+    expect(promptText).toContain("SHORTBODY_C");
+    // (f) contextManifest.recapAttach is observable on the restricted-store row.
+    const { rows } = await testDb.pool.query<{ params: Record<string, unknown> }>(
+      `select params from ai_generation_content where feature = 'coach-chat' order by id desc limit 1`,
+    );
+    const recapAttach = (
+      rows[0]?.params as {
+        contextManifest?: { recapAttach?: { full: number | null; short: number | null } };
+      }
+    )?.contextManifest?.recapAttach;
+    expect(typeof recapAttach?.full).toBe("number");
+    expect(typeof recapAttach?.short).toBe("number");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("(d) both exist, full newer -> full only", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    await seedRecap({ pageId, mode: "full", completion: "FULLBODY_D", createdAt: daysAgo(1) });
+    await seedRecap({ pageId, mode: "short", completion: "SHORTBODY_D", createdAt: daysAgo(5) });
+    const { res, promptText } = await runCoach();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(promptText).toContain("Full recap");
+    expect(promptText).toContain("FULLBODY_D");
+    expect(promptText).not.toContain("Short recap");
+    expect(promptText).not.toContain("SHORTBODY_D");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("(e) full recap identical to the injected dossier -> attached once (dedupe)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    // A plain, heading-less body compiles to itself (compileDossierForPrompt
+    // drops/truncates nothing), so the LOADED dossier body equals the raw body
+    // equals the seeded recap completion — the exact-match dedupe fires.
+    const body = "Charles rides a red Ducati and lives in Austin. Big tipper.";
+    await testDb.pool.query(
+      `insert into fans (platform, platform_user_id, username, display_name)
+       values ('fansly', $1, 'dedupe-fan', 'Dedupe Fan')`,
+      [fanRef],
+    );
+    const { rows: fanRows } = await testDb.pool.query<{ id: string }>(
+      `select id::text as id from fans where platform = 'fansly' and platform_user_id = $1`,
+      [fanRef],
+    );
+    await testDb.pool.query(
+      `insert into fan_profiles (fan_id, platform_account_id, version, body, source, source_generated_at)
+       values ($1, $2, 1, $3, 'chatmuse', now())`,
+      [Number(fanRows[0]!.id), pageId, body],
+    );
+    await seedRecap({ pageId, mode: "full", completion: body, createdAt: daysAgo(2) });
+    // The dossier path is off by default; the env allowlist enables it here.
+    appContext.config.chatMuseAiFanProfileContextFeatures = "all";
+    const { res, promptText } = await runCoach();
+    expect(res.statusCode, res.body).toBe(200);
+    // The dossier is injected...
+    expect(promptText).toContain("## Fan Dossier");
+    // ...and the duplicate full recap is dropped (no recap section at all).
+    expect(promptText).not.toContain("## Fan Recaps");
+    expect(promptText).not.toContain("Full recap");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
