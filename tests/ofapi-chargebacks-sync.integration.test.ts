@@ -404,6 +404,84 @@ describe("OFAPI chargebacks reconcile", () => {
     });
   });
 
+  it("keeps the failure incident open when a trailing walk writes a budget-truncated partial", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("cb-partial", "acct_cb_partial");
+    // Force trailing mode without spending a vendor call. The failed pass
+    // below conservatively leaves one backfill credit reserved.
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      source: "ofapi:rest",
+      transactionId: "seed:chargeback",
+      rawType: "ofapi:chargeback",
+      canonicalType: "chargeback",
+      transactionState: "posted",
+      rawStatus: "undo",
+      grossAmountMills: -1_000n,
+      sourceDestinationAmountMills: -1_000n,
+      creatorNetAmountMills: -800n,
+      senderId: "555000",
+      occurredAt: new Date("2026-06-01T00:00:00.000Z"),
+    });
+
+    appContext = {
+      ...appContext,
+      ofapi: {
+        async listChargebacks() {
+          throw new Error("scripted reconcile failure");
+        },
+      } as unknown as OfapiClient,
+    };
+    const failed = await runOfapiChargebacksReconcile(appContext);
+    expect(failed.pages[0]?.status).toBe("failed");
+    expect((await listNotificationIncidents(appContext.db))[0]?.status).toBe("open");
+
+    const partialItems = Array.from({ length: 100 }, (_, index) =>
+      chargebackItem(`partial-${index}`, String(700_000 + index)));
+    appContext = {
+      ...createTestAppContext(testDb, {
+        ofapiChargebacksReconcileEnabled: true,
+        ofapiCreditLedgerEnabled: true,
+        // One credit is already held by the failed attempt. Admit exactly one
+        // page, then block before page two.
+        ofapiBackfillDailyCreditBudget: 2,
+      }),
+      ofapi: {
+        async listChargebacks(): Promise<OfapiListPage> {
+          return {
+            items: partialItems,
+            hasNextPage: true,
+            nextMarker: null,
+            nextPageUrl: null,
+            meta: null,
+          };
+        },
+      } as unknown as OfapiClient,
+    };
+
+    const partial = await runOfapiChargebacksReconcile(appContext);
+    expect(partial.pages[0]).toMatchObject({
+      status: "blocked",
+      reason: "ofapi_daily_credit_budget",
+      apiPages: 1,
+      rawRows: 100,
+      writtenRows: 100,
+    });
+    const { rows: transactionCount } = await testDb.pool.query<{ n: number }>(
+      "select count(*)::int as n from transactions where platform_account_id = $1",
+      [page.id],
+    );
+    expect(transactionCount).toEqual([{ n: 101 }]);
+    expect((await listNotificationIncidents(appContext.db))[0]).toMatchObject({
+      kind: "ofapi_chargebacks_reconcile_failed",
+      status: "open",
+    });
+  });
+
   // ——— W7.3 (A21+B4, decision #132): negation guards ———
 
   function settledOriginal(pageId: number, transactionId: string) {

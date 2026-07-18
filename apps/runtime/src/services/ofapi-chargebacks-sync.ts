@@ -401,8 +401,8 @@ async function reconcilePage(
 
   return {
     pageLabel: input.pageLabel,
-    status: blockedReason !== null && written === 0 && apiPages === 0 ? "blocked" : "written",
-    reason: blockedReason,
+    status: walkComplete ? "written" : "blocked",
+    reason: walkComplete ? null : blockedReason ?? "trailing_walk_truncated",
     apiPages,
     rawRows,
     writtenRows: written,
