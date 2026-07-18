@@ -1461,7 +1461,8 @@ describe("fan-summary short variant cap (Task 8)", () => {
       context.skip();
       return;
     }
-    const { res, capture } = await postFanSummary({ summaryMode: "short" });
+    // P1-1: a short fansly recap now REQUIRES fanRef, so supply it here.
+    const { res, capture } = await postFanSummary({ summaryMode: "short", fanRef: "fan-42" });
     expect(res.statusCode, res.body).toBe(200);
     // The 2048 cap reaches the provider on the gateway body (honored by both
     // providers as input.maxTokens ?? tuning.maxTokens).
@@ -1506,6 +1507,7 @@ describe("fan-summary short variant cap (Task 8)", () => {
     // and hi-greeting gates already trust.
     const over = await postFanSummary({
       summaryMode: "short",
+      fanRef: "fan-42",
       clientContext: { ...shortContext, messageCount: 301 },
     });
     expect(over.res.statusCode, over.res.body).toBe(400);
@@ -1513,9 +1515,50 @@ describe("fan-summary short variant cap (Task 8)", () => {
 
     const exact = await postFanSummary({
       summaryMode: "short",
+      fanRef: "fan-42",
       clientContext: { ...shortContext, messageCount: 300 },
     });
     expect(exact.res.statusCode, exact.res.body).toBe(200);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("requires fanRef for a short fan-summary on fansly (P1-1)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // P1-1 broadens the coach-chat fanRef gate: on Fansly the conversationRef is
+    // the canonical groupId, so a short recap keyed only by conversation_ref
+    // would survive fan-scope erasure. A short recap WITHOUT fanRef is rejected.
+    const { res } = await postFanSummary({ summaryMode: "short" }); // no fanRef
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().message).toMatch(/fanRef/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("persists fan_ref from the EXPLICIT fanRef on a short fansly recap (P1-1 writer path)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The writer path the report demanded: conversationRef is a canonical groupId
+    // (≠ the fan), and the required fanRef carries the fan identity, so the stored
+    // fan_ref is the REAL fan id — not the groupId. Combined with the erasure
+    // repository test (a groupId + fan_ref row is deleted via fan_ref), a short
+    // recap generated this way is reachable by that fan's erasure.
+    const { res } = await postFanSummary({
+      summaryMode: "short",
+      conversationRef: "group-777",
+      fanRef: "fan-42",
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const { rows } = await testDb.pool.query<{
+      conversation_ref: string | null;
+      fan_ref: string | null;
+    }>(
+      `select conversation_ref, fan_ref from ai_generation_content
+       where feature = 'fan-summary' order by id desc limit 1`,
+    );
+    expect(rows[0]?.conversation_ref).toBe("group-777");
+    expect(rows[0]?.fan_ref).toBe("fan-42");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("persists fan_ref from the conversationRef on the fansly lane when fanRef is absent (Blocker 2)", async (context) => {
@@ -2263,6 +2306,57 @@ describe("recap-status read (Task 9)", () => {
       "select count(*)::text as count from ai_generation_content",
     );
     expect(Number(after.rows[0]!.count)).toBe(Number(before.rows[0]!.count) + 2);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("surfaces writer-populated requestedCount/keptCount through recap-status (archive lane, P2-5)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The writer→reader gap the report flagged: an archive-lane OnlyFans short
+    // recap resolves a 300-message window and a real kept count, yet both used
+    // to persist as null (requestedCount from body.messageCount, keptCount from
+    // clientContext — neither present on the archive lane). Generate one through
+    // the real endpoint, then read it back through recap-status.
+    await seedConversation(); // OnlyFans page (svc-of); 3 archive rows so far
+    // fan-summary needs ≥30 messages; seed enough archive rows on the OF page.
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, is_sent_by_me, occurred_at, text_plain)
+       select $1, 'onlyfans', $2, (3000000 + g)::text, $2, false,
+              now() - (g || ' minutes')::interval, 'archived message ' || g
+       from generate_series(1, 40) g`,
+      [pageId, FAN],
+    );
+    appContext.aiGatewayProvider = capturingProvider({});
+
+    const gen = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fan-summary",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN, // OnlyFans: conversationRef IS the fan id
+        summaryMode: "short",
+      },
+    });
+    expect(gen.statusCode, gen.body).toBe(200);
+
+    const res = await apiServer!.inject({
+      method: "GET",
+      url: `/api/v1/ai/recap-status?pageLabel=svc-of&conversationRef=${FAN}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json();
+    expect(body.short, res.body).not.toBeNull();
+    // requestedCount is the RESOLVED short window (300); keptCount is the actual
+    // archive count the loader returned — both non-null (the P2-5 fix).
+    expect(body.short.requestedCount).toBe(300);
+    expect(typeof body.short.keptCount).toBe("number");
+    expect(body.short.keptCount).toBeGreaterThan(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("returns null slots (not an error) when no usable recap exists", async (context) => {

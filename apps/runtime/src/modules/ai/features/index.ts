@@ -160,11 +160,11 @@ export async function prepareAiFeatureStream(
   }
   const feature = featureKey as OperationFeature;
   const policy = FEATURE_POLICIES[feature];
-  // Fansly's conversationRef is the canonical groupId, NOT the fan — the P1-2
-  // fan-erasure reachability fix keys off this in two spots (the coach-chat
-  // fanRef gate and the persisted fan_ref fallback). Computed once so it is a
-  // single platform-branch site (the access check below guarantees body.platform
-  // matches stored.page.platform).
+  // Fansly's conversationRef is the canonical groupId, NOT the fan — the
+  // fan-erasure reachability fix keys off this in two spots (the coach-chat /
+  // short-fan-summary fanRef gate and the persisted fan_ref fallback). Computed
+  // once so it is a single platform-branch site (the access check below
+  // guarantees body.platform matches stored.page.platform).
   const isFanslyRequest = body.platform === "fansly";
 
   if (policy.requiresDraft && !body.draftText?.trim()) {
@@ -184,19 +184,31 @@ export async function prepareAiFeatureStream(
     if (!body.chatterQuestion?.trim()) {
       throw new BadRequestError("coach-chat requires chatterQuestion");
     }
-    // Blocker 2 (P1-2a): on Fansly the conversationRef is the canonical groupId,
-    // NOT the fan — so a coach-chat generation keyed only by conversation_ref
-    // would survive fan-scope erasure. REQUIRE the explicit fanRef so the stored
-    // record's fan_ref always carries the fan identity. No released client calls
-    // coach-chat yet, so there is no compat risk to tightening this.
-    if (isFanslyRequest && !body.fanRef?.trim()) {
-      throw new BadRequestError("coach-chat requires fanRef on fansly");
-    }
   } else if (body.chatterQuestion !== undefined || body.coachHistory !== undefined) {
     throw new BadRequestError(`${feature} does not accept coach fields`);
   }
   if (body.summaryMode !== undefined && feature !== "fan-summary") {
     throw new BadRequestError(`${feature} does not accept summaryMode`);
+  }
+  // Blocker 2 / P1-1 (fan-erasure reachability): on Fansly the conversationRef is
+  // the canonical groupId, NOT the fan — so a restricted row keyed only by
+  // conversation_ref survives fan-scope erasure. REQUIRE the explicit fanRef on
+  // the writer paths that NEW clients drive: coach-chat AND short fan-summary
+  // (the short recap is the canonical two-slot writer). Only new clients send
+  // coachHistory/summaryMode, so tightening this breaks no released client, and
+  // canonical full recaps from new clients always send fanRef per spec. The
+  // residual legacy-full lane keeps the `fanRef ?? conversationRef` fallback
+  // below — correct because a legacy Fansly conversationRef IS the fanAccountId.
+  // (summaryMode === "short" implies feature === "fan-summary" here: the check
+  // above already rejects short on any other feature.)
+  if (
+    isFanslyRequest
+    && !body.fanRef?.trim()
+    && (feature === "coach-chat" || body.summaryMode === "short")
+  ) {
+    throw new BadRequestError(
+      "fanRef is required on fansly for coach-chat and short fan-summary",
+    );
   }
 
   // Access is checked HERE, before any context loads — a principal without
@@ -240,6 +252,16 @@ export async function prepareAiFeatureStream(
   // PR3: the per-generation transcript context manifest (kernel-context path
   // only); rides an INTERNAL argument into the gateway, never the body.
   let contextManifest: Record<string, unknown> | undefined;
+  // The transcript window this generation resolves to. Short fan-summary clamps
+  // DOWN to the compact template's "300 recent messages max" promise; every
+  // other request keeps the per-bucket default (fan-summary deep = 1500) or a
+  // caller-supplied messageCount. Computed ONCE here (P2-5) so the archive loader
+  // below and the fan-summary provenance (featureParams.requestedCount) agree —
+  // the recap-status reader surfaces this as the requested count on BOTH lanes.
+  const resolvedMessageLimit =
+    feature === "fan-summary" && body.summaryMode === "short"
+      ? Math.min(SHORT_SUMMARY_MESSAGE_COUNT, body.messageCount ?? SHORT_SUMMARY_MESSAGE_COUNT)
+      : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
   if (body.clientContext && stored.page.platform !== "fansly") {
     // The Stage 32 deviation is Fansly-motivated (no webhook lane; the kernel
     // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting
@@ -298,16 +320,13 @@ export async function prepareAiFeatureStream(
         unionMode = "unknown";
       }
     }
-    // Short fan-summary bounds its input window to match the template's
-    // "300 recent messages max" promise; every other request keeps the
-    // per-bucket default (fan-summary deep = 1500). Clamps DOWN only.
-    const limit = feature === "fan-summary" && body.summaryMode === "short"
-      ? Math.min(SHORT_SUMMARY_MESSAGE_COUNT, body.messageCount ?? SHORT_SUMMARY_MESSAGE_COUNT)
-      : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
+    // Uses the resolved window computed above (short fan-summary already clamped
+    // DOWN to 300; every other request keeps its per-bucket default or the
+    // caller-supplied messageCount).
     const transcript = await loadTranscriptContext(app, {
       pageId,
       conversationRef: body.conversationRef,
-      limit,
+      limit: resolvedMessageLimit,
       unionMode,
     });
     contextManifest = transcript.contextManifest;
@@ -529,8 +548,15 @@ export async function prepareAiFeatureStream(
         featureParams: {
           summaryMode: body.summaryMode ?? "full",
           transcriptCoverage: body.clientContext?.transcriptCoverage ?? null,
-          requestedCount: body.messageCount ?? null,
-          keptCount: body.clientContext?.messageCount ?? null,
+          // P2-5: provenance from the RESOLVED request window (after the short
+          // clamp) and the ACTUAL kept count — populated on BOTH lanes so an
+          // archive-generated recap no longer reports null through recap-status.
+          // keptCount is contextValues.messageCount, which already IS the
+          // client's reported count on the clientContext lane (client values
+          // win where present) and the kernel-counted transcript length on the
+          // archive lane.
+          requestedCount: resolvedMessageLimit,
+          keptCount: contextValues.messageCount,
         },
       }
       : {}),
