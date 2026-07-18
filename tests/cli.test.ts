@@ -1057,4 +1057,29 @@ describe("CLI parsing", () => {
     // The guard runs ahead of any I/O — the app context is never created.
     expect(cliMocks.createAppContext).not.toHaveBeenCalled();
   });
+
+  it("ai:feature-smoke fails fast on coach-chat without --fan", async () => {
+    // Blocker 2 (P1-2c): canonical Fansly coach-chat REQUIRES --fan so the
+    // stored record's fan_ref carries the fan identity (conversationRef is the
+    // groupId). --question is supplied so the earlier gate passes and this one
+    // is the tripwire — still before any app context / provider spend.
+    const program = buildProgram();
+    program.exitOverride();
+
+    await expect(program.parseAsync([
+      "ai:feature-smoke",
+      "--feature",
+      "coach-chat",
+      "--page",
+      "svc-fs",
+      "--conversation",
+      "group-1",
+      "--as",
+      "owner",
+      "--question",
+      "как продать ppv?",
+    ], { from: "user" })).rejects.toThrow("coach-chat requires --fan");
+
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
 });

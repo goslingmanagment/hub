@@ -1,4 +1,4 @@
-import { routeSchemas } from "@agency_hub_core/contracts";
+import { AI_FEATURE_STREAM_BODY_LIMIT_BYTES, routeSchemas } from "@agency_hub_core/contracts";
 import {
   classifyProviderStreamFailure,
   formatObservedError,
@@ -22,6 +22,7 @@ import {
 } from "@agency_hub_core/db";
 
 import {
+  AiGatewayTerminalStreamConsumer,
   prepareAiGatewayStream,
   serializeAiGatewaySseFrame,
 } from "../../services/ai-gateway.ts";
@@ -307,12 +308,15 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // gateway internals; only the prompt is built here instead of the client.
   server.post("/api/v1/ai/features/:feature", {
     schema: routeSchemas.aiFeatureStream,
-    // Coach transport headroom (spec §7, option "c"): the worst-case coach body
-    // is ~20 history entries × (2k question + 64k answer) + a 300k transcript +
-    // spend/subscription/bio/draft + JSON escaping ≈ 1.7MB, well over Fastify's
-    // 1MB default. A SCOPED route bodyLimit (not a global raise) gives that
-    // worst case room; genuine transport abuse still 413s here.
-    bodyLimit: 4 * 1024 * 1024,
+    // Coach transport headroom (spec §7, option "c"): the worst-case
+    // schema-valid coach body is ~1.69M chars — 20 history entries × (2k
+    // question + 64k answer) + a 300k transcript + spend/subscription/bio/draft —
+    // which at 3-byte UTF-8 chars serializes to ~5.06MB, over Fastify's 1MB
+    // default AND over the former 4 MiB cap (Blocker 4). A SCOPED route bodyLimit
+    // (not a global raise) gives that worst case room; the exact byte budget and
+    // its worst-case math live with the schema (AI_FEATURE_STREAM_BODY_LIMIT_BYTES
+    // in contracts). Genuine transport abuse still 413s here.
+    bodyLimit: AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
@@ -343,18 +347,12 @@ export async function pipeAiGatewaySse(
     const raw = reply.raw;
     const startedAt = Date.now();
     let terminalOutcome: "completed" | "failed" | "cancelled" = "completed";
-    let terminalUsage: Parameters<typeof stream.recordTerminal>[0]["usage"] = null;
-    let terminalProviderResponseId: string | null = null;
-    let terminalCacheHit = false;
-    let streamedContent = false;
-    let completionText = "";
-    // Coach transport ceiling (spec §3/§7): set true once accumulated visible
-    // output crosses the ceiling and we abort. It pins the terminal outcome to
+    // Shared terminal accounting + coach transport ceiling (P1-5): the CLI smoke
+    // path drives the SAME consumer so the two lanes cannot drift on what counts
+    // as a committed, usable generation. `ceilingExceeded` pins the outcome to
     // "failed" even if tearing down the aborted provider iterator rejects into
     // the catch below (which would otherwise reclassify an abort as cancelled).
-    let ceilingExceeded = false;
-    let terminalStopReason: string | null = null;
-    let terminalDoneFrame: Parameters<typeof serializeAiGatewaySseFrame>[0] | null = null;
+    const consumer = new AiGatewayTerminalStreamConsumer(stream.visibleOutputCeilingChars);
     raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-store, no-cache, no-transform",
@@ -378,62 +376,35 @@ export async function pipeAiGatewaySse(
       if (stream.debugFrame) {
         writeFrame(stream.debugFrame);
       }
+      // Coach transport ceiling (spec §3/§7, option "c"): a coach answer whose
+      // accumulated visible output crosses COACH_ANSWER_MAX_CHARS is aborted
+      // mid-stream and errors WITHOUT a `done` frame, so the attempt is
+      // terminal-recorded as failed (never completed) and can never be
+      // attached/committed — the consumer owns that decision (shared with the
+      // CLI). A committed answer is therefore always ≤ the ceiling and replays
+      // verbatim within schema. Only coach-chat carries the ceiling.
       for await (const frame of stream.stream(abort.signal)) {
-        if (frame.type === "usage") {
-          terminalUsage = frame.usage;
-          terminalProviderResponseId = frame.providerResponseId;
-          terminalCacheHit = frame.cacheHit;
-        } else if (frame.type === "content_delta" && frame.text.length > 0) {
-          streamedContent = true;
-          completionText += frame.text;
-          // Coach transport ceiling (spec §3/§7, option "c"): a coach answer
-          // whose accumulated visible output crosses COACH_ANSWER_MAX_CHARS is
-          // aborted mid-stream and errors WITHOUT a `done` frame, so the attempt
-          // is terminal-recorded as failed (never completed) and can never be
-          // attached/committed. The client sees the partial content plus the
-          // error; a committed answer is therefore always ≤ the ceiling and
-          // replays verbatim within schema. Only coach-chat carries the ceiling.
-          if (
-            stream.visibleOutputCeilingChars !== undefined
-            && completionText.length > stream.visibleOutputCeilingChars
-          ) {
-            writeFrame(frame);
-            ceilingExceeded = true;
-            terminalOutcome = "failed";
-            writeFrame({
-              type: "error",
-              code: "coach_output_too_long",
-              message: "AI gateway output exceeded the coach transport ceiling",
-              retryAfterMs: null,
-            });
-            abortProvider();
-            break;
-          }
-        } else if (frame.type === "error") {
-          terminalOutcome = "failed";
-        } else if (frame.type === "done") {
-          terminalDoneFrame = frame;
-          terminalStopReason = frame.stopReason ?? null;
-          continue;
+        const { emit, ceilingCrossed } = consumer.note(frame);
+        for (const out of emit) {
+          writeFrame(out);
         }
-        writeFrame(frame);
+        if (ceilingCrossed) {
+          abortProvider();
+          break;
+        }
       }
-      if (terminalOutcome === "completed" && streamedContent && !terminalUsage) {
-        terminalOutcome = "failed";
+      const finished = consumer.finish();
+      if (finished.usageMissing) {
         request.log.warn({
           requestId: stream.requestId,
         }, "AI gateway provider stream ended without usage metadata");
-        writeFrame({
-          type: "error",
-          code: "provider_usage_missing",
-          message: "AI gateway provider ended without usage metadata",
-          retryAfterMs: null,
-        });
-      } else if (terminalDoneFrame) {
-        writeFrame(terminalDoneFrame);
       }
+      for (const out of finished.emit) {
+        writeFrame(out);
+      }
+      terminalOutcome = consumer.outcome;
     } catch (error) {
-      if (ceilingExceeded) {
+      if (consumer.ceilingExceeded) {
         // The ceiling handler already recorded failed, wrote the error frame,
         // and aborted; a rejection while tearing down the aborted provider
         // stream must not reclassify this as cancelled or double-write an error.
@@ -466,13 +437,16 @@ export async function pipeAiGatewaySse(
       try {
         await stream.recordTerminal({
           outcome: terminalOutcome,
-          usage: terminalUsage,
-          providerResponseId: terminalProviderResponseId,
-          cacheHit: terminalCacheHit,
+          usage: consumer.usage,
+          providerResponseId: consumer.providerResponseId,
+          cacheHit: consumer.cacheHit,
           durationMs: Date.now() - startedAt,
           completedAt: new Date(),
-          completionText,
-          stopReason: terminalStopReason,
+          completionText: consumer.completionText,
+          stopReason: consumer.stopReason,
+          // Ceiling aborts spend real tokens with no usage frame — estimate the
+          // cost so the budget guards see it (P1-1/P2-6).
+          estimateCostOnMissingUsage: consumer.ceilingExceeded,
         });
       } catch (error) {
         request.log.error({

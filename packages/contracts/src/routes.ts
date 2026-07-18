@@ -2044,6 +2044,21 @@ export const aiFeatureStreamParamsSchema = z.object({
 // so the schema and the runtime stream check cannot drift apart.
 export const COACH_ANSWER_MAX_CHARS = 64_000;
 
+// Scoped body limit for POST /api/v1/ai/features/:feature (Blocker 4, P1-4).
+// Fastify's bodyLimit is a BYTE budget enforced BEFORE Zod, but the schema
+// caps are CHAR counts, and a char can be up to 3 UTF-8 bytes (a BMP CJK code
+// unit is the per-code-unit worst case; astral chars are 2 code units → 4 bytes
+// = fewer bytes/unit). The worst-case schema-valid coach body sums to ~1.69M
+// chars — coachHistory 20×(2k question + 64k answer) = 1.32M, transcript 300k,
+// spending 20k, subscription 20k, bio 5k, draft 20k, question 2k, plus the small
+// scalar fields — which at 3 bytes/char serializes to ~5.06MB (≈5,062,461 bytes
+// with JSON framing). The former 4 MiB (4,194,304) limit 413'd that
+// contract-valid request before validation; 8 MiB clears it with headroom while
+// genuine transport abuse still 413s. Kept in the contract next to the schema
+// so the limit and the field caps that drive it cannot drift apart; asserted
+// against the measured worst case in tests/contracts-coach-body.test.ts.
+export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
+
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
   pageLabel: z.string().min(1).max(120),

@@ -27,6 +27,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
+import { AiGatewayTerminalStreamConsumer } from "./services/ai-gateway.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
@@ -732,6 +733,13 @@ export function buildProgram() {
       if (options.feature === "coach-chat" && !options.question?.trim()) {
         throw new Error("coach-chat requires --question <text>");
       }
+      // Blocker 2 (P1-2c): canonical Fansly coach-chat REQUIRES --fan — the
+      // conversation is the groupId, so a generation keyed only by the
+      // conversation ref would survive fan-scope erasure. Fail fast to match the
+      // server gate before any provider spend.
+      if (options.feature === "coach-chat" && !options.fan?.trim()) {
+        throw new Error("coach-chat requires --fan <ref>");
+      }
       const app = await createAppContext();
       try {
         const { prepareAiFeatureStream } = await import("./modules/ai/index.ts");
@@ -767,36 +775,45 @@ export function buildProgram() {
           },
         );
         const preparedMs = Date.now() - startedAt;
-        let text = "";
-        let usage: Record<string, unknown> | null = null;
         let firstTokenMs: number | null = null;
         const abort = new AbortController();
+        // Blocker 5 (P1-5a): drive the SAME terminal-stream consumer the HTTP
+        // pump uses, so the CLI honors the coach ceiling and threads the real
+        // outcome + stopReason into recordTerminal. Without this the smoke could
+        // store a max_tokens-truncated fan-summary as `completed` with a NULL
+        // stopReason, which the recap selector would then attach to a coach turn.
+        const consumer = new AiGatewayTerminalStreamConsumer(stream.visibleOutputCeilingChars);
         for await (const frame of stream.stream(abort.signal)) {
-          if (frame.type === "content_delta") {
-            if (firstTokenMs === null) {
-              firstTokenMs = Date.now() - startedAt;
-            }
-            text += frame.text;
-          } else if (frame.type === "usage") {
-            usage = frame.usage as unknown as Record<string, unknown>;
+          if (frame.type === "content_delta" && frame.text.length > 0 && firstTokenMs === null) {
+            firstTokenMs = Date.now() - startedAt;
+          }
+          const { ceilingCrossed } = consumer.note(frame);
+          if (ceilingCrossed) {
+            abort.abort();
+            break;
           }
         }
+        consumer.finish();
         const totalMs = Date.now() - startedAt;
         await stream.recordTerminal({
-          outcome: "completed",
-          usage: usage as never,
-          providerResponseId: null,
-          cacheHit: false,
+          outcome: consumer.outcome,
+          usage: consumer.usage,
+          providerResponseId: consumer.providerResponseId,
+          cacheHit: consumer.cacheHit,
           durationMs: totalMs,
           completedAt: new Date(),
-          completionText: text,
+          completionText: consumer.completionText,
+          stopReason: consumer.stopReason,
+          estimateCostOnMissingUsage: consumer.ceilingExceeded,
         });
         console.log(JSON.stringify({
           feature: options.feature,
           generationRef: stream.requestId,
+          outcome: consumer.outcome,
+          stopReason: consumer.stopReason,
           latencyMs: { contextAndPrepare: preparedMs, firstToken: firstTokenMs, total: totalMs },
-          usage,
-          completionPreview: text.slice(0, 200),
+          usage: consumer.usage,
+          completionPreview: consumer.completionText.slice(0, 200),
         }, null, 2));
       } finally {
         await app.close();
