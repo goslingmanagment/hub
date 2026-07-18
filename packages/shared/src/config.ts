@@ -221,6 +221,18 @@ const envSchema = z.object({
       message: "prompt debug echo may be enabled only through the audited live-config API",
     })
     .default(false),
+  // Voice notes (ElevenLabs TTS): ships inert behind kill switches. ELEVENLABS_API_KEY
+  // is the vendor secret; the rest are live-wired kill switches + budgets read per
+  // request. VOICE_NOTES_PAGE_ALLOWLIST FAILS CLOSED — empty = NO pages enabled
+  // (the OPPOSITE of FANSLY_NEW_STREAM_PAGE_ALLOWLIST, where empty = all pages).
+  ELEVENLABS_API_KEY: optionalTrimmedStringSchema,
+  VOICE_NOTES_ENABLED: booleanSchema.default(false),
+  VOICE_NOTES_RETRIEVAL_ENABLED: booleanSchema.default(true),
+  VOICE_NOTES_PAGE_ALLOWLIST: z.string().default(""),
+  VOICE_NOTES_DAILY_CHAR_BUDGET: optionalPositiveIntSchema.default(5000),
+  VOICE_NOTES_GLOBAL_DAILY_CHAR_BUDGET: optionalPositiveIntSchema.default(20000),
+  VOICE_NOTES_SCRIPT_MAX_CHARS: optionalPositiveIntSchema.default(600),
+  VOICE_NOTES_MAX_CONCURRENT_SYNTHESES: optionalPositiveIntSchema.default(2),
   OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
@@ -343,6 +355,23 @@ export interface AppConfig {
   chatMuseAiFanProfileContextFeatures?: string;
   /** Fleet-wide prompt-echo kill-switch (live-wired); default false, audited enable. */
   chatMuseAiPromptDebugEchoEnabled?: boolean;
+  // Voice notes (ElevenLabs TTS) — ships inert behind kill switches (live-wired).
+  /** ElevenLabs vendor TTS key; unset ships the feature implemented-but-unkeyed. */
+  elevenLabsApiKey?: string | undefined;
+  /** Dispatch kill switch for voice-note synthesis; default off (deploy inert). */
+  voiceNotesEnabled?: boolean;
+  /** Retrieval kill switch (retrieval is free); default on, off only for incidents. */
+  voiceNotesRetrievalEnabled?: boolean;
+  /** CSV of page labels allowed to synthesize; empty = NONE (fails closed). */
+  voiceNotesPageAllowlist?: string;
+  /** Per-page/day character budget ceiling. */
+  voiceNotesDailyCharBudget?: number;
+  /** Fleet-wide per-day character budget ceiling. */
+  voiceNotesGlobalDailyCharBudget?: number;
+  /** Per-synthesis script length cap. */
+  voiceNotesScriptMaxChars?: number;
+  /** Ceiling on in-flight ElevenLabs syntheses. */
+  voiceNotesMaxConcurrentSyntheses?: number;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   openrouterApiKey?: string | null;
@@ -518,6 +547,14 @@ export function loadConfig(
     aiTranscriptFreshUnionMode: parsed.AI_TRANSCRIPT_FRESH_UNION_MODE,
     chatMuseAiFanProfileContextFeatures: parsed.CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES,
     chatMuseAiPromptDebugEchoEnabled: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO_ENABLED,
+    elevenLabsApiKey: parsed.ELEVENLABS_API_KEY,
+    voiceNotesEnabled: parsed.VOICE_NOTES_ENABLED,
+    voiceNotesRetrievalEnabled: parsed.VOICE_NOTES_RETRIEVAL_ENABLED,
+    voiceNotesPageAllowlist: parsed.VOICE_NOTES_PAGE_ALLOWLIST,
+    voiceNotesDailyCharBudget: parsed.VOICE_NOTES_DAILY_CHAR_BUDGET,
+    voiceNotesGlobalDailyCharBudget: parsed.VOICE_NOTES_GLOBAL_DAILY_CHAR_BUDGET,
+    voiceNotesScriptMaxChars: parsed.VOICE_NOTES_SCRIPT_MAX_CHARS,
+    voiceNotesMaxConcurrentSyntheses: parsed.VOICE_NOTES_MAX_CONCURRENT_SYNTHESES,
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
