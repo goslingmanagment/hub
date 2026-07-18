@@ -379,6 +379,18 @@ export async function syncOfapiFanIdentities(
     });
   }
 
+  // Resume the in-flight target before any newly discovered/incomplete one.
+  // Persisted ID arrays are sorted for deterministic checkpoints, so relying
+  // on Set iteration order here could let an earlier target clear the saved
+  // active offset and repurchase its prefix.
+  if (cursor.activeTargetKey !== null) {
+    const activeIndex = targets.findIndex((target) => target.key === cursor.activeTargetKey);
+    if (activeIndex > 0) {
+      const [activeTarget] = targets.splice(activeIndex, 1);
+      if (activeTarget) targets.unshift(activeTarget);
+    }
+  }
+
   // A request can span several executor chunks. Persist both completed link
   // targets and the active target's offset so a per-run budget yield resumes
   // after the prefix instead of buying the same prefix forever.

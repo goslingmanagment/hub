@@ -462,4 +462,61 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
       ],
     });
   });
+
+  it("resumes the active user target before sorted incomplete targets", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedMappedPage("links-active-order-of");
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "fan_identities",
+      state: {
+        version: 2,
+        revision: 1,
+        phase: "users",
+        linkType: null,
+        linkOffset: 0,
+        trackingLinkIds: ["10", "9"],
+        trialLinkIds: [],
+        completedTargetKeys: ["tracking:9:subscribers"],
+        activeTargetKey: "tracking:9:spenders",
+        activeOffset: 100,
+      },
+    });
+    const calls: string[] = [];
+    appContext = {
+      ...appContext,
+      ofapi: {
+        listTrackingLinks: vi.fn(async () => {
+          throw new Error("link discovery must not replay from a users-phase cursor");
+        }),
+        listTrialLinks: vi.fn(async () => {
+          throw new Error("link discovery must not replay from a users-phase cursor");
+        }),
+        listTrackingLinkUsers: vi.fn(async (
+          _context: unknown,
+          _accountId: string,
+          linkId: string,
+          kind: string,
+          options: { offset?: number },
+        ) => {
+          calls.push(`tracking:${linkId}:${kind}:${options.offset ?? 0}`);
+          return listPage([]);
+        }),
+        listTrialLinkSubscribers: vi.fn(async () => listPage([])),
+      } as unknown as OfapiClient,
+    };
+
+    const result = await syncOfapiFanIdentities(appContext, await buildInput(page));
+
+    expect(result.satisfied).toBe(true);
+    expect(calls).toEqual([
+      "tracking:9:spenders:100",
+      "tracking:10:subscribers:0",
+      "tracking:10:spenders:0",
+    ]);
+  });
 });
