@@ -4664,8 +4664,13 @@ terminal-recorded as failed, so it can never be attached/committed. Therefore
 every committed answer is ≤ the ceiling and replays verbatim within schema. The
 old 120k aggregate reject is REMOVED (a schema-valid-yet-gate-rejected zone was
 an API defect): a client trimming to its window setting is never rejected, and
-transport abuse is the route's job (a scoped 4MB body limit sized for the worst
-case: 20×66k history + a 300k transcript + escaping). The 2500-token base
+transport abuse is the route's job (a scoped 8 MiB body limit sized for the worst
+case: 20×66k history + a 300k transcript + the smaller free-text fields sum to
+~1.69M chars, which at 3 UTF-8 bytes/char serialize to ~5.06MB; the former 4 MiB
+limit 413'd that contract-valid body before validation, so it was raised to 8 MiB
+with headroom, and the large free-text fields reject ASCII control chars — except
+`\t \n \r` — so the 3-byte/char ceiling holds instead of a U+0000 escaping to a
+six-byte `\uXXXX` and inflating the wire to ~11.8MB). The 2500-token base
 `max_tokens` is NOT a character-serializability guarantee and must not be
 described as one; prompt cost is bounded core-side instead. Before assembly core
 projects each accepted history answer to a ≤10k head+tail replay (6000 head +
