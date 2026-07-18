@@ -652,6 +652,22 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       delete from ai_generation_content where ${generationPred}`),
   });
 
+  // Voice-notes lane (0106): a fan's rendered audio + conversation_ref + a
+  // source_generation_ref into an ai_generation_content row this same erasure
+  // deletes. Keyed EXACTLY like ai_generation_content above (page ∈ scope AND
+  // conversation_ref = fanRef). voice_notes has NO FK to `fans`, so the
+  // unmapped-FK guard cannot flag its omission — the delete must be explicit, or
+  // a fan erasure leaves up to 2 MiB of audio addressed to the erased fan behind
+  // (now dangling on a deleted source_generation_ref).
+  const voiceNotePred = sql`platform_account_id in ${scope.pageIds} and conversation_ref = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "voice_notes",
+    action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from voice_notes where ${voiceNotePred}`),
+    run: (tx) => execCount(tx, sql`delete from voice_notes where ${voiceNotePred}`),
+  });
+
   // Transactions: the money moved — anonymize, never delete (fan scope).
   const txnPred = sql`fan_id = ${fanId} or (platform_account_id in ${scope.pageIds}
     and (correlation_account_id = ${ref} or sender_id = ${ref}))`;

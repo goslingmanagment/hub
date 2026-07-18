@@ -506,6 +506,57 @@ describe("voice-notes service: admission gates", () => {
     ).rejects.toMatchObject({ code: "voice_quota_denied", statusCode: 429 });
     expect(state.calls).toBe(0);
   });
+
+  it("savepoint rollback: a CUMULATIVE global breach denies the second render AND undoes its page increment", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    // Gate-park the first render so its reservation stays HELD (dispatched, not
+    // yet reconciled/refunded) while the second render is admitted against it.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { provider, state } = fakeProvider(async () => {
+      await gate;
+      return okAudio(null); // no character cost → estimate kept, no reconcile
+    });
+    // Page budget has room for BOTH (100k), but the GLOBAL budget (30) binds.
+    // The first reservation takes 20; the second (20) then passes the per-request
+    // early guard (chars ≤ both budgets) yet breaches global CUMULATIVELY. That
+    // refusal fires INSIDE reserveVoiceCharBudget's transaction, AFTER its page
+    // upsert already incremented the page counter within the SAVEPOINT — the
+    // exact path the pageBudget:1 test can never reach (it short-circuits on the
+    // early guard, never entering the transaction).
+    const p = await provision({ provider, pageBudget: 100_000, globalBudget: 30 });
+
+    const first = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    expect(first.state).toBe("dispatched");
+    await waitFor(() => state.calls === 1); // inside synthesize, blocked on the gate
+    // First reservation committed: both scopes at 20, nothing else in flight.
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
+    expect(await spentForScope("global")).toBe(SCRIPT_CHARS);
+
+    // Second render: 20 ≤ 100k page and 20 ≤ 30 global (early guard passes), but
+    // 20 + 20 = 40 > 30 global → BudgetRefused AFTER the page upsert → the nested
+    // SAVEPOINT rolls back (page increment undone) while the outer tx still writes
+    // the durable quota_denied fact.
+    const secondBody = p.body();
+    await expect(
+      createVoiceNote(appContext, p.principal, p.page.label, secondBody),
+    ).rejects.toMatchObject({ code: "voice_quota_denied", statusCode: 429 });
+
+    const denied = await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, secondBody.clientRequestId);
+    expect(denied?.state).toBe("quota_denied");
+
+    // The crux: BOTH counters are unchanged beyond the first reservation. If the
+    // savepoint rollback misbehaved, the page counter would sit at 40 — the
+    // second render's page increment stranded, permanently over-charging the day
+    // while the request was denied.
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
+    expect(await spentForScope("global")).toBe(SCRIPT_CHARS);
+    expect(state.calls).toBe(1); // the denied render never dispatched
+
+    // Release the parked first render so the suite shuts down cleanly.
+    release();
+    await waitFor(async () => (await getVoiceNoteById(testDb!.db, first.voiceNoteId))?.state === "completed");
+  });
 });
 
 describe("voice-notes service: detached dispatch settle paths", () => {

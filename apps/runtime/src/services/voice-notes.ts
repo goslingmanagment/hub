@@ -21,6 +21,8 @@ import {
   getAiGenerationContentByRef,
   getVoiceNoteByClientRequestId,
   getVoiceNoteById,
+  getVoiceNoteStatusById,
+  getVoiceNoteStatusByClientRequestId,
   getVoiceProfile,
   insertQuotaDeniedVoiceNote,
   insertVoiceNoteJob,
@@ -29,11 +31,13 @@ import {
   settleVoiceNoteTerminal,
   type VoiceNoteRow,
   type VoiceNoteState,
+  type VoiceNoteStatusRow,
 } from "@agency_hub_core/db";
 import { findPageByLabel } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
+import { resolveEgress, type AppEgressContext } from "./egress/resolver.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { AppError, NotFoundError } from "./errors.ts";
 import { VOICE_AUDIO_MAX_BYTES } from "./voice-elevenlabs-provider.ts";
@@ -183,7 +187,10 @@ export class VoiceArtifactCorruptError extends AppError {
  * hash replays without re-admission, a different hash is a 409.
  */
 export async function createVoiceNote(
-  app: VoiceNotesApp,
+  // Full AppContext (not the narrow VoiceNotesApp): the detached dispatch below
+  // resolves the ElevenLabs vendor egress seam, which needs the whole context.
+  // The routes and tests already pass a full AppContext.
+  app: AppContext,
   principal: AuthPrincipal,
   pageLabel: string,
   body: CreateVoiceNoteBody,
@@ -209,7 +216,9 @@ export async function createVoiceNote(
 
   // (1) Idempotent replay — short-circuits WITHOUT re-running any admission
   // gate. A body that hashes differently under the same id is a client bug.
-  const existing = await getVoiceNoteByClientRequestId(app.db, principal.user.id, body.clientRequestId);
+  // Projected read: the replay only needs the request-hash compare + the status
+  // view, never the audio bytes.
+  const existing = await getVoiceNoteStatusByClientRequestId(app.db, principal.user.id, body.clientRequestId);
   if (existing) {
     if (existing.requestHash !== requestHash) {
       throw new VoiceIdempotencyMismatchError();
@@ -371,7 +380,9 @@ export async function createVoiceNote(
     });
     return toStatusView({ ...row, state: "dispatched" });
   }
-  const latest = await getVoiceNoteById(app.db, row.id);
+  // CAS lost (a sweep raced us): re-read just the status projection — this path
+  // never returns audio, so the full row's bytes would only be discarded.
+  const latest = await getVoiceNoteStatusById(app.db, row.id);
   return toStatusView(latest ?? row);
 }
 
@@ -387,7 +398,8 @@ export async function getVoiceNoteStatus(
 ): Promise<VoiceNoteStatusView> {
   const page = await resolveAccessiblePage(app, principal, pageLabel);
   await assertRetrievalEnabled(app);
-  const row = await getScopedVoiceNote(app, principal, page.id, id);
+  // Status never returns audio → read the projection (no 2 MiB detoast per poll).
+  const row = await getScopedVoiceNoteStatus(app, principal, page.id, id);
   return toStatusView(row);
 }
 
@@ -446,6 +458,8 @@ async function assertRetrievalEnabled(app: VoiceNotesApp): Promise<void> {
   }
 }
 
+// The full-row scoped read: ONLY getVoiceNoteAudio uses it (the bytes are the
+// payload). Status callers take getScopedVoiceNoteStatus below.
 async function getScopedVoiceNote(
   app: VoiceNotesApp,
   principal: AuthPrincipal,
@@ -459,6 +473,20 @@ async function getScopedVoiceNote(
   return row;
 }
 
+// Projected scoped read for status: same (id, page, user) guard, no audio bytes.
+async function getScopedVoiceNoteStatus(
+  app: VoiceNotesApp,
+  principal: AuthPrincipal,
+  pageId: number,
+  id: number,
+): Promise<VoiceNoteStatusRow> {
+  const row = await getVoiceNoteStatusById(app.db, id);
+  if (!row || row.platformAccountId !== pageId || row.userId !== principal.user.id) {
+    throw new NotFoundError("Voice note not found");
+  }
+  return row;
+}
+
 /** Re-read after a lost admission race and replay the winner's row. */
 async function replayConcurrentWinner(
   app: VoiceNotesApp,
@@ -466,7 +494,9 @@ async function replayConcurrentWinner(
   clientRequestId: string,
   requestHash: string,
 ): Promise<VoiceNoteStatusView> {
-  const other = await getVoiceNoteByClientRequestId(app.db, principal.user.id, clientRequestId);
+  // Projected read: this replay only compares the request hash and returns the
+  // status view — never the audio bytes.
+  const other = await getVoiceNoteStatusByClientRequestId(app.db, principal.user.id, clientRequestId);
   if (!other) {
     // The conflict target matched, so a row must exist; a null is an invariant break.
     throw new Error("voice note admission race: winning row not found on re-read");
@@ -484,7 +514,7 @@ async function replayConcurrentWinner(
  * client on a row that never advances. Same clientRequestId ⇒ same 429 on every
  * call — a fresh attempt needs a fresh clientRequestId.
  */
-function replayTerminalOrView(row: VoiceNoteRow): VoiceNoteStatusView {
+function replayTerminalOrView(row: VoiceNoteViewFields): VoiceNoteStatusView {
   if (row.state === "quota_denied") {
     throw new VoiceQuotaDeniedError();
   }
@@ -522,7 +552,7 @@ function assertRefControlCharFree(
  * is reconciled/released only when the fence is won.
  */
 async function dispatchVoiceNote(
-  app: VoiceNotesApp,
+  app: AppContext,
   input: {
     row: VoiceNoteRow;
     attemptToken: string;
@@ -542,8 +572,19 @@ async function dispatchVoiceNote(
   // client disconnect must never abort an in-flight, billable synthesis.
   const controller = new AbortController();
   const startedAt = Date.now();
+  // The ElevenLabs vendor egress seam, resolved once per dispatch. This is a
+  // NON-platform vendor class (egressKey "vendor:elevenlabs"): dispatcher is
+  // null and pace('interactive') is a 0 ms no-op, so the provider keeps its ONE
+  // recorded raw fetch — we deliberately do NOT rewire its transport. Resolving
+  // it anyway is the point: the egress key becomes telemetry-visible and the
+  // resolver branch (plus its test) stops being dead code. Declared before the
+  // try so the finally can always close it; a resolve fault is caught like any
+  // other and leaves the row 'dispatched' for the lease sweep.
+  let egress: AppEgressContext | undefined;
 
   try {
+    egress = await resolveEgress(app, { kind: "vendor", vendor: "elevenlabs" });
+    await egress.pace("interactive");
     const result = await provider.synthesize({
       voiceId: row.profileVoiceId,
       model: row.profileModel,
@@ -690,6 +731,10 @@ async function dispatchVoiceNote(
     // intact and the lease sweep reclaims it as 'indeterminate'. There is no
     // longer a window where the state settled but the budget delta was lost.
     app.logger.error({ voiceNoteId: row.id, error }, "voice note dispatch failed unexpectedly");
+  } finally {
+    // Close the egress seam on every path (no-op for the elevenlabs class, but
+    // the seam is symmetric — a page/proxy dispatcher WOULD need closing).
+    await egress?.close();
   }
 }
 
@@ -735,7 +780,15 @@ function terminalErrorCode(state: VoiceNoteState): string | undefined {
   }
 }
 
-function toStatusView(row: VoiceNoteRow): VoiceNoteStatusView {
+// The fields toStatusView + the replay verdict actually read — a structural
+// subset satisfied by BOTH the full VoiceNoteRow and the projected
+// VoiceNoteStatusRow, so a caller can hand in either.
+type VoiceNoteViewFields = Pick<
+  VoiceNoteRow,
+  "id" | "state" | "scriptChars" | "billed" | "audioSha256" | "audioBytesLen" | "createdAt"
+>;
+
+function toStatusView(row: VoiceNoteViewFields): VoiceNoteStatusView {
   const errorCode = terminalErrorCode(row.state);
   return {
     voiceNoteId: row.id,

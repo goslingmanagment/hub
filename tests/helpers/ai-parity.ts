@@ -65,8 +65,18 @@ export function checkManifestAgainstSources(): ManifestCheckResult[] {
   return Object.entries(manifest.files).map(([rel, entry]) => {
     // Net-new post-freeze assets never existed at the snapshot commit — there
     // is no frozen source to compare against, so the guard passes them through.
-    if (entry.netNewPostFreeze || entry.sourceSha256 === undefined) {
+    if (entry.netNewPostFreeze) {
       return { file: rel, ok: true, detail: "net-new post-freeze (no desktop twin)" };
+    }
+    // A frozen entry (no netNewPostFreeze) MUST pin its source hash. A blanket
+    // `sourceSha256 === undefined` skip would let deleting that one field from
+    // any frozen entry silently opt it out of the freeze check — fail loudly.
+    if (entry.sourceSha256 === undefined) {
+      return {
+        file: rel,
+        ok: false,
+        detail: "missing sourceSha256 without netNewPostFreeze — a frozen entry must pin its source hash",
+      };
     }
     const sourcePath = sourcePathFor(rel);
     if (!existsSync(sourcePath)) {

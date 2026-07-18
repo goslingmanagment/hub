@@ -132,6 +132,70 @@ export async function getVoiceNoteById(
   return row ?? null;
 }
 
+// The status/replay projection: everything toStatusView renders, the (page,
+// user) scope guard, and the replay hash-compare need — and NOTHING else. It
+// deliberately excludes `audio_bytes` (a TOASTed BYTEA capped at 2 MiB): a
+// 202-then-poll client hits the status read on every poll, and detoasting +
+// transferring megabytes only to discard them is pure waste. The full-row reads
+// stay ONLY where the bytes are actually used (getVoiceNoteAudio, dispatch).
+const voiceNoteStatusColumns = {
+  id: voiceNotes.id,
+  userId: voiceNotes.userId,
+  platformAccountId: voiceNotes.platformAccountId,
+  state: voiceNotes.state,
+  scriptChars: voiceNotes.scriptChars,
+  billed: voiceNotes.billed,
+  audioSha256: voiceNotes.audioSha256,
+  audioBytesLen: voiceNotes.audioBytesLen,
+  createdAt: voiceNotes.createdAt,
+  requestHash: voiceNotes.requestHash,
+} as const;
+
+export interface VoiceNoteStatusRow {
+  id: number;
+  userId: number;
+  platformAccountId: number;
+  state: VoiceNoteState;
+  scriptChars: number;
+  billed: boolean | null;
+  audioSha256: string | null;
+  audioBytesLen: number | null;
+  createdAt: Date;
+  requestHash: string;
+}
+
+/** Projected status read for `getVoiceNoteById`'s status-view callers — same
+ * id lookup, but without the audio bytes. */
+export async function getVoiceNoteStatusById(
+  db: Database,
+  id: number,
+): Promise<VoiceNoteStatusRow | null> {
+  const [row] = await db
+    .select(voiceNoteStatusColumns)
+    .from(voiceNotes)
+    .where(eq(voiceNotes.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Projected status read for the idempotent-replay lookup — same (user,
+ * clientRequestId) key as getVoiceNoteByClientRequestId, without the bytes. */
+export async function getVoiceNoteStatusByClientRequestId(
+  db: Database,
+  userId: number,
+  clientRequestId: string,
+): Promise<VoiceNoteStatusRow | null> {
+  const [row] = await db
+    .select(voiceNoteStatusColumns)
+    .from(voiceNotes)
+    .where(and(
+      eq(voiceNotes.userId, userId),
+      eq(voiceNotes.clientRequestId, clientRequestId),
+    ))
+    .limit(1);
+  return row ?? null;
+}
+
 /**
  * Compare-and-set the single dispatch grant: moves a `queued` row to
  * `dispatched`, stamping the attempt token + lease. The `state = 'queued'`

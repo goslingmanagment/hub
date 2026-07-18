@@ -9,6 +9,8 @@ import {
   createModel,
   getVoiceNoteByClientRequestId,
   getVoiceNoteById,
+  getVoiceNoteStatusByClientRequestId,
+  getVoiceNoteStatusById,
   getVoiceProfile,
   insertVoiceNoteJob,
   purgeExpiredVoiceNoteAudio,
@@ -118,6 +120,63 @@ describe("voice notes repository integration", () => {
     // The original row is preserved — the losing insert is a no-op, not an update.
     expect(row?.requestHash).toBe("hash-1");
     expect(row?.state).toBe("queued");
+  });
+
+  it("projected status reads carry the status/replay fields but NOT the audio bytes", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { db } = testDb;
+    const page = await createVoicePage(testDb, "voice-projected");
+    const clientRequestId = randomUUID();
+    await insertVoiceNoteJob(db, baseJob({ platformAccountId: page.id, clientRequestId }));
+    const seeded = await getVoiceNoteByClientRequestId(db, USER_ID, clientRequestId);
+    const id = seeded!.id;
+
+    // Settle to completed WITH real audio bytes present, so a projection that
+    // leaked the column would visibly carry them.
+    const attemptToken = randomUUID();
+    await casVoiceNoteDispatch(db, { id, attemptToken, leaseUntil: new Date(Date.now() + 60_000) });
+    await settleVoiceNoteTerminal(db, {
+      id,
+      attemptToken,
+      state: "completed",
+      billed: true,
+      billedChars: 120,
+      providerRequestId: "req-1",
+      providerTraceId: "trace-1",
+      providerRegion: "us-east-1",
+      audioBytes: Buffer.from("projected-audio-bytes"),
+      audioSha256: "b".repeat(64),
+      audioBytesLen: 21,
+      durationMs: 100,
+    });
+
+    // The full read still carries the bytes…
+    expect((await getVoiceNoteById(db, id))?.audioBytes).not.toBeNull();
+
+    // …but both projected reads select only the status/guard/replay columns.
+    for (const projected of [
+      await getVoiceNoteStatusById(db, id),
+      await getVoiceNoteStatusByClientRequestId(db, USER_ID, clientRequestId),
+    ]) {
+      expect(projected).not.toBeNull();
+      expect(projected).toMatchObject({
+        id,
+        userId: USER_ID,
+        platformAccountId: page.id,
+        state: "completed",
+        scriptChars: 120,
+        billed: true,
+        audioSha256: "b".repeat(64),
+        audioBytesLen: 21,
+        requestHash: "hash-1",
+      });
+      expect(projected?.createdAt).toBeInstanceOf(Date);
+      // The 2 MiB bytea column is NOT part of the projection.
+      expect(Object.keys(projected ?? {})).not.toContain("audioBytes");
+    }
   });
 
   it("grants dispatch exactly once under concurrent CAS calls", async (context) => {

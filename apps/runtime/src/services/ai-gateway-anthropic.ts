@@ -100,7 +100,12 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "ping": 8000,
   "hi-greeting": 8000,
   "workboard-closing": 8000,
-  "voice-script": 800,
+  // Adaptive thinking counts against max_tokens, so voice-script needs the same
+  // ~10x headroom every peer on this model+effort gets (fast-reply 800→8000):
+  // at 800 the thinking budget alone truncates the script → stopReason
+  // 'max_tokens' → the voice-notes admission guard rejects the source
+  // unrecoverably. The non-adaptive FEATURE_MAX_TOKENS cap stays 400.
+  "voice-script": 8000,
 };
 
 const APPROX_CHARS_PER_TOKEN = 4;
