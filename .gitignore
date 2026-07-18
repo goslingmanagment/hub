@@ -41,3 +41,4 @@ apps/dashboard/tsconfig.tsbuildinfo
 # new ones by accident (pre-deploy audit P-37).
 *.png
 generated-reports/
+/ofapi-export-artifacts/

@@ -1820,7 +1820,13 @@ export async function recoverStaleOfapiCaptureWork(
         select 1
         from ofapi_request_attempts attempt
         where attempt.capture_job_id = job.id
-          and attempt.state in ('reserved', 'dispatching', 'indeterminate')
+          and (
+            attempt.state in ('reserved', 'dispatching')
+            or (
+              attempt.state = 'indeterminate'
+              and attempt.certainty_resolved_at is null
+            )
+          )
       )
     returning job.id::text as id
   `);

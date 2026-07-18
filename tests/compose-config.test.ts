@@ -226,6 +226,16 @@ describe("compose config", () => {
     expect(dockerignore.split(/\r?\n/)).toContain("._*");
   });
 
+  it("keeps local OFAPI export artifacts out of Git and Docker contexts", async () => {
+    const [gitignore, dockerignore] = await Promise.all([
+      readComposeFile(".gitignore"),
+      readComposeFile(".dockerignore"),
+    ]);
+
+    expect(gitignore.split(/\r?\n/)).toContain("/ofapi-export-artifacts/");
+    expect(dockerignore.split(/\r?\n/)).toContain("/ofapi-export-artifacts/");
+  });
+
   it("deploy-production.sh fails loudly when schema baseline capture breaks", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const schemaCapture = getShellFunction(text, "capture_remote_schema_migrations");
@@ -233,7 +243,12 @@ describe("compose config", () => {
 
     expect(schemaCapture).toContain("set -euo pipefail");
     expect(schemaCapture).toContain("BEGIN;");
-    expect(schemaCapture).toContain("pg_advisory_xact_lock(31415, 27182)");
+    expect(schemaCapture).toContain("max_attempts=30");
+    expect(schemaCapture).toContain("pg_try_advisory_xact_lock(31415, 27182)");
+    expect(schemaCapture).toContain("IF NOT pg_try_advisory_xact_lock(31415, 27182) THEN");
+    expect(schemaCapture).toContain('attempt_output="${output_file}.attempt"');
+    expect(schemaCapture).toContain('mv "$attempt_output" "$output_file" || return 1');
+    expect(schemaCapture).toContain("sleep 1");
     expect(schemaCapture).toContain("deploy_schema_migrations");
     expect(schemaCapture).toContain("EXECUTE \\$q\\$insert into deploy_schema_migrations select id from schema_migrations order by id\\$q\\$");
     expect(schemaCapture).toContain("COMMIT;");
@@ -241,6 +256,7 @@ describe("compose config", () => {
     expect(schemaCapture).not.toContain("INSERT INTO deploy_schema_migrations EXECUTE");
     expect(schemaCapture).not.toContain("$$public$$");
     expect(schemaCapture).not.toContain("$$schema_migrations$$");
+    expect(schemaCapture).not.toContain("PERFORM pg_advisory_xact_lock");
     expect(schemaCapture).not.toContain("|| true");
     expect(schemaCapture).not.toContain("2>/dev/null");
     expect(rollback).toContain('SCHEMA_BASELINE_CAPTURED:-0');

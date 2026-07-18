@@ -2012,6 +2012,30 @@ describe("OFAPI capture correctness repository", () => {
       priority: 0,
       requestedAt: new Date(NOW.getTime() + 3_000),
     }]);
+
+    const released = await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      leaseOwner: "second-crashed-worker",
+      leaseTtlMs: 1_000,
+      now: new Date(NOW.getTime() + 3_001),
+    });
+    expect(released).toMatchObject({ id: created.job.id });
+
+    expect(await recoverStaleOfapiCaptureWork(testDb.db, {
+      now: new Date(NOW.getTime() + 5_000),
+    })).toEqual({ released: 0, indeterminate: 0, requeued: 1 });
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "ready",
+      reasonCode: "lease_expired_before_attempt",
+    });
+    const historicalAttempt = await getOfapiRequestAttempt(testDb.db, reservation.attemptId);
+    expect(historicalAttempt).toMatchObject({
+      state: "indeterminate",
+      certainty_resolution: "confirmed_billed",
+    });
+    expect(new Date(String(historicalAttempt?.certainty_resolved_at))).toEqual(
+      new Date(NOW.getTime() + 3_000),
+    );
   });
 
   it("does not hot-loop an awaiting-parse job parked after parser failure", async () => {
