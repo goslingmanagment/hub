@@ -1,7 +1,7 @@
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OverviewResponse } from "@agency_hub_core/contracts";
+import type { OverviewResponse, SyncBlockStatus } from "@agency_hub_core/contracts";
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/DashboardShellContext.tsx";
 
@@ -32,6 +32,9 @@ vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 import { Sidebar } from "../apps/dashboard/src/components/layout/Sidebar.tsx";
 import { Topbar } from "../apps/dashboard/src/components/layout/Topbar.tsx";
 import { SettingsPage } from "../apps/dashboard/src/pages/SettingsPage.tsx";
+import {
+  getSyncBlockActionPresentation,
+} from "../apps/dashboard/src/pages/settings/sync/SyncBlockActions.tsx";
 
 type DashboardShellValue = ComponentProps<typeof DashboardShellProvider>["value"];
 type DashboardPage = DashboardShellValue["pages"][number];
@@ -646,6 +649,68 @@ describe("dashboard sync layout", () => {
     expect(html).toContain("Financials");
     expect(html).toContain("View details");
     expect(html).not.toContain("Update Credentials");
+  });
+
+  it("offers recovery for an actionable paused OnlyFans substream hidden by a healthy block", () => {
+    const block: SyncBlockStatus = {
+      ...buildSyncBlock("financials"),
+      substreams: [
+        {
+          stream: "transactions",
+          role: "primary",
+          state: "paused",
+          succeededAt: null,
+          nextDueAt: null,
+          nextRetryAt: null,
+          cadenceSeconds: 3600,
+          isFresh: false,
+          needsAttention: false,
+          statusReason: null,
+          error: null,
+        },
+        {
+          stream: "fan_identities",
+          role: "supporting",
+          state: "up_to_date",
+          succeededAt: "2026-03-24T11:55:00.000Z",
+          nextDueAt: null,
+          nextRetryAt: null,
+          cadenceSeconds: 3600,
+          isFresh: true,
+          needsAttention: false,
+          statusReason: null,
+          error: null,
+        },
+        {
+          stream: "top_spenders",
+          role: "supporting",
+          state: "paused",
+          succeededAt: null,
+          nextDueAt: null,
+          nextRetryAt: null,
+          cadenceSeconds: 86400,
+          isFresh: false,
+          needsAttention: false,
+          statusReason: null,
+          error: null,
+        },
+      ],
+    };
+
+    expect(getSyncBlockActionPresentation(block, "onlyfans")).toEqual({
+      showTrigger: false,
+      showPause: false,
+      showResume: true,
+      showReset: true,
+      resumeLabel: "Resume top spenders",
+    });
+
+    expect(getSyncBlockActionPresentation({
+      ...block,
+      substreams: block.substreams.filter((substream) => substream.stream === "transactions"),
+    }, "onlyfans")).toMatchObject({
+      showResume: false,
+    });
   });
 
   it("shows an explicit sync overview load error", () => {

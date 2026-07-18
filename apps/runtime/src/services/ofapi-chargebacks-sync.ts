@@ -252,6 +252,7 @@ async function reconcilePage(
     pageId: input.pageId,
     dispatcher,
     egressKey: resolveStoredProxyEgressKey(stored.proxy),
+    creditBudgetScope: "backfill",
   };
 
   const normalized: NormalizedChargeback[] = [];

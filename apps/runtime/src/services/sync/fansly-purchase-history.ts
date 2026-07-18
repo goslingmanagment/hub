@@ -11,6 +11,40 @@ export type FanslyPurchaseHistoryCursorState = {
   pendingTargets: FanslyPurchaseHistoryTarget[];
 };
 
+export const FANSLY_PURCHASE_HISTORY_RESULT_LIMIT = 100;
+
+export type FanslyPurchaseHistoryCapture = {
+  id: number | null;
+  targetKey: string;
+  statusCode: number | null;
+  responsePayload: unknown;
+};
+
+export type FanslyPurchaseHistoryCaptureClassification =
+  & FanslyPurchaseHistoryCapture
+  & {
+    contentId: string;
+    captured: true;
+    validatedComplete: boolean;
+    blocked: boolean;
+    orderRows: number | null;
+    outcome:
+      | "supported_shape"
+      | "terminal_missing"
+      | "contract_rejected"
+      | "result_truncated"
+      | "http_rejected";
+  };
+
+export type FanslyPurchaseHistoryCaptureIndex = {
+  captures: FanslyPurchaseHistoryCaptureClassification[];
+  capturedTargetKeys: string[];
+  capturedContentIds: string[];
+  validatedCompleteTargetKeys: string[];
+  validatedCompleteContentIds: string[];
+  blocked: FanslyPurchaseHistoryCaptureClassification[];
+};
+
 function asRecord(value: unknown): JsonRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as JsonRecord
@@ -44,6 +78,11 @@ function hasPpvPermission(item: JsonRecord) {
 
 export function fanslyPurchaseHistoryTargetKey(target: FanslyPurchaseHistoryTarget) {
   return `${target.kind}:${target.contentId}`;
+}
+
+function purchaseHistoryContentIdFromTargetKey(targetKey: string) {
+  const separator = targetKey.indexOf(":");
+  return separator >= 0 ? targetKey.slice(separator + 1) : targetKey;
 }
 
 /**
@@ -219,4 +258,119 @@ export function countFanslyPurchaseHistoryRows(payloadValue: unknown): number | 
     return aggregation.accountMediaOrders.length;
   }
   return null;
+}
+
+/**
+ * Classifies a captured target entirely from its durable status and raw body.
+ * The function deliberately has no checkpoint or provider dependency so a
+ * parser repair can reclassify historical captures without another request.
+ */
+export function classifyFanslyPurchaseHistoryCapture(
+  capture: FanslyPurchaseHistoryCapture,
+): FanslyPurchaseHistoryCaptureClassification {
+  const contentId = purchaseHistoryContentIdFromTargetKey(capture.targetKey);
+  if (capture.statusCode === 404 || capture.statusCode === 410) {
+    return {
+      ...capture,
+      contentId,
+      captured: true,
+      validatedComplete: true,
+      blocked: false,
+      orderRows: 0,
+      outcome: "terminal_missing",
+    };
+  }
+
+  if (
+    capture.statusCode !== null &&
+    (capture.statusCode < 200 || capture.statusCode >= 300)
+  ) {
+    return {
+      ...capture,
+      contentId,
+      captured: true,
+      validatedComplete: false,
+      blocked: true,
+      orderRows: null,
+      outcome: "http_rejected",
+    };
+  }
+
+  const orderRows = countFanslyPurchaseHistoryRows(capture.responsePayload);
+  if (orderRows === null) {
+    return {
+      ...capture,
+      contentId,
+      captured: true,
+      validatedComplete: false,
+      blocked: true,
+      orderRows: null,
+      outcome: "contract_rejected",
+    };
+  }
+  if (orderRows >= FANSLY_PURCHASE_HISTORY_RESULT_LIMIT) {
+    return {
+      ...capture,
+      contentId,
+      captured: true,
+      validatedComplete: false,
+      blocked: true,
+      orderRows,
+      outcome: "result_truncated",
+    };
+  }
+
+  return {
+    ...capture,
+    contentId,
+    captured: true,
+    validatedComplete: true,
+    blocked: false,
+    orderRows,
+    outcome: "supported_shape",
+  };
+}
+
+/**
+ * Builds the local reconciliation view. Any capture suppresses egress, but a
+ * target is complete only when at least one capture validates. Multiple raw
+ * rows for the same content id are folded so an older rejected shape cannot
+ * override a later locally-valid capture (or the reverse).
+ */
+export function classifyFanslyPurchaseHistoryCaptures(
+  captures: readonly FanslyPurchaseHistoryCapture[],
+): FanslyPurchaseHistoryCaptureIndex {
+  const classified = captures.map(classifyFanslyPurchaseHistoryCapture);
+  const capturedTargetKeys = new Set<string>();
+  const capturedContentIds = new Set<string>();
+  const validatedCompleteTargetKeys = new Set<string>();
+  const validatedCompleteContentIds = new Set<string>();
+
+  for (const capture of classified) {
+    capturedTargetKeys.add(capture.targetKey);
+    capturedContentIds.add(capture.contentId);
+    if (capture.validatedComplete) {
+      validatedCompleteTargetKeys.add(capture.targetKey);
+      validatedCompleteContentIds.add(capture.contentId);
+    }
+  }
+
+  const blockedByContentId = new Map<string, FanslyPurchaseHistoryCaptureClassification>();
+  for (const capture of classified) {
+    if (
+      capture.blocked &&
+      !validatedCompleteContentIds.has(capture.contentId)
+    ) {
+      blockedByContentId.set(capture.contentId, capture);
+    }
+  }
+
+  return {
+    captures: classified,
+    capturedTargetKeys: [...capturedTargetKeys],
+    capturedContentIds: [...capturedContentIds],
+    validatedCompleteTargetKeys: [...validatedCompleteTargetKeys],
+    validatedCompleteContentIds: [...validatedCompleteContentIds],
+    blocked: [...blockedByContentId.values()],
+  };
 }

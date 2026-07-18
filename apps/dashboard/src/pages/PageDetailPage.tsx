@@ -42,6 +42,7 @@ import type {
   PageSpenderAutoListsResponse,
   SpenderListResponse,
   SubscriberListResponse,
+  SyncUxSummary,
   TransactionListResponse,
 } from "@agency_hub_core/contracts";
 type TabKey = "transactions" | "spenders" | "followers";
@@ -62,11 +63,12 @@ function getAudienceChartPeriod(period: PeriodOption): PeriodOption {
 }
 
 function getPageExceptionMessage(
+  summary: SyncUxSummary,
   kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
 ) {
   switch (kind) {
     case "off":
-      return "Data updates paused \u2014 check sync settings";
+      return `${summary.headline} \u2014 check sync settings`;
     case "attention":
       return "Data may be incomplete \u2014 check sync settings";
     default:
@@ -215,7 +217,7 @@ export function PageDetailPage() {
   const exceptionKind = getSyncUxExceptionKind(page.syncUx);
   const syncTone = getSyncUxTone(page.syncUx.state);
   const isOwner = auth?.user.role === "owner";
-  const pageExceptionMessage = exceptionKind ? getPageExceptionMessage(exceptionKind) : null;
+  const pageExceptionMessage = exceptionKind ? getPageExceptionMessage(page.syncUx, exceptionKind) : null;
 
   function breakdownAmount(canonicalType: string): number {
     if (!selectedRevenue?.breakdown) return 0;
@@ -266,7 +268,10 @@ export function PageDetailPage() {
               {pageExceptionMessage}
             </span>
             {isOwner && (
-              <Link to={buildSettingsRoute("sync")} className="font-semibold text-accent hover:underline">
+              <Link
+                to={buildSettingsRoute("sync", page.label)}
+                className="font-semibold text-accent hover:underline"
+              >
                 Open Sync Settings
               </Link>
             )}

@@ -484,22 +484,39 @@ export async function listFanslyDmRawPayloadsAfterId(
   }));
 }
 
-/** Successful and terminal target-specific captures are both complete work
- * items. Error captures carry the same media key so a deleted item cannot
- * wedge the walk forever; systemic contract errors are never swallowed by the
- * handler and therefore never reach this set. */
-export async function listCapturedFanslyPurchaseHistoryTargetKeys(
+export interface FanslyPurchaseHistoryCaptureRow {
+  id: number;
+  targetKey: string;
+  statusCode: number | null;
+  responsePayload: unknown;
+}
+
+/**
+ * Returns the durable target-specific facts for local purchase-history
+ * reconciliation. Capture alone prevents another provider request; the
+ * runtime classifier decides from status + raw payload whether that fact is
+ * complete or must keep the stream visibly blocked.
+ */
+export async function listFanslyPurchaseHistoryCaptures(
   db: Database,
   pageId: number,
-): Promise<string[]> {
-  const result = await db.execute<{ target_key: string }>(sql`
-    select distinct case
-      when nullif(rp.request_params ->> 'accountMediaId', '') is not null
-        then 'single:' || (rp.request_params ->> 'accountMediaId')
-      when nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
-        then 'bundle:' || (rp.request_params ->> 'accountMediaBundleId')
-      else null
-    end as target_key
+): Promise<FanslyPurchaseHistoryCaptureRow[]> {
+  const result = await db.execute<{
+    id: string;
+    targetKey: string;
+    statusCode: number | null;
+    responsePayload: unknown;
+  }>(sql`
+    select rp.id::text as id,
+           case
+             when nullif(rp.request_params ->> 'accountMediaId', '') is not null
+               then 'single:' || (rp.request_params ->> 'accountMediaId')
+             when nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
+               then 'bundle:' || (rp.request_params ->> 'accountMediaBundleId')
+             else null
+           end as "targetKey",
+           rp.status_code as "statusCode",
+           rp.response_payload as "responsePayload"
     from ${syncRawPayloads} rp
     where rp.page_id = ${pageId}
       and rp.endpoint = 'purchase_history'
@@ -507,8 +524,14 @@ export async function listCapturedFanslyPurchaseHistoryTargetKeys(
         nullif(rp.request_params ->> 'accountMediaId', '') is not null
         or nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
       )
+    order by rp.id asc
   `);
-  return result.rows.map((row) => row.target_key);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    targetKey: row.targetKey,
+    statusCode: row.statusCode,
+    responsePayload: row.responsePayload,
+  }));
 }
 
 /** Refreshes the page-level reporting cache from the authoritative current

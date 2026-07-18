@@ -10,6 +10,7 @@ node_modules
 apps/**/dist
 coverage
 output
+/ofapi-export-artifacts/
 tmp
 .sessions
 .lilly2-session.json

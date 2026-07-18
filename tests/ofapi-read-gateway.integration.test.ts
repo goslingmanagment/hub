@@ -665,7 +665,7 @@ describe("OFAPI read gateway integration", () => {
     expect(response.json()._pagination.next_page).toBeNull();
   });
 
-  it("coalesces repeated explicit no-certificate misses into one bounded repair", async () => {
+  it("keeps repeated explicit no-certificate misses as separate capture-first intents", async () => {
     await seedUncertifiedHistory();
     scriptedResponses.push(
       { status: 200, body: { data: [{ id: 202 }], _pagination: { next_page: null } } },
@@ -687,51 +687,34 @@ describe("OFAPI read gateway integration", () => {
     expect(second.headers["x-agency-hub-read-fallback"]).toBe("no_certificate");
     expect(upstreamRequests).toHaveLength(2);
 
-    const jobs = await testDb!.pool.query<{
-      kind: string;
-      goal: string;
-      state: string;
-      active_slot_key: string;
-      target: Record<string, unknown>;
-      target_generation: number;
-      budget_scope: string;
-      origin_principal_id: number;
-      created_by: string;
-      max_calls: number;
-      max_credits: number;
-      max_pages: number;
-      max_items: number;
+    expect((await testDb!.pool.query(
+      "select 1 from ofapi_capture_jobs",
+    )).rows).toHaveLength(0);
+    const intents = await testDb!.pool.query<{
+      request_state: string;
+      attempt_state: string;
+      fallback_reason: string;
     }>(`
-      select kind, goal, state, active_slot_key, target,
-             target_generation, budget_scope,
-             origin_principal_id::int, created_by,
-             max_calls, max_credits, max_pages, max_items
-      from ofapi_capture_jobs
+      select request.state as request_state,
+             attempt.state as attempt_state,
+             attempt.fallback_reason
+      from ofapi_interactive_requests request
+      join ofapi_request_attempts attempt
+        on attempt.interactive_request_id = request.id
+      order by request.created_at, request.id
     `);
-    const chatterId = (await testDb!.pool.query<{ id: number }>(
-      "select id::int from users where username = 'chatter'",
-    )).rows[0]!.id;
-    expect(jobs.rows).toEqual([{
-      kind: "chat_paginate",
-      goal: "history_to_exhaustion",
-      state: "ready",
-      active_slot_key: `page:${assignedPageId}:chat:456`,
-      target: {
-        chatId: "456",
-        frozenHeadId: "203",
-        anchorMessageId: null,
-        limit: 100,
-        reason: "interactive_history_miss",
+    expect(intents.rows).toEqual([
+      {
+        request_state: "served",
+        attempt_state: "response_captured",
+        fallback_reason: "no_certificate",
       },
-      target_generation: 7,
-      budget_scope: "interactive",
-      origin_principal_id: chatterId,
-      created_by: "interactive_open",
-      max_calls: 3,
-      max_credits: 3,
-      max_pages: 3,
-      max_items: 300,
-    }]);
+      {
+        request_state: "served",
+        attempt_state: "response_captured",
+        fallback_reason: "no_certificate",
+      },
+    ]);
   });
 
   it("keeps old clients and non-certified history on one capture-first vendor fallback", async () => {
@@ -772,29 +755,9 @@ describe("OFAPI read gateway integration", () => {
     expect(stale.headers["x-agency-hub-read-fallback"]).toBe("stale_head");
     expect(upstreamRequests).toHaveLength(2);
 
-    const repair = await testDb!.pool.query<{
-      goal: string;
-      active_slot_key: string;
-      target: Record<string, unknown>;
-      budget_scope: string;
-      created_by: string;
-    }>(`
-      select goal, active_slot_key, target, budget_scope, created_by
-      from ofapi_capture_jobs
-    `);
-    expect(repair.rows).toEqual([{
-      goal: "connect_to_anchor",
-      active_slot_key: `page:${assignedPageId}:chat:123`,
-      target: {
-        chatId: "123",
-        frozenHeadId: "104",
-        anchorMessageId: "103",
-        limit: 100,
-        reason: "interactive_history_miss",
-      },
-      budget_scope: "interactive",
-      created_by: "interactive_open",
-    }]);
+    expect((await testDb!.pool.query(
+      "select 1 from ofapi_capture_jobs",
+    )).rows).toHaveLength(0);
 
     const attempts = await testDb!.pool.query<{
       serving_mode: string;
@@ -1019,6 +982,118 @@ describe("OFAPI read gateway integration", () => {
     expect(attempt.rows).toEqual([{
       parser_outcome: "contract_rejected",
       raw_body: "{not-json",
+    }]);
+  });
+
+  it("capture-first rejects an empty 2xx body instead of accepting JSON null", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    scriptedResponses.push({ status: 200, rawBody: Buffer.alloc(0) });
+
+    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+
+    expect(response.statusCode, response.body).toBe(503);
+    expect(upstreamRequests).toHaveLength(1);
+    const attempt = await testDb!.pool.query<{
+      request_state: string;
+      parser_outcome: string;
+      raw_body: string;
+    }>(
+      `select request.state as request_state,
+              attempt.parser_outcome,
+              observation.payload #>> '{response,body}' as raw_body
+       from ofapi_interactive_requests request
+       join ofapi_request_attempts attempt
+         on attempt.interactive_request_id = request.id
+       join observations observation
+         on observation.id = attempt.response_observation_id
+        and observation.received_at = attempt.response_observation_received_at`,
+    );
+    expect(attempt.rows).toEqual([{
+      request_state: "failed",
+      parser_outcome: "contract_rejected",
+      raw_body: "",
+    }]);
+  });
+
+  it("capture-first records but refuses a valid 2xx outside the operation envelope", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    scriptedResponses.push({ status: 200, body: {} });
+
+    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+
+    expect(response.statusCode, response.body).toBe(503);
+    expect(upstreamRequests).toHaveLength(1);
+    const attempt = await testDb!.pool.query<{
+      request_state: string;
+      parser_outcome: string;
+      raw_body: string;
+    }>(
+      `select request.state as request_state,
+              attempt.parser_outcome,
+              observation.payload #>> '{response,body}' as raw_body
+       from ofapi_interactive_requests request
+       join ofapi_request_attempts attempt
+         on attempt.interactive_request_id = request.id
+       join observations observation
+         on observation.id = attempt.response_observation_id
+        and observation.received_at = attempt.response_observation_received_at`,
+    );
+    expect(attempt.rows).toEqual([{
+      request_state: "failed",
+      parser_outcome: "contract_rejected",
+      raw_body: "{}",
+    }]);
+  });
+
+  it("capture-first accepts the data.list variant for registered list operations", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    scriptedResponses.push({
+      status: 200,
+      body: {
+        data: { list: [{ id: "tx-1" }], hasMore: false },
+        _meta: { _credits: { used: 1, balance: 8999 } },
+      },
+    });
+
+    const response = await inject(`${ACCOUNT_ONE}/transactions?limit=10`);
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      data: { list: [{ id: "tx-1" }], hasMore: false },
+    });
+    const attempt = await testDb!.pool.query<{
+      request_state: string;
+      parser_outcome: string;
+    }>(
+      `select request.state as request_state, attempt.parser_outcome
+       from ofapi_interactive_requests request
+       join ofapi_request_attempts attempt
+         on attempt.interactive_request_id = request.id`,
+    );
+    expect(attempt.rows).toEqual([{
+      request_state: "served",
+      parser_outcome: "accepted",
     }]);
   });
 

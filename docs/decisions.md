@@ -4732,3 +4732,68 @@ transition the attach lookup searches both the canonical and the legacy
 `docs/superpowers/specs/2026-07-17-coach-chat-design.md` (§5 recap, §7 kernel
 contract); the `ai_usage_events.feature` enum gains `coach-chat` via a numbered
 forward migration and the Usage dashboard's fixed feature column list.
+
+**Decision #168 (2026-07-18, governed interactive OFAPI budgets are per user
+per UTC day):** The initial capture-first safety limits of 60 calls per UTC
+hour and 250 shared interactive credits per UTC day blocked ordinary desktop
+reads while the vendor remained healthy. Governed mirror reads now allow each
+origin principal up to 4,000 calls and 4,000 reserved credits per UTC day. The
+principal window and its retry boundary both reset at the next UTC day; the
+shared 250-credit ceiling is removed.
+
+Mirror capture uses its own 40,000-credit global daily stop-loss instead of
+reusing the legacy DM-sync budget. The existing balance floor, durable
+reservation accounting, per-job bulk caps, and explicit incident pause remain
+unchanged. `OFAPI_DM_DAILY_CREDIT_BUDGET` continues to govern only the legacy
+DM-sync path.
+
+**Decision #169 (2026-07-18, owner adjustment to #168):** The per-principal
+governed mirror allowance is 7,000 calls and 7,000 reserved credits per UTC
+day. This supersedes only the 4,000/4,000 values in #168; its UTC-day window,
+40,000-credit global stop-loss, balance floor, and all other safeguards remain
+unchanged.
+
+**Decision #170 (2026-07-18, owner clarification to #168 and #169):** The
+governed mirror budget is 4,000 calls and 4,000 reserved credits per origin
+principal per UTC day, with a 7,000-credit global ceiling across all
+principals for that UTC day. This supersedes the numeric allowances in #168
+and #169; their UTC-day reset, balance floor, and remaining safeguards are
+unchanged.
+
+**Decision #171 (2026-07-18, partial sync pauses stay precise and
+recoverable):** Product surfaces preserve the page summary's distinction
+between a fully paused page and one paused applicable stream instead of
+collapsing both to the same `Data updates paused` banner. Owner links from the
+overview and page detail deep-link to that page's Sync workspace.
+
+Detailed block controls expose Resume whenever an operational substream is
+paused even if the block's primary truth remains current and its aggregate
+badge is `Up to date`. While that recovery is available, `Sync Now` and Pause
+are hidden because neither is the action that clears the paused state. Resume
+re-requests only the block rows that were actually paused, so recovering one
+supporting stream cannot restart already-healthy vendor work. Visible
+OnlyFans compatibility/no-op rows (`light`, legacy `transactions`, retired
+`dm_messages`) remain auditable but never manufacture a Resume action. This
+changes only operator copy and control reachability; applicability, scheduling,
+stored data, and Decision #166 page-health policy remain unchanged.
+
+**Decision #172 (2026-07-18, dist-only releases rebase on one pinned clean
+full image):** A production full build publishes a clean base alias keyed by
+the dependency checksum after the deployed candidate passes all
+health, capability, label, sync, and dashboard verification. A dist-only
+release must build from that pinned full image and refuses to run when the tag
+is absent, unlabeled without an explicit compatibility override, or labeled
+with a different dependency checksum. The running production image and its
+rollback snapshot are never retagged as a dist base. Consequently every
+dist-only image is the clean full image plus exactly one current artifact
+overlay instead of an unbounded chain of previous releases.
+
+The overlay mirrors the full runtime image and contains only dashboard,
+runtime, database bundle, and migration outputs. Internal contracts, Fansly,
+platform-core, and shared bundles are already incorporated into the runtime
+and database production bundles and are not copied as separate runtime paths.
+The full image installs only Playwright's Chromium headless shell, which is the
+binary used by both runtime launch sites, and removes package-manager indexes
+in the same layer. Image/tag garbage collection remains an explicit,
+owner-gated operation so current, rollback, and the checksum-pinned clean base
+cannot be deleted by an unscoped prune.

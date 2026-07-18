@@ -85,11 +85,12 @@ function formatMetricTotal(total: number | null) {
 }
 
 function getOverviewExceptionMessage(
+  summary: OverviewPageItem["syncUx"],
   kind: NonNullable<ReturnType<typeof getSyncUxExceptionKind>>,
 ) {
   switch (kind) {
     case "off":
-      return "Data updates paused";
+      return summary.headline;
     case "attention":
       return "Data may be incomplete \u2014 updates need attention";
     default:
@@ -458,11 +459,11 @@ function ModelGroupRows({
               {syncMode === "exception" && exceptionKind && exceptionKind !== "credentials" && (
                 <div className={`mt-2 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[12px] ${tone.panel}`}>
                   <span className={`font-medium ${tone.text}`}>
-                    {getOverviewExceptionMessage(exceptionKind)}
+                    {getOverviewExceptionMessage(page.syncUx, exceptionKind)}
                   </span>
                   {isOwner && (
                     <Link
-                      to={buildSettingsRoute("sync")}
+                      to={buildSettingsRoute("sync", page.label)}
                       onClick={(event) => event.stopPropagation()}
                       className="font-semibold text-accent hover:underline"
                     >

@@ -137,7 +137,7 @@ describe("sync UX summaries", () => {
     ]);
 
     expect(summary.state).toBe("off");
-    expect(summary.headline).toBe("Some syncs are off");
+    expect(summary.headline).toBe("Some data updates are paused");
   });
 
   it("marks overall summaries as off when any page sync is off", () => {

@@ -123,19 +123,44 @@ function sameInstant(value: unknown, expected: string) {
   return Number.isFinite(actualMs) && actualMs === expectedMs;
 }
 
-function sameInstantOrNormalizedUtcDayEnd(value: unknown, expected: string) {
+/**
+ * The vendor normalizes a requested UTC midnight to the inclusive end of that
+ * same UTC day. Other requested instants remain exact so an intraday boundary
+ * can never be silently widened.
+ */
+export function effectiveOfapiExportEndDate(value: string): Date | null {
+  const requested = new Date(value);
+  if (!Number.isFinite(requested.getTime())) return null;
+  if (
+    requested.getUTCHours() === 0
+    && requested.getUTCMinutes() === 0
+    && requested.getUTCSeconds() === 0
+    && requested.getUTCMilliseconds() === 0
+  ) {
+    requested.setUTCHours(23, 59, 59, 999);
+  }
+  return requested;
+}
+
+function sameInstantOrEffectiveUtcDayEnd(value: unknown, expected: string) {
   if (sameInstant(value, expected)) return true;
   if (typeof value !== "string") return false;
   const actual = new Date(value);
   const requested = new Date(expected);
-  return Number.isFinite(actual.getTime())
-    && Number.isFinite(requested.getTime())
-    && actual.getUTCFullYear() === requested.getUTCFullYear()
-    && actual.getUTCMonth() === requested.getUTCMonth()
-    && actual.getUTCDate() === requested.getUTCDate()
-    && actual.getUTCHours() === 23
-    && actual.getUTCMinutes() === 59
-    && actual.getUTCSeconds() === 59;
+  const effective = effectiveOfapiExportEndDate(expected);
+  if (
+    !Number.isFinite(actual.getTime())
+    || !Number.isFinite(requested.getTime())
+    || effective === null
+    || effective.getTime() === requested.getTime()
+  ) {
+    return false;
+  }
+  // The observed contract reports second precision. Treat any value in the
+  // final second as the same inclusive day-end while retaining .999 for CSV
+  // row validation.
+  return actual.getTime() >= effective.getTime() - 999
+    && actual.getTime() <= effective.getTime();
 }
 
 function effectiveOptionsMatch(target: ExportQuoteTarget, data: Record<string, unknown>) {
@@ -601,7 +626,7 @@ function responseIdentity(
     || data.type !== target.type
     || data.file_type !== target.fileType
     || !sameInstant(data.start_date, target.startDate)
-    || !sameInstantOrNormalizedUtcDayEnd(data.end_date, target.endDate)
+    || !sameInstantOrEffectiveUtcDayEnd(data.end_date, target.endDate)
     || !effectiveOptionsMatch(target, data)
   ) {
     return null;

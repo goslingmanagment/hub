@@ -79,6 +79,9 @@ export interface OfapiRequestContext {
   // Stage 9: the acting principal for gateway reads; background REST
   // spenders leave it unset (NULL = system spend in the ledger).
   actorUserId?: number | null;
+  // Attributes physical retry spend to a dedicated legacy lane as well as
+  // the shared global ceiling. Governed mirror calls use their own plane.
+  creditBudgetScope?: "audience" | "backfill" | null;
 }
 
 // Every OFAPI REST response carries _meta with the remaining credit balance —
@@ -96,6 +99,9 @@ export interface OfapiListPage {
   nextMarker?: string | null;
   nextPageUrl?: string | null;
   meta: OfapiResponseMeta | null;
+  /** Internal acknowledgement that the physical-attempt sink accounted this
+   * logical request. Test/custom clients omit it and use guard settlement. */
+  creditSpendAccounted?: true;
 }
 
 export interface OfapiRawResponse {
@@ -160,11 +166,12 @@ export interface OfapiCreditSpendObservation {
   attemptNumber: number;
   isCached: boolean | null;
   actorUserId: number | null;
+  budgetScope?: "audience" | "backfill" | null;
 }
 
 export type OfapiCreditSpendSink = (
   observation: OfapiCreditSpendObservation,
-) => Promise<void> | void;
+) => Promise<boolean | null | void> | boolean | null | void;
 
 /**
  * Maps one HTTP response to its ledger spend, or null for no row. Server-reported
@@ -598,8 +605,9 @@ export function createOfapiClient(input: {
   const restDelayMs = Math.max(0, input.restDelayMs ?? OFAPI_DEFAULT_REST_DELAY_MS);
   const onCreditSpend = input.onCreditSpend ?? null;
 
-  // Reports one response's spend to the injected sink; the sink owns durability
-  // and error handling — a sink failure must never fail the API call itself.
+  // Reports one physical response's spend before retry/return. A configured
+  // sink can fail closed so a billed attempt is never followed by more egress
+  // while both durable accounting paths are unavailable.
   async function reportCreditSpend(report: {
     operation: string;
     httpStatus: number;
@@ -614,9 +622,10 @@ export function createOfapiClient(input: {
      * reaches the sink and is never hidden. */
     suppressZeroCredits?: boolean;
     actorUserId?: number | null;
+    budgetScope?: "audience" | "backfill" | null;
   }) {
     if (!onCreditSpend) {
-      return;
+      return null;
     }
 
     const meta = parseResponseMeta(report.body);
@@ -631,14 +640,14 @@ export function createOfapiClient(input: {
       }
       : resolveOfapiCreditSpend({ httpStatus: report.httpStatus, meta });
     if (!spend) {
-      return;
+      return null;
     }
     if (report.suppressZeroCredits === true && spend.credits === 0) {
-      return;
+      return null;
     }
 
     try {
-      await onCreditSpend({
+      const outcome = await onCreditSpend({
         operation: report.operation,
         httpStatus: report.httpStatus,
         credits: spend.credits,
@@ -649,9 +658,14 @@ export function createOfapiClient(input: {
         attemptNumber: report.attemptNumber,
         isCached: meta?.isCached ?? null,
         actorUserId: report.actorUserId ?? null,
+        ...(report.budgetScope ? { budgetScope: report.budgetScope } : {}),
       });
+      // Existing injected sinks are observational and return void. Treat that
+      // as acknowledgement; the production sink returns explicit true/false.
+      return outcome === undefined ? true : outcome;
     } catch {
-      // Spend recording is best-effort at this layer; reconciliation closes gaps.
+      // A configured sink that throws did not establish durable accounting.
+      return false;
     }
   }
   // Client-wide pacing across concurrent executor chunks: each caller claims the
@@ -773,14 +787,29 @@ export function createOfapiClient(input: {
 
         // Every attempt that produced an HTTP response is reported — the
         // server charged each one, retries included.
-        await reportCreditSpend({
+        const creditSpendRecorded = await reportCreditSpend({
           operation: options.operation,
           httpStatus: response.status,
           body,
           requestId,
           pageId: options.context.pageId ?? null,
           attemptNumber: executionContext.attemptNumber,
+          budgetScope: options.context.creditBudgetScope ?? null,
         });
+
+        if (creditSpendRecorded === false) {
+          const message =
+            `OFAPI request failed closed: credit accounting unavailable for ${options.operation}`;
+          return {
+            kind: "failed",
+            failureKind: "transport",
+            httpStatus: response.status,
+            errorMessage: message,
+            // Keep this outside vendor HTTP classification: callers must stop
+            // the whole request path, not quarantine one resource and continue.
+            error: new OfapiApiError(message, null, null),
+          };
+        }
 
         if (response.status === 429 && executionContext.retriesRemaining > 0) {
           return {
@@ -830,7 +859,9 @@ export function createOfapiClient(input: {
         const page = (options.mapResponse ?? toListPage)(body);
         return {
           kind: "success",
-          value: page,
+          value: creditSpendRecorded === true
+            ? { ...page, creditSpendAccounted: true as const }
+            : page,
           httpStatus: response.status,
           // Lands in sync_http_attempts.response_shape — credits/rate budget
           // telemetry per request, as the plan requires.

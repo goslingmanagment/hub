@@ -13,7 +13,7 @@ import {
   getCheckpoint,
   getCurrentSubscribers,
   listPageDmConversationsByPlatformConversationIds,
-  listCapturedFanslyPurchaseHistoryTargetKeys,
+  listFanslyPurchaseHistoryCaptures,
   listFanslyDmRawPayloadsAfterId,
   markPageDmConversationsInvisibleByGeneration,
   PAGE_DM_LIVE_BACKFILL_CAP,
@@ -128,10 +128,13 @@ import {
 } from "./ofapi-fan-identities.ts";
 import { fanslyNewStreamAllowed } from "./fansly-stream-gate.ts";
 import {
-  countFanslyPurchaseHistoryRows,
+  classifyFanslyPurchaseHistoryCapture,
+  classifyFanslyPurchaseHistoryCaptures,
   extractFanslyPurchaseHistoryTargets,
+  FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
   fanslyPurchaseHistoryTargetKey,
   parseFanslyPurchaseHistoryCursorState,
+  type FanslyPurchaseHistoryCaptureClassification,
   type FanslyPurchaseHistoryCursorState,
 } from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
@@ -161,8 +164,31 @@ export type ExecutorRequestContext = {
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
-const PURCHASE_HISTORY_RESULT_LIMIT = 100;
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function purchaseHistoryCaptureBlockError(
+  capture: FanslyPurchaseHistoryCaptureClassification,
+) {
+  if (capture.outcome === "result_truncated") {
+    return new FanslyPurchaseHistoryContractError({
+      code: "purchase_history_result_truncated",
+      message:
+        `Fansly purchase-history returned ${capture.orderRows} rows at the ${FANSLY_PURCHASE_HISTORY_RESULT_LIMIT}-row cap; refusing false completeness`,
+    });
+  }
+  if (capture.outcome === "http_rejected") {
+    return new FanslyPurchaseHistoryContractError({
+      code: "purchase_history_contract_rejected",
+      message:
+        `Captured Fansly purchase-history target returned HTTP ${capture.statusCode}; local resolution is required before completeness can be certified`,
+    });
+  }
+  return new FanslyPurchaseHistoryContractError({
+    code: "purchase_history_contract_rejected",
+    message:
+      "Fansly purchase-history response omitted both supported order arrays; captured response requires local parser repair",
+  });
+}
 const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
 const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
 
@@ -2122,8 +2148,12 @@ export async function executeFollowersReconcileChunk(
   );
   const previousCheckpointState = asRecord(checkpoint?.state);
   const previousGeneration = asNumber(previousCheckpointState?.generation) ?? 0;
-  const previousSnapshotRestartCount =
-    asNumber(previousCheckpointState?.snapshotRestartCount) ?? 0;
+  const previousIsSnapshotRestartMarker =
+    previousCheckpointState?.restartReason === "snapshot_mismatch" &&
+    asNumber(previousCheckpointState.revision) === input.streamState.requestSeq;
+  const previousSnapshotRestartCount = previousIsSnapshotRestartMarker
+    ? asNumber(previousCheckpointState?.snapshotRestartCount) ?? 0
+    : 0;
   let state: FollowersReconcileCursorState;
   if (existingState) {
     state = existingState;
@@ -2131,12 +2161,13 @@ export async function executeFollowersReconcileChunk(
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     state = {
       revision: input.streamState.requestSeq,
-    generation: previousGeneration + 1,
-    offset: 0,
+      generation: previousGeneration + 1,
+      offset: 0,
       observedCount: 0,
       pageCount: 0,
       sourceFollowerCount: accountMe.parsed.account.followCount,
       snapshotRestartCount: previousSnapshotRestartCount,
+      restartReason: previousIsSnapshotRestartMarker ? "snapshot_mismatch" : null,
     };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -2311,8 +2342,13 @@ export async function executeFollowersReconcileChunk(
             platformAccountId: input.pageContext.page.id,
             stream: "followers_reconcile",
             state: {
-              ...state,
+              revision: state.revision,
+              generation: state.generation,
+              offset: state.offset,
               observedCount: finalObservedCount,
+              pageCount: state.pageCount,
+              sourceFollowerCount: state.sourceFollowerCount,
+              snapshotRestartCount: 0,
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -2369,6 +2405,7 @@ export async function executeFollowersReconcileChunk(
           platformAccountId: input.pageContext.page.id,
           stream: "followers_reconcile",
           state: {
+            revision: state.revision,
             generation: state.generation,
             snapshotRestartCount: state.snapshotRestartCount + 1,
             restartReason: "snapshot_mismatch",
@@ -3862,28 +3899,45 @@ export async function executePurchaseHistoryChunk(
       rawPayloadCursorId: 0,
       pendingTargets: [],
     };
-  const capturedTargetKeys = new Set(
-    await listCapturedFanslyPurchaseHistoryTargetKeys(app.db, input.pageContext.page.id),
+  const captureIndex = classifyFanslyPurchaseHistoryCaptures(
+    await listFanslyPurchaseHistoryCaptures(app.db, input.pageContext.page.id),
   );
-  const capturedContentIds = new Set(
-    [...capturedTargetKeys].flatMap((key) => {
-      const separator = key.indexOf(":");
-      return separator >= 0 ? [key.slice(separator + 1)] : [];
-    }),
-  );
+  const capturedTargetKeys = new Set(captureIndex.capturedTargetKeys);
+  const capturedContentIds = new Set(captureIndex.capturedContentIds);
+  const validatedCompleteTargetKeys = new Set(captureIndex.validatedCompleteTargetKeys);
+  const validatedCompleteContentIds = new Set(captureIndex.validatedCompleteContentIds);
   // A crash after raw capture but before checkpoint advance is reconciled
-  // locally: the captured content id removes the stale pending item without
-  // another vendor request. Content-level reconciliation also repairs legacy
-  // checkpoints where one Fansly bundle was inferred once as bundle and once
-  // as single media from contradictory fields in the same DM payload.
-  state = {
-    ...state,
-    pendingTargets: state.pendingTargets.filter(
-      (target) =>
-        !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
-        !capturedContentIds.has(target.contentId),
-    ),
-  };
+  // locally: a VALID captured content id removes the stale pending item
+  // without another vendor request. A rejected/truncated capture remains
+  // pending and blocks locally. Content-level reconciliation also repairs
+  // legacy checkpoints where contradictory payload fields inferred both a
+  // bundle and a single-media target for the same Fansly content id.
+  const reconciledPendingTargets = state.pendingTargets.filter(
+    (target) =>
+      !validatedCompleteTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
+      !validatedCompleteContentIds.has(target.contentId),
+  );
+  if (reconciledPendingTargets.length !== state.pendingTargets.length) {
+    state = { ...state, pendingTargets: reconciledPendingTargets };
+    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "purchase_history",
+      state,
+    });
+    await input.telemetry.recordCheckpointAdvanced(
+      "purchase_history",
+      summarizeCheckpoint(progressCheckpoint),
+    );
+  }
+
+  // Raw capture is the sole truth. A historical capture that the local parser
+  // still cannot certify blocks every later run before egress, even if an old
+  // buggy checkpoint already dropped its pending target. Parser repairs can
+  // unlock the exact same bytes on the next run.
+  const blockedCapture = captureIndex.blocked[0];
+  if (blockedCapture) {
+    throw purchaseHistoryCaptureBlockError(blockedCapture);
+  }
 
   let scannedRawPages = 0;
   let scanBatches = 0;
@@ -3973,8 +4027,8 @@ export async function executePurchaseHistoryChunk(
 
     const target = state.pendingTargets[0]!;
     const requestParams = target.kind === "single"
-      ? { accountMediaId: target.contentId, limit: PURCHASE_HISTORY_RESULT_LIMIT }
-      : { accountMediaBundleId: target.contentId, limit: PURCHASE_HISTORY_RESULT_LIMIT };
+      ? { accountMediaId: target.contentId, limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT }
+      : { accountMediaBundleId: target.contentId, limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT };
     let page: Awaited<ReturnType<AppContext["adapter"]["getMediaOrderHistoryPage"]>>;
     try {
       page = await app.adapter.getMediaOrderHistoryPage(requestContext, requestParams);
@@ -4005,6 +4059,20 @@ export async function executePurchaseHistoryChunk(
         errorMessage: error.message,
         retainUntil: retentionDate(),
       }, { action: "capturing rejected purchase_history target", platform: "fansly" });
+      const capture = classifyFanslyPurchaseHistoryCapture({
+        id: null,
+        targetKey: fanslyPurchaseHistoryTargetKey(target),
+        statusCode: error.status,
+        responsePayload: {
+          error: {
+            status: error.status,
+            code: error.code ?? null,
+          },
+        },
+      });
+      if (!capture.validatedComplete) {
+        throw purchaseHistoryCaptureBlockError(capture);
+      }
       await input.telemetry.addAnomaly({
         code: "purchase_history_media_rejected",
         severity: "warn",
@@ -4042,7 +4110,20 @@ export async function executePurchaseHistoryChunk(
       retainUntil: retentionDate(),
     }, { action: "inserting purchase_history raw payload", platform: "fansly" });
 
-    const orderRows = countFanslyPurchaseHistoryRows(page.raw);
+    const capture = classifyFanslyPurchaseHistoryCapture({
+      id: null,
+      targetKey: fanslyPurchaseHistoryTargetKey(target),
+      statusCode: null,
+      responsePayload: page.raw,
+    });
+    if (capture.blocked) {
+      // Keep the already-persisted pending target. Every later run reparses
+      // this raw fact locally and fails before egress until the parser or data
+      // contract is deliberately repaired.
+      throw purchaseHistoryCaptureBlockError(capture);
+    }
+
+    const orderRows = capture.orderRows!;
     capturedTargetKeys.add(fanslyPurchaseHistoryTargetKey(target));
     capturedContentIds.add(target.contentId);
     state = { ...state, pendingTargets: state.pendingTargets.slice(1) };
@@ -4055,19 +4136,6 @@ export async function executePurchaseHistoryChunk(
       "purchase_history",
       summarizeCheckpoint(progressCheckpoint),
     );
-
-    if (orderRows === null) {
-      throw new FanslyPurchaseHistoryContractError({
-        code: "purchase_history_contract_rejected",
-        message: "Fansly purchase-history response omitted both supported order arrays; captured response requires local parser repair",
-      });
-    }
-    if (orderRows >= PURCHASE_HISTORY_RESULT_LIMIT) {
-      throw new FanslyPurchaseHistoryContractError({
-        code: "purchase_history_result_truncated",
-        message: `Fansly purchase-history returned ${orderRows} rows at the ${PURCHASE_HISTORY_RESULT_LIMIT}-row cap; refusing false completeness`,
-      });
-    }
     targetsFetched += 1;
     orderRowsCaptured += orderRows;
   }

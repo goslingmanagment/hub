@@ -10,9 +10,11 @@
 import {
   countOfapiWebhookEventsReceivedBetween,
   getOfapiCreditReconcileState,
+  hasOfapiCreditSpendRequestAttempt,
   insertOfapiCreditLedgerEntry,
   listOfapiBalanceObservationsAfter,
   listOfapiMappedPages,
+  recordOfapiPhysicalCreditUsage,
   recordOfapiCreditSpend,
   setOfapiCreditReconcileCursor,
   sumOfapiCreditsSpentBetween,
@@ -56,15 +58,15 @@ export function isOfapiCreditLedgerEnabled(
 /**
  * Builds the onCreditSpend sink wired into createOfapiClient (D1/D2): with the
  * flag on, every reported response becomes a ledger row plus the day-counter
- * update in one transaction. Never throws — a failed write is logged and the
- * reconciliation residual absorbs the gap.
+ * update in one transaction. If that write is unavailable, the sink falls back
+ * to the physical day counter. Only failure of both paths rejects more egress.
  */
 export function createOfapiCreditSpendSink(
   app: Pick<AppContext, "db" | "logger" | "config">,
 ): OfapiCreditSpendSink {
   return async (observation) => {
     if (!isOfapiCreditLedgerEnabled(app.config)) {
-      return;
+      return null;
     }
 
     try {
@@ -77,16 +79,36 @@ export function createOfapiCreditSpendSink(
         balanceAfter: observation.balanceAfter,
         requestId: observation.requestId,
         actorUserId: observation.actorUserId,
+        budgetScope: observation.budgetScope ?? null,
         details: {
           attemptNumber: observation.attemptNumber,
           ...(observation.isCached === null ? {} : { isCached: observation.isCached }),
         },
       });
+      return true;
     } catch (error) {
+      // A connection failure can make COMMIT acknowledgement ambiguous. Check
+      // the physical request-attempt identity before telling the caller to
+      // repair the fast counter, otherwise a committed ledger write could be
+      // counted twice. requestId alone is logical and is reused by retries.
+      let recorded = await hasOfapiCreditSpendRequestAttempt(app.db, {
+        requestId: observation.requestId,
+        attemptNumber: observation.attemptNumber,
+      }).catch(() => false);
+      if (!recorded) {
+        recorded = await recordOfapiPhysicalCreditUsage(app.db, {
+          creditsUsed: observation.credits,
+          balance: observation.balanceAfter,
+          budgetScope: observation.budgetScope ?? null,
+        }).then(() => true, () => false);
+      }
       app.logger.warn(
-        { err: error, operation: observation.operation },
-        "OFAPI credit ledger write failed; continuing",
+        { err: error, operation: observation.operation, recorded },
+        recorded
+          ? "OFAPI credit ledger write failed; physical counter preserved"
+          : "OFAPI credit accounting failed; request path will stop",
       );
+      return recorded;
     }
   };
 }

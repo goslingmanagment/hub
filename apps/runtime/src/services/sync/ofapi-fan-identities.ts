@@ -17,7 +17,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { asRecord, idToString } from "../ofapi-payloads.ts";
+import { idToString } from "../ofapi-payloads.ts";
 import type { OfapiClient, OfapiListPage, OfapiRequestContext } from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
@@ -105,6 +105,7 @@ async function upsertLinkUsers(
 
 type GuardedFetch = (
   offset: number,
+  limit: number,
 ) => Promise<OfapiListPage>;
 
 export interface OfapiFanIdentitiesStats {
@@ -115,7 +116,7 @@ export interface OfapiFanIdentitiesStats {
   requestsUsed: number;
 }
 
-type OfapiFanIdentitiesCursorState = {
+type OfapiFanIdentitiesCursorStateV1 = {
   version: 1;
   revision: number;
   completedTargetKeys: string[];
@@ -123,17 +124,73 @@ type OfapiFanIdentitiesCursorState = {
   activeOffset: number;
 };
 
+type OfapiFanIdentitiesCursorState = {
+  version: 2;
+  revision: number;
+  phase: "links" | "users";
+  linkType: "tracking" | "trial" | null;
+  linkOffset: number;
+  trackingLinkIds: string[];
+  trialLinkIds: string[];
+  completedTargetKeys: string[];
+  activeTargetKey: string | null;
+  activeOffset: number;
+};
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
 function parseCursorState(value: unknown): OfapiFanIdentitiesCursorState | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return null;
   }
   const state = value as Record<string, unknown>;
+
+  // V1 had only phase-2 progress. Upgrade it in memory and preserve every
+  // completed/active user target; only the previously-uncheckpointed link
+  // discovery must run once after deployment.
+  if (state.version === 1) {
+    if (
+      typeof state.revision !== "number" ||
+      !Number.isSafeInteger(state.revision) ||
+      !isStringArray(state.completedTargetKeys) ||
+      (state.activeTargetKey !== null && typeof state.activeTargetKey !== "string") ||
+      typeof state.activeOffset !== "number" ||
+      !Number.isSafeInteger(state.activeOffset) ||
+      state.activeOffset < 0
+    ) {
+      return null;
+    }
+    const previous = state as OfapiFanIdentitiesCursorStateV1;
+    return {
+      version: 2,
+      revision: previous.revision,
+      phase: "links",
+      linkType: "tracking",
+      linkOffset: 0,
+      trackingLinkIds: [],
+      trialLinkIds: [],
+      completedTargetKeys: [...new Set(previous.completedTargetKeys)],
+      activeTargetKey: previous.activeTargetKey,
+      activeOffset: previous.activeOffset,
+    };
+  }
+
   if (
-    state.version !== 1 ||
+    state.version !== 2 ||
     typeof state.revision !== "number" ||
     !Number.isSafeInteger(state.revision) ||
-    !Array.isArray(state.completedTargetKeys) ||
-    !state.completedTargetKeys.every((key) => typeof key === "string") ||
+    (state.phase !== "links" && state.phase !== "users") ||
+    (state.linkType !== null && state.linkType !== "tracking" && state.linkType !== "trial") ||
+    (state.phase === "links" && state.linkType === null) ||
+    (state.phase === "users" && state.linkType !== null) ||
+    typeof state.linkOffset !== "number" ||
+    !Number.isSafeInteger(state.linkOffset) ||
+    state.linkOffset < 0 ||
+    !isStringArray(state.trackingLinkIds) ||
+    !isStringArray(state.trialLinkIds) ||
+    !isStringArray(state.completedTargetKeys) ||
     (state.activeTargetKey !== null && typeof state.activeTargetKey !== "string") ||
     typeof state.activeOffset !== "number" ||
     !Number.isSafeInteger(state.activeOffset) ||
@@ -142,8 +199,13 @@ function parseCursorState(value: unknown): OfapiFanIdentitiesCursorState | null 
     return null;
   }
   return {
-    version: 1,
+    version: 2,
     revision: state.revision,
+    phase: state.phase,
+    linkType: state.linkType,
+    linkOffset: state.linkOffset,
+    trackingLinkIds: [...new Set(state.trackingLinkIds)],
+    trialLinkIds: [...new Set(state.trialLinkIds)],
     completedTargetKeys: [...new Set(state.completedTargetKeys)],
     activeTargetKey: state.activeTargetKey,
     activeOffset: state.activeOffset,
@@ -176,6 +238,7 @@ export async function syncOfapiFanIdentities(
   const requestContext: OfapiRequestContext = {
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     pageId: input.pageContext.page.id,
+    creditBudgetScope: "audience",
   };
   // Spec: runs under the AUDIENCE day budget (this is audience-class work).
   const guard = createOfapiRestGuard(app, {
@@ -199,16 +262,25 @@ export async function syncOfapiFanIdentities(
   let cursor: OfapiFanIdentitiesCursorState = storedCursor?.revision === input.requestSeq
     ? storedCursor
     : {
-      version: 1,
+      version: 2,
       revision: input.requestSeq,
+      phase: "links",
+      linkType: "tracking",
+      linkOffset: 0,
+      trackingLinkIds: [],
+      trialLinkIds: [],
       completedTargetKeys: [],
       activeTargetKey: null,
       activeOffset: 0,
     };
   const completedTargetKeys = new Set(cursor.completedTargetKeys);
+  const trackingLinkIds = new Set(cursor.trackingLinkIds);
+  const trialLinkIds = new Set(cursor.trialLinkIds);
   const persistCursor = async () => {
     cursor = {
       ...cursor,
+      trackingLinkIds: [...trackingLinkIds].sort(),
+      trialLinkIds: [...trialLinkIds].sort(),
       completedTargetKeys: [...completedTargetKeys].sort(),
     };
     await upsertCheckpointProgress(app.db, {
@@ -218,62 +290,64 @@ export async function syncOfapiFanIdentities(
     });
   };
 
-  // Guarded offset walk; returns the budget block that ended it, if any.
-  const walk = async (
-    fetchPage: GuardedFetch,
-    onItems: (items: Record<string, unknown>[]) => Promise<void>,
-  ): Promise<"completed" | OfapiBudgetBlock> => {
-    for (let offset = 0; ;) {
+  // Phase 1: link discovery is itself a durable offset walk. Both the request
+  // limit and the next offset use the same local pageLimit, so pagination
+  // cannot silently drift if tracking/trial limits change later.
+  const walkLinkPages = async (): Promise<OfapiBudgetBlock | null> => {
+    while (cursor.phase === "links") {
       const block = await guard.resolveBlock();
       if (block !== null) {
+        await persistCursor();
         return block;
       }
-      const page = await fetchPage(offset);
+
+      const linkType = cursor.linkType!;
+      const pageLimit = LINKS_PAGE_LIMIT;
+      const page = linkType === "tracking"
+        ? await client.listTrackingLinks!(requestContext, ofapiAccountId, {
+          limit: pageLimit,
+          offset: cursor.linkOffset,
+        })
+        : await client.listTrialLinks!(requestContext, ofapiAccountId, {
+          limit: pageLimit,
+          offset: cursor.linkOffset,
+        });
       await guard.recordResponse(page);
       stats.requestsUsed += 1;
-      await onItems(page.items);
-      if (page.items.length < USERS_PAGE_LIMIT) {
-        return "completed";
+
+      const ids = linkType === "tracking" ? trackingLinkIds : trialLinkIds;
+      for (const item of page.items) {
+        const id = idToString(item.id);
+        if (id) {
+          ids.add(id);
+        }
       }
-      offset += page.items.length;
+
+      if (page.items.length < pageLimit) {
+        cursor = linkType === "tracking"
+          ? { ...cursor, linkType: "trial", linkOffset: 0 }
+          : { ...cursor, phase: "users", linkType: null, linkOffset: 0 };
+      } else {
+        cursor = { ...cursor, linkOffset: cursor.linkOffset + pageLimit };
+      }
+      stats.trackingLinks = trackingLinkIds.size;
+      stats.trialLinks = trialLinkIds.size;
+      await persistCursor();
     }
+    return null;
   };
 
-  // Phase 1: collect link ids (tracking + trial).
-  const trackingLinkIds: string[] = [];
-  const trialLinkIds: string[] = [];
-  const collectIds = (target: string[]) => async (items: Record<string, unknown>[]) => {
-    for (const item of items) {
-      const id = idToString(asRecord(item)?.id ?? item.id);
-      if (id) {
-        target.push(id);
-      }
-    }
-  };
-
-  let block = await walk(
-    (offset) => client.listTrackingLinks!(requestContext, ofapiAccountId, {
-      limit: LINKS_PAGE_LIMIT,
-      offset,
-    }),
-    collectIds(trackingLinkIds),
-  );
-  if (block !== "completed") {
-    return budgetBlockResult(block, { ...stats });
+  stats.trackingLinks = trackingLinkIds.size;
+  stats.trialLinks = trialLinkIds.size;
+  const phaseOneBlock = await walkLinkPages();
+  if (phaseOneBlock !== null) {
+    return budgetBlockResult(phaseOneBlock, {
+      ...stats,
+      phase: cursor.phase,
+      linkType: cursor.linkType,
+      linkOffset: cursor.linkOffset,
+    });
   }
-  stats.trackingLinks = trackingLinkIds.length;
-
-  block = await walk(
-    (offset) => client.listTrialLinks!(requestContext, ofapiAccountId, {
-      limit: LINKS_PAGE_LIMIT,
-      offset,
-    }),
-    collectIds(trialLinkIds),
-  );
-  if (block !== "completed") {
-    return budgetBlockResult(block, { ...stats });
-  }
-  stats.trialLinks = trialLinkIds.length;
 
   // Phase 2: each link's users -> fans/page_fans.
   const consumeUsers = async (items: Record<string, unknown>[]) => {
@@ -286,9 +360,9 @@ export async function syncOfapiFanIdentities(
     for (const kind of ["subscribers", "spenders"] as const) {
       targets.push({
         key: `tracking:${linkId}:${kind}`,
-        fetchPage: (offset) =>
+        fetchPage: (offset, limit) =>
           client.listTrackingLinkUsers!(requestContext, ofapiAccountId, linkId, kind, {
-            limit: USERS_PAGE_LIMIT,
+            limit,
             offset,
           }),
       });
@@ -297,12 +371,24 @@ export async function syncOfapiFanIdentities(
   for (const linkId of trialLinkIds) {
     targets.push({
       key: `trial:${linkId}:subscribers`,
-      fetchPage: (offset) =>
+      fetchPage: (offset, limit) =>
         client.listTrialLinkSubscribers!(requestContext, ofapiAccountId, linkId, {
-          limit: USERS_PAGE_LIMIT,
+          limit,
           offset,
         }),
     });
+  }
+
+  // Resume the in-flight target before any newly discovered/incomplete one.
+  // Persisted ID arrays are sorted for deterministic checkpoints, so relying
+  // on Set iteration order here could let an earlier target clear the saved
+  // active offset and repurchase its prefix.
+  if (cursor.activeTargetKey !== null) {
+    const activeIndex = targets.findIndex((target) => target.key === cursor.activeTargetKey);
+    if (activeIndex > 0) {
+      const [activeTarget] = targets.splice(activeIndex, 1);
+      if (activeTarget) targets.unshift(activeTarget);
+    }
   }
 
   // A request can span several executor chunks. Persist both completed link
@@ -325,17 +411,18 @@ export async function syncOfapiFanIdentities(
           activeOffset: offset,
         });
       }
-      const page = await target.fetchPage(offset);
+      const pageLimit = USERS_PAGE_LIMIT;
+      const page = await target.fetchPage(offset, pageLimit);
       await guard.recordResponse(page);
       stats.requestsUsed += 1;
       await consumeUsers(page.items);
-      if (page.items.length < USERS_PAGE_LIMIT) {
+      if (page.items.length < pageLimit) {
         completedTargetKeys.add(target.key);
         cursor = { ...cursor, activeTargetKey: null, activeOffset: 0 };
         await persistCursor();
         break;
       }
-      offset += page.items.length;
+      offset += pageLimit;
       cursor = { ...cursor, activeTargetKey: target.key, activeOffset: offset };
       await persistCursor();
     }

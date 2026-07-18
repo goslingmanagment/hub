@@ -13,7 +13,6 @@ import {
 import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import { executeCaptureFirstInteractiveRead } from "./ofapi-capture-transport.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
-import { enqueueExplicitOfapiHistoryRepair } from "./ofapi-history-repair.ts";
 import { isOfapiDmReadthroughReconcileEnabled } from "./ofapi-dm-readthrough.ts";
 import { enqueueReadGatewayCapture } from "./ofapi-read-gateway-capture.ts";
 import { OfapiApiError } from "./ofapi.ts";
@@ -478,24 +477,6 @@ export async function executeOfapiReadGatewayRequest(
           certifiedHistoryMissReason: certified.reason,
           fallbackReason,
         }, "OFAPI certified history read missed");
-        if (fallbackReason === "stale_head" || fallbackReason === "no_certificate") {
-          try {
-            await enqueueExplicitOfapiHistoryRepair(app, {
-              pageId: page.id,
-              ofapiAccountId: request.accountId,
-              chatId: request.chatId!,
-              principalUserId: principal.user.id,
-              reason: fallbackReason,
-            });
-          } catch (error) {
-            app.logger.warn({
-              err: error,
-              pageId: page.id,
-              chatId: request.chatId,
-              fallbackReason,
-            }, "Failed to enqueue bounded OFAPI history repair");
-          }
-        }
       }
     }
   }
