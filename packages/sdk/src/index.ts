@@ -21,6 +21,7 @@ export {
 // cannot reach @agency_hub_core/contracts the way the dashboard does).
 export {
   decodeDomainEventCursor,
+  fetchVoiceNoteAudio,
   ofapiRead,
   routeSchemas,
   streamAiFeature,

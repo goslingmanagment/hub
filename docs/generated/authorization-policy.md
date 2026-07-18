@@ -21,7 +21,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `any` | any authenticated principal |
 
-## Routes (174)
+## Routes (177)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -177,6 +177,9 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/pages/:pageLabel/sync/blocks/messages` | `pageMessagesBlock` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/top-spenders` | `pageTopSpenders` | `any` | — | page |
 | GET | `/api/v1/pages/:pageLabel/transactions` | `pageTransactions` | `session` | — | page |
+| POST | `/api/v1/pages/:pageLabel/voice-notes` | `voiceNoteCreate` | `apiKey` | — | page |
+| GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page |
+| GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page |
 | GET | `/api/v1/pages/:pageLabel/workboard/v2` | `workboardV2` | `session` | — | page |
 | GET | `/api/v1/pages/:pageLabel/workboard/v2/ai` | `workboardV2Ai` | `owner-session` | — | page |
 | POST | `/api/v1/pages/:pageLabel/workboard/v2/ai/classify` | `workboardV2AiClassify` | `owner-session` | — | page |
