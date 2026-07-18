@@ -168,6 +168,19 @@ describe("voice-profiles service", () => {
     await expect(
       setVoiceProfile(app, page.label, { voiceId: "v", stability: "1.5" }),
     ).rejects.toThrow(/stability .* invalid/i);
+
+    // Object.prototype member names must NOT slip through the preset lookup: a
+    // bare `STABILITY_PRESETS[key]` walks the prototype chain, so "constructor"
+    // resolves to the inherited Object function and "__proto__" to the prototype
+    // object — each `!== undefined` — and (before the own-property guard) would
+    // be stored as a broken settings blob instead of raising BadRequest. The
+    // lookup lower-cases first, so "toString" arrives as "tostring" (which is not
+    // itself a prototype key, but is asserted for completeness).
+    for (const key of ["constructor", "__proto__", "tostring"]) {
+      await expect(
+        setVoiceProfile(app, page.label, { voiceId: "v", stability: key }),
+      ).rejects.toThrow(/stability .* invalid/i);
+    }
   });
 
   it("rejects an empty voice-id", async (context) => {

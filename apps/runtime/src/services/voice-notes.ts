@@ -579,10 +579,12 @@ export async function dispatchVoiceNote(
   // NON-platform vendor class (egressKey "vendor:elevenlabs"): dispatcher is
   // null and pace('interactive') is a 0 ms no-op, so the provider keeps its ONE
   // recorded raw fetch — we deliberately do NOT rewire its transport. Resolving
-  // it anyway is the point: the egress key becomes telemetry-visible and the
-  // resolver branch (plus its test) stops being dead code. Declared before the
-  // try so the finally can always close it; a resolve fault is caught like any
-  // other and leaves the row 'dispatched' for the lease sweep.
+  // it anyway keeps the seam symmetric (a page/proxy dispatcher WOULD need
+  // closing) and exercises the resolver branch; the resolved key is stamped onto
+  // this dispatch's diagnostic log points below, so WHICH egress identity carried
+  // a non-clean synthesis is telemetry-visible rather than inferred. Declared
+  // before the try so the finally can always close it; a resolve fault is caught
+  // like any other and leaves the row 'dispatched' for the lease sweep.
   let egress: AppEgressContext | undefined;
 
   try {
@@ -607,7 +609,12 @@ export async function dispatchVoiceNote(
       // production; this guards a provider that hands back an oversize buffer.
       if (result.audio.byteLength > VOICE_AUDIO_MAX_BYTES) {
         app.logger.warn(
-          { voiceNoteId: row.id, audioBytesLen: result.audio.byteLength, cap: VOICE_AUDIO_MAX_BYTES },
+          {
+            voiceNoteId: row.id,
+            egressKey: egress?.egressKey,
+            audioBytesLen: result.audio.byteLength,
+            cap: VOICE_AUDIO_MAX_BYTES,
+          },
           "voice note audio exceeds size cap; settling failed_after_dispatch (billed-unknown)",
         );
         await settleVoiceNoteTerminal(app.db, {
@@ -723,7 +730,7 @@ export async function dispatchVoiceNote(
     // 'dispatched' for the lease sweep to reclaim as 'indeterminate' — never
     // settle a verdict we cannot justify, and keep the estimate charged.
     app.logger.warn(
-      { voiceNoteId: row.id },
+      { voiceNoteId: row.id, egressKey: egress?.egressKey },
       "voice note synthesis indeterminate; leaving dispatched for the lease sweep",
     );
   } catch (error) {
@@ -737,7 +744,7 @@ export async function dispatchVoiceNote(
     // whose `params` (and message text) embed the bound SQL params — including
     // the up-to-2 MB audio BYTEA. Log only sanitized type/code/message.
     app.logger.error(
-      { voiceNoteId: row.id, error: describeErrorForLog(error) },
+      { voiceNoteId: row.id, egressKey: egress?.egressKey, error: describeErrorForLog(error) },
       "voice note dispatch failed unexpectedly",
     );
   } finally {

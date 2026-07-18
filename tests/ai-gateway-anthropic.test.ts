@@ -131,6 +131,43 @@ describe("Anthropic AI gateway request builder", () => {
   });
 });
 
+describe("voice-script adaptive max_tokens headroom", () => {
+  // Pins the 800→8000 headroom fix (ANTHROPIC_ADAPTIVE_MAX_TOKENS["voice-script"]).
+  // On an adaptive-thinking model the thinking budget counts against max_tokens,
+  // so voice-script needs the same ~10x room its peers get, or the script itself
+  // truncates (stopReason 'max_tokens') and the voice-notes admission guard
+  // rejects the source unrecoverably. A NON-adaptive model must keep the tight
+  // FEATURE_MAX_TOKENS=400 line-length cap. Reverting either constant flips a
+  // row here — the feature-integration tests use capturingProvider and never
+  // reach the Anthropic request builder, so this is the only guard on the value.
+  it.each([
+    { providerModelId: "claude-sonnet-4-6", reasoningEffort: "max" as const, expected: 8000 },
+    { providerModelId: "claude-opus-4-8", reasoningEffort: "off" as const, expected: 8000 },
+    { providerModelId: "claude-haiku-4-5", reasoningEffort: "off" as const, expected: 400 },
+    { providerModelId: "claude-sonnet-4-5", reasoningEffort: "max" as const, expected: 400 },
+  ])(
+    "voice-script on $providerModelId (effort $reasoningEffort) → max_tokens $expected",
+    ({ providerModelId, reasoningEffort, expected }) => {
+      const tuning = resolveAnthropicGatewayRequestTuning({
+        providerModelId,
+        feature: "voice-script",
+        temperature: 0.4,
+        reasoningEffort,
+      });
+      expect(tuning.maxTokens).toBe(expected);
+    },
+  );
+
+  it("ships the adaptive headroom as the built request's max_tokens for voice-script", () => {
+    const request = buildAnthropicGatewayStreamRequest(body({
+      feature: "voice-script",
+      model: "anthropic:claude-sonnet-4-6",
+      reasoningEffort: "max",
+    }));
+    expect(request.max_tokens).toBe(8000);
+  });
+});
+
 describe("Anthropic AI gateway usage normalization", () => {
   it("normalizes provider usage and preserves cache-write TTL breakdown for pricing", () => {
     const normalized = normalizeAnthropicGatewayUsage({

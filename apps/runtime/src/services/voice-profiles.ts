@@ -35,7 +35,13 @@ const STABILITY_PRESETS: Record<string, number> = {
  * is looked up case-insensitively; anything else is rejected with a clear message.
  */
 function resolveStability(raw: string): number {
-  const preset = STABILITY_PRESETS[raw.toLowerCase()];
+  // Own-property guard: STABILITY_PRESETS is a plain object, so a bare lookup
+  // walks the prototype chain — "constructor"/"toString" would return inherited
+  // functions and "__proto__" the prototype object, each `!== undefined`, so the
+  // value would be accepted (and later serialized to a broken `{}` /
+  // `{"stability":{}}`) instead of the BadRequest this function promises.
+  const key = raw.toLowerCase();
+  const preset = Object.hasOwn(STABILITY_PRESETS, key) ? STABILITY_PRESETS[key] : undefined;
   if (preset !== undefined) {
     return preset;
   }

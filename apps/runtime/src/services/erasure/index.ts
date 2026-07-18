@@ -654,12 +654,35 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
 
   // Voice-notes lane (0106): a fan's rendered audio + conversation_ref + a
   // source_generation_ref into an ai_generation_content row this same erasure
-  // deletes. Keyed EXACTLY like ai_generation_content above (page ∈ scope AND
-  // conversation_ref = fanRef). voice_notes has NO FK to `fans`, so the
-  // unmapped-FK guard cannot flag its omission — the delete must be explicit, or
-  // a fan erasure leaves up to 2 MiB of audio addressed to the erased fan behind
-  // (now dangling on a deleted source_generation_ref).
-  const voiceNotePred = sql`platform_account_id in ${scope.pageIds} and conversation_ref = ${ref}`;
+  // deletes. voice_notes has NO FK to `fans`, so the unmapped-FK guard cannot
+  // flag its omission — the delete must be explicit, or a fan erasure leaves up
+  // to 2 MiB of audio addressed to the erased fan behind (now dangling on a
+  // deleted source_generation_ref).
+  //
+  // conversation_ref is the fanRef on OnlyFans, but on Fansly the extension may
+  // fall back to the messaging GROUP id (item.groupId) — a DIFFERENT id space
+  // than the fan's partnerAccountId fanRef (recorded law A49 / decisions.md
+  // ~3570: Fansly conversationRef is the group id, the partner id travels
+  // separately). Matching conversation_ref = fanRef alone leaves those
+  // group-ref'd notes behind. Resolve the fan's group ids from page_dm_threads
+  // (the sync table linking groupId ↔ partnerAccountId ↔ fan) via the SAME
+  // linkage the thread target above uses, plus the partner-id column that
+  // carries the Fansly partnerAccountId, and scope voice notes to fanRef OR
+  // those group ids. Resolved NOW (build time) into a static id list: the
+  // page_dm_threads target above deletes those rows inside the tx BEFORE this
+  // target's run closure fires, so a live subquery would find nothing.
+  const fanGroupIdRows = await rows<{ group_id: string }>(app, sql`
+    select distinct t.platform_conversation_id as group_id
+    from page_dm_threads t
+    where (${threadPred}) or (t.platform_account_id in ${scope.pageIds}
+      and t.partner_platform_user_id = ${ref})`);
+  const fanGroupIds = fanGroupIdRows
+    .map((row) => row.group_id)
+    .filter((id): id is string => !!id && id !== ref);
+  const voiceNoteConvPred = fanGroupIds.length > 0
+    ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
+    : sql`conversation_ref = ${ref}`;
+  const voiceNotePred = sql`platform_account_id in ${scope.pageIds} and ${voiceNoteConvPred}`;
   targets.push({
     plane: "hot",
     target: "voice_notes",
