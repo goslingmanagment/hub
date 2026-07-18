@@ -25,7 +25,7 @@ export interface ParsedOfapiJsonBody {
 
 export function parseOfapiJsonBytes(bytes: Buffer): ParsedOfapiJsonBody {
   if (bytes.length === 0) {
-    return { validJson: true, body: null, creditsUsed: null, balanceAfter: null };
+    return { validJson: false, body: "", creditsUsed: null, balanceAfter: null };
   }
   const text = bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(bytes)) {

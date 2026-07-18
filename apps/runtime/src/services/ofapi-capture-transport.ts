@@ -4,12 +4,15 @@ import {
   captureOfapiAttemptResponse,
   completeOfapiInteractiveRequest,
   createOfapiInteractiveRequest,
+  listExpiredOfapiInteractiveResponseCaptures,
+  loadOfapiCaptureObservation,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
   reconcileOfapiCapturedAttemptCredit,
   releaseOfapiAttemptPreDispatch,
   reserveOfapiRequestAttempt,
   type OfapiHttpOutcome,
+  type OfapiParserOutcome,
 } from "@agency_hub_core/db";
 import type { Dispatcher } from "undici";
 
@@ -23,7 +26,14 @@ import {
   type OfapiGovernedRawResponse,
   type OfapiRawResponse,
 } from "./ofapi.ts";
-import { parseOfapiJsonBytes } from "./ofapi-capture-contract.ts";
+import {
+  capturePayloadResponse,
+  parseOfapiJsonBytes,
+  type ParsedOfapiJsonBody,
+} from "./ofapi-capture-contract.ts";
+import {
+  materializeOfapiCaptureObservation,
+} from "./ofapi-capture-materialization.ts";
 
 const DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET = 7_000;
 const DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP = 4_000;
@@ -41,6 +51,16 @@ function httpOutcome(status: number): OfapiHttpOutcome {
   if (status >= 500) return "vendor_5xx";
   if (status === 400 || status === 409 || status === 422) return "request_rejected";
   return "unexpected_http";
+}
+
+function interactiveParserOutcome(
+  status: number,
+  parsed: ParsedOfapiJsonBody,
+): OfapiParserOutcome {
+  const successfulHttp = status >= 200 && status < 300;
+  return parsed.validJson || !successfulHttp
+    ? parsed.validJson ? "accepted" : "intentional_noop"
+    : "contract_rejected";
 }
 
 function denialError(reason: string) {
@@ -238,10 +258,7 @@ export async function executeCaptureFirstInteractiveRead(
     });
   }
 
-  const successfulHttp = raw.status >= 200 && raw.status < 300;
-  const parserOutcome = parsed.validJson || !successfulHttp
-    ? parsed.validJson ? "accepted" as const : "intentional_noop" as const
-    : "contract_rejected" as const;
+  const parserOutcome = interactiveParserOutcome(raw.status, parsed);
   const completed = await completeOfapiInteractiveRequest(app.db, {
     requestId: owner.id,
     attemptId: reservation.attemptId,
@@ -258,4 +275,97 @@ export async function executeCaptureFirstInteractiveRead(
     body: parsed.body,
     headers: raw.headers,
   };
+}
+
+export interface OfapiInteractiveResponseRecoveryResult {
+  scanned: number;
+  terminalized: number;
+  materialized: number;
+  raced: number;
+  unavailable: number;
+  errors: number;
+}
+
+/**
+ * Finishes expired capture-first interactive owners from their immutable raw
+ * observation. The intentionally narrow app type makes vendor egress
+ * structurally unavailable to this recovery path.
+ */
+export async function recoverExpiredOfapiInteractiveResponses(
+  app: Pick<AppContext, "db" | "logger">,
+  input?: { now?: Date; limit?: number },
+): Promise<OfapiInteractiveResponseRecoveryResult> {
+  const now = input?.now ?? new Date();
+  const candidates = await listExpiredOfapiInteractiveResponseCaptures(app.db, {
+    now,
+    ...(input?.limit === undefined ? {} : { limit: input.limit }),
+  });
+  const result: OfapiInteractiveResponseRecoveryResult = {
+    scanned: candidates.length,
+    terminalized: 0,
+    materialized: 0,
+    raced: 0,
+    unavailable: 0,
+    errors: 0,
+  };
+
+  for (const candidate of candidates) {
+    const observation = await loadOfapiCaptureObservation(app.db, {
+      observationId: candidate.observationId,
+      observationReceivedAt: candidate.observationReceivedAt,
+    });
+    if (!observation || observation.attemptId !== candidate.attemptId) {
+      result.unavailable += 1;
+      continue;
+    }
+    const captured = capturePayloadResponse(observation.payload);
+    const parsed = captured === null
+      ? { validJson: false, body: null, creditsUsed: null, balanceAfter: null }
+      : parseOfapiJsonBytes(captured.bodyBytes);
+    try {
+      if (parsed.creditsUsed !== null) {
+        await reconcileOfapiCapturedAttemptCredit(app.db, {
+          attemptId: candidate.attemptId,
+          actualCredits: parsed.creditsUsed,
+          balanceAfter: parsed.balanceAfter,
+          now,
+        });
+      }
+    } catch (error) {
+      result.errors += 1;
+      app.logger.error(
+        { error, attemptId: candidate.attemptId },
+        "Failed to reconcile recovered OFAPI interactive response credits",
+      );
+      continue;
+    }
+
+    try {
+      const materialized = await materializeOfapiCaptureObservation(app, observation);
+      if (materialized.kind === "materialized") result.materialized += 1;
+    } catch (error) {
+      // The raw observation remains replayable by the normal materialization
+      // sweep; delivery ownership can still be terminalized independently.
+      result.errors += 1;
+      app.logger.error(
+        { error, observationId: observation.id },
+        "Recovered OFAPI interactive response materialization remains replayable",
+      );
+    }
+
+    const parserOutcome = captured === null
+      ? "failed"
+      : interactiveParserOutcome(captured.status, parsed);
+    const completed = await completeOfapiInteractiveRequest(app.db, {
+      requestId: candidate.requestId,
+      attemptId: candidate.attemptId,
+      outcome: "failed",
+      parserOutcome,
+      errorCode: "response_delivery_interrupted",
+      now,
+    });
+    if (completed) result.terminalized += 1;
+    else result.raced += 1;
+  }
+  return result;
 }

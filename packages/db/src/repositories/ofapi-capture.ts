@@ -25,6 +25,7 @@ export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v2";
 export const OFAPI_CAPTURE_PROOF_POLICY_VERSION = "ofapi-proof-v1";
 export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v2";
 export const OFAPI_STORAGE_HEALTH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+export const OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS = 30_000;
 
 const OFAPI_STORAGE_HEALTH_RETRY_MS = 5 * 60 * 1000;
 const OFAPI_BUDGET_RECHECK_MS = 15 * 60 * 1000;
@@ -616,12 +617,16 @@ export async function loadOfapiCaptureObservation(
     id: string;
     received_at: Date | string;
     kind: string;
+    producer: string;
+    account_id: unknown;
     payload: unknown;
     attempt_id: string | null;
   }>(sql`
     select observation.id::text as id,
            observation.received_at,
            observation.kind,
+           observation.producer,
+           observation.account_id,
            observation.payload,
            attempt.id::text as attempt_id
     from observations observation
@@ -638,10 +643,78 @@ export async function loadOfapiCaptureObservation(
       id: Number(row.id),
       receivedAt: new Date(row.received_at),
       kind: row.kind,
+      producer: row.producer,
+      accountId: asNullableNumber(row.account_id, "observation.account_id"),
       payload: row.payload,
       attemptId: row.attempt_id,
     }
     : null;
+}
+
+export interface ExpiredOfapiInteractiveResponseCapture {
+  requestId: string;
+  attemptId: string;
+  observationId: number;
+  observationReceivedAt: Date;
+  deadlineAt: Date;
+  responseCapturedAt: Date;
+}
+
+/**
+ * Returns only locally recoverable interactive responses whose client deadline
+ * and grace period have elapsed. The linked observation is immutable; callers
+ * may safely race because terminalization still uses a conditional owner CAS.
+ */
+export async function listExpiredOfapiInteractiveResponseCaptures(
+  db: Database,
+  input?: { now?: Date; limit?: number },
+): Promise<ExpiredOfapiInteractiveResponseCapture[]> {
+  const now = input?.now ?? new Date();
+  const eligibleBefore = new Date(
+    now.getTime() - OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
+  );
+  const limit = Math.max(1, Math.min(1_000, Math.trunc(input?.limit ?? 100)));
+  const result = await db.execute<{
+    request_id: string;
+    attempt_id: string;
+    observation_id: unknown;
+    observation_received_at: Date | string;
+    deadline_at: Date | string;
+    response_captured_at: Date | string;
+  }>(sql`
+    select request.id::text as request_id,
+           attempt.id::text as attempt_id,
+           attempt.response_observation_id as observation_id,
+           attempt.response_observation_received_at as observation_received_at,
+           attempt.deadline_at,
+           attempt.response_captured_at
+    from ofapi_interactive_requests request
+    join ofapi_request_attempts attempt
+      on attempt.interactive_request_id = request.id
+     and attempt.owner_kind = 'interactive_request'
+    where request.state = 'response_captured'
+      and attempt.state = 'response_captured'
+      and attempt.parser_outcome = 'pending'
+      and attempt.deadline_at <= ${eligibleBefore}
+      and request.response_observation_id = attempt.response_observation_id
+      and request.response_observation_received_at = attempt.response_observation_received_at
+    order by attempt.deadline_at, attempt.id
+    limit ${limit}
+  `);
+  return result.rows.map((row) => ({
+    requestId: row.request_id,
+    attemptId: row.attempt_id,
+    observationId: asNumber(row.observation_id, "interactive_recovery.observation_id"),
+    observationReceivedAt: asDate(
+      row.observation_received_at,
+      "interactive_recovery.observation_received_at",
+    ),
+    deadlineAt: asDate(row.deadline_at, "interactive_recovery.deadline_at"),
+    responseCapturedAt: asDate(
+      row.response_captured_at,
+      "interactive_recovery.response_captured_at",
+    ),
+  }));
 }
 
 export type OfapiBudgetDenialReason =
@@ -2655,14 +2728,31 @@ export async function completeOfapiInteractiveRequest(
 ) {
   const now = input.now ?? new Date();
   const result = await db.execute<{ id: string }>(sql`
-    with attempt as (
-      update ofapi_request_attempts
+    with eligible as materialized (
+      select request.id as request_id,
+             attempt.id as attempt_id,
+             attempt.response_observation_id,
+             attempt.response_observation_received_at
+      from ofapi_interactive_requests request
+      join ofapi_request_attempts attempt
+        on attempt.interactive_request_id = request.id
+      where request.id = ${input.requestId}::uuid
+        and request.state = 'response_captured'
+        and attempt.id = ${input.attemptId}::uuid
+        and attempt.state = 'response_captured'
+        and attempt.parser_outcome = 'pending'
+        and request.response_observation_id = attempt.response_observation_id
+        and request.response_observation_received_at = attempt.response_observation_received_at
+      for update of request, attempt
+    ), attempt as (
+      update ofapi_request_attempts target
       set parser_outcome = ${input.parserOutcome},
           updated_at = ${now}
-      where id = ${input.attemptId}::uuid
-        and interactive_request_id = ${input.requestId}::uuid
-        and state = 'response_captured'
-      returning response_observation_id, response_observation_received_at
+      from eligible
+      where target.id = eligible.attempt_id
+      returning eligible.request_id,
+                eligible.response_observation_id,
+                eligible.response_observation_received_at
     )
     update ofapi_interactive_requests request
     set state = ${input.outcome},
@@ -2671,8 +2761,7 @@ export async function completeOfapiInteractiveRequest(
         row_version = row_version + 1,
         updated_at = ${now}
     from attempt
-    where request.id = ${input.requestId}::uuid
-      and request.state = 'response_captured'
+    where request.id = attempt.request_id
       and request.response_observation_id = attempt.response_observation_id
       and request.response_observation_received_at = attempt.response_observation_received_at
     returning request.id::text as id
@@ -3425,14 +3514,26 @@ export async function getOfapiCaptureOperatorAttempt(db: Database, attemptId: st
 
 export async function getOfapiCaptureOperatorStatus(
   db: Database,
-  input?: { jobSampleLimit?: number; attemptSampleLimit?: number },
+  input?: { jobSampleLimit?: number; attemptSampleLimit?: number; now?: Date },
 ) {
+  const now = input?.now ?? new Date();
+  const interactiveRecoveryEligibleBefore = new Date(
+    now.getTime() - OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
+  );
   const jobSampleLimit = Math.max(1, Math.min(50, Math.trunc(input?.jobSampleLimit ?? 20)));
   const attemptSampleLimit = Math.max(
     1,
     Math.min(20, Math.trunc(input?.attemptSampleLimit ?? 10)),
   );
-  const [controls, jobGroups, jobSamples, indeterminateSummary, attempts, storage] =
+  const [
+    controls,
+    jobGroups,
+    jobSamples,
+    indeterminateSummary,
+    attempts,
+    strandedInteractiveSummary,
+    storage,
+  ] =
     await Promise.all([
       db.execute<Record<string, unknown>>(sql`
         select control_key, paused, reason, version, updated_at
@@ -3469,12 +3570,27 @@ export async function getOfapiCaptureOperatorStatus(
         limit ${attemptSampleLimit}
       `),
       db.execute<Record<string, unknown>>(sql`
+        select count(*)::bigint as count,
+               min(attempt.response_captured_at) as oldest_at
+        from ofapi_interactive_requests request
+        join ofapi_request_attempts attempt
+          on attempt.interactive_request_id = request.id
+         and attempt.owner_kind = 'interactive_request'
+        where request.state = 'response_captured'
+          and attempt.state = 'response_captured'
+          and attempt.parser_outcome = 'pending'
+          and attempt.deadline_at <= ${interactiveRecoveryEligibleBefore}
+          and request.response_observation_id = attempt.response_observation_id
+          and request.response_observation_received_at = attempt.response_observation_received_at
+      `),
+      db.execute<Record<string, unknown>>(sql`
         select healthy, breached, checked_at, used_bytes, free_bytes, total_bytes, error
         from ofapi_storage_health_state
         where id = 1
       `),
     ]);
   const summary = indeterminateSummary.rows[0];
+  const strandedSummary = strandedInteractiveSummary.rows[0];
   const storageRow = storage.rows[0];
   return {
     controls: controls.rows.map((row) => ({
@@ -3505,6 +3621,14 @@ export async function getOfapiCaptureOperatorStatus(
         ? asNullableDate(summary.oldest_at, "indeterminate.oldest_at")
         : null,
       samples: attempts.rows.map(mapOperatorAttempt),
+    },
+    strandedInteractive: {
+      count: strandedSummary
+        ? asNumber(strandedSummary.count, "stranded_interactive.count")
+        : 0,
+      oldestAt: strandedSummary
+        ? asNullableDate(strandedSummary.oldest_at, "stranded_interactive.oldest_at")
+        : null,
     },
     storageHealth: storageRow
       ? {

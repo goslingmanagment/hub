@@ -3692,6 +3692,10 @@ export const ofapiCaptureOperatorStatusResponseSchema = z.object({
     oldestAt: isoTimestamp.nullable(),
     samples: z.array(ofapiCaptureOperatorAttemptSchema),
   }),
+  strandedInteractive: z.object({
+    count: z.number().int().nonnegative(),
+    oldestAt: isoTimestamp.nullable(),
+  }),
   storageHealth: z.object({
     healthy: z.boolean(),
     breached: z.boolean(),

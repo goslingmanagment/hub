@@ -83,6 +83,10 @@ export async function getOwnerOfapiCaptureOperatorStatus(
       oldestAt: status.indeterminate.oldestAt?.toISOString() ?? null,
       samples: status.indeterminate.samples.map(serializeAttempt),
     },
+    strandedInteractive: {
+      count: status.strandedInteractive.count,
+      oldestAt: status.strandedInteractive.oldestAt?.toISOString() ?? null,
+    },
     storageHealth: status.storageHealth === null
       ? null
       : {

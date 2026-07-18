@@ -1022,6 +1022,43 @@ describe("OFAPI read gateway integration", () => {
     }]);
   });
 
+  it("capture-first rejects an empty 2xx body instead of accepting JSON null", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+       set last_balance = excluded.last_balance,
+           last_balance_at = excluded.last_balance_at`,
+    );
+    scriptedResponses.push({ status: 200, rawBody: Buffer.alloc(0) });
+
+    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+
+    expect(response.statusCode, response.body).toBe(503);
+    expect(upstreamRequests).toHaveLength(1);
+    const attempt = await testDb!.pool.query<{
+      request_state: string;
+      parser_outcome: string;
+      raw_body: string;
+    }>(
+      `select request.state as request_state,
+              attempt.parser_outcome,
+              observation.payload #>> '{response,body}' as raw_body
+       from ofapi_interactive_requests request
+       join ofapi_request_attempts attempt
+         on attempt.interactive_request_id = request.id
+       join observations observation
+         on observation.id = attempt.response_observation_id
+        and observation.received_at = attempt.response_observation_received_at`,
+    );
+    expect(attempt.rows).toEqual([{
+      request_state: "failed",
+      parser_outcome: "contract_rejected",
+      raw_body: "",
+    }]);
+  });
+
   it("fails open when the tee queue is full: serves 200, counts drops, raises the incident (Stage 9)", async () => {
     configureReadGatewayCaptureForTests({ queueCap: 0, dropIncidentThreshold: 1 });
     scriptedResponses.push({

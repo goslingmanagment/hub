@@ -22,6 +22,7 @@ import {
   listRunnableOfapiCapturePages,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
+  OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
   OFAPI_CAPTURE_PARSER_VERSION,
   OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION,
   releaseOfapiAttemptPreDispatch,
@@ -42,6 +43,9 @@ import {
   OFAPI_CAPTURE_MATERIALIZER_VERSION,
   runOfapiCaptureMaterialization,
 } from "../apps/runtime/src/services/ofapi-capture-materialization.ts";
+import {
+  recoverExpiredOfapiInteractiveResponses,
+} from "../apps/runtime/src/services/ofapi-capture-transport.ts";
 import { OfapiGovernedRequestError } from "../apps/runtime/src/services/ofapi.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
@@ -2197,6 +2201,109 @@ describe("OFAPI capture correctness repository", () => {
     const status = await getOfapiCaptureOperatorStatus(testDb.db);
     expect(status.indeterminate.count).toBe(1);
     expect(status.indeterminate.samples[0]?.attemptId).toBe(dispatched.reservation.attemptId);
+  });
+
+  it("locally finalizes an expired captured interactive response without vendor egress", async () => {
+    if (!testDb) return;
+    const crashed = await createAndReserveInteractive();
+    if (!crashed.reservation.admitted) throw new Error("interactive reservation denied");
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId: crashed.reservation.attemptId,
+      fenceToken: crashed.reservation.fenceToken,
+      now: new Date(NOW.getTime() + 1_000),
+    })).toBe(true);
+    const captured = await captureOfapiAttemptResponse(testDb.db, {
+      attemptId: crashed.reservation.attemptId,
+      fenceToken: crashed.reservation.fenceToken,
+      responseObservedAt: new Date(NOW.getTime() + 2_000),
+      httpStatus: 200,
+      httpOutcome: "success",
+      responseHeaders: { "content-type": "application/json" },
+      bodyBytes: messagePage({ nextPage: null, creditsUsed: 2 }),
+      request: {
+        method: "GET",
+        pathname: "/v2/chats/42/messages",
+        query: { limit: "20" },
+      },
+      producer: "ofapi-mirror-interactive",
+      observationKind: "ofapi.interactive_response.v1",
+      now: new Date(NOW.getTime() + 3_000),
+    });
+    const dispatchGovernedRaw = vi.fn();
+    const app = createTestAppContext(testDb, {
+      ofapi: { dispatchGovernedRaw } as never,
+    });
+    const deadlineAt = new Date(NOW.getTime() + 60_000);
+    const beforeGrace = new Date(
+      deadlineAt.getTime() + OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS - 1,
+    );
+    const eligibleAt = new Date(
+      deadlineAt.getTime() + OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
+    );
+
+    expect(await recoverExpiredOfapiInteractiveResponses(app, { now: beforeGrace })).toEqual({
+      scanned: 0,
+      terminalized: 0,
+      materialized: 0,
+      raced: 0,
+      unavailable: 0,
+      errors: 0,
+    });
+    expect((await getOfapiCaptureOperatorStatus(testDb.db, { now: beforeGrace }))
+      .strandedInteractive).toEqual({ count: 0, oldestAt: null });
+    expect((await getOfapiCaptureOperatorStatus(testDb.db, { now: eligibleAt }))
+      .strandedInteractive).toMatchObject({
+        count: 1,
+        oldestAt: new Date(NOW.getTime() + 3_000),
+      });
+
+    expect(await recoverExpiredOfapiInteractiveResponses(app, { now: eligibleAt })).toEqual({
+      scanned: 1,
+      terminalized: 1,
+      materialized: 1,
+      raced: 0,
+      unavailable: 0,
+      errors: 0,
+    });
+    expect(dispatchGovernedRaw).not.toHaveBeenCalled();
+    expect(await getOfapiRequestAttempt(testDb.db, crashed.reservation.attemptId)).toMatchObject({
+      parser_outcome: "accepted",
+      settled_credits: 2,
+      credit_estimated: false,
+    });
+    const owner = await testDb.pool.query<{
+      state: string;
+      error_code: string;
+    }>(`
+      select state, error_code
+      from ofapi_interactive_requests
+      where id = $1
+    `, [crashed.request.id]);
+    expect(owner.rows).toEqual([{
+      state: "failed",
+      error_code: "response_delivery_interrupted",
+    }]);
+    const observation = await testDb.pool.query<{ parse_version: number }>(`
+      select parse_version from observations where id = $1 and received_at = $2
+    `, [captured.observationId, captured.receivedAt]);
+    expect(observation.rows[0]?.parse_version).toBe(OFAPI_CAPTURE_MATERIALIZER_VERSION);
+    const material = await testDb.pool.query<{ n: string }>(`
+      select count(*)::text as n
+      from domain_events
+      where account_id = $1 and type = 'message.material_observed'
+    `, [crashed.page.id]);
+    expect(material.rows[0]?.n).toBe("2");
+    expect((await getOfapiCaptureOperatorStatus(testDb.db, { now: eligibleAt }))
+      .strandedInteractive).toEqual({ count: 0, oldestAt: null });
+    expect(await recoverExpiredOfapiInteractiveResponses(app, { now: eligibleAt })).toEqual({
+      scanned: 0,
+      terminalized: 0,
+      materialized: 0,
+      raced: 0,
+      unavailable: 0,
+      errors: 0,
+    });
+    expect(dispatchGovernedRaw).not.toHaveBeenCalled();
   });
 
   it("releases a crashed floor probe without globally pinning live admission", async () => {
