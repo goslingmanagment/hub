@@ -36,6 +36,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { AppError, NotFoundError } from "./errors.ts";
+import { VOICE_AUDIO_MAX_BYTES } from "./voice-elevenlabs-provider.ts";
 import {
   canonicalizeVoiceScript,
   computeVoiceRequestHash,
@@ -45,8 +46,10 @@ import {
 } from "./voice-script-validation.ts";
 
 // The subset of the app context the service reads. `voiceTtsProvider` is
-// present only when BOTH boot kill-gates were on at startup; the presence check
-// below is deliberately separate from the live `voiceNotesEnabled` flag.
+// present whenever ELEVENLABS_API_KEY was configured at boot; the presence
+// check below is deliberately separate from the live `voiceNotesEnabled` flag
+// (the flag is the spend gate; the provider's presence is the key-configured
+// gate).
 type VoiceNotesApp = Pick<AppContext, "db" | "config" | "logger" | "voiceTtsProvider">;
 
 /** Single-dispatch lease: matches the sweep's reclaim window. */
@@ -90,12 +93,14 @@ export class VoiceDisabledError extends AppError {
   }
 }
 
-/** Task 4 operator trap: the live flag is on but the provider was never built. */
+/** Operator trap: the live flag is on but no ELEVENLABS_API_KEY was configured,
+ * so the provider was never built. Distinct from voice_disabled (403). */
 export class VoiceProviderUnavailableError extends AppError {
   constructor() {
     super(
-      "Voice notes are enabled but the TTS provider was not constructed at boot; "
-        + "a runtime restart is required before syntheses can run",
+      "Voice notes are enabled but ELEVENLABS_API_KEY is not configured, so the TTS "
+        + "provider was not constructed; set the key and restart the runtime before "
+        + "syntheses can run",
       503,
       "voice_provider_unavailable",
     );
@@ -202,7 +207,7 @@ export async function createVoiceNote(
     if (existing.requestHash !== requestHash) {
       throw new VoiceIdempotencyMismatchError();
     }
-    return toStatusView(existing);
+    return replayTerminalOrView(existing);
   }
 
   // (2) Fresh admission, in order.
@@ -210,9 +215,9 @@ export async function createVoiceNote(
   if (effective.voiceNotesEnabled !== true) {
     throw new VoiceDisabledError();
   }
-  // Distinct from the flag: the provider is constructed at boot only. A live
-  // flag flip with no provider is an actionable "restart required", not a
-  // generic "disabled".
+  // Distinct from the flag: the provider is built at boot iff ELEVENLABS_API_KEY
+  // is configured. Enabled-but-no-provider means the key is unset — an
+  // actionable 503 ("configure the key and restart"), not a generic "disabled".
   if (!app.voiceTtsProvider) {
     throw new VoiceProviderUnavailableError();
   }
@@ -242,6 +247,19 @@ export async function createVoiceNote(
     || (source.generation.params as { outcome?: unknown }).outcome !== "completed"
   ) {
     throw new VoiceSourceInvalidError();
+  }
+  // A "completed" outcome is NOT proof the script is whole: the gateway records
+  // outcome="completed" even when the model hit its token ceiling, leaving the
+  // truncation only in params.stopReason ("max_tokens" for Anthropic, "length"
+  // for OpenRouter/OpenAI). Synthesizing a truncated prefix bills ElevenLabs for
+  // a cut-off take, so reject it before admission. Name the reason, never the
+  // script text.
+  const stopReason = (source.generation.params as { stopReason?: unknown }).stopReason;
+  if (stopReason === "max_tokens" || stopReason === "length") {
+    throw new VoiceSourceInvalidError(
+      `The source voice-script generation was truncated (stopReason "${stopReason}"); `
+        + "regenerate a complete script before synthesis",
+    );
   }
   const originalScriptSha256 = sha256Hex(canonicalizeVoiceScript(source.generation.completion));
   const finalScriptSha256 = sha256Hex(canonicalScript);
@@ -435,7 +453,21 @@ async function replayConcurrentWinner(
   if (other.requestHash !== requestHash) {
     throw new VoiceIdempotencyMismatchError();
   }
-  return toStatusView(other);
+  return replayTerminalOrView(other);
+}
+
+/**
+ * Replay projection with ONE deliberate exception: a `quota_denied` row
+ * re-throws its 429 rather than returning a 202 view. A denied reservation is a
+ * hard refusal; surfacing it as a pollable 202 would trap a correct idempotent
+ * client on a row that never advances. Same clientRequestId ⇒ same 429 on every
+ * call — a fresh attempt needs a fresh clientRequestId.
+ */
+function replayTerminalOrView(row: VoiceNoteRow): VoiceNoteStatusView {
+  if (row.state === "quota_denied") {
+    throw new VoiceQuotaDeniedError();
+  }
+  return toStatusView(row);
 }
 
 // Control characters (U+0000–U+001F, U+007F) are rejected before a request ever
@@ -501,6 +533,33 @@ async function dispatchVoiceNote(
     });
 
     if (result.ok) {
+      // Size fence BEFORE the terminal settle: the `voice_notes_audio_cap` CHECK
+      // rejects audio_bytes_len > 2 MiB, so writing oversize bytes would throw
+      // inside settleVoiceNoteTerminal, leave the row 'dispatched', and defer to
+      // the sweep as 'indeterminate' — with the vendor ALREADY billed. Settle it
+      // deterministically as failed_after_dispatch (billed-unknown, estimate
+      // kept charged) instead. The provider refuses oversize before this in
+      // production; this guards a provider that hands back an oversize buffer.
+      if (result.audio.byteLength > VOICE_AUDIO_MAX_BYTES) {
+        app.logger.warn(
+          { voiceNoteId: row.id, audioBytesLen: result.audio.byteLength, cap: VOICE_AUDIO_MAX_BYTES },
+          "voice note audio exceeds size cap; settling failed_after_dispatch (billed-unknown)",
+        );
+        await settleVoiceNoteTerminal(app.db, {
+          id: row.id,
+          attemptToken: input.attemptToken,
+          state: "failed_after_dispatch",
+          billedChars: null,
+          providerRequestId: null,
+          providerTraceId: null,
+          providerRegion: null,
+          audioBytes: null,
+          audioSha256: null,
+          audioBytesLen: null,
+          durationMs: Date.now() - startedAt,
+        });
+        return;
+      }
       const audioSha256 = sha256Hex(result.audio);
       const billedChars = result.characterCost != null
         ? Math.max(0, Math.round(result.characterCost))

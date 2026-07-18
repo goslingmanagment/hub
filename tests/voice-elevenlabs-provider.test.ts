@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createElevenLabsVoiceProvider,
+  VOICE_AUDIO_MAX_BYTES,
   type VoiceTtsProvider,
 } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 
@@ -137,6 +138,70 @@ describe("ElevenLabs voice provider", () => {
       }
     },
   );
+
+  it("refuses an oversize body advertised via content-length WITHOUT buffering it", async () => {
+    // A huge content-length header must short-circuit BEFORE arrayBuffer() — we
+    // never allocate the megabytes. Prove it by making the body read explode: a
+    // pre-buffer guard returns the size-cap failure, a post-buffer one would throw.
+    const exploding = {
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": String(VOICE_AUDIO_MAX_BYTES + 1) }),
+      body: { cancel: async () => {} },
+      arrayBuffer: async () => {
+        throw new Error("body was buffered despite an over-cap content-length");
+      },
+    } as unknown as Response;
+    const fetchImpl = vi.fn(async () => exploding);
+    const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
+
+    const result = await provider.synthesize(synthInput());
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.refusedBeforeBilling).toBe(false); // possibly billed → indeterminate-ish
+      expect(result.status).toBe(200); // keeps its HTTP status
+      expect(result.snippet).toBe("audio exceeds size cap");
+    }
+  });
+
+  it("refuses an oversize buffered body when no content-length is advertised", async () => {
+    // No content-length header: buffer, then measure. An over-cap buffer is a
+    // definite non-refused failure — never returned as ok:true audio. A stream
+    // body carries no content-length, so this exercises the post-buffer guard.
+    const bytes = new Uint8Array(VOICE_AUDIO_MAX_BYTES + 1);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(stream, { status: 200 }));
+    const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
+
+    const result = await provider.synthesize(synthInput());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.refusedBeforeBilling).toBe(false);
+      expect(result.status).toBe(200);
+      expect(result.snippet).toBe("audio exceeds size cap");
+    }
+  });
+
+  it("accepts a body exactly at the size cap", async () => {
+    const bytes = new Uint8Array(VOICE_AUDIO_MAX_BYTES);
+    const fetchImpl = vi.fn(async () => new Response(bytes, { status: 200 }));
+    const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
+
+    const result = await provider.synthesize(synthInput());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.audio.byteLength).toBe(VOICE_AUDIO_MAX_BYTES);
+    }
+  });
 
   it("treats HTTP 500 as NOT refused (indeterminate) and never leaks the 5xx body", async () => {
     const fetchImpl = vi.fn(

@@ -117,6 +117,31 @@ describe("voice-profiles service", () => {
     await expect(removeVoiceProfile(app, page.label)).resolves.toBeUndefined();
   });
 
+  it("rejects a non-MP3 output-format (the audio route is audio/mpeg-only)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const app = { db: testDb.db };
+    const page = await createFanslyVoicePage(testDb, "voice-format");
+
+    // A valid ElevenLabs PCM format is still refused — the download route serves
+    // audio/mpeg with nosniff, so only MP3 formats may be pinned.
+    await expect(
+      setVoiceProfile(app, page.label, { voiceId: "voice-1", outputFormat: "pcm_44100" }),
+    ).rejects.toThrow(/mp3|not supported/i);
+    // Nothing was persisted.
+    expect(await showVoiceProfile(app, page.label)).toBeNull();
+
+    // Every allowlisted MP3 format is accepted.
+    const first = await setVoiceProfile(app, page.label, {
+      voiceId: "voice-1",
+      outputFormat: "mp3_44100_192",
+    });
+    expect(first.version).toBe(1);
+    expect((await showVoiceProfile(app, page.label))?.outputFormat).toBe("mp3_44100_192");
+  });
+
   it("rejects an empty voice-id", async (context) => {
     if (!testDb) {
       context.skip();

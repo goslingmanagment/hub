@@ -16,7 +16,10 @@ import {
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import type { AuthPrincipal } from "../apps/runtime/src/services/auth.ts";
-import type { VoiceTtsProvider } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
+import {
+  VOICE_AUDIO_MAX_BYTES,
+  type VoiceTtsProvider,
+} from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 import {
   createVoiceNote,
   getVoiceNoteAudio,
@@ -124,6 +127,7 @@ async function provision(opts?: {
   withProfile?: boolean;
   sourceOutcome?: string;
   sourceFeature?: string;
+  sourceStopReason?: string;
   provider?: VoiceTtsProvider;
 }): Promise<Provisioned> {
   const model = await createModel(appContext.db, { slug: "voice", name: "Voice" });
@@ -163,7 +167,10 @@ async function provision(opts?: {
     conversationRef: CONVERSATION_REF,
     promptBlocks: [],
     completion: opts?.script ?? SCRIPT,
-    params: { outcome: opts?.sourceOutcome ?? "completed" },
+    params: {
+      outcome: opts?.sourceOutcome ?? "completed",
+      ...(opts?.sourceStopReason !== undefined ? { stopReason: opts.sourceStopReason } : {}),
+    },
   });
 
   const principal: AuthPrincipal = {
@@ -337,14 +344,16 @@ describe("voice-notes service: admission gates", () => {
   it("distinguishes provider-absent (503) from disabled (403)", async (ctx) => {
     if (!testDb) return ctx.skip();
 
-    // Flag on, provider never constructed at boot → distinct restart-required error.
+    // Flag on, provider never built (no ELEVENLABS_API_KEY) → distinct
+    // key-required error that names the key and the restart hint.
     const absent = await provision({ enabled: true });
     await expect(
       createVoiceNote(appContext, absent.principal, absent.page.label, absent.body()),
     ).rejects.toMatchObject({ code: "voice_provider_unavailable", statusCode: 503 });
     const providerErr = await createVoiceNote(appContext, absent.principal, absent.page.label, absent.body())
       .catch((e) => e);
-    expect(String(providerErr.message)).toMatch(/boot|restart/i);
+    expect(String(providerErr.message)).toMatch(/ELEVENLABS_API_KEY/);
+    expect(String(providerErr.message)).toMatch(/restart/i);
 
     // Flag off → generic disabled, even with a provider present.
     appContext.config.voiceNotesEnabled = false;
@@ -408,6 +417,37 @@ describe("voice-notes service: admission gates", () => {
     ).rejects.toMatchObject({ code: "voice_source_invalid" });
   });
 
+  it("rejects a truncated source generation (stopReason max_tokens/length) as voice_source_invalid", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(12));
+
+    // Anthropic-style token-ceiling truncation: outcome is "completed" but the
+    // script is a cut-off prefix. Must never reach paid synthesis.
+    const maxTokens = await provision({ provider, sourceStopReason: "max_tokens" });
+    const err = await createVoiceNote(
+      appContext, maxTokens.principal, maxTokens.page.label, maxTokens.body(),
+    ).catch((e) => e);
+    expect(err).toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
+    expect(String(err.message)).toMatch(/truncat/i);
+    expect(String(err.message)).not.toContain(SCRIPT); // never echoes the script
+    expect(state.calls).toBe(0);
+
+    // OpenRouter/OpenAI-style length truncation is rejected the same way.
+    await resetIntegrationDatabase(testDb.pool);
+    appContext = createTestAppContext(testDb);
+    const length = await provision({ provider, sourceStopReason: "length" });
+    await expect(
+      createVoiceNote(appContext, length.principal, length.page.label, length.body()),
+    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
+
+    // A normal terminal stopReason still admits.
+    await resetIntegrationDatabase(testDb.pool);
+    appContext = createTestAppContext(testDb);
+    const okStop = await provision({ provider, sourceStopReason: "end_turn" });
+    const view = await createVoiceNote(appContext, okStop.principal, okStop.page.label, okStop.body());
+    expect(view.state).toBe("dispatched");
+  });
+
   it("rejects a control character in conversationRef before hashing (voice_source_invalid, field-only message)", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider, state } = fakeProvider(() => okAudio(12));
@@ -457,10 +497,12 @@ describe("voice-notes service: admission gates", () => {
     // Never dispatched.
     expect(state.calls).toBe(0);
 
-    // A replay of the denied request returns the recorded verdict, not a throw.
-    const replay = await createVoiceNote(appContext, p.principal, p.page.label, body);
-    expect(replay.state).toBe("quota_denied");
-    expect(replay.errorCode).toBe("voice_quota_denied");
+    // A replay of the denied request re-throws the SAME 429 (never a pollable
+    // 202 view): quota_denied burns the clientRequestId — a retry needs a fresh
+    // one. Same outcome, same status on every call with this id.
+    await expect(
+      createVoiceNote(appContext, p.principal, p.page.label, body),
+    ).rejects.toMatchObject({ code: "voice_quota_denied", statusCode: 429 });
     expect(state.calls).toBe(0);
   });
 });
@@ -542,6 +584,35 @@ describe("voice-notes service: detached dispatch settle paths", () => {
     const row = await getVoiceNoteById(testDb.db, view.voiceNoteId);
     expect(row?.billed).toBe(false);
     expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS); // no refund
+  });
+
+  it("oversize audio (buffered, over the cap) → failed_after_dispatch, NEVER a CHECK crash", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    // A provider that hands back an over-cap buffer with ok:true. Writing its
+    // byteLength would violate voice_notes_audio_cap; the service guard must
+    // settle failed_after_dispatch (billed-unknown) BEFORE the terminal write.
+    const oversize = Buffer.alloc(VOICE_AUDIO_MAX_BYTES + 1, 7);
+    const { provider } = fakeProvider(() => ({
+      ok: true,
+      audio: oversize,
+      characterCost: 12,
+      requestId: "prov-req-oversize",
+      traceId: "prov-trace-oversize",
+      region: "us-east-1",
+    }));
+    const p = await provision({ provider });
+
+    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "failed_after_dispatch");
+
+    const row = await getVoiceNoteById(testDb.db, view.voiceNoteId);
+    expect(row?.state).toBe("failed_after_dispatch"); // never indeterminate, never a throw
+    expect(row?.audioBytes).toBeNull();
+    expect(row?.audioBytesLen).toBeNull();
+    expect(row?.billed).toBe(false);
+    // Billed-unknown → estimate stays charged (no refund).
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
   });
 
   it("network/timeout (status 0) → left dispatched for the lease sweep → indeterminate", async (ctx) => {

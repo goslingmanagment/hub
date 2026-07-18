@@ -1,7 +1,7 @@
 // Voice notes — the ElevenLabs TTS provider, behind the egress seam as a
 // NON-platform vendor class (egress key "vendor:elevenlabs": direct, unpaced;
-// never in PLATFORM_VENDORS / EGRESS_VENDOR_PROVIDERS). Ships inert behind the
-// bootstrap kill-gates (voiceNotesEnabled && elevenLabsApiKey).
+// never in PLATFORM_VENDORS / EGRESS_VENDOR_PROVIDERS). Constructed at boot when
+// ELEVENLABS_API_KEY is set; spend is gated live at admission (voiceNotesEnabled).
 //
 // Semantics the design mandates:
 //   - EXACTLY ONE fetch per synthesize() — ZERO retries anywhere.
@@ -14,11 +14,23 @@
 //     5xx / network / timeout carry a short, text-free reason.
 //
 // The API key is captured in the factory closure and never leaves it (mirrors
-// the Anthropic provider's createSdkClient key encapsulation).
+// the Anthropic provider's createSdkClient key encapsulation). Constructed at
+// boot whenever ELEVENLABS_API_KEY is set (independent of the live
+// voiceNotesEnabled flag, which is the admission-time spend gate).
 
 const ELEVENLABS_TTS_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
 const SYNTHESIS_TIMEOUT_MS = 60_000;
 const SNIPPET_MAX_CHARS = 200;
+
+/**
+ * Hard ceiling on a rendered artifact, in bytes (2 MiB) — the SINGLE source of
+ * truth for the size cap, mirrored by the `voice_notes_audio_cap` DB CHECK in
+ * migration 0106. The provider refuses an oversize body (never buffers it),
+ * and the service guards `result.audio.byteLength` before the terminal settle,
+ * so an oversize synthesis can never crash the CHECK and fall through to
+ * indeterminate. Imported by the voice-notes service — never redeclared.
+ */
+export const VOICE_AUDIO_MAX_BYTES = 2_097_152;
 
 export interface VoiceTtsProvider {
   synthesize(input: {
@@ -126,7 +138,32 @@ export function createElevenLabsVoiceProvider(
         });
 
         if (response.ok) {
+          // Oversize guard, in two layers. (1) If the vendor advertises a
+          // content-length over the cap, abort the body read entirely — never
+          // buffer megabytes we will only discard. (2) Absent a content-length,
+          // buffer then measure. Either way an oversize body is a DEFINITE,
+          // non-refused failure that keeps its HTTP status: the synthesis was
+          // billed, so the caller settles failed_after_dispatch (billed-unknown)
+          // rather than letting the DB CHECK crash the terminal settle.
+          const advertised = parseNumberHeader(response.headers.get("content-length"));
+          if (advertised != null && advertised > VOICE_AUDIO_MAX_BYTES) {
+            await response.body?.cancel().catch(() => {});
+            return {
+              ok: false,
+              refusedBeforeBilling: false,
+              status: response.status,
+              snippet: "audio exceeds size cap",
+            };
+          }
           const audio = Buffer.from(await response.arrayBuffer());
+          if (audio.byteLength > VOICE_AUDIO_MAX_BYTES) {
+            return {
+              ok: false,
+              refusedBeforeBilling: false,
+              status: response.status,
+              snippet: "audio exceeds size cap",
+            };
+          }
           return {
             ok: true,
             audio,

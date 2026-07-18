@@ -5270,8 +5270,11 @@ export const routeSchemas = {
       + "Structured error codes (in the body `error` field): 400 voice_script_invalid / "
       + "voice_source_invalid; 403 voice_disabled / voice_not_allowlisted; 409 "
       + "idempotency_mismatch (same id, different request) / voice_no_profile; 429 "
-      + "voice_quota_denied; 503 voice_provider_unavailable (live flag on, provider not "
-      + "built at boot — restart required).",
+      + "voice_quota_denied; 503 voice_provider_unavailable (live flag on but "
+      + "ELEVENLABS_API_KEY unconfigured — set it and restart). A quota-denied "
+      + "clientRequestId STAYS denied: every replay of it re-throws the same 429 "
+      + "(never a 202 view), so a retry after quota exhaustion needs a FRESH "
+      + "clientRequestId.",
     params: pageParamsSchema,
     body: voiceNoteCreateBodySchema,
     response: {
@@ -5307,7 +5310,9 @@ export const routeSchemas = {
     summary: "Download a completed voice-note's audio bytes",
     description:
       "Returns the rendered artifact as binary `audio/mpeg` (headers: content-length, "
-      + "cache-control private/no-store, x-content-type-options nosniff). The handler "
+      + "cache-control private/no-store, x-content-type-options nosniff). The content-type "
+      + "is honest because setVoiceProfile constrains output_format to an MP3-only "
+      + "allowlist (non-MP3 ElevenLabs formats are rejected at profile-set time). The handler "
       + "writes the body directly; server OpenAPI generation rewrites the 200 media type "
       + "to audio/mpeg (the Zod Fastify transformer only accepts a Zod schema here). "
       + "Not-yet-ready and never-produced are indistinguishable 404s. A purged artifact "

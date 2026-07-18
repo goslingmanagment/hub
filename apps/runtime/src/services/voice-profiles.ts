@@ -16,6 +16,23 @@ import { BadRequestError, NotFoundError } from "./errors.ts";
 const DEFAULT_VOICE_MODEL = "eleven_v3";
 const DEFAULT_OUTPUT_FORMAT = "mp3_44100_128";
 
+/**
+ * The ONLY output formats a profile may pin. The audio download route serves a
+ * hardcoded `audio/mpeg` content-type with `nosniff`, so a non-MP3 ElevenLabs
+ * format (pcm_*, ulaw_*, opus_*) would be mislabelled and fail to decode. This
+ * allowlist is what makes that constant honest — reject anything else at set
+ * time. Kept next to the default so callers and the route agree on one list.
+ */
+export const VOICE_OUTPUT_FORMAT_ALLOWLIST = [
+  "mp3_22050_32",
+  "mp3_24000_48",
+  "mp3_44100_32",
+  "mp3_44100_64",
+  "mp3_44100_96",
+  "mp3_44100_128",
+  "mp3_44100_192",
+] as const;
+
 export interface SetVoiceProfileInput {
   voiceId: string;
   model?: string;
@@ -66,12 +83,21 @@ export async function setVoiceProfile(
   const stability = input.stability?.trim();
   const settings: VoiceProfileSettings = stability ? { stability } : {};
 
+  const outputFormat = input.outputFormat?.trim() || DEFAULT_OUTPUT_FORMAT;
+  if (!(VOICE_OUTPUT_FORMAT_ALLOWLIST as readonly string[]).includes(outputFormat)) {
+    throw new BadRequestError(
+      `output-format "${outputFormat}" is not supported; voice notes are served as `
+        + `audio/mpeg, so only MP3 formats are allowed: `
+        + VOICE_OUTPUT_FORMAT_ALLOWLIST.join(", "),
+    );
+  }
+
   const { version } = await upsertVoiceProfile(app.db, {
     platformAccountId: page.id,
     voiceId,
     model: input.model?.trim() || DEFAULT_VOICE_MODEL,
     settings,
-    outputFormat: input.outputFormat?.trim() || DEFAULT_OUTPUT_FORMAT,
+    outputFormat,
   });
 
   return { version };
