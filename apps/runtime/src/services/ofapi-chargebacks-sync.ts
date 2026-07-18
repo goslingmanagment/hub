@@ -36,7 +36,11 @@ import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
-import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import {
+  ensureQueueCreated,
+  type QueueCreationClient,
+  type SyncQueueLifecycleClient,
+} from "./sync-queue.ts";
 import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
 import {
   assertPageTransactionsWriter,
@@ -44,6 +48,14 @@ import {
 } from "./transactions-writer-gate.ts";
 
 export const OFAPI_CHARGEBACKS_RECONCILE_QUEUE = "ofapi.chargebacks.reconcile";
+
+// A failed fleet pass is already durable and operator-visible through the
+// global incident. Retrying the pg-boss job would repeat every healthy page's
+// vendor walk, so this queue deliberately gets one attempt only.
+const OFAPI_CHARGEBACKS_QUEUE_OPTIONS = {
+  policy: "exclusive",
+  retryLimit: 0,
+} as const;
 
 const CHARGEBACKS_PAGE_LIMIT = 100;
 // Trailing reconcile window once a page has chargeback rows: chargebacks
@@ -488,15 +500,34 @@ export async function runOfapiChargebacksReconcile(app: AppContext) {
 }
 
 export async function ensureOfapiChargebacksQueue(
-  boss: QueueCreationClient,
+  boss: SyncQueueLifecycleClient,
   createdQueues?: Set<string>,
 ) {
   await ensureQueueCreated(
     boss,
     OFAPI_CHARGEBACKS_RECONCILE_QUEUE,
-    { policy: "exclusive" },
+    OFAPI_CHARGEBACKS_QUEUE_OPTIONS,
     createdQueues,
   );
+
+  // createQueue uses ON CONFLICT DO NOTHING, so production queues retain old
+  // mutable defaults unless they are explicitly reconciled after creation.
+  await boss.updateQueue(OFAPI_CHARGEBACKS_RECONCILE_QUEUE, {
+    retryLimit: OFAPI_CHARGEBACKS_QUEUE_OPTIONS.retryLimit,
+  });
+
+  const queue = await boss.getQueue(OFAPI_CHARGEBACKS_RECONCILE_QUEUE);
+  if (
+    !queue ||
+    queue.policy !== OFAPI_CHARGEBACKS_QUEUE_OPTIONS.policy ||
+    queue.retryLimit !== OFAPI_CHARGEBACKS_QUEUE_OPTIONS.retryLimit
+  ) {
+    throw new Error(
+      `Queue ${OFAPI_CHARGEBACKS_RECONCILE_QUEUE} configuration drift: expected ` +
+      `policy=${OFAPI_CHARGEBACKS_QUEUE_OPTIONS.policy}, ` +
+      `retryLimit=${OFAPI_CHARGEBACKS_QUEUE_OPTIONS.retryLimit}`,
+    );
+  }
 }
 
 export async function ensureOfapiChargebacksSchedule(boss: QueueCreationClient) {
