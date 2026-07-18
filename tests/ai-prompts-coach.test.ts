@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildPrompt,
+  coachHistorySection,
   COACH_CHAT_TEMPLATE,
   FAN_SUMMARY_SHORT_TEMPLATE,
+  projectCoachAnswer,
   type PromptBuildInput,
 } from "../apps/runtime/src/modules/ai/index.ts";
 
@@ -78,6 +80,68 @@ describe("coach-chat prompt", () => {
     // The question stays in the uncached task block.
     expect(taskBlock?.cache).toBe("none");
     expect(taskBlock?.text).toContain("как продать ppv?");
+  });
+});
+
+describe("coach answer replay projection (option c)", () => {
+  it("preserves the beginning and ending, dropping the middle with a marker", () => {
+    const head = "HEAD_SENTINEL " + "h".repeat(6_000);
+    const middle = "MID_SENTINEL " + "m".repeat(30_000);
+    const tail = "t".repeat(3_800) + " TAIL_SENTINEL";
+    const projected = projectCoachAnswer(head + middle + tail);
+
+    expect(projected.length).toBeLessThanOrEqual(10_000);
+    expect(projected).toContain("HEAD_SENTINEL");
+    expect(projected).toContain("TAIL_SENTINEL");
+    expect(projected).not.toContain("MID_SENTINEL");
+    expect(projected).toMatch(/\n\[… \d+ chars omitted …\]\n/);
+  });
+
+  it("is a byte-identical no-op within the cap and stable when re-projected", () => {
+    const short = "a".repeat(10_000); // exactly at the cap
+    expect(projectCoachAnswer(short)).toBe(short);
+    // No double-projection distortion: projecting an already-projected answer
+    // returns it unchanged (it is now well under the cap).
+    const once = projectCoachAnswer("x".repeat(30_000));
+    expect(projectCoachAnswer(once)).toBe(once);
+  });
+
+  it("slices on code points — never splits a surrogate pair", () => {
+    // 🎉 is a surrogate pair (2 UTF-16 units, 1 code point); a naive .slice at
+    // the head/tail boundary would leave a lone surrogate.
+    const projected = projectCoachAnswer("🎉".repeat(20_000));
+    expect(projected.startsWith("🎉")).toBe(true);
+    expect(projected.endsWith("🎉")).toBe(true);
+    expect(projected).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/); // no high surrogate without a low
+    expect(projected).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/); // no low surrogate without a high
+  });
+});
+
+describe("coach history section budget (exact rendered size)", () => {
+  it("caps an oversized newest entry via projection so it cannot overshoot the budget", () => {
+    // Pre-option-"c" the newest entry was kept WHOLE (the old kept.length>0
+    // guard) — a 40k answer would blow the 60k budget once escaped/wrapped.
+    // Projection now caps it to ≤10k first.
+    const section = coachHistorySection([{ question: "q", answer: "z".repeat(40_000) }]);
+    expect(section.length).toBeLessThanOrEqual(60_000);
+    expect(section).toMatch(/\n\[… \d+ chars omitted …\]\n/); // projected, not whole
+  });
+
+  it("sheds oldest entries so the exact rendered section stays within budget", () => {
+    const entries = Array.from({ length: 20 }, (_, i) => ({
+      question: `Q${i}`,
+      answer: `A${i} ` + "y".repeat(9_900), // ~9.9k, just under the projection cap
+    }));
+    const section = coachHistorySection(entries);
+    expect(section.length).toBeLessThanOrEqual(60_000);
+    expect(section).toContain("A19"); // newest kept
+    expect(section).not.toContain("A0 "); // oldest shed
+  });
+
+  it("renders a within-cap answer byte-identical (escaped), no projection marker", () => {
+    const section = coachHistorySection([{ question: "q", answer: "plain answer text" }]);
+    expect(section).toContain("<coach>plain answer text</coach>");
+    expect(section).not.toContain("chars omitted");
   });
 });
 

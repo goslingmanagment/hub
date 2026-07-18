@@ -292,36 +292,87 @@ ${escapeForPrompt(trimmed)}
 }
 
 // Coach dialog can grow unbounded across a session; shed the oldest exchanges
-// so the assembled prompt stays inside a sane budget. The feature service caps
-// the aggregate BEFORE this (contract-level); this is the prompt-side floor.
+// so the assembled prompt stays inside a sane budget. The feature service no
+// longer caps the aggregate (option "c" removed the 120k gate); this is the
+// authoritative prompt-side bound, applied to the EXACT rendered size.
 const COACH_PROMPT_HISTORY_BUDGET_CHARS = 60_000;
-// Per recap slot. The oldest recap text is itself a summary — hard-truncate the
-// TAIL beyond this and keep the head (recap sections lead with the most
-// load-bearing facts).
-const RECAP_ATTACH_MAX_CHARS = 30_000;
 
-/** Renders the coach dialog so far, newest exchanges kept whole and oldest shed
- * first when the aggregate would blow the budget. Every value is escaped. */
-function coachHistorySection(history: CoachHistoryEntry[] | undefined): string {
-  if (!history?.length) {
-    return '(no prior coach dialog — this is the first question)';
+// Core-side replay projection (spec §3/§7, option "c"): the model's replay
+// memory is intentionally lossy. A committed coach answer may be up to the 64k
+// TRANSPORT ceiling, but before assembly core projects each history answer to a
+// small head+tail so prompt cost never tracks the transport ceiling. Correctness
+// never depends on the client: the extension applies the same projection only as
+// a bandwidth optimization. Questions are already ≤2k and pass through untouched.
+const COACH_ANSWER_PROJECTION_MAX_CHARS = 10_000;
+const COACH_ANSWER_PROJECTION_HEAD_CHARS = 6_000;
+const COACH_ANSWER_PROJECTION_TAIL_CHARS = 3_800;
+
+/** Projects a committed coach answer to ≤10k chars for prompt replay: the head
+ * and tail verbatim with an explicit omission marker between them. Slicing is
+ * code-point-safe (never splits a surrogate pair). An answer already within the
+ * cap is returned byte-identical (no-op), so a re-projected answer is stable.
+ * head (6000) + tail (3800) + marker (≤27) ≤ 10_000 by construction. */
+export function projectCoachAnswer(answer: string): string {
+  const codePoints = Array.from(answer);
+  if (codePoints.length <= COACH_ANSWER_PROJECTION_MAX_CHARS) {
+    return answer;
   }
-  const kept: CoachHistoryEntry[] = [];
-  let used = 0;
-  for (const entry of [...history].reverse()) {
-    const size = entry.question.length + entry.answer.length;
-    if (used + size > COACH_PROMPT_HISTORY_BUDGET_CHARS && kept.length > 0) {
-      break;
-    }
-    kept.unshift(entry);
-    used += size;
-  }
-  return kept
+  const head = codePoints.slice(0, COACH_ANSWER_PROJECTION_HEAD_CHARS).join('');
+  const tail = codePoints
+    .slice(codePoints.length - COACH_ANSWER_PROJECTION_TAIL_CHARS)
+    .join('');
+  const omitted =
+    codePoints.length
+    - COACH_ANSWER_PROJECTION_HEAD_CHARS
+    - COACH_ANSWER_PROJECTION_TAIL_CHARS;
+  return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
+}
+
+/** Renders the kept coach exchanges (oldest-first, 1-indexed) into their escaped,
+ * XML-wrapped section string. Measuring THIS output — not the raw question+answer
+ * sum — is what makes the budget exact (escaping and wrapper overhead included).*/
+function renderCoachExchanges(entries: CoachHistoryEntry[]): string {
+  return entries
     .map(
       (entry, index) =>
         `<coach_exchange n="${index + 1}">\n<chatter>${escapeForPrompt(entry.question)}</chatter>\n<coach>${escapeForPrompt(entry.answer)}</coach>\n</coach_exchange>`,
     )
     .join('\n');
+}
+// Per recap slot. The oldest recap text is itself a summary — hard-truncate the
+// TAIL beyond this and keep the head (recap sections lead with the most
+// load-bearing facts).
+const RECAP_ATTACH_MAX_CHARS = 30_000;
+
+/** Renders the coach dialog so far. Each answer is FIRST projected to the ≤10k
+ * replay bound (spec §3/§7, option "c"), THEN the newest exchanges are kept and
+ * the oldest shed when the EXACT rendered size (escaped, XML-wrapped, numbered,
+ * newline-joined) would blow the 60k budget. Projecting every entry first closes
+ * the old "oversized newest entry kept whole" hole: no single entry can overshoot
+ * the budget, and the budget is exact because it counts what is actually sent. */
+export function coachHistorySection(history: CoachHistoryEntry[] | undefined): string {
+  if (!history?.length) {
+    return '(no prior coach dialog — this is the first question)';
+  }
+  const projected: CoachHistoryEntry[] = history.map((entry) => ({
+    question: entry.question,
+    answer: projectCoachAnswer(entry.answer),
+  }));
+  // Walk newest→oldest, growing the (oldest-first) kept window while the FULLY
+  // RENDERED section stays inside the budget. At least the newest entry is always
+  // kept (projection already bounds it), so the section is never empty.
+  let kept: CoachHistoryEntry[] = [];
+  for (let i = projected.length - 1; i >= 0; i -= 1) {
+    const candidate = [projected[i]!, ...kept];
+    if (
+      renderCoachExchanges(candidate).length > COACH_PROMPT_HISTORY_BUDGET_CHARS
+      && kept.length > 0
+    ) {
+      break;
+    }
+    kept = candidate;
+  }
+  return renderCoachExchanges(kept);
 }
 
 /** Coarse human age label for a dated recap ("10 min ago", "3 days ago"). */
