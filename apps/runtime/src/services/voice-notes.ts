@@ -62,6 +62,13 @@ const DEFAULT_SCRIPT_MAX_CHARS = 600;
 const DEFAULT_PAGE_BUDGET = 5000;
 const DEFAULT_GLOBAL_BUDGET = 20000;
 
+// Internal rollback sentinel: thrown inside the reserve+insert transaction when
+// the queued insert loses the unique (user, clientRequestId) race, so drizzle
+// rolls the whole tx back — the budget reservation included — rather than
+// leaving it stranded. Caught in createVoiceNote to replay the winner. Mirrors
+// the BudgetRefused idiom the repo's reserveVoiceCharBudget already uses.
+class VoiceAdmissionLostRace extends Error {}
+
 export interface CreateVoiceNoteBody {
   clientRequestId: string;
   conversationRef: string;
@@ -286,39 +293,53 @@ export async function createVoiceNote(
     profileVersion: profile.version,
   };
 
-  // (3) Reserve the character budget (page + global, atomic). A refusal is a
-  // durable ledger fact — a quota_denied row — and fails closed. The reserve
-  // rolled back atomically, so no budget was consumed (nothing to release).
-  const reserved = await reserveVoiceCharBudget(app.db, {
-    pageId: page.id,
-    chars: scriptChars,
-    pageBudget,
-    globalBudget,
-    now,
-  });
-  if (!reserved) {
-    const wonDenied = await insertQuotaDeniedVoiceNote(app.db, snapshot);
-    if (wonDenied) {
+  // (3+4) Reserve the character budget AND record the idempotency row in ONE
+  // transaction. Wrapping both closes two windows the two-commit version left
+  // open: (a) a crash between the reserve and the insert can no longer strand a
+  // reservation with no row to carry it (a rollback releases it), and (b) the
+  // reserve holds its budget-row lock THROUGH the insert, so a same-budget
+  // competitor cannot slip a quota_denied row in between and falsely deny a
+  // request that actually had budget. A refused reservation rolls back only its
+  // own savepoint (nothing consumed) and records the durable quota_denied fact
+  // in the same tx; losing the unique race throws a sentinel to roll the whole
+  // reservation back (the rollback IS the release), caught below to replay the
+  // concurrent winner.
+  let admission:
+    | { kind: "inserted" }
+    | { kind: "quota_denied"; wonDenied: boolean };
+  try {
+    admission = await app.db.transaction(async (tx) => {
+      const reserved = await reserveVoiceCharBudget(tx, {
+        pageId: page.id,
+        chars: scriptChars,
+        pageBudget,
+        globalBudget,
+        now,
+      });
+      if (!reserved) {
+        const wonDenied = await insertQuotaDeniedVoiceNote(tx, snapshot);
+        return { kind: "quota_denied", wonDenied } as const;
+      }
+      const insertResult = await insertVoiceNoteJob(tx, snapshot);
+      if (!insertResult.inserted) {
+        // A concurrent duplicate already claimed this (user, clientRequestId).
+        // Abort the tx so the reservation rolls back, then replay its row below.
+        throw new VoiceAdmissionLostRace();
+      }
+      return { kind: "inserted" } as const;
+    });
+  } catch (error) {
+    if (error instanceof VoiceAdmissionLostRace) {
+      return await replayConcurrentWinner(app, principal, body.clientRequestId, requestHash);
+    }
+    throw error;
+  }
+
+  if (admission.kind === "quota_denied") {
+    if (admission.wonDenied) {
       throw new VoiceQuotaDeniedError();
     }
     // A concurrent request already claimed this clientRequestId — replay it.
-    return await replayConcurrentWinner(app, principal, body.clientRequestId, requestHash);
-  }
-
-  // (4) Insert the queued row. Losing the unique race means a concurrent
-  // duplicate won the admission: release OUR reservation and replay its row.
-  let insertResult: Awaited<ReturnType<typeof insertVoiceNoteJob>>;
-  try {
-    insertResult = await insertVoiceNoteJob(app.db, snapshot);
-  } catch (error) {
-    // The insert itself faulted (a DB error — NOT the inserted:false conflict
-    // path below): the reservation is already made but no row exists to carry
-    // it, so release it before rethrowing to avoid a phantom charge.
-    await settleVoiceCharBudget(app.db, { pageId: page.id, charsDelta: -scriptChars, now });
-    throw error;
-  }
-  if (!insertResult.inserted) {
-    await settleVoiceCharBudget(app.db, { pageId: page.id, charsDelta: -scriptChars, now });
     return await replayConcurrentWinner(app, principal, body.clientRequestId, requestHash);
   }
 
@@ -549,6 +570,9 @@ async function dispatchVoiceNote(
           id: row.id,
           attemptToken: input.attemptToken,
           state: "failed_after_dispatch",
+          // Oversize means the vendor DID synthesize (and may have billed), we
+          // just can't keep the artifact → billing unknown, estimate kept.
+          billed: null,
           billedChars: null,
           providerRequestId: null,
           providerTraceId: null,
@@ -561,68 +585,84 @@ async function dispatchVoiceNote(
         return;
       }
       const audioSha256 = sha256Hex(result.audio);
+      // A completed take IS billed — the vendor synthesized it. A missing cost
+      // header only means we cannot reconcile the estimate to actuals, NOT that
+      // the synthesis was free, so the billing verdict is `true` regardless.
       const billedChars = result.characterCost != null
         ? Math.max(0, Math.round(result.characterCost))
         : null;
-      const settled = await settleVoiceNoteTerminal(app.db, {
-        id: row.id,
-        attemptToken: input.attemptToken,
-        state: "completed",
-        billedChars,
-        providerRequestId: result.requestId,
-        providerTraceId: result.traceId,
-        providerRegion: result.region,
-        audioBytes: result.audio,
-        audioSha256,
-        audioBytesLen: result.audio.byteLength,
-        durationMs: Date.now() - startedAt,
-      });
-      // Reconcile the estimate to the vendor-reported actuals — but only when
-      // the fence was won AND a character cost was reported. Absent a cost
-      // header we keep the estimate charged (billed-unknown).
-      if (settled && billedChars != null) {
-        await settleVoiceCharBudget(app.db, {
-          pageId: row.platformAccountId,
-          charsDelta: billedChars - input.reservedChars,
-          now: input.now,
+      // Fence the settle AND the reconcile in ONE transaction: if the fence is
+      // lost (a sweep already moved the row off 'dispatched'), the UPDATE
+      // touches 0 rows and the budget mutation is skipped; a fault rolls BOTH
+      // back together (the row stays 'dispatched' for the lease sweep), so the
+      // terminal state and the budget can never diverge.
+      await app.db.transaction(async (tx) => {
+        const settled = await settleVoiceNoteTerminal(tx, {
+          id: row.id,
+          attemptToken: input.attemptToken,
+          state: "completed",
+          billed: true,
+          billedChars,
+          providerRequestId: result.requestId,
+          providerTraceId: result.traceId,
+          providerRegion: result.region,
+          audioBytes: result.audio,
+          audioSha256,
+          audioBytesLen: result.audio.byteLength,
+          durationMs: Date.now() - startedAt,
         });
-      }
+        // Reconcile the estimate to the vendor-reported actuals — but only when
+        // the fence was won AND a character cost was reported. Absent a cost
+        // header we keep the estimate charged (billed, amount unknown).
+        if (settled && billedChars != null) {
+          await settleVoiceCharBudget(tx, {
+            pageId: row.platformAccountId,
+            charsDelta: billedChars - input.reservedChars,
+            now: input.now,
+          });
+        }
+      });
       return;
     }
 
     if (result.refusedBeforeBilling) {
-      // Pre-synthesis rejection (4xx): the vendor never began billing → full refund.
-      const settled = await settleVoiceNoteTerminal(app.db, {
-        id: row.id,
-        attemptToken: input.attemptToken,
-        state: "failed_definite",
-        billedChars: null,
-        providerRequestId: null,
-        providerTraceId: null,
-        providerRegion: null,
-        audioBytes: null,
-        audioSha256: null,
-        audioBytesLen: null,
-        durationMs: Date.now() - startedAt,
-      });
-      if (settled) {
-        await settleVoiceCharBudget(app.db, {
-          pageId: row.platformAccountId,
-          charsDelta: -input.reservedChars,
-          now: input.now,
+      // Pre-synthesis rejection (4xx): the vendor never began billing → not
+      // billed, full refund. Settle + refund atomically (same fence rationale).
+      await app.db.transaction(async (tx) => {
+        const settled = await settleVoiceNoteTerminal(tx, {
+          id: row.id,
+          attemptToken: input.attemptToken,
+          state: "failed_definite",
+          billed: false,
+          billedChars: null,
+          providerRequestId: null,
+          providerTraceId: null,
+          providerRegion: null,
+          audioBytes: null,
+          audioSha256: null,
+          audioBytesLen: null,
+          durationMs: Date.now() - startedAt,
         });
-      }
+        if (settled) {
+          await settleVoiceCharBudget(tx, {
+            pageId: row.platformAccountId,
+            charsDelta: -input.reservedChars,
+            now: input.now,
+          });
+        }
+      });
       return;
     }
 
     if (result.status !== 0) {
       // A definite, non-refused HTTP failure (5xx): synthesis may have been
-      // billed → failed_after_dispatch, billed-unknown, and KEEP the estimate
-      // charged (no refund).
+      // billed → failed_after_dispatch, billing unknown, and KEEP the estimate
+      // charged (no refund → single settle, no budget mutation to pair).
       await settleVoiceNoteTerminal(app.db, {
         id: row.id,
         attemptToken: input.attemptToken,
         state: "failed_after_dispatch",
+        billed: null,
         billedChars: null,
         providerRequestId: null,
         providerTraceId: null,
@@ -644,13 +684,11 @@ async function dispatchVoiceNote(
     );
   } catch (error) {
     // The provider is contractually non-throwing, but a settle/DB fault must not
-    // surface as an unhandled rejection on the detached task. Two shapes:
-    //   (a) the terminal settle itself faulted → the row stays 'dispatched' and
-    //       the lease sweep reclaims it as 'indeterminate';
-    //   (b) the terminal settle already succeeded and only the FOLLOW-UP budget
-    //       settle threw → the row is already TERMINAL, so the sweep will NOT
-    //       reclaim it; only the conservative budget delta (the refund/reconcile)
-    //       is lost, which never over-charges the operator.
+    // surface as an unhandled rejection on the detached task. The terminal
+    // settle and its budget delta now share ONE transaction, so a fault rolls
+    // BOTH back atomically: the row stays 'dispatched' with its reservation
+    // intact and the lease sweep reclaims it as 'indeterminate'. There is no
+    // longer a window where the state settled but the budget delta was lost.
     app.logger.error({ voiceNoteId: row.id, error }, "voice note dispatch failed unexpectedly");
   }
 }

@@ -735,6 +735,14 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
 
   const deletions: Array<[string, string]> = [
     ["ai_generation_content", "page_id"],
+    // Voice-notes lane (0106): both are page-scoped and must be purged
+    // explicitly. voice_notes REFERENCES pages WITHOUT cascade (it would block
+    // a page delete; erasure keeps the pages catalog row, so we delete the
+    // notes — audio bytes, user_id, conversation_ref, provider metadata — here).
+    // page_voice_profiles DOES cascade on pages, but erasure preserves the pages
+    // row, so the cascade never fires — it too needs an explicit delete.
+    ["voice_notes", "platform_account_id"],
+    ["page_voice_profiles", "platform_account_id"],
     ["wb_closing_cache", "platform_account_id"],
     ["page_dm_threads", "platform_account_id"], // messages ride the cascade
     ["message_archive", "account_id"],

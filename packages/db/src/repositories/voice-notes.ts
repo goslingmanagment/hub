@@ -161,6 +161,14 @@ export interface SettleVoiceNoteTerminalInput {
   id: number;
   attemptToken: string;
   state: VoiceNoteState;
+  /**
+   * The billing verdict, passed EXPLICITLY by the caller (a tri-state, NOT
+   * derived from `billedChars`): `true` = the vendor synthesized (a completed
+   * take bills even when no character-cost header arrived); `false` = refused
+   * before billing (`failed_definite`); `null` = billing unknown (a
+   * `failed_after_dispatch` where the vendor may or may not have charged).
+   */
+  billed: boolean | null;
   billedChars: number | null;
   providerRequestId: string | null;
   providerTraceId: string | null;
@@ -176,7 +184,9 @@ export interface SettleVoiceNoteTerminalInput {
  * `WHERE attempt_token = $token AND state = 'dispatched'`. A stale token, or a
  * row the sweep already moved off `dispatched`, fails the fence and returns
  * false — so a late provider result can never overwrite a swept/indeterminate
- * verdict. `billed` is derived from whether the provider reported billed chars.
+ * verdict. `billed` is the caller's explicit billing verdict (see the input
+ * doc); it is NOT inferred from `billedChars` (a cost header's absence does not
+ * mean the vendor billed nothing).
  */
 export async function settleVoiceNoteTerminal(
   db: Database,
@@ -186,7 +196,7 @@ export async function settleVoiceNoteTerminal(
     .update(voiceNotes)
     .set({
       state: input.state,
-      billed: input.billedChars != null,
+      billed: input.billed,
       billedChars: input.billedChars,
       providerRequestId: input.providerRequestId,
       providerTraceId: input.providerTraceId,
@@ -222,9 +232,12 @@ export interface VoiceNoteBudgetReleaseRow {
  * only expired leases — no queued row is abandoned without an explicit cutoff.
  *
  * The two classes differ in billing certainty, so `billed` diverges:
- * - An abandoned `queued` row crashed BEFORE dispatch → certainly unbilled, so
- *   the same UPDATE stamps `billed=false` (the released marker) and the row is
- *   returned in `abandonedQueuedRows` for the caller to refund its reservation.
+ * - An abandoned `queued` row crashed BEFORE dispatch → certainly unbilled. Its
+ *   stamp (`state=indeterminate`, `billed=false` — both the verdict AND the
+ *   released marker) and its reservation refund are done TOGETHER in one
+ *   per-row transaction, fenced on `state='queued'`, so a crash can never leave
+ *   a stamped-but-unrefunded row (the stamp fences it out of every later pass).
+ *   The refunded rows are returned in `abandonedQueuedRows` for count/telemetry.
  * - A lease-expired `dispatched` row may or may not have been billed at the
  *   provider → `billed` is left NULL (billing unknown; the reservation stays,
  *   the conservative direction). The nightly job releases these after 24h.
@@ -248,20 +261,55 @@ export async function sweepVoiceNotes(
     ))
     .returning({ id: voiceNotes.id });
 
-  let abandonedQueuedRows: VoiceNoteBudgetReleaseRow[] = [];
+  const abandonedQueuedRows: VoiceNoteBudgetReleaseRow[] = [];
   if (queuedCutoff !== undefined) {
-    abandonedQueuedRows = await db
-      .update(voiceNotes)
-      .set({ state: "indeterminate", billed: false, updatedAt: now })
-      .where(and(
-        eq(voiceNotes.state, "queued"),
-        lt(voiceNotes.createdAt, queuedCutoff),
-      ))
-      .returning({
+    // Collect candidates WITHOUT stamping; each row is then stamped AND refunded
+    // atomically below. Selecting first (rather than one bulk UPDATE) is what
+    // lets the stamp+refund share a transaction per row.
+    const candidates = await db
+      .select({
+        id: voiceNotes.id,
         platformAccountId: voiceNotes.platformAccountId,
         scriptChars: voiceNotes.scriptChars,
         createdAt: voiceNotes.createdAt,
+      })
+      .from(voiceNotes)
+      .where(and(
+        eq(voiceNotes.state, "queued"),
+        lt(voiceNotes.createdAt, queuedCutoff),
+      ));
+
+    for (const candidate of candidates) {
+      const released = await db.transaction(async (tx) => {
+        const stamped = await tx
+          .update(voiceNotes)
+          .set({ state: "indeterminate", billed: false, updatedAt: now })
+          .where(and(
+            eq(voiceNotes.id, candidate.id),
+            eq(voiceNotes.state, "queued"),
+          ))
+          .returning({ id: voiceNotes.id });
+        if (stamped.length === 0) {
+          // A concurrent sweep already claimed it — no stamp, no refund.
+          return false;
+        }
+        // Refund against the reservation's own UTC day (createdAt), in the SAME
+        // tx as the stamp: the two commit together or not at all.
+        await settleVoiceCharBudget(tx, {
+          pageId: candidate.platformAccountId,
+          charsDelta: -candidate.scriptChars,
+          now: candidate.createdAt,
+        });
+        return true;
       });
+      if (released) {
+        abandonedQueuedRows.push({
+          platformAccountId: candidate.platformAccountId,
+          scriptChars: candidate.scriptChars,
+          createdAt: candidate.createdAt,
+        });
+      }
+    }
   }
 
   return {
@@ -273,30 +321,68 @@ export async function sweepVoiceNotes(
 
 /**
  * Nightly conservative release for `indeterminate` rows whose billing was never
- * resolved. One UPDATE stamps `billed=false` on `indeterminate` rows with
- * `billed IS NULL` (never released, never settled) created before `cutoff`,
- * RETURNING the (page, chars, day) each release needs. The `billed IS NULL`
- * predicate makes it idempotent — a second run finds nothing because the first
- * run already flipped the marker. The caller refunds each returned row against
- * its own `createdAt` day.
+ * resolved. For each `indeterminate` row with `billed IS NULL` (never released,
+ * never settled) created before `cutoff`, the release marker and the reservation
+ * refund are applied TOGETHER in one per-row transaction: the marker stamp is
+ * `billed=false` and the refund lands on the row's own `createdAt` UTC day.
+ *
+ * For an `indeterminate` row `billed=false` means "reservation released, vendor
+ * billing genuinely unknown" — it is the release marker, NOT a billing verdict
+ * (the row's state, and the status view's errorCode, carry the unknown-ness).
+ * The `billed IS NULL` predicate is the idempotency fence: it selects candidates
+ * AND fences each per-row stamp, so a crash mid-loop leaves the unstamped rows
+ * eligible for the next run and a second run finds nothing. Returns the rows
+ * whose reservations were actually released.
  */
 export async function releaseStaleIndeterminateVoiceBudgets(
   db: Database,
   cutoff: Date,
 ): Promise<VoiceNoteBudgetReleaseRow[]> {
-  return db
-    .update(voiceNotes)
-    .set({ billed: false, updatedAt: new Date() })
+  const candidates = await db
+    .select({
+      id: voiceNotes.id,
+      platformAccountId: voiceNotes.platformAccountId,
+      scriptChars: voiceNotes.scriptChars,
+      createdAt: voiceNotes.createdAt,
+    })
+    .from(voiceNotes)
     .where(and(
       eq(voiceNotes.state, "indeterminate"),
       isNull(voiceNotes.billed),
       lt(voiceNotes.createdAt, cutoff),
-    ))
-    .returning({
-      platformAccountId: voiceNotes.platformAccountId,
-      scriptChars: voiceNotes.scriptChars,
-      createdAt: voiceNotes.createdAt,
+    ));
+
+  const released: VoiceNoteBudgetReleaseRow[] = [];
+  for (const candidate of candidates) {
+    const ok = await db.transaction(async (tx) => {
+      const stamped = await tx
+        .update(voiceNotes)
+        .set({ billed: false, updatedAt: new Date() })
+        .where(and(
+          eq(voiceNotes.id, candidate.id),
+          eq(voiceNotes.state, "indeterminate"),
+          isNull(voiceNotes.billed),
+        ))
+        .returning({ id: voiceNotes.id });
+      if (stamped.length === 0) {
+        return false;
+      }
+      await settleVoiceCharBudget(tx, {
+        pageId: candidate.platformAccountId,
+        charsDelta: -candidate.scriptChars,
+        now: candidate.createdAt,
+      });
+      return true;
     });
+    if (ok) {
+      released.push({
+        platformAccountId: candidate.platformAccountId,
+        scriptChars: candidate.scriptChars,
+        createdAt: candidate.createdAt,
+      });
+    }
+  }
+  return released;
 }
 
 /**

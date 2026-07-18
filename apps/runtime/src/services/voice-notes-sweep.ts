@@ -13,16 +13,17 @@
 //     reservations still held by long-stale `indeterminate` rows.
 //
 // Every reservation refund lands on the UTC-day counter the reservation was
-// made against — the row's `createdAt`, NOT the sweep/nightly `now`. Logging is
-// counts-only: script text and audio never appear in logs.
+// made against — the row's `createdAt`, NOT the sweep/nightly `now`. The stamp
+// (release marker) and its refund are atomic PER ROW inside the repo functions
+// (`sweepVoiceNotes` / `releaseStaleIndeterminateVoiceBudgets`), so this service
+// only orchestrates and reports counts — it no longer runs a separate refund
+// loop that a crash could strand mid-way. Logging is counts-only: script text
+// and audio never appear in logs.
 
 import {
   purgeExpiredVoiceNoteAudio,
   releaseStaleIndeterminateVoiceBudgets,
-  settleVoiceCharBudget,
   sweepVoiceNotes,
-  type Database,
-  type VoiceNoteBudgetReleaseRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -56,26 +57,12 @@ export async function ensureVoiceNotesSweepSchedule(boss: QueueCreationClient) {
   await boss.schedule(VOICE_NOTES_SWEEP_QUEUE, "*/1 * * * *", null, { tz: "UTC" });
 }
 
-// Refunds each row's reservation against the UTC-day counter it was reserved
-// on (row.createdAt), returning how many were released.
-async function releaseReservations(
-  db: Database,
-  rows: VoiceNoteBudgetReleaseRow[],
-): Promise<number> {
-  for (const row of rows) {
-    await settleVoiceCharBudget(db, {
-      pageId: row.platformAccountId,
-      charsDelta: -row.scriptChars,
-      now: row.createdAt,
-    });
-  }
-  return rows.length;
-}
-
 /**
  * Minutely sweep: reclaim abandoned `queued` rows (older than 5 min) and
- * lease-expired `dispatched` rows to `indeterminate`, refunding the reservations
- * of the certainly-unbilled abandoned-queued rows. Returns counts only.
+ * lease-expired `dispatched` rows to `indeterminate`. The abandoned-queued rows
+ * are certainly unbilled, so `sweepVoiceNotes` stamps and refunds each one
+ * atomically; `abandonedQueued` therefore equals the number of reservations
+ * released. Returns counts only.
  */
 export async function runVoiceNotesSweep(
   app: Pick<AppContext, "db">,
@@ -83,18 +70,19 @@ export async function runVoiceNotesSweep(
 ): Promise<{ abandonedQueued: number; leaseExpired: number; budgetsReleased: number }> {
   const queuedCutoff = new Date(now.getTime() - QUEUED_ABANDON_MS);
   const swept = await sweepVoiceNotes(app.db, now, queuedCutoff);
-  const budgetsReleased = await releaseReservations(app.db, swept.abandonedQueuedRows);
   return {
     abandonedQueued: swept.abandonedQueued,
     leaseExpired: swept.leaseExpired,
-    budgetsReleased,
+    budgetsReleased: swept.abandonedQueued,
   };
 }
 
 /**
  * Nightly retention: purge audio bytes older than 7 days and release the
  * reservations of `indeterminate` rows older than 24h whose billing never
- * resolved. Both halves are idempotent. Returns counts only.
+ * resolved. `releaseStaleIndeterminateVoiceBudgets` stamps and refunds each row
+ * atomically, so `budgetsReleased` is just the count it returns. Both halves are
+ * idempotent. Returns counts only.
  */
 export async function runVoiceNotesNightlyRetention(
   app: Pick<AppContext, "db">,
@@ -108,6 +96,5 @@ export async function runVoiceNotesNightlyRetention(
     app.db,
     new Date(now.getTime() - STALE_INDETERMINATE_MS),
   );
-  const budgetsReleased = await releaseReservations(app.db, staleRows);
-  return { audioPurged, budgetsReleased };
+  return { audioPurged, budgetsReleased: staleRows.length };
 }

@@ -270,18 +270,21 @@ describe("voice notes sweep + nightly retention", () => {
     expect(firstRows[0]!.platformAccountId).toBe(page.id);
     expect(firstRows[0]!.scriptChars).toBe(SCRIPT_CHARS);
     expect((await getVoiceNoteById(db, id))?.billed).toBe(false);
+    // The refund is now atomic with the release stamp (the repo fn stamps
+    // billed=false AND settles the counter in one per-row tx), so that FIRST call
+    // already walked the reservation-day counter back to zero.
+    expect(await spentChars(pool, pageScope, reservedDayStr)).toBe(0);
 
-    // Idempotent: billed IS NULL no longer matches → nothing returned.
+    // Idempotent: billed IS NULL no longer matches → nothing returned, no refund.
     expect(await releaseStaleIndeterminateVoiceBudgets(db, cutoff)).toHaveLength(0);
 
     // The nightly service helper applies the release against the reservation day.
     const nightly = await runVoiceNotesNightlyRetention({ db }, now);
     // The repo fn above already released this row, so the nightly pass finds none.
     expect(nightly.budgetsReleased).toBe(0);
-    // The reservation's day counter is untouched here because we released via the
-    // repo fn directly (no settle) — assert the day is still the reservation day,
-    // proving the fn does not silently touch counters.
-    expect(await spentChars(pool, pageScope, reservedDayStr)).toBe(SCRIPT_CHARS);
+    // The counter stays at zero — the first call refunded it; the idempotent
+    // no-op nightly pass neither double-refunds nor resurrects the reservation.
+    expect(await spentChars(pool, pageScope, reservedDayStr)).toBe(0);
   });
 
   it("nightly retention purges audio older than 7 days and releases stale budgets on the right day", async (context) => {
@@ -309,6 +312,7 @@ describe("voice notes sweep + nightly retention", () => {
       id: audioId,
       attemptToken: token,
       state: "completed",
+      billed: true,
       billedChars: SCRIPT_CHARS,
       providerRequestId: "p",
       providerTraceId: "t",

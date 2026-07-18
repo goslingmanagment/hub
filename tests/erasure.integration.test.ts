@@ -1062,6 +1062,63 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`egress_endpoints where platform_account_id = ${page.id}`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("page-scope erasure purges the page's voice notes (audio + metadata) and voice profile (0106)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // The voice-notes lane (migration 0106) is page-scoped: voice_notes carries
+    // synthesized audio bytes, the source conversation ref, the chatter's user id
+    // and provider metadata, and page_voice_profiles holds the page's voice
+    // config. Neither rides a cascade when erasure keeps the pages catalog row
+    // (voice_notes REFERENCES pages WITHOUT cascade; page_voice_profiles cascades
+    // pages, which erasure preserves), so both are explicit page-hot targets.
+    // This drill proves the stored audio and the profile are gone afterwards.
+    const model = await createModel(testDb.db, { slug: "erasure-voice", name: "Erasure Voice" });
+    const page = model
+      ? await createOnlyFansPage(testDb.db, { modelId: model.id, label: "erasure-voice-page" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed voice erasure page");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-voice-owner', 'owner') returning id::text as id`,
+    );
+
+    await testDb.pool.query(
+      `insert into page_voice_profiles (platform_account_id, voice_id) values ($1, 'voice-erasure')`,
+      [page.id],
+    );
+    // A completed note with real audio bytes — the row an erasure must reach.
+    await testDb.pool.query(
+      `insert into voice_notes (
+         user_id, platform_account_id, conversation_ref, source_generation_ref,
+         client_request_id, request_hash, script_chars, original_script_sha256,
+         final_script_sha256, script_edited, profile_voice_id, profile_model,
+         profile_settings, profile_output_format, profile_version, state, billed,
+         billed_chars, audio_bytes, audio_sha256, audio_bytes_len)
+       values (7373, $1, 'conv-erase', 'gen-erase', $2, 'hash-erase', 120, $3, $3, false,
+               'voice-erasure', 'eleven_v3', '{}'::jsonb, 'mp3_44100_128', 1, 'completed',
+               true, 120, $4, $5, 13)`,
+      [page.id, randomUUID(), "a".repeat(64), Buffer.from("audio-payload"), "c".repeat(64)],
+    );
+    // Precondition: the audio really is present, so a zero-count afterwards means
+    // it was purged (not merely never seeded).
+    expect(await count(`voice_notes where platform_account_id = ${page.id} and audio_bytes is not null`)).toBe(1);
+    expect(await count(`page_voice_profiles where platform_account_id = ${page.id}`)).toBe(1);
+
+    const result = await executeErasure(
+      appStub(),
+      { scopeType: "page", pageLabel: "erasure-voice-page" },
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(result.executedCounts["hot:voice_notes:delete"], "voice_notes target").toBe(1);
+    expect(result.executedCounts["hot:page_voice_profiles:delete"], "page_voice_profiles target").toBe(1);
+    expect(await count(`voice_notes where platform_account_id = ${page.id}`)).toBe(0);
+    expect(await count(`page_voice_profiles where platform_account_id = ${page.id}`)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("a converged retry supersedes every unresolved attempt for only the same scope", async (context) => {
     if (!testDb) {
       context.skip();

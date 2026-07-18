@@ -167,6 +167,7 @@ describe("voice notes repository integration", () => {
     const terminal = {
       id,
       state: "completed" as const,
+      billed: true,
       billedChars: 120,
       providerRequestId: "prov-req",
       providerTraceId: "prov-trace",
@@ -259,6 +260,7 @@ describe("voice notes repository integration", () => {
       id: withAudio!.id,
       attemptToken: tokenA,
       state: "completed",
+      billed: true,
       billedChars: 120,
       providerRequestId: "p",
       providerTraceId: "t",
@@ -284,6 +286,7 @@ describe("voice notes repository integration", () => {
       id: noAudio!.id,
       attemptToken: tokenB,
       state: "failed_definite",
+      billed: false,
       billedChars: null,
       providerRequestId: null,
       providerTraceId: null,

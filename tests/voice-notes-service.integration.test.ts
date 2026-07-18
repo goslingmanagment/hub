@@ -327,9 +327,10 @@ describe("voice-notes service: admission + idempotent replay", () => {
     );
     expect(rows.rows.length).toBe(1);
 
-    // Both racers reserved (2× the estimate); the loser self-released on its lost
-    // insert, so exactly ONE reservation's worth remains charged while the
-    // winner's synthesis is still gated (not yet reconciled to actuals).
+    // The loser's reserve+insert ran in ONE transaction; losing the unique race
+    // rolled that whole tx back (the rollback IS the reservation release), so
+    // exactly ONE reservation's worth remains charged while the winner's
+    // synthesis is still gated (not yet reconciled to actuals) — no residue.
     expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
     expect(await spentForScope("global")).toBe(SCRIPT_CHARS);
 
@@ -539,7 +540,7 @@ describe("voice-notes service: detached dispatch settle paths", () => {
     expect(got.sha256).toBe(sha256Hex(audio));
   });
 
-  it("completed + NO character cost → keeps the estimate charged (billed-unknown)", async (ctx) => {
+  it("completed + NO character cost → billed=true, estimate kept (cost amount unknown)", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider } = fakeProvider(() => okAudio(null));
     const p = await provision({ provider });
@@ -549,8 +550,11 @@ describe("voice-notes service: detached dispatch settle paths", () => {
 
     const row = await getVoiceNoteById(testDb.db, view.voiceNoteId);
     expect(row?.state).toBe("completed");
-    expect(row?.billed).toBe(false);
+    // The vendor synthesized → billed is TRUE even without a cost header (its
+    // absence means we cannot reconcile, not that the take was free).
+    expect(row?.billed).toBe(true);
     expect(row?.billedChars).toBeNull();
+    // No cost to reconcile against → the estimate stays charged.
     expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
   });
 
@@ -582,7 +586,9 @@ describe("voice-notes service: detached dispatch settle paths", () => {
       (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "failed_after_dispatch");
 
     const row = await getVoiceNoteById(testDb.db, view.voiceNoteId);
-    expect(row?.billed).toBe(false);
+    // Billing genuinely unknown (the vendor may or may not have charged) → null,
+    // NOT false.
+    expect(row?.billed).toBeNull();
     expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS); // no refund
   });
 
@@ -610,7 +616,8 @@ describe("voice-notes service: detached dispatch settle paths", () => {
     expect(row?.state).toBe("failed_after_dispatch"); // never indeterminate, never a throw
     expect(row?.audioBytes).toBeNull();
     expect(row?.audioBytesLen).toBeNull();
-    expect(row?.billed).toBe(false);
+    // Vendor synthesized (and may have billed), artifact discarded → unknown.
+    expect(row?.billed).toBeNull();
     // Billed-unknown → estimate stays charged (no refund).
     expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
   });
