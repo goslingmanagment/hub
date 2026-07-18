@@ -38,6 +38,25 @@ describe("coach-chat prompt", () => {
     expect(text).toMatch(/full recap.*3 day/i); // age labels
   });
 
+  it("tail-truncates an oversized recap on code points — never splits a surrogate pair", () => {
+    // RECAP_ATTACH_MAX_CHARS is 30_000; a recap of pure emoji (surrogate pairs)
+    // well past it forces the bounded() tail cut. A raw UTF-16 slice at 30_000
+    // could leave a lone high surrogate; the code-point-safe slice must not.
+    const built = buildPrompt({
+      ...baseInput,
+      recapAttach: {
+        full: { body: "🎉".repeat(40_000), ageMs: 60_000 },
+        short: null,
+      },
+    });
+    // Assert on the RAW block text, not JSON.stringify — the latter escapes a
+    // lone surrogate to \uXXXX and would mask the very bug under test.
+    const text = built.userBlocks.map((block) => block.text).join("");
+    expect(text).toContain("[recap truncated]"); // truncation actually fired
+    expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/); // no lone high surrogate
+    expect(text).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/); // no lone low surrogate
+  });
+
   it("sheds oldest history entries over the prompt budget", () => {
     const big = Array.from({ length: 20 }, (_, i) => ({
       question: `q${i} ` + "x".repeat(1900),

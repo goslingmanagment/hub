@@ -6,6 +6,7 @@ only, no prose padding. Hard limit: keep the whole recap under 350 words.
 
 - Only claims grounded in the transcript/data below; no speculation.
 - Money numbers verbatim from the spending data.
+- Write the recap in Russian. English terms are acceptable where they sound more natural (e.g. attachment style, churn risk, girlfriend experience).
 
 ## Sections
 
@@ -28,4 +29,4 @@ only, no prose padding. Hard limit: keep the whole recap under 350 words.
 
 ## Your Task
 
-Write the compact recap now, sections 1-6, under 350 words total.
+Write the compact recap now, sections 1-6, under 350 words total. Write in Russian.

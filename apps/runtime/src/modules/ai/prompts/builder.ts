@@ -395,10 +395,17 @@ function recapSection(attach: RecapAttach | undefined): string {
   if (!attach || (!attach.full && !attach.short)) {
     return '';
   }
-  const bounded = (body: string): string =>
-    body.length > RECAP_ATTACH_MAX_CHARS
-      ? body.slice(0, RECAP_ATTACH_MAX_CHARS) + '\n[recap truncated]'
+  // Code-point-safe tail truncation (P2-9): model-written recaps of a DM
+  // conversation routinely contain emoji (surrogate pairs), and a raw UTF-16
+  // slice at RECAP_ATTACH_MAX_CHARS could split one, emitting a lone surrogate
+  // into the escaped prompt / JSON body. Slice on code points, exactly as
+  // projectCoachAnswer does.
+  const bounded = (body: string): string => {
+    const codePoints = Array.from(body);
+    return codePoints.length > RECAP_ATTACH_MAX_CHARS
+      ? codePoints.slice(0, RECAP_ATTACH_MAX_CHARS).join('') + '\n[recap truncated]'
       : body;
+  };
   const parts: string[] = ['## Fan Recaps\n'];
   if (attach.full) {
     parts.push(
