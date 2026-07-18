@@ -4653,13 +4653,30 @@ replayed each turn as `coachHistory` (completed exchanges only, oldest first)
 alongside the required free-form `chatterQuestion`; the kernel keeps no
 session. `chatterQuestion` is 1–2000 chars, required for coach-chat and
 rejected for every other feature; `coachHistory` is coach-only with a hard
-ceiling of ≤20 entries, `question` ≤2000 / `answer` ≤10000 chars, aggregate
-≤120k chars, so a client trimming to its window setting is never rejected, and
-coach output tokens are capped below the per-entry bound so every committed
-answer is serializable into the next turn's history. When the prompt cannot
-fit the worst case, core sheds deterministically: protect the question, the
-safety/methodology system prompt, and the newest transcript, then drop oldest
-coach exchanges, then trim/dedupe recap and dossier. An unrecognized feature
+ceiling of ≤20 entries, `question` ≤2000 chars, `answer` ≤64000 chars.
+Serializability follows the owner-approved option "c" (2026-07-18): the coach
+keeps its adaptive thinking budget (16k, no output-token cap games), and the
+`answer` bound is a TRANSPORT ceiling, not a prompt bound. The same
+`COACH_ANSWER_MAX_CHARS` (64000, one shared contract constant) is enforced
+identically on the live coach-chat output stream — a generation whose
+accumulated visible output crosses it errors WITHOUT a `done` frame and is
+terminal-recorded as failed, so it can never be attached/committed. Therefore
+every committed answer is ≤ the ceiling and replays verbatim within schema. The
+old 120k aggregate reject is REMOVED (a schema-valid-yet-gate-rejected zone was
+an API defect): a client trimming to its window setting is never rejected, and
+transport abuse is the route's job (a scoped 4MB body limit sized for the worst
+case: 20×66k history + a 300k transcript + escaping). The 2500-token base
+`max_tokens` is NOT a character-serializability guarantee and must not be
+described as one; prompt cost is bounded core-side instead. Before assembly core
+projects each accepted history answer to a ≤10k head+tail replay (6000 head +
+3800 tail + an explicit `[… N chars omitted …]` marker, code-point-safe), then
+the newest-first 60k history budget sheds on the EXACT rendered size (escaping +
+XML-wrapper overhead included), so an oversized newest entry can no longer
+overshoot the budget. The extension applies the same ≤10k projection only as a
+bandwidth optimization; correctness never depends on it. When the prompt still
+cannot fit the worst case, core sheds deterministically: protect the question,
+the safety/methodology system prompt, and the newest transcript, then drop
+oldest coach exchanges, then trim/dedupe recap and dossier. An unrecognized feature
 name returns the structured `unknown_ai_feature` error (not a bare 404) so the
 extension can distinguish "needs a newer Hub" from an unauthorized/missing
 page.
