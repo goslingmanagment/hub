@@ -2057,7 +2057,34 @@ export const COACH_ANSWER_MAX_CHARS = 64_000;
 // genuine transport abuse still 413s. Kept in the contract next to the schema
 // so the limit and the field caps that drive it cannot drift apart; asserted
 // against the measured worst case in tests/contracts-coach-body.test.ts.
+//
+// Round-3 P1-2: the 3-bytes/char ceiling only holds because the LARGE string
+// fields ban ASCII control chars (`noAsciiControl` below). Left unbanned, a
+// U+0000 is legal in a JSON string yet escapes to the six-byte `\u0000` on the
+// wire, so a fully-U+0000 worst case reaches ~11.8MB and 413s a contract-valid
+// body. With control chars rejected, the only remaining multi-byte legal chars
+// are 3-byte UTF-8 (×3, the ceiling) and the whitespace escapes \n \r \t
+// (→ two-byte `\n` etc., cheaper), so ~5.06MB stands and 8 MiB holds.
 export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
+
+// Reject ASCII control characters (< 0x20) EXCEPT the whitespace \t \n \r, which
+// JSON escapes cheaply (two bytes). Applied to the large free-text fields so the
+// pre-Zod byte-budget math above (3 UTF-8 bytes/char) cannot be defeated by
+// control chars that escape to six-byte `\uXXXX` sequences on the wire. Small
+// scalar fields (labels, refs, names) are left unrefined — they are not part of
+// the worst-case bulk and never carry legitimate control bytes.
+// Matching control characters is the whole point of this refinement, so the
+// no-control-regex lint is intentionally disabled for this pattern.
+// eslint-disable-next-line no-control-regex
+const ASCII_CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
+const NO_ASCII_CONTROL_MESSAGE =
+  "must not contain ASCII control characters (only tab, newline, and carriage return are allowed)";
+const noAsciiControl = (value: string): boolean => !ASCII_CONTROL_PATTERN.test(value);
+// Apply the control-char ban to a large free-text field. Callers keep .min()/.max()
+// on the base ZodString (the refine must come last on the string) and may still
+// chain .optional()/.default() after — both are valid on the resulting ZodEffects.
+const largeText = <T extends z.ZodString>(base: T) =>
+  base.refine(noAsciiControl, NO_ASCII_CONTROL_MESSAGE);
 
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
@@ -2072,14 +2099,14 @@ export const aiFeatureStreamBodySchema = z.object({
   replyTone: z.enum(["none", "casual", "flirty", "upsell", "spicy"]).optional(),
   replyMode: z.enum(["default", "preferSplit"]).optional(),
   messageCount: z.number().int().min(5).max(3000).optional(),
-  draftText: z.string().min(1).max(20_000).optional(),
+  draftText: largeText(z.string().min(1).max(20_000)).optional(),
   isRegeneration: z.boolean().optional(),
-  chatterQuestion: z.string().min(1).max(2_000).optional(),
+  chatterQuestion: largeText(z.string().min(1).max(2_000)).optional(),
   coachHistory: z
     .array(
       z.object({
-        question: z.string().min(1).max(2_000),
-        answer: z.string().min(1).max(COACH_ANSWER_MAX_CHARS),
+        question: largeText(z.string().min(1).max(2_000)),
+        answer: largeText(z.string().min(1).max(COACH_ANSWER_MAX_CHARS)),
       }).strict(),
     )
     .max(20)
@@ -2093,12 +2120,12 @@ export const aiFeatureStreamBodySchema = z.object({
   // land verbatim in the assembled prompt and are captured under the
   // Stage 29 restricted class exactly like archive-loaded context.
   clientContext: z.object({
-    transcript: z.string().min(1).max(300_000),
+    transcript: largeText(z.string().min(1).max(300_000)),
     messageCount: z.number().int().min(0).max(5000),
     fanDisplayName: z.string().max(200),
-    fanSpendingData: z.string().max(20_000).default(""),
-    fanSubscriptionData: z.string().max(20_000).default(""),
-    fanBio: z.string().max(5_000).optional(),
+    fanSpendingData: largeText(z.string().max(20_000)).default(""),
+    fanSubscriptionData: largeText(z.string().max(20_000)).default(""),
+    fanBio: largeText(z.string().max(5_000)).optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
     transcriptCoverage: z.enum(["full-history", "window"]).optional(),
   }).strict().optional(),

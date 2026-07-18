@@ -111,4 +111,62 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // The raised limit must clear it with headroom.
     expect(bytes).toBeLessThan(AI_FEATURE_STREAM_BODY_LIMIT_BYTES);
   });
+
+  // Round-3 P1-2: control chars are now BANNED in the large fields, so the
+  // 3-byte "の" ceiling above is the true worst case. Two guards keep it honest.
+  it("(a) a newline-heavy maximal body is schema-valid and still fits 8 MiB", () => {
+    // \n is an ALLOWED control char; it escapes to the two-byte "\\n" on the
+    // wire — cheaper per code unit than the 3-byte "の", so a fully-newline body
+    // sits comfortably under the same limit the "の" worst case clears.
+    const nl = (units: number) => "\n".repeat(units);
+    const newlineWorstCase = {
+      clientRequestId: "5f0c9d5e-3b6a-4d3e-9a10-6a3d2b1c0e9f",
+      pageLabel: "demo-page",
+      platform: "fansly",
+      conversationRef: "group-123",
+      draftText: nl(20_000),
+      chatterQuestion: nl(2_000),
+      coachHistory: Array.from({ length: 20 }, () => ({
+        question: nl(2_000),
+        answer: nl(COACH_ANSWER_MAX_CHARS),
+      })),
+      clientContext: {
+        transcript: nl(300_000),
+        messageCount: 5000,
+        fanDisplayName: "Bob",
+        fanSpendingData: nl(20_000),
+        fanSubscriptionData: nl(20_000),
+        fanBio: nl(5_000),
+      },
+    };
+    expect(schema.safeParse(newlineWorstCase).success, "newline body must be schema-valid").toBe(true);
+    const bytes = Buffer.byteLength(JSON.stringify(newlineWorstCase), "utf8");
+    expect(bytes).toBeLessThan(AI_FEATURE_STREAM_BODY_LIMIT_BYTES);
+  });
+
+  it("(b) a body carrying ASCII control chars is REJECTED by the schema", () => {
+    const base = {
+      clientRequestId: "5f0c9d5e-3b6a-4d3e-9a10-6a3d2b1c0e9f",
+      pageLabel: "demo-page",
+      platform: "fansly",
+      conversationRef: "group-123",
+    };
+    // A NUL in any refined large field fails validation before the body limit
+    // even matters — this is the escape-expansion hole the report flagged.
+    expect(schema.safeParse({ ...base, draftText: "hello\u0000world" }).success).toBe(false);
+    expect(schema.safeParse({
+      ...base,
+      clientContext: {
+        transcript: "fan: hi\u0007", // BEL (0x07) — a control char
+        messageCount: 1,
+        fanDisplayName: "Bob",
+      },
+    }).success).toBe(false);
+    expect(schema.safeParse({
+      ...base,
+      coachHistory: [{ question: "q", answer: "a\u001Bb" }], // ESC (0x1B)
+    }).success).toBe(false);
+    // The allowed whitespace control chars stay accepted.
+    expect(schema.safeParse({ ...base, draftText: "line1\nline2\ttabbed\r" }).success).toBe(true);
+  });
 });
