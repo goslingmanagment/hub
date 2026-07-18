@@ -730,26 +730,36 @@ export function buildProgram() {
     .action(async (options) => {
       // Fail fast with a clear CLI message instead of a server 400: the T5 gate
       // rejects coach-chat without a chatterQuestion before any provider call.
+      // This is platform-independent, so it stays ahead of the app context.
       if (options.feature === "coach-chat" && !options.question?.trim()) {
         throw new Error("coach-chat requires --question <text>");
-      }
-      // Blocker 2 (P1-2c): canonical Fansly coach-chat REQUIRES --fan — the
-      // conversation is the groupId, so a generation keyed only by the
-      // conversation ref would survive fan-scope erasure. Fail fast to match the
-      // server gate before any provider spend.
-      if (options.feature === "coach-chat" && !options.fan?.trim()) {
-        throw new Error("coach-chat requires --fan <ref>");
       }
       const app = await createAppContext();
       try {
         const { prepareAiFeatureStream } = await import("./modules/ai/index.ts");
-        const user = await findUserByUsername(app.db, options.as);
-        if (!user) {
-          throw new Error(`unknown user: ${options.as}`);
-        }
+        // Resolve the page BEFORE the platform-specific --fan guard: the server
+        // requires fanRef only on Fansly (P1-3), where the conversation is the
+        // canonical groupId. On OnlyFans the conversation IS the fan id, so a
+        // valid smoke needs no --fan. Load the page first so the guard keys off
+        // the REAL platform instead of rejecting every coach-chat.
         const pageRow = await findPageByLabel(app.db, options.page);
         if (!pageRow) {
           throw new Error(`unknown page: ${options.page}`);
+        }
+        // Blocker 2 (P1-3): canonical Fansly coach-chat REQUIRES --fan so the
+        // stored record's fan_ref carries the fan identity (conversationRef is
+        // the groupId, which survives fan-scope erasure). Fail fast to match the
+        // server gate before any provider spend.
+        if (
+          options.feature === "coach-chat"
+          && pageRow.page.platform === "fansly"
+          && !options.fan?.trim()
+        ) {
+          throw new Error("coach-chat requires --fan <ref> on fansly");
+        }
+        const user = await findUserByUsername(app.db, options.as);
+        if (!user) {
+          throw new Error(`unknown user: ${options.as}`);
         }
         const startedAt = Date.now();
         // Operator smoke runs as the named user with owner-style page reach
