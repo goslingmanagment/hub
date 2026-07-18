@@ -162,6 +162,32 @@ describe("coach history section budget (exact rendered size)", () => {
     expect(section).toContain("<coach>plain answer text</coach>");
     expect(section).not.toContain("chars omitted");
   });
+
+  it("shrinks the newest entry when '&'-escaping inflates its rendered size past the budget", () => {
+    // Round-4 P2-5: the newest entry used to bypass the budget entirely (the
+    // old kept.length>0 guard). Every '&' escapes to the 5-char '&amp;', so a
+    // MAX question (2000 '&' -> 10000 rendered) plus a projection-cap answer
+    // (10000 '&', a projectCoachAnswer no-op, -> 50000 rendered) plus the XML
+    // wrapper renders to ~60076 -- OVER the 60k budget. The newest entry must be
+    // re-projected smaller until its RENDERED (escaped+wrapped) form fits.
+    const section = coachHistorySection([
+      { question: "&".repeat(2_000), answer: "&".repeat(10_000) },
+    ]);
+    expect(section.length).toBeLessThanOrEqual(60_000);
+    // It was shrunk, not dropped: the shrink projection leaves the omission
+    // marker, and the (escaped) newest question is still present.
+    expect(section).toContain("chars omitted");
+    expect(section).toContain("&amp;".repeat(1)); // question rendered, escaped
+  });
+
+  it("shrinks the newest entry even when it is the ONLY entry (max question + max answer)", () => {
+    // The worst legal single entry: 2000-char question + 64000-char answer, all
+    // '&'. Proves the guarantee holds with nothing older to shed.
+    const section = coachHistorySection([
+      { question: "&".repeat(2_000), answer: "&".repeat(64_000) },
+    ]);
+    expect(section.length).toBeLessThanOrEqual(60_000);
+  });
 });
 
 describe("fan-summary short variant", () => {

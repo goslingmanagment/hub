@@ -307,6 +307,16 @@ const COACH_ANSWER_PROJECTION_MAX_CHARS = 10_000;
 const COACH_ANSWER_PROJECTION_HEAD_CHARS = 6_000;
 const COACH_ANSWER_PROJECTION_TAIL_CHARS = 3_800;
 
+/** Code-point-safe head+tail slice with an explicit omission marker between the
+ * two verbatim ends (never splits a surrogate pair). Shared by the default
+ * projection and the newest-entry budget shrink below. */
+function sliceCoachAnswer(codePoints: string[], headChars: number, tailChars: number): string {
+  const head = codePoints.slice(0, headChars).join('');
+  const tail = codePoints.slice(codePoints.length - tailChars).join('');
+  const omitted = codePoints.length - headChars - tailChars;
+  return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
+}
+
 /** Projects a committed coach answer to ≤10k chars for prompt replay: the head
  * and tail verbatim with an explicit omission marker between them. Slicing is
  * code-point-safe (never splits a surrogate pair). An answer already within the
@@ -317,15 +327,21 @@ export function projectCoachAnswer(answer: string): string {
   if (codePoints.length <= COACH_ANSWER_PROJECTION_MAX_CHARS) {
     return answer;
   }
-  const head = codePoints.slice(0, COACH_ANSWER_PROJECTION_HEAD_CHARS).join('');
-  const tail = codePoints
-    .slice(codePoints.length - COACH_ANSWER_PROJECTION_TAIL_CHARS)
-    .join('');
-  const omitted =
-    codePoints.length
-    - COACH_ANSWER_PROJECTION_HEAD_CHARS
-    - COACH_ANSWER_PROJECTION_TAIL_CHARS;
-  return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
+  return sliceCoachAnswer(
+    codePoints,
+    COACH_ANSWER_PROJECTION_HEAD_CHARS,
+    COACH_ANSWER_PROJECTION_TAIL_CHARS,
+  );
+}
+
+/** Re-projects an answer to a caller-chosen head+tail (used only by the
+ * newest-entry budget shrink). No-op when the answer already fits head+tail. */
+function projectCoachAnswerSized(answer: string, headChars: number, tailChars: number): string {
+  const codePoints = Array.from(answer);
+  if (codePoints.length <= headChars + tailChars) {
+    return answer;
+  }
+  return sliceCoachAnswer(codePoints, headChars, tailChars);
 }
 
 /** Renders the kept coach exchanges (oldest-first, 1-indexed) into their escaped,
@@ -358,9 +374,32 @@ export function coachHistorySection(history: CoachHistoryEntry[] | undefined): s
     question: entry.question,
     answer: projectCoachAnswer(entry.answer),
   }));
+  // P2-5: the newest entry is always kept, but it must ALSO fit the budget on
+  // its own. XML-escaping inflates rendered size up to ~5× (every '&' → '&amp;'),
+  // so a MAX question (2k chars) plus a projection-cap answer (10k) can render to
+  // ~60k+ once escaped and wrapped — the old `kept.length > 0` guard let that
+  // single entry through whole. If the newest entry's RENDERED size exceeds the
+  // budget, re-project its answer from the ORIGINAL with progressively smaller
+  // (halving) head+tail until the single-entry rendered section fits. The
+  // question is ≤2k chars (≤10k escaped) so a fully-omitted answer always fits —
+  // the loop terminates. Only the newest entry is shrunk; older ones are shed.
+  const newestIndex = projected.length - 1;
+  let headChars = COACH_ANSWER_PROJECTION_HEAD_CHARS;
+  let tailChars = COACH_ANSWER_PROJECTION_TAIL_CHARS;
+  while (
+    renderCoachExchanges([projected[newestIndex]!]).length > COACH_PROMPT_HISTORY_BUDGET_CHARS
+    && (headChars > 0 || tailChars > 0)
+  ) {
+    headChars = Math.floor(headChars / 2);
+    tailChars = Math.floor(tailChars / 2);
+    projected[newestIndex] = {
+      question: history[newestIndex]!.question,
+      answer: projectCoachAnswerSized(history[newestIndex]!.answer, headChars, tailChars),
+    };
+  }
   // Walk newest→oldest, growing the (oldest-first) kept window while the FULLY
-  // RENDERED section stays inside the budget. At least the newest entry is always
-  // kept (projection already bounds it), so the section is never empty.
+  // RENDERED section stays inside the budget. The newest entry (now bounded to
+  // the budget above) is always kept, so the section is never empty.
   let kept: CoachHistoryEntry[] = [];
   for (let i = projected.length - 1; i >= 0; i -= 1) {
     const candidate = [projected[i]!, ...kept];
