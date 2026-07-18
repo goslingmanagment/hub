@@ -720,11 +720,18 @@ export function buildProgram() {
     .description("Stage 30: exercise a kernel AI feature end-to-end against this environment (spends provider budget)")
     .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting | coach-chat")
     .requiredOption("--page <label>", "page label")
-    .requiredOption("--conversation <ref>", "fan conversation ref (OF: the fan id)")
+    .requiredOption("--conversation <ref>", "conversation ref (OF: the fan id; Fansly canonical: the groupId)")
     .requiredOption("--as <username>", "chatter/owner user the generation is attributed to")
     .option("--draft <text>", "improve-draft input")
+    .option("--question <text>", "coach-chat: the chatter's question (required for coach-chat)")
+    .option("--fan <ref>", "canonical fan ref (Fansly: separate from the --conversation groupId)")
     .option("--model <model>", "gateway model override")
     .action(async (options) => {
+      // Fail fast with a clear CLI message instead of a server 400: the T5 gate
+      // rejects coach-chat without a chatterQuestion before any provider call.
+      if (options.feature === "coach-chat" && !options.question?.trim()) {
+        throw new Error("coach-chat requires --question <text>");
+      }
       const app = await createAppContext();
       try {
         const { prepareAiFeatureStream } = await import("./modules/ai/index.ts");
@@ -754,6 +761,8 @@ export function buildProgram() {
             platform: pageRow.page.platform as "onlyfans" | "fansly",
             conversationRef: options.conversation,
             ...(options.draft ? { draftText: options.draft } : {}),
+            ...(options.question ? { chatterQuestion: options.question } : {}),
+            ...(options.fan ? { fanRef: options.fan } : {}),
             ...(options.model ? { model: options.model } : {}),
           },
         );

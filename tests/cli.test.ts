@@ -1034,4 +1034,27 @@ describe("CLI parsing", () => {
       "- run=13 page=lana stream=light event=phase_started severity=warn Still running",
     );
   });
+
+  it("ai:feature-smoke fails fast on coach-chat without --question", async () => {
+    // Blocker 5: the T5 gate rejects coach-chat with no chatterQuestion, so the
+    // smoke must fail with a clear CLI message BEFORE opening the app context /
+    // spending a provider call — never a bare server 400.
+    const program = buildProgram();
+    program.exitOverride();
+
+    await expect(program.parseAsync([
+      "ai:feature-smoke",
+      "--feature",
+      "coach-chat",
+      "--page",
+      "svc-of",
+      "--conversation",
+      "group-1",
+      "--as",
+      "owner",
+    ], { from: "user" })).rejects.toThrow("coach-chat requires --question");
+
+    // The guard runs ahead of any I/O — the app context is never created.
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
 });
