@@ -74,6 +74,29 @@ describe("compose config", () => {
     expect(worker).toContain("stale worker health file");
   });
 
+  it("requires one explicit host directory for read-only OFAPI export artifacts", async () => {
+    const compose = await readComposeFile("docker-compose.production.yml");
+    const productionEnv = await readComposeFile(".env.production.example");
+    const gitignore = await readComposeFile(".gitignore");
+    const dockerignore = await readComposeFile(".dockerignore");
+    const api = getServiceBlock(compose, "api");
+    const worker = getServiceBlock(compose, "worker");
+    const requiredMount = "${OFAPI_EXPORT_ARTIFACT_HOST_DIR:?Set "
+      + "OFAPI_EXPORT_ARTIFACT_HOST_DIR to an absolute host path in .env.production}:"
+      + "${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro";
+
+    expect(api).toContain(requiredMount);
+    expect(worker).toContain(requiredMount);
+    expect(compose).not.toContain("OFAPI_EXPORT_ARTIFACT_HOST_DIR:-./");
+    expect(productionEnv).toContain(
+      "OFAPI_EXPORT_ARTIFACT_HOST_DIR=/opt/agency-hub-artifacts/ofapi-export",
+    );
+    expect(productionEnv).toContain("mode 0700");
+    expect(productionEnv).toContain("CSVs must be 0600");
+    expect(gitignore.split(/\r?\n/)).toContain("/ofapi-export-artifacts/");
+    expect(dockerignore.split(/\r?\n/)).toContain("/ofapi-export-artifacts/");
+  });
+
   // Review finding: the scheduler is the only cron timekeeper — a wedged (not
   // crashed) one silently stalls the planner, sweeps and reports. Its health
   // file refreshes only after a successful heartbeat upsert, so mtime

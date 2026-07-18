@@ -269,6 +269,7 @@ async function createExportQuoteExecutionFixture(
     profile?: "pilot_chats" | "fleet_tail";
     maxMessages?: number;
     chatIds?: string[];
+    endDate?: string;
   } = {},
 ) {
   const seeded = await seed();
@@ -296,7 +297,7 @@ async function createExportQuoteExecutionFixture(
       type: "chat_messages",
       accountIds: [seeded.accountId],
       startDate: "2016-11-01T00:00:00.000Z",
-      endDate: "2026-07-16T00:00:00.000Z",
+      endDate: options.endDate ?? "2026-07-16T00:00:00.000Z",
       fileType: "csv",
       maxMessages: options.maxMessages ?? 10_000_000,
       quoteTtlMinutes: 1_440,
@@ -2292,6 +2293,43 @@ describe("OFAPI capture correctness repository", () => {
     })).toEqual({ cancelled: true, currentState: "cancelled" });
   });
 
+  it("does not widen a non-midnight export end to the end of its UTC day", async () => {
+    if (!testDb) return;
+    const dispatchGovernedRaw = vi.fn(async (
+      _context: unknown,
+      request: { beforeDispatch: () => Promise<boolean> },
+    ) => {
+      if (!await request.beforeDispatch()) throw new Error("dispatch fence lost");
+      return {
+        status: 200,
+        bodyBytes: Buffer.from(JSON.stringify({
+          data: {
+            id: "data_export_intraday_end",
+            type: "chat_messages",
+            status: "calculating_credits",
+            start_date: "2016-11-01T00:00:00+00:00",
+            end_date: "2026-07-16T23:59:59+00:00",
+            file_type: "csv",
+          },
+          _meta: { _credits: { used: 0, balance: 1_000 } },
+        })),
+        headers: { "content-type": "application/json" },
+        receivedAt: new Date(),
+      };
+    });
+    const fixture = await createExportQuoteExecutionFixture(dispatchGovernedRaw, {
+      endDate: "2026-07-16T12:00:00.000Z",
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    expect(dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "blocked",
+      reasonCode: "export_contract_rejected",
+    });
+  });
+
   it("starts one owner-approved bounded pilot and reconciles its terminal cost", async () => {
     if (!testDb) return;
     const calls: Array<{ method: string; pathname: string }> = [];
@@ -2388,6 +2426,10 @@ describe("OFAPI capture correctness repository", () => {
       reason: "bounded integration pilot",
       execute: true,
     })).toMatchObject({ outcome: "approved" });
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      maxCredits: quoted!.spentCredits + 50 + 4,
+      maxCalls: quoted!.attemptCount + 1 + 288,
+    });
 
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
     expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({

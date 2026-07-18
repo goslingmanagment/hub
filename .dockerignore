@@ -12,6 +12,7 @@ coverage
 output
 /ofapi-export-artifacts/
 tmp
+/ofapi-export-artifacts/
 .sessions
 .lilly2-session.json
 .om-token

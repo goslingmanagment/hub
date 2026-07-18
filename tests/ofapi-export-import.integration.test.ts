@@ -182,7 +182,9 @@ describe("OFAPI export artifact import", () => {
       type: "chat_messages",
       accountIds: ["acct-export-test"],
       startDate: "2016-11-01T00:00:00.000Z",
-      endDate: "2026-07-15T00:00:00.000Z",
+      // Vendor-normalized midnight means the inclusive end of this UTC day.
+      // Both artifact rows below are later on 2026-07-14 and must remain valid.
+      endDate: "2026-07-14T00:00:00.000Z",
       fileType: "csv",
       maxMessages: 1_000,
       quoteTtlMinutes: 1_440,

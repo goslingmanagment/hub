@@ -30,6 +30,9 @@ const OFAPI_STORAGE_HEALTH_RETRY_MS = 5 * 60 * 1000;
 const OFAPI_BUDGET_RECHECK_MS = 15 * 60 * 1000;
 const OFAPI_PAUSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const OFAPI_DEADLINE_RECHECK_MS = 60 * 1000;
+const OFAPI_EXPORT_STATUS_POLL_CREDIT_ALLOWANCE = 4;
+const OFAPI_EXPORT_START_CALL_ALLOWANCE = 1;
+const OFAPI_EXPORT_STARTED_STATUS_POLL_CALL_ALLOWANCE = 288;
 
 export class OfapiCaptureInvariantError extends Error {
   constructor(message: string) {
@@ -3263,7 +3266,15 @@ export async function approveBlockedOfapiExportPilotJob(
             cursor_hash = ${nextCursorHash},
             max_credits = greatest(
               coalesce(max_credits, 0),
-              spent_credits + ${approvedMaxCredits} + 1
+              spent_credits
+                + ${approvedMaxCredits}
+                + ${OFAPI_EXPORT_STATUS_POLL_CREDIT_ALLOWANCE}
+            ),
+            max_calls = greatest(
+              coalesce(max_calls, 0),
+              attempt_count
+                + ${OFAPI_EXPORT_START_CALL_ALLOWANCE}
+                + ${OFAPI_EXPORT_STARTED_STATUS_POLL_CALL_ALLOWANCE}
             ),
             reason_code = null,
             reason_message = null,

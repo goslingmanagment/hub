@@ -22,6 +22,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { OFAPI_CAPTURE_MATERIALIZER_VERSION } from "./ofapi-capture-materialization.ts";
 import {
+  effectiveOfapiExportEndDate,
   parseOfapiExportCursor,
   parseOfapiExportTarget,
 } from "./ofapi-export-quotes.ts";
@@ -164,13 +165,30 @@ function nonnegativeMoney(value: string, field: string) {
   return parsed;
 }
 
-function vendorTimestamp(value: string, field: string, nullable = false) {
+export function parseOfapiExportCsvTimestamp(value: string, field: string, nullable = false) {
   if (nullable && value === "") return null;
-  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/,
+  );
+  if (!match) {
     throw new Error(`CSV ${field} has an unknown timestamp shape`);
   }
-  const parsed = new Date(`${value.replace(" ", "T")}Z`);
-  if (Number.isNaN(parsed.getTime())) throw new Error(`CSV ${field} is invalid`);
+  const [year, month, day, hour, minute, second] = match
+    .slice(1)
+    .map((component) => Number(component)) as [number, number, number, number, number, number];
+  const parsed = new Date(0);
+  parsed.setUTCFullYear(year, month - 1, day);
+  parsed.setUTCHours(hour, minute, second, 0);
+  if (
+    parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+    || parsed.getUTCHours() !== hour
+    || parsed.getUTCMinutes() !== minute
+    || parsed.getUTCSeconds() !== second
+  ) {
+    throw new Error(`CSV ${field} is invalid`);
+  }
   return parsed;
 }
 
@@ -223,7 +241,11 @@ async function inspectPilotArtifact(input: {
   }
 
   const startMs = new Date(input.expectedStartDate).getTime();
-  const endMs = new Date(input.expectedEndDate).getTime();
+  const effectiveEnd = effectiveOfapiExportEndDate(input.expectedEndDate);
+  const endMs = effectiveEnd?.getTime() ?? Number.NaN;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+    throw new Error("Frozen OFAPI export date range is invalid");
+  }
   const expectedChats = new Set(input.expectedChatIds);
   const messageIds = new Set<string>();
   const grouped = new Map<string, Record<string, unknown>[]>();
@@ -252,8 +274,11 @@ async function inspectPilotArtifact(input: {
     if (sentBy !== "creator" && sentBy !== "fan") {
       throw new Error("OFAPI chat-export sent_by is outside creator|fan");
     }
-    const createdAt = vendorTimestamp(row.onlyfans_created_at!, "onlyfans_created_at")!;
-    const changedAt = vendorTimestamp(
+    const createdAt = parseOfapiExportCsvTimestamp(
+      row.onlyfans_created_at!,
+      "onlyfans_created_at",
+    )!;
+    const changedAt = parseOfapiExportCsvTimestamp(
       row.onlyfans_changed_at!,
       "onlyfans_changed_at",
       true,
