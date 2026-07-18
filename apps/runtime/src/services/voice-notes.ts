@@ -34,6 +34,7 @@ import {
   type VoiceNoteStatusRow,
 } from "@agency_hub_core/db";
 import { findPageByLabel } from "@agency_hub_core/db";
+import { redactSensitiveText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
@@ -551,7 +552,9 @@ function assertRefControlCharFree(
  * fenced by the attempt token — a lost fence is a strict no-op — and the budget
  * is reconciled/released only when the fence is won.
  */
-async function dispatchVoiceNote(
+// Exported for the log-hygiene test (a forced settle fault must not spill the
+// audio buffer into the log); production callers still fire it fire-and-forget.
+export async function dispatchVoiceNote(
   app: AppContext,
   input: {
     row: VoiceNoteRow;
@@ -730,7 +733,13 @@ async function dispatchVoiceNote(
     // BOTH back atomically: the row stays 'dispatched' with its reservation
     // intact and the lease sweep reclaims it as 'indeterminate'. There is no
     // longer a window where the state settled but the budget delta was lost.
-    app.logger.error({ voiceNoteId: row.id, error }, "voice note dispatch failed unexpectedly");
+    // NEVER log the raw error object here: a settle fault is a DrizzleQueryError
+    // whose `params` (and message text) embed the bound SQL params — including
+    // the up-to-2 MB audio BYTEA. Log only sanitized type/code/message.
+    app.logger.error(
+      { voiceNoteId: row.id, error: describeErrorForLog(error) },
+      "voice note dispatch failed unexpectedly",
+    );
   } finally {
     // Close the egress seam on every path (no-op for the elevenlabs class, but
     // the seam is symmetric — a page/proxy dispatcher WOULD need closing).
@@ -738,7 +747,45 @@ async function dispatchVoiceNote(
   }
 }
 
-function isPageAllowlisted(csv: string | undefined, pageLabel: string): boolean {
+/** Pull a string `code` off an error (or its `cause` chain), else null. */
+function extractErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && code.trim().length > 0) {
+    return code.trim();
+  }
+  if ("cause" in error) {
+    return extractErrorCode((error as { cause?: unknown }).cause);
+  }
+  return null;
+}
+
+/**
+ * Safe log projection for a caught error. A Drizzle settle fault embeds the bound
+ * SQL params — for a voice-note that includes the up-to-2 MB audio buffer — in
+ * BOTH `error.params` and the message ("Failed query: … params: …"). For any
+ * query-style error we therefore report ONLY the type/code and drop the message
+ * body (mirroring the sync error sanitizer); other errors keep a redacted,
+ * length-capped message. Never returns the raw object.
+ */
+function describeErrorForLog(
+  error: unknown,
+): { name: string; code: string | null; message: string } {
+  const name = error instanceof Error && error.name ? error.name : "Error";
+  const code = extractErrorCode(error);
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const isQueryStyle = name === "DrizzleQueryError"
+    || rawMessage.includes("Failed query:")
+    || rawMessage.includes("params:");
+  const message = isQueryStyle
+    ? `${name}${code ? ` (${code})` : ""}`
+    : redactSensitiveText(rawMessage).slice(0, 512);
+  return { name, code, message };
+}
+
+export function isPageAllowlisted(csv: string | undefined, pageLabel: string): boolean {
   // Empty (or unset) = NONE — the allowlist fails CLOSED.
   if (!csv) {
     return false;

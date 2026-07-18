@@ -152,10 +152,18 @@ export function normalizeOpenApiDocument<T extends Record<string, unknown>>(spec
   // use `{param}` brace syntax.
   const audioResponse = paths?.["/api/v1/pages/{pageLabel}/voice-notes/{id}/audio"]
     ?.get?.responses?.["200"];
-  const audioJsonContent = audioResponse?.content?.["application/json"];
+  const audioJsonContent = audioResponse?.content?.["application/json"] as
+    | { schema?: Record<string, unknown> }
+    | undefined;
   if (audioResponse && audioJsonContent) {
+    // The Zod transformer only accepts a Zod schema for the body, so the route
+    // declares z.string() → a bare `type: string`. Rewrite it to the OpenAPI
+    // binary payload so external generators decode the MP3 as bytes, not text.
     audioResponse.content = {
-      "audio/mpeg": audioJsonContent,
+      "audio/mpeg": {
+        ...audioJsonContent,
+        schema: { ...(audioJsonContent.schema ?? {}), type: "string", format: "binary" },
+      },
     };
   }
 

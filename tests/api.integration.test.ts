@@ -51,8 +51,9 @@ import {
   resolveBusinessDateRange,
 } from "@agency_hub_core/shared";
 
-import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import { buildApiServer, normalizeOpenApiDocument } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import * as effectiveConfigModule from "../apps/runtime/src/services/effective-config.ts";
 import type { VoiceTtsProvider } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
@@ -8170,6 +8171,19 @@ describe("api integration", () => {
       bearerAuth: expect.any(Object),
       monitoringTokenAuth: expect.any(Object),
     });
+
+    // The voice-note audio route's 200 is a binary MP3 payload, not a JSON
+    // string — external generators must decode it as bytes (review R3-9).
+    const normalized = normalizeOpenApiDocument(
+      server.swagger() as unknown as Record<string, unknown>,
+    ) as {
+      paths?: Record<string, {
+        get?: { responses?: Record<string, { content?: Record<string, { schema?: Record<string, unknown> }> }> };
+      }>;
+    };
+    const audioSchema = normalized.paths?.["/api/v1/pages/{pageLabel}/voice-notes/{id}/audio"]
+      ?.get?.responses?.["200"]?.content?.["audio/mpeg"]?.schema;
+    expect(audioSchema).toMatchObject({ type: "string", format: "binary" });
   });
 
   it("uses UTC day boundaries for Fansly follower and subscriber daily rollups", async (context) => {
@@ -10553,6 +10567,35 @@ describe("api integration", () => {
         appContext.config.voiceNotesEnabled = false;
         expect((await read()).lana?.capabilities).toBeUndefined();
       } finally {
+        await voiceServer.close();
+      }
+    });
+
+    it("keeps GET /pages 200 (no capabilities) when the config lookup fails — fail-open", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, appContext } = await provisionVoice({ allowlist: "lana" });
+      // Obtain the session BEFORE breaking the config read (login must not be
+      // affected by the forced fault).
+      const cookie = await loginOwnerCookie(voiceServer);
+      const warnSpy = vi.spyOn(appContext.logger, "warn");
+      const configSpy = vi
+        .spyOn(effectiveConfigModule, "loadEffectiveConfig")
+        .mockRejectedValue(new Error("config_settings unavailable"));
+      try {
+        const res = await voiceServer.inject({
+          method: "GET",
+          url: "/api/v1/pages",
+          headers: { cookie },
+        });
+        // The optional hint's failure must not 500 the primary list endpoint.
+        expect(res.statusCode).toBe(200);
+        const pages = res.json() as Array<{ label: string; capabilities?: unknown }>;
+        expect(pages.length).toBeGreaterThan(0);
+        // Missing field reads as disabled — no page carries a capabilities hint.
+        expect(pages.every((p) => p.capabilities === undefined)).toBe(true);
+        expect(warnSpy).toHaveBeenCalled();
+      } finally {
+        configSpy.mockRestore();
         await voiceServer.close();
       }
     });

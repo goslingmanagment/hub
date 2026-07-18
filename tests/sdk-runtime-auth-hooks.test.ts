@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createKernelClient,
+  fetchVoiceNoteAudio,
   subscribeSyncEvents,
 } from "../packages/contracts/src/sdk-runtime.ts";
 
@@ -38,6 +39,39 @@ describe("onAuthError coverage beyond the typed path", () => {
 
     const response = await client.raw("ping");
     expect(response.status).toBe(500);
+    expect(onAuthError).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403])(
+    "fetchVoiceNoteAudio notifies the hook on %i and still returns the response",
+    async (status) => {
+      const onAuthError = vi.fn();
+      const response = await fetchVoiceNoteAudio(
+        {
+          baseUrl: "http://kernel.test",
+          onAuthError,
+          fetch: (async () => new Response("nope", { status })) as never,
+        },
+        { pageLabel: "lana", id: 7 },
+      );
+      expect(response.status).toBe(status);
+      expect(onAuthError).toHaveBeenCalledTimes(1);
+      expect(onAuthError.mock.calls[0]![0].category).toBe("auth");
+      expect(onAuthError.mock.calls[0]![1]).toBeNull();
+    },
+  );
+
+  it("fetchVoiceNoteAudio stays silent on a non-auth status (e.g. 410 artifact_expired)", async () => {
+    const onAuthError = vi.fn();
+    const response = await fetchVoiceNoteAudio(
+      {
+        baseUrl: "http://kernel.test",
+        onAuthError,
+        fetch: (async () => new Response("{}", { status: 410 })) as never,
+      },
+      { pageLabel: "lana", id: 7 },
+    );
+    expect(response.status).toBe(410);
     expect(onAuthError).not.toHaveBeenCalled();
   });
 

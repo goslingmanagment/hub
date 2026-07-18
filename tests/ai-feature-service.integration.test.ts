@@ -1079,36 +1079,42 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
 });
 
 describe("voice-script feature (voice notes lane)", () => {
+  const voiceCall = (extra: Record<string, unknown> = {}) =>
+    apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/voice-script",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        ...extra,
+      },
+    });
+
   it("gates on the draft, then adapts it into a spoken script over the stream", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     await seedConversation();
+    // Decision #167: voice-script rides the voice-notes lane — enable the live
+    // flag and allowlist this page so the paid generation is admitted.
+    appContext.config.voiceNotesEnabled = true;
+    appContext.config.voiceNotesPageAllowlist = "svc-of";
     const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
-    const call = (extra: Record<string, unknown> = {}) =>
-      apiServer!.inject({
-        method: "POST",
-        url: "/api/v1/ai/features/voice-script",
-        headers: { authorization: `Bearer ${chatterKey}` },
-        payload: {
-          clientRequestId: randomUUID(),
-          pageLabel: "svc-of",
-          platform: "onlyfans",
-          conversationRef: FAN,
-          ...extra,
-        },
-      });
 
-    // requiresDraft: no draft is a product gate, not a stream.
-    const noDraft = await call();
+    // requiresDraft: no draft is a product gate, not a stream (fires before the
+    // voice-lane gate).
+    const noDraft = await voiceCall();
     expect(noDraft.statusCode, noDraft.body).toBe(400);
     expect(noDraft.json().error).toBe("gate_draft_required");
     expect(capture.calls).toBeUndefined();
 
     // With a draft it streams the script through the gateway.
-    const scripted = await call({ draftText: "omg u looked so good today 😍 ily" });
+    const scripted = await voiceCall({ draftText: "omg u looked so good today 😍 ily" });
     expect(scripted.statusCode, scripted.body).toBe(200);
     expect(scripted.body).toContain("sure thing");
     expect(capture.input!.body.feature).toBe("voice-script");
@@ -1121,6 +1127,38 @@ describe("voice-script feature (voice notes lane)", () => {
     // includesEarnings: false — no spend/subscription blocks in a voice script.
     expect(userText).not.toContain("<fan_spending_data>");
     expect(userText).not.toContain("<fan_subscription_data>");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses (no gateway spend) when the voice-notes lane is disabled — Decision #167 inertness", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    // Default-off: no flag set. A draft is present so the request clears the
+    // draft gate and reaches the voice-lane admission check.
+    const disabled = await voiceCall({ draftText: "hi" });
+    expect(disabled.statusCode, disabled.body).toBe(400);
+    expect(disabled.json().error).toBe("gate_voice_disabled");
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses when the page is enabled but not on the voice allowlist (fails closed)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    appContext.config.voiceNotesEnabled = true;
+    appContext.config.voiceNotesPageAllowlist = "some-other-page";
+    const notListed = await voiceCall({ draftText: "hi" });
+    expect(notListed.statusCode, notListed.body).toBe(400);
+    expect(notListed.json().error).toBe("gate_voice_disabled");
+    expect(capture.calls).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

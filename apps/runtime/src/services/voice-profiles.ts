@@ -17,6 +17,39 @@ const DEFAULT_VOICE_MODEL = "eleven_v3";
 const DEFAULT_OUTPUT_FORMAT = "mp3_44100_128";
 
 /**
+ * ElevenLabs `voice_settings.stability` is a NUMBER in [0, 1] (per the official
+ * voice-settings schema); the CLI/UX speaks in named presets. Map the presets to
+ * their numeric value here — in the service layer, so EVERY caller stores the
+ * number and the provider never ships a string ElevenLabs would 422. Matched
+ * case-insensitively.
+ */
+const STABILITY_PRESETS: Record<string, number> = {
+  natural: 0.5,
+  creative: 0.3,
+  robust: 0.8,
+};
+
+/**
+ * Resolve a caller-supplied stability (a preset name or a numeric string) to the
+ * stored NUMBER. A numeric string is parsed and range-checked to [0, 1]; a preset
+ * is looked up case-insensitively; anything else is rejected with a clear message.
+ */
+function resolveStability(raw: string): number {
+  const preset = STABILITY_PRESETS[raw.toLowerCase()];
+  if (preset !== undefined) {
+    return preset;
+  }
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 1) {
+    return numeric;
+  }
+  throw new BadRequestError(
+    `stability "${raw}" is invalid; use a preset (`
+      + `${Object.keys(STABILITY_PRESETS).join(", ")}) or a number between 0 and 1`,
+  );
+}
+
+/**
  * The ONLY output formats a profile may pin. The audio download route serves a
  * hardcoded `audio/mpeg` content-type with `nosniff`, so a non-MP3 ElevenLabs
  * format (pcm_*, ulaw_*, opus_*) would be mislabelled and fail to decode. This
@@ -37,9 +70,9 @@ export interface SetVoiceProfileInput {
   voiceId: string;
   model?: string;
   /**
-   * Free-form ElevenLabs stability value (a named preset like "natural" or a
-   * numeric string); stored verbatim under `settings.stability`. Omitted → an
-   * empty settings blob.
+   * ElevenLabs stability as a named preset ("natural"/"creative"/"robust") or a
+   * numeric string in [0, 1]; resolved to a NUMBER and stored under
+   * `settings.stability`. Omitted (or empty) → an empty settings blob.
    */
   stability?: string;
   outputFormat?: string;
@@ -80,8 +113,10 @@ export async function setVoiceProfile(
     throw new BadRequestError("voice-id must be a non-empty value");
   }
 
-  const stability = input.stability?.trim();
-  const settings: VoiceProfileSettings = stability ? { stability } : {};
+  const stabilityRaw = input.stability?.trim();
+  const settings: VoiceProfileSettings = stabilityRaw
+    ? { stability: resolveStability(stabilityRaw) }
+    : {};
 
   const outputFormat = input.outputFormat?.trim() || DEFAULT_OUTPUT_FORMAT;
   if (!(VOICE_OUTPUT_FORMAT_ALLOWLIST as readonly string[]).includes(outputFormat)) {

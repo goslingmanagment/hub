@@ -11,6 +11,7 @@ import {
   purgeExpiredVoiceNoteAudio,
   sweepVoiceNotes,
   upsertVoiceProfile,
+  type VoiceNoteRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -22,6 +23,7 @@ import {
 } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 import {
   createVoiceNote,
+  dispatchVoiceNote,
   getVoiceNoteAudio,
   getVoiceNoteStatus,
   type CreateVoiceNoteBody,
@@ -738,5 +740,74 @@ describe("voice-notes service: status + audio reads", () => {
     const status = await getVoiceNoteStatus(appContext, p.principal, p.page.label, view.voiceNoteId);
     expect(status.state).toBe("artifact_expired");
     expect(status.errorCode).toBe("artifact_expired");
+  });
+});
+
+describe("voice-notes service: dispatch log hygiene", () => {
+  it("never spills the audio buffer when a DB settle fault is logged", async () => {
+    // A completed synthesis settle is a DrizzleQueryError whose params (and
+    // message) embed the bound SQL — including the audio BYTEA. The catch must
+    // log only sanitized type/code/message, never the raw object.
+    const SENTINEL = `AUDIO_SENTINEL_${"x".repeat(4096)}`;
+    const drizzleError = Object.assign(
+      new Error(
+        `Failed query: insert into voice_notes (audio_bytes) values ($1)\nparams: ${SENTINEL}`,
+      ),
+      {
+        name: "DrizzleQueryError",
+        code: "22001",
+        query: "insert into voice_notes (audio_bytes) values ($1)",
+        params: [SENTINEL],
+      },
+    );
+
+    const records: Array<{ level: string; obj: unknown; msg: string }> = [];
+    const record = (level: string) => (obj: unknown, msg?: string) => {
+      records.push({ level, obj, msg: msg ?? "" });
+    };
+    const logger = {
+      error: record("error"),
+      warn: record("warn"),
+      info: record("info"),
+      debug: record("debug"),
+    };
+    const fakeApp = {
+      voiceTtsProvider: fakeProvider(() => okAudio(100)).provider,
+      logger,
+      // The terminal settle runs inside app.db.transaction — force it to throw.
+      db: {
+        transaction: async () => {
+          throw drizzleError;
+        },
+      },
+    } as unknown as AppContext;
+
+    const row = {
+      id: 42,
+      platformAccountId: 1,
+      profileVoiceId: "voice-abc",
+      profileModel: "eleven_v3",
+      profileSettings: { stability: 0.5 },
+      profileOutputFormat: "mp3_44100_128",
+    } as unknown as VoiceNoteRow;
+
+    await dispatchVoiceNote(fakeApp, {
+      row,
+      attemptToken: "attempt-1",
+      reservedChars: 20,
+      canonicalScript: "hello world",
+      now: new Date(),
+    });
+
+    const errorRecord = records.find((r) => r.level === "error");
+    expect(errorRecord, "expected a settle-failure error log").toBeDefined();
+    const serialized = JSON.stringify(errorRecord!.obj);
+    // The sentinel (standing in for the audio buffer) must NOT reach the log…
+    expect(serialized).not.toContain("AUDIO_SENTINEL_");
+    expect(serialized.length).toBeLessThan(1024);
+    // …while the safe, useful fields DO.
+    expect(serialized).toContain("voiceNoteId");
+    expect(serialized).toContain("DrizzleQueryError");
+    expect(serialized).toContain("22001");
   });
 });

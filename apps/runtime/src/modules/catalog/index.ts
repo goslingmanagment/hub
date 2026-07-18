@@ -135,22 +135,33 @@ async function attachVoiceNoteCapabilities(
   app: AppContext,
   pages: AssignedPage[],
 ): Promise<AssignedPage[]> {
-  const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.voiceNotesEnabled !== true || app.voiceTtsProvider == null) {
+  // The capabilities hint is OPTIONAL enrichment (a missing field reads as
+  // disabled). It must NEVER break GET /api/v1/pages — a high-frequency, primary
+  // list endpoint clients call on startup. So the whole config/profile lookup is
+  // fail-open: any error (a config_settings/page_voice_profiles lock, query
+  // fault, or migration) logs a warn and returns the pages unchanged, mirroring
+  // the fan-dossier fail-open in modules/ai/features/index.ts.
+  try {
+    const effective = await loadEffectiveConfig(app.db, app.config);
+    if (effective.voiceNotesEnabled !== true || app.voiceTtsProvider == null) {
+      return pages;
+    }
+    const allowlist = parseVoiceAllowlist(effective.voiceNotesPageAllowlist);
+    if (allowlist.size === 0) {
+      return pages;
+    }
+    const profiledPageIds = new Set(
+      (await listVoiceProfiles(app.db)).map((profile) => profile.platformAccountId),
+    );
+    return pages.map((page) =>
+      allowlist.has(page.label) && profiledPageIds.has(page.id)
+        ? { ...page, capabilities: { voiceNotes: true } }
+        : page,
+    );
+  } catch (error) {
+    app.logger.warn({ err: error }, "voice-note capability hint lookup failed; omitting the field");
     return pages;
   }
-  const allowlist = parseVoiceAllowlist(effective.voiceNotesPageAllowlist);
-  if (allowlist.size === 0) {
-    return pages;
-  }
-  const profiledPageIds = new Set(
-    (await listVoiceProfiles(app.db)).map((profile) => profile.platformAccountId),
-  );
-  return pages.map((page) =>
-    allowlist.has(page.label) && profiledPageIds.has(page.id)
-      ? { ...page, capabilities: { voiceNotes: true } }
-      : page,
-  );
 }
 
 function rethrowAdminCatalogError(error: unknown): never {

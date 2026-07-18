@@ -80,8 +80,9 @@ describe("voice-profiles service", () => {
     // Defaults applied when the caller omits model/output-format.
     expect(afterFirst?.model).toBe("eleven_v3");
     expect(afterFirst?.outputFormat).toBe("mp3_44100_128");
-    // Stability lands verbatim in the settings jsonb.
-    expect(afterFirst?.settings).toEqual({ stability: "natural" });
+    // The CLI default preset "natural" is resolved to its NUMBER before storage
+    // (ElevenLabs voice_settings.stability is a number in [0, 1]).
+    expect(afterFirst?.settings).toEqual({ stability: 0.5 });
 
     const second = await setVoiceProfile(app, page.label, {
       voiceId: "voice-2",
@@ -140,6 +141,33 @@ describe("voice-profiles service", () => {
     });
     expect(first.version).toBe(1);
     expect((await showVoiceProfile(app, page.label))?.outputFormat).toBe("mp3_44100_192");
+  });
+
+  it("maps stability presets and numeric strings to a stored number, rejecting the rest", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const app = { db: testDb.db };
+    const page = await createFanslyVoicePage(testDb, "voice-stability");
+
+    // Presets resolve to their numeric value (case-insensitive)…
+    await setVoiceProfile(app, page.label, { voiceId: "v", stability: "Creative" });
+    expect((await showVoiceProfile(app, page.label))?.settings).toEqual({ stability: 0.3 });
+    await setVoiceProfile(app, page.label, { voiceId: "v", stability: "robust" });
+    expect((await showVoiceProfile(app, page.label))?.settings).toEqual({ stability: 0.8 });
+
+    // …a numeric string in range is parsed and stored as a number…
+    await setVoiceProfile(app, page.label, { voiceId: "v", stability: "0.72" });
+    expect((await showVoiceProfile(app, page.label))?.settings).toEqual({ stability: 0.72 });
+
+    // …and anything else (unknown word, out-of-range number) is rejected.
+    await expect(
+      setVoiceProfile(app, page.label, { voiceId: "v", stability: "banana" }),
+    ).rejects.toThrow(/stability .* invalid/i);
+    await expect(
+      setVoiceProfile(app, page.label, { voiceId: "v", stability: "1.5" }),
+    ).rejects.toThrow(/stability .* invalid/i);
   });
 
   it("rejects an empty voice-id", async (context) => {

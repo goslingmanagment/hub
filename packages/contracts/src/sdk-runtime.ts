@@ -680,11 +680,25 @@ export async function fetchVoiceNoteAudio(options: KernelClientOptions, input: {
   pageLabel: string;
   id: number;
 }): Promise<Response> {
-  return executeKernelRequest({
-    def: { method: "GET", path: "/api/v1/pages/:pageLabel/voice-notes/:id/audio" },
+  const def = { method: "GET", path: "/api/v1/pages/:pageLabel/voice-notes/:id/audio" };
+  const response = await executeKernelRequest({
+    def,
     options,
     params: { pageLabel: input.pageLabel, id: input.id },
   });
+  // Mirror client.raw(): the caller gets the raw Response, so nothing else fires
+  // the logout hook. An expired bearer during audio download must still notify
+  // onAuthError (operation=null) like every other 401/403.
+  if (response.status === 401 || response.status === 403) {
+    notifyAuthError(options, new KernelApiError(
+      `${def.method} ${def.path} failed with ${response.status}`,
+      "auth",
+      response.status,
+      null,
+      null,
+    ));
+  }
+  return response;
 }
 
 /**

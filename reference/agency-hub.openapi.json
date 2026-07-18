@@ -44532,7 +44532,8 @@
               "audio/mpeg": {
                 "schema": {
                   "type": "string",
-                  "description": "Binary audio/mpeg — the rendered voice-note MP3 bytes"
+                  "description": "Binary audio/mpeg — the rendered voice-note MP3 bytes",
+                  "format": "binary"
                 }
               }
             }
