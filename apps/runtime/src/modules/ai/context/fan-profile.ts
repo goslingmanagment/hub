@@ -250,6 +250,12 @@ export function isFanProfileFeatureEnabled(
 export interface FanProfilePromptContext {
   /** Compiled, prompt-ready (but unescaped) dossier body. */
   body: string;
+  /** The RAW stored dossier body, before compilation (P2-10). The coach recap
+   * dedupe compares this against the raw recap completion: the compiler drops
+   * the financial section and can shed others, so a compiled body almost never
+   * stays byte-identical to the summary it came from — comparing raw-vs-raw is
+   * what makes the dedupe fire on real sectioned dossiers. */
+  rawBody: string;
   version: number;
   /** createdAt of the latest profile version. */
   generatedAt: Date;
@@ -300,6 +306,7 @@ export async function loadFanProfileContext(
 
   return {
     body: compiled.body,
+    rawBody: profile.body,
     version: profile.version,
     generatedAt,
     ageDays,

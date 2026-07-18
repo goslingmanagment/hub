@@ -1217,6 +1217,25 @@ describe("coach-chat gates", () => {
     expect(res.json().message).toMatch(/chatterQuestion/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("requires fanRef for coach-chat on fansly (Blocker 2)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // chatterQuestion is present so the fanRef gate is the tripwire, not the
+    // question gate. Canonical Fansly conversationRef is the groupId, so without
+    // fanRef the stored record's fan_ref would be a non-fan id and the row would
+    // survive fan-scope erasure.
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({ chatterQuestion: "как продать ppv?", fanRef: undefined }),
+    });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().message).toMatch(/fanRef/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("rejects coach fields on other features", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1391,12 +1410,18 @@ describe("coach-chat gates", () => {
 
     // The attempt is terminal-recorded as FAILED (never completed): it can never
     // be attached/committed as a usable coach answer.
-    const { rows } = await testDb.pool.query<{ gateway_outcome: string }>(
-      `select u.gateway_outcome
+    const { rows } = await testDb.pool.query<{ gateway_outcome: string; cost_micro_usd: string }>(
+      `select u.gateway_outcome, u.cost_micro_usd::text as cost_micro_usd
        from ai_generation_content g join ai_usage_events u on u.id = g.usage_event_id
        order by g.id desc limit 1`,
     );
     expect(rows[0]!.gateway_outcome).toBe("failed");
+    // Blocker 1 (P1-1/P2-6): the ceiling aborts BEFORE the provider's usage
+    // frame (which the fake places after the crossing), so real token counts
+    // never arrive — but the request spent provider budget. The terminal record
+    // must fall back to the cost estimator, NOT record zero, or the spend
+    // escapes both the per-user daily $ cap and the per-feature global ceiling.
+    expect(Number(rows[0]!.cost_micro_usd)).toBeGreaterThan(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
@@ -1468,6 +1493,51 @@ describe("fan-summary short variant cap (Task 8)", () => {
       .join("\n");
     expect(promptText).not.toContain("COMPACT RECAP");
     expect(promptText).toContain("detailed fan profile review");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rejects a short clientContext window over 300, accepts exactly 300 (Blocker 3)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // P1-3/P2-8: the compact template promises "300 recent messages max", and
+    // coach/short-recap ships ONLY on the clientContext (fansly) lane — so the
+    // window is gated on the same client-asserted messageCount the minMessages
+    // and hi-greeting gates already trust.
+    const over = await postFanSummary({
+      summaryMode: "short",
+      clientContext: { ...shortContext, messageCount: 301 },
+    });
+    expect(over.res.statusCode, over.res.body).toBe(400);
+    expect(over.res.json().message).toMatch(/300/);
+
+    const exact = await postFanSummary({
+      summaryMode: "short",
+      clientContext: { ...shortContext, messageCount: 300 },
+    });
+    expect(exact.res.statusCode, exact.res.body).toBe(200);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("persists fan_ref from the conversationRef on the fansly lane when fanRef is absent (Blocker 2)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // P1-2b: a fansly fan-summary carrying only conversationRef must still be
+    // reachable by fan-scope erasure — the persisted fan_ref falls back to the
+    // conversationRef (which legacy clients set to the fanAccountId). Before the
+    // fix this row's fan_ref was NULL and the recap survived a fan erasure.
+    const { res } = await postFanSummary(); // conversationRef = FAN, no fanRef
+    expect(res.statusCode, res.body).toBe(200);
+    const { rows } = await testDb.pool.query<{
+      conversation_ref: string | null;
+      fan_ref: string | null;
+    }>(
+      `select conversation_ref, fan_ref from ai_generation_content
+       where feature = 'fan-summary' order by id desc limit 1`,
+    );
+    expect(rows[0]?.conversation_ref).toBe(FAN);
+    expect(rows[0]?.fan_ref).toBe(FAN);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
@@ -1726,6 +1796,55 @@ describe("coach-chat recap attach (spec §5)", () => {
     // The dossier is injected...
     expect(promptText).toContain("## Fan Dossier");
     // ...and the duplicate full recap is dropped (no recap section at all).
+    expect(promptText).not.toContain("## Fan Recaps");
+    expect(promptText).not.toContain("Full recap");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("(g) dedupe fires on a REAL sectioned recap even though compilation drops its financial section (P2-10)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    // A REAL fan-summary body: markdown sections including the FINANCIAL PROFILE
+    // the dossier compiler ALWAYS drops. So the compiled dossier body is NOT
+    // byte-identical to this raw body — the old compiled-vs-raw dedupe would miss
+    // it and attach the recap twice. The fix compares raw-vs-raw.
+    const sectionedBody = [
+      "## 1. ДОСЬЕ",
+      "- Ездит на красном Ducati, живёт в Остине",
+      "",
+      "## 5. ФИНАНСОВЫЙ ПРОФИЛЬ",
+      "- FINSENTINEL кит, типсует каждый вечер",
+      "",
+      "## 6. ОТКРЫТЫЕ ПЕТЛИ",
+      "- Обещала фото с пляжа",
+    ].join("\n");
+    await testDb.pool.query(
+      `insert into fans (platform, platform_user_id, username, display_name)
+       values ('fansly', $1, 'sectioned-fan', 'Sectioned Fan')`,
+      [fanRef],
+    );
+    const { rows: fanRows } = await testDb.pool.query<{ id: string }>(
+      `select id::text as id from fans where platform = 'fansly' and platform_user_id = $1`,
+      [fanRef],
+    );
+    await testDb.pool.query(
+      `insert into fan_profiles (fan_id, platform_account_id, version, body, source, source_generated_at)
+       values ($1, $2, 1, $3, 'chatmuse', now())`,
+      [Number(fanRows[0]!.id), pageId, sectionedBody],
+    );
+    // The recap completion is the SAME raw summary the dossier was built from.
+    await seedRecap({ pageId, mode: "full", completion: sectionedBody, createdAt: daysAgo(2) });
+    appContext.config.chatMuseAiFanProfileContextFeatures = "all";
+    const { res, promptText } = await runCoach();
+    expect(res.statusCode, res.body).toBe(200);
+    // The dossier is injected, keeping the non-financial section...
+    expect(promptText).toContain("## Fan Dossier");
+    expect(promptText).toContain("красном Ducati");
+    // ...compilation dropped the financial section (its content is nowhere)...
+    expect(promptText).not.toContain("FINSENTINEL");
+    // ...and the raw-vs-raw dedupe fired, so the recap is NOT re-attached.
     expect(promptText).not.toContain("## Fan Recaps");
     expect(promptText).not.toContain("Full recap");
   }, INTEGRATION_TEST_TIMEOUT_MS);

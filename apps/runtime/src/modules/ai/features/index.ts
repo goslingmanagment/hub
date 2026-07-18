@@ -160,6 +160,12 @@ export async function prepareAiFeatureStream(
   }
   const feature = featureKey as OperationFeature;
   const policy = FEATURE_POLICIES[feature];
+  // Fansly's conversationRef is the canonical groupId, NOT the fan — the P1-2
+  // fan-erasure reachability fix keys off this in two spots (the coach-chat
+  // fanRef gate and the persisted fan_ref fallback). Computed once so it is a
+  // single platform-branch site (the access check below guarantees body.platform
+  // matches stored.page.platform).
+  const isFanslyRequest = body.platform === "fansly";
 
   if (policy.requiresDraft && !body.draftText?.trim()) {
     throw new ProductGateError(`${feature} requires draftText`, "gate_draft_required");
@@ -177,6 +183,14 @@ export async function prepareAiFeatureStream(
   if (feature === "coach-chat") {
     if (!body.chatterQuestion?.trim()) {
       throw new BadRequestError("coach-chat requires chatterQuestion");
+    }
+    // Blocker 2 (P1-2a): on Fansly the conversationRef is the canonical groupId,
+    // NOT the fan — so a coach-chat generation keyed only by conversation_ref
+    // would survive fan-scope erasure. REQUIRE the explicit fanRef so the stored
+    // record's fan_ref always carries the fan identity. No released client calls
+    // coach-chat yet, so there is no compat risk to tightening this.
+    if (isFanslyRequest && !body.fanRef?.trim()) {
+      throw new BadRequestError("coach-chat requires fanRef on fansly");
     }
   } else if (body.chatterQuestion !== undefined || body.coachHistory !== undefined) {
     throw new BadRequestError(`${feature} does not accept coach fields`);
@@ -238,9 +252,23 @@ export async function prepareAiFeatureStream(
     // pre-cutover assembly gated on; the kernel cannot know them fresher
     // (its Fansly archive is pull-cadenced by design).
     const clientContext = body.clientContext;
-    // Short-recap's 300-message input bound is NOT enforced here: the client
-    // owns this window and the kernel can't count a pre-assembled string
-    // transcript. The archive lane below is where the kernel-counted clamp lives.
+    // Blocker 3 (P1-3/P2-8): short-recap's 300-message window IS enforced on the
+    // clientContext lane — the only lane coach/short-recap ships on. The kernel
+    // can't count a pre-assembled string transcript, but it already trusts
+    // clientContext.messageCount for the minMessages and hi-greeting gates, so it
+    // gates on the same client-asserted count here: reject a short request whose
+    // window exceeds 300 so the compact template's "300 recent messages max"
+    // claim holds. The archive lane below applies the kernel-counted clamp.
+    if (
+      feature === "fan-summary"
+      && body.summaryMode === "short"
+      && clientContext.messageCount > SHORT_SUMMARY_MESSAGE_COUNT
+    ) {
+      throw new BadRequestError(
+        `fan-summary short mode provides at most ${SHORT_SUMMARY_MESSAGE_COUNT} recent messages; `
+          + `clientContext.messageCount was ${clientContext.messageCount}`,
+      );
+    }
     if (policy.usesPingSegment && clientContext.pingSegment === undefined) {
       throw new BadRequestError(`${feature} requires clientContext.pingSegment`);
     }
@@ -401,9 +429,14 @@ export async function prepareAiFeatureStream(
             ? { body: found.short.completion, ageMs: now - shortAt! }
             : null,
       };
-      // Dossier dedupe: when the injected dossier is byte-identical to the full
-      // recap, keep the dated dossier section and drop the duplicate recap.
-      if (recapAttach.full && fanProfile?.body === recapAttach.full.body) {
+      // Dossier dedupe (P2-10): when the injected dossier came from the same
+      // summary as the full recap, keep the dated dossier section and drop the
+      // duplicate recap. Compare the RAW dossier body against the raw recap
+      // completion — the compiled body drops the financial section (and can shed
+      // others), so comparing compiled-vs-raw would almost never match on a real
+      // sectioned summary and the recap would double up. Fail-open: any lookup
+      // hiccup already degrades to "no recaps" in the surrounding catch.
+      if (recapAttach.full && fanProfile?.rawBody === recapAttach.full.body) {
         recapAttach.full = null;
       }
       contextManifest = {
@@ -457,10 +490,15 @@ export async function prepareAiFeatureStream(
     conversationId: body.conversationRef,
     // Off-wire: the fan this generation is ABOUT, stored as the restricted
     // record's fan_ref so fan-scope erasure reaches coach/recap rows whose
-    // conversation_ref is the canonical groupId (spec §5). Only the explicit
-    // wire fanRef counts — features that carry only conversationRef leave it
-    // null and stay reachable by conversation_ref = fanId.
-    fanRef: body.fanRef ?? null,
+    // conversation_ref is the canonical groupId (spec §5). Blocker 2 (P1-2b):
+    // on Fansly the conversationRef is NOT the fan (it is the groupId), so a
+    // row keyed only by conversation_ref survives fan erasure — fall back to
+    // conversationRef when fanRef is absent. Canonical Fansly clients always
+    // send fanRef; legacy Fansly clients send conversationRef = fanAccountId, so
+    // this fallback gives BOTH the correct fan identity. On OnlyFans the
+    // conversationRef IS the fan id, so the row already stays reachable by
+    // conversation_ref and needs no fallback (leave fan_ref null there).
+    fanRef: body.fanRef ?? (isFanslyRequest ? body.conversationRef : null),
     model: body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature],
     reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,

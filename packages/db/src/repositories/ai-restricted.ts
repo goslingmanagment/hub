@@ -97,11 +97,13 @@ export interface FreshestRecaps {
 
 /** Two-slot recap selection (spec §5): newest usable full + newest usable
  * short for one conversation. Usable = completed outcome, non-empty
- * completion, not output-exhausted, and modern params (summaryMode present —
- * legacy rows are excluded from attach by design). The exhausted stop-reason
- * literals mirror the shared `isOutputExhausted` predicate
- * (packages/shared/src/ai-stop-reason.ts): Anthropic 'max_tokens',
- * OpenRouter 'length'. Served by the existing
+ * completion, a PRESENT and non-exhausted stopReason, and modern params
+ * (summaryMode present — legacy rows are excluded from attach by design). A
+ * modern row with a NULL stopReason is fail-closed unusable (P1-5b): a
+ * truncated generation that never recorded its terminal reason must never be
+ * attached as a recap. The exhausted stop-reason literals mirror the shared
+ * `isOutputExhausted` predicate (packages/shared/src/ai-stop-reason.ts):
+ * Anthropic 'max_tokens', OpenRouter 'length'. Served by the existing
  * ai_generation_content_page_conversation_idx (pageId, conversationRef). */
 export async function getFreshestUsableRecaps(
   db: Database,
@@ -117,7 +119,8 @@ export async function getFreshestUsableRecaps(
         eq(aiGenerationContent.feature, "fan-summary"),
         sql`${aiGenerationContent.params} ->> 'summaryMode' = ${mode}`,
         sql`${aiGenerationContent.params} ->> 'outcome' = 'completed'`,
-        sql`coalesce(${aiGenerationContent.params} ->> 'stopReason', '') not in ('max_tokens', 'length')`,
+        sql`${aiGenerationContent.params} ->> 'stopReason' is not null`,
+        sql`${aiGenerationContent.params} ->> 'stopReason' not in ('max_tokens', 'length')`,
         sql`${aiGenerationContent.completion} <> ''`,
       ))
       .orderBy(desc(aiGenerationContent.createdAt), desc(aiGenerationContent.id))

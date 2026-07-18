@@ -71,6 +71,13 @@ describe("getFreshestUsableRecaps", () => {
     await insertAiGenerationContent(db, row({ completion: "", params: { summaryMode: "full", outcome: "completed", stopReason: null } }));
     await insertAiGenerationContent(db, row({ params: { outcome: "completed", stopReason: null } })); // legacy
     await insertAiGenerationContent(db, row({ feature: "help-me" }));
+    // P1-5b: a MODERN row (summaryMode present) with a NULL stopReason is now
+    // fail-closed unusable — the CLI/HTTP paths always thread a stopReason, so a
+    // NULL means a truncated write that never recorded its terminal reason.
+    // Inserted LAST (highest id / newest) so it WOULD win each slot if selectable;
+    // the assertions below prove it is skipped for the older valid rows.
+    await insertAiGenerationContent(db, row({ params: { summaryMode: "full", outcome: "completed", stopReason: null }, completion: "full null stopreason" }));
+    await insertAiGenerationContent(db, row({ params: { summaryMode: "short", outcome: "completed", stopReason: null }, completion: "short null stopreason" }));
 
     const out = await getFreshestUsableRecaps(db, {
       pageId: PAGE_ID, conversationRefs: ["group-1", "fan-42"],
