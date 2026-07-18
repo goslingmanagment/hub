@@ -258,7 +258,24 @@ describe("dashboard sync product surfaces", () => {
 
     expect(html).toContain("Data may be incomplete");
     expect(html).toContain("Check sync settings");
-    expect(html).toContain("href=\"/settings?tab=sync\"");
+    expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
+  });
+
+  it("shows partial pause copy and links straight to that page's sync detail", () => {
+    queryMocks.useOverview.mockReturnValue({
+      data: buildOverviewPage(buildSyncUx({
+        state: "off",
+        label: "Off",
+        headline: "Some data updates are paused",
+        detail: "1 sync is paused on this page.",
+      })),
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(createElement(OverviewPage));
+
+    expect(html).toContain("Some data updates are paused");
+    expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
   });
 
   it("renders an explicit overview error state instead of an endless loader", () => {
@@ -299,8 +316,35 @@ describe("dashboard sync product surfaces", () => {
 
     expect(html).toContain("Data may be incomplete");
     expect(html).toContain("check sync settings");
-    expect(html).toContain("href=\"/settings?tab=sync\"");
+    expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
     expect(html).not.toContain("Sync needs attention");
+  });
+
+  it("keeps partial pause copy on page detail and deep-links to its sync controls", () => {
+    const overview = buildOverviewPage(buildSyncUx({
+      state: "off",
+      label: "Off",
+      headline: "Some data updates are paused",
+      detail: "1 sync is paused on this page.",
+    }));
+    queryMocks.useOverview.mockReturnValue({
+      data: overview,
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(
+      createElement(Routes, undefined,
+        createElement(Route, {
+          path: "/pages/:pageLabel",
+          element: createElement(PageDetailPage),
+        }),
+      ),
+      ["/pages/lana"],
+      overview.pages,
+    );
+
+    expect(html).toContain("Some data updates are paused \u2014 check sync settings");
+    expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
   });
 
   it("hides non-blocking catching-up sync states on page detail", () => {

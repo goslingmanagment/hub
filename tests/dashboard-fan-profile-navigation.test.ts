@@ -46,6 +46,7 @@ describe("fan profile navigation", () => {
 
   it("builds stable settings deep links and defaults unknown tabs safely", () => {
     expect(buildSettingsRoute("sync")).toBe("/settings?tab=sync");
+    expect(buildSettingsRoute("sync", "lora/of")).toBe("/settings?tab=sync&page=lora%2Fof");
     expect(buildSettingsRoute("personas")).toBe("/settings?tab=personas");
     expect(resolveSettingsTab("users")).toBe("users");
     expect(resolveSettingsTab("personas")).toBe("personas");
