@@ -16,6 +16,9 @@ import {
   listFanslyPurchaseHistoryCaptures,
   listFanslyDmRawPayloadsAfterId,
   markPageDmConversationsInvisibleByGeneration,
+  maxPageDmThreadGeneration,
+  maxPageFollowGeneration,
+  maxPageSubscriptionGeneration,
   PAGE_DM_LIVE_BACKFILL_CAP,
   PageSyncLeaseLostError,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
@@ -100,6 +103,7 @@ import {
   parseFollowersReconcileCursorState,
   parseSubscribersCursorState,
   parseTopSpendersCursorState,
+  type DmConversationCursorState,
   type DmMessagesCursorState,
   type FollowersCursorState,
   type FollowersReconcileCursorState,
@@ -1632,16 +1636,22 @@ export async function fanslySubscribersChunk(
 
   const existingState = parseSubscribersCursorState(checkpoint?.state, input.streamState.requestSeq);
   const previousGeneration = asNumber(asRecord(checkpoint?.state)?.generation) ?? 0;
-  let state = existingState ?? {
-    revision: input.streamState.requestSeq,
-    generation: previousGeneration + 1,
-    offset: 0,
-    observedCount: 0,
-    pageCount: 0,
-    providerReportedTotal: null,
-  } satisfies SubscribersCursorState;
-
-  if (!existingState) {
+  let state: SubscribersCursorState;
+  if (existingState) {
+    state = existingState;
+  } else {
+    const storedGeneration = await maxPageSubscriptionGeneration(
+      app.db,
+      input.pageContext.page.id,
+    );
+    state = {
+      revision: input.streamState.requestSeq,
+      generation: Math.max(previousGeneration, storedGeneration) + 1,
+      offset: 0,
+      observedCount: 0,
+      pageCount: 0,
+      providerReportedTotal: null,
+    };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "subscribers",
@@ -2159,9 +2169,10 @@ export async function executeFollowersReconcileChunk(
     state = existingState;
   } else {
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
+    const storedGeneration = await maxPageFollowGeneration(app.db, input.pageContext.page.id);
     state = {
       revision: input.streamState.requestSeq,
-      generation: previousGeneration + 1,
+      generation: Math.max(previousGeneration, storedGeneration) + 1,
       offset: 0,
       observedCount: 0,
       pageCount: 0,
@@ -2537,19 +2548,23 @@ export async function fanslyDmConversationsChunk(
   const pageAccountId = resolveFanslyPlatformAccountId(input.pageContext.page);
   const checkpointStateRecord = asRecord(checkpoint?.state);
   const existingState = parseDmConversationCursorState(checkpoint?.state);
-  let state = existingState ?? {
-    version: 1 as const,
-    mode: "full_scan" as const,
-    generation: (asNumber(checkpointStateRecord?.generation) ?? 0) + 1,
-    offset: 0,
-    pageCount: 0,
-    providerReportedTotal: null,
-    unchangedPageStreak: 0,
-    fullSweepStartedAt: new Date().toISOString(),
-    lastFullSweepCompletedAt: asNullableString(checkpointStateRecord?.lastFullSweepCompletedAt),
-  };
-
-  if (!existingState) {
+  let state: DmConversationCursorState;
+  if (existingState) {
+    state = existingState;
+  } else {
+    const checkpointGeneration = asNumber(checkpointStateRecord?.generation) ?? 0;
+    const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
+    state = {
+      version: 1,
+      mode: "full_scan",
+      generation: Math.max(checkpointGeneration, storedGeneration) + 1,
+      offset: 0,
+      pageCount: 0,
+      providerReportedTotal: null,
+      unchangedPageStreak: 0,
+      fullSweepStartedAt: new Date().toISOString(),
+      lastFullSweepCompletedAt: asNullableString(checkpointStateRecord?.lastFullSweepCompletedAt),
+    };
     const progressCheckpoint = await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "dm_conversations",

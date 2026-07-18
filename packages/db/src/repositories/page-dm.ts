@@ -245,6 +245,19 @@ export async function markPageDmConversationsInvisibleByGeneration(
   `);
 }
 
+export async function maxPageDmThreadGeneration(db: Database, platformAccountId: number) {
+  const result = await db.execute(sql`
+    select coalesce(max(last_seen_generation), 0)::int as generation
+    from page_dm_threads
+    where platform_account_id = ${platformAccountId}
+  `);
+  const generation = Number(result.rows[0]?.generation ?? 0);
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new Error("Expected page_dm_threads generation high-water to be a non-negative safe integer");
+  }
+  return generation;
+}
+
 export interface PageDmConversationRow {
   id: number;
   platformAccountId: number;
