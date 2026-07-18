@@ -1331,6 +1331,11 @@ describe("fan-summary short variant cap (Task 8)", () => {
     // The 2048 cap reaches the provider on the gateway body (honored by both
     // providers as input.maxTokens ?? tuning.maxTokens).
     expect(capture.input!.body.maxTokens).toBe(2048);
+    // ...and adaptive summarized thinking is disabled so 2048 is a PURE output
+    // budget (the default fan-summary model is adaptive; Anthropic counts
+    // thinking inside max_tokens). The provider input carries the off-switch;
+    // that it drops the `thinking` block is proven in ai-gateway-anthropic.test.
+    expect(capture.input!.disableAdaptiveThinking).toBe(true);
     const promptText = capture.input!.body.prompt.userBlocks
       .map((block) => block.text)
       .join("\n");
@@ -1338,7 +1343,7 @@ describe("fan-summary short variant cap (Task 8)", () => {
     expect(promptText).toContain("fresh beach message");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("leaves maxTokens unset and uses the full template without summaryMode", async (context) => {
+  it("leaves maxTokens unset and keeps adaptive thinking without summaryMode", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1346,6 +1351,8 @@ describe("fan-summary short variant cap (Task 8)", () => {
     const { res, capture } = await postFanSummary();
     expect(res.statusCode, res.body).toBe(200);
     expect(capture.input!.body.maxTokens).toBeUndefined();
+    // The full summary keeps the provider's adaptive tuning (no off-switch).
+    expect(capture.input!.disableAdaptiveThinking).toBeUndefined();
     const promptText = capture.input!.body.prompt.userBlocks
       .map((block) => block.text)
       .join("\n");

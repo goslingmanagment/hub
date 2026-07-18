@@ -51,6 +51,10 @@ export interface AiGatewayProviderInput {
   body: AiGatewayStreamBody;
   quota: AiGatewayQuota;
   signal: AbortSignal;
+  /** Server-derived, off the wire: disables adaptive summarized thinking so a
+   * tight maxTokens stays a pure output budget (fan-summary short recap). The
+   * Anthropic provider honors it; OpenRouter has no thinking block to disable. */
+  disableAdaptiveThinking?: boolean;
 }
 
 export interface AiGatewayProvider {
@@ -194,6 +198,10 @@ export interface AiGatewayStreamInternalOptions {
  * the two-slot recap selection (spec §5). */
 export type AiGatewayStreamInput = AiGatewayStreamBody & {
   featureParams?: Record<string, unknown>;
+  /** Server-derived, off the wire: disables adaptive summarized thinking on the
+   * Anthropic provider so a tight maxTokens stays a pure output budget (the
+   * fan-summary short recap sets it alongside maxTokens: 2048). */
+  disableAdaptiveThinking?: boolean;
 };
 
 export async function prepareAiGatewayStream(
@@ -347,6 +355,9 @@ export async function prepareAiGatewayStream(
         body: input,
         quota: quotaFrame,
         signal,
+        ...(input.disableAdaptiveThinking
+          ? { disableAdaptiveThinking: true }
+          : {}),
       });
     },
     async recordTerminal(record) {

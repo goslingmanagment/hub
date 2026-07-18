@@ -172,8 +172,14 @@ export function resolveAnthropicGatewayRequestTuning(input: {
   feature: GatewayOperationFeature;
   temperature: number;
   reasoningEffort: AiGatewayReasoningEffort;
+  /** Per-request off-switch for adaptive summarized thinking. Anthropic counts
+   * thinking tokens inside `max_tokens`, so a caller enforcing a tight output
+   * budget (fan-summary short recap: 2048) sets this to keep the cap a PURE
+   * output budget — otherwise summarized thinking eats the budget and truncates
+   * the answer (stopReason: 'max_tokens'). */
+  disableAdaptiveThinking?: boolean | undefined;
 }): AnthropicGatewayRequestTuning {
-  const adaptive = isAdaptiveAnthropicModel(input.providerModelId);
+  const adaptive = isAdaptiveAnthropicModel(input.providerModelId) && !input.disableAdaptiveThinking;
   const maxTokens = adaptive
     ? ANTHROPIC_ADAPTIVE_MAX_TOKENS[input.feature]
     : FEATURE_MAX_TOKENS[input.feature];
@@ -193,6 +199,7 @@ export function resolveAnthropicGatewayRequestTuning(input: {
 
 export function buildAnthropicGatewayStreamRequest(
   input: AiGatewayStreamBody,
+  options?: { disableAdaptiveThinking?: boolean | undefined },
 ): AnthropicGatewayStreamRequest {
   const model = resolveAnthropicGatewayModel(input.model);
   const temperature = input.temperature ?? getAnthropicGatewayFeatureTemperature(input.feature);
@@ -201,6 +208,7 @@ export function buildAnthropicGatewayStreamRequest(
     feature: input.feature,
     temperature,
     reasoningEffort: input.reasoningEffort,
+    disableAdaptiveThinking: options?.disableAdaptiveThinking,
   });
 
   return {

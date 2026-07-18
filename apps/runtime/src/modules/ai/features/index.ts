@@ -454,8 +454,11 @@ export async function prepareAiFeatureStream(
     isRegeneration: body.isRegeneration ?? false,
     // Short fan-summary caps output at 2048 tokens (Task 8); every other
     // feature leaves maxTokens unset so the provider's per-feature tuning wins.
+    // disableAdaptiveThinking keeps that 2048 a PURE output budget — the default
+    // fan-summary model is adaptive, and Anthropic counts summarized thinking
+    // inside max_tokens, so without it the recap truncates before it finishes.
     ...(feature === "fan-summary" && body.summaryMode === "short"
-      ? { maxTokens: SHORT_SUMMARY_MAX_TOKENS }
+      ? { maxTokens: SHORT_SUMMARY_MAX_TOKENS, disableAdaptiveThinking: true }
       : {}),
     // Two-slot recap selection (spec §5): only fan-summary rows carry the
     // summaryMode/coverage/count provenance the recap reader filters on.
