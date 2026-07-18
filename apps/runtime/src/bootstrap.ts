@@ -31,6 +31,10 @@ import {
   createAnthropicAiGatewayProvider,
   createPageProxyAnthropicClientResolver,
 } from "./services/ai-gateway-anthropic-provider.ts";
+import {
+  createElevenLabsVoiceProvider,
+  type VoiceTtsProvider,
+} from "./services/voice-elevenlabs-provider.ts";
 import type { ProviderAdapter } from "./services/provider.ts";
 
 export type AdapterLike = ProviderAdapter<
@@ -124,6 +128,10 @@ export interface AppContext {
   // Stage 29: second provider ("openrouter:*" models route here); absent
   // when OPENROUTER_API_KEY is unset — implemented-but-unkeyed ships fine.
   aiGatewayOpenrouterProvider?: AiGatewayProvider | undefined;
+  // Voice notes vendor TTS (ElevenLabs). Constructed only when BOTH kill-gates
+  // are on at boot (voiceNotesEnabled && elevenLabsApiKey); undefined otherwise
+  // — ships inert. Non-platform, direct vendor egress.
+  voiceTtsProvider?: VoiceTtsProvider | undefined;
   close(): Promise<void>;
 }
 
@@ -218,6 +226,9 @@ export async function createAppContext(): Promise<AppContext> {
     const aiGatewayOpenrouterProvider = config.chatMuseAiGatewayEnabled && config.openrouterApiKey
       ? createOpenrouterAiGatewayProvider({ apiKey: config.openrouterApiKey })
       : undefined;
+    const voiceTtsProvider = config.voiceNotesEnabled && config.elevenLabsApiKey
+      ? createElevenLabsVoiceProvider({ apiKey: config.elevenLabsApiKey })
+      : undefined;
 
     return {
       config,
@@ -230,6 +241,7 @@ export async function createAppContext(): Promise<AppContext> {
       ofapi,
       aiGatewayProvider,
       aiGatewayOpenrouterProvider,
+      voiceTtsProvider,
       async close() {
         await adapter.close?.();
         await pool.end();
