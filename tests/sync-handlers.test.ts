@@ -26,6 +26,9 @@ const dbMocks = vi.hoisted(() => ({
   getPageDmConversationById: vi.fn(),
   listPageDmConversationsByPlatformConversationIds: vi.fn(),
   markPageDmConversationsInvisibleByGeneration: vi.fn(),
+  maxPageDmThreadGeneration: vi.fn(),
+  maxPageFollowGeneration: vi.fn(),
+  maxPageSubscriptionGeneration: vi.fn(),
   rebuildFollowerRollups: vi.fn(),
   rebuildSubscriberRollups: vi.fn(),
   requestPageSync: vi.fn(),
@@ -217,6 +220,9 @@ describe("sync executor handlers", () => {
     dbMocks.getPageDmConversationById.mockResolvedValue(null);
     dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([]);
     dbMocks.markPageDmConversationsInvisibleByGeneration.mockResolvedValue(undefined);
+    dbMocks.maxPageDmThreadGeneration.mockResolvedValue(0);
+    dbMocks.maxPageFollowGeneration.mockResolvedValue(0);
+    dbMocks.maxPageSubscriptionGeneration.mockResolvedValue(0);
     dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValue(0);
     dbMocks.countPageFollowsByGeneration.mockResolvedValue(0);
     dbMocks.rebuildFollowerRollups.mockResolvedValue(undefined);
@@ -1712,6 +1718,134 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     }));
   });
 
+  it("starts the first follower generation at one when checkpoint and projection are empty", async () => {
+    const telemetry = createTelemetry();
+    const db = {};
+    const app = {
+      db,
+      config: {
+        followerPageDelayMs: 0,
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {},
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.maxPageFollowGeneration.mockResolvedValue(0);
+    sharedMocks.refreshPageMetadata.mockResolvedValue({
+      parsed: { account: { followCount: 0 } },
+    });
+
+    const result = await executeFollowersReconcileChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 13,
+          label: "fansly-page",
+          platformAccountId: "acct-13",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: { requestSeq: 4 },
+      syncRunId: 102,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(0),
+    } as never);
+
+    expect(result).toMatchObject({ satisfied: false, stats: { generation: 1 } });
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(db, {
+      platformAccountId: 13,
+      stream: "followers_reconcile",
+      state: expect.objectContaining({ generation: 1 }),
+    });
+  });
+
+  it("starts a fresh follower generation above the persisted row high-water", async () => {
+    const telemetry = createTelemetry();
+    const db = {};
+    const app = {
+      db,
+      config: {
+        followerPageDelayMs: 0,
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {},
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({ state: { revision: 3, generation: 613 } });
+    dbMocks.maxPageFollowGeneration.mockResolvedValue(861);
+    sharedMocks.refreshPageMetadata.mockResolvedValue({
+      parsed: { account: { followCount: 9_307 } },
+    });
+
+    const result = await executeFollowersReconcileChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 13,
+          label: "fansly-page",
+          platformAccountId: "acct-13",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: { requestSeq: 4 },
+      syncRunId: 102,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(0),
+    } as never);
+
+    expect(result).toMatchObject({ satisfied: false, stats: { generation: 862 } });
+    expect(dbMocks.maxPageFollowGeneration).toHaveBeenCalledWith(db, 13);
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(db, {
+      platformAccountId: 13,
+      stream: "followers_reconcile",
+      state: expect.objectContaining({ generation: 862 }),
+    });
+  });
+
+  it("keeps a newer subscriber checkpoint generation above a lower row high-water", async () => {
+    const telemetry = createTelemetry();
+    const db = {};
+    const app = {
+      db,
+      config: { syncSharedRateLimitEnabled: false },
+      adapter: {},
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({ state: { revision: 3, generation: 900 } });
+    dbMocks.maxPageSubscriptionGeneration.mockResolvedValue(861);
+
+    const result = await fanslySubscribersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 13,
+          label: "fansly-page",
+          platformAccountId: "acct-13",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: { requestSeq: 4 },
+      syncRunId: 102,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(0),
+    } as never);
+
+    expect(result).toMatchObject({ satisfied: false, stats: { generation: 901 } });
+    expect(dbMocks.maxPageSubscriptionGeneration).toHaveBeenCalledWith(db, 13);
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(db, {
+      platformAccountId: 13,
+      stream: "subscribers",
+      state: expect.objectContaining({ generation: 901 }),
+    });
+  });
+
   it("finalizes subscribers inside one transaction on completed pages", async () => {
     const telemetry = createTelemetry();
     const tx = {};
@@ -2014,6 +2148,52 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
         lastFullSweepCompletedAt: expect.any(String),
       }),
     }));
+    expect(dbMocks.maxPageDmThreadGeneration).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh dm_conversations sweep above the persisted thread high-water", async () => {
+    const telemetry = createTelemetry();
+    const db = {};
+    const app = {
+      db,
+      config: { syncSharedRateLimitEnabled: true },
+      adapter: {},
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        generation: 17,
+        lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+      },
+    });
+    dbMocks.maxPageDmThreadGeneration.mockResolvedValue(2_144);
+
+    const result = await fanslyDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: { requestSeq: 42 },
+      syncRunId: 900,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(0),
+    } as never);
+
+    expect(result).toMatchObject({ satisfied: false, stats: { generation: 2_145 } });
+    expect(dbMocks.maxPageDmThreadGeneration).toHaveBeenCalledWith(db, 55);
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(db, {
+      platformAccountId: 55,
+      stream: "dm_conversations",
+      state: expect.objectContaining({ generation: 2_145 }),
+    });
   });
 
   it("requests a dm_messages follow-up when conversation heads advance", async () => {
