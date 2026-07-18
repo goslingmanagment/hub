@@ -147,6 +147,12 @@ const COACH_HISTORY_AGGREGATE_MAX_CHARS = 120_000;
 // body (input.maxTokens ?? tuning.maxTokens, honored by both providers).
 const SHORT_SUMMARY_MAX_TOKENS = 2048;
 
+// Short recap also bounds its INPUT window: the compact template promises the
+// model "300 recent messages max are provided", so the archive lane must not
+// pull the deep default (1500) — or a caller-supplied messageCount up to the
+// 3000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
+const SHORT_SUMMARY_MESSAGE_COUNT = 300;
+
 export async function prepareAiFeatureStream(
   app: AppContext,
   principal: AuthPrincipal,
@@ -241,6 +247,9 @@ export async function prepareAiFeatureStream(
     // pre-cutover assembly gated on; the kernel cannot know them fresher
     // (its Fansly archive is pull-cadenced by design).
     const clientContext = body.clientContext;
+    // Short-recap's 300-message input bound is NOT enforced here: the client
+    // owns this window and the kernel can't count a pre-assembled string
+    // transcript. The archive lane below is where the kernel-counted clamp lives.
     if (policy.usesPingSegment && clientContext.pingSegment === undefined) {
       throw new BadRequestError(`${feature} requires clientContext.pingSegment`);
     }
@@ -270,10 +279,16 @@ export async function prepareAiFeatureStream(
         unionMode = "unknown";
       }
     }
+    // Short fan-summary bounds its input window to match the template's
+    // "300 recent messages max" promise; every other request keeps the
+    // per-bucket default (fan-summary deep = 1500). Clamps DOWN only.
+    const limit = feature === "fan-summary" && body.summaryMode === "short"
+      ? Math.min(SHORT_SUMMARY_MESSAGE_COUNT, body.messageCount ?? SHORT_SUMMARY_MESSAGE_COUNT)
+      : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
     const transcript = await loadTranscriptContext(app, {
       pageId,
       conversationRef: body.conversationRef,
-      limit: body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket],
+      limit,
       unionMode,
     });
     contextManifest = transcript.contextManifest;

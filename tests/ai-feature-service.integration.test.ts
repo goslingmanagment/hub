@@ -1361,6 +1361,76 @@ describe("fan-summary short variant cap (Task 8)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("fan-summary short variant input window (Blocker 4)", () => {
+  // The compact template promises "300 recent messages max"; the ARCHIVE lane
+  // (OnlyFans — no clientContext) must clamp the transcript loader to 300 under
+  // short mode instead of the deep default (1500) or a caller-supplied count.
+  // The loader's actual pull is observable as contextManifest.archiveCount,
+  // which the gateway persists on the restricted generation row.
+  async function runArchiveFanSummary(over: Record<string, unknown> = {}) {
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fan-summary",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        ...over,
+      },
+    });
+    return { res };
+  }
+
+  async function lastFanSummaryArchiveCount(): Promise<number> {
+    const { rows } = await testDb!.pool.query<{ params: Record<string, unknown> }>(
+      `select params from ai_generation_content where feature = 'fan-summary'
+       order by id desc limit 1`,
+    );
+    const manifest = (
+      rows[0]?.params as { contextManifest?: { archiveCount?: number } } | undefined
+    )?.contextManifest;
+    return manifest?.archiveCount ?? -1;
+  }
+
+  it("clamps the archive loader to 300 under short mode; full mode stays deep", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation(); // fan + page_fans + 3 archive rows
+    // Push the fan's thread well past 300 so the clamp is observable. The AI
+    // shaper drops rows with a non-numeric message_ref, so keep refs numeric.
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, is_sent_by_me, occurred_at, text_plain)
+       select $1, 'onlyfans', $2, (1000000 + g)::text, $2, false,
+              now() - (g || ' minutes')::interval, 'archived message ' || g
+       from generate_series(1, 320) g`,
+      [pageId, FAN],
+    );
+
+    // Short mode with no explicit count: clamped to exactly 300.
+    const short = await runArchiveFanSummary({ summaryMode: "short" });
+    expect(short.res.statusCode, short.res.body).toBe(200);
+    expect(await lastFanSummaryArchiveCount()).toBe(300);
+
+    // A smaller caller-supplied count wins (the clamp is Math.min, not a floor).
+    const shortSmaller = await runArchiveFanSummary({ summaryMode: "short", messageCount: 50 });
+    expect(shortSmaller.res.statusCode, shortSmaller.res.body).toBe(200);
+    expect(await lastFanSummaryArchiveCount()).toBe(50);
+
+    // Full mode is untouched: it keeps the deep default and pulls the whole
+    // thread (>300), proving the clamp is short-specific.
+    const full = await runArchiveFanSummary();
+    expect(full.res.statusCode, full.res.body).toBe(200);
+    expect(await lastFanSummaryArchiveCount()).toBeGreaterThan(300);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("coach-chat recap attach (spec §5)", () => {
   // Exercises the six attach branches in prepareAiFeatureStream by seeding
   // fan-summary recap rows (as the recap reader in ai-recap-selection does) and
