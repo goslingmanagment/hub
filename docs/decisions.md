@@ -4650,7 +4650,7 @@ key and never calls ElevenLabs. A new `voice-script` feature rides the existing
 SSE feature lane to compose the spoken script from refs + `clientContext`
 exactly like every other AI feature, and the render itself is driven by three
 page-scoped routes — POST to admit a render, a status poll, and an audio fetch —
-each returning structured `voice_note_*` outcome codes so the client maps
+each returning structured `voice_*` error/outcome codes plus `artifact_expired` so the client maps
 failures by code, not by prose. Every render is a durable job in `voice_notes`
 governed by the decision-#158 discipline: admission creates the attempt before
 any dispatch, a CAS transition grants exactly one dispatch under a fenced

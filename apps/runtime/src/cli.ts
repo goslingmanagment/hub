@@ -1098,7 +1098,7 @@ export function buildProgram() {
     .requiredOption("--page <label>")
     .requiredOption("--voice-id <id>")
     .option("--model <model>", "ElevenLabs model id", "eleven_v3")
-    .option("--stability <value>", "voice stability preset or number (stored in settings)")
+    .option("--stability <value>", "voice stability preset or number (stored in settings)", "natural")
     .option("--output-format <format>", "rendered audio format", "mp3_44100_128")
     .action(async (options) => {
       const app = await createAppContext();
