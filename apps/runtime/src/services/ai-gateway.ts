@@ -505,6 +505,17 @@ export const PROVIDER_USAGE_MISSING_ERROR_FRAME: AiGatewayStreamFrame = {
   retryAfterMs: null,
 };
 
+// A provider that streamed content but reached EOF WITHOUT a terminal stopReason
+// (no done frame, or a synthetic done carrying stopReason == null) was cut
+// mid-generation — recorded as failed and emitted WITHOUT a done frame, so no
+// client can commit an aborted coach answer or attach a truncated recap (P1-2).
+export const PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME: AiGatewayStreamFrame = {
+  type: "error",
+  code: "provider_stream_incomplete",
+  message: "AI gateway provider stream ended without a terminal stop reason",
+  retryAfterMs: null,
+};
+
 /**
  * Shared terminal-stream consumer (P1-5): the coach transport ceiling check and
  * the terminal outcome/usage/stopReason accounting used by BOTH the HTTP SSE
@@ -567,14 +578,34 @@ export class AiGatewayTerminalStreamConsumer {
     return { emit: [frame], ceilingCrossed: false };
   }
 
+  /** A content-bearing stream is a USABLE terminal only when the provider
+   * emitted a done frame carrying a non-null stopReason. A premature EOF — no
+   * done frame, or a synthetic done with stopReason == null (Anthropic yields
+   * exactly this on a clean iterator end that never saw a terminal
+   * message_delta) — means the generation was cut mid-output and must fail
+   * closed. An exhausted-but-present stopReason (`max_tokens`/`length`) IS a
+   * usable terminal here; the recap selector and the coach ceiling handle
+   * exhaustion separately downstream. */
+  private hasUsableTerminal(): boolean {
+    return this.doneFrame !== null && this.stopReason !== null;
+  }
+
   /** After the loop ends without a ceiling abort: returns the trailing frames
-   * to emit (the held `done` frame, or a provider_usage_missing error) and
-   * finalizes the outcome. `usageMissing` lets the caller log the anomaly.
-   * A no-op after a ceiling abort (outcome is already failed, no done frame). */
+   * to emit (the held `done` frame, or an error) and finalizes the outcome.
+   * `usageMissing` lets the caller log the missing-usage anomaly. A no-op after
+   * a ceiling abort (outcome is already failed, no done frame). */
   finish(): { emit: AiGatewayStreamFrame[]; usageMissing: boolean } {
     if (this.outcome === "completed" && this.streamedContent && !this.usage) {
       this.outcome = "failed";
       return { emit: [PROVIDER_USAGE_MISSING_ERROR_FRAME], usageMissing: true };
+    }
+    // Premature EOF (P1-2): the stream emitted content (and, past the check
+    // above, usage) but ended without a terminal stopReason. Fail closed with an
+    // error frame and NO done, so the partial output can never be committed or
+    // attached. Zero-content streams are out of scope and keep prior behavior.
+    if (this.outcome === "completed" && this.streamedContent && !this.hasUsableTerminal()) {
+      this.outcome = "failed";
+      return { emit: [PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME], usageMissing: false };
     }
     if (this.doneFrame) {
       return { emit: [this.doneFrame], usageMissing: false };

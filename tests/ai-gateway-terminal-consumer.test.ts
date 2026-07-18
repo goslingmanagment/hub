@@ -88,6 +88,51 @@ describe("AiGatewayTerminalStreamConsumer", () => {
     expect(consumer.outcome).toBe("failed");
   });
 
+  it("fails a content-bearing stream that reached EOF with a null-stopReason done (premature EOF)", () => {
+    // P1-2: Anthropic on a clean iterator end that never saw a terminal
+    // message_delta still yields the saved usage and a SYNTHETIC done with
+    // stopReason=null. That is a truncated generation, not a completed one — it
+    // must fail closed with an error frame and NO done, so no client can commit
+    // an aborted coach answer or attach a truncated recap.
+    const consumer = new AiGatewayTerminalStreamConsumer();
+    consumer.note(content("partial answer"));
+    consumer.note(usageFrame);
+    consumer.note(done(null));
+    const finished = consumer.finish();
+    expect(finished.usageMissing).toBe(false);
+    expect(finished.emit).toEqual([
+      { type: "error", code: "provider_stream_incomplete", message: expect.any(String), retryAfterMs: null },
+    ]);
+    // No done frame is released.
+    expect(finished.emit.some((frame) => frame.type === "done")).toBe(false);
+    expect(consumer.outcome).toBe("failed");
+  });
+
+  it("fails a content-bearing stream that ended with NO done frame at all", () => {
+    // A provider iterator that simply ends after content+usage (no done frame)
+    // is the same premature-EOF class: no terminal stopReason ever arrived.
+    const consumer = new AiGatewayTerminalStreamConsumer();
+    consumer.note(content("partial answer"));
+    consumer.note(usageFrame);
+    const finished = consumer.finish();
+    expect(finished.emit).toEqual([
+      { type: "error", code: "provider_stream_incomplete", message: expect.any(String), retryAfterMs: null },
+    ]);
+    expect(finished.emit.some((frame) => frame.type === "done")).toBe(false);
+    expect(consumer.outcome).toBe("failed");
+  });
+
+  it("keeps zero-content streams on existing behavior (no premature-EOF error)", () => {
+    // The premature-EOF guard is scoped to streams that emitted content. A
+    // zero-content stream (nothing to commit) is left to its existing path.
+    const consumer = new AiGatewayTerminalStreamConsumer();
+    consumer.note(usageFrame);
+    consumer.note(done(null));
+    const finished = consumer.finish();
+    expect(finished.emit).toEqual([done(null)]);
+    expect(consumer.outcome).toBe("completed");
+  });
+
   it("an error frame pins the outcome to failed", () => {
     const consumer = new AiGatewayTerminalStreamConsumer();
     const errorFrame: AiGatewayStreamFrame = {

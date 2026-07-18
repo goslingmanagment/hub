@@ -222,6 +222,34 @@ function overCeilingProvider(capture: { calls?: number }): AiGatewayProvider {
   };
 }
 
+// Streams content + usage, then a SYNTHETIC done with stopReason=null — exactly
+// what the Anthropic provider yields on a clean iterator EOF that never saw a
+// terminal message_delta. The pump must fail closed: an error frame, NO done
+// frame, failed terminal outcome (P1-2).
+function prematureEofProvider(capture: { calls?: number }): AiGatewayProvider {
+  return {
+    provider: "anthropic",
+    async *stream() {
+      capture.calls = (capture.calls ?? 0) + 1;
+      yield { type: "content_delta", text: "partial coach answer" };
+      yield {
+        type: "usage",
+        providerResponseId: "msg_eof",
+        cacheHit: false,
+        usage: {
+          inputTokens: 50,
+          outputTokens: 5,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          costMicroUsd: 100,
+          costApproximate: false,
+        },
+      };
+      yield { type: "done", stopReason: null };
+    },
+  };
+}
+
 function aiFrames(body: string): Array<Record<string, unknown>> {
   return body
     .split("\n")
@@ -1422,6 +1450,39 @@ describe("coach-chat gates", () => {
     // must fall back to the cost estimator, NOT record zero, or the spend
     // escapes both the per-user daily $ cap and the per-feature global ceiling.
     expect(Number(rows[0]!.cost_micro_usd)).toBeGreaterThan(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("fails a coach stream that reaches EOF without a terminal stopReason (P1-2)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = prematureEofProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({ chatterQuestion: "и что дальше?" }),
+    });
+    expect(res.statusCode, res.body).toBe(200); // the SSE stream itself opened 200
+    const frames = aiFrames(res.body);
+    // The incomplete-stream error is emitted, and the stream ends WITHOUT a done
+    // frame so no client can treat the truncated coach answer as committed.
+    expect(
+      frames.some(
+        (frame) => frame.type === "error" && frame.code === "provider_stream_incomplete",
+      ),
+    ).toBe(true);
+    expect(frames.some((frame) => frame.type === "done")).toBe(false);
+
+    // The attempt is terminal-recorded as FAILED (never completed).
+    const { rows } = await testDb.pool.query<{ gateway_outcome: string }>(
+      `select u.gateway_outcome
+       from ai_generation_content g join ai_usage_events u on u.id = g.usage_event_id
+       order by g.id desc limit 1`,
+    );
+    expect(rows[0]!.gateway_outcome).toBe("failed");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
