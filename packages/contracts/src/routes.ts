@@ -571,7 +571,11 @@ export const voiceNoteParamsSchema = pageParamsSchema.extend({
 // (control-char refs, script length against the LIVE config max, source
 // eligibility) run service-side and answer with structured 400/409 codes.
 export const voiceNoteCreateBodySchema = z.object({
-  clientRequestId: z.string().min(1).max(200),
+  // MUST be a UUID: it keys the idempotent `voice_notes.client_request_id`
+  // (a `uuid` column). Validating the format here — like the sibling AI-lane
+  // routes — rejects a malformed id at the schema boundary with a 400, before
+  // any non-UUID string can reach Postgres and raise a raw 22P02 → 500.
+  clientRequestId: z.string().uuid(),
   conversationRef: z.string().min(1).max(200),
   sourceGenerationRef: z.string().min(1).max(200),
   script: z.string().min(1).max(8000),

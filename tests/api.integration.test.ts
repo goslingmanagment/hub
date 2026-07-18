@@ -10438,6 +10438,26 @@ describe("api integration", () => {
       }
     });
 
+    it("400s a non-UUID clientRequestId at the schema boundary (never a raw 500)", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, key, sourceRef } = await provisionVoice();
+      try {
+        const create = await voiceServer.inject({
+          method: "POST",
+          url: "/api/v1/pages/lana/voice-notes",
+          headers: { authorization: `Bearer ${key}` },
+          payload: createBody(sourceRef, { clientRequestId: "not-a-uuid" }),
+        });
+        // Fastify/zod body validation rejects the malformed id BEFORE the
+        // handler — so a non-UUID never reaches the `uuid` column to raise a
+        // raw Postgres 22P02 that would surface as an unstructured 500.
+        expect(create.statusCode, create.body).toBe(400);
+        expect(create.statusCode).not.toBe(500);
+      } finally {
+        await voiceServer.close();
+      }
+    });
+
     it("rejects a reused clientRequestId + different body with 409 idempotency_mismatch", async (context) => {
       if (!testDb || !fixture) return context.skip();
       const { voiceServer, key, sourceRef } = await provisionVoice();
