@@ -33,6 +33,16 @@ export class NotFoundError extends AppError {
   }
 }
 
+// Coach feature (spec §7 compat): an unknown AI feature key carries its own
+// structured code so clients distinguish "this hub is too old to serve the
+// feature" from a generic missing-resource 404 (the extension's «Coach
+// requires a newer Agency Hub» mapping keys on this code, never on 404 alone).
+export class UnknownAiFeatureError extends AppError {
+  constructor(message = "Unknown AI feature") {
+    super(message, 404, "unknown_ai_feature");
+  }
+}
+
 export class ConflictError extends AppError {
   constructor(message: string) {
     super(message, 409, "conflict");

@@ -195,7 +195,7 @@ export function createOfapiRestGuard(app: AppContext, options?: {
   );
   const globalDailyCreditBudget = Math.max(
     1,
-    // Decision #160/#169: dedicated legacy lanes and mirror admission share
+    // Decision #160/#170: dedicated legacy lanes and mirror admission share
     // one physical stop-loss; the retired DM crawler's 500-credit cap is not
     // that shared ceiling.
     app.config.ofapiMirrorGlobalDailyCreditBudget ??

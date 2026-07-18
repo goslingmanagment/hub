@@ -12,6 +12,7 @@ import {
 import { escapeForPrompt } from '../apps/runtime/src/modules/ai/index.ts';
 import {
   CHAT_REVIEW_TEMPLATE,
+  COACH_CHAT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
@@ -64,6 +65,10 @@ const TEMPLATES: Record<PromptFeature, string> = {
   'chat-review': CHAT_REVIEW_TEMPLATE,
   ping: PING_TEMPLATE,
   'hi-greeting': HI_GREETING_TEMPLATE,
+  // Satisfies the exhaustive Record<PromptFeature, …>; the parity loops iterate
+  // FEATURES (which omits coach-chat), so this row is never exercised — but it
+  // now holds the real template rather than a placeholder.
+  'coach-chat': COACH_CHAT_TEMPLATE,
 };
 const PING_SEGMENT_INSTRUCTIONS = {
   'segment-a':

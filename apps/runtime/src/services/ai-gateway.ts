@@ -51,6 +51,10 @@ export interface AiGatewayProviderInput {
   body: AiGatewayStreamBody;
   quota: AiGatewayQuota;
   signal: AbortSignal;
+  /** Server-derived, off the wire: disables adaptive summarized thinking so a
+   * tight maxTokens stays a pure output budget (fan-summary short recap). The
+   * Anthropic provider honors it; OpenRouter has no thinking block to disable. */
+  disableAdaptiveThinking?: boolean;
 }
 
 export interface AiGatewayProvider {
@@ -64,6 +68,12 @@ export interface PreparedAiGatewayStream {
   debugFrame?: AiFeatureDebugInputFrame;
   stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
   recordTerminal(input: AiGatewayTerminalRecordInput): Promise<boolean>;
+  /** Coach transport ceiling (spec §3/§7, option "c"): when set, the SSE pump
+   * aborts the generation if accumulated visible output (content_delta chars)
+   * crosses this bound, erroring WITHOUT a `done` frame so the attempt is
+   * terminal-recorded as failed and can never be committed/replayed. Off the
+   * wire (feature service sets it for coach-chat only); unset = no ceiling. */
+  visibleOutputCeilingChars?: number;
 }
 
 export interface AiGatewayTerminalRecordInput {
@@ -76,6 +86,13 @@ export interface AiGatewayTerminalRecordInput {
   /** Stage 29 restricted class: the accumulated completion text, verbatim. */
   completionText: string;
   stopReason?: string | null;
+  /** Coach transport ceiling (spec §3/§7): the ceiling aborts the provider
+   * mid-stream BEFORE its terminal usage frame, so real token counts never
+   * arrive — but the request already burned provider spend. Set true ONLY on
+   * the ceiling path so the ledger falls back to the request-cost estimator
+   * instead of recording zeros (which would hide the spend from both budget
+   * guards). A genuine provider failure / client cancel leaves this false. */
+  estimateCostOnMissingUsage?: boolean;
 }
 
 /** Stage 29: model prefix routes the provider — "openrouter:*" to the
@@ -186,10 +203,36 @@ export interface AiGatewayStreamInternalOptions {
   personaDefinitionId?: string;
 }
 
+/** The feature service builds a stream input from the wire body plus optional
+ * server-derived provenance. `featureParams` is NEVER part of the wire
+ * contract (the raw gateway route passes a plain body and leaves it unset) —
+ * it is spread verbatim, additively, into the restricted generation record's
+ * params so fan-summary rows carry summaryMode/transcriptCoverage/counts for
+ * the two-slot recap selection (spec §5). */
+export type AiGatewayStreamInput = AiGatewayStreamBody & {
+  featureParams?: Record<string, unknown>;
+  /** Server-derived, off the wire: disables adaptive summarized thinking on the
+   * Anthropic provider so a tight maxTokens stays a pure output budget (the
+   * fan-summary short recap sets it alongside maxTokens: 2048). */
+  disableAdaptiveThinking?: boolean;
+  /** Off the wire (never on aiGatewayStreamBodySchema): the fan this generation
+   * is ABOUT, stored as the restricted record's fan_ref so a fan-scope Stage 28
+   * erasure reaches coach/recap rows whose conversation_ref is the canonical
+   * groupId (spec §5). The feature lane sets it to body.fanRef ?? null; the raw
+   * gateway and internal lanes leave it unset (null). */
+  fanRef?: string | null;
+  /** Server-derived, off the wire: the coach transport ceiling (spec §3/§7,
+   * option "c"). The feature service sets it to COACH_ANSWER_MAX_CHARS for
+   * coach-chat so the SSE pump enforces the same bound on the live stream that
+   * the wire schema enforces on a replayed answer. Propagated verbatim onto the
+   * prepared stream; the raw gateway and other features leave it unset. */
+  visibleOutputCeilingChars?: number;
+};
+
 export async function prepareAiGatewayStream(
   app: AppContext,
   principal: AuthPrincipal,
-  input: AiGatewayStreamBody,
+  input: AiGatewayStreamInput,
   internal?: AiGatewayStreamInternalOptions,
 ): Promise<PreparedAiGatewayStream> {
   if (!isChatMuseAiGatewayEnabled(app.config)) {
@@ -323,6 +366,9 @@ export async function prepareAiGatewayStream(
       quota: quotaFrame,
     },
     ...(internal?.debugFrame ? { debugFrame: internal.debugFrame } : {}),
+    ...(input.visibleOutputCeilingChars !== undefined
+      ? { visibleOutputCeilingChars: input.visibleOutputCeilingChars }
+      : {}),
     stream(signal) {
       return provider.stream({
         requestId,
@@ -337,10 +383,42 @@ export async function prepareAiGatewayStream(
         body: input,
         quota: quotaFrame,
         signal,
+        ...(input.disableAdaptiveThinking
+          ? { disableAdaptiveThinking: true }
+          : {}),
       });
     },
     async recordTerminal(record) {
-      const usage = record.usage ?? {
+      // Ceiling abort (P1-1/P2-6): the provider was torn down mid-stream before
+      // its terminal usage frame, so record.usage is null even though the
+      // request already spent tokens (a ~100k-token prompt plus the streamed
+      // output up to the ceiling). Recording zeros hides that spend from BOTH
+      // getAiGatewayDailyUsageTotals (per-user daily $ cap) and
+      // getAiGatewayFeatureDailyTotals (per-feature global ceiling), which each
+      // sum cost_micro_usd. Fall back to the SAME conservative request-cost
+      // estimator the pre-stream ceiling used, so the terminal record carries a
+      // non-zero, never-under charge. costApproximate stays true; the token
+      // split is left at zero because only the cost is estimable here.
+      let resolvedUsage = record.usage;
+      if (!resolvedUsage && record.estimateCostOnMissingUsage) {
+        try {
+          const estimate = provider.provider === "openrouter"
+            ? estimateOpenrouterGatewayRequestCost(input)
+            : estimateAnthropicGatewayRequestCost(input);
+          resolvedUsage = {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 0,
+            costMicroUsd: estimate.costMicroUsd,
+            costApproximate: true,
+          };
+        } catch {
+          // A pricing lookup failure must not lose the terminal record; fall
+          // through to the zeroed default below.
+        }
+      }
+      const usage = resolvedUsage ?? {
         inputTokens: 0,
         outputTokens: 0,
         cacheWriteTokens: 0,
@@ -379,12 +457,16 @@ export async function prepareAiGatewayStream(
         userId: principal.user.id,
         pageId: page.id,
         conversationRef: input.conversationId ?? null,
+        fanRef: input.fanRef ?? null,
         promptBlocks: [
           { role: "system", blocks: input.prompt.systemBlocks },
           { role: "user", blocks: input.prompt.userBlocks },
         ],
         completion: record.completionText,
         params: {
+          // Feature-derived provenance spreads FIRST so the canonical
+          // gateway keys below always win on any collision.
+          ...(input.featureParams ?? {}),
           maxTokens: input.maxTokens ?? null,
           temperature: input.temperature ?? null,
           reasoningEffort: input.reasoningEffort,
@@ -403,4 +485,131 @@ export async function prepareAiGatewayStream(
 
 export function serializeAiGatewaySseFrame(frame: AiGatewayStreamFrame | AiFeatureDebugInputFrame) {
   return `event: ai\ndata: ${JSON.stringify(frame)}\n\n`;
+}
+
+// The coach ceiling error frame (spec §3/§7): emitted WITHOUT a `done` frame so
+// no client treats an over-ceiling answer as a committed result.
+export const COACH_OUTPUT_TOO_LONG_ERROR_FRAME: AiGatewayStreamFrame = {
+  type: "error",
+  code: "coach_output_too_long",
+  message: "AI gateway output exceeded the coach transport ceiling",
+  retryAfterMs: null,
+};
+
+// A provider that streamed content but never sent usage metadata is a broken
+// (truncated) stream, recorded as failed — never presented as a result.
+export const PROVIDER_USAGE_MISSING_ERROR_FRAME: AiGatewayStreamFrame = {
+  type: "error",
+  code: "provider_usage_missing",
+  message: "AI gateway provider ended without usage metadata",
+  retryAfterMs: null,
+};
+
+// A provider that streamed content but reached EOF WITHOUT a terminal stopReason
+// (no done frame, or a synthetic done carrying stopReason == null) was cut
+// mid-generation — recorded as failed and emitted WITHOUT a done frame, so no
+// client can commit an aborted coach answer or attach a truncated recap (P1-2).
+export const PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME: AiGatewayStreamFrame = {
+  type: "error",
+  code: "provider_stream_incomplete",
+  message: "AI gateway provider stream ended without a terminal stop reason",
+  retryAfterMs: null,
+};
+
+/**
+ * Shared terminal-stream consumer (P1-5): the coach transport ceiling check and
+ * the terminal outcome/usage/stopReason accounting used by BOTH the HTTP SSE
+ * pump (pipeAiGatewaySse) and the CLI smoke path (ai:feature-smoke), so the two
+ * can never drift on what counts as a committed, usable generation. It writes
+ * no SSE and owns no I/O — the caller emits the frames each step returns and
+ * decides how to abort. The seam it shares: (1) a coach answer whose accumulated
+ * visible output crosses the ceiling is aborted mid-stream and recorded failed
+ * (never completed), so it can never be attached/committed; (2) a stream that
+ * emitted content but no usage frame is failed, not silently completed.
+ */
+export class AiGatewayTerminalStreamConsumer {
+  outcome: "completed" | "failed" | "cancelled" = "completed";
+  usage: AiGatewayUsage | null = null;
+  providerResponseId: string | null = null;
+  cacheHit = false;
+  completionText = "";
+  stopReason: string | null = null;
+  streamedContent = false;
+  ceilingExceeded = false;
+  private doneFrame: AiGatewayStreamFrame | null = null;
+
+  constructor(private readonly visibleOutputCeilingChars?: number | undefined) {}
+
+  /** Fold one provider frame into the terminal state. Returns the frames the
+   * caller should emit IN ORDER, and whether the ceiling was crossed. A
+   * crossing means: emit these (the crossing content + the ceiling error),
+   * then abort the provider and stop reading — no `done` frame follows. */
+  note(frame: AiGatewayStreamFrame): { emit: AiGatewayStreamFrame[]; ceilingCrossed: boolean } {
+    if (frame.type === "usage") {
+      this.usage = frame.usage;
+      this.providerResponseId = frame.providerResponseId;
+      this.cacheHit = frame.cacheHit;
+      return { emit: [frame], ceilingCrossed: false };
+    }
+    if (frame.type === "content_delta" && frame.text.length > 0) {
+      this.streamedContent = true;
+      this.completionText += frame.text;
+      if (
+        this.visibleOutputCeilingChars !== undefined
+        && this.completionText.length > this.visibleOutputCeilingChars
+      ) {
+        this.ceilingExceeded = true;
+        this.outcome = "failed";
+        return { emit: [frame, COACH_OUTPUT_TOO_LONG_ERROR_FRAME], ceilingCrossed: true };
+      }
+      return { emit: [frame], ceilingCrossed: false };
+    }
+    if (frame.type === "error") {
+      this.outcome = "failed";
+      return { emit: [frame], ceilingCrossed: false };
+    }
+    if (frame.type === "done") {
+      // Held back until finish(): a `done` frame is only emitted for a stream
+      // that actually completed (with usage), never for a truncated one.
+      this.doneFrame = frame;
+      this.stopReason = frame.stopReason ?? null;
+      return { emit: [], ceilingCrossed: false };
+    }
+    return { emit: [frame], ceilingCrossed: false };
+  }
+
+  /** A content-bearing stream is a USABLE terminal only when the provider
+   * emitted a done frame carrying a non-null stopReason. A premature EOF — no
+   * done frame, or a synthetic done with stopReason == null (Anthropic yields
+   * exactly this on a clean iterator end that never saw a terminal
+   * message_delta) — means the generation was cut mid-output and must fail
+   * closed. An exhausted-but-present stopReason (`max_tokens`/`length`) IS a
+   * usable terminal here; the recap selector and the coach ceiling handle
+   * exhaustion separately downstream. */
+  private hasUsableTerminal(): boolean {
+    return this.doneFrame !== null && this.stopReason !== null;
+  }
+
+  /** After the loop ends without a ceiling abort: returns the trailing frames
+   * to emit (the held `done` frame, or an error) and finalizes the outcome.
+   * `usageMissing` lets the caller log the missing-usage anomaly. A no-op after
+   * a ceiling abort (outcome is already failed, no done frame). */
+  finish(): { emit: AiGatewayStreamFrame[]; usageMissing: boolean } {
+    if (this.outcome === "completed" && this.streamedContent && !this.usage) {
+      this.outcome = "failed";
+      return { emit: [PROVIDER_USAGE_MISSING_ERROR_FRAME], usageMissing: true };
+    }
+    // Premature EOF (P1-2): the stream emitted content (and, past the check
+    // above, usage) but ended without a terminal stopReason. Fail closed with an
+    // error frame and NO done, so the partial output can never be committed or
+    // attached. Zero-content streams are out of scope and keep prior behavior.
+    if (this.outcome === "completed" && this.streamedContent && !this.hasUsableTerminal()) {
+      this.outcome = "failed";
+      return { emit: [PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME], usageMissing: false };
+    }
+    if (this.doneFrame) {
+      return { emit: [this.doneFrame], usageMissing: false };
+    }
+    return { emit: [], usageMissing: false };
+  }
 }
