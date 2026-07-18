@@ -83,6 +83,28 @@ async function captureDmPage(pageId: number, responsePayload: unknown) {
   });
 }
 
+async function capturePurchaseHistoryTarget(
+  pageId: number,
+  input: {
+    requestParams: Record<string, unknown>;
+    responsePayload: unknown;
+    statusCode?: number;
+    errorMessage?: string;
+  },
+) {
+  await insertRawPayload(appContext.db, {
+    platformAccountId: pageId,
+    endpoint: "purchase_history",
+    requestParams: input.requestParams,
+    responsePayload: input.responsePayload,
+    mapperVersion: "test",
+    payloadKind: "mapping_critical",
+    ...(input.statusCode === undefined ? {} : { statusCode: input.statusCode }),
+    ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
+    retainUntil: new Date("2126-01-01T00:00:00Z"),
+  });
+}
+
 function ppvDmPayload() {
   return {
     messages: [{
@@ -288,6 +310,61 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     expect(requested).toHaveLength(1);
   });
 
+  it("reconciles a crash after valid raw capture locally without another request", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await captureDmPage(page.id, {
+      messages: [{ attachments: [{ contentType: 1, contentId: "media-1" }] }],
+      accountMedia: [{
+        id: "media-1",
+        permissions: { permissionFlags: [{ flags: 1 }] },
+      }],
+    });
+    const dmCapture = await testDb.pool.query<{ id: string }>(
+      "select id::text from sync_raw_payloads where endpoint = 'dm_messages'",
+    );
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "purchase_history",
+      state: {
+        version: 2,
+        rawPayloadCursorId: Number(dmCapture.rows[0]!.id),
+        pendingTargets: [{ kind: "single", contentId: "media-1" }],
+      },
+    });
+    // This is the exact crash window: the response fact committed, while the
+    // pending checkpoint still points at the same target.
+    await capturePurchaseHistoryTarget(page.id, {
+      requestParams: { accountMediaId: "media-1", limit: 100 },
+      responsePayload: { accountMediaOrderHistory: [{ id: "order-1" }] },
+    });
+    const adapterSpy = vi.fn(async () => ({
+      items: [],
+      raw: { accountMediaOrderHistory: [] },
+    }));
+    appContext = {
+      ...appContext,
+      adapter: { getMediaOrderHistoryPage: adapterSpy } as never,
+    };
+
+    const result = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    );
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: { targetsFetched: 0, walkCompleted: true },
+    });
+    expect(adapterSpy).not.toHaveBeenCalled();
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
+    expect(checkpoint?.state).toMatchObject({ pendingTargets: [] });
+    expect(checkpoint?.state.completedAt).toEqual(expect.any(String));
+  });
+
   it("makes zero adapter calls with the feature flag off", async (context) => {
     if (!testDb) {
       context.skip();
@@ -351,13 +428,10 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
         permissions: { permissionFlags: [{ flags: 1 }] },
       }],
     });
+    const adapterSpy = vi.fn(async () => ({ items: [], raw: { unexpected: [] } }));
     appContext = {
       ...appContext,
-      adapter: {
-        async getMediaOrderHistoryPage() {
-          return { items: [], raw: { unexpected: [] } };
-        },
-      } as never,
+      adapter: { getMediaOrderHistoryPage: adapterSpy } as never,
     };
 
     await expect(
@@ -368,6 +442,119 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     );
     expect(captures.rows).toEqual([{ n: "1" }]);
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
-    expect(checkpoint?.state).toMatchObject({ pendingTargets: [] });
+    expect(checkpoint?.state).toMatchObject({
+      pendingTargets: [{ kind: "single", contentId: "media-1" }],
+    });
+
+    // Even an old checkpoint that already dropped the pending target cannot
+    // grandfather the rejected raw capture into completeness.
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "purchase_history",
+      state: {
+        version: 2,
+        rawPayloadCursorId: Number(checkpoint?.state.rawPayloadCursorId ?? 0),
+        pendingTargets: [],
+      },
+    });
+    await expect(
+      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, fakeTelemetry())),
+    ).rejects.toBeInstanceOf(FanslyPurchaseHistoryContractError);
+    expect(adapterSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures but blocks a response at the cursorless 100-row cap", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await captureDmPage(page.id, {
+      messages: [{ attachments: [{ contentType: 1, contentId: "media-100" }] }],
+      accountMedia: [{
+        id: "media-100",
+        permissions: { permissionFlags: [{ flags: 1 }] },
+      }],
+    });
+    const adapterSpy = vi.fn(async () => ({
+      items: [],
+      raw: {
+        accountMediaOrderHistory: Array.from({ length: 100 }, (_, index) => ({ id: index })),
+      },
+    }));
+    appContext = {
+      ...appContext,
+      adapter: { getMediaOrderHistoryPage: adapterSpy } as never,
+    };
+
+    await expect(
+      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, fakeTelemetry())),
+    ).rejects.toMatchObject({ code: "purchase_history_result_truncated" });
+    await expect(
+      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, fakeTelemetry())),
+    ).rejects.toMatchObject({ code: "purchase_history_result_truncated" });
+
+    expect(adapterSpy).toHaveBeenCalledTimes(1);
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
+    expect(checkpoint?.state).toMatchObject({
+      pendingTargets: [{ kind: "single", contentId: "media-100" }],
+    });
+  });
+
+  it("reconciles valid and terminal captures but keeps a mixed blocked target", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await captureDmPage(page.id, ppvDmPayload());
+    const dmCapture = await testDb.pool.query<{ id: string }>(
+      "select id::text from sync_raw_payloads where endpoint = 'dm_messages'",
+    );
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "purchase_history",
+      state: {
+        version: 2,
+        rawPayloadCursorId: Number(dmCapture.rows[0]!.id),
+        pendingTargets: [
+          { kind: "bundle", contentId: "bundle-1" },
+          { kind: "single", contentId: "media-1" },
+          { kind: "single", contentId: "ordered-media" },
+        ],
+      },
+    });
+    await capturePurchaseHistoryTarget(page.id, {
+      requestParams: { accountMediaBundleId: "bundle-1", limit: 100 },
+      responsePayload: { error: { status: 404 } },
+      statusCode: 404,
+      errorMessage: "gone",
+    });
+    await capturePurchaseHistoryTarget(page.id, {
+      requestParams: { accountMediaId: "media-1", limit: 100 },
+      responsePayload: { aggregationData: { accountMediaOrders: [] } },
+    });
+    await capturePurchaseHistoryTarget(page.id, {
+      requestParams: { accountMediaId: "ordered-media", limit: 100 },
+      responsePayload: { unexpected: [] },
+    });
+    const adapterSpy = vi.fn(async () => ({
+      items: [],
+      raw: { accountMediaOrderHistory: [] },
+    }));
+    appContext = {
+      ...appContext,
+      adapter: { getMediaOrderHistoryPage: adapterSpy } as never,
+    };
+
+    await expect(
+      executePurchaseHistoryChunk(appContext, await buildChunkInput(page, fakeTelemetry())),
+    ).rejects.toMatchObject({ code: "purchase_history_contract_rejected" });
+
+    expect(adapterSpy).not.toHaveBeenCalled();
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
+    expect(checkpoint?.state).toMatchObject({
+      pendingTargets: [{ kind: "single", contentId: "ordered-media" }],
+    });
   });
 });
