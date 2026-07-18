@@ -1105,7 +1105,12 @@ export async function reserveOfapiRequestAttempt(
     const principalUsedCalls = principal ? asNumber(principal.used_calls, "used_calls") : 0;
     const principalUsedCredits = principal ? asNumber(principal.used_credits, "used_credits") : 0;
 
-    let isFloorProbe = false;
+    const balanceUnavailable = !balanceFresh || lastBalance === null;
+    const floorProbeEligible = balanceUnavailable &&
+      input.allowFloorProbe === true &&
+      input.budgetScope === "live" &&
+      activeFloorProbe.rows.length === 0 &&
+      (!floorProbeNotBefore || floorProbeNotBefore.getTime() <= now.getTime());
     let denial: OfapiBudgetDenialReason | null = null;
     if (paused.rows.length > 0) {
       denial = "persistent_pause";
@@ -1113,18 +1118,6 @@ export async function reserveOfapiRequestAttempt(
       denial = "storage_unhealthy";
     } else if (principalBlockedUntil && principalBlockedUntil.getTime() > now.getTime()) {
       denial = "principal_storm_block";
-    } else if (!balanceFresh || lastBalance === null) {
-      const probeEligible = input.allowFloorProbe === true &&
-        input.budgetScope === "live" &&
-        activeFloorProbe.rows.length === 0 &&
-        (!floorProbeNotBefore || floorProbeNotBefore.getTime() <= now.getTime());
-      if (probeEligible) {
-        isFloorProbe = true;
-      } else {
-        denial = "balance_stale";
-      }
-    } else if (lastBalance - unsettled - estimate < creditFloor) {
-      denial = "credit_floor";
     } else if (globalSpent + estimate > globalCap) {
       denial = "global_cap";
     } else if (scopeSpent + estimate > scopeCap) {
@@ -1137,11 +1130,28 @@ export async function reserveOfapiRequestAttempt(
       denial = "job_cap";
     } else if (job?.maxCredits !== null && job && job.spentCredits + estimate > job.maxCredits) {
       denial = "job_cap";
+    } else if (balanceUnavailable && !floorProbeEligible) {
+      denial = "balance_stale";
+    } else if (!balanceUnavailable && lastBalance - unsettled - estimate < creditFloor) {
+      denial = "credit_floor";
     }
+    const isFloorProbe = floorProbeEligible && denial === null;
+    const eligibleProbeBlockedByHardCap = floorProbeEligible && (
+      denial === "global_cap" ||
+      denial === "scope_cap" ||
+      denial === "principal_call_cap" ||
+      denial === "principal_credit_cap" ||
+      denial === "job_cap"
+    );
 
     if (denial) {
       let thresholdCrossing = false;
-      if (denial !== "storage_unhealthy" && principalId !== null && principal) {
+      if (
+        denial !== "storage_unhealthy" &&
+        !eligibleProbeBlockedByHardCap &&
+        principalId !== null &&
+        principal
+      ) {
         const previousDenials = asNumber(
           principal.consecutive_budget_denials,
           "consecutive_budget_denials",
@@ -1982,6 +1992,10 @@ export async function captureOfapiAttemptResponse(
       : normalizeCredits(input.settledCredits);
     const estimated = input.settledCredits === null || input.settledCredits === undefined;
     const priorIndeterminate = attempt.state === "indeterminate";
+    const jobCreditDelta = priorIndeterminate
+      ? settledCredits - reservedCredits
+      : settledCredits;
+    const jobDispatchDelta = priorIndeterminate ? 0 : 1;
     if (!priorIndeterminate) {
       await database.execute(sql`
         insert into ofapi_credit_ledger (
@@ -2083,8 +2097,8 @@ export async function captureOfapiAttemptResponse(
         set state = 'awaiting_parse',
             pending_observation_id = ${observation.observationId},
             pending_observation_received_at = ${observation.receivedAt},
-            spent_credits = spent_credits + ${settledCredits},
-            dispatch_count = dispatch_count + 1,
+            spent_credits = greatest(0, spent_credits + ${jobCreditDelta}),
+            dispatch_count = dispatch_count + ${jobDispatchDelta},
             reason_code = null,
             reason_message = null,
             row_version = row_version + 1,
@@ -3023,7 +3037,7 @@ export async function setOfapiCaptureControl(
       version: version + 1,
     };
     if (input.execute === true) {
-      await database.execute(sql`
+      const updated = await database.execute<{ control_key: string }>(sql`
         insert into ofapi_capture_controls (
           control_key, paused, reason, version, actor_user_id, updated_at
         ) values (
@@ -3041,7 +3055,13 @@ export async function setOfapiCaptureControl(
           actor_user_id = excluded.actor_user_id,
           updated_at = excluded.updated_at
         where ofapi_capture_controls.version = ${version}
+        returning control_key
       `);
+      if (updated.rows.length !== 1) {
+        throw new OfapiCaptureInvariantError(
+          `Control ${input.controlKey} changed during update`,
+        );
+      }
       if (!input.paused) {
         // persistent_pause is reversible operator containment, never a
         // terminal job outcome. Wake all such jobs; admission re-evaluates

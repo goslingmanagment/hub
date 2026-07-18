@@ -25,6 +25,7 @@ import {
   OFAPI_CAPTURE_PARSER_VERSION,
   OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION,
   releaseOfapiAttemptPreDispatch,
+  reconcileOfapiCapturedAttemptCredit,
   recoverStaleOfapiCaptureWork,
   replayOfapiCaptureJobParse,
   resetOfapiMessageCoverageProjection,
@@ -179,6 +180,77 @@ async function createAndReserveInteractive(input?: {
     now: NOW,
   });
   return { ...seeded, request, reservation };
+}
+
+async function createAndReserveFloorProbeJob(input?: {
+  globalDailyCap?: number;
+  scopeDailyCap?: number;
+  principalCallCap?: number;
+  principalCreditCap?: number;
+  maxCalls?: number;
+  maxCredits?: number;
+  floorProbeNotBefore?: Date;
+}) {
+  const seeded = await seed();
+  await testDb!.pool.query(`
+    update ofapi_credit_state
+    set last_balance = null,
+        last_balance_at = null,
+        floor_probe_not_before = $2,
+        updated_at = $1
+    where id = 1
+  `, [NOW, input?.floorProbeNotBefore ?? null]);
+  const created = await createOrGetOfapiCaptureJob(testDb!.db, {
+    pageId: seeded.page.id,
+    ofapiAccountId: seeded.accountId,
+    kind: "chat_paginate",
+    goal: "bounded_tail",
+    activeSlotKey: `page:${seeded.page.id}:chat:floor-probe-${randomUUID()}`,
+    target: { chatId: "floor-probe", frozenHeadId: "100" },
+    budgetScope: "live",
+    originPrincipalId: seeded.owner.id,
+    createdBy: "verification_probe",
+    maxCalls: input?.maxCalls ?? 100,
+    maxCredits: input?.maxCredits ?? 100,
+    maxPages: 1,
+    now: NOW,
+  });
+  const leased = await leaseNextOfapiCaptureJob(testDb!.db, {
+    pageId: seeded.page.id,
+    leaseOwner: `floor-probe-${randomUUID()}`,
+    leaseTtlMs: 60_000,
+    now: NOW,
+  });
+  if (!leased?.leaseToken || leased.id !== created.job.id) {
+    throw new Error("floor-probe cap fixture leased the wrong job");
+  }
+  const reservation = await reserveOfapiRequestAttempt(testDb!.db, {
+    ownerKind: "capture_job",
+    ownerId: created.job.id,
+    pageId: seeded.page.id,
+    ofapiAccountId: seeded.accountId,
+    originPrincipalId: seeded.owner.id,
+    budgetScope: "live",
+    operation: "list_messages",
+    endpointClass: "messages",
+    egressKey: `page:${seeded.page.id}`,
+    method: "GET",
+    requestSemantics: "safe_read",
+    requestShape: { chatId: "floor-probe", firstId: "100" },
+    reservedCredits: 1,
+    globalDailyCap: input?.globalDailyCap ?? 100,
+    scopeDailyCap: input?.scopeDailyCap ?? 100,
+    creditFloor: 10,
+    balanceMaxAgeMs: 60 * 60 * 1000,
+    allowFloorProbe: true,
+    principalCallCap: input?.principalCallCap ?? 100,
+    principalCreditCap: input?.principalCreditCap ?? 100,
+    denialBlockThreshold: 1,
+    jobLeaseToken: leased.leaseToken,
+    deadlineAt: new Date(NOW.getTime() + 60_000),
+    now: NOW,
+  });
+  return { ...seeded, job: created.job, reservation };
 }
 
 function messagePage(input: {
@@ -460,6 +532,86 @@ describe("OFAPI capture correctness repository", () => {
     expect(denials.rows).toEqual([{ denied_count: "1", reason: "global_cap" }]);
   });
 
+  it("applies every hard cap to a stale-balance floor probe without storm punishment", async () => {
+    if (!testDb) return;
+    const cases = [
+      { label: "global", expectedReason: "global_cap", globalDailyCap: 0 },
+      { label: "scope", expectedReason: "scope_cap", scopeDailyCap: 0 },
+      {
+        label: "principal calls",
+        expectedReason: "principal_call_cap",
+        principalCallCap: 0,
+      },
+      {
+        label: "principal credits",
+        expectedReason: "principal_credit_cap",
+        principalCreditCap: 0,
+      },
+      { label: "job calls", expectedReason: "job_cap", maxCalls: 0 },
+      { label: "job credits", expectedReason: "job_cap", maxCredits: 0 },
+    ] as const;
+
+    for (const sample of cases) {
+      const fixture = await createAndReserveFloorProbeJob(sample);
+      expect(fixture.reservation, sample.label).toMatchObject({
+        admitted: false,
+        reason: sample.expectedReason,
+      });
+      const principal = await testDb.pool.query<{
+        consecutive_budget_denials: number;
+        blocked_until: Date | null;
+        last_denial_reason: string | null;
+      }>(`
+        select consecutive_budget_denials, blocked_until, last_denial_reason
+        from ofapi_principal_budget_state
+        where principal_user_id = $1
+      `, [fixture.owner.id]);
+      expect(principal.rows[0], sample.label).toMatchObject({
+        consecutive_budget_denials: 0,
+        blocked_until: null,
+        last_denial_reason: null,
+      });
+    }
+
+    const attempts = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from ofapi_request_attempts",
+    );
+    expect(attempts.rows[0]?.n).toBe("0");
+  });
+
+  it("reports a hard cap even when a stale-balance probe is cooling down", async () => {
+    if (!testDb) return;
+    const fixture = await createAndReserveFloorProbeJob({
+      globalDailyCap: 0,
+      floorProbeNotBefore: new Date(NOW.getTime() + 30_000),
+    });
+
+    expect(fixture.reservation).toEqual({
+      admitted: false,
+      reason: "global_cap",
+      retryAt: new Date("2026-07-17T00:00:00.000Z"),
+    });
+    const principal = await testDb.pool.query<{
+      consecutive_budget_denials: number;
+      last_denial_reason: string;
+      blocked_until: Date | null;
+    }>(`
+      select consecutive_budget_denials, last_denial_reason, blocked_until
+      from ofapi_principal_budget_state
+      where principal_user_id = $1
+    `, [fixture.owner.id]);
+    expect(principal.rows[0]).toMatchObject({
+      consecutive_budget_denials: 1,
+      last_denial_reason: "global_cap",
+    });
+    expect(principal.rows[0]?.blocked_until).not.toBeNull();
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "retry_wait",
+      reasonCode: "global_cap",
+      nextAttemptAt: new Date("2026-07-17T00:00:00.000Z"),
+    });
+  });
+
   it("enforces principal call caps for the whole UTC day and resets at the next day", async () => {
     if (!testDb) return;
     const seeded = await seed();
@@ -630,6 +782,79 @@ describe("OFAPI capture correctness repository", () => {
     expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
   });
 
+  it("lets only one concurrent first-write control CAS report success", async () => {
+    if (!testDb) return;
+    const seeded = await seed();
+    const controlKey = `page:${seeded.page.id}`;
+    const tableLock = await testDb.pool.connect();
+    await tableLock.query("begin");
+    await tableLock.query("lock table ofapi_capture_controls in share mode");
+
+    const writes = ["first contender", "second contender"].map((reason) =>
+      setOfapiCaptureControl(testDb!.db, {
+        controlKey,
+        paused: true,
+        reason,
+        expectedVersion: 0,
+        actorUserId: seeded.owner.id,
+        execute: true,
+        now: NOW,
+      }));
+
+    let blockedWriters = 0;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const blocked = await testDb.pool.query<{ count: number }>(`
+        select count(*)::int as count
+        from pg_locks
+        where relation = 'ofapi_capture_controls'::regclass
+          and mode = 'RowExclusiveLock'
+          and granted = false
+      `);
+      blockedWriters = blocked.rows[0]?.count ?? 0;
+      if (blockedWriters === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    if (blockedWriters !== 2) {
+      await tableLock.query("rollback");
+      tableLock.release();
+      await Promise.allSettled(writes);
+      throw new Error(`Expected two blocked control writers, found ${blockedWriters}`);
+    }
+    await tableLock.query("commit");
+    tableLock.release();
+
+    const outcomes = await Promise.allSettled(writes);
+    const successes = outcomes.filter((outcome) => outcome.status === "fulfilled");
+    const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+    expect(successes).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(successes[0]?.value).toMatchObject({ executed: true });
+    expect(String(failures[0]?.reason)).toMatch(/Control .* changed during update/);
+
+    const control = await testDb.pool.query<{
+      paused: boolean;
+      reason: string;
+      version: bigint;
+    }>(`
+      select paused, reason, version
+      from ofapi_capture_controls
+      where control_key = $1
+    `, [controlKey]);
+    expect(control.rows).toHaveLength(1);
+    expect(control.rows[0]).toMatchObject({ paused: true, version: 1n });
+    expect(["first contender", "second contender"]).toContain(control.rows[0]?.reason);
+
+    const audit = await testDb.pool.query<{ count: number }>(`
+      select count(*)::int as count
+      from ofapi_capture_operator_actions
+      where target_type = 'control'
+        and target_ref = $1
+        and dry_run = false
+    `, [controlKey]);
+    expect(audit.rows[0]?.count).toBe(1);
+  });
+
   it("keeps transient balance, floor, and deadline denials retryable", async () => {
     if (!testDb) return;
     const seeded = await seed();
@@ -795,6 +1020,132 @@ describe("OFAPI capture correctness repository", () => {
       { source: "rest", credits: 5 },
       { source: "adjustment", credits: -5 },
     ]);
+  });
+
+  it("counts one physical dispatch when an indeterminate job receives a late response", async () => {
+    if (!testDb) return;
+    const seeded = await seed();
+    const created = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      kind: "chat_paginate",
+      goal: "bounded_tail",
+      activeSlotKey: `page:${seeded.page.id}:chat:late-response`,
+      target: { chatId: "late-response", frozenHeadId: "100" },
+      budgetScope: "live",
+      createdBy: "owner",
+      maxCalls: 5,
+      maxCredits: 10,
+      maxPages: 1,
+      now: NOW,
+    });
+    const leased = await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      leaseOwner: "late-response-worker",
+      leaseTtlMs: 60_000,
+      now: NOW,
+    });
+    if (!leased?.leaseToken || leased.id !== created.job.id) {
+      throw new Error("late-response fixture leased the wrong job");
+    }
+    const reservation = await reserveOfapiRequestAttempt(testDb.db, {
+      ownerKind: "capture_job",
+      ownerId: created.job.id,
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      budgetScope: "live",
+      operation: "list_messages",
+      endpointClass: "messages",
+      egressKey: `page:${seeded.page.id}`,
+      method: "GET",
+      requestSemantics: "safe_read",
+      requestShape: { chatId: "late-response", firstId: "100" },
+      reservedCredits: 1,
+      globalDailyCap: 100,
+      scopeDailyCap: 100,
+      creditFloor: 10,
+      balanceMaxAgeMs: 60 * 60 * 1000,
+      jobLeaseToken: leased.leaseToken,
+      deadlineAt: new Date(NOW.getTime() + 60_000),
+      now: NOW,
+    });
+    if (!reservation.admitted) {
+      throw new Error(`late-response fixture denied: ${reservation.reason}`);
+    }
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      jobLeaseToken: leased.leaseToken,
+      now: new Date(NOW.getTime() + 1_000),
+    })).toBe(true);
+    expect(await markOfapiAttemptIndeterminate(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      outcome: "transport",
+      now: new Date(NOW.getTime() + 2_000),
+    })).toBe(true);
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "blocked",
+      spentCredits: 1,
+      dispatchCount: 1,
+    });
+
+    await captureOfapiAttemptResponse(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      responseObservedAt: new Date(NOW.getTime() + 2_500),
+      httpStatus: 200,
+      httpOutcome: "success",
+      responseHeaders: { "content-type": "application/json" },
+      bodyBytes: messagePage({ nextPage: null, creditsUsed: 3 }),
+      request: { method: "GET", path: "/api2/v2/chats/late-response/messages" },
+      producer: "test",
+      observationKind: "ofapi.chat_messages_page.v1",
+      now: new Date(NOW.getTime() + 3_000),
+    });
+
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "awaiting_parse",
+      attemptCount: 1,
+      dispatchCount: 1,
+      spentCredits: 1,
+    });
+    expect(await reconcileOfapiCapturedAttemptCredit(testDb.db, {
+      attemptId: reservation.attemptId,
+      actualCredits: 3,
+      balanceAfter: 997,
+      now: new Date(NOW.getTime() + 3_500),
+    })).toBe(true);
+    expect(await getOfapiCaptureJob(testDb.db, created.job.id)).toMatchObject({
+      state: "awaiting_parse",
+      attemptCount: 1,
+      dispatchCount: 1,
+      spentCredits: 3,
+    });
+    const ledger = await testDb.pool.query<{
+      source: string;
+      credits: number;
+      attempt_entry_phase: string;
+    }>(`
+      select source, credits, attempt_entry_phase
+      from ofapi_credit_ledger
+      where attempt_id = $1
+      order by id
+    `, [reservation.attemptId]);
+    expect(ledger.rows).toEqual([
+      { source: "rest", credits: 1, attempt_entry_phase: "settlement" },
+      { source: "adjustment", credits: 2, attempt_entry_phase: "certainty_adjustment" },
+    ]);
+    const credit = await testDb.pool.query<{
+      spent_credits: number;
+      live_spent_credits: number;
+      governed_unsettled_credits: number;
+    }>("select * from ofapi_credit_state where id = 1");
+    expect(credit.rows[0]).toMatchObject({
+      spent_credits: 3,
+      live_spent_credits: 3,
+      governed_unsettled_credits: 0,
+    });
   });
 
   it("coalesces only within a page and advances a job only after local parse", async () => {
