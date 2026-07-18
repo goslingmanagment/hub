@@ -70,6 +70,44 @@ export async function insertVoiceNoteJob(
   return { inserted: inserted.length > 0 };
 }
 
+/**
+ * Inserts a `quota_denied` row for a refused reservation. `insertVoiceNoteJob`
+ * only produces `queued`, so this mirrors its columns (same values, same
+ * conflict target) with the denied terminal state. Idempotent on
+ * (user_id, client_request_id): returns whether THIS call won the insert.
+ */
+export async function insertQuotaDeniedVoiceNote(
+  db: Database,
+  row: InsertVoiceNoteJobInput,
+): Promise<boolean> {
+  const inserted = await db
+    .insert(voiceNotes)
+    .values({
+      userId: row.userId,
+      platformAccountId: row.platformAccountId,
+      conversationRef: row.conversationRef,
+      sourceGenerationRef: row.sourceGenerationRef,
+      clientRequestId: row.clientRequestId,
+      requestHash: row.requestHash,
+      scriptChars: row.scriptChars,
+      originalScriptSha256: row.originalScriptSha256,
+      finalScriptSha256: row.finalScriptSha256,
+      scriptEdited: row.scriptEdited,
+      profileVoiceId: row.profileVoiceId,
+      profileModel: row.profileModel,
+      profileSettings: row.profileSettings,
+      profileOutputFormat: row.profileOutputFormat,
+      profileVersion: row.profileVersion,
+      state: "quota_denied",
+    })
+    .onConflictDoNothing({
+      target: [voiceNotes.userId, voiceNotes.clientRequestId],
+    })
+    .returning({ id: voiceNotes.id });
+
+  return inserted.length > 0;
+}
+
 export async function getVoiceNoteByClientRequestId(
   db: Database,
   userId: number,

@@ -22,12 +22,11 @@ import {
   getVoiceNoteByClientRequestId,
   getVoiceNoteById,
   getVoiceProfile,
+  insertQuotaDeniedVoiceNote,
   insertVoiceNoteJob,
   reserveVoiceCharBudget,
   settleVoiceCharBudget,
   settleVoiceNoteTerminal,
-  voiceNotes,
-  type Database,
   type VoiceNoteRow,
   type VoiceNoteState,
 } from "@agency_hub_core/db";
@@ -122,9 +121,10 @@ export class VoiceScriptInvalidError extends AppError {
 }
 
 export class VoiceSourceInvalidError extends AppError {
-  constructor() {
+  constructor(message?: string) {
     super(
-      "The source voice-script generation is missing, ineligible, or not owned by this page",
+      message
+        ?? "The source voice-script generation is missing, ineligible, or not owned by this page",
       400,
       "voice_source_invalid",
     );
@@ -180,6 +180,13 @@ export async function createVoiceNote(
   // re-run. Everything below the idempotency lookup is fresh-admission-only.
   const page = await resolveAccessiblePage(app, principal, pageLabel);
 
+  // The refs feed computeVoiceRequestHash with '\n' as the field delimiter, so a
+  // control char in either ref could forge a hash collision across distinct
+  // (conversationRef, sourceGenerationRef) pairs. The hash format is frozen law,
+  // so we reject at admission — before hashing — rather than sanitising.
+  assertRefControlCharFree("conversationRef", body.conversationRef);
+  assertRefControlCharFree("sourceGenerationRef", body.sourceGenerationRef);
+
   const canonicalScript = canonicalizeVoiceScript(body.script);
   const requestHash = computeVoiceRequestHash({
     pageId: page.id,
@@ -209,7 +216,8 @@ export async function createVoiceNote(
   if (!app.voiceTtsProvider) {
     throw new VoiceProviderUnavailableError();
   }
-  if (!isPageAllowlisted(effective.voiceNotesPageAllowlist, pageLabel)) {
+  // Check the RESOLVED canonical label, never the caller's raw pageLabel string.
+  if (!isPageAllowlisted(effective.voiceNotesPageAllowlist, page.label)) {
     throw new VoiceNotAllowlistedError();
   }
   const profile = await getVoiceProfile(app.db, page.id);
@@ -281,7 +289,16 @@ export async function createVoiceNote(
 
   // (4) Insert the queued row. Losing the unique race means a concurrent
   // duplicate won the admission: release OUR reservation and replay its row.
-  const insertResult = await insertVoiceNoteJob(app.db, snapshot);
+  let insertResult: Awaited<ReturnType<typeof insertVoiceNoteJob>>;
+  try {
+    insertResult = await insertVoiceNoteJob(app.db, snapshot);
+  } catch (error) {
+    // The insert itself faulted (a DB error — NOT the inserted:false conflict
+    // path below): the reservation is already made but no row exists to carry
+    // it, so release it before rethrowing to avoid a phantom charge.
+    await settleVoiceCharBudget(app.db, { pageId: page.id, charsDelta: -scriptChars, now });
+    throw error;
+  }
   if (!insertResult.inserted) {
     await settleVoiceCharBudget(app.db, { pageId: page.id, charsDelta: -scriptChars, now });
     return await replayConcurrentWinner(app, principal, body.clientRequestId, requestHash);
@@ -421,22 +438,28 @@ async function replayConcurrentWinner(
   return toStatusView(other);
 }
 
-/**
- * Insert a `quota_denied` row for a refused reservation (the queued-job insert
- * helper can only produce `queued`, so this mirrors its columns with the denied
- * state). Idempotent on (user, clientRequestId): returns whether THIS call won
- * the insert.
- */
-async function insertQuotaDeniedVoiceNote(
-  db: Database,
-  snapshot: Parameters<typeof insertVoiceNoteJob>[1],
-): Promise<boolean> {
-  const inserted = await db
-    .insert(voiceNotes)
-    .values({ ...snapshot, state: "quota_denied" })
-    .onConflictDoNothing({ target: [voiceNotes.userId, voiceNotes.clientRequestId] })
-    .returning({ id: voiceNotes.id });
-  return inserted.length > 0;
+// Control characters (U+0000–U+001F, U+007F) are rejected before a request ever
+// reaches computeVoiceRequestHash — see the admission call site for why. A
+// char-code scan (not a regex) keeps the control bytes out of the source and
+// clear of no-control-regex.
+function hasControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function assertRefControlCharFree(
+  field: "conversationRef" | "sourceGenerationRef",
+  value: string,
+): void {
+  if (hasControlChar(value)) {
+    // Name the offending FIELD only — never echo the (client-controlled) value.
+    throw new VoiceSourceInvalidError(`The ${field} field contains a control character`);
+  }
 }
 
 /**
@@ -562,8 +585,13 @@ async function dispatchVoiceNote(
     );
   } catch (error) {
     // The provider is contractually non-throwing, but a settle/DB fault must not
-    // surface as an unhandled rejection on the detached task. Leave the row
-    // dispatched; the lease sweep reclaims it.
+    // surface as an unhandled rejection on the detached task. Two shapes:
+    //   (a) the terminal settle itself faulted → the row stays 'dispatched' and
+    //       the lease sweep reclaims it as 'indeterminate';
+    //   (b) the terminal settle already succeeded and only the FOLLOW-UP budget
+    //       settle threw → the row is already TERMINAL, so the sweep will NOT
+    //       reclaim it; only the conservative budget delta (the refund/reconcile)
+    //       is lost, which never over-charges the operator.
     app.logger.error({ voiceNoteId: row.id, error }, "voice note dispatch failed unexpectedly");
   }
 }

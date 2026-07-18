@@ -291,6 +291,46 @@ describe("voice-notes service: admission + idempotent replay", () => {
     expect(replay.state).toBe("completed");
     expect(state.calls).toBe(1);
   });
+
+  it("collapses a concurrent same-clientRequestId race to one row, one synthesis, one reservation", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    // Gate-blocked provider: the winner's detached synthesis parks in synthesize
+    // so its reservation stays UNRECONCILED while we inspect the ledger.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { provider, state } = fakeProvider(async () => {
+      await gate;
+      return okAudio(12);
+    });
+    const p = await provision({ provider });
+    const body = p.body(); // ONE clientRequestId shared by both racers
+
+    const [a, b] = await Promise.all([
+      createVoiceNote(appContext, p.principal, p.page.label, body),
+      createVoiceNote(appContext, p.principal, p.page.label, body),
+    ]);
+
+    // Winner + replayed loser resolve to the SAME admitted row.
+    expect(a.voiceNoteId).toBe(b.voiceNoteId);
+
+    // Exactly one voice_notes row for this (user, clientRequestId).
+    const rows = await testDb.pool.query(
+      "select id from voice_notes where user_id = $1 and client_request_id = $2",
+      [p.principal.user.id, body.clientRequestId],
+    );
+    expect(rows.rows.length).toBe(1);
+
+    // Both racers reserved (2× the estimate); the loser self-released on its lost
+    // insert, so exactly ONE reservation's worth remains charged while the
+    // winner's synthesis is still gated (not yet reconciled to actuals).
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
+    expect(await spentForScope("global")).toBe(SCRIPT_CHARS);
+
+    // Exactly one synthesis fires, once released, and the single row completes.
+    release();
+    await waitFor(async () => (await getVoiceNoteById(testDb!.db, a.voiceNoteId))?.state === "completed");
+    expect(state.calls).toBe(1);
+  });
 });
 
 describe("voice-notes service: admission gates", () => {
@@ -366,6 +406,35 @@ describe("voice-notes service: admission gates", () => {
       createVoiceNote(appContext, unknownRef.principal, unknownRef.page.label,
         unknownRef.body({ sourceGenerationRef: "gen-does-not-exist" })),
     ).rejects.toMatchObject({ code: "voice_source_invalid" });
+  });
+
+  it("rejects a control character in conversationRef before hashing (voice_source_invalid, field-only message)", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(12));
+    const p = await provision({ provider });
+    const body = p.body({ conversationRef: "conv\n777" }); // '\n' is the hash delimiter
+
+    const err = await createVoiceNote(appContext, p.principal, p.page.label, body).catch((e) => e);
+    expect(err).toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
+    expect(String(err.message)).toContain("conversationRef");
+    expect(String(err.message)).not.toContain("777"); // never echoes the value
+    // Rejected before any admission side effect: no row, no synthesis.
+    expect(await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId)).toBeNull();
+    expect(state.calls).toBe(0);
+  });
+
+  it("rejects a control character in sourceGenerationRef before hashing (voice_source_invalid, field-only message)", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(12));
+    const p = await provision({ provider });
+    const body = p.body({ sourceGenerationRef: "gen\u0000evil" }); // NUL
+
+    const err = await createVoiceNote(appContext, p.principal, p.page.label, body).catch((e) => e);
+    expect(err).toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
+    expect(String(err.message)).toContain("sourceGenerationRef");
+    expect(String(err.message)).not.toContain("evil"); // never echoes the value
+    expect(await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId)).toBeNull();
+    expect(state.calls).toBe(0);
   });
 
   it("records a quota_denied row and leaves the budget uncharged when reservation is refused", async (ctx) => {
