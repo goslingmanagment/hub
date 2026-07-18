@@ -23,9 +23,13 @@ export function desktopRepoPresent(): boolean {
 }
 
 interface ManifestEntry {
-  sourceSha256: string;
+  sourceSha256?: string;
   coreSha256: string;
   byteIdenticalToSource: boolean;
+  /** Net-new post-freeze prompt asset with NO desktop twin (created after the
+   * Stage 30 snapshot). There is no source to freeze-check — the kernel file
+   * is the sole living copy, so the source-hash guard skips it. */
+  netNewPostFreeze?: boolean;
 }
 
 export interface ManifestCheckResult {
@@ -59,6 +63,11 @@ export function checkManifestAgainstSources(): ManifestCheckResult[] {
   };
 
   return Object.entries(manifest.files).map(([rel, entry]) => {
+    // Net-new post-freeze assets never existed at the snapshot commit — there
+    // is no frozen source to compare against, so the guard passes them through.
+    if (entry.netNewPostFreeze || entry.sourceSha256 === undefined) {
+      return { file: rel, ok: true, detail: "net-new post-freeze (no desktop twin)" };
+    }
     const sourcePath = sourcePathFor(rel);
     if (!existsSync(sourcePath)) {
       return { file: rel, ok: false, detail: `source missing: ${sourcePath}` };

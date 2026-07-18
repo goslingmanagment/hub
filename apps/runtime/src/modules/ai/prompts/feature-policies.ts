@@ -101,6 +101,7 @@ export const OPERATION_FEATURES = [
   'chat-review',
   'ping',
   'hi-greeting',
+  'voice-script',
 ] as const satisfies readonly OperationFeature[];
 
 export const FEATURE_POLICIES = {
@@ -213,6 +214,27 @@ export const FEATURE_POLICIES = {
     supportsReplyMode: false,
     supportsReplyTone: false,
     requiresDraft: false,
+    usesPingSegment: false,
+    usesFanProfile: false,
+  },
+  // Voice notes: adapt a chosen chat draft into a speakable ElevenLabs script.
+  // One script text (single-reply, no [NEXT]/variants); delegates model
+  // selection to fast-reply (improve-draft precedent). Tone presets re-run the
+  // script step (UX decision 2026-07-18), so the template carries
+  // {toneInstructions}. No earnings, no dossier, no ping segment.
+  'voice-script': {
+    surface: 'panel-tab',
+    resultKind: 'single-reply',
+    promptMode: 'reply',
+    timeoutBucket: 'quick',
+    messageCountBucket: 'quick',
+    modelFeature: 'fast-reply',
+    includesEarnings: false,
+    minMessages: 0,
+    rerunAction: 'regenerate',
+    supportsReplyMode: false,
+    supportsReplyTone: true,
+    requiresDraft: true,
     usesPingSegment: false,
     usesFanProfile: false,
   },

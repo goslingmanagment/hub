@@ -14,6 +14,7 @@ export type FeatureType =
   | 'chat-review'
   | 'ping'
   | 'hi-greeting'
+  | 'voice-script'
   | 'compare';
 
 /** Features with their own model selection; improve-draft & hi-greeting delegate to fast-reply. */

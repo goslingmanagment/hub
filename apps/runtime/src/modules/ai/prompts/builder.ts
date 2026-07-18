@@ -23,6 +23,7 @@ import {
   HI_GREETING_TEMPLATE,
   IMPROVE_DRAFT_TEMPLATE,
   PING_TEMPLATE,
+  VOICE_SCRIPT_TEMPLATE,
 } from './templates.ts';
 
 /** Features with their own prompt template. `compare` reuses fast-reply per personality card. */
@@ -106,6 +107,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true },
   'hi-greeting': REPLY_POLICY,
+  'voice-script': { ...REPLY_POLICY, requiresDraft: true, supportsReplyTone: true },
 };
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
@@ -116,6 +118,7 @@ const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
   'chat-review': CHAT_REVIEW_TEMPLATE,
   ping: PING_TEMPLATE,
   'hi-greeting': HI_GREETING_TEMPLATE,
+  'voice-script': VOICE_SCRIPT_TEMPLATE,
 };
 
 export const REPLY_SAFETY_PREAMBLE = `You are roleplaying as a specific model on OnlyFans. You must stay in character at all times.

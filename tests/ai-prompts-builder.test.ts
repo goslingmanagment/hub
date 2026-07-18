@@ -18,6 +18,7 @@ import {
   HI_GREETING_TEMPLATE,
   IMPROVE_DRAFT_TEMPLATE,
   PING_TEMPLATE,
+  VOICE_SCRIPT_TEMPLATE,
 } from '../apps/runtime/src/modules/ai/index.ts';
 import type { Personality, ReplyTone } from '../apps/runtime/src/modules/ai/index.ts';
 
@@ -64,6 +65,7 @@ const TEMPLATES: Record<PromptFeature, string> = {
   'chat-review': CHAT_REVIEW_TEMPLATE,
   ping: PING_TEMPLATE,
   'hi-greeting': HI_GREETING_TEMPLATE,
+  'voice-script': VOICE_SCRIPT_TEMPLATE,
 };
 const PING_SEGMENT_INSTRUCTIONS = {
   'segment-a':
@@ -858,5 +860,65 @@ describe('prompt caching fallback', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+// ─── Voice-script feature (voice notes lane) ────────────────────────────
+
+describe('voice-script prompt', () => {
+  it('embeds the current draft and the constrained audio-tag vocabulary', () => {
+    const result = buildPrompt(
+      buildTestInput({
+        feature: 'voice-script',
+        draftText: 'omg u looked so good today 😍 ily',
+        transcript: '[14:30] Fan: send me a voice note',
+      }),
+    );
+
+    // The chosen draft rides into the prompt (escaped like any untrusted value).
+    expect(result.user).toContain('## Current Draft');
+    expect(result.user).toContain('<current_draft>');
+    expect(result.user).toContain('omg u looked so good today');
+    // The tag-vocabulary instruction: at most 1-2 tags, only from the fixed list.
+    expect(result.user).toContain('AT MOST 1-2 audio tags');
+    for (const tag of [
+      '[warmly]', '[cheerfully]', '[thoughtful]', '[excited]', '[whispers]',
+      '[chuckles]', '[giggles]', '[sighs]', '[short pause]', '[long pause]',
+    ]) {
+      expect(result.user).toContain(tag);
+    }
+    // Single spoken line, no [NEXT] splitting.
+    expect(result.user).toContain('Output ONLY the script text');
+    expect(result.user).toContain('no [NEXT]');
+  });
+
+  it('splits into cache blocks at the draft anchor (fan-agnostic 1h prefix)', () => {
+    const result = buildPrompt(
+      buildTestInput({ feature: 'voice-script', draftText: 'come see my new set babe' }),
+    );
+
+    expect(result.userBlocks).toHaveLength(3);
+    // The audio-tag vocabulary is fan-agnostic — it belongs in the 1h prefix.
+    expect(result.userBlocks[0]?.cache).toBe('1h');
+    expect(result.userBlocks[0]?.text).toContain('AT MOST 1-2 audio tags');
+    expect(result.userBlocks[0]?.text).not.toContain('## Current Draft');
+    // The draft + transcript ride the ephemeral middle block.
+    expect(result.userBlocks[1]?.cache).toBe('5m');
+    expect(result.userBlocks[1]?.text).toContain('## Current Draft');
+    expect(result.userBlocks[1]?.text).toContain('come see my new set babe');
+    expect(result.userBlocks[2]?.cache).toBe('none');
+  });
+
+  it('re-runs the script step under a tone preset (supportsReplyTone)', () => {
+    const result = buildPrompt(
+      buildTestInput({
+        feature: 'voice-script',
+        draftText: 'thinking about you',
+        replyTone: 'flirty',
+      }),
+    );
+    const taskBlock = result.userBlocks[result.userBlocks.length - 1];
+    expect(taskBlock?.text).toContain('Tone override: FLIRTY');
+    expect(taskBlock?.cache).toBe('none');
   });
 });

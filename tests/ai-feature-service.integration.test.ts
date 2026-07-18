@@ -1078,6 +1078,52 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
+describe("voice-script feature (voice notes lane)", () => {
+  it("gates on the draft, then adapts it into a spoken script over the stream", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const call = (extra: Record<string, unknown> = {}) =>
+      apiServer!.inject({
+        method: "POST",
+        url: "/api/v1/ai/features/voice-script",
+        headers: { authorization: `Bearer ${chatterKey}` },
+        payload: {
+          clientRequestId: randomUUID(),
+          pageLabel: "svc-of",
+          platform: "onlyfans",
+          conversationRef: FAN,
+          ...extra,
+        },
+      });
+
+    // requiresDraft: no draft is a product gate, not a stream.
+    const noDraft = await call();
+    expect(noDraft.statusCode, noDraft.body).toBe(400);
+    expect(noDraft.json().error).toBe("gate_draft_required");
+    expect(capture.calls).toBeUndefined();
+
+    // With a draft it streams the script through the gateway.
+    const scripted = await call({ draftText: "omg u looked so good today 😍 ily" });
+    expect(scripted.statusCode, scripted.body).toBe(200);
+    expect(scripted.body).toContain("sure thing");
+    expect(capture.input!.body.feature).toBe("voice-script");
+    // Delegates model + reasoning selection to fast-reply.
+    expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-4-6");
+    const userText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
+    expect(userText).toContain("## Current Draft");
+    expect(userText).toContain("omg u looked so good today");
+    expect(userText).toContain("AT MOST 1-2 audio tags");
+    // includesEarnings: false — no spend/subscription blocks in a voice script.
+    expect(userText).not.toContain("<fan_spending_data>");
+    expect(userText).not.toContain("<fan_subscription_data>");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
 describe("client-context path (Stage 32)", () => {
   it("uses client-loaded values verbatim and runs the gates on client counts", async (context) => {
     if (!testDb) {
