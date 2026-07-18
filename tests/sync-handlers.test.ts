@@ -1103,7 +1103,7 @@ it("guards against empty first-page follower reconcile wipes when active followe
   expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
 });
 
-it("restarts one live follower snapshot before blocking an incomplete generation", async () => {
+it("does not carry a restart marker into a newer follower revision", async () => {
   const telemetry = createTelemetry();
   const db = {
     transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback({})),
@@ -1134,7 +1134,14 @@ it("restarts one live follower snapshot before blocking an incomplete generation
     },
   } as never;
 
-  dbMocks.getCheckpoint.mockResolvedValue(null);
+  dbMocks.getCheckpoint.mockResolvedValue({
+    state: {
+      revision: 3,
+      generation: 613,
+      snapshotRestartCount: 1,
+      restartReason: "snapshot_mismatch",
+    },
+  });
   sharedMocks.refreshPageMetadata.mockResolvedValue({
     parsed: {
       account: {
@@ -1187,11 +1194,86 @@ it("restarts one live follower snapshot before blocking an incomplete generation
     platformAccountId: 13,
     stream: "followers_reconcile",
     state: {
-      generation: 1,
+      revision: 4,
+      generation: 614,
       snapshotRestartCount: 1,
       restartReason: "snapshot_mismatch",
     },
   });
+});
+
+it("blocks a second follower mismatch inside the same restart scope", async () => {
+  const telemetry = createTelemetry();
+  const db = {
+    transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback({})),
+  };
+  const app = {
+    db,
+    config: {
+      followerPageDelayMs: 0,
+      syncSharedRateLimitEnabled: false,
+    },
+    adapter: {
+      getFollowersPage: vi.fn(async () => ({
+        items: [{
+          id: "1000",
+          followerId: "fan-1",
+          lastSeenAt: 1_775_782_500_000,
+        }],
+        accounts: [{
+          id: "fan-1",
+          username: "fan_1",
+          displayName: "Fan 1",
+          createdAt: 1_770_000_000_000,
+          lastSeenAt: 1_775_782_500_000,
+        }],
+        done: true,
+        raw: {},
+      })),
+    },
+  } as never;
+
+  dbMocks.getCheckpoint.mockResolvedValue({
+    state: {
+      revision: 4,
+      generation: 614,
+      offset: 0,
+      observedCount: 0,
+      pageCount: 0,
+      sourceFollowerCount: 2,
+      snapshotRestartCount: 1,
+      restartReason: "snapshot_mismatch",
+    },
+  });
+  dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
+  dbMocks.countPageFollowsByGeneration.mockResolvedValue(1);
+
+  await expect(executeFollowersReconcileChunk(app, {
+    pageContext: {
+      platform: "fansly",
+      page: {
+        id: 13,
+        label: "fansly-page",
+        platformAccountId: "acct-13",
+        metadata: {},
+      },
+      session: { authorization: "token" },
+      proxy: null,
+    },
+    streamState: {
+      requestSeq: 4,
+    },
+    syncRunId: 102,
+    telemetry: telemetry as never,
+    budget: new SyncChunkBudget(),
+  } as never)).rejects.toMatchObject({
+    code: "followers_reconcile_inconsistent_snapshot",
+    retryable: false,
+  });
+
+  expect(sharedMocks.refreshPageMetadata).not.toHaveBeenCalled();
+  expect(dbMocks.upsertCheckpointProgress).not.toHaveBeenCalled();
+  expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
 });
 
 it("finalizes follower reconcile when offset drift duplicates raw rows but the unique generation is complete", async () => {
@@ -1234,6 +1316,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       observedCount: 2,
       pageCount: 2,
       sourceFollowerCount: 2,
+      snapshotRestartCount: 1,
+      restartReason: "snapshot_mismatch",
     },
   });
   dbMocks.upsertFans.mockResolvedValue([{ id: 92, platformUserId: "fan-2" }]);
@@ -1274,6 +1358,11 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     platformAccountId: 13,
     generation: 613,
   });
+  const completedCheckpoint = dbMocks.upsertCheckpoint.mock.calls.at(-1)?.[1];
+  expect(completedCheckpoint?.state).toMatchObject({
+    snapshotRestartCount: 0,
+  });
+  expect(completedCheckpoint?.state).not.toHaveProperty("restartReason");
   expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
     code: "followers_reconcile_offset_drift_tolerated",
     details: {

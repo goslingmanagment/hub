@@ -7,7 +7,9 @@ import {
   createModel,
   createOnlyFansPage,
   findPageById,
+  getCheckpoint,
   setPageOfapiAccountId,
+  upsertCheckpointProgress,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -288,13 +290,176 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     });
 
     const second = await syncOfapiFanIdentities(appContext, await buildInput(page));
-    expect(second.satisfied).toBe(false);
-    expect(second.stats).toMatchObject({ completedTargets: 3 });
-
-    const third = await syncOfapiFanIdentities(appContext, await buildInput(page));
-    expect(third.satisfied).toBe(true);
+    expect(second.satisfied).toBe(true);
+    expect(second.stats).toMatchObject({ completedTargets: 4 });
+    expect(calls.filter((call) => call === "tracking-links")).toHaveLength(1);
+    expect(calls.filter((call) => call === "trial-links")).toHaveLength(1);
     expect(calls.filter((call) => call === "tracking:42:subscribers:0")).toHaveLength(1);
     expect(calls.filter((call) => call === "tracking:42:spenders:0")).toHaveLength(1);
     expect(calls.filter((call) => call === "tracking:42:spenders:100")).toHaveLength(1);
+  });
+
+  it("checkpoints multi-page link discovery across chunks without replaying offsets", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext = createTestAppContext(testDb, {
+      ofapiFanIdentitiesSyncEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiAudienceMaxRequestsPerRun: 2,
+    });
+    const page = await seedMappedPage("links-phase-one-resume-of");
+    const linkCalls: string[] = [];
+    const userCalls: string[] = [];
+    const repeatedLinks = (id: number, count: number) =>
+      Array.from({ length: count }, () => ({ id }));
+    appContext = {
+      ...appContext,
+      ofapi: {
+        listTrackingLinks: vi.fn(async (
+          _context: unknown,
+          _accountId: string,
+          options: { offset?: number; limit?: number },
+        ) => {
+          const offset = options.offset ?? 0;
+          const limit = options.limit ?? 0;
+          linkCalls.push(`tracking:${offset}:${limit}`);
+          return listPage(offset < 200 ? repeatedLinks(42, 100) : [{ id: 42 }]);
+        }),
+        listTrialLinks: vi.fn(async (
+          _context: unknown,
+          _accountId: string,
+          options: { offset?: number; limit?: number },
+        ) => {
+          const offset = options.offset ?? 0;
+          const limit = options.limit ?? 0;
+          linkCalls.push(`trial:${offset}:${limit}`);
+          return listPage(offset === 0 ? repeatedLinks(7, 100) : [{ id: 7 }]);
+        }),
+        listTrackingLinkUsers: vi.fn(async (
+          _context: unknown,
+          _accountId: string,
+          linkId: string,
+          kind: string,
+          options: { offset?: number },
+        ) => {
+          userCalls.push(`tracking:${linkId}:${kind}:${options.offset ?? 0}`);
+          return listPage([]);
+        }),
+        listTrialLinkSubscribers: vi.fn(async (
+          _context: unknown,
+          _accountId: string,
+          linkId: string,
+          options: { offset?: number },
+        ) => {
+          userCalls.push(`trial:${linkId}:${options.offset ?? 0}`);
+          return listPage([]);
+        }),
+      } as unknown as OfapiClient,
+    };
+
+    const first = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(first).toMatchObject({
+      satisfied: false,
+      stats: { phase: "links", linkType: "tracking", linkOffset: 200 },
+    });
+    const second = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(second).toMatchObject({
+      satisfied: false,
+      stats: { phase: "links", linkType: "trial", linkOffset: 100 },
+    });
+    const third = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(third.satisfied).toBe(false);
+    const fourth = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(fourth.satisfied).toBe(true);
+
+    expect(linkCalls).toEqual([
+      "tracking:0:100",
+      "tracking:100:100",
+      "tracking:200:100",
+      "trial:0:100",
+      "trial:100:100",
+    ]);
+    expect(userCalls).toEqual([
+      "tracking:42:subscribers:0",
+      "tracking:42:spenders:0",
+      "trial:7:0",
+    ]);
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "fan_identities");
+    expect(checkpoint?.state).toMatchObject({
+      version: 2,
+      phase: "users",
+      linkType: null,
+      linkOffset: 0,
+      trackingLinkIds: ["42"],
+      trialLinkIds: ["7"],
+    });
+  });
+
+  it("upgrades a v1 cursor without losing completed or active user targets", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedMappedPage("links-v1-upgrade-of");
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "fan_identities",
+      state: {
+        version: 1,
+        revision: 1,
+        completedTargetKeys: ["tracking:42:subscribers"],
+        activeTargetKey: "tracking:42:spenders",
+        activeOffset: 100,
+      },
+    });
+    const calls: string[] = [];
+    appContext = {
+      ...appContext,
+      ofapi: {
+        listTrackingLinks: vi.fn(async () => listPage([{ id: 42 }])),
+        listTrialLinks: vi.fn(async () => listPage([{ id: 7 }])),
+        listTrackingLinkUsers: vi.fn(async (
+          _context: unknown,
+          _accountId: string,
+          linkId: string,
+          kind: string,
+          options: { offset?: number },
+        ) => {
+          calls.push(`tracking:${linkId}:${kind}:${options.offset ?? 0}`);
+          return listPage([]);
+        }),
+        listTrialLinkSubscribers: vi.fn(async (
+          _context: unknown,
+          _accountId: string,
+          linkId: string,
+          options: { offset?: number },
+        ) => {
+          calls.push(`trial:${linkId}:${options.offset ?? 0}`);
+          return listPage([]);
+        }),
+      } as unknown as OfapiClient,
+    };
+
+    const result = await syncOfapiFanIdentities(appContext, await buildInput(page));
+
+    expect(result.satisfied).toBe(true);
+    expect(calls).toEqual([
+      "tracking:42:spenders:100",
+      "trial:7:0",
+    ]);
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "fan_identities");
+    expect(checkpoint?.state).toMatchObject({
+      version: 2,
+      phase: "users",
+      completedTargetKeys: [
+        "tracking:42:spenders",
+        "tracking:42:subscribers",
+        "trial:7:subscribers",
+      ],
+    });
   });
 });

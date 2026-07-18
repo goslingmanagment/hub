@@ -2148,8 +2148,12 @@ export async function executeFollowersReconcileChunk(
   );
   const previousCheckpointState = asRecord(checkpoint?.state);
   const previousGeneration = asNumber(previousCheckpointState?.generation) ?? 0;
-  const previousSnapshotRestartCount =
-    asNumber(previousCheckpointState?.snapshotRestartCount) ?? 0;
+  const previousIsSnapshotRestartMarker =
+    previousCheckpointState?.restartReason === "snapshot_mismatch" &&
+    asNumber(previousCheckpointState.revision) === input.streamState.requestSeq;
+  const previousSnapshotRestartCount = previousIsSnapshotRestartMarker
+    ? asNumber(previousCheckpointState?.snapshotRestartCount) ?? 0
+    : 0;
   let state: FollowersReconcileCursorState;
   if (existingState) {
     state = existingState;
@@ -2157,12 +2161,13 @@ export async function executeFollowersReconcileChunk(
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     state = {
       revision: input.streamState.requestSeq,
-    generation: previousGeneration + 1,
-    offset: 0,
+      generation: previousGeneration + 1,
+      offset: 0,
       observedCount: 0,
       pageCount: 0,
       sourceFollowerCount: accountMe.parsed.account.followCount,
       snapshotRestartCount: previousSnapshotRestartCount,
+      restartReason: previousIsSnapshotRestartMarker ? "snapshot_mismatch" : null,
     };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -2337,8 +2342,13 @@ export async function executeFollowersReconcileChunk(
             platformAccountId: input.pageContext.page.id,
             stream: "followers_reconcile",
             state: {
-              ...state,
+              revision: state.revision,
+              generation: state.generation,
+              offset: state.offset,
               observedCount: finalObservedCount,
+              pageCount: state.pageCount,
+              sourceFollowerCount: state.sourceFollowerCount,
+              snapshotRestartCount: 0,
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -2395,6 +2405,7 @@ export async function executeFollowersReconcileChunk(
           platformAccountId: input.pageContext.page.id,
           stream: "followers_reconcile",
           state: {
+            revision: state.revision,
             generation: state.generation,
             snapshotRestartCount: state.snapshotRestartCount + 1,
             restartReason: "snapshot_mismatch",
