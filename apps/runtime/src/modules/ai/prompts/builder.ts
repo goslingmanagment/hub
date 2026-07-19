@@ -17,6 +17,8 @@ import type {
 import { escapeForPrompt } from './escape.ts';
 import {
   CHAT_REVIEW_TEMPLATE,
+  COACH_CHAT_TEMPLATE,
+  FAN_SUMMARY_SHORT_TEMPLATE,
   FAN_SUMMARY_TEMPLATE,
   FAST_REPLY_TEMPLATE,
   HELP_ME_TEMPLATE,
@@ -52,6 +54,21 @@ export function applyPlatformWording(text: string, platform: PromptPlatform): st
   return platform === "fansly" ? text.replaceAll("OnlyFans", "Fansly") : text;
 }
 
+/** One prior coach turn: the chatter's question and the coach's answer. The
+ * extension carries this dialog scratchpad; this repo assembles no history. */
+export interface CoachHistoryEntry {
+  question: string;
+  answer: string;
+}
+
+/** Two-slot recap attach (spec §5): the dated full/short fan-summary recaps the
+ * feature service selected. `ageMs` is measured from the recap's generation
+ * time; either slot may be null. */
+export interface RecapAttach {
+  full: { body: string; ageMs: number } | null;
+  short: { body: string; ageMs: number } | null;
+}
+
 export interface PromptBuildInput {
   feature: PromptFeature;
   personality: Personality;
@@ -69,6 +86,19 @@ export interface PromptBuildInput {
   pingSegment?: PingSegment | undefined;
   replyMode?: ReplyMode | undefined;
   replyTone?: ReplyTone | undefined;
+  /** coach-chat: the chatter's current question (the {chatterQuestion} slot). */
+  chatterQuestion?: string | undefined;
+  /** coach-chat: prior coach dialog, oldest-first; sheds oldest over budget. */
+  coachHistory?: CoachHistoryEntry[] | undefined;
+  /** coach-chat: dated recap slots for the {recapSection}. */
+  recapAttach?: RecapAttach | undefined;
+  /** coach-chat / fan-summary: whether the transcript covers the whole history
+   * or just a recent window (drives the {transcriptCoverageNote}). */
+  transcriptCoverage?: 'full-history' | 'window' | undefined;
+  /** fan-summary only: 'short' selects the compact-recap template (and the
+   * feature service caps its output at 2048 tokens). Ignored for other
+   * features. */
+  summaryMode?: 'short' | undefined;
 }
 
 export interface PromptPayload {
@@ -107,6 +137,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true },
   'hi-greeting': REPLY_POLICY,
+  'coach-chat': ANALYSIS_POLICY,
   'voice-script': { ...REPLY_POLICY, requiresDraft: true, supportsReplyTone: true },
 };
 
@@ -118,6 +149,7 @@ const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
   'chat-review': CHAT_REVIEW_TEMPLATE,
   ping: PING_TEMPLATE,
   'hi-greeting': HI_GREETING_TEMPLATE,
+  'coach-chat': COACH_CHAT_TEMPLATE,
   'voice-script': VOICE_SCRIPT_TEMPLATE,
 };
 
@@ -262,6 +294,188 @@ ${escapeForPrompt(trimmed)}
 </fan_dossier>`;
 }
 
+// Coach dialog can grow unbounded across a session; shed the oldest exchanges
+// so the assembled prompt stays inside a sane budget. The feature service no
+// longer caps the aggregate (option "c" removed the 120k gate); this is the
+// authoritative prompt-side bound, applied to the EXACT rendered size.
+const COACH_PROMPT_HISTORY_BUDGET_CHARS = 60_000;
+
+// Core-side replay projection (spec §3/§7, option "c"): the model's replay
+// memory is intentionally lossy. A committed coach answer may be up to the 64k
+// TRANSPORT ceiling, but before assembly core projects each history answer to a
+// small head+tail so prompt cost never tracks the transport ceiling. Correctness
+// never depends on the client: the extension applies the same projection only as
+// a bandwidth optimization. Questions are already ≤2k and pass through untouched.
+const COACH_ANSWER_PROJECTION_MAX_CHARS = 10_000;
+const COACH_ANSWER_PROJECTION_HEAD_CHARS = 6_000;
+const COACH_ANSWER_PROJECTION_TAIL_CHARS = 3_800;
+
+/** Code-point-safe head+tail slice with an explicit omission marker between the
+ * two verbatim ends (never splits a surrogate pair). Shared by the default
+ * projection and the newest-entry budget shrink below. */
+function sliceCoachAnswer(codePoints: string[], headChars: number, tailChars: number): string {
+  const head = codePoints.slice(0, headChars).join('');
+  const tail = codePoints.slice(codePoints.length - tailChars).join('');
+  const omitted = codePoints.length - headChars - tailChars;
+  return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
+}
+
+/** Projects a committed coach answer to ≤10k chars for prompt replay: the head
+ * and tail verbatim with an explicit omission marker between them. Slicing is
+ * code-point-safe (never splits a surrogate pair). An answer already within the
+ * cap is returned byte-identical (no-op), so a re-projected answer is stable.
+ * head (6000) + tail (3800) + marker (≤27) ≤ 10_000 by construction. */
+export function projectCoachAnswer(answer: string): string {
+  const codePoints = Array.from(answer);
+  if (codePoints.length <= COACH_ANSWER_PROJECTION_MAX_CHARS) {
+    return answer;
+  }
+  return sliceCoachAnswer(
+    codePoints,
+    COACH_ANSWER_PROJECTION_HEAD_CHARS,
+    COACH_ANSWER_PROJECTION_TAIL_CHARS,
+  );
+}
+
+/** Re-projects an answer to a caller-chosen head+tail (used only by the
+ * newest-entry budget shrink). No-op when the answer already fits head+tail. */
+function projectCoachAnswerSized(answer: string, headChars: number, tailChars: number): string {
+  const codePoints = Array.from(answer);
+  if (codePoints.length <= headChars + tailChars) {
+    return answer;
+  }
+  return sliceCoachAnswer(codePoints, headChars, tailChars);
+}
+
+/** Renders the kept coach exchanges (oldest-first, 1-indexed) into their escaped,
+ * XML-wrapped section string. Measuring THIS output — not the raw question+answer
+ * sum — is what makes the budget exact (escaping and wrapper overhead included).*/
+function renderCoachExchanges(entries: CoachHistoryEntry[]): string {
+  return entries
+    .map(
+      (entry, index) =>
+        `<coach_exchange n="${index + 1}">\n<chatter>${escapeForPrompt(entry.question)}</chatter>\n<coach>${escapeForPrompt(entry.answer)}</coach>\n</coach_exchange>`,
+    )
+    .join('\n');
+}
+// Per recap slot. The oldest recap text is itself a summary — hard-truncate the
+// TAIL beyond this and keep the head (recap sections lead with the most
+// load-bearing facts).
+const RECAP_ATTACH_MAX_CHARS = 30_000;
+
+/** Renders the coach dialog so far. Each answer is FIRST projected to the ≤10k
+ * replay bound (spec §3/§7, option "c"), THEN the newest exchanges are kept and
+ * the oldest shed when the EXACT rendered size (escaped, XML-wrapped, numbered,
+ * newline-joined) would blow the 60k budget. Projecting every entry first closes
+ * the old "oversized newest entry kept whole" hole: no single entry can overshoot
+ * the budget, and the budget is exact because it counts what is actually sent. */
+export function coachHistorySection(history: CoachHistoryEntry[] | undefined): string {
+  if (!history?.length) {
+    return '(no prior coach dialog — this is the first question)';
+  }
+  const projected: CoachHistoryEntry[] = history.map((entry) => ({
+    question: entry.question,
+    answer: projectCoachAnswer(entry.answer),
+  }));
+  // P2-5: the newest entry is always kept, but it must ALSO fit the budget on
+  // its own. XML-escaping inflates rendered size up to ~5× (every '&' → '&amp;'),
+  // so a MAX question (2k chars) plus a projection-cap answer (10k) can render to
+  // ~60k+ once escaped and wrapped — the old `kept.length > 0` guard let that
+  // single entry through whole. If the newest entry's RENDERED size exceeds the
+  // budget, re-project its answer from the ORIGINAL with progressively smaller
+  // (halving) head+tail until the single-entry rendered section fits. The
+  // question is ≤2k chars (≤10k escaped) so a fully-omitted answer always fits —
+  // the loop terminates. Only the newest entry is shrunk; older ones are shed.
+  const newestIndex = projected.length - 1;
+  let headChars = COACH_ANSWER_PROJECTION_HEAD_CHARS;
+  let tailChars = COACH_ANSWER_PROJECTION_TAIL_CHARS;
+  while (
+    renderCoachExchanges([projected[newestIndex]!]).length > COACH_PROMPT_HISTORY_BUDGET_CHARS
+    && (headChars > 0 || tailChars > 0)
+  ) {
+    headChars = Math.floor(headChars / 2);
+    tailChars = Math.floor(tailChars / 2);
+    projected[newestIndex] = {
+      question: history[newestIndex]!.question,
+      answer: projectCoachAnswerSized(history[newestIndex]!.answer, headChars, tailChars),
+    };
+  }
+  // Walk newest→oldest, growing the (oldest-first) kept window while the FULLY
+  // RENDERED section stays inside the budget. The newest entry (now bounded to
+  // the budget above) is always kept, so the section is never empty.
+  let kept: CoachHistoryEntry[] = [];
+  for (let i = projected.length - 1; i >= 0; i -= 1) {
+    const candidate = [projected[i]!, ...kept];
+    if (
+      renderCoachExchanges(candidate).length > COACH_PROMPT_HISTORY_BUDGET_CHARS
+      && kept.length > 0
+    ) {
+      break;
+    }
+    kept = candidate;
+  }
+  return renderCoachExchanges(kept);
+}
+
+/** Coarse human age label for a dated recap ("10 min ago", "3 days ago"). */
+function formatAge(ageMs: number): string {
+  const minutes = Math.round(ageMs / 60_000);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) {
+    return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+  return `${Math.round(hours / 24)} days ago`;
+}
+
+/** The dated "## Fan Recaps" section. Each present slot is labeled with its age
+ * before the escaped recap body; the label carries "Full recap"/"Short recap"
+ * so the reader knows which summary it is reading and how stale it is. */
+function recapSection(attach: RecapAttach | undefined): string {
+  if (!attach || (!attach.full && !attach.short)) {
+    return '';
+  }
+  // Code-point-safe tail truncation (P2-9): model-written recaps of a DM
+  // conversation routinely contain emoji (surrogate pairs), and a raw UTF-16
+  // slice at RECAP_ATTACH_MAX_CHARS could split one, emitting a lone surrogate
+  // into the escaped prompt / JSON body. Slice on code points, exactly as
+  // projectCoachAnswer does.
+  const bounded = (body: string): string => {
+    const codePoints = Array.from(body);
+    return codePoints.length > RECAP_ATTACH_MAX_CHARS
+      ? codePoints.slice(0, RECAP_ATTACH_MAX_CHARS).join('') + '\n[recap truncated]'
+      : body;
+  };
+  const parts: string[] = ['## Fan Recaps\n'];
+  if (attach.full) {
+    parts.push(
+      `Full recap — generated ${formatAge(attach.full.ageMs)}:\n<full_recap>\n${escapeForPrompt(bounded(attach.full.body))}\n</full_recap>`,
+    );
+  }
+  if (attach.short) {
+    parts.push(
+      `Short recap — generated ${formatAge(attach.short.ageMs)}:\n<short_recap>\n${escapeForPrompt(bounded(attach.short.body))}\n</short_recap>`,
+    );
+  }
+  return parts.join('\n');
+}
+
+/** Honest framing of how much of the conversation the transcript shows (spec
+ * §5) — an empty note when the coverage is unknown. */
+function transcriptCoverageNote(
+  coverage: 'full-history' | 'window' | undefined,
+): string {
+  if (coverage === 'full-history') {
+    return '(the transcript below covers the ENTIRE conversation history)';
+  }
+  if (coverage === 'window') {
+    return '(the transcript below is the most recent window only — the history is longer)';
+  }
+  return '';
+}
+
 function toneInstructions(policy: PromptFeaturePolicy, replyTone: ReplyTone | undefined): string {
   const tone = policy.supportsReplyTone ? (replyTone ?? 'none') : 'none';
   if (tone === 'none') {
@@ -314,6 +528,10 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     splitReplyInstructions: splitReplyInstructions(policy, input.replyMode),
     toneInstructions: toneInstructions(policy, input.replyTone),
     segmentInstructions: segmentInstructions(policy, input.pingSegment),
+    coachHistorySection: coachHistorySection(input.coachHistory),
+    chatterQuestion: escapeForPrompt(input.chatterQuestion ?? ''),
+    recapSection: recapSection(input.recapAttach),
+    transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage),
   };
 }
 
@@ -371,10 +589,15 @@ export function buildPrompt(
   templateOverrides?: Partial<Record<PromptFeature, string>>,
 ): PromptPayload {
   const platform = input.platform ?? "onlyfans";
-  const template = applyPlatformWording(
-    templateOverrides?.[input.feature] ?? DEFAULT_TEMPLATES[input.feature],
-    platform,
-  );
+  // fan-summary with summaryMode:'short' selects the compact-recap template; a
+  // test override still wins (anchor-fallback fixtures). Other features ignore
+  // summaryMode.
+  const selectedTemplate =
+    templateOverrides?.[input.feature]
+    ?? (input.feature === "fan-summary" && input.summaryMode === "short"
+      ? FAN_SUMMARY_SHORT_TEMPLATE
+      : DEFAULT_TEMPLATES[input.feature]);
+  const template = applyPlatformWording(selectedTemplate, platform);
   const systemBlocks = buildSystemBlocks(input.feature, input.personality, platform);
   const userBlocks = buildUserBlocks(input.feature, template, templateValues(input));
   return {

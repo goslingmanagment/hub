@@ -101,6 +101,17 @@ export const transactionStates = ["pending", "posted", "unknown"] as const;
 
 export type TransactionState = (typeof transactionStates)[number];
 
+export const ofapiCaptureJobStates = [
+  "ready",
+  "leased",
+  "awaiting_parse",
+  "retry_wait",
+  "blocked",
+  "complete",
+  "cancelled",
+] as const;
+export type OfapiCaptureJobState = (typeof ofapiCaptureJobStates)[number];
+
 export const userRoles = ["owner", "team_lead", "chatter", "content_manager"] as const;
 export type UserRole = (typeof userRoles)[number];
 export const creatableUserRoles = ["owner", "team_lead", "chatter"] as const;
@@ -120,6 +131,7 @@ export const aiUsageFeatures = [
   "hi-greeting",
   // Stage 29: internal gateway lane for the workboard closing classifier.
   "workboard-closing",
+  "coach-chat",
   // Voice notes: the ElevenLabs TTS lane's script-generation feature.
   "voice-script",
 ] as const;

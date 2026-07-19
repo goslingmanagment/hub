@@ -24,6 +24,7 @@ import {
   runOfapiWebhookAccrual,
 } from "../apps/runtime/src/services/ofapi-credits.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
+import { createOfapiRestGuard } from "../apps/runtime/src/services/sync/ofapi-dm-sync.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -99,9 +100,10 @@ async function listLedgerRows() {
     page_id: number | null;
     request_id: string | null;
     accrual_day: string | null;
+    details: Record<string, unknown>;
   }>(
     `select id::int, source, operation, credits, estimated, balance_after, page_id::int,
-            request_id, to_char(accrual_day, 'YYYY-MM-DD') as accrual_day
+            request_id, to_char(accrual_day, 'YYYY-MM-DD') as accrual_day, details
      from ofapi_credit_ledger order by id`,
   );
   return rows;
@@ -203,6 +205,133 @@ describe("ofapi credit ledger integration", () => {
     const credit = await getOfapiCreditState(appContext.db);
     expect(credit.spentToday).toBe(4);
     expect(credit.lastBalance).toBe(3999);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("accounts every billed retry attempt and terminal billed error", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const baseUrl = await startScriptedOfapiServer();
+    if (!baseUrl) {
+      context.skip();
+      return;
+    }
+
+    const client = buildClient(baseUrl, appContext);
+    scriptResponse({
+      status: 429,
+      headers: { "retry-after": "0" },
+      body: metaBody([], { used: 3, balance: 3997 }),
+    });
+    scriptResponse({ status: 200, body: metaBody([], { used: 1, balance: 3996 }) });
+    await client.listChats({}, "acct_credits", { limit: 5 });
+
+    scriptResponse({ status: 400, body: metaBody([], { used: 2, balance: 3994 }) });
+    await expect(
+      client.listChats({}, "acct_credits", { limit: 5 }),
+    ).rejects.toThrow("returned 400");
+
+    const rows = await listLedgerRows();
+    expect(rows.map((row) => row.credits)).toEqual([3, 1, 2]);
+    expect(rows[0]!.request_id).toBe(rows[1]!.request_id);
+    expect(rows[0]!.details).toMatchObject({ attemptNumber: 1 });
+    expect(rows[1]!.details).toMatchObject({ attemptNumber: 2 });
+    expect(rows[2]!.details).toMatchObject({ attemptNumber: 1 });
+    expect((await getOfapiCreditState(appContext.db)).spentToday).toBe(6);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("attributes billed retries to the dedicated lane and shared ceiling", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const baseUrl = await startScriptedOfapiServer();
+    if (!baseUrl) {
+      context.skip();
+      return;
+    }
+
+    const guard = createOfapiRestGuard(appContext, {
+      dailyCreditBudget: 100,
+      budgetScope: "audience",
+    });
+    expect(await guard.resolveBlock()).toBeNull();
+    scriptResponse({
+      status: 429,
+      headers: { "retry-after": "0" },
+      body: metaBody([], { used: 3, balance: 3997 }),
+    });
+    scriptResponse({ status: 200, body: metaBody([], { used: 1, balance: 3996 }) });
+    const page = await buildClient(baseUrl, appContext).listChats(
+      { creditBudgetScope: "audience" },
+      "acct_credits",
+      { limit: 5 },
+    );
+    await guard.recordResponse(page);
+
+    expect(await getOfapiCreditState(appContext.db)).toMatchObject({
+      spentToday: 4,
+      audienceSpentToday: 4,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("falls back to the physical counter when the ledger row cannot be written", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const sink = createOfapiCreditSpendSink(appContext);
+    const recorded = await sink({
+      operation: "ofapi_chats",
+      httpStatus: 200,
+      credits: 3,
+      estimated: false,
+      balanceAfter: 3997,
+      requestId: "ledger-fallback",
+      pageId: 2_147_483_647,
+      attemptNumber: 1,
+      isCached: false,
+      actorUserId: null,
+      budgetScope: null,
+    });
+
+    expect(recorded).toBe(true);
+    expect(await listLedgerRows()).toHaveLength(0);
+    expect(await getOfapiCreditState(appContext.db)).toMatchObject({
+      spentToday: 3,
+      lastBalance: 3997,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("stops before retrying when neither accounting path acknowledges spend", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const baseUrl = await startScriptedOfapiServer();
+    if (!baseUrl) {
+      context.skip();
+      return;
+    }
+
+    const client = createOfapiClient({
+      baseUrl,
+      apiKey: "test-key",
+      restDelayMs: 0,
+      onCreditSpend: async () => false,
+    });
+    scriptResponse({ status: 500, body: metaBody([], { used: 3, balance: 3997 }) });
+    scriptResponse({ status: 200, body: metaBody([], { used: 1, balance: 3996 }) });
+
+    await expect(
+      client.listChats({}, "acct_credits", { limit: 5 }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("credit accounting unavailable"),
+      status: null,
+    });
+    expect(scriptedResponses).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("keeps the sink inert and counter behavior unchanged with the flag off", async (context) => {

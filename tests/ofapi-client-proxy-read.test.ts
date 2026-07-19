@@ -121,6 +121,39 @@ describe("OFAPI proxy read client", () => {
     expect(page.nextMarker).toBe("1782465831");
   });
 
+  it("omits a standalone chargeback endDate and sends it with startDate", async () => {
+    const upstreamRequests: string[] = [];
+    server = createServer((request, response) => {
+      upstreamRequests.push(request.url ?? "");
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: { list: [] } }));
+    });
+    const baseUrl = await listenOnLocalhost(server);
+    const client = createOfapiClient({
+      baseUrl,
+      apiKey: "test-key",
+      restDelayMs: 0,
+    });
+
+    // A standalone upper bound is not a valid OFAPI range and must not leak
+    // onto the wire even if a caller accidentally supplies it.
+    await client.listChargebacks!({ pageId: 42 }, ACCOUNT, {
+      limit: 100,
+      endDate: "2026-07-19 12:00:00",
+    });
+    await client.listChargebacks!({ pageId: 42 }, ACCOUNT, {
+      limit: 100,
+      offset: 100,
+      startDate: "2026-04-20 12:00:00",
+      endDate: "2026-07-19 12:00:00",
+    });
+
+    expect(upstreamRequests).toEqual([
+      `/${ACCOUNT}/chargebacks?limit=100`,
+      `/${ACCOUNT}/chargebacks?limit=100&offset=100&start_date=2026-04-20+12%3A00%3A00&end_date=2026-07-19+12%3A00%3A00`,
+    ]);
+  });
+
   it("routes proxy reads through the supplied dispatcher", async () => {
     const upstreamRequests: string[] = [];
     const proxyRequests: string[] = [];

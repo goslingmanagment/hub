@@ -14,15 +14,15 @@
     },
     "builder.ts": {
       "sourceSha256": "3f90eabc80214ac66f25990d2face2ff9456141046c8624f094fd1f935ef8ad5",
-      "coreSha256": "97600ec89d0790e1a30c0e5e70a9fc2da115aed3f555d947f41d23c783bdc0a8",
+      "coreSha256": "f9e3891f1f8602f1f59f040ce68918a9ff32aa6fc5863de37d23c4bae532006a",
       "byteIdenticalToSource": false,
-      "note": "Stage 32: applyPlatformWording added (named platform substitution; the frozen desktop sourceSha256 stays the historical record). Decision #136: fanProfile input + fanProfileSection substitution (stored fan dossier). Decision #136 addendum: fanProfileSection disclaimer strengthened (volatile sections kept, not age-dropped; framed as possibly-stale history by generation date). Decision #156: preferSplit requests 2-3 parts and removes the single-message opt-out; output cardinality remains provider-controlled rather than parser-enforced. Voice notes: voice-script PROMPT_POLICIES + DEFAULT_TEMPLATES entries (net-new post-freeze feature, no desktop twin)."
+      "note": "Stage 32: applyPlatformWording added (named platform substitution; the frozen desktop sourceSha256 stays the historical record). Decision #136: fanProfile input + fanProfileSection substitution (stored fan dossier). Decision #136 addendum: fanProfileSection disclaimer strengthened (volatile sections kept, not age-dropped; framed as possibly-stale history by generation date). Decision #156: preferSplit requests 2-3 parts and removes the single-message opt-out; output cardinality remains provider-controlled rather than parser-enforced. Coach feature (Task 7): COACH_CHAT_TEMPLATE wired into PROMPT_POLICIES/DEFAULT_TEMPLATES (placeholder removed), CoachHistoryEntry/RecapAttach inputs, and the coachHistorySection (budget-shed, escaped), recapSection (dated two-slot attach, tail-bounded), and transcriptCoverageNote builders. Task 8: summaryMode input added; fan-summary with summaryMode:'short' selects FAN_SUMMARY_SHORT_TEMPLATE (test template override still wins). Coach option 'c' (decision #167): projectCoachAnswer (≤10k head+tail replay, code-point-safe) applied per entry before coachHistorySection sheds on the EXACT rendered size against the 60k budget — closes the oversized-newest-entry hole; the 120k aggregate gate was removed. Round-2 P2-9: recapSection bounded() tail truncation made code-point-safe (Array.from, mirroring projectCoachAnswer) so a recap emoji at the 30k boundary can no longer emit a lone surrogate. Round-4 P2-5: the newest coach history entry no longer bypasses the 60k budget — when its RENDERED (escaped+wrapped) size exceeds the budget (XML escaping can inflate ~5×, e.g. every '&' → '&amp;'), its answer is re-projected from the original with progressively smaller (halving) head+tail via projectCoachAnswerSized until the single-entry rendered section fits. Voice notes: voice-script PROMPT_POLICIES + DEFAULT_TEMPLATES entries (net-new post-freeze feature, no desktop twin)."
     },
     "templates.ts": {
       "sourceSha256": "cf40a9ecb86834a4d4c1fa4bd742687244df49eac6a9be6058a8341c5a7bf922",
-      "coreSha256": "012785db39be3aee0dbaccc146b02c05a1f9cb4569ce3884dca27188f441b3ff",
+      "coreSha256": "0cdff9ed97f207ba88e28cb518b08eeb3b6fe2855512c5a86c41e1d522509700",
       "byteIdenticalToSource": false,
-      "note": "Decision #136: {fanProfileSection} added to fast-reply/improve-draft/help-me/ping (templates-sync byte-equality). Voice notes: VOICE_SCRIPT_TEMPLATE added (net-new post-freeze feature, no desktop twin)."
+      "note": "Decision #136: {fanProfileSection} added to fast-reply/improve-draft/help-me/ping (templates-sync byte-equality). Coach feature (Task 7): COACH_CHAT_TEMPLATE added (kernel-native, byte-identical to templates/coach-chat.md); {fanBioSection} added to help-me so its includesFanBio policy actually renders (owner ruling, spec §7). Task 7 review fix: coach template reordered so the 1h static prefix is fan-agnostic (recaps/dossier/fan-data/coach-history moved after the transcript into the 5m dynamic block); intro wording corrected to \\\"the agency method you were given\\\". Task 8: FAN_SUMMARY_SHORT_TEMPLATE added (kernel-native compact recap, byte-identical to templates/fan-summary-short.md; cache-safe layout with the transcript anchor ahead of the fan spending/subscription sections). Round-2 P2-7: FAN_SUMMARY_SHORT_TEMPLATE pinned to Russian (a Rules directive plus \\\"Write in Russian.\\\" in the task line) mirroring fan-summary.md, held byte-identical to fan-summary-short.md. Voice notes: VOICE_SCRIPT_TEMPLATE added (net-new post-freeze feature, no desktop twin)."
     },
     "personalities.ts": {
       "sourceSha256": "ae445150784b3ef9c0b77092358645a82d2a09ae6a12bae54147bf9193c3dca6",
@@ -31,9 +31,9 @@
     },
     "types.ts": {
       "sourceSha256": "0fee9bac7a324960c4ef60186405289972a3d786fd1b98d86a7a97487ad3fb00",
-      "coreSha256": "aad9c15e046809c21dcbc0ea561dac066b05dab2311248e66b4a4ecd15a4fa0d",
+      "coreSha256": "ac7bdd9f207a825f6abacf659bff76a70aa6ab3bd959e4bf261f225c2ddb8568",
       "byteIdenticalToSource": false,
-      "note": "Voice notes: 'voice-script' added to FeatureType (net-new post-freeze feature, no desktop twin; the frozen desktop sourceSha256 stays the historical record)."
+      "note": "Coach feature: 'coach-chat' added to FeatureType + ModelSelectableFeature; ResultKind gains 'text' (free-text coach output). The frozen desktop sourceSha256 stays the historical record. Voice notes: 'voice-script' added to FeatureType (net-new post-freeze feature, no desktop twin)."
     },
     "output/reply-output.ts": {
       "sourceSha256": "f88c93bef9be368f8cc4b6542102ee88739700249c166cdc1799ce6fd2bec985",
@@ -95,10 +95,22 @@
       "coreSha256": "a66df6426ec6675479c3c5338a9646f56f7deeb7e6c6ef3aaf1d79843d39db56",
       "byteIdenticalToSource": true
     },
+    "templates/coach-chat.md": {
+      "sourceSha256": "fe4a2f031ef615528fcb2477de71e3fbf73723ad011c21a37b957bc171406aaa",
+      "coreSha256": "fe4a2f031ef615528fcb2477de71e3fbf73723ad011c21a37b957bc171406aaa",
+      "byteIdenticalToSource": false,
+      "note": "Coach feature (Task 7): kernel-native prompt template — coach-chat postdates the Stage 30 freeze, so there is NO frozen desktop antecedent. sourceSha256 mirrors coreSha256 as a documented self-reference (the kernel file is the sole source of truth); byteIdenticalToSource is false because this is not a migrated desktop asset. Held byte-identical to COACH_CHAT_TEMPLATE by templates-sync.test.ts. Carries the ```draft fence grammar, the {recapSection} two-slot attach, the {coachHistorySection} coach dialog, and the {transcriptCoverageNote}."
+    },
     "templates/fan-summary.md": {
       "sourceSha256": "7da7bbe29d27132b49e1f3976ec767ed9f14956e833cdefa6cf690f549196988",
       "coreSha256": "7da7bbe29d27132b49e1f3976ec767ed9f14956e833cdefa6cf690f549196988",
       "byteIdenticalToSource": true
+    },
+    "templates/fan-summary-short.md": {
+      "sourceSha256": "e4335cfdd029e982c5609f37333e7262774bc304c3fb795c505e667a29dc3f46",
+      "coreSha256": "e4335cfdd029e982c5609f37333e7262774bc304c3fb795c505e667a29dc3f46",
+      "byteIdenticalToSource": false,
+      "note": "Task 8: kernel-native compact fan-summary recap template — postdates the Stage 30 freeze, so there is NO frozen desktop antecedent (same posture as coach-chat.md). sourceSha256 mirrors coreSha256 as a documented self-reference; byteIdenticalToSource is false because this is not a migrated desktop asset. fan-summary with summaryMode:'short' selects it and the feature service caps output at 2048 tokens. Held byte-identical to FAN_SUMMARY_SHORT_TEMPLATE by templates-sync.test.ts. Round-2 P2-7: pinned to Russian (a Rules directive plus \"Write in Russian.\" in the task line) mirroring fan-summary.md, so the compact recap is not answered in the template's own (English) language."
     },
     "templates/fast-reply.md": {
       "sourceSha256": "776186d38436dad30ec9cb0b772950386a9ec17c13f565e150466febbec499ac",
@@ -108,9 +120,9 @@
     },
     "templates/help-me.md": {
       "sourceSha256": "08cd22932ca532c211e77223e2237f98a4ca4615d473324bcc469ab74fcb045a",
-      "coreSha256": "993af98deafadd441a9eb77b25c90a3899f98171a43b40706e0e559bb88d24d9",
+      "coreSha256": "06a14d8a0d30111abbefd5a047a144857f09213a4bce7e0d0a20af62dd97e1e3",
       "byteIdenticalToSource": false,
-      "note": "Decision #136: {fanProfileSection} dossier injection. Post-freeze template change; the desktop twin was deleted at its kernel cutover, so the kernel file is the living copy and sourceSha256 stays the Stage 30 historical record."
+      "note": "Decision #136: {fanProfileSection} dossier injection. Coach feature (Task 7): {fanBioSection} added (right after the spending/subscription sections) so help-me's includesFanBio policy flag actually renders the fan bio (owner ruling, spec §7 — the flag was enabled in Task 3 but the template had no slot). Post-freeze template change; the desktop twin was deleted at its kernel cutover, so the kernel file is the living copy and sourceSha256 stays the Stage 30 historical record."
     },
     "templates/hi-greeting.md": {
       "sourceSha256": "bd9d5750e284ed538d3bb4092344ee0cab4e34748ca2b81975c10a7c52fc8726",
@@ -137,9 +149,9 @@
     },
     "feature-policies.ts": {
       "sourceSha256": "832ff495138694e0a05d8c8b5c8010befdadf1e5331df2b3c803bc58e47c6e80",
-      "coreSha256": "c3e656f94d5bc2bb82052465f7735034c0a4ef0bbb8559cb537332048bc4a109",
+      "coreSha256": "e69c9af6cf1a68218c0e08543f6ca26d18f5ed67d52d1ddfe419826cf299c45d",
       "byteIdenticalToSource": false,
-      "note": "Decision #136: usesFanProfile flag (dossier injection gate). Voice notes: voice-script policy added to OPERATION_FEATURES + FEATURE_POLICIES (net-new post-freeze feature, no desktop twin)."
+      "note": "Decision #136: usesFanProfile flag (dossier injection gate). Coach feature: includesFanBio policy flag (true for hi-greeting/help-me/coach-chat) replaces the hard-coded bio check; coach-chat registered in OPERATION_FEATURES/FEATURE_POLICIES + model/reasoning defaults. Voice notes: voice-script policy added to OPERATION_FEATURES + FEATURE_POLICIES (net-new post-freeze feature, no desktop twin)."
     }
   }
 }

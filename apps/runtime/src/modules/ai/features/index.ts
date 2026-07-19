@@ -1,13 +1,18 @@
 import type {
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
-  AiGatewayStreamBody,
 } from "@agency_hub_core/contracts";
-import { findAiPersonaByKey, findPageByLabel } from "@agency_hub_core/db";
+import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
+import {
+  findAiPersonaByKey,
+  findPageByLabel,
+  getFreshestUsableRecaps,
+} from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import {
   prepareAiGatewayStream,
+  type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
 import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
@@ -16,6 +21,7 @@ import {
   NotFoundError,
   PersonaDefinitionChangedError,
   ProductGateError,
+  UnknownAiFeatureError,
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { isPageAllowlisted } from "../../../services/voice-notes.ts";
@@ -45,6 +51,7 @@ import {
   type OperationFeature,
   type Personality,
   type PingSegment,
+  type RecapAttach,
   type ReplyMode,
   type ReplyTone,
 } from "../prompts/index.ts";
@@ -78,6 +85,9 @@ export interface AiFeatureRequestBody {
   messageCount?: number;
   draftText?: string;
   isRegeneration?: boolean;
+  chatterQuestion?: string;
+  coachHistory?: Array<{ question: string; answer: string }>;
+  summaryMode?: "short";
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
    * the extension reads the conversation live at generation time). */
@@ -89,6 +99,7 @@ export interface AiFeatureRequestBody {
     fanSubscriptionData: string;
     fanBio?: string;
     pingSegment?: PingSegment;
+    transcriptCoverage?: "full-history" | "window";
   };
 }
 
@@ -127,6 +138,17 @@ async function resolvePersona(
   };
 }
 
+// Fan-summary short variant (Task 8): the compact recap is deliberately capped
+// so it stays cheap and terse — the cap reaches the provider on the gateway
+// body (input.maxTokens ?? tuning.maxTokens, honored by both providers).
+const SHORT_SUMMARY_MAX_TOKENS = 2048;
+
+// Short recap also bounds its INPUT window: the compact template promises the
+// model "300 recent messages max are provided", so the archive lane must not
+// pull the deep default (1500) — or a caller-supplied messageCount up to the
+// 3000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
+const SHORT_SUMMARY_MESSAGE_COUNT = 300;
+
 export async function prepareAiFeatureStream(
   app: AppContext,
   principal: AuthPrincipal,
@@ -135,13 +157,59 @@ export async function prepareAiFeatureStream(
   options?: { debugPromptEcho?: boolean },
 ): Promise<PreparedAiGatewayStream> {
   if (!(featureKey in FEATURE_POLICIES) || !isOperationFeature(featureKey as never)) {
-    throw new NotFoundError(`Unknown AI feature: ${featureKey}`);
+    throw new UnknownAiFeatureError(`Unknown AI feature: ${featureKey}`);
   }
   const feature = featureKey as OperationFeature;
   const policy = FEATURE_POLICIES[feature];
+  // Fansly's conversationRef is the canonical groupId, NOT the fan — the
+  // fan-erasure reachability fix keys off this in two spots (the coach-chat /
+  // short-fan-summary fanRef gate and the persisted fan_ref fallback). Computed
+  // once so it is a single platform-branch site (the access check below
+  // guarantees body.platform matches stored.page.platform).
+  const isFanslyRequest = body.platform === "fansly";
 
   if (policy.requiresDraft && !body.draftText?.trim()) {
     throw new ProductGateError(`${feature} requires draftText`, "gate_draft_required");
+  }
+
+  // Coach feature isolation (spec §7): coach-chat REQUIRES a question; every
+  // other feature REFUSES the coach fields so a stray field can never silently
+  // reshape a Reply/Ping/Summary prompt. The summaryMode toggle is likewise
+  // fan-summary-only. There is deliberately NO aggregate-chars reject (option
+  // "c"): per-entry answers are transport-bounded by COACH_ANSWER_MAX_CHARS in
+  // the schema (and by the identical live-stream ceiling below), and prompt cost
+  // is bounded by core's ≤10k per-entry replay projection plus the newest-first
+  // 60k history budget in the prompt builder — a schema-valid client that trims
+  // to its window setting must never be rejected.
+  if (feature === "coach-chat") {
+    if (!body.chatterQuestion?.trim()) {
+      throw new BadRequestError("coach-chat requires chatterQuestion");
+    }
+  } else if (body.chatterQuestion !== undefined || body.coachHistory !== undefined) {
+    throw new BadRequestError(`${feature} does not accept coach fields`);
+  }
+  if (body.summaryMode !== undefined && feature !== "fan-summary") {
+    throw new BadRequestError(`${feature} does not accept summaryMode`);
+  }
+  // Blocker 2 / P1-1 (fan-erasure reachability): on Fansly the conversationRef is
+  // the canonical groupId, NOT the fan — so a restricted row keyed only by
+  // conversation_ref survives fan-scope erasure. REQUIRE the explicit fanRef on
+  // the writer paths that NEW clients drive: coach-chat AND short fan-summary
+  // (the short recap is the canonical two-slot writer). Only new clients send
+  // coachHistory/summaryMode, so tightening this breaks no released client, and
+  // canonical full recaps from new clients always send fanRef per spec. The
+  // residual legacy-full lane keeps the `fanRef ?? conversationRef` fallback
+  // below — correct because a legacy Fansly conversationRef IS the fanAccountId.
+  // (summaryMode === "short" implies feature === "fan-summary" here: the check
+  // above already rejects short on any other feature.)
+  if (
+    isFanslyRequest
+    && !body.fanRef?.trim()
+    && (feature === "coach-chat" || body.summaryMode === "short")
+  ) {
+    throw new BadRequestError(
+      "fanRef is required on fansly for coach-chat and short fan-summary",
+    );
   }
 
   // Access is checked HERE, before any context loads — a principal without
@@ -160,7 +228,7 @@ export async function prepareAiFeatureStream(
   }
   const pageId = stored.page.id;
 
-  // Decision #167: voice-script is part of the voice-notes lane, which ships
+  // Decision #174: voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
   // SAME live flag + fail-closed page allowlist the voice-notes service admits
   // on — reusing its allowlist parser — so a disabled/unlisted lane spends no
@@ -205,6 +273,16 @@ export async function prepareAiFeatureStream(
   // PR3: the per-generation transcript context manifest (kernel-context path
   // only); rides an INTERNAL argument into the gateway, never the body.
   let contextManifest: Record<string, unknown> | undefined;
+  // The transcript window this generation resolves to. Short fan-summary clamps
+  // DOWN to the compact template's "300 recent messages max" promise; every
+  // other request keeps the per-bucket default (fan-summary deep = 1500) or a
+  // caller-supplied messageCount. Computed ONCE here (P2-5) so the archive loader
+  // below and the fan-summary provenance (featureParams.requestedCount) agree —
+  // the recap-status reader surfaces this as the requested count on BOTH lanes.
+  const resolvedMessageLimit =
+    feature === "fan-summary" && body.summaryMode === "short"
+      ? Math.min(SHORT_SUMMARY_MESSAGE_COUNT, body.messageCount ?? SHORT_SUMMARY_MESSAGE_COUNT)
+      : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
   if (body.clientContext && stored.page.platform !== "fansly") {
     // The Stage 32 deviation is Fansly-motivated (no webhook lane; the kernel
     // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting
@@ -217,6 +295,23 @@ export async function prepareAiFeatureStream(
     // pre-cutover assembly gated on; the kernel cannot know them fresher
     // (its Fansly archive is pull-cadenced by design).
     const clientContext = body.clientContext;
+    // Blocker 3 (P1-3/P2-8): short-recap's 300-message window IS enforced on the
+    // clientContext lane — the only lane coach/short-recap ships on. The kernel
+    // can't count a pre-assembled string transcript, but it already trusts
+    // clientContext.messageCount for the minMessages and hi-greeting gates, so it
+    // gates on the same client-asserted count here: reject a short request whose
+    // window exceeds 300 so the compact template's "300 recent messages max"
+    // claim holds. The archive lane below applies the kernel-counted clamp.
+    if (
+      feature === "fan-summary"
+      && body.summaryMode === "short"
+      && clientContext.messageCount > SHORT_SUMMARY_MESSAGE_COUNT
+    ) {
+      throw new BadRequestError(
+        `fan-summary short mode provides at most ${SHORT_SUMMARY_MESSAGE_COUNT} recent messages; `
+          + `clientContext.messageCount was ${clientContext.messageCount}`,
+      );
+    }
     if (policy.usesPingSegment && clientContext.pingSegment === undefined) {
       throw new BadRequestError(`${feature} requires clientContext.pingSegment`);
     }
@@ -226,7 +321,7 @@ export async function prepareAiFeatureStream(
       fanSpendingData: policy.includesEarnings ? clientContext.fanSpendingData : "",
       fanSubscriptionData: policy.includesEarnings ? clientContext.fanSubscriptionData : "",
       fanDisplayName: clientContext.fanDisplayName,
-      fanBio: feature === "hi-greeting" ? clientContext.fanBio : undefined,
+      fanBio: policy.includesFanBio ? clientContext.fanBio : undefined,
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
     };
   } else {
@@ -246,10 +341,13 @@ export async function prepareAiFeatureStream(
         unionMode = "unknown";
       }
     }
+    // Uses the resolved window computed above (short fan-summary already clamped
+    // DOWN to 300; every other request keeps its per-bucket default or the
+    // caller-supplied messageCount).
     const transcript = await loadTranscriptContext(app, {
       pageId,
       conversationRef: body.conversationRef,
-      limit: body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket],
+      limit: resolvedMessageLimit,
       unionMode,
     });
     contextManifest = transcript.contextManifest;
@@ -265,7 +363,7 @@ export async function prepareAiFeatureStream(
       fanSpendingData: spending?.block ?? "",
       fanSubscriptionData: subscription?.block ?? "",
       fanDisplayName: await loadFanDisplayName(app, { pageId, fanRef, platform: stored.page.platform }),
-      fanBio: feature === "hi-greeting"
+      fanBio: policy.includesFanBio
         ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
         : undefined,
       pingSegment: policy.usesPingSegment
@@ -341,6 +439,62 @@ export async function prepareAiFeatureStream(
     };
   }
 
+  // Two-slot recap attach (spec §5): coach-chat pulls the freshest usable full
+  // and short fan-summary recaps for this conversation and dates them into the
+  // prompt. Fail-open like the dossier — a recap-lookup hiccup degrades to "no
+  // recaps", never to a failed coach answer.
+  let recapAttach: RecapAttach | undefined;
+  if (feature === "coach-chat") {
+    try {
+      const conversationRefs = [
+        body.conversationRef,
+        ...(body.fanRef ? [body.fanRef] : []),
+      ];
+      const found = await getFreshestUsableRecaps(app.db, {
+        pageId,
+        conversationRefs,
+      });
+      const fullAt = found.full?.createdAt?.getTime() ?? null;
+      const shortAt = found.short?.createdAt?.getTime() ?? null;
+      const now = Date.now();
+      // Attach rule (spec §5): the full recap is attached whenever present; the
+      // short recap only when it is strictly newer than the full (an older short
+      // adds nothing the fuller, fresher recap does not already carry).
+      recapAttach = {
+        full: found.full
+          ? { body: found.full.completion, ageMs: now - fullAt! }
+          : null,
+        short:
+          found.short && (fullAt === null || shortAt! > fullAt)
+            ? { body: found.short.completion, ageMs: now - shortAt! }
+            : null,
+      };
+      // Dossier dedupe (P2-10): when the injected dossier came from the same
+      // summary as the full recap, keep the dated dossier section and drop the
+      // duplicate recap. Compare the RAW dossier body against the raw recap
+      // completion — the compiled body drops the financial section (and can shed
+      // others), so comparing compiled-vs-raw would almost never match on a real
+      // sectioned summary and the recap would double up. Fail-open: any lookup
+      // hiccup already degrades to "no recaps" in the surrounding catch.
+      if (recapAttach.full && fanProfile?.rawBody === recapAttach.full.body) {
+        recapAttach.full = null;
+      }
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        recapAttach: {
+          full: recapAttach.full ? fullAt : null,
+          short: recapAttach.short ? shortAt : null,
+        },
+      };
+    } catch (error) {
+      app.logger.warn({ err: error }, "coach-chat recap attach failed open");
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        recapAttach: { lookupFailed: true },
+      };
+    }
+  }
+
   const prompt = buildPrompt({
     feature,
     personality: persona.personality,
@@ -357,18 +511,78 @@ export async function prepareAiFeatureStream(
     pingSegment: contextValues.pingSegment,
     replyTone: policy.supportsReplyTone ? body.replyTone : undefined,
     replyMode: policy.supportsReplyMode ? body.replyMode : undefined,
+    chatterQuestion: feature === "coach-chat" ? body.chatterQuestion : undefined,
+    coachHistory: feature === "coach-chat" ? body.coachHistory : undefined,
+    recapAttach,
+    transcriptCoverage:
+      feature === "coach-chat" || feature === "fan-summary"
+        ? body.clientContext?.transcriptCoverage
+        : undefined,
+    summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
   });
 
-  const gatewayBody: AiGatewayStreamBody = {
+  const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
     feature,
     pageLabel: body.pageLabel,
     platform: body.platform,
     platformUserId: fanRef,
     conversationId: body.conversationRef,
+    // Off-wire: the fan this generation is ABOUT, stored as the restricted
+    // record's fan_ref so fan-scope erasure reaches coach/recap rows whose
+    // conversation_ref is the canonical Fansly groupId (spec §5). Round-4 P1-3
+    // dropped the old `isFanslyRequest ? conversationRef` fallback: a legacy row
+    // (conversationRef = fanAccountId) is ALREADY reachable through the erasure
+    // predicate's conversation_ref arm, so the fallback added nothing for it —
+    // while POISONING a canonical row by stamping its groupId into fan_ref (a
+    // non-fan id the erasure of some OTHER fan could never match, and the erasure
+    // of THIS fan already reaches via conversation_ref). Persist the real fan or
+    // NULL. The gate above already REQUIRES an explicit fanRef on the canonical
+    // writer paths (coach-chat / short fan-summary), so those rows always carry
+    // a true fan identity.
+    fanRef: body.fanRef ?? null,
     model: body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature],
     reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,
+    // Short fan-summary caps output at 2048 tokens (Task 8); every other
+    // feature leaves maxTokens unset so the provider's per-feature tuning wins.
+    // disableAdaptiveThinking keeps that 2048 a PURE output budget — the default
+    // fan-summary model is adaptive, and Anthropic counts summarized thinking
+    // inside max_tokens, so without it the recap truncates before it finishes.
+    ...(feature === "fan-summary" && body.summaryMode === "short"
+      ? { maxTokens: SHORT_SUMMARY_MAX_TOKENS, disableAdaptiveThinking: true }
+      : {}),
+    // Coach transport ceiling (spec §3/§7, option "c"): the coach keeps its
+    // adaptive 16k thinking budget (no output-token cap games), but the SSE pump
+    // aborts a coach generation whose accumulated visible output crosses
+    // COACH_ANSWER_MAX_CHARS — the SAME number the wire schema enforces on a
+    // replayed coachHistory answer. A crossing errors without a `done` frame and
+    // records a failed (never completed) outcome, so an over-ceiling answer can
+    // never be attached/committed, and every committed answer replays verbatim
+    // within schema. Off the wire (never on aiFeatureStreamBodySchema), coach
+    // only — mirrors the featureParams / disableAdaptiveThinking pattern.
+    ...(feature === "coach-chat"
+      ? { visibleOutputCeilingChars: COACH_ANSWER_MAX_CHARS }
+      : {}),
+    // Two-slot recap selection (spec §5): only fan-summary rows carry the
+    // summaryMode/coverage/count provenance the recap reader filters on.
+    ...(feature === "fan-summary"
+      ? {
+        featureParams: {
+          summaryMode: body.summaryMode ?? "full",
+          transcriptCoverage: body.clientContext?.transcriptCoverage ?? null,
+          // P2-5: provenance from the RESOLVED request window (after the short
+          // clamp) and the ACTUAL kept count — populated on BOTH lanes so an
+          // archive-generated recap no longer reports null through recap-status.
+          // keptCount is contextValues.messageCount, which already IS the
+          // client's reported count on the clientContext lane (client values
+          // win where present) and the kernel-counted transcript length on the
+          // archive lane.
+          requestedCount: resolvedMessageLimit,
+          keptCount: contextValues.messageCount,
+        },
+      }
+      : {}),
     prompt: {
       systemBlocks: prompt.systemBlocks,
       userBlocks: prompt.userBlocks,

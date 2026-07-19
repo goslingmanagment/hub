@@ -1385,7 +1385,7 @@ describe("OFAPI backfill day-budget guard", () => {
       scope: "backfill",
       estimate: 2,
       budget: 2,
-    })).toBe(true);
+    })).not.toBeNull();
 
     const calls: Array<{ marker: string | null }> = [];
     appContext = {

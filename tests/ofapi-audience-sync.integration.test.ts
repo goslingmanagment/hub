@@ -351,6 +351,50 @@ describe("OFAPI audience sweep", () => {
     expect(credit.lastBalance).toBe(20_000);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("seeds a post-reset sweep above the persisted subscription generation", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedMappedPage("audience-high-water");
+    if (!page) {
+      throw new Error("test setup: page creation failed");
+    }
+    const [staleFan] = await upsertFans(appContext.db, [{
+      platform: "onlyfans",
+      platformUserId: "999",
+      username: "stale-high-water",
+    }]);
+    await upsertPageSubscription(appContext.db, {
+      platformSubscriptionId: "999",
+      platformAccountId: page.id,
+      fanId: staleFan!.id,
+      rawStatus: 0,
+      canonicalStatus: "active",
+      priceMills: 4_990n,
+      renewPriceMills: 4_990n,
+      lastSeenGeneration: 861,
+    });
+
+    const { client } = fakeAudienceClient(new Map([
+      [0, fansPage([activeFanItem({ id: 101 })], false)],
+    ]));
+    appContext = { ...appContext, ofapi: client };
+
+    const result = await executeOfapiAudienceChunk(appContext, await buildChunkInput(page));
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: { generation: 862, fullSweepCompleted: true },
+    });
+    expect(await getCheckpoint(appContext.db, page.id, "subscribers")).toMatchObject({
+      state: { generation: 862 },
+    });
+    expect((await listSubscriptions(page.id)).find(
+      (subscription) => subscription.platform_subscription_id === "999",
+    )).toMatchObject({ is_current: false });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("skips when the sweep interval has not elapsed", async (context) => {
     if (!testDb) {
       context.skip();

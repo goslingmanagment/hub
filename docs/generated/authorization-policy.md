@@ -21,7 +21,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
 | `any` | any authenticated principal |
 
-## Routes (177)
+## Routes (178)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -114,6 +114,7 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/ai/personas` | `aiPersonasList` | `apiKey` | — | — |
 | DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `apiKey` | — | — |
 | PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `apiKey` | — | — |
+| GET | `/api/v1/ai/recap-status` | `aiRecapStatus` | `apiKey` | — | — |
 | GET | `/api/v1/ai/restricted/generations` | `aiRestrictedGenerations` | `owner-session` | — | — |
 | GET | `/api/v1/ai/restricted/generations/:generationRef` | `aiRestrictedGenerationDetail` | `owner-session` | — | — |
 | GET | `/api/v1/archive/conversations/:ref/messages` | `archiveConversationMessages` | `session` | — | — |

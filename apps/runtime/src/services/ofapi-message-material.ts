@@ -6,6 +6,9 @@ import {
 } from "@agency_hub_core/db";
 import { millsFromDollars } from "@agency_hub_core/shared";
 
+const SIGNED_BIGINT_MAX_MILLS = 9_223_372_036_854_775_807n;
+const MAX_DOLLAR_DECIMAL_LENGTH = 20;
+
 interface MaterialPageInput {
   accountId: number;
   observationId: number;
@@ -38,10 +41,20 @@ function booleanOrNull(value: unknown) {
   return typeof value === "boolean" ? value : null;
 }
 
-function millsString(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? millsFromDollars(value).toString()
-    : null;
+export function ofapiDollarValueToMillsString(value: unknown) {
+  const isNonnegativeNumber = typeof value === "number"
+    && Number.isFinite(value)
+    && value >= 0;
+  const isNonnegativeDecimal = typeof value === "string"
+    && value.length <= MAX_DOLLAR_DECIMAL_LENGTH
+    && /^(0|[1-9]\d*)(\.\d{1,3})?$/.test(value);
+  if (!isNonnegativeNumber && !isNonnegativeDecimal) return null;
+
+  const mills = millsFromDollars(value as number | string);
+  if (mills > SIGNED_BIGINT_MAX_MILLS) {
+    throw new Error("OFAPI dollar amount exceeds the signed BIGINT mills range");
+  }
+  return mills.toString();
 }
 
 function stableMedia(value: unknown) {
@@ -84,7 +97,7 @@ function materialDraft(
   const counterpart = asRecord(isSentByMe ? item.toUser : item.fromUser);
   const fanId = asString(counterpart?.id);
   const isTip = item.isTip === true;
-  const priceMills = millsString(item.price);
+  const priceMills = ofapiDollarValueToMillsString(item.price);
   const declaredPresence = asRecord(item.materialPresence);
   const head = {
     nativeMessageId: messageId,
@@ -96,7 +109,9 @@ function materialDraft(
     isOpened: booleanOrNull(item.isOpened),
     isNew: booleanOrNull(item.isNew),
     isTip,
-    tipAmountMills: isTip ? millsString(item.tipAmount) ?? priceMills ?? "0" : "0",
+    tipAmountMills: isTip
+      ? ofapiDollarValueToMillsString(item.tipAmount) ?? priceMills ?? "0"
+      : "0",
     tipTextPlain: typeof item.tipText === "string" ? item.tipText : null,
     reply: replyMetadata(item.replyToMessage),
     media: stableMedia(item.media),

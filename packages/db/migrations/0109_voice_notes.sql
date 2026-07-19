@@ -1,4 +1,4 @@
--- 0106_voice_notes.sql
+-- 0109_voice_notes.sql
 CREATE TABLE IF NOT EXISTS "page_voice_profiles" (
   "platform_account_id" bigint PRIMARY KEY REFERENCES "pages"("id") ON DELETE CASCADE,
   "voice_id" text NOT NULL,

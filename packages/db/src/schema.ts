@@ -21,8 +21,16 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { aiUsageFeatures, fanFlagTypes, userRoles } from "@agency_hub_core/shared";
-import type { ConfigOverrideValue, RunningSnapshot } from "@agency_hub_core/shared";
+import {
+  aiUsageFeatures,
+  fanFlagTypes,
+  userRoles,
+} from "@agency_hub_core/shared";
+import type {
+  ConfigOverrideValue,
+  ofapiCaptureJobStates,
+  RunningSnapshot,
+} from "@agency_hub_core/shared";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType() {
@@ -169,6 +177,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "golden_signal_lag",
   "scheduler_silent",
   "ops_sampler_silent",
+  "ofapi_chargebacks_reconcile_failed",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -2307,14 +2316,7 @@ export type OfapiCaptureJobGoal =
   | "history_to_exhaustion"
   | "connect_to_anchor"
   | "bounded_tail";
-export type OfapiCaptureJobState =
-  | "ready"
-  | "leased"
-  | "awaiting_parse"
-  | "retry_wait"
-  | "blocked"
-  | "complete"
-  | "cancelled";
+export type OfapiCaptureJobState = (typeof ofapiCaptureJobStates)[number];
 export type OfapiBudgetScope = "live" | "interactive" | "bulk";
 export type OfapiCaptureCreatedBy =
   | "owner"
@@ -3240,6 +3242,10 @@ export const aiGenerationContent = pgTable(
     }),
     pageId: bigint("page_id", { mode: "number" }),
     conversationRef: text("conversation_ref"),
+    // The fan this generation is ABOUT (spec §5): coach/recap requests send a
+    // canonical conversation_ref (groupId) + separate fan_ref, so fan-scope
+    // erasure matches on either. NULL for legacy/raw-gateway rows.
+    fanRef: text("fan_ref"),
     promptBlocks: jsonb("prompt_blocks").$type<unknown[]>().notNull(),
     completion: text("completion").notNull(),
     params: jsonb("params").$type<Record<string, unknown>>().notNull(),
@@ -3254,6 +3260,9 @@ export const aiGenerationContent = pgTable(
       table.pageId,
       table.conversationRef,
     ),
+    pageFanIdx: index("ai_generation_content_page_fan_idx")
+      .on(table.pageId, table.fanRef)
+      .where(sql`${table.fanRef} is not null`),
   }),
 );
 
@@ -3371,7 +3380,7 @@ export type VoiceProfileSettings = Record<string, unknown>;
 
 // Terminal + in-flight states for a voice-note render job. TEXT + CHECK (not a
 // pg enum) so the state set can evolve with a plain migration. Mirrors migration
-// 0106's voice_notes_state_check verbatim.
+// 0109's voice_notes_state_check verbatim.
 export type VoiceNoteState =
   | "queued"
   | "dispatched"

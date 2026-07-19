@@ -14,11 +14,18 @@ export type FeatureType =
   | 'chat-review'
   | 'ping'
   | 'hi-greeting'
+  | 'coach-chat'
   | 'voice-script'
   | 'compare';
 
 /** Features with their own model selection; improve-draft & hi-greeting delegate to fast-reply. */
-export type ModelSelectableFeature = 'fast-reply' | 'help-me' | 'fan-summary' | 'chat-review' | 'ping';
+export type ModelSelectableFeature =
+  | 'fast-reply'
+  | 'help-me'
+  | 'fan-summary'
+  | 'chat-review'
+  | 'ping'
+  | 'coach-chat';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
 
@@ -30,8 +37,8 @@ export type ReplyMode = 'default' | 'preferSplit';
 /** Safety-preamble selector: in-character reply features vs analysis/coaching features. */
 export type PromptMode = 'reply' | 'analysis';
 
-/** Shape of a feature's output: multi-part reply, single message, or XML document. */
-export type ResultKind = 'reply' | 'single-reply' | 'xml';
+/** Shape of a feature's output: multi-part reply, single message, XML document, or free text (coach-chat — no parsing). */
+export type ResultKind = 'reply' | 'single-reply' | 'xml' | 'text';
 
 export type PingSegment = 'segment-a' | 'segment-b' | 'active';
 

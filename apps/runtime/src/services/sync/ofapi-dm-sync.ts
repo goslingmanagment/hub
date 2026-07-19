@@ -38,7 +38,10 @@ import {
   type OfapiDayBudgetScope,
   type PageSyncLease,
 } from "@agency_hub_core/db";
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import {
+  normalizeDmMessageText,
+  OFAPI_MIRROR_BUDGET_DEFAULTS,
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
@@ -194,7 +197,11 @@ export function createOfapiRestGuard(app: AppContext, options?: {
   );
   const globalDailyCreditBudget = Math.max(
     1,
-    app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
+    // Decision #160/#170: dedicated legacy lanes and mirror admission share
+    // one physical stop-loss; the retired DM crawler's 500-credit cap is not
+    // that shared ceiling.
+    app.config.ofapiMirrorGlobalDailyCreditBudget ??
+      OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
   );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
   // Dedicated counters (audience per decision #50, backfill per Stage 14)
@@ -207,14 +214,26 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       ? options.budgetScope
       : "global";
   let requestsUsed = 0;
+  let reservationReceipt: Awaited<ReturnType<typeof reserveOfapiDayCredits>> = null;
 
   return {
     get requestsUsed() {
       return requestsUsed;
     },
+    abandonPendingReservation() {
+      // A transport/classified request failure has no response to settle.
+      // Clear only the in-memory lifecycle token; the DB estimate deliberately
+      // remains charged until UTC rollover as a conservative unknown outcome.
+      const abandoned = reservationReceipt !== null;
+      reservationReceipt = null;
+      return abandoned;
+    },
     async resolveBlock(): Promise<OfapiBudgetBlock | null> {
       if (requestsUsed >= maxRequestsPerRun) {
         return "ofapi_request_budget";
+      }
+      if (reservationReceipt !== null) {
+        throw new Error("OFAPI day-budget reservation is still pending settlement");
       }
 
       const credit = await getOfapiCreditState(app.db);
@@ -226,35 +245,42 @@ export function createOfapiRestGuard(app: AppContext, options?: {
         return "ofapi_credit_floor";
       }
 
-      const reserved = await reserveOfapiDayCredits(app.db, {
+      const receipt = await reserveOfapiDayCredits(app.db, {
         scope,
         estimate: OFAPI_REQUEST_CREDIT_ESTIMATE,
         budget: dailyCreditBudget,
         ...(scope === "global" ? {} : { globalBudget: globalDailyCreditBudget }),
       });
-      return reserved ? null : "ofapi_daily_credit_budget";
+      if (receipt) reservationReceipt = receipt;
+      return receipt ? null : "ofapi_daily_credit_budget";
     },
     async recordResponse(page: OfapiListPage) {
       requestsUsed += 1;
+      const receipt = reservationReceipt;
+      reservationReceipt = null;
+      if (!receipt) {
+        throw new Error("OFAPI response cannot settle without a day-budget receipt");
+      }
       const actualCredits = page.meta?.creditsUsed ?? OFAPI_REQUEST_CREDIT_ESTIMATE;
       // With the ledger on, the client's onCreditSpend sink already recorded
-      // the actuals (ledger row + global day counter + balance, one
-      // transaction) before the response reached us. Dedicated counters
-      // (audience, backfill) settle to actuals because the sink maintains only
-      // the global one, then their shared-cap reservation is released. A crash
-      // between these settlements remains conservative until UTC rollover.
+      // every physical attempt in both the global counter and the attributed
+      // dedicated lane. Release only the original reservation here; retry
+      // spend must not disappear behind the final logical response. Custom
+      // clients without the sink retain the legacy final-response settlement.
       // Flag off keeps the pre-ledger accounting (uncached reads cost 1 credit;
       // trust _meta when present), applied as a settle against the reservation.
       if (isOfapiCreditLedgerEnabled(app.config)) {
         await settleOfapiDayCreditReservation(app.db, {
           scope,
-          creditsDelta: scope === "global"
+          receipt,
+          creditsDelta: page.creditSpendAccounted === true
             ? -OFAPI_REQUEST_CREDIT_ESTIMATE
             : actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE,
         });
         if (scope !== "global") {
           await settleOfapiDayCreditReservation(app.db, {
             scope: "global",
+            receipt,
             creditsDelta: -OFAPI_REQUEST_CREDIT_ESTIMATE,
           });
         }
@@ -262,6 +288,7 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       }
       await settleOfapiDayCreditReservation(app.db, {
         scope,
+        receipt,
         creditsDelta: actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE,
         balance: page.meta?.creditBalance ?? null,
       });
@@ -999,6 +1026,7 @@ export async function executeOfapiDmMessagesChunk(
           },
         );
       } catch (error) {
+        guard.abandonPendingReservation();
         const errorClass = classifyOfapiConversationSyncError(error);
         if (errorClass === null) {
           // Auth (401/403), 429, other 4xx, and anything unrecognized stay
@@ -1042,6 +1070,7 @@ export async function executeOfapiDmMessagesChunk(
               });
               break;
             } catch (probeError) {
+              guard.abandonPendingReservation();
               if (classifyOfapiConversationSyncError(probeError) === null) {
                 throw probeError;
               }

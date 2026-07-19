@@ -182,7 +182,9 @@ describe("OFAPI export artifact import", () => {
       type: "chat_messages",
       accountIds: ["acct-export-test"],
       startDate: "2016-11-01T00:00:00.000Z",
-      endDate: "2026-07-15T00:00:00.000Z",
+      // Vendor-normalized midnight means the inclusive end of this UTC day.
+      // Both artifact rows below are later on 2026-07-14 and must remain valid.
+      endDate: "2026-07-14T00:00:00.000Z",
       fileType: "csv",
       maxMessages: 1_000,
       quoteTtlMinutes: 1_440,
@@ -232,14 +234,14 @@ describe("OFAPI export artifact import", () => {
     const parent = await getOfapiCaptureJob(app.db, created.job.id);
     if (!parent) throw new Error("Expected parent export job");
 
-    const csv = [
+    const csvForPrice = (price: string) => [
       OFAPI_CHAT_EXPORT_COLUMNS.join(","),
       csvRow({ message_id: "1001", message_text: "<p>new,\ntext</p>" }),
       csvRow({
         sent_by: "creator",
         message_id: "1002",
         message_text: "PPV",
-        price: "24.00",
+        price,
         is_free: "false",
         is_opened: "false",
         is_new: "true",
@@ -248,6 +250,29 @@ describe("OFAPI export artifact import", () => {
       }),
       "",
     ].join("\n");
+
+    // Both boundary values collapse to 9223372036854776 through Number().
+    // Exact decimal parsing must reject the first and preserve the second.
+    const overflowCsv = csvForPrice("9223372036854775.81");
+    await writeFile(path.join(artifactDir, `${parent.id}.csv`), overflowCsv, { mode: 0o600 });
+    const overflowPreview = await server.inject({
+      method: "POST",
+      url: `/api/v1/admin/ofapi/export-quotes/${parent.id}/capture-artifact`,
+      headers: { cookie },
+      payload: {
+        expectedRowVersion: parent.rowVersion,
+        expectedSha256: createHash("sha256").update(overflowCsv).digest("hex"),
+        reason: "bounded import overflow test",
+      },
+    });
+    expect(overflowPreview.statusCode, overflowPreview.body).toBe(400);
+    expect(await getOfapiCaptureJob(app.db, parent.id)).toMatchObject({
+      state: "blocked",
+      rowVersion: parent.rowVersion,
+      reasonCode: "artifact_capture_required",
+    });
+
+    const csv = csvForPrice("9223372036854775.80");
     await writeFile(path.join(artifactDir, `${parent.id}.csv`), csv, { mode: 0o600 });
     const expectedSha256 = createHash("sha256").update(csv).digest("hex");
 
@@ -315,8 +340,9 @@ describe("OFAPI export artifact import", () => {
       text_plain: string;
       media_metadata: Array<{ id: string }>;
       origin_class: string;
+      price_mills: string | null;
     }>(`
-      select message_ref, text_plain, media_metadata, origin_class
+      select message_ref, text_plain, media_metadata, origin_class, price_mills::text
       from message_archive
       where account_id = $1 and conversation_ref = '42'
       order by message_ref
@@ -332,6 +358,7 @@ describe("OFAPI export artifact import", () => {
       message_ref: "1002",
       text_plain: "PPV",
       origin_class: "export_import",
+      price_mills: "9223372036854775800",
     });
     expect((await testDb.pool.query(
       "select count(*)::int as n from ofapi_message_coverage where page_id = $1 and chat_id = '42'",

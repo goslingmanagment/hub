@@ -45,6 +45,11 @@ export interface FeaturePolicy {
    * and hi-greeting (a cold opener must not show unexplained familiarity).
    * Runtime allowlist chatMuseAiFanProfileContextFeatures narrows this set. */
   usesFanProfile: boolean;
+  /** Inject the fan's own profile bio (a cold-open detail, distinct from the
+   * stored dossier above). True for hi-greeting, help-me, and coach-chat;
+   * false everywhere else. Replaces the former hard-coded feature check in
+   * the feature service. */
+  includesFanBio: boolean;
 }
 
 // ─── Message counts (research §5.1; desktop defaults carried) ───────────
@@ -73,6 +78,7 @@ export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
   'fan-summary': DEFAULT_FAN_SUMMARY_MODEL_ID,
   'chat-review': DEFAULT_MODEL_ID,
   'ping': DEFAULT_MODEL_ID,
+  'coach-chat': DEFAULT_MODEL_ID,
 };
 
 export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, ReasoningEffort> = {
@@ -81,6 +87,7 @@ export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, Reasoning
   'fan-summary': 'medium',
   'chat-review': 'medium',
   'ping': 'medium',
+  'coach-chat': 'medium',
 };
 
 export const DEFAULT_MESSAGE_COUNT_BY_BUCKET: Record<FeatureMessageCountBucket, number> = {
@@ -101,6 +108,7 @@ export const OPERATION_FEATURES = [
   'chat-review',
   'ping',
   'hi-greeting',
+  'coach-chat',
   'voice-script',
 ] as const satisfies readonly OperationFeature[];
 
@@ -120,6 +128,7 @@ export const FEATURE_POLICIES = {
     requiresDraft: false,
     usesPingSegment: false,
     usesFanProfile: true,
+    includesFanBio: false,
   },
   'improve-draft': {
     surface: 'ai-dock',
@@ -136,6 +145,7 @@ export const FEATURE_POLICIES = {
     requiresDraft: true,
     usesPingSegment: false,
     usesFanProfile: true,
+    includesFanBio: false,
   },
   'help-me': {
     surface: 'panel-tab',
@@ -152,6 +162,7 @@ export const FEATURE_POLICIES = {
     requiresDraft: false,
     usesPingSegment: false,
     usesFanProfile: true,
+    includesFanBio: true,
   },
   'fan-summary': {
     surface: 'panel-tab',
@@ -168,6 +179,7 @@ export const FEATURE_POLICIES = {
     requiresDraft: false,
     usesPingSegment: false,
     usesFanProfile: false,
+    includesFanBio: false,
   },
   'chat-review': {
     surface: 'panel-tab',
@@ -184,6 +196,7 @@ export const FEATURE_POLICIES = {
     requiresDraft: false,
     usesPingSegment: false,
     usesFanProfile: false,
+    includesFanBio: false,
   },
   'ping': {
     surface: 'ai-dock',
@@ -200,6 +213,7 @@ export const FEATURE_POLICIES = {
     requiresDraft: false,
     usesPingSegment: true,
     usesFanProfile: true,
+    includesFanBio: false,
   },
   'hi-greeting': {
     surface: 'ai-dock',
@@ -216,6 +230,24 @@ export const FEATURE_POLICIES = {
     requiresDraft: false,
     usesPingSegment: false,
     usesFanProfile: false,
+    includesFanBio: true,
+  },
+  'coach-chat': {
+    surface: 'panel-tab',
+    resultKind: 'text',
+    promptMode: 'analysis',
+    timeoutBucket: 'quick',
+    messageCountBucket: 'quick',
+    modelFeature: 'coach-chat',
+    includesEarnings: true,
+    minMessages: 0,
+    rerunAction: 'regenerate',
+    supportsReplyMode: false,
+    supportsReplyTone: false,
+    requiresDraft: false,
+    usesPingSegment: false,
+    usesFanProfile: true,
+    includesFanBio: true,
   },
   // Voice notes: adapt a chosen chat draft into a speakable ElevenLabs script.
   // One script text (single-reply, no [NEXT]/variants); delegates model
@@ -237,6 +269,7 @@ export const FEATURE_POLICIES = {
     requiresDraft: true,
     usesPingSegment: false,
     usesFanProfile: false,
+    includesFanBio: false,
   },
 } as const satisfies Record<OperationFeature, FeaturePolicy>;
 

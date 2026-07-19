@@ -82,6 +82,7 @@ export const kernelOperations = {
   aiPersonaCatalog: { method: "GET", path: "/api/v1/ai/persona-catalog" },
   aiPersonaUpsert: { method: "PUT", path: "/api/v1/ai/personas/:key" },
   aiPersonasList: { method: "GET", path: "/api/v1/ai/personas" },
+  aiRecapStatus: { method: "GET", path: "/api/v1/ai/recap-status" },
   aiRestrictedGenerationDetail: { method: "GET", path: "/api/v1/ai/restricted/generations/:generationRef" },
   aiRestrictedGenerations: { method: "GET", path: "/api/v1/ai/restricted/generations" },
   aiUsageBatch: { method: "POST", path: "/api/v1/ai-usage/batch" },

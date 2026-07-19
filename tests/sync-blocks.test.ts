@@ -7,6 +7,7 @@ const dbMocks = vi.hoisted(() => ({
   deletePageTopSpenders: vi.fn(),
   ensurePageSyncStates: vi.fn(),
   findPageByLabel: vi.fn(),
+  listPageSyncStates: vi.fn(),
   pausePageSync: vi.fn(),
   requestPageSync: vi.fn(),
   resetPageDmSyncState: vi.fn(),
@@ -443,6 +444,9 @@ describe("sync blocks service", () => {
       proxy: null,
     });
     dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      { stream: "dm_conversations", status: "paused" },
+    ]);
     dbMocks.resumePageSync.mockResolvedValue(undefined);
     dbMocks.requestPageSync.mockResolvedValue([
       { stream: "dm_conversations", requestedSeq: 3 },
@@ -473,6 +477,94 @@ describe("sync blocks service", () => {
       source: "manual",
     }));
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes only paused OnlyFans financial substreams", async () => {
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: {
+        id: 9,
+        label: "lana-of",
+        platform: "onlyfans",
+      },
+      proxy: null,
+    });
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      { stream: "transactions", status: "paused" },
+      { stream: "fan_identities", status: "idle" },
+      { stream: "top_spenders", status: "paused" },
+    ]);
+    dbMocks.resumePageSync.mockResolvedValue(undefined);
+    dbMocks.requestPageSync.mockResolvedValue([
+      { stream: "transactions", requestedSeq: 2 },
+      { stream: "top_spenders", requestedSeq: 2 },
+    ]);
+    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-of-financials");
+
+    const response = await resumeSyncBlock({ db: {} } as never, {
+      send: vi.fn(),
+    } as never, {
+      pageLabel: "lana-of",
+      block: "financials",
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(response.requests).toEqual([
+      { stream: "transactions", requestedSeq: 2 },
+      { stream: "top_spenders", requestedSeq: 2 },
+    ]);
+    expect(dbMocks.resumePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 9,
+      streams: ["transactions", "top_spenders"],
+    }));
+    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      pageId: 9,
+      streams: ["transactions", "top_spenders"],
+      source: "manual",
+    }));
+    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        platformAccountId: 9,
+        provider: "onlyfans",
+        priority: Math.max(
+          resolvePageSyncPriority("transactions", "manual"),
+          resolvePageSyncPriority("top_spenders", "manual"),
+        ),
+      }),
+    );
+  });
+
+  it("does not turn Resume into a trigger when no block rows are paused", async () => {
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: {
+        id: 9,
+        label: "lana-of",
+        platform: "onlyfans",
+      },
+      proxy: null,
+    });
+    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      { stream: "transactions", status: "idle" },
+      { stream: "fan_identities", status: "idle" },
+      { stream: "top_spenders", status: "idle" },
+    ]);
+
+    const response = await resumeSyncBlock({ db: {} } as never, {
+      send: vi.fn(),
+    } as never, {
+      pageLabel: "lana-of",
+      block: "financials",
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(response.requests).toEqual([]);
+    expect(dbMocks.resumePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      streams: [],
+    }));
+    expect(dbMocks.requestPageSync).not.toHaveBeenCalled();
+    expect(queueMocks.sendSyncPageWakeup).not.toHaveBeenCalled();
   });
 
   it("allows OnlyFans message domains when the platform exposes DM streams", async () => {
@@ -522,6 +614,9 @@ describe("sync blocks service", () => {
       proxy: null,
     });
     dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      { stream: "dm_messages", status: "paused" },
+    ]);
     dbMocks.resumePageSync.mockResolvedValue(undefined);
     dbMocks.requestPageSync.mockResolvedValue([
       { stream: "dm_messages", requestedSeq: 4 },

@@ -167,6 +167,7 @@ async function provision(opts?: {
     userId: user.id,
     pageId: page.id,
     conversationRef: CONVERSATION_REF,
+    fanRef: null,
     promptBlocks: [],
     completion: opts?.script ?? SCRIPT,
     params: {

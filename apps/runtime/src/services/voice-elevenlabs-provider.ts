@@ -25,7 +25,7 @@ const SNIPPET_MAX_CHARS = 200;
 /**
  * Hard ceiling on a rendered artifact, in bytes (2 MiB) — the SINGLE source of
  * truth for the size cap, mirrored by the `voice_notes_audio_cap` DB CHECK in
- * migration 0106. The provider refuses an oversize body (never buffers it),
+ * migration 0109. The provider refuses an oversize body (never buffers it),
  * and the service guards `result.audio.byteLength` before the terminal settle,
  * so an oversize synthesis can never crash the CHECK and fall through to
  * indeterminate. Imported by the voice-notes service — never redeclared.

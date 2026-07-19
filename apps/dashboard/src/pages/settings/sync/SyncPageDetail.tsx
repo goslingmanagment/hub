@@ -29,9 +29,11 @@ import {
 function BlockDetailCard({
   block,
   pageLabel,
+  platform,
 }: {
   block: SyncBlockStatus;
   pageLabel: string;
+  platform: SyncBlocksPage["platform"];
 }) {
   const label = getBlockLabel(block.block);
   const description = getBlockDescription(block.block);
@@ -288,7 +290,7 @@ function BlockDetailCard({
 
       {/* Actions */}
       <div className="mt-4 flex justify-end">
-        <SyncBlockActions pageLabel={pageLabel} block={block} />
+        <SyncBlockActions pageLabel={pageLabel} platform={platform} block={block} />
       </div>
     </div>
   );
@@ -402,6 +404,7 @@ export function SyncPageDetail({
             key={key}
             block={page.blocks[key]}
             pageLabel={pageLabel}
+            platform={page.platform}
           />
         ))}
       </div>

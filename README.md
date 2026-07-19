@@ -185,6 +185,7 @@ By default the script uses `--mode full`:
 - the canonical `node:22-bookworm-slim` base image is validated for `linux/amd64` and used unchanged by BuildKit, so a local alias cannot be mistaken for a private Docker Hub namespace
 - every built runtime image is labeled with the dependency checksum and source revision
 - after health checks, the running API, scheduler, and worker images must have labels matching the source revision and dependency checksum for this deploy
+- after a successful full deploy, the verified candidate is published under a dependency-checksum clean-base tag for future dist-only releases
 
 Older deploy wrappers may still pass `--node-base-cache-image` or set
 `DEPLOY_NODE_BASE_CACHE_IMAGE`. Both forms remain accepted as deprecated
@@ -192,9 +193,9 @@ compatibility shims, emit a warning, and are ignored; only the canonical
 `--node-base-image` / `DEPLOY_NODE_BASE_IMAGE` value can select the image used
 for validation and the Docker build.
 
-`--mode auto` is available only as an explicit opt-in. In auto mode, if the full build fails before the remote release is modified, the script can fall back to a dist-only overlay build from the currently running production image. Dist-only fallback is allowed only when the current production image carries the same dependency checksum label.
+`--mode auto` is available only as an explicit opt-in. In auto mode, if the full build fails before the remote release is modified, the script can fall back to a dist-only overlay build from the clean full image published by the latest successful full deploy for the same dependency checksum. The running production and rollback images are never used as dist bases, so repeated dist-only releases do not accumulate previous artifact layers.
 
-For the first deploy from an older unlabeled production image, use the override only after confirming that `Dockerfile`, package manifests, and `pnpm-lock.yaml` are compatible with the running image:
+Dist-only mode requires that checksum-keyed clean full image to exist on the remote host. Bootstrap it with a full deploy whenever the tag is absent or the dependency checksum changes. The compatibility override is reserved for a manually retained clean full image that predates dependency labels; it does not permit falling back to the running production image:
 
 ```bash
 scripts/deploy-production.sh --mode dist-only --allow-unlabeled-dist-base \
@@ -206,6 +207,7 @@ Use the default `--mode full` when runtime dependencies, Dockerfile structure, P
 What the script does:
 
 - builds a per-run candidate image tag locally, or as a verified dist-only overlay on the remote host
+- builds each dist-only image as the clean full image plus one four-layer dashboard/runtime/database/migrations artifact overlay
 - streams a locally built image to the remote host with `docker load`
 - syncs release files into `/opt/agency-hub` by default
 - runs `docker compose --env-file .env.production -f docker-compose.production.yml up -d --remove-orphans --force-recreate --no-build`

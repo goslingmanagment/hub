@@ -305,12 +305,12 @@ export function buildPageSyncUx(items: SyncUxSummary[]): SyncUxSummary {
     return chooseSummary("off", off, off.length === items.length
       ? {
         label: "Off",
-        headline: "Sync is off",
+        headline: "Data updates are paused",
         detail: "All background syncs are off for this page.",
       }
       : {
         label: "Off",
-        headline: "Some syncs are off",
+        headline: "Some data updates are paused",
         detail: `${pluralize(off.length, "sync")} are paused on this page.`,
       });
   }

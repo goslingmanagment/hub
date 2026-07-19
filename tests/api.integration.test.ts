@@ -10330,6 +10330,7 @@ describe("api integration", () => {
         userId: anton!.id,
         pageId: lanaId,
         conversationRef: "conv-voice-1",
+        fanRef: null,
         promptBlocks: [],
         completion: VOICE_SCRIPT,
         params: { outcome: "completed" },

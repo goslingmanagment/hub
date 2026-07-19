@@ -65,6 +65,7 @@ export const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   // Stage 29: the closing classifier's gateway lane (classification, not
   // generation — its own direct-SDK constants carried over).
   "workboard-closing": 1536,
+  "coach-chat": 2500,
   // Voice notes: a spoken-message script is a single short line.
   "voice-script": 400,
 };
@@ -79,6 +80,7 @@ const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
   "ping": 0.65,
   "hi-greeting": 0.7,
   "workboard-closing": 0,
+  "coach-chat": 0.5,
   "voice-script": 0.4,
 };
 
@@ -100,6 +102,7 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "ping": 8000,
   "hi-greeting": 8000,
   "workboard-closing": 8000,
+  "coach-chat": 16000,
   // Adaptive thinking counts against max_tokens, so voice-script needs the same
   // ~10x headroom every peer on this model+effort gets (fast-reply 800→8000):
   // at 800 the thinking budget alone truncates the script → stopReason
@@ -178,8 +181,14 @@ export function resolveAnthropicGatewayRequestTuning(input: {
   feature: GatewayOperationFeature;
   temperature: number;
   reasoningEffort: AiGatewayReasoningEffort;
+  /** Per-request off-switch for adaptive summarized thinking. Anthropic counts
+   * thinking tokens inside `max_tokens`, so a caller enforcing a tight output
+   * budget (fan-summary short recap: 2048) sets this to keep the cap a PURE
+   * output budget — otherwise summarized thinking eats the budget and truncates
+   * the answer (stopReason: 'max_tokens'). */
+  disableAdaptiveThinking?: boolean | undefined;
 }): AnthropicGatewayRequestTuning {
-  const adaptive = isAdaptiveAnthropicModel(input.providerModelId);
+  const adaptive = isAdaptiveAnthropicModel(input.providerModelId) && !input.disableAdaptiveThinking;
   const maxTokens = adaptive
     ? ANTHROPIC_ADAPTIVE_MAX_TOKENS[input.feature]
     : FEATURE_MAX_TOKENS[input.feature];
@@ -199,6 +208,7 @@ export function resolveAnthropicGatewayRequestTuning(input: {
 
 export function buildAnthropicGatewayStreamRequest(
   input: AiGatewayStreamBody,
+  options?: { disableAdaptiveThinking?: boolean | undefined },
 ): AnthropicGatewayStreamRequest {
   const model = resolveAnthropicGatewayModel(input.model);
   const temperature = input.temperature ?? getAnthropicGatewayFeatureTemperature(input.feature);
@@ -207,6 +217,7 @@ export function buildAnthropicGatewayStreamRequest(
     feature: input.feature,
     temperature,
     reasoningEffort: input.reasoningEffort,
+    disableAdaptiveThinking: options?.disableAdaptiveThinking,
   });
 
   return {

@@ -8,8 +8,19 @@ import {
 } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { toast } from "sonner";
-import { getBlockLabel } from "./syncBlockDisplay.js";
+import { getBlockLabel, getStreamLabel } from "./syncBlockDisplay.js";
 import type { SyncBlockKey, SyncBlockState } from "./syncBlockDisplay.js";
+
+type SyncPlatform = "fansly" | "onlyfans";
+
+// Detailed status keeps compatibility rows visible for auditability, but they
+// must not create a fake recovery action. OnlyFans `light` and `transactions`
+// are webhook/OFAPI-era no-ops, while legacy `dm_messages` is retired.
+const ONLYFANS_NON_RESUMABLE_STREAMS = new Set([
+  "light",
+  "transactions",
+  "dm_messages",
+]);
 
 function canTrigger(state: SyncBlockState): boolean {
   return (
@@ -38,11 +49,38 @@ function canReset(state: SyncBlockState): boolean {
   return state !== "not_available";
 }
 
+export function getSyncBlockActionPresentation(
+  block: SyncBlockStatus,
+  platform: SyncPlatform,
+) {
+  const pausedSubstreams = block.substreams.filter((substream) => (
+    substream.state === "paused" && !(
+      platform === "onlyfans" && ONLYFANS_NON_RESUMABLE_STREAMS.has(substream.stream)
+    )
+  ));
+  const hasPartialPause = block.state !== "paused" && pausedSubstreams.length > 0;
+  const showResume = platform === "onlyfans" && block.substreams.length > 0
+    ? pausedSubstreams.length > 0
+    : canResume(block.state) || hasPartialPause;
+
+  return {
+    showTrigger: !hasPartialPause && (canTrigger(block.state) || canTriggerDisabled(block.state)),
+    showPause: !hasPartialPause && canPause(block.state),
+    showResume,
+    showReset: canReset(block.state),
+    resumeLabel: hasPartialPause && pausedSubstreams.length === 1
+      ? `Resume ${getStreamLabel(pausedSubstreams[0]!.stream)}`
+      : "Resume",
+  };
+}
+
 export function SyncBlockActions({
   pageLabel,
+  platform,
   block,
 }: {
   pageLabel: string;
+  platform: SyncPlatform;
   block: SyncBlockStatus;
 }) {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -96,10 +134,13 @@ export function SyncBlockActions({
     }
   }
 
-  const showTrigger = canTrigger(state) || canTriggerDisabled(state);
-  const showPause = canPause(state);
-  const showResume = canResume(state);
-  const showReset = canReset(state);
+  const {
+    showTrigger,
+    showPause,
+    showResume,
+    showReset,
+    resumeLabel,
+  } = getSyncBlockActionPresentation(block, platform);
 
   return (
     <>
@@ -131,7 +172,7 @@ export function SyncBlockActions({
             disabled={anyPending}
             className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-hover disabled:opacity-40"
           >
-            Resume
+            {resumeLabel}
           </button>
         )}
         {showReset && (

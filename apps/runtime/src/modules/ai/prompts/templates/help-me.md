@@ -40,6 +40,7 @@ The flirty message suggestion here. Written in the model's voice.
 
 {fanSpendingSection}
 {fanSubscriptionSection}
+{fanBioSection}
 {fanProfileSection}
 
 ## Your Task

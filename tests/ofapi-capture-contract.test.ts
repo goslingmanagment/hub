@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { parseStrictOfapiMessagePage } from "../apps/runtime/src/services/ofapi-capture-contract.ts";
+import {
+  parseStrictOfapiMessagePage,
+  validateOfapiInteractiveResponseShape,
+} from "../apps/runtime/src/services/ofapi-capture-contract.ts";
 
 function item(id: string, createdAt: string) {
   return { id, createdAt, isSentByMe: false };
@@ -78,5 +81,101 @@ describe("strict OFAPI message-page contract", () => {
       requiredBoundaryCursor: "99",
       boundaryIsDuplicate: true,
     })).toMatchObject({ accepted: false, reason });
+  });
+});
+
+describe("interactive OFAPI response envelopes", () => {
+  const arrayListOperations = [
+    "ofapi_gateway_chats",
+    "ofapi_gateway_chat_messages",
+  ];
+  const wrappedListOperations = [
+    "ofapi_gateway_chat_media",
+    "ofapi_gateway_user_list_users",
+    "ofapi_gateway_vault_media",
+    "ofapi_gateway_vault_lists",
+  ];
+  const dualListOperations = [
+    "ofapi_gateway_transactions",
+    "ofapi_gateway_fans_all",
+    "ofapi_gateway_fans_active",
+    "ofapi_gateway_user_lists",
+  ];
+
+  it.each(arrayListOperations)("accepts only the array list envelope for %s", (operation) => {
+    expect(validateOfapiInteractiveResponseShape(operation, { data: [] })).toBe(true);
+    expect(validateOfapiInteractiveResponseShape(operation, {
+      data: { list: [], hasMore: false },
+    })).toBe(false);
+  });
+
+  it.each(wrappedListOperations)("accepts only the wrapped list envelope for %s", (operation) => {
+    expect(validateOfapiInteractiveResponseShape(operation, { data: [] })).toBe(false);
+    expect(validateOfapiInteractiveResponseShape(operation, {
+      data: { list: [], hasMore: false },
+    })).toBe(true);
+  });
+
+  it.each(dualListOperations)("accepts both established list envelopes for %s", (operation) => {
+    expect(validateOfapiInteractiveResponseShape(operation, { data: [] })).toBe(true);
+    expect(validateOfapiInteractiveResponseShape(operation, {
+      data: { list: [], hasMore: false },
+    })).toBe(true);
+  });
+
+  it.each([
+    "ofapi_gateway_chat_message",
+    "ofapi_gateway_user",
+    "ofapi_gateway_vault_media_item",
+  ])("accepts an id-bearing single-item envelope for %s", (operation) => {
+    expect(validateOfapiInteractiveResponseShape(operation, { data: { id: 42 } })).toBe(true);
+    expect(validateOfapiInteractiveResponseShape(operation, { data: { id: "42" } })).toBe(true);
+    expect(validateOfapiInteractiveResponseShape(operation, { data: {} })).toBe(false);
+    expect(validateOfapiInteractiveResponseShape(operation, { data: { list: [] } })).toBe(false);
+  });
+
+  it("accepts only an id-bearing user map for the mass-user surface", () => {
+    expect(validateOfapiInteractiveResponseShape("ofapi_gateway_users_list", {
+      data: {},
+    })).toBe(true);
+    expect(validateOfapiInteractiveResponseShape("ofapi_gateway_users_list", {
+      data: { "42": { id: 42 }, "43": { id: "43" } },
+    })).toBe(true);
+    expect(validateOfapiInteractiveResponseShape("ofapi_gateway_users_list", {
+      data: { list: [] },
+    })).toBe(false);
+    expect(validateOfapiInteractiveResponseShape("ofapi_gateway_users_list", {
+      data: { "42": {} },
+    })).toBe(false);
+  });
+
+  it("accepts a nonempty bare upload status without pinning vendor state vocabulary", () => {
+    expect(validateOfapiInteractiveResponseShape("ofapi_gateway_upload_status", {
+      status: "processing",
+    })).toBe(true);
+    expect(validateOfapiInteractiveResponseShape("ofapi_gateway_upload_status", {
+      status: "future_additive_state",
+    })).toBe(true);
+    expect(validateOfapiInteractiveResponseShape("ofapi_gateway_upload_status", {
+      status: 42,
+    })).toBe(false);
+  });
+
+  it.each([
+    ...arrayListOperations,
+    ...wrappedListOperations,
+    ...dualListOperations,
+    "ofapi_gateway_chat_message",
+    "ofapi_gateway_user",
+    "ofapi_gateway_vault_media_item",
+    "ofapi_gateway_users_list",
+    "ofapi_gateway_upload_status",
+  ])("rejects missing and null envelopes for the registered operation %s", (operation) => {
+    expect(validateOfapiInteractiveResponseShape(operation, {})).toBe(false);
+    expect(validateOfapiInteractiveResponseShape(operation, { data: null })).toBe(false);
+  });
+
+  it("fails closed for an operation without a registered response family", () => {
+    expect(validateOfapiInteractiveResponseShape("future_interactive_operation", {})).toBe(false);
   });
 });

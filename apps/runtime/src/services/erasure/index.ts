@@ -626,9 +626,11 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     run: (tx) => execCount(tx, sql`delete from ofapi_commands where ${commandPred}`),
   });
 
-  // Stage 29 restricted class: generations tied to the fan's conversation
-  // (acceptance rows resolve through them, so they go first).
-  const generationPred = sql`page_id in ${scope.pageIds} and conversation_ref = ${ref}`;
+  // Stage 29 restricted class: generations tied to the fan — by legacy
+  // conversation_ref = fanId OR the canonical fan_ref (coach/recap rows whose
+  // conversation_ref is the Fansly groupId, spec §5). Acceptance rows resolve
+  // through them, so they go first.
+  const generationPred = sql`page_id in ${scope.pageIds} and (conversation_ref = ${ref} or fan_ref = ${ref})`;
   targets.push({
     plane: "hot",
     target: "ai_acceptance_events",
@@ -652,7 +654,7 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       delete from ai_generation_content where ${generationPred}`),
   });
 
-  // Voice-notes lane (0106): a fan's rendered audio + conversation_ref + a
+  // Voice-notes lane (0109): a fan's rendered audio + conversation_ref + a
   // source_generation_ref into an ai_generation_content row this same erasure
   // deletes. voice_notes has NO FK to `fans`, so the unmapped-FK guard cannot
   // flag its omission — the delete must be explicit, or a fan erasure leaves up
@@ -774,7 +776,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
 
   const deletions: Array<[string, string]> = [
     ["ai_generation_content", "page_id"],
-    // Voice-notes lane (0106): both are page-scoped and must be purged
+    // Voice-notes lane (0109): both are page-scoped and must be purged
     // explicitly. voice_notes REFERENCES pages WITHOUT cascade (it would block
     // a page delete; erasure keeps the pages catalog row, so we delete the
     // notes — audio bytes, user_id, conversation_ref, provider metadata — here).

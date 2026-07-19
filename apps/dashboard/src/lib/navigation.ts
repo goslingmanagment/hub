@@ -86,8 +86,12 @@ export function resolveFanLabelFromState(state: unknown): string | undefined {
   return undefined;
 }
 
-export function buildSettingsRoute(tab: SettingsTab) {
-  return `/settings?tab=${tab}`;
+export function buildSettingsRoute(tab: SettingsTab, pageLabel?: string) {
+  const params = new URLSearchParams({ tab });
+  if (tab === "sync" && pageLabel) {
+    params.set("page", pageLabel);
+  }
+  return `/settings?${params.toString()}`;
 }
 
 export function resolveSettingsTab(value: string | null | undefined): SettingsTab {

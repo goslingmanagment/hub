@@ -3,6 +3,7 @@ import {
   deletePageTopSpenders,
   ensurePageSyncStates,
   findPageByLabel,
+  listPageSyncStates,
   pausePageSync,
   requestPageSync as requestPageSyncRows,
   resetPageDmSyncState,
@@ -508,25 +509,39 @@ export async function resumeSyncBlock(
     now,
     ...dependencyInput,
   });
+  const currentStates = await listPageSyncStates(app.db, {
+    pageId: stored.page.id,
+    streams: tasks,
+  });
+  const pausedStreams = new Set(
+    currentStates
+      .filter((state) => state.status === "paused")
+      .map((state) => state.stream),
+  );
+  const resumableTasks = tasks.filter((task) => pausedStreams.has(task));
   await resumePageSync(app.db, {
     pageId: stored.page.id,
-    streams: tasks,
+    streams: resumableTasks,
     now,
   });
-  const requests = await requestPageSyncRows(app.db, {
-    pageId: stored.page.id,
-    streams: tasks,
-    source: "manual",
-    now,
-    ...dependencyInput,
-  });
-  await enqueueBlockWakeup(boss, {
-    platformAccountId: stored.page.id,
-    platform: stored.page.platform,
-    egressKey: resolveStoredProxyEgressKey(stored.proxy),
-    tasks,
-    reason: "manual",
-  });
+  const requests = resumableTasks.length > 0
+    ? await requestPageSyncRows(app.db, {
+      pageId: stored.page.id,
+      streams: resumableTasks,
+      source: "manual",
+      now,
+      ...dependencyInput,
+    })
+    : [];
+  if (resumableTasks.length > 0) {
+    await enqueueBlockWakeup(boss, {
+      platformAccountId: stored.page.id,
+      platform: stored.page.platform,
+      egressKey: resolveStoredProxyEgressKey(stored.proxy),
+      tasks: resumableTasks,
+      reason: "manual",
+    });
+  }
 
   return {
     accepted: true as const,
