@@ -13,6 +13,7 @@ import {
   HI_GREETING_TEMPLATE,
   IMPROVE_DRAFT_TEMPLATE,
   PING_TEMPLATE,
+  VOICE_SCRIPT_TEMPLATE,
 } from '../apps/runtime/src/modules/ai/index.ts';
 
 const TEMPLATE_FILES: ReadonlyArray<[file: string, constant: string]> = [
@@ -25,6 +26,7 @@ const TEMPLATE_FILES: ReadonlyArray<[file: string, constant: string]> = [
   ['ping.md', PING_TEMPLATE],
   ['hi-greeting.md', HI_GREETING_TEMPLATE],
   ['coach-chat.md', COACH_CHAT_TEMPLATE],
+  ['voice-script.md', VOICE_SCRIPT_TEMPLATE],
 ];
 
 function readTemplateFile(file: string): string {
@@ -39,7 +41,7 @@ describe('templates.ts ↔ templates/*.md byte-sync', () => {
   }
 
   it('covers every .md template file', () => {
-    expect(TEMPLATE_FILES).toHaveLength(9);
+    expect(TEMPLATE_FILES).toHaveLength(10);
   });
 
   for (const [file, constant] of TEMPLATE_FILES) {

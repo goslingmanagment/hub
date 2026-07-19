@@ -3371,3 +3371,123 @@ export const pageDmMessageSyncHealth = pgTable(
     ),
   }),
 );
+
+// ── Voice notes (ElevenLabs TTS lane) ────────────────────────────────────────
+
+// Free-form ElevenLabs voice_settings blob (stability/similarity/style/…);
+// stored verbatim and echoed to the provider, never money-bearing.
+export type VoiceProfileSettings = Record<string, unknown>;
+
+// Terminal + in-flight states for a voice-note render job. TEXT + CHECK (not a
+// pg enum) so the state set can evolve with a plain migration. Mirrors migration
+// 0109's voice_notes_state_check verbatim.
+export type VoiceNoteState =
+  | "queued"
+  | "dispatched"
+  | "completed"
+  | "failed_definite"
+  | "failed_after_dispatch"
+  | "indeterminate"
+  | "quota_denied"
+  | "artifact_expired";
+
+// Per-page ElevenLabs voice binding, owner-editable. `version` bumps on every
+// upsert so a render job can pin the exact profile it rendered against.
+export const pageVoiceProfiles = pgTable("page_voice_profiles", {
+  platformAccountId: bigint("platform_account_id", { mode: "number" })
+    .primaryKey()
+    .references(() => pages.id, { onDelete: "cascade" }),
+  voiceId: text("voice_id").notNull(),
+  model: text("model").default("eleven_v3").notNull(),
+  settings: jsonb("settings").$type<VoiceProfileSettings>().default({}).notNull(),
+  outputFormat: text("output_format").default("mp3_44100_128").notNull(),
+  version: integer("version").default(1).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Durable state machine for a single voice-note render. The profile_* columns
+// snapshot the page voice profile at request time; attempt_token + lease_until
+// fence the single-dispatch CAS and the lease-expiry sweep. audio_bytes holds
+// the rendered artifact until the retention purge nulls it (state →
+// artifact_expired).
+export const voiceNotes = pgTable(
+  "voice_notes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    userId: bigint("user_id", { mode: "number" }).notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id)
+      .notNull(),
+    conversationRef: text("conversation_ref").notNull(),
+    sourceGenerationRef: text("source_generation_ref").notNull(),
+    clientRequestId: uuid("client_request_id").notNull(),
+    requestHash: text("request_hash").notNull(),
+    scriptChars: integer("script_chars").notNull(),
+    originalScriptSha256: text("original_script_sha256").notNull(),
+    finalScriptSha256: text("final_script_sha256").notNull(),
+    scriptEdited: boolean("script_edited").notNull(),
+    profileVoiceId: text("profile_voice_id").notNull(),
+    profileModel: text("profile_model").notNull(),
+    profileSettings: jsonb("profile_settings").$type<VoiceProfileSettings>().notNull(),
+    profileOutputFormat: text("profile_output_format").notNull(),
+    profileVersion: integer("profile_version").notNull(),
+    state: text("state").$type<VoiceNoteState>().default("queued").notNull(),
+    attemptToken: uuid("attempt_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    billed: boolean("billed"),
+    billedChars: integer("billed_chars"),
+    providerRequestId: text("provider_request_id"),
+    providerTraceId: text("provider_trace_id"),
+    providerRegion: text("provider_region"),
+    durationMs: integer("duration_ms"),
+    audioBytes: bytea("audio_bytes"),
+    audioSha256: text("audio_sha256"),
+    audioBytesLen: integer("audio_bytes_len"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    userClientRequestUniq: uniqueIndex("voice_notes_user_client_request").on(
+      table.userId,
+      table.clientRequestId,
+    ),
+    leaseIdx: index("voice_notes_lease_idx").on(table.state, table.leaseUntil),
+    purgeIdx: index("voice_notes_purge_idx")
+      .on(table.state, table.createdAt)
+      .where(sql`${table.audioBytes} is not null`),
+    stateCheck: check("voice_notes_state_check", sql`
+      ${table.state} in (
+        'queued',
+        'dispatched',
+        'completed',
+        'failed_definite',
+        'failed_after_dispatch',
+        'indeterminate',
+        'quota_denied',
+        'artifact_expired'
+      )
+    `),
+    charsPositiveCheck: check("voice_notes_chars_positive", sql`${table.scriptChars} > 0`),
+    audioCapCheck: check("voice_notes_audio_cap", sql`
+      ${table.audioBytesLen} is null or ${table.audioBytesLen} <= 2097152
+    `),
+  }),
+);
+
+// Per-(scope, UTC-day) character-spend counter for the atomic voice budget
+// reservation. scope is 'global' or 'page:<id>'; the (scope, utc_day) PK lets a
+// new day start a fresh row without a rollover reset.
+export const voiceCharBudget = pgTable(
+  "voice_char_budget",
+  {
+    scope: text("scope").notNull(),
+    utcDay: date("utc_day").notNull(),
+    spentChars: integer("spent_chars").default(0).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "voice_char_budget_pkey",
+      columns: [table.scope, table.utcDay],
+    }),
+  }),
+);

@@ -52,6 +52,18 @@ export async function resolveEgress(
         'Egress scope vendor:"fansly" is refused: Fansly egress is direct-to-platform and must be page-scoped',
       );
     }
+    if (scope.vendor === "elevenlabs") {
+      // Voice notes vendor TTS: a NON-platform vendor (deliberately absent from
+      // PLATFORM_VENDORS and the pacer's EGRESS_VENDOR_PROVIDERS). Direct hub
+      // egress (dispatcher null), UNPACED — the provider makes exactly one
+      // attempt and this vendor is not rate-limit-governed by the seam.
+      return {
+        egressKey: "vendor:elevenlabs",
+        dispatcher: null,
+        pace: async () => 0,
+        close: async () => {},
+      };
+    }
     if (scope.vendor !== "ofapi") {
       throw new Error(`Unknown egress vendor "${scope.vendor}"`);
     }

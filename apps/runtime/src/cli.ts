@@ -38,6 +38,11 @@ import {
 import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-backfill.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
+import {
+  removeVoiceProfile,
+  setVoiceProfile,
+  showVoiceProfile,
+} from "./services/voice-profiles.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
@@ -1117,6 +1122,68 @@ export function buildProgram() {
         console.log(`Proxy exit IP: ${proxyIp}`);
         console.log(`Direct exit IP: ${directIp}`);
         console.log(`Differs from direct: ${proxyIp !== directIp ? "yes" : "no"}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  const voiceProfile = program.command("voice-profile");
+  voiceProfile
+    .command("set")
+    .description("Bind an ElevenLabs voice to a Fansly page (upsert; version auto-increments)")
+    .requiredOption("--page <label>")
+    .requiredOption("--voice-id <id>")
+    .option("--model <model>", "ElevenLabs model id", "eleven_v3")
+    .option("--stability <value>", "voice stability preset or number (stored in settings)", "natural")
+    .option("--output-format <format>", "rendered audio format", "mp3_44100_128")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { version } = await setVoiceProfile(app, options.page, {
+          voiceId: options.voiceId,
+          model: options.model,
+          stability: options.stability,
+          outputFormat: options.outputFormat,
+        });
+        console.log(`Set voice profile for page ${options.page} (version ${version})`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  voiceProfile
+    .command("show")
+    .description("Print the Fansly page's voice binding (config only; no secrets)")
+    .requiredOption("--page <label>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const profile = await showVoiceProfile(app, options.page);
+        if (!profile) {
+          console.log(`Page ${options.page}: no voice profile`);
+          return;
+        }
+        console.log(`Page: ${options.page}`);
+        console.log(`Voice id: ${profile.voiceId}`);
+        console.log(`Model: ${profile.model}`);
+        console.log(`Output format: ${profile.outputFormat}`);
+        console.log(`Settings: ${JSON.stringify(profile.settings)}`);
+        console.log(`Version: ${profile.version}`);
+        console.log(`Updated at: ${profile.updatedAt.toISOString()}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  voiceProfile
+    .command("clear")
+    .description("Remove the Fansly page's voice binding (no-op when none exists)")
+    .requiredOption("--page <label>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        await removeVoiceProfile(app, options.page);
+        console.log(`Cleared voice profile for page ${options.page}`);
       } finally {
         await app.close();
       }

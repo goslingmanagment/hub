@@ -97,6 +97,7 @@ export function buildSdkFiles(input: SdkGenerationInput): Map<string, string> {
     "// cannot reach @agency_hub_core/contracts the way the dashboard does).",
     "export {",
     "  decodeDomainEventCursor,",
+    "  fetchVoiceNoteAudio,",
     "  // Shared client-side predicate (coach-chat spec §8): apply to a terminal",
     "  // stop reason before committing a coach answer / attaching a recap.",
     "  isOutputExhausted,",

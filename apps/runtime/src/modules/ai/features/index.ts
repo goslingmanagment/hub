@@ -24,6 +24,7 @@ import {
   UnknownAiFeatureError,
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
+import { isPageAllowlisted } from "../../../services/voice-notes.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import {
@@ -226,6 +227,26 @@ export async function prepareAiFeatureStream(
     throw new NotFoundError("Page not found");
   }
   const pageId = stored.page.id;
+
+  // Decision #174: voice-script is part of the voice-notes lane, which ships
+  // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
+  // SAME live flag + fail-closed page allowlist the voice-notes service admits
+  // on — reusing its allowlist parser — so a disabled/unlisted lane spends no
+  // Anthropic/OpenRouter budget. Checked HERE, before persona/context loads and
+  // any gateway spend, against the RESOLVED canonical label.
+  if (feature === "voice-script") {
+    const effective = await loadEffectiveConfig(app.db, app.config);
+    if (
+      effective.voiceNotesEnabled !== true
+      || !isPageAllowlisted(effective.voiceNotesPageAllowlist, stored.page.label)
+    ) {
+      throw new ProductGateError(
+        "voice-script is unavailable: the voice-notes lane is disabled for this page",
+        "gate_voice_disabled",
+      );
+    }
+  }
+
   const fanRef = body.fanRef ?? body.conversationRef;
 
   const persona = await resolvePersona(

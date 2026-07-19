@@ -57,6 +57,7 @@ import { registerFinanceRoutes } from "../modules/finance/index.ts";
 import { registerIdentityRoutes } from "../modules/identity/index.ts";
 import { registerIngestRoutes } from "../modules/ingest/index.ts";
 import { registerOpsRoutes } from "../modules/ops/index.ts";
+import { registerVoiceRoutes } from "../modules/voice/index.ts";
 import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
@@ -142,6 +143,27 @@ export function normalizeOpenApiDocument<T extends Record<string, unknown>>(spec
   if (csvResponse && jsonContent) {
     csvResponse.content = {
       "text/csv": jsonContent,
+    };
+  }
+
+  // Voice-note audio (Task 6): the handler writes raw audio/mpeg bytes, but the
+  // Zod Fastify transformer only accepts a Zod schema for the 200 body, so the
+  // route declares z.string() and we rewrite the media type here. OpenAPI paths
+  // use `{param}` brace syntax.
+  const audioResponse = paths?.["/api/v1/pages/{pageLabel}/voice-notes/{id}/audio"]
+    ?.get?.responses?.["200"];
+  const audioJsonContent = audioResponse?.content?.["application/json"] as
+    | { schema?: Record<string, unknown> }
+    | undefined;
+  if (audioResponse && audioJsonContent) {
+    // The Zod transformer only accepts a Zod schema for the body, so the route
+    // declares z.string() → a bare `type: string`. Rewrite it to the OpenAPI
+    // binary payload so external generators decode the MP3 as bytes, not text.
+    audioResponse.content = {
+      "audio/mpeg": {
+        ...audioJsonContent,
+        schema: { ...(audioJsonContent.schema ?? {}), type: "string", format: "binary" },
+      },
     };
   }
 
@@ -490,6 +512,9 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Conversations (profiles/threads/archive) --- (module: apps/runtime/src/modules/conversations)
   registerConversationsRoutes(server, moduleContext);
+
+  // --- Voice notes (page-scoped render/status/audio) --- (module: apps/runtime/src/modules/voice)
+  registerVoiceRoutes(server, moduleContext);
 
   // --- Workboard --- (module: apps/runtime/src/modules/workboard)
   registerWorkboardRoutes(server, moduleContext);

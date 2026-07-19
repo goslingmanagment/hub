@@ -66,6 +66,8 @@ export const FEATURE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   // generation — its own direct-SDK constants carried over).
   "workboard-closing": 1536,
   "coach-chat": 2500,
+  // Voice notes: a spoken-message script is a single short line.
+  "voice-script": 400,
 };
 
 const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
@@ -79,6 +81,7 @@ const FEATURE_TEMPERATURES: Record<GatewayOperationFeature, number> = {
   "hi-greeting": 0.7,
   "workboard-closing": 0,
   "coach-chat": 0.5,
+  "voice-script": 0.4,
 };
 
 const ANTHROPIC_ADAPTIVE_THINKING_MODELS = new Set([
@@ -100,6 +103,12 @@ const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "hi-greeting": 8000,
   "workboard-closing": 8000,
   "coach-chat": 16000,
+  // Adaptive thinking counts against max_tokens, so voice-script needs the same
+  // ~10x headroom every peer on this model+effort gets (fast-reply 800→8000):
+  // at 800 the thinking budget alone truncates the script → stopReason
+  // 'max_tokens' → the voice-notes admission guard rejects the source
+  // unrecoverably. The non-adaptive FEATURE_MAX_TOKENS cap stays 400.
+  "voice-script": 8000,
 };
 
 const APPROX_CHARS_PER_TOKEN = 4;

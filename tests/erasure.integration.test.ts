@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  createFanslyPage,
   createModel,
   createOnlyFansPage,
   createOrGetOfapiCommand,
@@ -1101,6 +1102,210 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(result.executedCounts["hot:egress_endpoints:delete"], "egress_endpoints target").toBe(1);
     expect(await count(`page_credentials where platform_account_id = ${page.id}`)).toBe(0);
     expect(await count(`egress_endpoints where platform_account_id = ${page.id}`)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("page-scope erasure purges the page's voice notes (audio + metadata) and voice profile (0109)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // The voice-notes lane (migration 0109) is page-scoped: voice_notes carries
+    // synthesized audio bytes, the source conversation ref, the chatter's user id
+    // and provider metadata, and page_voice_profiles holds the page's voice
+    // config. Neither rides a cascade when erasure keeps the pages catalog row
+    // (voice_notes REFERENCES pages WITHOUT cascade; page_voice_profiles cascades
+    // pages, which erasure preserves), so both are explicit page-hot targets.
+    // This drill proves the stored audio and the profile are gone afterwards.
+    const model = await createModel(testDb.db, { slug: "erasure-voice", name: "Erasure Voice" });
+    const page = model
+      ? await createOnlyFansPage(testDb.db, { modelId: model.id, label: "erasure-voice-page" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed voice erasure page");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-voice-owner', 'owner') returning id::text as id`,
+    );
+
+    await testDb.pool.query(
+      `insert into page_voice_profiles (platform_account_id, voice_id) values ($1, 'voice-erasure')`,
+      [page.id],
+    );
+    // A completed note with real audio bytes — the row an erasure must reach.
+    await testDb.pool.query(
+      `insert into voice_notes (
+         user_id, platform_account_id, conversation_ref, source_generation_ref,
+         client_request_id, request_hash, script_chars, original_script_sha256,
+         final_script_sha256, script_edited, profile_voice_id, profile_model,
+         profile_settings, profile_output_format, profile_version, state, billed,
+         billed_chars, audio_bytes, audio_sha256, audio_bytes_len)
+       values (7373, $1, 'conv-erase', 'gen-erase', $2, 'hash-erase', 120, $3, $3, false,
+               'voice-erasure', 'eleven_v3', '{}'::jsonb, 'mp3_44100_128', 1, 'completed',
+               true, 120, $4, $5, 13)`,
+      [page.id, randomUUID(), "a".repeat(64), Buffer.from("audio-payload"), "c".repeat(64)],
+    );
+    // Precondition: the audio really is present, so a zero-count afterwards means
+    // it was purged (not merely never seeded).
+    expect(await count(`voice_notes where platform_account_id = ${page.id} and audio_bytes is not null`)).toBe(1);
+    expect(await count(`page_voice_profiles where platform_account_id = ${page.id}`)).toBe(1);
+
+    const result = await executeErasure(
+      appStub(),
+      { scopeType: "page", pageLabel: "erasure-voice-page" },
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(result.executedCounts["hot:voice_notes:delete"], "voice_notes target").toBe(1);
+    expect(result.executedCounts["hot:page_voice_profiles:delete"], "page_voice_profiles target").toBe(1);
+    expect(await count(`voice_notes where platform_account_id = ${page.id}`)).toBe(0);
+    expect(await count(`page_voice_profiles where platform_account_id = ${page.id}`)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("fan-scope erasure purges the fan's voice notes (audio + metadata); a co-resident different fan's note survives (0109)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Fan-scope erasure must reach voice_notes the same way it reaches
+    // ai_generation_content: keyed platform_account_id ∈ pageIds AND
+    // conversation_ref = fanRef. A voice_note carries up to 2 MiB of rendered
+    // audio addressed to that fan plus a source_generation_ref into an
+    // ai_generation_content row this same erasure deletes — and it has NO FK to
+    // `fans`, so the unmapped-FK guard cannot catch the omission. This drill pins
+    // the explicit fan-hot target: the erased fan's note (row AND audio) is gone,
+    // while a co-resident DIFFERENT fan's note on the same page survives — proving
+    // conversation_ref selectivity, not merely page scope.
+    const TARGET_FAN = "909000909";
+    const OTHER_FAN = "808000808";
+    const model = await createModel(testDb.db, { slug: "erasure-voice-fan", name: "Erasure Voice Fan" });
+    const page = model
+      ? await createOnlyFansPage(testDb.db, { modelId: model.id, label: "erasure-voice-fan-page" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed voice fan erasure page");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-voice-fan-owner', 'owner') returning id::text as id`,
+    );
+
+    const seedNote = async (conversationRef: string) => {
+      await testDb!.pool.query(
+        `insert into voice_notes (
+           user_id, platform_account_id, conversation_ref, source_generation_ref,
+           client_request_id, request_hash, script_chars, original_script_sha256,
+           final_script_sha256, script_edited, profile_voice_id, profile_model,
+           profile_settings, profile_output_format, profile_version, state, billed,
+           billed_chars, audio_bytes, audio_sha256, audio_bytes_len)
+         values (7474, $1, $2, 'gen-' || $2, $3, 'hash-' || $2, 120, $4, $4, false,
+                 'voice-erasure', 'eleven_v3', '{}'::jsonb, 'mp3_44100_128', 1, 'completed',
+                 true, 120, $5, $6, 13)`,
+        [page.id, conversationRef, randomUUID(), "a".repeat(64), Buffer.from("audio-payload"), "c".repeat(64)],
+      );
+    };
+    await seedNote(TARGET_FAN);
+    await seedNote(OTHER_FAN);
+
+    // Precondition: both notes present WITH audio, so a zero afterwards means the
+    // row was purged (not merely never seeded).
+    expect(await count(`voice_notes where platform_account_id = ${page.id} and audio_bytes is not null`)).toBe(2);
+
+    const result = await executeErasure(
+      appStub(),
+      { scopeType: "fan", platform: "onlyfans", fanRef: TARGET_FAN },
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(result.executedCounts["hot:voice_notes:delete"], "voice_notes fan target").toBe(1);
+    // The target fan's note — its row and its audio bytes — is gone…
+    expect(await count(`voice_notes where conversation_ref = '${TARGET_FAN}'`)).toBe(0);
+    // …and the OTHER fan's note (same page) survives, audio intact.
+    expect(await count(`voice_notes where conversation_ref = '${OTHER_FAN}' and audio_bytes is not null`)).toBe(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("fan-scope erasure purges a Fansly voice note keyed by the messaging GROUP id, not the fan ref (0109 / A49)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // On Fansly the extension may write conversation_ref as the messaging GROUP
+    // id (item.groupId) — a DIFFERENT id space than the fan's partnerAccountId
+    // fanRef (recorded law A49). A predicate matching conversation_ref = fanRef
+    // alone would leave the group-ref'd audio behind. The fan-hot target resolves
+    // the fan's group ids from page_dm_threads (the sync table linking
+    // groupId ↔ partnerAccountId ↔ fan) and scopes voice notes to fanRef OR those
+    // group ids. This drill pins that: the target fan's note (conversation_ref =
+    // HIS group id) is erased, while a co-resident DIFFERENT fan's note (keyed by
+    // the OTHER fan's group id) on the same page survives.
+    const TARGET_PARTNER = "700700700"; // partnerAccountId == fanRef
+    const TARGET_GROUP = "9001900190019"; // item.groupId (the conversation_ref)
+    const OTHER_PARTNER = "600600600";
+    const OTHER_GROUP = "8002800280028";
+    const model = await createModel(testDb.db, {
+      slug: "erasure-voice-fansly",
+      name: "Erasure Voice Fansly",
+    });
+    const page = model
+      ? await createFanslyPage(testDb.db, { modelId: model.id, label: "erasure-voice-fansly-page" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed Fansly voice fan erasure page");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-voice-fansly-owner', 'owner') returning id::text as id`,
+    );
+
+    // Fans + per-fan page_dm_thread carrying the groupId↔partner linkage.
+    const fanIds = new Map<string, number>();
+    for (const [partner, group] of [[TARGET_PARTNER, TARGET_GROUP], [OTHER_PARTNER, OTHER_GROUP]] as const) {
+      await testDb.pool.query(
+        `insert into fans (platform, platform_user_id, username, display_name)
+         values ('fansly', $1, $1, $1)`,
+        [partner],
+      );
+      const fan = await one<{ id: string }>(
+        `select id::text as id from fans where platform = 'fansly' and platform_user_id = $1`,
+        [partner],
+      );
+      fanIds.set(partner, Number(fan.id));
+      await testDb.pool.query(
+        `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id)
+         values ($1, $2, $3, $4)`,
+        [page.id, Number(fan.id), group, partner],
+      );
+    }
+
+    const seedNote = async (conversationRef: string) => {
+      await testDb!.pool.query(
+        `insert into voice_notes (
+           user_id, platform_account_id, conversation_ref, source_generation_ref,
+           client_request_id, request_hash, script_chars, original_script_sha256,
+           final_script_sha256, script_edited, profile_voice_id, profile_model,
+           profile_settings, profile_output_format, profile_version, state, billed,
+           billed_chars, audio_bytes, audio_sha256, audio_bytes_len)
+         values (7575, $1, $2, 'gen-' || $2, $3, 'hash-' || $2, 120, $4, $4, false,
+                 'voice-erasure', 'eleven_v3', '{}'::jsonb, 'mp3_44100_128', 1, 'completed',
+                 true, 120, $5, $6, 13)`,
+        [page.id, conversationRef, randomUUID(), "a".repeat(64), Buffer.from("audio-payload"), "c".repeat(64)],
+      );
+    };
+    // Both notes are keyed by the GROUP id (the Fansly conversation_ref), NOT the
+    // partner id — the whole point of the defect.
+    await seedNote(TARGET_GROUP);
+    await seedNote(OTHER_GROUP);
+
+    expect(await count(`voice_notes where platform_account_id = ${page.id} and audio_bytes is not null`)).toBe(2);
+
+    const result = await executeErasure(
+      appStub(),
+      { scopeType: "fan", platform: "fansly", fanRef: TARGET_PARTNER },
+      { initiatedBy: Number(operator.id) },
+    );
+    // The group-ref'd note for the target fan is erased via the resolved group id…
+    expect(result.executedCounts["hot:voice_notes:delete"], "fansly voice_notes fan target").toBe(1);
+    expect(await count(`voice_notes where conversation_ref = '${TARGET_GROUP}'`)).toBe(0);
+    // …and the OTHER fan's group-ref'd note survives, audio intact.
+    expect(await count(`voice_notes where conversation_ref = '${OTHER_GROUP}' and audio_bytes is not null`)).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("a converged retry supersedes every unresolved attempt for only the same scope", async (context) => {

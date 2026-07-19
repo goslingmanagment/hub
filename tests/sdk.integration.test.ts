@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -6,19 +6,25 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createFanslyPage,
   createModel,
+  findUserByUsername,
+  insertAiGenerationContent,
   insertOfapiWebhookEvent,
   settleOfapiWebhookEvent,
+  upsertVoiceProfile,
 } from "@agency_hub_core/db";
 import {
   KERNEL_CONTRACT_HASH as CONTRACTS_CONTRACT_HASH,
   KernelApiError,
   createKernelClient,
+  fetchVoiceNoteAudio,
   routeSchemas,
   subscribeSyncEvents,
   type SyncSnapshotRequired,
 } from "@agency_hub_core/contracts";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import type { VoiceTtsProvider } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 import { buildSdkFiles } from "../packages/contracts/src/generate-sdk.ts";
 import {
   createUserAccount,
@@ -38,6 +44,22 @@ let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let baseUrl = "";
 let chatterKey = "";
 let lanaPageId = 0;
+let voiceSourceRef = "";
+
+const VOICE_AUDIO = Buffer.from("sdk-voice-note-mp3-bytes");
+
+const voiceProvider: VoiceTtsProvider = {
+  async synthesize() {
+    return {
+      ok: true,
+      audio: VOICE_AUDIO,
+      characterCost: 12,
+      requestId: "sdk-prov-req",
+      traceId: "sdk-prov-trace",
+      region: "us-east-1",
+    };
+  },
+};
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -64,7 +86,43 @@ beforeAll(async () => {
   }, { source: "cli" });
   chatterKey = issued.key;
 
-  server = await buildApiServer(createTestAppContext(testDb));
+  // Voice notes (Task 6): a completed source voice-script + a page profile so
+  // the typed create/status roundtrip and the binary audio helper have a live
+  // render to exercise. The server context carries voice on + a fake provider.
+  await upsertVoiceProfile(testDb.db, {
+    platformAccountId: lanaPageId,
+    voiceId: "voice-abc",
+    model: "eleven_v3",
+    settings: { stability: 0.5 },
+    outputFormat: "mp3_44100_128",
+  });
+  const anton = await findUserByUsername(testDb.db, "anton");
+  voiceSourceRef = `gen-${randomUUID()}`;
+  await insertAiGenerationContent(testDb.db, {
+    usageEventId: null,
+    generationRef: voiceSourceRef,
+    feature: "voice-script",
+    model: "anthropic:claude-sonnet-4-6",
+    provider: "anthropic",
+    userId: anton!.id,
+    pageId: lanaPageId,
+    conversationRef: "conv-sdk-voice",
+    fanRef: null,
+    promptBlocks: [],
+    completion: "hello [warmly] world",
+    params: { outcome: "completed" },
+  });
+
+  const serverContext: AppContext = createTestAppContext(testDb);
+  serverContext.config.voiceNotesEnabled = true;
+  serverContext.config.voiceNotesRetrievalEnabled = true;
+  serverContext.config.voiceNotesPageAllowlist = "lana";
+  serverContext.config.voiceNotesScriptMaxChars = 600;
+  serverContext.config.voiceNotesDailyCharBudget = 100_000;
+  serverContext.config.voiceNotesGlobalDailyCharBudget = 100_000;
+  serverContext.voiceTtsProvider = voiceProvider;
+
+  server = await buildApiServer(serverContext);
   await server.listen({ port: 0, host: "127.0.0.1" });
   const address = server.server.address();
   if (typeof address === "object" && address) {
@@ -171,6 +229,51 @@ describe("kernel SDK against a live server", () => {
     const response = await owner.raw("adminOfapiCreditsLedgerCsv", { query: {} });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/csv");
+  });
+
+  it("round-trips voice-note create/status typed + fetches audio via the binary helper", async (context) => {
+    if (!requireSetup(context)) return;
+
+    const options = { baseUrl, auth: { mode: "bearer" as const, token: () => chatterKey } };
+    const bearer = createKernelClient(kernelOperations, options);
+
+    // Typed create → 202 view (voiceNoteId + createdAt REQUIRED in the schema).
+    const created = await bearer.voiceNoteCreate({
+      params: { pageLabel: "lana" },
+      body: {
+        clientRequestId: randomUUID(),
+        conversationRef: "conv-sdk-voice",
+        sourceGenerationRef: voiceSourceRef,
+        script: "hello [warmly] world",
+      },
+    });
+    expect(typeof created.voiceNoteId).toBe("number");
+    expect(["queued", "dispatched"]).toContain(created.state);
+    expect(typeof created.createdAt).toBe("string");
+
+    // Typed status → poll to completed (the synthesis runs detached).
+    let status = created;
+    const deadline = Date.now() + 5000;
+    while (status.state !== "completed" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      status = await bearer.voiceNoteStatus({
+        params: { pageLabel: "lana", id: created.voiceNoteId },
+      });
+    }
+    expect(status.state).toBe("completed");
+    expect(status.audioBytesLen).toBe(VOICE_AUDIO.byteLength);
+
+    // Binary helper → raw Response with audio/mpeg bytes (excluded from the
+    // typed client; the CSV-raw test is its sibling precedent).
+    const audio = await fetchVoiceNoteAudio(options, {
+      pageLabel: "lana",
+      id: created.voiceNoteId,
+    });
+    expect(audio.status).toBe(200);
+    expect(audio.headers.get("content-type")).toBe("audio/mpeg");
+    expect(audio.headers.get("x-content-type-options")).toBe("nosniff");
+    const bytes = Buffer.from(await audio.arrayBuffer());
+    expect(bytes).toEqual(VOICE_AUDIO);
   });
 
   it("manifest matches the booted server's route table exactly", async (context) => {

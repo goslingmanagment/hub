@@ -132,6 +132,8 @@ export const aiUsageFeatures = [
   // Stage 29: internal gateway lane for the workboard closing classifier.
   "workboard-closing",
   "coach-chat",
+  // Voice notes: the ElevenLabs TTS lane's script-generation feature.
+  "voice-script",
 ] as const;
 export type AiUsageFeature = (typeof aiUsageFeatures)[number];
 

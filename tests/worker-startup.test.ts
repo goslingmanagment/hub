@@ -7,6 +7,12 @@ const dbMocks = vi.hoisted(() => ({
   deleteExpiredSyncObservability: vi.fn(),
   getLatestScheduledReportDateOnOrBefore: vi.fn(),
   getTelegramSettings: vi.fn(),
+  // Voice-notes recovery jobs (Task 7): the nightly raw-payload cleanup handler
+  // and the minutely sweep worker reach into @agency_hub_core/db for these.
+  purgeExpiredVoiceNoteAudio: vi.fn(),
+  releaseStaleIndeterminateVoiceBudgets: vi.fn(),
+  sweepVoiceNotes: vi.fn(),
+  settleVoiceCharBudget: vi.fn(),
 }));
 
 const executorMocks = vi.hoisted(() => ({
@@ -249,6 +255,16 @@ describe("worker startup", () => {
     executorMocks.startSyncPageExecutor.mockResolvedValue(undefined);
     plannerMocks.runSyncPlannerCycle.mockResolvedValue([]);
     dbMocks.getLatestScheduledReportDateOnOrBefore.mockResolvedValue(null);
+    // Inert voice-notes recovery stubs: match the real return shapes so the
+    // nightly-retention and sweep handlers run as no-ops (nothing to release).
+    dbMocks.purgeExpiredVoiceNoteAudio.mockResolvedValue(0);
+    dbMocks.releaseStaleIndeterminateVoiceBudgets.mockResolvedValue([]);
+    dbMocks.sweepVoiceNotes.mockResolvedValue({
+      abandonedQueued: 0,
+      leaseExpired: 0,
+      abandonedQueuedRows: [],
+    });
+    dbMocks.settleVoiceCharBudget.mockResolvedValue(undefined);
     telegramReportMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
       delivery: {
         status: "sent",

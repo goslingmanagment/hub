@@ -4826,3 +4826,49 @@ repurchasing healthy pages. A request without a response keeps its durable
 credit estimate charged in
 the conservative direction while only its in-memory lifecycle token is
 released for the next page.
+
+**Decision #174 (2026-07-18, voice notes are a page-scoped kernel render lane
+with a durable single-dispatch state machine; supersedes #36 for the bounded
+voice-audio artifact class):** ElevenLabs voice notes ship as a first-class
+kernel feature, not a client-side integration: the extension holds no vendor
+key and never calls ElevenLabs. A new `voice-script` feature rides the existing
+SSE feature lane to compose the spoken script from refs + `clientContext`
+exactly like every other AI feature, and the render itself is driven by three
+page-scoped routes — POST to admit a render, a status poll, and an audio fetch —
+each returning structured `voice_*` error/outcome codes plus `idempotency_mismatch` and `artifact_expired` so the client maps
+failures by code, not by prose. Every render is a durable job in `voice_notes`
+governed by the decision-#158 discipline: admission creates the attempt before
+any dispatch, a CAS transition grants exactly one dispatch under a fenced
+`attempt_token` + `lease_until`, and only the fencing token may settle the
+terminal row; a lease-expiry sweep resolves abandoned dispatches to
+`indeterminate` rather than retrying, because an unacknowledged provider call is
+never silently re-sent. A truncated script stream is an error, never a
+render input.
+
+The rendered audio is stored as bounded `BYTEA` inline on the job row — capped
+at ≤2 MB per row and nulled by a logged 7-day retention purge that flips the row
+to `artifact_expired`. This **explicitly supersedes Decision #36's
+"Postgres text/JSON only; no binary storage" rule for this one bounded,
+short-lived, self-purging artifact class** and for it alone: no object store,
+no unbounded blobs, no other artifact type is admitted by this carve-out. The
+audio bytes and any expiring provider URLs stay out of every projection and
+export.
+
+ElevenLabs is a new `vendor:"elevenlabs"` egress class: a non-platform vendor
+reached directly and unpaced, distinct from the platform (Fansly/OFAPI) egress
+that the per-page proxy pacer governs — it carries no chatter session and no
+model-ban risk, so it does not ride the platform rate limiter, but it is still
+named as its own class for budgeting and observability. Character spend is
+metered by the `voice_notes` rows themselves plus per-day `voice_char_budget`
+scope counters (page and global), reserved atomically before dispatch and
+refunded on settle. This ledger is deliberately kept OUT of `ai_usage_events`,
+whose provider `CHECK` stays `anthropic | openrouter`; voice characters are not
+token spend and must not pollute the AI gateway's accounting or its provider
+domain.
+
+The whole lane is gated behind `VOICE_NOTES_ENABLED` (default off) and a
+fail-closed page allowlist: with the flag off or a page absent from the
+allowlist, the feature, routes, executor dispatch, and capability hint are all
+inert. Owner sign-off for the #36 supersession is requested explicitly in this
+PR's description — merging the code lands the mechanism, but the documented
+carve-out from #36 is the owner's to ratify.

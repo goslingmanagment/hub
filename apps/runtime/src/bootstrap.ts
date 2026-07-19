@@ -31,6 +31,10 @@ import {
   createAnthropicAiGatewayProvider,
   createPageProxyAnthropicClientResolver,
 } from "./services/ai-gateway-anthropic-provider.ts";
+import {
+  createElevenLabsVoiceProvider,
+  type VoiceTtsProvider,
+} from "./services/voice-elevenlabs-provider.ts";
 import type { ProviderAdapter } from "./services/provider.ts";
 
 export type AdapterLike = ProviderAdapter<
@@ -124,6 +128,12 @@ export interface AppContext {
   // Stage 29: second provider ("openrouter:*" models route here); absent
   // when OPENROUTER_API_KEY is unset — implemented-but-unkeyed ships fine.
   aiGatewayOpenrouterProvider?: AiGatewayProvider | undefined;
+  // Voice notes vendor TTS (ElevenLabs). Constructed whenever ELEVENLABS_API_KEY
+  // is configured at boot — INDEPENDENT of the live voiceNotesEnabled flag,
+  // which is a DB override bootstrap never sees. Undefined only when the key is
+  // absent (admission then 503s voice_provider_unavailable). Non-platform,
+  // direct vendor egress; spend is gated live by voiceNotesEnabled at admission.
+  voiceTtsProvider?: VoiceTtsProvider | undefined;
   close(): Promise<void>;
 }
 
@@ -218,6 +228,16 @@ export async function createAppContext(): Promise<AppContext> {
     const aiGatewayOpenrouterProvider = config.chatMuseAiGatewayEnabled && config.openrouterApiKey
       ? createOpenrouterAiGatewayProvider({ apiKey: config.openrouterApiKey })
       : undefined;
+    // Construct on API-KEY PRESENCE ALONE — deliberately NOT gated on
+    // voiceNotesEnabled. That flag is a LIVE DB override with a default of
+    // false; bootstrap only ever sees the env/boot config, so gating here would
+    // wedge the provider undefined forever — flipping the live flag on (even
+    // with a restart) could never build it, and admission would 503 in
+    // perpetuity. The live admission gate (voice_disabled 403) is the spend
+    // gate; a missing key is the only reason the provider stays inert.
+    const voiceTtsProvider = config.elevenLabsApiKey
+      ? createElevenLabsVoiceProvider({ apiKey: config.elevenLabsApiKey })
+      : undefined;
 
     return {
       config,
@@ -230,6 +250,7 @@ export async function createAppContext(): Promise<AppContext> {
       ofapi,
       aiGatewayProvider,
       aiGatewayOpenrouterProvider,
+      voiceTtsProvider,
       async close() {
         await adapter.close?.();
         await pool.end();

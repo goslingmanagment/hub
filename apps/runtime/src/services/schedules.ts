@@ -13,6 +13,7 @@ import { ensureOfapiDmAnalyticsQueues, ensureOfapiDmAnalyticsSchedules } from ".
 import { ensureOfapiQueues, ensureOfapiSchedules } from "./ofapi-events.ts";
 import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./projections/message-archive.ts";
 import { ensureProjectionDebtQueue, ensureProjectionDebtSchedule } from "./projection-debt-sweep.ts";
+import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voice-notes-sweep.ts";
 import {
   RAW_PAYLOAD_CLEANUP_QUEUE,
   ensurePlannerSchedule,
@@ -46,6 +47,7 @@ export async function registerAllSchedules(
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureProjectionDebtQueue(boss, createdQueues);
+  await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureTieringQueue(boss, createdQueues);
   await Promise.all([
@@ -64,6 +66,7 @@ export async function registerAllSchedules(
     ensureCanonicalizeSchedule(boss),
     ensureMessageArchiveSchedule(boss),
     ensureProjectionDebtSchedule(boss),
+    ensureVoiceNotesSweepSchedule(boss),
     ensureOpsMetricsSchedule(boss),
     ensureTieringSchedule(boss),
   ]);

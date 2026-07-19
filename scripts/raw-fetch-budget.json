@@ -1,4 +1,4 @@
 {
-  "comment": "Kernel Stage 26 ratchet: raw global-fetch( call sites outside services/egress. OF Mirror adds one governed OFAPI transport call after the durable dispatch CAS; it can only use the page-scoped dispatcher already returned by resolveOfapiEgressContext. Ceiling 14 = ofapi.ts 8 + fansly adapter 1 + telegram 4 + anthropic provider 1. Count may only decrease.",
-  "budget": 14
+  "comment": "Kernel Stage 26 ratchet: raw global-fetch( call sites outside services/egress. OF Mirror adds one governed OFAPI transport call after the durable dispatch CAS; it can only use the page-scoped dispatcher already returned by resolveOfapiEgressContext. Ceiling 15 = ofapi.ts 8 + fansly adapter 1 + telegram 4 + anthropic provider 1 + elevenlabs provider 1. Count may only decrease.",
+  "budget": 15
 }
