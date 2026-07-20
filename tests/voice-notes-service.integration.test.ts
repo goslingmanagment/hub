@@ -9,6 +9,7 @@ import {
   getVoiceNoteById,
   insertAiGenerationContent,
   purgeExpiredVoiceNoteAudio,
+  releaseStaleIndeterminateVoiceBudgets,
   sweepVoiceNotes,
   upsertVoiceProfile,
   type VoiceNoteRow,
@@ -130,7 +131,10 @@ async function provision(opts?: {
   sourceOutcome?: string;
   sourceFeature?: string;
   sourceStopReason?: string;
+  sourceConversationRef?: string;
+  sourceFanRef?: string | null;
   provider?: VoiceTtsProvider;
+  maxConcurrentSyntheses?: number;
 }): Promise<Provisioned> {
   const model = await createModel(appContext.db, { slug: "voice", name: "Voice" });
   if (!model) {
@@ -166,8 +170,10 @@ async function provision(opts?: {
     provider: "anthropic",
     userId: user.id,
     pageId: page.id,
-    conversationRef: CONVERSATION_REF,
-    fanRef: null,
+    conversationRef: opts?.sourceConversationRef ?? CONVERSATION_REF,
+    fanRef: opts?.sourceFanRef === undefined
+      ? (opts?.sourceConversationRef ?? CONVERSATION_REF)
+      : opts.sourceFanRef,
     promptBlocks: [],
     completion: opts?.script ?? SCRIPT,
     params: {
@@ -195,6 +201,7 @@ async function provision(opts?: {
   appContext.config.voiceNotesScriptMaxChars = opts?.scriptMaxChars ?? 600;
   appContext.config.voiceNotesDailyCharBudget = opts?.pageBudget ?? 100_000;
   appContext.config.voiceNotesGlobalDailyCharBudget = opts?.globalBudget ?? 100_000;
+  appContext.config.voiceNotesMaxConcurrentSyntheses = opts?.maxConcurrentSyntheses ?? 2;
   appContext.voiceTtsProvider = opts?.provider;
 
   return {
@@ -419,6 +426,33 @@ describe("voice-notes service: admission gates", () => {
       createVoiceNote(appContext, unknownRef.principal, unknownRef.page.label,
         unknownRef.body({ sourceGenerationRef: "gen-does-not-exist" })),
     ).rejects.toMatchObject({ code: "voice_source_invalid" });
+
+    await resetIntegrationDatabase(testDb.pool);
+    appContext = createTestAppContext(testDb);
+    const wrongConversation = await provision({
+      provider,
+      sourceConversationRef: "conv-someone-else",
+    });
+    await expect(
+      createVoiceNote(
+        appContext,
+        wrongConversation.principal,
+        wrongConversation.page.label,
+        wrongConversation.body(),
+      ),
+    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
+
+    await resetIntegrationDatabase(testDb.pool);
+    appContext = createTestAppContext(testDb);
+    const wrongFan = await provision({ provider, sourceFanRef: "fan-someone-else" });
+    await expect(
+      createVoiceNote(
+        appContext,
+        wrongFan.principal,
+        wrongFan.page.label,
+        wrongFan.body(),
+      ),
+    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
   });
 
   it("rejects a truncated source generation (stopReason max_tokens/length) as voice_source_invalid", async (ctx) => {
@@ -563,6 +597,77 @@ describe("voice-notes service: admission gates", () => {
 });
 
 describe("voice-notes service: detached dispatch settle paths", () => {
+  it("holds queued work before the dispatch CAS when the live process cap is full", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let calls = 0;
+    let active = 0;
+    let maxActive = 0;
+    const provider: VoiceTtsProvider = {
+      async synthesize() {
+        calls += 1;
+        const call = calls;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        if (call === 1) {
+          await firstGate;
+        }
+        active -= 1;
+        return okAudio(12);
+      },
+    };
+    const p = await provision({ provider, maxConcurrentSyntheses: 1 });
+
+    const first = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    expect(first.state).toBe("dispatched");
+    await waitFor(() => calls === 1);
+
+    const second = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    expect(second.state).toBe("queued");
+    await delay(50);
+    expect(calls).toBe(1);
+    expect((await getVoiceNoteById(testDb.db, second.voiceNoteId))?.attemptToken).toBeNull();
+
+    releaseFirst();
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, first.voiceNoteId))?.state === "completed"
+      && (await getVoiceNoteById(testDb!.db, second.voiceNoteId))?.state === "completed");
+    expect(calls).toBe(2);
+    expect(maxActive).toBe(1);
+  });
+
+  it("does not dispatch queued work after the live kill switch is turned off", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let calls = 0;
+    const provider: VoiceTtsProvider = {
+      async synthesize() {
+        calls += 1;
+        if (calls === 1) {
+          await firstGate;
+        }
+        return okAudio(12);
+      },
+    };
+    const p = await provision({ provider, maxConcurrentSyntheses: 1 });
+    const first = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    await waitFor(() => calls === 1);
+    const queued = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    expect(queued.state).toBe("queued");
+
+    appContext.config.voiceNotesEnabled = false;
+    releaseFirst();
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, first.voiceNoteId))?.state === "completed");
+    await delay(100);
+
+    expect(calls).toBe(1);
+    expect((await getVoiceNoteById(testDb.db, queued.voiceNoteId))?.state).toBe("queued");
+    expect((await getVoiceNoteById(testDb.db, queued.voiceNoteId))?.attemptToken).toBeNull();
+  });
+
   it("completed + character cost → reconciles the budget to actuals and stores audio", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider } = fakeProvider(() => okAudio(12));
@@ -696,6 +801,18 @@ describe("voice-notes service: detached dispatch settle paths", () => {
     expect(swept.leaseExpired).toBe(1);
     expect((await getVoiceNoteById(testDb.db, view.voiceNoteId))?.state).toBe("indeterminate");
     expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
+
+    // After 24h the conservative reservation is released using billed=false as
+    // an INTERNAL idempotency marker. The client-facing billing verdict must
+    // remain unknown for this possibly-billed dispatch.
+    await releaseStaleIndeterminateVoiceBudgets(
+      testDb.db,
+      new Date(Date.now() + 24 * 60 * 60 * 1000 + 1),
+    );
+    expect((await getVoiceNoteById(testDb.db, view.voiceNoteId))?.billed).toBe(false);
+    expect(
+      (await getVoiceNoteStatus(appContext, p.principal, p.page.label, view.voiceNoteId)).billed,
+    ).toBeNull();
   });
 });
 

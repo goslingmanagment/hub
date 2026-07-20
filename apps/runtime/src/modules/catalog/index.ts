@@ -120,6 +120,10 @@ function parseVoiceAllowlist(csv: string | undefined): Set<string> {
   );
 }
 
+// Capability membership, not a new platform branch: Voice is Fansly-only for
+// this pilot, and the platform-branch ratchet keeps dispatch logic centralized.
+const VOICE_NOTE_CAPABILITY_PLATFORMS = new Set<Platform>(["fansly"]);
+
 /**
  * Attach the OPTIONAL `capabilities.voiceNotes` UI hint to each assigned page.
  * The field appears ONLY when all four hold: the live voiceNotesEnabled switch
@@ -154,7 +158,9 @@ async function attachVoiceNoteCapabilities(
       (await listVoiceProfiles(app.db)).map((profile) => profile.platformAccountId),
     );
     return pages.map((page) =>
-      allowlist.has(page.label) && profiledPageIds.has(page.id)
+      VOICE_NOTE_CAPABILITY_PLATFORMS.has(page.platform)
+        && allowlist.has(page.label)
+        && profiledPageIds.has(page.id)
         ? { ...page, capabilities: { voiceNotes: true } }
         : page,
     );

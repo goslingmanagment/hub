@@ -107,7 +107,7 @@ beforeAll(async () => {
     userId: anton!.id,
     pageId: lanaPageId,
     conversationRef: "conv-sdk-voice",
-    fanRef: null,
+    fanRef: "conv-sdk-voice",
     promptBlocks: [],
     completion: "hello [warmly] world",
     params: { outcome: "completed" },

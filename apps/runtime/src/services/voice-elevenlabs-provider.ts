@@ -21,6 +21,7 @@
 const ELEVENLABS_TTS_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
 const SYNTHESIS_TIMEOUT_MS = 60_000;
 const SNIPPET_MAX_CHARS = 200;
+const SNIPPET_MAX_BYTES = 1024;
 
 /**
  * Hard ceiling on a rendered artifact, in bytes (2 MiB) — the SINGLE source of
@@ -60,11 +61,115 @@ export interface CreateElevenLabsVoiceProviderOptions {
 }
 
 function parseNumberHeader(raw: string | null): number | null {
-  if (raw == null) {
+  if (raw == null || raw.trim().length === 0) {
     return null;
   }
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
+}
+
+/** Read at most `maxBytes` from a response body. The reader is cancelled as
+ * soon as the cap is crossed, so a chunked response can never be accumulated
+ * without bound. */
+async function readBoundedBody(
+  response: Response,
+  maxBytes: number,
+): Promise<{ bytes: Buffer; exceeded: boolean }> {
+  if (!response.body) {
+    return { bytes: Buffer.alloc(0), exceeded: false };
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return { bytes: Buffer.concat(chunks, total), exceeded: false };
+      }
+      const chunk = Buffer.from(value);
+      const remaining = maxBytes - total;
+      if (chunk.byteLength > remaining) {
+        if (remaining > 0) {
+          chunks.push(chunk.subarray(0, remaining));
+          total += remaining;
+        }
+        await reader.cancel("response body exceeds configured size cap").catch(() => {});
+        return { bytes: Buffer.concat(chunks, total), exceeded: true };
+      }
+      chunks.push(chunk);
+      total += chunk.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function contentTypeIsMp3(response: Response): boolean {
+  const contentType = response.headers.get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
+  return contentType === "audio/mpeg";
+}
+
+function mp3FrameLength(bytes: Buffer, offset: number): number | null {
+  if (bytes.byteLength < offset + 4) {
+    return null;
+  }
+  const b0 = bytes[offset]!;
+  const b1 = bytes[offset + 1]!;
+  const b2 = bytes[offset + 2]!;
+  if (b0 !== 0xff || (b1 & 0xe0) !== 0xe0) {
+    return null;
+  }
+  const version = (b1 >> 3) & 0x03;
+  const layer = (b1 >> 1) & 0x03;
+  // MP3 is MPEG Audio Layer III; version 01 is reserved.
+  if (version === 1 || layer !== 1) {
+    return null;
+  }
+  const bitrateIndex = (b2 >> 4) & 0x0f;
+  const sampleRateIndex = (b2 >> 2) & 0x03;
+  if (bitrateIndex === 0 || bitrateIndex === 0x0f || sampleRateIndex === 0x03) {
+    return null;
+  }
+  const mpeg1Bitrates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+  const mpeg2Bitrates = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+  const bitrateKbps = (version === 3 ? mpeg1Bitrates : mpeg2Bitrates)[bitrateIndex];
+  const baseSampleRate = [44_100, 48_000, 32_000][sampleRateIndex];
+  if (bitrateKbps === undefined || baseSampleRate === undefined) {
+    return null;
+  }
+  const sampleRate = version === 3
+    ? baseSampleRate
+    : version === 2
+      ? baseSampleRate / 2
+      : baseSampleRate / 4;
+  const padding = (b2 >> 1) & 0x01;
+  return Math.floor(((version === 3 ? 144 : 72) * bitrateKbps * 1000) / sampleRate) + padding;
+}
+
+/** Validate enough MP3 structure to reject JSON/HTML, empty, ID3-only, and
+ * truncated successful responses without trying to fully decode the take. */
+function isMp3Artifact(bytes: Buffer): boolean {
+  let frameOffset = 0;
+  if (bytes.byteLength >= 3 && bytes.subarray(0, 3).equals(Buffer.from("ID3"))) {
+    if (bytes.byteLength < 10) {
+      return false;
+    }
+    const sizeBytes = bytes.subarray(6, 10);
+    if ([...sizeBytes].some((value) => (value & 0x80) !== 0)) {
+      return false;
+    }
+    const tagSize = ((sizeBytes[0]! << 21) | (sizeBytes[1]! << 14)
+      | (sizeBytes[2]! << 7) | sizeBytes[3]!) >>> 0;
+    const footerSize = (bytes[5]! & 0x10) !== 0 ? 10 : 0;
+    frameOffset = 10 + tagSize + footerSize;
+  }
+  const frameLength = mp3FrameLength(bytes, frameOffset);
+  return frameLength !== null && bytes.byteLength >= frameOffset + frameLength;
 }
 
 /** Bounded excerpt of a 4xx response body — validation/auth detail, capped so a
@@ -72,7 +177,8 @@ function parseNumberHeader(raw: string | null): number | null {
  * back to a status-only reason (never the request). */
 async function readBoundedSnippet(response: Response): Promise<string> {
   try {
-    const text = await response.text();
+    const { bytes } = await readBoundedBody(response, SNIPPET_MAX_BYTES);
+    const text = new TextDecoder().decode(bytes);
     return text.slice(0, SNIPPET_MAX_CHARS);
   } catch {
     return `HTTP ${response.status}`;
@@ -135,13 +241,16 @@ export function createElevenLabsVoiceProvider(
           },
           body: JSON.stringify(requestBody),
           signal: controller.signal,
+          // A redirect would replay the custom API-key header and private script
+          // body to the redirect target, and would violate the one-POST law.
+          redirect: "error",
         });
 
         if (response.ok) {
           // Oversize guard, in two layers. (1) If the vendor advertises a
           // content-length over the cap, abort the body read entirely — never
           // buffer megabytes we will only discard. (2) Absent a content-length,
-          // buffer then measure. Either way an oversize body is a DEFINITE,
+          // stream with the same hard cap. Either way an oversize body is a DEFINITE,
           // non-refused failure that keeps its HTTP status: the synthesis was
           // billed, so the caller settles failed_after_dispatch (billed-unknown)
           // rather than letting the DB CHECK crash the terminal settle.
@@ -155,13 +264,31 @@ export function createElevenLabsVoiceProvider(
               snippet: "audio exceeds size cap",
             };
           }
-          const audio = Buffer.from(await response.arrayBuffer());
-          if (audio.byteLength > VOICE_AUDIO_MAX_BYTES) {
+          if (!contentTypeIsMp3(response)) {
+            await response.body?.cancel().catch(() => {});
+            return {
+              ok: false,
+              refusedBeforeBilling: false,
+              status: response.status,
+              snippet: "unexpected audio content type",
+            };
+          }
+          const body = await readBoundedBody(response, VOICE_AUDIO_MAX_BYTES);
+          if (body.exceeded) {
             return {
               ok: false,
               refusedBeforeBilling: false,
               status: response.status,
               snippet: "audio exceeds size cap",
+            };
+          }
+          const audio = body.bytes;
+          if (!isMp3Artifact(audio)) {
+            return {
+              ok: false,
+              refusedBeforeBilling: false,
+              status: response.status,
+              snippet: "invalid MP3 artifact",
             };
           }
           return {

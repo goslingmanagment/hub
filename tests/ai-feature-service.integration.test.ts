@@ -16,6 +16,7 @@ import {
   insertAiGenerationContent,
   seedBundledAiPersona,
   storeProxyConfig,
+  upsertVoiceProfile,
   upsertAiPersona,
 } from "@agency_hub_core/db";
 
@@ -52,6 +53,7 @@ let appContext: AppContext;
 let apiServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let chatterKey = "";
 let pageId = 0;
+let fanslyPageId = 0;
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -100,6 +102,7 @@ beforeEach(async (context) => {
   if (!fanslyPage) {
     throw new Error("test setup: fansly page creation failed");
   }
+  fanslyPageId = fanslyPage.id;
   await storeProxyConfig(appContext.db, fanslyPage.id, {
     url: "socks5://proxy.example:1080",
     encryptedAuth: null,
@@ -1143,12 +1146,41 @@ describe("voice-script feature (voice notes lane)", () => {
       headers: { authorization: `Bearer ${chatterKey}` },
       payload: {
         clientRequestId: randomUUID(),
-        pageLabel: "svc-of",
-        platform: "onlyfans",
+        pageLabel: "svc-fs",
+        platform: "fansly",
         conversationRef: FAN,
+        fanRef: FAN,
+        clientContext: {
+          transcript: "Fan: hey babe\nCreator: hey you",
+          messageCount: 2,
+          fanDisplayName: "Fan",
+          fanSpendingData: "",
+          fanSubscriptionData: "",
+        },
         ...extra,
       },
     });
+
+  async function enableVoiceLane(opts?: { provider?: boolean; profile?: boolean }) {
+    appContext.config.voiceNotesEnabled = true;
+    appContext.config.voiceNotesPageAllowlist = "svc-fs";
+    if (opts?.provider !== false) {
+      appContext.voiceTtsProvider = {
+        async synthesize() {
+          throw new Error("voice-script gate must not invoke TTS");
+        },
+      };
+    }
+    if (opts?.profile !== false) {
+      await upsertVoiceProfile(appContext.db, {
+        platformAccountId: fanslyPageId,
+        voiceId: "voice-feature-test",
+        model: "eleven_v3",
+        settings: {},
+        outputFormat: "mp3_44100_128",
+      });
+    }
+  }
 
   it("gates on the draft, then adapts it into a spoken script over the stream", async (context) => {
     if (!testDb) {
@@ -1158,8 +1190,7 @@ describe("voice-script feature (voice notes lane)", () => {
     await seedConversation();
     // Decision #174: voice-script rides the voice-notes lane — enable the live
     // flag and allowlist this page so the paid generation is admitted.
-    appContext.config.voiceNotesEnabled = true;
-    appContext.config.voiceNotesPageAllowlist = "svc-of";
+    await enableVoiceLane();
     const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
     appContext.aiGatewayProvider = capturingProvider(capture);
 
@@ -1184,6 +1215,61 @@ describe("voice-script feature (voice notes lane)", () => {
     // includesEarnings: false — no spend/subscription blocks in a voice script.
     expect(userText).not.toContain("<fan_spending_data>");
     expect(userText).not.toContain("<fan_subscription_data>");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses unsupported or ambiguous voice identity before gateway spend", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    await enableVoiceLane();
+
+    const onlyFans = await voiceCall({
+      pageLabel: "svc-of",
+      platform: "onlyfans",
+      clientContext: undefined,
+      draftText: "hi",
+    });
+    expect(onlyFans.statusCode, onlyFans.body).toBe(400);
+    expect(onlyFans.json().error).toBe("gate_voice_unsupported_platform");
+
+    const missingFan = await voiceCall({ fanRef: undefined, draftText: "hi" });
+    expect(missingFan.statusCode, missingFan.body).toBe(400);
+    expect(missingFan.json().error).toBe("gate_voice_identity_required");
+
+    const mismatchedFan = await voiceCall({ fanRef: "different-fan", draftText: "hi" });
+    expect(mismatchedFan.statusCode, mismatchedFan.body).toBe(400);
+    expect(mismatchedFan.json().error).toBe("gate_voice_identity_required");
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses before gateway spend when TTS provider or page profile is unavailable", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+
+    await enableVoiceLane({ profile: false });
+    const noProfile = await voiceCall({ draftText: "hi" });
+    expect(noProfile.statusCode, noProfile.body).toBe(400);
+    expect(noProfile.json().error).toBe("gate_voice_no_profile");
+
+    await upsertVoiceProfile(appContext.db, {
+      platformAccountId: fanslyPageId,
+      voiceId: "voice-feature-test",
+      model: "eleven_v3",
+      settings: {},
+      outputFormat: "mp3_44100_128",
+    });
+    appContext.voiceTtsProvider = undefined;
+    const noProvider = await voiceCall({ draftText: "hi" });
+    expect(noProvider.statusCode, noProvider.body).toBe(400);
+    expect(noProvider.json().error).toBe("gate_voice_provider_unavailable");
+    expect(capture.calls).toBeUndefined();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("refuses (no gateway spend) when the voice-notes lane is disabled — Decision #174 inertness", async (context) => {

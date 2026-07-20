@@ -255,6 +255,42 @@ describe("voice notes repository integration", () => {
     expect(await settleVoiceNoteTerminal(db, { ...terminal, attemptToken })).toBe(false);
   });
 
+  it("rejects BYTEA whose actual length exceeds the cap despite forged length metadata", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { db } = testDb;
+    const page = await createVoicePage(testDb, "voice-actual-audio-cap");
+    const clientRequestId = randomUUID();
+    await insertVoiceNoteJob(db, baseJob({ platformAccountId: page.id, clientRequestId }));
+    const note = await getVoiceNoteByClientRequestId(db, USER_ID, clientRequestId);
+    const attemptToken = randomUUID();
+    await casVoiceNoteDispatch(db, {
+      id: note!.id,
+      attemptToken,
+      leaseUntil: new Date(Date.now() + 60_000),
+    });
+
+    await expect(settleVoiceNoteTerminal(db, {
+      id: note!.id,
+      attemptToken,
+      state: "completed",
+      billed: true,
+      billedChars: 1,
+      providerRequestId: "p",
+      providerTraceId: "t",
+      providerRegion: "us",
+      audioBytes: Buffer.alloc(2_097_153),
+      audioSha256: "c".repeat(64),
+      // The old 0109 CHECK trusted this metadata and accepted the oversized
+      // BYTEA. 0110 binds it to octet_length(audio_bytes).
+      audioBytesLen: 1,
+      durationMs: 1,
+    })).rejects.toThrow();
+    expect((await getVoiceNoteById(db, note!.id))?.state).toBe("dispatched");
+  });
+
   it("sweeps lease-expired dispatched and abandoned queued rows to indeterminate", async (context) => {
     if (!testDb) {
       context.skip();
