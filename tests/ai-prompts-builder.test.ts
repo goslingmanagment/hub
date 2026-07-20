@@ -2,6 +2,7 @@
 // packages/shared/tests/prompt-builder.test.ts @ 1db76a4ae13d (2026-07-06);
 // adapted ONLY in imports (+ template paths where noted).
 import { describe, expect, it, vi } from 'vitest';
+import { FAN_SILENCE_DAYS_MAX } from '@agency_hub_core/contracts';
 import {
   buildPrompt,
   flattenPromptBlocks,
@@ -181,6 +182,30 @@ function buildFanProfileSectionOracle(
   return `## Fan Dossier\n\nStored dossier about this fan, generated on ${date} from earlier conversation history. Facts and personality age well, but the situational parts — stage and trajectory, open loops, and strategy — describe where things stood ON ${date} and may now be obsolete: treat them as history and context, not as current instructions. If anything here conflicts with the live transcript above, the transcript is authoritative.\n\n<fan_dossier>\n${escapeForPrompt(trimmed)}\n</fan_dossier>`;
 }
 
+function buildFanSilenceSection(
+  feature: PromptFeature,
+  fanSilenceDays: number | undefined,
+): string {
+  if (
+    feature !== 'ping'
+    || fanSilenceDays === undefined
+    || !Number.isFinite(fanSilenceDays)
+    || fanSilenceDays < 0
+  ) {
+    return '';
+  }
+  const days = Math.min(FAN_SILENCE_DAYS_MAX, Math.floor(fanSilenceDays));
+  let approx = '';
+  if (days >= 730) {
+    approx = ` (over ${Math.floor(days / 365)} years)`;
+  } else if (days >= 60) {
+    approx = ` (about ${Math.round(days / 30)} months)`;
+  } else if (days >= 14) {
+    approx = ` (about ${Math.round(days / 7)} weeks)`;
+  }
+  return `Fan silence: the fan's last message was ${days} ${days === 1 ? 'day' : 'days'} ago${approx}.`;
+}
+
 function applyTemplate(template: string, replacements: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (match, key: string) => replacements[key] ?? match);
 }
@@ -211,6 +236,7 @@ function buildExpectedFlatUser(input: PromptBuildInput): string {
       input.feature === 'ping' && input.pingSegment
         ? PING_SEGMENT_INSTRUCTIONS[input.pingSegment]
         : '',
+    fanSilenceSection: buildFanSilenceSection(input.feature, input.fanSilenceDays),
   });
 }
 
@@ -275,6 +301,7 @@ describe('prompt caching blocks', () => {
         fanSpendingData: 'Gross: $10',
         fanSubscriptionData: 'Tier: VIP',
         pingSegment: feature === 'ping' ? 'segment-a' : undefined,
+        fanSilenceDays: feature === 'ping' ? 12 : undefined,
         replyMode: feature === 'fast-reply' ? 'preferSplit' : undefined,
       });
       const result = buildPrompt(input);
@@ -294,6 +321,7 @@ describe('prompt caching blocks', () => {
           fanSpendingData: 'Gross: $10',
           fanSubscriptionData: 'Tier: VIP',
           pingSegment: feature === 'ping' ? 'segment-a' : undefined,
+          fanSilenceDays: feature === 'ping' ? 12 : undefined,
           replyMode: feature === 'fast-reply' ? 'preferSplit' : undefined,
         }),
       );
@@ -443,6 +471,7 @@ describe('template variable substitution', () => {
         buildTestInput({
           feature,
           pingSegment: feature === 'ping' ? 'segment-a' : undefined,
+          fanSilenceDays: feature === 'ping' ? 12 : undefined,
         }),
       );
       expect(result.user).not.toContain('{transcript}');
@@ -453,6 +482,7 @@ describe('template variable substitution', () => {
       expect(result.user).not.toContain('{splitReplyInstructions}');
       expect(result.user).not.toContain('{toneInstructions}');
       expect(result.user).not.toContain('{segmentInstructions}');
+      expect(result.user).not.toContain('{fanSilenceSection}');
     }
   });
 });
@@ -761,6 +791,63 @@ describe('ping segment substitution', () => {
 
     expect(result.userBlocks[2]?.text).toContain('Use this fan segment strategy');
     expect(result.userBlocks[2]?.text).toContain('Segment A');
+    expect(result.userBlocks[2]?.cache).toBe('none');
+  });
+});
+
+// ─── Fan silence section (Decision #127) ───────────────────────────────
+
+describe('fan silence section', () => {
+  it.each([
+    [1, "Fan silence: the fan's last message was 1 day ago."],
+    [8, "Fan silence: the fan's last message was 8 days ago."],
+    [23, "Fan silence: the fan's last message was 23 days ago (about 3 weeks)."],
+    [45, "Fan silence: the fan's last message was 45 days ago (about 6 weeks)."],
+    [90, "Fan silence: the fan's last message was 90 days ago (about 3 months)."],
+    [800, "Fan silence: the fan's last message was 800 days ago (over 2 years)."],
+  ] as const)('renders %s days as the exact bounded task line', (days, expected) => {
+    const result = buildPrompt(
+      buildTestInput({ feature: 'ping', pingSegment: 'segment-a', fanSilenceDays: days }),
+    );
+    expect(result.user).toContain(expected);
+  });
+
+  it('omits an absent or invalid value and ignores the field outside ping', () => {
+    expect(buildPrompt(
+      buildTestInput({ feature: 'ping', pingSegment: 'segment-b' }),
+    ).user).not.toContain('Fan silence:');
+    for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(buildPrompt(
+        buildTestInput({ feature: 'ping', pingSegment: 'segment-a', fanSilenceDays: bad }),
+      ).user).not.toContain('Fan silence:');
+    }
+    expect(buildPrompt(
+      buildTestInput({ feature: 'fast-reply', fanSilenceDays: 42 }),
+    ).user).not.toContain('Fan silence:');
+  });
+
+  it('clamps direct internal input to the contract maximum', () => {
+    const result = buildPrompt(
+      buildTestInput({
+        feature: 'ping',
+        pingSegment: 'segment-a',
+        fanSilenceDays: FAN_SILENCE_DAYS_MAX + 1,
+      }),
+    );
+    expect(result.user).toContain(
+      `Fan silence: the fan's last message was ${FAN_SILENCE_DAYS_MAX} days ago`,
+    );
+    expect(result.user).not.toContain(`${FAN_SILENCE_DAYS_MAX + 1} days ago`);
+  });
+
+  it('keeps the line beside segment guidance in the uncached task block', () => {
+    const result = buildPrompt(
+      buildTestInput({ feature: 'ping', pingSegment: 'segment-a', fanSilenceDays: 23 }),
+    );
+    expect(result.userBlocks).toHaveLength(3);
+    expect(result.userBlocks[0]?.text).not.toContain('Fan silence:');
+    expect(result.userBlocks[1]?.text).not.toContain('Fan silence:');
+    expect(result.userBlocks[2]?.text).toContain('Fan silence:');
     expect(result.userBlocks[2]?.cache).toBe('none');
   });
 });

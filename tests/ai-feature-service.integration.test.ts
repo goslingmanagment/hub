@@ -1139,15 +1139,20 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     expect(pingActive.json().message).toContain("active");
     expect(pingActive.json().error).toBe("gate_ping_active");
 
-    // Age the fan's messages past the 5-day window: ping unblocks.
+    // Age the fan's messages past the 5-day window: ping unblocks. The extra
+    // hour keeps the whole-days floor at 10 under small DB/Node clock drift.
     await testDb.pool.query(
-      `update message_archive set occurred_at = now() - interval '10 days'
+      `update message_archive set occurred_at = now() - interval '10 days 1 hour'
        where account_id = $1 and is_sent_by_me = false`,
       [pageId],
     );
     const ping = await call("ping");
     expect(ping.statusCode, ping.body).toBe(200);
     expect(capture.input!.body.feature).toBe("ping");
+    // Decision #127: the silence line comes from the SAME analysis call that
+    // selected the segment on the kernel-owned OnlyFans context path.
+    const pingText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
+    expect(pingText).toContain("Fan silence: the fan's last message was 10 days ago");
     // Restore recency for the later hi-greeting assertions.
     await testDb.pool.query(
       `update message_archive set occurred_at = now()
@@ -1409,6 +1414,22 @@ describe("client-context path (Stage 32)", () => {
     expect(pingActive.json().message).toContain("active");
     const ping = await call("ping", { ...baseContext, pingSegment: "segment-a" });
     expect(ping.statusCode, ping.body).toBe(200);
+    const pingWithoutSilence = capture.input!.body.prompt.userBlocks
+      .map((block) => block.text)
+      .join("\n");
+    expect(pingWithoutSilence).not.toContain("Fan silence:");
+    const pingWithSilence = await call("ping", {
+      ...baseContext,
+      pingSegment: "segment-a",
+      fanSilenceDays: 45,
+    });
+    expect(pingWithSilence.statusCode, pingWithSilence.body).toBe(200);
+    const pingSilenceText = capture.input!.body.prompt.userBlocks
+      .map((block) => block.text)
+      .join("\n");
+    expect(pingSilenceText).toContain(
+      "Fan silence: the fan's last message was 45 days ago (about 6 weeks).",
+    );
 
     // Audit hardening: OnlyFans context is kernel-fresh — client-fabricated
     // context is refused there (fansly-only lane).

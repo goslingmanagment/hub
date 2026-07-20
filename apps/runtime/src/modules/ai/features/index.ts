@@ -3,7 +3,10 @@ import type {
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
 } from "@agency_hub_core/contracts";
-import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
+import {
+  COACH_ANSWER_MAX_CHARS,
+  FAN_SILENCE_DAYS_MAX,
+} from "@agency_hub_core/contracts";
 import {
   findAiPersonaByKey,
   findPageByLabel,
@@ -101,9 +104,13 @@ export interface AiFeatureRequestBody {
     fanSubscriptionData: string;
     fanBio?: string;
     pingSegment?: PingSegment;
+    /** Whole days since the fan's last text message (same clock as pingSegment). */
+    fanSilenceDays?: number;
     transcriptCoverage?: "full-history" | "window";
   };
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function resolvePersona(
   app: Pick<AppContext, "db">,
@@ -295,6 +302,7 @@ export async function prepareAiFeatureStream(
     fanDisplayName: string;
     fanBio: string | undefined;
     pingSegment: PingSegment | undefined;
+    fanSilenceDays: number | undefined;
   };
   // PR3: the per-generation transcript context manifest (kernel-context path
   // only); rides an INTERNAL argument into the gateway, never the body.
@@ -349,6 +357,7 @@ export async function prepareAiFeatureStream(
       fanDisplayName: clientContext.fanDisplayName,
       fanBio: policy.includesFanBio ? clientContext.fanBio : undefined,
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
+      fanSilenceDays: policy.usesPingSegment ? clientContext.fanSilenceDays : undefined,
     };
   } else {
     // PR3 (C6): read the union mode ONCE per generation, here, just before
@@ -383,6 +392,12 @@ export async function prepareAiFeatureStream(
     const subscription = policy.includesEarnings
       ? await loadSubscriptionContext(app, { pageId, fanRef })
       : null;
+    // One analysis call and one clock feed both values. A Date.now() per field
+    // could disagree exactly at the 5-day segment boundary (Decision #127).
+    const pingNowMs = Date.now();
+    const pingAnalysis = policy.usesPingSegment
+      ? analyzePingSegment(transcript.messages, pingNowMs)
+      : null;
     contextValues = {
       transcript: transcript.transcript,
       messageCount: transcript.messages.length,
@@ -392,8 +407,12 @@ export async function prepareAiFeatureStream(
       fanBio: policy.includesFanBio
         ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
         : undefined,
-      pingSegment: policy.usesPingSegment
-        ? analyzePingSegment(transcript.messages, Date.now()).segment
+      pingSegment: pingAnalysis?.segment,
+      fanSilenceDays: pingAnalysis && pingAnalysis.latestFanTextAtMs !== null
+        ? Math.min(
+            FAN_SILENCE_DAYS_MAX,
+            Math.max(0, Math.floor((pingNowMs - pingAnalysis.latestFanTextAtMs) / DAY_MS)),
+          )
         : undefined,
     };
   }
@@ -552,6 +571,7 @@ export async function prepareAiFeatureStream(
       : undefined,
     draftText: body.draftText,
     pingSegment: contextValues.pingSegment,
+    fanSilenceDays: contextValues.fanSilenceDays,
     replyTone: policy.supportsReplyTone ? body.replyTone : undefined,
     replyMode: policy.supportsReplyMode ? body.replyMode : undefined,
     chatterQuestion: feature === "coach-chat" ? body.chatterQuestion : undefined,

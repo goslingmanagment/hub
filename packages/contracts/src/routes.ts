@@ -2117,6 +2117,13 @@ export const aiFeatureStreamParamsSchema = z.object({
 // so the schema and the runtime stream check cannot drift apart.
 export const COACH_ANSWER_MAX_CHARS = 64_000;
 
+// Ping recency is a bounded wire value, not an arbitrary client number. The
+// ceiling is intentionally far beyond any real platform history (~54 years)
+// while keeping the strict clientContext contract finite. The runtime imports
+// this same constant when deriving the OnlyFans value so the two paths cannot
+// drift.
+export const FAN_SILENCE_DAYS_MAX = 20_000;
+
 // Scoped body limit for POST /api/v1/ai/features/:feature (Blocker 4, P1-4).
 // Fastify's bodyLimit is a BYTE budget enforced BEFORE Zod, but the schema caps
 // are CHAR counts (z.string().max() counts UTF-16 code units). The limit must
@@ -2183,6 +2190,10 @@ export const aiFeatureStreamBodySchema = z.object({
     fanSubscriptionData: z.string().max(20_000).default(""),
     fanBio: z.string().max(5_000).optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
+    // Whole days since the fan's latest text message, computed from the same
+    // analysis (and clock) that selected pingSegment. Ping only; optional for
+    // compatibility with clients released before Decision #127.
+    fanSilenceDays: z.number().int().min(0).max(FAN_SILENCE_DAYS_MAX).optional(),
     transcriptCoverage: z.enum(["full-history", "window"]).optional(),
   }).strict().optional(),
 }).strict();

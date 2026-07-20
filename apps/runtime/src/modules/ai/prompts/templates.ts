@@ -392,6 +392,8 @@ Mine the transcript for anything personal: topics, jokes, facts about the fan, n
 
 If the transcript is thin or empty, lean on the model's personality for a warm opener. Don't fake familiarity — a confident, personality-driven first move beats a hollow "hey how have you been."
 
+If a "Fan silence" line appears in the task section, let the length of the gap set the energy: days or a couple of weeks can carry a light "hey stranger" tease; months of silence need a softer, zero-pressure re-open. Never quote the number back to the fan or make the outreach feel tracked.
+
 ## Approach
 
 Pick a strategy that fits the transcript:
@@ -424,6 +426,8 @@ Pick a strategy that fits the transcript:
 Use this fan segment strategy:
 
 {segmentInstructions}
+
+{fanSilenceSection}
 
 Write a reactivation message from the model to the fan following that segment strategy. Output only the message text.
 `;

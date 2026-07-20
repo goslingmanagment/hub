@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
   COACH_ANSWER_MAX_CHARS,
+  FAN_SILENCE_DAYS_MAX,
   routeSchemas,
 } from "@agency_hub_core/contracts";
 
@@ -53,6 +54,35 @@ describe("aiFeatureStream body — coach fields", () => {
     expect(schema.safeParse({ ...base, summaryMode: "short" }).success).toBe(true);
     expect(schema.safeParse({ ...base, summaryMode: "full" }).success).toBe(false);
   });
+
+  it("bounds fanSilenceDays to a whole number from 0 through the shared maximum", () => {
+    const clientContext = {
+      transcript: "fan: hi",
+      messageCount: 1,
+      fanDisplayName: "Bob",
+      pingSegment: "segment-a",
+    };
+    expect(schema.safeParse({
+      ...base,
+      clientContext: { ...clientContext, fanSilenceDays: 0 },
+    }).success).toBe(true);
+    expect(schema.safeParse({
+      ...base,
+      clientContext: { ...clientContext, fanSilenceDays: FAN_SILENCE_DAYS_MAX },
+    }).success).toBe(true);
+    expect(schema.safeParse({
+      ...base,
+      clientContext: { ...clientContext, fanSilenceDays: -1 },
+    }).success).toBe(false);
+    expect(schema.safeParse({
+      ...base,
+      clientContext: { ...clientContext, fanSilenceDays: FAN_SILENCE_DAYS_MAX + 1 },
+    }).success).toBe(false);
+    expect(schema.safeParse({
+      ...base,
+      clientContext: { ...clientContext, fanSilenceDays: 1.5 },
+    }).success).toBe(false);
+  });
 });
 
 // Blocker 4 (P1-4) / round-4 P2-4: the scoped route bodyLimit is a BYTE budget
@@ -101,6 +131,7 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
       fanSubscriptionData: unit.repeat(20_000),
       fanBio: unit.repeat(5_000),
       pingSegment: "segment-a",
+      fanSilenceDays: FAN_SILENCE_DAYS_MAX,
       transcriptCoverage: "full-history",
     },
   });

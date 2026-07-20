@@ -6,6 +6,8 @@
 // artifacts carried byte-for-byte (Fansly→OnlyFans wording only) — do not
 // reword them outside the prompt regression harness (PLAN P4).
 
+import { FAN_SILENCE_DAYS_MAX } from '@agency_hub_core/contracts';
+
 import type {
   FeatureType,
   Personality,
@@ -84,6 +86,8 @@ export interface PromptBuildInput {
   fanProfile?: { body: string; generatedAt: Date } | undefined;
   draftText?: string | undefined;
   pingSegment?: PingSegment | undefined;
+  /** Whole days since the fan's latest text message (ping only, Decision #127). */
+  fanSilenceDays?: number | undefined;
   replyMode?: ReplyMode | undefined;
   replyTone?: ReplyTone | undefined;
   /** coach-chat: the chatter's current question (the {chatterQuestion} slot). */
@@ -537,6 +541,30 @@ function segmentInstructions(
   return PING_SEGMENT_INSTRUCTIONS[pingSegment];
 }
 
+function fanSilenceSection(
+  policy: PromptFeaturePolicy,
+  fanSilenceDays: number | undefined,
+): string {
+  if (
+    !policy.usesPingSegment
+    || fanSilenceDays === undefined
+    || !Number.isFinite(fanSilenceDays)
+    || fanSilenceDays < 0
+  ) {
+    return '';
+  }
+  const days = Math.min(FAN_SILENCE_DAYS_MAX, Math.floor(fanSilenceDays));
+  let approx = '';
+  if (days >= 730) {
+    approx = ` (over ${Math.floor(days / 365)} years)`;
+  } else if (days >= 60) {
+    approx = ` (about ${Math.round(days / 30)} months)`;
+  } else if (days >= 14) {
+    approx = ` (about ${Math.round(days / 7)} weeks)`;
+  }
+  return `Fan silence: the fan's last message was ${days} ${days === 1 ? 'day' : 'days'} ago${approx}.`;
+}
+
 /**
  * Untrusted inputs (transcript, draft, spending/subscription data, fan
  * name/bio) are escaped; the personality is trusted model-owner content and is
@@ -564,6 +592,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     splitReplyInstructions: splitReplyInstructions(policy, input.replyMode),
     toneInstructions: toneInstructions(policy, input.replyTone),
     segmentInstructions: segmentInstructions(policy, input.pingSegment),
+    fanSilenceSection: fanSilenceSection(policy, input.fanSilenceDays),
     coachHistorySection: coachHistorySection(input.coachHistory),
     chatterQuestion: escapeForPrompt(input.chatterQuestion ?? ''),
     recapSection: recapSection(input.recapAttach),

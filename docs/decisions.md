@@ -3446,6 +3446,37 @@ motivation (honest admin surface): `adminListUsers` now carries
 `lastActiveAt = max(api-key last_used, device-token last_used)` — the key-only
 column showed "Never" for every #116 password+device-token chatter.
 
+**Decision #127 (2026-07-11, restored 2026-07-20 — ping knows the silence
+length through bounded `fanSilenceDays`):** The ping prompt previously received
+only the segment LABEL (`segment-a` / `segment-b`). The model therefore could
+not distinguish six days of silence from six months: client transcripts carry
+only wall-clock `HH:MM`, while the existing analyzer already knows the latest
+fan-text timestamp. The whole-day gap now appears as a `Fan silence:` line in
+the uncached ping task block, with a static calibration rule in the template:
+short gaps may carry light “hey stranger” energy, long gaps need a softer
+zero-pressure reopen, and the generated message must never quote the number or
+sound tracked.
+
+Both context paths derive the value from the SAME analysis and `nowMs` that
+select the segment. OnlyFans computes it kernel-side; Fansly may send optional
+`clientContext.fanSilenceDays` beside its live client-computed `pingSegment`.
+The wire value is an integer `0..20_000`; future timestamps clamp to zero and
+the kernel-derived path clamps to the same maximum, so prompt assembly never
+sees an unbounded recency value. Older clients omit it and retain the segment-
+only behavior. Because `clientContext` is strict, Core must deploy before the
+extension starts sending the new field; the extension must re-vendor the SDK
+from this current Core rather than restore the historical pre-Coach vendor.
+
+This entry and implementation were originally authored in stranded Core commit
+`5bc88df8` and extension commits `1a0edb4..55ecb96`, then lost from both mains
+during parallel branch integration. Later prompt-manifest commentary and
+Decision #136 continued to reference #127 even though its actual entry/code
+were absent. Restoring the missing numbered decision closes that historical
+gap; there was no superseding or reversing decision. Prompt-freeze discipline
+continues: `prompt-manifest.json` re-pins the evolved builder/templates and the
+ping template carries a Decision #127 note while its Stage-30 source hash stays
+the historical record.
+
 **Decision #128 (2026-07-11, B5 — recurring DB backups declined, risk accepted):**
 The 2026-07-08 audit's B5 finding (decision #41 "nightly off-box Postgres backups +
 restore drills" never implemented) was resolved by the owner as ACCEPTED RISK, not
