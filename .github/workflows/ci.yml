@@ -49,6 +49,9 @@ jobs:
       - name: Production Docker image build
         run: docker build --target runtime -t agency_hub_core/runtime:ci .
 
+      - name: Chromium Headless Shell runtime smoke
+        run: docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs
+
       - name: Reliable unit tests
         run: pnpm test:unit
 

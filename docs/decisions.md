@@ -4907,3 +4907,21 @@ Finally, the existing 24-hour reservation release for stale
 release marker. Every public status projection for an `indeterminate` row
 returns `billed:null`; neither the client nor an operator may interpret the
 internal marker as proof that ElevenLabs did not charge.
+
+**Decision #176 (2026-07-20, local Docker use is opt-in and production build
+caches stay architecture-scoped):** Development and local-test Postgres no
+longer use `restart: unless-stopped`; local work starts the database explicitly,
+so reopening Docker Desktop does not silently revive an idle checkout. Every
+local Compose service uses Docker's rotating `local` log driver, bounded to
+three 10 MiB files. Production Compose restart and logging policies are
+unchanged.
+
+The production Dockerfile uses BuildKit cache mounts with distinct target- and
+native-build architecture keys for pnpm and Corepack. Workspace manifests are
+copied before source trees so ordinary source changes reuse the dependency
+layer, while nested host `node_modules` and package build outputs are excluded
+from the context. The runtime keeps Decision #172's Chromium Headless Shell and
+package-index cleanup, and CI launches that bundled browser from the final
+runtime image. This does not change #172's checksum-pinned clean-base lifecycle
+or its owner-gated image/tag garbage collection; deploys do not automatically
+promote a local cache tag or delete candidate image tags.

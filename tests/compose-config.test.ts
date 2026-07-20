@@ -56,7 +56,53 @@ describe("compose config", () => {
       expect(worker).toContain("migrator:");
       expect(worker).toContain("condition: service_completed_successfully");
     });
+
+    it(`${composePath} keeps local services opt-in and bounds their logs`, async () => {
+      const text = await readComposeFile(composePath);
+      const postgres = getServiceBlock(text, "postgres");
+
+      expect(text).toContain("x-local-logging: &local-logging");
+      expect(text).toContain("driver: local");
+      expect(text).toContain('max-size: "10m"');
+      expect(text).toContain('max-file: "3"');
+      expect(postgres).not.toContain("restart: unless-stopped");
+
+      for (const service of ["postgres", "migrator", "api", "worker"]) {
+        expect(getServiceBlock(text, service)).toContain("logging: *local-logging");
+      }
+    });
   }
+
+  it("keeps Docker caches architecture-scoped and smoke-tests the final browser runtime", async () => {
+    const dockerfile = await readComposeFile("Dockerfile");
+    const dockerignore = await readComposeFile(".dockerignore");
+    const ciWorkflow = await readComposeFile(".github/workflows/ci.yml");
+    const deploy = await readComposeFile("scripts/deploy-production.sh");
+    const fullBuild = getShellFunction(deploy, "build_full_candidate_image");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const sourceCopyIndex = dockerfile.indexOf("COPY apps ./apps");
+
+    expect(dockerfile.startsWith("# syntax=docker/dockerfile:1.7\n")).toBe(true);
+    expect(dockerfile).toContain("ARG TARGETARCH");
+    expect(dockerfile).toContain("ARG BUILDARCH");
+    expect(dockerfile).toContain("id=agency-hub-corepack-target-${TARGETARCH}");
+    expect(dockerfile).toContain("id=agency-hub-pnpm-target-${TARGETARCH}");
+    expect(dockerfile).toContain("id=agency-hub-corepack-build-${BUILDARCH}");
+    expect(dockerfile).toContain("id=agency-hub-pnpm-build-${BUILDARCH}");
+    expect(dockerfile).toContain("target=/pnpm/store,sharing=locked");
+    expect(dockerfile).toContain("install --with-deps --only-shell chromium");
+    expect(dockerfile).toContain("rm -rf /var/lib/apt/lists/* /tmp/*");
+    expect(dockerfile).toContain(
+      "COPY scripts/smoke-playwright-runtime.mjs ./scripts/smoke-playwright-runtime.mjs",
+    );
+    expect(dockerignore.split(/\r?\n/)).toContain("**/node_modules");
+    expect(dockerignore.split(/\r?\n/)).toContain("packages/**/dist");
+    expect(ciWorkflow).toContain(
+      "docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs",
+    );
+    expect(fullBuild).toContain("DOCKER_BUILDKIT=1 docker build");
+    expect(sourceCopyIndex).toBeGreaterThan(installIndex);
+  });
 
   it("docker-compose.production.yml keeps the API behind loopback and uses worker readiness health", async () => {
     const text = await readComposeFile("docker-compose.production.yml");

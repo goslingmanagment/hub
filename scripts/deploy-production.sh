@@ -1019,7 +1019,7 @@ build_full_candidate_image() {
   ensure_node_base_image || return 1
 
   log "Building ${IMAGE_CANDIDATE_TAG} locally from ${ROOT_DIR} for ${BUILD_PLATFORM}"
-  docker build \
+  DOCKER_BUILDKIT=1 docker build \
     --platform="${BUILD_PLATFORM}" \
     --build-arg "NODE_BASE_IMAGE=${NODE_BASE_IMAGE}" \
     --build-arg "APP_DEPENDENCY_CHECKSUM=${APP_DEPENDENCY_CHECKSUM}" \
