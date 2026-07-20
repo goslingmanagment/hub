@@ -366,6 +366,10 @@ export async function createVoiceNote(
     profileSettings: profile.settings,
     profileOutputFormat: profile.outputFormat,
     profileVersion: profile.version,
+    // This is the same instant reserveVoiceCharBudget uses below. Pinning it on
+    // the row prevents a transaction that crosses UTC midnight from reserving
+    // one day's counter but later refunding the next day's counter.
+    createdAt: now,
   };
 
   // (3+4) Reserve the character budget AND record the idempotency row in ONE

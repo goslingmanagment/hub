@@ -59,6 +59,7 @@ function baseJob(
     profileSettings: { stability: 0.5 },
     profileOutputFormat: "mp3_44100_128",
     profileVersion: 1,
+    createdAt: new Date(),
     ...overrides,
   };
 }
@@ -120,6 +121,24 @@ describe("voice notes repository integration", () => {
     // The original row is preserved — the losing insert is a no-op, not an update.
     expect(row?.requestHash).toBe("hash-1");
     expect(row?.state).toBe("queued");
+  });
+
+  it("persists the admission timestamp used by the budget reservation", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await createVoicePage(testDb, "voice-admission-time");
+    const clientRequestId = randomUUID();
+    const createdAt = new Date("2026-07-18T23:59:59.999Z");
+
+    await insertVoiceNoteJob(
+      testDb.db,
+      baseJob({ platformAccountId: page.id, clientRequestId, createdAt }),
+    );
+
+    const row = await getVoiceNoteByClientRequestId(testDb.db, USER_ID, clientRequestId);
+    expect(row?.createdAt).toEqual(createdAt);
   });
 
   it("projected status reads carry the status/replay fields but NOT the audio bytes", async (context) => {
