@@ -66,6 +66,65 @@ const DISPATCH_LEASE_MS = 120_000;
 const DEFAULT_SCRIPT_MAX_CHARS = 600;
 const DEFAULT_PAGE_BUDGET = 5000;
 const DEFAULT_GLOBAL_BUDGET = 20000;
+const DEFAULT_MAX_CONCURRENT_SYNTHESES = 2;
+
+type ReleaseVoiceSynthesisPermit = () => void;
+
+/** Process-local concurrency gate. Production runs one API process; queued
+ * rows wait here before their dispatch CAS, so no lease can expire merely
+ * because another synthesis holds the configured slot. */
+class VoiceSynthesisGate {
+  private active = 0;
+  private limit = DEFAULT_MAX_CONCURRENT_SYNTHESES;
+  private readonly waiters: Array<(release: ReleaseVoiceSynthesisPermit) => void> = [];
+
+  setLimit(value: number): void {
+    this.limit = Math.max(1, Math.floor(value));
+    this.drain();
+  }
+
+  tryAcquire(): ReleaseVoiceSynthesisPermit | null {
+    if (this.active >= this.limit) {
+      return null;
+    }
+    this.active += 1;
+    return this.makeRelease();
+  }
+
+  acquire(): Promise<ReleaseVoiceSynthesisPermit> {
+    const immediate = this.tryAcquire();
+    if (immediate) {
+      return Promise.resolve(immediate);
+    }
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  occupancyWithinLimit(): boolean {
+    return this.active <= this.limit;
+  }
+
+  private makeRelease(): ReleaseVoiceSynthesisPermit {
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.active -= 1;
+      this.drain();
+    };
+  }
+
+  private drain(): void {
+    while (this.active < this.limit && this.waiters.length > 0) {
+      const resolve = this.waiters.shift()!;
+      this.active += 1;
+      resolve(this.makeRelease());
+    }
+  }
+}
+
+const voiceSynthesisGate = new VoiceSynthesisGate();
 
 // Internal rollback sentinel: thrown inside the reserve+insert transaction when
 // the queued insert loses the unique (user, clientRequestId) race, so drizzle
@@ -254,13 +313,16 @@ export async function createVoiceNote(
   const scriptChars = validation.chars;
 
   // Source generation: a terminal-success voice-script generation owned by the
-  // same principal on the same page (the restricted-capture row is the ledger).
+  // same principal on the same page and conversation (the restricted-capture
+  // row is the ledger).
   const source = await getAiGenerationContentByRef(app.db, body.sourceGenerationRef);
   if (
     !source
     || source.generation.feature !== "voice-script"
     || source.generation.userId !== principal.user.id
     || source.generation.pageId !== page.id
+    || source.generation.conversationRef !== body.conversationRef
+    || source.generation.fanRef !== body.conversationRef
     || (source.generation.params as { outcome?: unknown }).outcome !== "completed"
   ) {
     throw new VoiceSourceInvalidError();
@@ -284,6 +346,9 @@ export async function createVoiceNote(
   const now = new Date();
   const pageBudget = effective.voiceNotesDailyCharBudget ?? DEFAULT_PAGE_BUDGET;
   const globalBudget = effective.voiceNotesGlobalDailyCharBudget ?? DEFAULT_GLOBAL_BUDGET;
+  voiceSynthesisGate.setLimit(
+    effective.voiceNotesMaxConcurrentSyntheses ?? DEFAULT_MAX_CONCURRENT_SYNTHESES,
+  );
 
   const snapshot = {
     userId: principal.user.id,
@@ -301,6 +366,10 @@ export async function createVoiceNote(
     profileSettings: profile.settings,
     profileOutputFormat: profile.outputFormat,
     profileVersion: profile.version,
+    // This is the same instant reserveVoiceCharBudget uses below. Pinning it on
+    // the row prevents a transaction that crosses UTC midnight from reserving
+    // one day's counter but later refunding the next day's counter.
+    createdAt: now,
   };
 
   // (3+4) Reserve the character budget AND record the idempotency row in ONE
@@ -359,32 +428,148 @@ export async function createVoiceNote(
     throw new Error("voice note row missing immediately after a winning insert");
   }
 
-  // (5) Single-dispatch CAS: exactly one attempt token wins queued→dispatched
-  // plus the lease.
-  const attemptToken = randomUUID();
-  const won = await casVoiceNoteDispatch(app.db, {
-    id: row.id,
-    attemptToken,
-    leaseUntil: new Date(now.getTime() + DISPATCH_LEASE_MS),
-  });
-
-  // (6) Detached dispatch: return the view NOW; the provider call runs
-  // fire-and-forget with its own signal, then fences the settle. A rare CAS loss
-  // (a sweep raced us) just returns the latest persisted state.
-  if (won) {
-    void dispatchVoiceNote(app, {
+  // (5) Concurrency permit BEFORE the single-dispatch CAS. An immediately
+  // available slot preserves the usual dispatched response. Otherwise the row
+  // remains safely queued (no lease yet) until a slot opens; a process crash is
+  // recovered by the existing abandoned-queued sweep without vendor spend.
+  const permit = voiceSynthesisGate.tryAcquire();
+  if (!permit) {
+    void dispatchVoiceNoteAfterPermit(app, {
       row,
-      attemptToken,
+      pageLabel: page.label,
       reservedChars: scriptChars,
       canonicalScript,
       now,
     });
+    return toStatusView(row);
+  }
+
+  // (6) The provider call runs detached with its own signal, then fences the
+  // settle. The synthesis permit is held until that task has fully settled.
+  const won = await grantVoiceNoteDispatch(app, {
+    row,
+    pageLabel: page.label,
+    reservedChars: scriptChars,
+    canonicalScript,
+    now,
+  }, permit);
+  if (won) {
     return toStatusView({ ...row, state: "dispatched" });
   }
   // CAS lost (a sweep raced us): re-read just the status projection — this path
   // never returns audio, so the full row's bytes would only be discarded.
   const latest = await getVoiceNoteStatusById(app.db, row.id);
   return toStatusView(latest ?? row);
+}
+
+async function grantVoiceNoteDispatch(
+  app: AppContext,
+  input: {
+    row: VoiceNoteRow;
+    pageLabel: string;
+    reservedChars: number;
+    canonicalScript: string;
+    now: Date;
+  },
+  releasePermit: ReleaseVoiceSynthesisPermit,
+): Promise<boolean> {
+  const attemptToken = randomUUID();
+  let won: boolean;
+  try {
+    won = await casVoiceNoteDispatch(app.db, {
+      id: input.row.id,
+      attemptToken,
+      leaseUntil: new Date(Date.now() + DISPATCH_LEASE_MS),
+    });
+  } catch (error) {
+    releasePermit();
+    throw error;
+  }
+  if (!won) {
+    releasePermit();
+    return false;
+  }
+
+  void runGrantedVoiceNoteDispatch(app, {
+    ...input,
+    attemptToken,
+  }, releasePermit);
+  return true;
+}
+
+async function runGrantedVoiceNoteDispatch(
+  app: AppContext,
+  input: {
+    row: VoiceNoteRow;
+    pageLabel: string;
+    attemptToken: string;
+    reservedChars: number;
+    canonicalScript: string;
+    now: Date;
+  },
+  releasePermit: ReleaseVoiceSynthesisPermit,
+): Promise<void> {
+  try {
+    await dispatchVoiceNote(app, input);
+  } catch (error) {
+    // dispatchVoiceNote handles provider/settle faults itself; this final guard
+    // covers only an unexpected failure from its cleanup path.
+    app.logger.error(
+      { voiceNoteId: input.row.id, error: describeErrorForLog(error) },
+      "voice note dispatch cleanup failed unexpectedly",
+    );
+  } finally {
+    releasePermit();
+  }
+}
+
+async function dispatchVoiceNoteAfterPermit(
+  app: AppContext,
+  input: {
+    row: VoiceNoteRow;
+    pageLabel: string;
+    reservedChars: number;
+    canonicalScript: string;
+    now: Date;
+  },
+): Promise<void> {
+  let permit = await voiceSynthesisGate.acquire();
+  try {
+    while (true) {
+      // A queued row can wait materially longer than the admitting request.
+      // Re-read all live dispatch gates after each permit arrival and before
+      // granting the one paid dispatch. A config read fault fails closed through
+      // this function's catch; the row stays queued for the unbilled sweep.
+      const effective = await loadEffectiveConfig(app.db, app.config);
+      voiceSynthesisGate.setLimit(
+        effective.voiceNotesMaxConcurrentSyntheses ?? DEFAULT_MAX_CONCURRENT_SYNTHESES,
+      );
+      if (
+        effective.voiceNotesEnabled !== true
+        || !isPageAllowlisted(effective.voiceNotesPageAllowlist, input.pageLabel)
+      ) {
+        permit();
+        return;
+      }
+      // The limit may have been lowered while this row waited. Its permit was
+      // granted under the previous limit, so yield and re-enter the gate instead
+      // of temporarily overshooting the newly-read live value.
+      if (voiceSynthesisGate.occupancyWithinLimit()) {
+        break;
+      }
+      permit();
+      permit = await voiceSynthesisGate.acquire();
+    }
+    await grantVoiceNoteDispatch(app, input, permit);
+  } catch (error) {
+    permit();
+    // A CAS/read fault happened before provider dispatch. The permit has already
+    // been released; leave the row queued for the existing recovery sweep.
+    app.logger.error(
+      { voiceNoteId: input.row.id, error: describeErrorForLog(error) },
+      "queued voice note could not claim a dispatch slot",
+    );
+  }
 }
 
 /**
@@ -848,7 +1033,11 @@ function toStatusView(row: VoiceNoteViewFields): VoiceNoteStatusView {
     voiceNoteId: row.id,
     state: row.state,
     scriptChars: row.scriptChars,
-    billed: row.billed,
+    // A stale indeterminate reservation eventually uses billed=false as an
+    // INTERNAL one-time refund marker. The external verdict remains unknown:
+    // no client may interpret that bookkeeping stamp as proof the vendor did
+    // not charge.
+    billed: row.state === "indeterminate" ? null : row.billed,
     audioSha256: row.audioSha256,
     audioBytesLen: row.audioBytesLen,
     createdAt: row.createdAt.toISOString(),

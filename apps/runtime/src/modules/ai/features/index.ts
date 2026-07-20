@@ -7,6 +7,7 @@ import {
   findAiPersonaByKey,
   findPageByLabel,
   getFreshestUsableRecaps,
+  getVoiceProfile,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
@@ -235,6 +236,18 @@ export async function prepareAiFeatureStream(
   // Anthropic/OpenRouter budget. Checked HERE, before persona/context loads and
   // any gateway spend, against the RESOLVED canonical label.
   if (feature === "voice-script") {
+    if (!isFanslyRequest) {
+      throw new ProductGateError(
+        "voice-script is available only for Fansly pages",
+        "gate_voice_unsupported_platform",
+      );
+    }
+    if (!body.fanRef?.trim() || body.conversationRef !== body.fanRef) {
+      throw new ProductGateError(
+        "voice-script requires matching, nonblank conversationRef and fanRef",
+        "gate_voice_identity_required",
+      );
+    }
     const effective = await loadEffectiveConfig(app.db, app.config);
     if (
       effective.voiceNotesEnabled !== true
@@ -243,6 +256,18 @@ export async function prepareAiFeatureStream(
       throw new ProductGateError(
         "voice-script is unavailable: the voice-notes lane is disabled for this page",
         "gate_voice_disabled",
+      );
+    }
+    if (!app.voiceTtsProvider) {
+      throw new ProductGateError(
+        "voice-script is unavailable: the voice synthesis provider is not configured",
+        "gate_voice_provider_unavailable",
+      );
+    }
+    if (!await getVoiceProfile(app.db, pageId)) {
+      throw new ProductGateError(
+        "voice-script is unavailable: this page has no voice profile",
+        "gate_voice_no_profile",
       );
     }
   }

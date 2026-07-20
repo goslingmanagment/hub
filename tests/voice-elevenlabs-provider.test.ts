@@ -15,6 +15,25 @@ import {
 
 const SCRIPT_TEXT = "SECRET_SCRIPT_hey babe this is my private voice note xoxo";
 
+// One complete MPEG-1 Layer III frame: 128 kbps, 44.1 kHz, no padding.
+// The first-frame structural check deliberately does not require a decoder.
+function validMp3Bytes(totalBytes = 417): Uint8Array<ArrayBuffer> {
+  if (totalBytes < 417) {
+    throw new Error("validMp3Bytes needs room for one complete frame");
+  }
+  const bytes = new Uint8Array(new ArrayBuffer(totalBytes));
+  bytes.set([0xff, 0xfb, 0x90, 0x64]);
+  return bytes;
+}
+
+function validId3Mp3Bytes(): Uint8Array<ArrayBuffer> {
+  const frame = validMp3Bytes();
+  const bytes = new Uint8Array(new ArrayBuffer(10 + frame.byteLength));
+  bytes.set([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0]);
+  bytes.set(frame, 10);
+  return bytes;
+}
+
 function synthInput(
   overrides: Partial<Parameters<VoiceTtsProvider["synthesize"]>[0]> = {},
 ): Parameters<VoiceTtsProvider["synthesize"]>[0] {
@@ -36,12 +55,13 @@ afterEach(() => {
 
 describe("ElevenLabs voice provider", () => {
   it("succeeds and captures every response header", async () => {
-    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    const bytes = validMp3Bytes();
     const fetchImpl = vi.fn(
       async () =>
         new Response(bytes, {
           status: 200,
           headers: {
+            "content-type": "audio/mpeg",
             "character-cost": "42",
             "request-id": "req_abc",
             "x-trace-id": "trace_xyz",
@@ -64,9 +84,12 @@ describe("ElevenLabs voice provider", () => {
     }
   });
 
-  it("succeeds with absent headers, yielding nulls (never undefined)", async () => {
+  it("succeeds with absent optional headers, yielding nulls (never undefined)", async () => {
     const fetchImpl = vi.fn(
-      async () => new Response(new Uint8Array([9]), { status: 200 }),
+      async () => new Response(validMp3Bytes(), {
+        status: 200,
+        headers: { "content-type": "audio/mpeg" },
+      }),
     );
     const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
 
@@ -79,6 +102,34 @@ describe("ElevenLabs voice provider", () => {
       expect(result.traceId).toBeNull();
       expect(result.region).toBeNull();
     }
+  });
+
+  it("treats a blank character-cost header as unknown, never as zero", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(validMp3Bytes(), {
+        status: 200,
+        headers: { "content-type": "audio/mpeg", "character-cost": "   " },
+      }),
+    );
+    const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+      .synthesize(synthInput());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.characterCost).toBeNull();
+    }
+  });
+
+  it("accepts a legitimate ID3-prefixed MP3 artifact", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(validId3Mp3Bytes(), {
+        status: 200,
+        headers: { "content-type": "Audio/MPEG; charset=binary" },
+      }),
+    );
+    const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+      .synthesize(synthInput());
+    expect(result.ok).toBe(true);
   });
 
   it("issues exactly one POST to the voice endpoint with the passed-through body", async () => {
@@ -95,6 +146,7 @@ describe("ElevenLabs voice provider", () => {
       "https://api.elevenlabs.io/v1/text-to-speech/voice_1?output_format=mp3_44100_128",
     );
     expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("error");
     expect((init.headers as Record<string, string>)["xi-api-key"]).toBe("secret-key");
     expect(JSON.parse(init.body as string)).toEqual({
       text: SCRIPT_TEXT,
@@ -139,6 +191,27 @@ describe("ElevenLabs voice provider", () => {
     },
   );
 
+  it("cancels an oversized 4xx body after a bounded snippet read", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode("vendor error ".repeat(200)));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(stream, { status: 422 }));
+    const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+      .synthesize(synthInput());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.snippet.length).toBeLessThanOrEqual(200);
+    }
+    expect(cancelled).toBe(true);
+  });
+
   it("refuses an oversize body advertised via content-length WITHOUT buffering it", async () => {
     // A huge content-length header must short-circuit BEFORE arrayBuffer() — we
     // never allocate the megabytes. Prove it by making the body read explode: a
@@ -146,7 +219,10 @@ describe("ElevenLabs voice provider", () => {
     const exploding = {
       ok: true,
       status: 200,
-      headers: new Headers({ "content-length": String(VOICE_AUDIO_MAX_BYTES + 1) }),
+      headers: new Headers({
+        "content-length": String(VOICE_AUDIO_MAX_BYTES + 1),
+        "content-type": "audio/mpeg",
+      }),
       body: { cancel: async () => {} },
       arrayBuffer: async () => {
         throw new Error("body was buffered despite an over-cap content-length");
@@ -170,14 +246,17 @@ describe("ElevenLabs voice provider", () => {
     // No content-length header: buffer, then measure. An over-cap buffer is a
     // definite non-refused failure — never returned as ok:true audio. A stream
     // body carries no content-length, so this exercises the post-buffer guard.
-    const bytes = new Uint8Array(VOICE_AUDIO_MAX_BYTES + 1);
+    const bytes = validMp3Bytes(VOICE_AUDIO_MAX_BYTES + 1);
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(bytes);
         controller.close();
       },
     });
-    const fetchImpl = vi.fn(async () => new Response(stream, { status: 200 }));
+    const fetchImpl = vi.fn(async () => new Response(stream, {
+      status: 200,
+      headers: { "content-type": "audio/mpeg" },
+    }));
     const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
 
     const result = await provider.synthesize(synthInput());
@@ -191,8 +270,11 @@ describe("ElevenLabs voice provider", () => {
   });
 
   it("accepts a body exactly at the size cap", async () => {
-    const bytes = new Uint8Array(VOICE_AUDIO_MAX_BYTES);
-    const fetchImpl = vi.fn(async () => new Response(bytes, { status: 200 }));
+    const bytes = validMp3Bytes(VOICE_AUDIO_MAX_BYTES);
+    const fetchImpl = vi.fn(async () => new Response(bytes, {
+      status: 200,
+      headers: { "content-type": "audio/mpeg" },
+    }));
     const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
 
     const result = await provider.synthesize(synthInput());
@@ -201,6 +283,42 @@ describe("ElevenLabs voice provider", () => {
     if (result.ok) {
       expect(result.audio.byteLength).toBe(VOICE_AUDIO_MAX_BYTES);
     }
+  });
+
+  it("rejects a successful response with the wrong MIME as possibly billed", async () => {
+    const fetchImpl = vi.fn(async () => new Response(validMp3Bytes(), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+      .synthesize(synthInput());
+
+    expect(result).toMatchObject({
+      ok: false,
+      refusedBeforeBilling: false,
+      status: 200,
+      snippet: "unexpected audio content type",
+    });
+  });
+
+  it.each([
+    ["empty", new Uint8Array()],
+    ["JSON", new TextEncoder().encode('{"error":"upstream proxy page"}')],
+    ["truncated MP3", new Uint8Array([0xff, 0xfb, 0x90, 0x64])],
+  ])("rejects a successful audio/mpeg %s body as possibly billed", async (_name, bytes) => {
+    const fetchImpl = vi.fn(async () => new Response(bytes, {
+      status: 200,
+      headers: { "content-type": "audio/mpeg" },
+    }));
+    const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+      .synthesize(synthInput());
+
+    expect(result).toMatchObject({
+      ok: false,
+      refusedBeforeBilling: false,
+      status: 200,
+      snippet: "invalid MP3 artifact",
+    });
   });
 
   it("treats HTTP 500 as NOT refused (indeterminate) and never leaks the 5xx body", async () => {

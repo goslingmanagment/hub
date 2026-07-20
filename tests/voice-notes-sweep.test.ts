@@ -49,6 +49,7 @@ function baseJob(
     profileSettings: { stability: 0.5 },
     profileOutputFormat: "mp3_44100_128",
     profileVersion: 1,
+    createdAt: new Date(),
     ...overrides,
   };
 }
@@ -90,13 +91,16 @@ async function insertQueued(
   createdAt: Date,
 ): Promise<number> {
   const clientRequestId = randomUUID();
-  await insertVoiceNoteJob(testDb.db, baseJob({ platformAccountId: pageId, clientRequestId }));
+  await insertVoiceNoteJob(testDb.db, baseJob({
+    platformAccountId: pageId,
+    clientRequestId,
+    createdAt,
+  }));
   const row = await testDb.pool.query<{ id: number }>(
     "select id from voice_notes where client_request_id = $1",
     [clientRequestId],
   );
   const id = Number(row.rows[0]!.id);
-  await backdate(testDb.pool, id, createdAt);
   return id;
 }
 
@@ -129,8 +133,9 @@ describe("voice notes sweep + nightly retention", () => {
     const page = await createVoicePage(testDb, "sweep-abandoned");
     const pageScope = `page:${page.id}`;
 
-    const reservedDay = new Date("2026-07-16T12:00:00.000Z");
+    const reservedDay = new Date("2026-07-16T23:59:59.999Z");
     const reservedDayStr = "2026-07-16";
+    const nextDayStr = "2026-07-17";
     const now = new Date("2026-07-18T12:00:00.000Z");
     const todayStr = "2026-07-18";
 
@@ -163,7 +168,10 @@ describe("voice notes sweep + nightly retention", () => {
     // The release hit the reservation's day, walking it back to zero...
     expect(await spentChars(pool, pageScope, reservedDayStr)).toBe(0);
     expect(await spentChars(pool, "global", reservedDayStr)).toBe(0);
-    // ...NOT today's counter (which must never have been created/touched).
+    // ...NOT the next-day counter a transaction crossing midnight would have
+    // used before the admission timestamp was pinned, nor today's counter.
+    expect(await spentChars(pool, pageScope, nextDayStr)).toBe(0);
+    expect(await spentChars(pool, "global", nextDayStr)).toBe(0);
     expect(await spentChars(pool, pageScope, todayStr)).toBe(0);
     expect(await spentChars(pool, "global", todayStr)).toBe(0);
   });

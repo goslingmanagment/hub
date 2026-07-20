@@ -59,6 +59,7 @@ function baseJob(
     profileSettings: { stability: 0.5 },
     profileOutputFormat: "mp3_44100_128",
     profileVersion: 1,
+    createdAt: new Date(),
     ...overrides,
   };
 }
@@ -120,6 +121,24 @@ describe("voice notes repository integration", () => {
     // The original row is preserved — the losing insert is a no-op, not an update.
     expect(row?.requestHash).toBe("hash-1");
     expect(row?.state).toBe("queued");
+  });
+
+  it("persists the admission timestamp used by the budget reservation", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await createVoicePage(testDb, "voice-admission-time");
+    const clientRequestId = randomUUID();
+    const createdAt = new Date("2026-07-18T23:59:59.999Z");
+
+    await insertVoiceNoteJob(
+      testDb.db,
+      baseJob({ platformAccountId: page.id, clientRequestId, createdAt }),
+    );
+
+    const row = await getVoiceNoteByClientRequestId(testDb.db, USER_ID, clientRequestId);
+    expect(row?.createdAt).toEqual(createdAt);
   });
 
   it("projected status reads carry the status/replay fields but NOT the audio bytes", async (context) => {
@@ -253,6 +272,42 @@ describe("voice notes repository integration", () => {
 
     // A second settle on a now-terminal row is fenced out (state is no longer 'dispatched').
     expect(await settleVoiceNoteTerminal(db, { ...terminal, attemptToken })).toBe(false);
+  });
+
+  it("rejects BYTEA whose actual length exceeds the cap despite forged length metadata", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { db } = testDb;
+    const page = await createVoicePage(testDb, "voice-actual-audio-cap");
+    const clientRequestId = randomUUID();
+    await insertVoiceNoteJob(db, baseJob({ platformAccountId: page.id, clientRequestId }));
+    const note = await getVoiceNoteByClientRequestId(db, USER_ID, clientRequestId);
+    const attemptToken = randomUUID();
+    await casVoiceNoteDispatch(db, {
+      id: note!.id,
+      attemptToken,
+      leaseUntil: new Date(Date.now() + 60_000),
+    });
+
+    await expect(settleVoiceNoteTerminal(db, {
+      id: note!.id,
+      attemptToken,
+      state: "completed",
+      billed: true,
+      billedChars: 1,
+      providerRequestId: "p",
+      providerTraceId: "t",
+      providerRegion: "us",
+      audioBytes: Buffer.alloc(2_097_153),
+      audioSha256: "c".repeat(64),
+      // The old 0109 CHECK trusted this metadata and accepted the oversized
+      // BYTEA. 0110 binds it to octet_length(audio_bytes).
+      audioBytesLen: 1,
+      durationMs: 1,
+    })).rejects.toThrow();
+    expect((await getVoiceNoteById(db, note!.id))?.state).toBe("dispatched");
   });
 
   it("sweeps lease-expired dispatched and abandoned queued rows to indeterminate", async (context) => {

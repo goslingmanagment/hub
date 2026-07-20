@@ -3471,6 +3471,13 @@ export const voiceNotes = pgTable(
     audioCapCheck: check("voice_notes_audio_cap", sql`
       ${table.audioBytesLen} is null or ${table.audioBytesLen} <= 2097152
     `),
+    audioBytesConsistentCheck: check("voice_notes_audio_bytes_consistent", sql`
+      ${table.audioBytes} is null or (
+        ${table.audioBytesLen} is not null
+        and ${table.audioBytesLen} = octet_length(${table.audioBytes})
+        and octet_length(${table.audioBytes}) <= 2097152
+      )
+    `),
   }),
 );
 

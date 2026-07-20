@@ -4872,3 +4872,38 @@ allowlist, the feature, routes, executor dispatch, and capability hint are all
 inert. Owner sign-off for the #36 supersession is requested explicitly in this
 PR's description — merging the code lands the mechanism, but the documented
 carve-out from #36 is the owner's to ratify.
+
+**Decision #175 (2026-07-20, voice pilot hardening clarifies identity,
+artifact, billing-view, and concurrency invariants):** `voice-script` is a
+Fansly-only precursor to synthesis. Before any LLM spend it now requires the
+live voice switch, fail-closed page allowlist, configured ElevenLabs provider,
+page voice profile, and a nonblank fan identity carried identically in
+`conversationRef` and `fanRef`. Synthesis admission accepts the resulting
+restricted generation only when its user, page, conversation, and fan refs all
+match the requested fan. This removes the group-id fallback and makes fan-scope
+erasure address a new voice artifact directly by its canonical fan ref.
+
+The ElevenLabs adapter still performs exactly one client fetch and zero
+automatic retries, but redirects now fail instead of forwarding the API key and
+script. Successful bodies are streamed under the 2 MiB ceiling, require exact
+`audio/mpeg`, and must contain a complete first MPEG Layer III frame (directly
+or after a valid ID3v2 header). Blank `character-cost` is unknown, never zero.
+The database independently binds `audio_bytes_len` to
+`octet_length(audio_bytes)` and the same cap. Invalid, truncated, wrong-MIME,
+or oversized 200 responses remain possibly billed and never become playable
+artifacts.
+
+`VOICE_NOTES_MAX_CONCURRENT_SYNTHESES` is enforced by a process-local gate for
+the current single-API deployment. A saturated job remains `queued` without a
+dispatch lease; only after a permit opens does it re-read the live switch,
+allowlist, and limit and attempt the one queued→dispatched CAS. Thus waiting
+cannot expire a dispatch lease, a disabled/de-allowlisted job cannot slip into
+ElevenLabs later, and a sweep that wins the row prevents provider dispatch.
+Running multiple API replicas would require replacing this gate with a shared
+one before enabling more than one replica.
+
+Finally, the existing 24-hour reservation release for stale
+`indeterminate` rows may use `billed=false` only as an internal one-time budget
+release marker. Every public status projection for an `indeterminate` row
+returns `billed:null`; neither the client nor an operator may interpret the
+internal marker as proof that ElevenLabs did not charge.

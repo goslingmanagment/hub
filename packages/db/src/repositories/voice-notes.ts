@@ -32,6 +32,12 @@ export interface InsertVoiceNoteJobInput {
   profileSettings: VoiceProfileSettings;
   profileOutputFormat: string;
   profileVersion: number;
+  /**
+   * The admission timestamp used for the matching daily-budget reservation.
+   * Persisting the same instant keeps later sweep refunds on that reservation's
+   * UTC day even when the transaction crosses midnight.
+   */
+  createdAt: Date;
 }
 
 /**
@@ -61,6 +67,7 @@ export async function insertVoiceNoteJob(
       profileSettings: row.profileSettings,
       profileOutputFormat: row.profileOutputFormat,
       profileVersion: row.profileVersion,
+      createdAt: row.createdAt,
     })
     .onConflictDoNothing({
       target: [voiceNotes.userId, voiceNotes.clientRequestId],
@@ -98,6 +105,7 @@ export async function insertQuotaDeniedVoiceNote(
       profileSettings: row.profileSettings,
       profileOutputFormat: row.profileOutputFormat,
       profileVersion: row.profileVersion,
+      createdAt: row.createdAt,
       state: "quota_denied",
     })
     .onConflictDoNothing({
