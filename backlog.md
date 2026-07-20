@@ -1,6 +1,6 @@
 # Backlog — подтверждённые открытые задачи
 
-Проверено по `main` на `465d7c44` (2026-07-20). Здесь остаются только
+Проверено по `main` на `56537085` (2026-07-20). Здесь остаются только
 воспроизводимые дефекты и конкретный release-safety debt. История PPV-инцидента
 живёт в Decision #155; здесь — только незакрытая работа.
 
@@ -14,16 +14,6 @@
 - **Код:** `apps/runtime/src/services/auth.ts:417-455,998-1048`.
 - **Закрыть:** общий user-lock или authentication epoch при создании сессии и
   детерминированный concurrent regression.
-
-### UV-002 — Logout не линеаризован с выдачей device token
-
-- **Сбой:** issue/reserve успевает прочитать активную сессию, logout возвращает
-  успех, затем запрос коммитит active/pending credential; activation повторно
-  исходную сессию не проверяет.
-- **Код:** `apps/runtime/src/services/auth.ts:1099-1114,1240-1269,1311-1334,1394-1428`,
-  `packages/db/src/repositories/auth.ts:129-132`.
-- **Закрыть:** единый lock order для logout и обоих mint-path плюс реально
-  перекрывающиеся integration-тесты.
 
 ### UV-003 — Bounded snapshot может checkpoint-нуть уже стёртые данные
 
