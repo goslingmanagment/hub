@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayQuota,
   AiGatewayStreamBody,
@@ -201,6 +202,9 @@ export interface AiGatewayStreamInternalOptions {
   debugFrame?: AiFeatureDebugInputFrame;
   /** Echoed only for clients that supplied the matching feature precondition. */
   personaDefinitionId?: string;
+  /** Coach-only recap provenance for the existing meta frame. Derived from the
+   * finalized prompt attachments; absent for the raw gateway and other features. */
+  attachedRecaps?: AiFeatureAttachedRecaps;
 }
 
 /** The feature service builds a stream input from the wire body plus optional
@@ -363,6 +367,9 @@ export async function prepareAiGatewayStream(
       ...(internal?.personaDefinitionId !== undefined
         ? { personaDefinitionId: internal.personaDefinitionId }
         : {}),
+      ...(internal?.attachedRecaps !== undefined
+        ? { attachedRecaps: internal.attachedRecaps }
+        : {}),
       quota: quotaFrame,
     },
     ...(internal?.debugFrame ? { debugFrame: internal.debugFrame } : {}),
@@ -516,6 +523,16 @@ export const PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME: AiGatewayStreamFrame = {
   retryAfterMs: null,
 };
 
+// Empty or whitespace-only output is not a completed generation. Reject it in
+// the shared terminal consumer so HTTP and CLI callers agree, no `done` frame
+// reaches a client, and the restricted record cannot become a usable recap.
+export const PROVIDER_OUTPUT_EMPTY_ERROR_FRAME: AiGatewayStreamFrame = {
+  type: "error",
+  code: "provider_output_empty",
+  message: "AI gateway provider completed without usable output",
+  retryAfterMs: null,
+};
+
 /**
  * Shared terminal-stream consumer (P1-5): the coach transport ceiling check and
  * the terminal outcome/usage/stopReason accounting used by BOTH the HTTP SSE
@@ -602,10 +619,15 @@ export class AiGatewayTerminalStreamConsumer {
     // Premature EOF (P1-2): the stream emitted content (and, past the check
     // above, usage) but ended without a terminal stopReason. Fail closed with an
     // error frame and NO done, so the partial output can never be committed or
-    // attached. Zero-content streams are out of scope and keep prior behavior.
+    // attached. Zero/whitespace output has its own explicit guard immediately
+    // below, once the stronger incomplete-terminal condition is ruled out.
     if (this.outcome === "completed" && this.streamedContent && !this.hasUsableTerminal()) {
       this.outcome = "failed";
       return { emit: [PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME], usageMissing: false };
+    }
+    if (this.outcome === "completed" && this.completionText.trim().length === 0) {
+      this.outcome = "failed";
+      return { emit: [PROVIDER_OUTPUT_EMPTY_ERROR_FRAME], usageMissing: false };
     }
     if (this.doneFrame) {
       return { emit: [this.doneFrame], usageMissing: false };

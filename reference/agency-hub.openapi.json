@@ -22169,6 +22169,16 @@
             "in": "query",
             "name": "fanRef",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 100
+            },
+            "in": "query",
+            "name": "personaDefinitionId",
+            "required": false
           }
         ],
         "security": [

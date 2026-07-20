@@ -4,6 +4,7 @@ import {
   buildPrompt,
   coachHistorySection,
   COACH_CHAT_TEMPLATE,
+  COACH_PROMPT_MAX_CHARS,
   FAN_SUMMARY_SHORT_TEMPLATE,
   projectCoachAnswer,
   type PromptBuildInput,
@@ -36,6 +37,7 @@ describe("coach-chat prompt", () => {
     expect(text).toContain("FULL RECAP");
     expect(text).toContain("SHORT RECAP");
     expect(text).toMatch(/full recap.*3 day/i); // age labels
+    expect(built.coachRecapSlots).toEqual({ full: true, short: true });
   });
 
   it("tail-truncates an oversized recap on code points — never splits a surrogate pair", () => {
@@ -99,6 +101,139 @@ describe("coach-chat prompt", () => {
     // The question stays in the uncached task block.
     expect(taskBlock?.cache).toBe("none");
     expect(taskBlock?.text).toContain("как продать ppv?");
+  });
+
+  it("bounds the whole worst-legal escaped prompt while preserving the question and newest transcript", () => {
+    const amp = "&";
+    const transcript =
+      "OLDEST_TRANSCRIPT_SENTINEL\n"
+      + amp.repeat(299_940)
+      + "\nNEWEST_TRANSCRIPT_🎉";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: {
+        ...baseInput.personality,
+        content: amp.repeat(50_000),
+      },
+      transcript,
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(1_980) + "QUESTION_SENTINEL",
+      coachHistory: Array.from({ length: 20 }, (_, index) => ({
+        question: `HISTORY_Q_${index}` + amp.repeat(1_980),
+        answer: `HISTORY_A_${index}` + amp.repeat(63_980),
+      })),
+      recapAttach: {
+        full: { body: "FULL_RECAP " + amp.repeat(40_000), ageMs: 86_400_000 },
+        short: { body: "SHORT_RECAP " + amp.repeat(40_000), ageMs: 60_000 },
+      },
+      fanProfile: {
+        body: "DOSSIER " + amp.repeat(19_990),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      transcriptCoverage: "window",
+    });
+    const text = built.system + built.user;
+
+    expect(text.length).toBeLessThanOrEqual(COACH_PROMPT_MAX_CHARS);
+    expect(built.system).toContain(amp.repeat(50_000));
+    expect(built.user).toContain("QUESTION_SENTINEL");
+    expect(built.user).toContain("[older transcript omitted]");
+    expect(built.user).toContain("NEWEST_TRANSCRIPT_🎉");
+    expect(built.user).not.toContain("OLDEST_TRANSCRIPT_SENTINEL");
+    expect(built.coachRecapSlots).toEqual({ full: false, short: false });
+    expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(text).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
+
+  it("sheds oldest coach exchanges before reducing summaries or the transcript", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "TRANSCRIPT_HEAD\n" + amp.repeat(1_800) + "\nTRANSCRIPT_TAIL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      coachHistory: [
+        { question: "OLDEST_HISTORY", answer: "old " + "o".repeat(3_000) },
+        { question: "NEWEST_HISTORY", answer: "new " + "n".repeat(500) },
+      ],
+      recapAttach: {
+        full: { body: "FULL_UNTOUCHED", ageMs: 86_400_000 },
+        short: { body: "SHORT_UNTOUCHED", ageMs: 60_000 },
+      },
+      fanProfile: {
+        body: "DOSSIER_UNTOUCHED",
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+    });
+
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    expect(built.user).not.toContain("OLDEST_HISTORY");
+    expect(built.user).toContain("NEWEST_HISTORY");
+    expect(built.user).toContain("FULL_UNTOUCHED");
+    expect(built.user).toContain("SHORT_UNTOUCHED");
+    expect(built.user).toContain("DOSSIER_UNTOUCHED");
+    expect(built.user).not.toContain("older transcript omitted");
+    expect(built.coachRecapSlots).toEqual({ full: true, short: true });
+  });
+
+  it("reduces intact summary sections before trimming the oldest transcript", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "TRANSCRIPT_HEAD\n" + amp.repeat(2_000) + "\nTRANSCRIPT_TAIL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      recapAttach: {
+        full: { body: "FULL_TO_SHED " + amp.repeat(500), ageMs: 86_400_000 },
+        short: { body: "SHORT_TO_KEEP " + amp.repeat(500), ageMs: 60_000 },
+      },
+      fanProfile: {
+        body: "DOSSIER_TO_SHED " + amp.repeat(500),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+    });
+
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    expect(built.user).not.toContain("DOSSIER_TO_SHED");
+    expect(built.user).not.toContain("FULL_TO_SHED");
+    expect(built.user).toContain("SHORT_TO_KEEP");
+    expect(built.user).toContain("TRANSCRIPT_HEAD");
+    expect(built.user).toContain("TRANSCRIPT_TAIL");
+    expect(built.user).not.toContain("older transcript omitted");
+    expect((built.user.match(/<short_recap>/g) ?? [])).toHaveLength(1);
+    expect((built.user.match(/<\/short_recap>/g) ?? [])).toHaveLength(1);
+    expect(built.coachRecapSlots).toEqual({ full: false, short: true });
+  });
+
+  it("deduplicates a byte-identical recap already carried as the dossier", () => {
+    const built = buildPrompt({
+      ...baseInput,
+      fanProfile: {
+        body: "SAME_SUMMARY",
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      recapAttach: {
+        full: { body: "SAME_SUMMARY", ageMs: 60_000 },
+        short: { body: "FRESH_SHORT", ageMs: 1_000 },
+      },
+    });
+
+    expect(built.user).toContain("<fan_dossier>\nSAME_SUMMARY\n</fan_dossier>");
+    expect(built.user).not.toContain("<full_recap>");
+    expect(built.user).toContain("<short_recap>\nFRESH_SHORT\n</short_recap>");
+    expect(built.coachRecapSlots).toEqual({ full: false, short: true });
   });
 });
 

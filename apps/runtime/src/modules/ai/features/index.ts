@@ -1,4 +1,5 @@
 import type {
+  AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
 } from "@agency_hub_core/contracts";
@@ -469,7 +470,9 @@ export async function prepareAiFeatureStream(
   // prompt. Fail-open like the dossier — a recap-lookup hiccup degrades to "no
   // recaps", never to a failed coach answer.
   let recapAttach: RecapAttach | undefined;
+  let attachedRecaps: AiFeatureAttachedRecaps | undefined;
   if (feature === "coach-chat") {
+    attachedRecaps = { full: null, short: null };
     try {
       const conversationRefs = [
         body.conversationRef,
@@ -478,6 +481,7 @@ export async function prepareAiFeatureStream(
       const found = await getFreshestUsableRecaps(app.db, {
         pageId,
         conversationRefs,
+        personaDefinitionId: persona.definitionId,
       });
       const fullAt = found.full?.createdAt?.getTime() ?? null;
       const shortAt = found.short?.createdAt?.getTime() ?? null;
@@ -487,11 +491,11 @@ export async function prepareAiFeatureStream(
       // adds nothing the fuller, fresher recap does not already carry).
       recapAttach = {
         full: found.full
-          ? { body: found.full.completion, ageMs: now - fullAt! }
+          ? { body: found.full.completion, ageMs: Math.max(0, now - fullAt!) }
           : null,
         short:
           found.short && (fullAt === null || shortAt! > fullAt)
-            ? { body: found.short.completion, ageMs: now - shortAt! }
+            ? { body: found.short.completion, ageMs: Math.max(0, now - shortAt!) }
             : null,
       };
       // Dossier dedupe (P2-10): when the injected dossier came from the same
@@ -504,6 +508,20 @@ export async function prepareAiFeatureStream(
       if (recapAttach.full && fanProfile?.rawBody === recapAttach.full.body) {
         recapAttach.full = null;
       }
+      attachedRecaps = {
+        full: recapAttach.full && found.full
+          ? {
+            generatedAt: found.full.createdAt.toISOString(),
+            ageMs: recapAttach.full.ageMs,
+          }
+          : null,
+        short: recapAttach.short && found.short
+          ? {
+            generatedAt: found.short.createdAt.toISOString(),
+            ageMs: recapAttach.short.ageMs,
+          }
+          : null,
+      };
       contextManifest = {
         ...(contextManifest ?? {}),
         recapAttach: {
@@ -545,6 +563,33 @@ export async function prepareAiFeatureStream(
         : undefined,
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
   });
+
+  // The whole-Coach prompt budget may shed a recap after repository selection.
+  // Metadata must describe what the provider actually receives, not the
+  // pre-budget candidates. The builder reports exact final wrapper presence;
+  // fan-derived wrappers cannot spoof it because prompt values are escaped.
+  if (attachedRecaps && prompt.coachRecapSlots) {
+    attachedRecaps = {
+      full: prompt.coachRecapSlots.full ? attachedRecaps.full : null,
+      short: prompt.coachRecapSlots.short ? attachedRecaps.short : null,
+    };
+    const recapManifest = contextManifest?.["recapAttach"];
+    if (
+      typeof recapManifest === "object"
+      && recapManifest !== null
+      && ("full" in recapManifest || "short" in recapManifest)
+    ) {
+      const slots = recapManifest as Record<string, unknown>;
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        recapAttach: {
+          ...slots,
+          full: prompt.coachRecapSlots.full ? slots["full"] : null,
+          short: prompt.coachRecapSlots.short ? slots["short"] : null,
+        },
+      };
+    }
+  }
 
   const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
@@ -590,11 +635,15 @@ export async function prepareAiFeatureStream(
       ? { visibleOutputCeilingChars: COACH_ANSWER_MAX_CHARS }
       : {}),
     // Two-slot recap selection (spec §5): only fan-summary rows carry the
-    // summaryMode/coverage/count provenance the recap reader filters on.
+    // summaryMode/persona/coverage/count provenance the recap reader filters on.
     ...(feature === "fan-summary"
       ? {
         featureParams: {
           summaryMode: body.summaryMode ?? "full",
+          // Recaps are persona-scoped inputs. Persist the exact resolved
+          // definition (not merely the caller-supplied key) so a later coach
+          // turn cannot attach a recap generated under another revision.
+          personaDefinitionId: persona.definitionId,
           transcriptCoverage: body.clientContext?.transcriptCoverage ?? null,
           // P2-5: provenance from the RESOLVED request window (after the short
           // clamp) and the ACTUAL kept count — populated on BOTH lanes so an
@@ -643,12 +692,14 @@ export async function prepareAiFeatureStream(
     contextManifest !== undefined
       || debugFrame !== undefined
       || body.expectedPersonaDefinitionId !== undefined
+      || attachedRecaps !== undefined
       ? {
         ...(contextManifest !== undefined ? { contextManifest } : {}),
         ...(debugFrame !== undefined ? { debugFrame } : {}),
         ...(body.expectedPersonaDefinitionId !== undefined
           ? { personaDefinitionId: persona.definitionId }
           : {}),
+        ...(attachedRecaps !== undefined ? { attachedRecaps } : {}),
       }
       : undefined,
   );

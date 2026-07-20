@@ -1923,6 +1923,16 @@ export const aiGatewayQuotaSchema = z.object({
   remainingMicroUsdToday: z.number().int().nonnegative().nullable(),
 });
 
+const aiFeatureAttachedRecapSchema = z.object({
+  generatedAt: isoTimestamp,
+  ageMs: z.number().int().nonnegative(),
+}).strict();
+
+export const aiFeatureAttachedRecapsSchema = z.object({
+  full: aiFeatureAttachedRecapSchema.nullable(),
+  short: aiFeatureAttachedRecapSchema.nullable(),
+}).strict();
+
 export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("meta"),
@@ -1934,6 +1944,9 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
     provider: z.enum(["anthropic", "openrouter"]),
     providerResponseId: z.string().nullable(),
     personaDefinitionId: z.string().min(16).max(100).optional(),
+    // Feature-lane-only provenance for coach-chat. It is optional because the
+    // raw gateway and every other feature share this existing meta frame.
+    attachedRecaps: aiFeatureAttachedRecapsSchema.optional(),
     quota: aiGatewayQuotaSchema,
   }).strict(),
   z.object({
@@ -2025,6 +2038,10 @@ export const aiRecapStatusQuerySchema = z.object({
   pageLabel: z.string().min(1).max(120),
   conversationRef: z.string().min(1).max(255),
   fanRef: z.string().min(1).max(255).optional(),
+  // Optional for rollout compatibility. Definition-aware clients send the
+  // opaque catalog identity so status and the eventual coach attach select the
+  // same persona-scoped recap rows.
+  personaDefinitionId: z.string().min(16).max(100).optional(),
 }).strict();
 
 const aiRecapSlotSchema = z.object({
@@ -7128,6 +7145,7 @@ export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSc
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
 export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
 export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;
+export type AiFeatureAttachedRecaps = z.infer<typeof aiFeatureAttachedRecapsSchema>;
 export type AiGatewayStreamFrame = z.infer<typeof aiGatewayStreamFrameSchema>;
 export type AiFeatureStreamFrame = z.infer<typeof aiFeatureStreamFrameSchema>;
 export type AiPersonaCatalogItem = z.infer<typeof aiPersonaCatalogItemSchema>;

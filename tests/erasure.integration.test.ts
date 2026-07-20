@@ -1222,7 +1222,7 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`voice_notes where conversation_ref = '${OTHER_FAN}' and audio_bytes is not null`)).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("fan-scope erasure purges a Fansly voice note keyed by the messaging GROUP id, not the fan ref (0109 / A49)", async (context) => {
+  it("fan-scope erasure purges Fansly voice and AI rows keyed by the messaging GROUP id (0109 / A49)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1294,7 +1294,31 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     await seedNote(TARGET_GROUP);
     await seedNote(OTHER_GROUP);
 
+    // Pre-fix and unresolved-fan generations can also be keyed only by the
+    // Fansly GROUP id, with no separate fan_ref. Fan erasure must resolve the
+    // same page_dm_threads linkage used for voice notes. Seed a bystander row
+    // and acceptance event too, proving the predicate remains fan-selective.
+    for (const [generationRef, conversationRef] of [
+      ["gen-fansly-group-target", TARGET_GROUP],
+      ["gen-fansly-group-other", OTHER_GROUP],
+    ] as const) {
+      await testDb.pool.query(
+        `insert into ai_generation_content (generation_ref, feature, model, provider,
+           page_id, conversation_ref, fan_ref, prompt_blocks, completion, params)
+         values ($1, 'fan-summary', 'm', 'anthropic', $2, $3, null,
+                 '[]'::jsonb, 'recap', '{}'::jsonb)`,
+        [generationRef, page.id, conversationRef],
+      );
+      await testDb.pool.query(
+        `insert into ai_acceptance_events (generation_ref, lifecycle, occurred_at)
+         values ($1, 'shown', now())`,
+        [generationRef],
+      );
+    }
+
     expect(await count(`voice_notes where platform_account_id = ${page.id} and audio_bytes is not null`)).toBe(2);
+    expect(await count(`ai_generation_content where page_id = ${page.id}`)).toBe(2);
+    expect(await count(`ai_acceptance_events`)).toBe(2);
 
     const result = await executeErasure(
       appStub(),
@@ -1306,6 +1330,11 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`voice_notes where conversation_ref = '${TARGET_GROUP}'`)).toBe(0);
     // …and the OTHER fan's group-ref'd note survives, audio intact.
     expect(await count(`voice_notes where conversation_ref = '${OTHER_GROUP}' and audio_bytes is not null`)).toBe(1);
+    expect(result.executedCounts["hot:ai_generation_content:delete"], "fansly AI generation fan target").toBe(1);
+    expect(result.executedCounts["hot:ai_acceptance_events:delete"], "fansly AI acceptance fan target").toBe(1);
+    expect(await count(`ai_generation_content where generation_ref = 'gen-fansly-group-target'`)).toBe(0);
+    expect(await count(`ai_generation_content where generation_ref = 'gen-fansly-group-other'`)).toBe(1);
+    expect(await count(`ai_acceptance_events`)).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("a converged retry supersedes every unresolved attempt for only the same scope", async (context) => {

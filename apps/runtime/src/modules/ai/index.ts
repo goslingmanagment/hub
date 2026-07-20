@@ -143,7 +143,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
-    const { pageLabel, conversationRef, fanRef } = request.query;
+    const { pageLabel, conversationRef, fanRef, personaDefinitionId } = request.query;
     const stored = await findPageByLabel(appContext.db, pageLabel);
     if (!stored || !canAccessPage(principal, stored.page.id)) {
       throw new NotFoundError("Page not found");
@@ -152,6 +152,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const found = await getFreshestUsableRecaps(appContext.db, {
       pageId: stored.page.id,
       conversationRefs,
+      ...(personaDefinitionId ? { personaDefinitionId } : {}),
     });
     const now = Date.now();
     const slot = (row: typeof found.full) =>

@@ -169,6 +169,25 @@ async function seedConversation() {
   );
 }
 
+async function defaultPersonaDefinitionId(): Promise<string> {
+  const personaKey = createBundledPersonalities()[0]!.id;
+  const catalog = await apiServer!.inject({
+    method: "GET",
+    url: "/api/v1/ai/persona-catalog",
+    headers: { authorization: `Bearer ${chatterKey}` },
+  });
+  if (catalog.statusCode !== 200) {
+    throw new Error(`persona catalog lookup failed: ${catalog.statusCode} ${catalog.body}`);
+  }
+  const definitionId = catalog.json().personas.find(
+    (persona: { key: string }) => persona.key === personaKey,
+  )?.definitionId;
+  if (typeof definitionId !== "string") {
+    throw new Error(`default persona ${personaKey} missing from catalog`);
+  }
+  return definitionId;
+}
+
 function capturingProvider(capture: {
   input?: AiGatewayProviderInput;
   calls?: number;
@@ -249,6 +268,30 @@ function prematureEofProvider(capture: { calls?: number }): AiGatewayProvider {
         },
       };
       yield { type: "done", stopReason: null };
+    },
+  };
+}
+
+function whitespaceOnlyProvider(capture: { calls?: number }): AiGatewayProvider {
+  return {
+    provider: "anthropic",
+    async *stream() {
+      capture.calls = (capture.calls ?? 0) + 1;
+      yield { type: "content_delta", text: " \t\n " };
+      yield {
+        type: "usage",
+        providerResponseId: "msg_empty",
+        cacheHit: false,
+        usage: {
+          inputTokens: 50,
+          outputTokens: 1,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          costMicroUsd: 100,
+          costApproximate: false,
+        },
+      };
+      yield { type: "done", stopReason: "end_turn" };
     },
   };
 }
@@ -508,6 +551,7 @@ describe("AI feature service pilot (Stage 30)", () => {
       type: "meta",
       personaDefinitionId: definitionId,
     });
+    expect(aiFrames(response.body)[0]).not.toHaveProperty("attachedRecaps");
 
     const stale = await apiServer!.inject({
       method: "POST",
@@ -1654,6 +1698,38 @@ describe("coach-chat gates", () => {
     );
     expect(rows[0]!.gateway_outcome).toBe("failed");
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("fails whitespace-only output before it can be recorded as completed", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = whitespaceOnlyProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({ chatterQuestion: "что ответить?" }),
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const frames = aiFrames(res.body);
+    expect(frames).toContainEqual({
+      type: "error",
+      code: "provider_output_empty",
+      message: expect.any(String),
+      retryAfterMs: null,
+    });
+    expect(frames.some((frame) => frame.type === "done")).toBe(false);
+
+    // Restricted capture still records the failed attempt as an audit fact,
+    // but it can no longer become a completed/attachable recap row.
+    const { rows } = await testDb.pool.query<{ outcome: string | null; completion: string }>(
+      `select params ->> 'outcome' as outcome, completion
+       from ai_generation_content order by id desc limit 1`,
+    );
+    expect(rows[0]).toEqual({ outcome: "failed", completion: " \t\n " });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
 describe("fan-summary short variant cap (Task 8)", () => {
@@ -1708,6 +1784,13 @@ describe("fan-summary short variant cap (Task 8)", () => {
       .join("\n");
     expect(promptText).toContain("COMPACT RECAP");
     expect(promptText).toContain("fresh beach message");
+    const { rows } = await testDb.pool.query<{ params: Record<string, unknown> }>(
+      `select params from ai_generation_content
+       where feature = 'fan-summary' order by id desc limit 1`,
+    );
+    expect(rows[0]?.params["personaDefinitionId"]).toBe(
+      await defaultPersonaDefinitionId(),
+    );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("leaves maxTokens unset and keeps adaptive thinking without summaryMode", async (context) => {
@@ -1910,8 +1993,12 @@ describe("coach-chat recap attach (spec §5)", () => {
     mode: "full" | "short";
     completion: string;
     createdAt: Date;
+    personaDefinitionId?: string | null;
   }): Promise<void> {
     const generationRef = randomUUID();
+    const personaDefinitionId = input.personaDefinitionId === undefined
+      ? await defaultPersonaDefinitionId()
+      : input.personaDefinitionId;
     await insertAiGenerationContent(testDb!.db, {
       usageEventId: null,
       generationRef,
@@ -1924,7 +2011,12 @@ describe("coach-chat recap attach (spec §5)", () => {
       fanRef,
       promptBlocks: [],
       completion: input.completion,
-      params: { summaryMode: input.mode, outcome: "completed", stopReason: "end_turn" },
+      params: {
+        summaryMode: input.mode,
+        ...(personaDefinitionId ? { personaDefinitionId } : {}),
+        outcome: "completed",
+        stopReason: "end_turn",
+      },
     });
     // insertAiGenerationContent has no createdAt input; set it directly so the
     // full-vs-short recency the attach rule compares is deterministic.
@@ -1958,7 +2050,7 @@ describe("coach-chat recap attach (spec §5)", () => {
         ...over,
       },
     });
-    return { res, promptText: JSON.stringify(capture.input) };
+    return { res, promptText: JSON.stringify(capture.input), frames: aiFrames(res.body) };
   }
 
   it("(a) only a full recap exists -> full attached", async (context) => {
@@ -1967,12 +2059,24 @@ describe("coach-chat recap attach (spec §5)", () => {
       return;
     }
     const pageId = await svcFsPageId();
-    await seedRecap({ pageId, mode: "full", completion: "FULL_ONLY_BODY", createdAt: daysAgo(2) });
-    const { res, promptText } = await runCoach();
+    const fullCreatedAt = daysAgo(2);
+    await seedRecap({ pageId, mode: "full", completion: "FULL_ONLY_BODY", createdAt: fullCreatedAt });
+    const { res, promptText, frames } = await runCoach();
     expect(res.statusCode, res.body).toBe(200);
     expect(promptText).toContain("Full recap");
     expect(promptText).toContain("FULL_ONLY_BODY");
     expect(promptText).not.toContain("Short recap");
+    expect(frames[0]).toMatchObject({
+      type: "meta",
+      attachedRecaps: {
+        full: {
+          generatedAt: fullCreatedAt.toISOString(),
+          ageMs: expect.any(Number),
+        },
+        short: null,
+      },
+    });
+    expect(aiFeatureStreamFrameSchema.safeParse(frames[0]).success).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(b) only a short recap exists -> short attached", async (context) => {
@@ -1989,20 +2093,67 @@ describe("coach-chat recap attach (spec §5)", () => {
     expect(promptText).not.toContain("Full recap");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("does not attach a recap from another persona or a legacy unscoped row", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    await seedRecap({
+      pageId,
+      mode: "full",
+      completion: "OTHER_PERSONA_BODY",
+      createdAt: daysAgo(2),
+      personaDefinitionId: `v1:${"x".repeat(43)}`,
+    });
+    await seedRecap({
+      pageId,
+      mode: "short",
+      completion: "LEGACY_UNSCOPED_BODY",
+      createdAt: daysAgo(1),
+      personaDefinitionId: null,
+    });
+
+    const { res, promptText, frames } = await runCoach();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(promptText).not.toContain("OTHER_PERSONA_BODY");
+    expect(promptText).not.toContain("LEGACY_UNSCOPED_BODY");
+    expect(promptText).not.toContain("## Fan Recaps");
+    expect(frames[0]).toMatchObject({
+      type: "meta",
+      attachedRecaps: { full: null, short: null },
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("(c) both exist, short newer -> BOTH attached, and (f) the manifest records both ages", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     const pageId = await svcFsPageId();
-    await seedRecap({ pageId, mode: "full", completion: "FULLBODY_C", createdAt: daysAgo(5) });
-    await seedRecap({ pageId, mode: "short", completion: "SHORTBODY_C", createdAt: daysAgo(1) });
-    const { res, promptText } = await runCoach();
+    const fullCreatedAt = daysAgo(5);
+    const shortCreatedAt = daysAgo(1);
+    await seedRecap({ pageId, mode: "full", completion: "FULLBODY_C", createdAt: fullCreatedAt });
+    await seedRecap({ pageId, mode: "short", completion: "SHORTBODY_C", createdAt: shortCreatedAt });
+    const { res, promptText, frames } = await runCoach();
     expect(res.statusCode, res.body).toBe(200);
     expect(promptText).toContain("Full recap");
     expect(promptText).toContain("FULLBODY_C");
     expect(promptText).toContain("Short recap");
     expect(promptText).toContain("SHORTBODY_C");
+    expect(frames[0]).toMatchObject({
+      type: "meta",
+      attachedRecaps: {
+        full: {
+          generatedAt: fullCreatedAt.toISOString(),
+          ageMs: expect.any(Number),
+        },
+        short: {
+          generatedAt: shortCreatedAt.toISOString(),
+          ageMs: expect.any(Number),
+        },
+      },
+    });
     // (f) contextManifest.recapAttach is observable on the restricted-store row.
     // The canonical Fansly shape also persists a SEPARATE fan_ref alongside the
     // groupId conversation_ref (Blocker 1) so fan-scope erasure can reach it.
@@ -2023,6 +2174,62 @@ describe("coach-chat recap attach (spec §5)", () => {
     expect(typeof recapAttach?.short).toBe("number");
     expect(rows[0]?.conversation_ref).toBe(conversationRef);
     expect(rows[0]?.fan_ref).toBe(fanRef);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reports recaps as absent when the whole-prompt budget sheds them", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    await seedRecap({
+      pageId,
+      mode: "full",
+      completion: "FULL_SHED_BY_PROMPT_BUDGET",
+      createdAt: daysAgo(5),
+    });
+    await seedRecap({
+      pageId,
+      mode: "short",
+      completion: "SHORT_SHED_BY_PROMPT_BUDGET",
+      createdAt: daysAgo(1),
+    });
+    const amp = "&";
+    const { res, promptText, frames } = await runCoach({
+      chatterQuestion: amp.repeat(2_000),
+      clientContext: {
+        transcript:
+          "OLDEST_RECAP_PRESSURE\n"
+          + amp.repeat(299_950)
+          + "\nNEWEST_RECAP_PRESSURE",
+        messageCount: 5_000,
+        fanDisplayName: "Bob",
+        fanSpendingData: amp.repeat(20_000),
+        fanSubscriptionData: amp.repeat(20_000),
+        fanBio: amp.repeat(5_000),
+      },
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(promptText).not.toContain("FULL_SHED_BY_PROMPT_BUDGET");
+    expect(promptText).not.toContain("SHORT_SHED_BY_PROMPT_BUDGET");
+    expect(promptText).toContain("NEWEST_RECAP_PRESSURE");
+    expect(promptText).not.toContain("OLDEST_RECAP_PRESSURE");
+    expect(frames[0]).toMatchObject({
+      type: "meta",
+      attachedRecaps: { full: null, short: null },
+    });
+
+    const { rows } = await testDb.pool.query<{
+      params: { contextManifest?: { recapAttach?: { full: number | null; short: number | null } } };
+    }>(
+      `select params from ai_generation_content
+       where feature = 'coach-chat' order by id desc limit 1`,
+    );
+    expect(rows[0]?.params.contextManifest?.recapAttach).toEqual({
+      full: null,
+      short: null,
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(d) both exist, full newer -> full only", async (context) => {
@@ -2068,13 +2275,17 @@ describe("coach-chat recap attach (spec §5)", () => {
     await seedRecap({ pageId, mode: "full", completion: body, createdAt: daysAgo(2) });
     // The dossier path is off by default; the env allowlist enables it here.
     appContext.config.chatMuseAiFanProfileContextFeatures = "all";
-    const { res, promptText } = await runCoach();
+    const { res, promptText, frames } = await runCoach();
     expect(res.statusCode, res.body).toBe(200);
     // The dossier is injected...
     expect(promptText).toContain("## Fan Dossier");
     // ...and the duplicate full recap is dropped (no recap section at all).
     expect(promptText).not.toContain("## Fan Recaps");
     expect(promptText).not.toContain("Full recap");
+    expect(frames[0]).toMatchObject({
+      type: "meta",
+      attachedRecaps: { full: null, short: null },
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(g) dedupe fires on a REAL sectioned recap even though compilation drops its financial section (P2-10)", async (context) => {
@@ -2464,8 +2675,12 @@ describe("recap-status read (Task 9)", () => {
     completion: string;
     createdAt: Date;
     params?: Record<string, unknown>;
+    personaDefinitionId?: string | null;
   }): Promise<void> {
     const generationRef = randomUUID();
+    const personaDefinitionId = input.personaDefinitionId === undefined
+      ? await defaultPersonaDefinitionId()
+      : input.personaDefinitionId;
     await insertAiGenerationContent(testDb!.db, {
       usageEventId: null,
       generationRef,
@@ -2480,6 +2695,7 @@ describe("recap-status read (Task 9)", () => {
       completion: input.completion,
       params: {
         summaryMode: input.mode,
+        ...(personaDefinitionId ? { personaDefinitionId } : {}),
         outcome: "completed",
         stopReason: "end_turn",
         ...input.params,
@@ -2519,7 +2735,7 @@ describe("recap-status read (Task 9)", () => {
 
     const res = await apiServer!.inject({
       method: "GET",
-      url: `/api/v1/ai/recap-status?pageLabel=${fanslyPageLabel}&conversationRef=${conversationRef}&fanRef=${fanRef}`,
+      url: `/api/v1/ai/recap-status?pageLabel=${fanslyPageLabel}&conversationRef=${conversationRef}&fanRef=${fanRef}&personaDefinitionId=${encodeURIComponent(await defaultPersonaDefinitionId())}`,
       headers: { authorization: `Bearer ${chatterKey}` },
     });
     expect(res.statusCode, res.body).toBe(200);
@@ -2580,7 +2796,7 @@ describe("recap-status read (Task 9)", () => {
 
     const res = await apiServer!.inject({
       method: "GET",
-      url: `/api/v1/ai/recap-status?pageLabel=svc-of&conversationRef=${FAN}`,
+      url: `/api/v1/ai/recap-status?pageLabel=svc-of&conversationRef=${FAN}&personaDefinitionId=${encodeURIComponent(await defaultPersonaDefinitionId())}`,
       headers: { authorization: `Bearer ${chatterKey}` },
     });
     expect(res.statusCode, res.body).toBe(200);
@@ -2591,6 +2807,36 @@ describe("recap-status read (Task 9)", () => {
     expect(body.short.requestedCount).toBe(300);
     expect(typeof body.short.keptCount).toBe("number");
     expect(body.short.keptCount).toBeGreaterThan(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("filters status by persona definition and excludes legacy unscoped rows", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await svcFsPageId();
+    await seedRecap({
+      pageId,
+      mode: "full",
+      completion: "OTHER_PERSONA_BODY",
+      createdAt: new Date(Date.now() - 2 * 60 * 1000),
+      personaDefinitionId: `v1:${"x".repeat(43)}`,
+    });
+    await seedRecap({
+      pageId,
+      mode: "short",
+      completion: "LEGACY_UNSCOPED_BODY",
+      createdAt: new Date(Date.now() - 60 * 1000),
+      personaDefinitionId: null,
+    });
+    const personaDefinitionId = await defaultPersonaDefinitionId();
+    const res = await apiServer!.inject({
+      method: "GET",
+      url: `/api/v1/ai/recap-status?pageLabel=${fanslyPageLabel}&conversationRef=${conversationRef}&fanRef=${fanRef}&personaDefinitionId=${encodeURIComponent(personaDefinitionId)}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ full: null, short: null });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("returns null slots (not an error) when no usable recap exists", async (context) => {

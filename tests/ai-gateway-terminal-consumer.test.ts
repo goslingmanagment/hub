@@ -122,15 +122,29 @@ describe("AiGatewayTerminalStreamConsumer", () => {
     expect(consumer.outcome).toBe("failed");
   });
 
-  it("keeps zero-content streams on existing behavior (no premature-EOF error)", () => {
-    // The premature-EOF guard is scoped to streams that emitted content. A
-    // zero-content stream (nothing to commit) is left to its existing path.
+  it("fails a zero-content stream even when usage and a clean terminal are present", () => {
     const consumer = new AiGatewayTerminalStreamConsumer();
     consumer.note(usageFrame);
-    consumer.note(done(null));
+    consumer.note(done("end_turn"));
     const finished = consumer.finish();
-    expect(finished.emit).toEqual([done(null)]);
-    expect(consumer.outcome).toBe("completed");
+    expect(finished.emit).toEqual([
+      { type: "error", code: "provider_output_empty", message: expect.any(String), retryAfterMs: null },
+    ]);
+    expect(finished.emit.some((frame) => frame.type === "done")).toBe(false);
+    expect(consumer.outcome).toBe("failed");
+  });
+
+  it("fails a whitespace-only stream before it can be persisted as completed", () => {
+    const consumer = new AiGatewayTerminalStreamConsumer();
+    consumer.note(content(" \t\n "));
+    consumer.note(usageFrame);
+    consumer.note(done("end_turn"));
+    const finished = consumer.finish();
+    expect(finished.emit).toEqual([
+      { type: "error", code: "provider_output_empty", message: expect.any(String), retryAfterMs: null },
+    ]);
+    expect(finished.emit.some((frame) => frame.type === "done")).toBe(false);
+    expect(consumer.outcome).toBe("failed");
   });
 
   it("an error frame pins the outcome to failed", () => {

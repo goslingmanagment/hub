@@ -538,6 +538,20 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // threads BEFORE those threads (and their messages) are deleted.
   const threadPred = sql`t.platform_account_id in ${scope.pageIds}
     and (t.fan_id = ${fanId} or t.platform_conversation_id = ${ref})`;
+
+  // Fansly can key fan-owned artifacts by the messaging GROUP id rather than
+  // the partner account id used as fanRef. Resolve those ids once, while the
+  // page_dm_threads linkage still exists, and reuse the static list below: the
+  // thread target runs before the generation and voice-note delete closures.
+  const fanGroupIdRows = await rows<{ group_id: string }>(app, sql`
+    select distinct t.platform_conversation_id as group_id
+    from page_dm_threads t
+    where (${threadPred}) or (t.platform_account_id in ${scope.pageIds}
+      and t.partner_platform_user_id = ${ref})`);
+  const fanGroupIds = fanGroupIdRows
+    .map((row) => row.group_id)
+    .filter((id): id is string => !!id && id !== ref);
+
   targets.push({
     plane: "hot",
     target: "wb_closing_cache",
@@ -627,10 +641,14 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   });
 
   // Stage 29 restricted class: generations tied to the fan — by legacy
-  // conversation_ref = fanId OR the canonical fan_ref (coach/recap rows whose
-  // conversation_ref is the Fansly groupId, spec §5). Acceptance rows resolve
-  // through them, so they go first.
-  const generationPred = sql`page_id in ${scope.pageIds} and (conversation_ref = ${ref} or fan_ref = ${ref})`;
+  // conversation_ref = fanId, canonical fan_ref, OR a resolved Fansly groupId
+  // on pre-fix/unresolved-fan rows whose fan_ref is NULL. Acceptance rows
+  // resolve through them, so they go first.
+  const generationConvPred = fanGroupIds.length > 0
+    ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
+    : sql`conversation_ref = ${ref}`;
+  const generationPred = sql`page_id in ${scope.pageIds}
+    and (${generationConvPred} or fan_ref = ${ref})`;
   targets.push({
     plane: "hot",
     target: "ai_acceptance_events",
@@ -670,17 +688,8 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // (the sync table linking groupId ↔ partnerAccountId ↔ fan) via the SAME
   // linkage the thread target above uses, plus the partner-id column that
   // carries the Fansly partnerAccountId, and scope voice notes to fanRef OR
-  // those group ids. Resolved NOW (build time) into a static id list: the
-  // page_dm_threads target above deletes those rows inside the tx BEFORE this
-  // target's run closure fires, so a live subquery would find nothing.
-  const fanGroupIdRows = await rows<{ group_id: string }>(app, sql`
-    select distinct t.platform_conversation_id as group_id
-    from page_dm_threads t
-    where (${threadPred}) or (t.platform_account_id in ${scope.pageIds}
-      and t.partner_platform_user_id = ${ref})`);
-  const fanGroupIds = fanGroupIdRows
-    .map((row) => row.group_id)
-    .filter((id): id is string => !!id && id !== ref);
+  // those group ids. The list was resolved above before the thread target can
+  // delete the linkage; a live subquery here would find nothing at execution.
   const voiceNoteConvPred = fanGroupIds.length > 0
     ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
     : sql`conversation_ref = ${ref}`;

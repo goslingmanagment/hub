@@ -106,6 +106,9 @@ export interface PromptPayload {
   user: string;
   systemBlocks: PromptBlock[];
   userBlocks: PromptBlock[];
+  /** Exact recap slots present in the final rendered Coach prompt, after the
+   * whole-prompt reducer. Omitted for every other feature. */
+  coachRecapSlots?: { full: boolean; short: boolean };
 }
 
 interface PromptFeaturePolicy {
@@ -279,19 +282,35 @@ function fanBioSection(fanBio: string | undefined): string {
  * conversation facts. */
 function fanProfileSection(
   fanProfile: { body: string; generatedAt: Date } | undefined,
+  maxBodyChars?: number,
 ): string {
   const trimmed = fanProfile?.body.trim() ?? '';
-  if (!trimmed) {
+  if (!trimmed || maxBodyChars === 0) {
     return '';
   }
+  const body = boundHeadOnCodePoints(
+    trimmed,
+    maxBodyChars ?? Number.POSITIVE_INFINITY,
+    '\n\n[dossier truncated]',
+  );
   const date = fanProfile!.generatedAt.toISOString().slice(0, 10);
   return `## Fan Dossier
 
 Stored dossier about this fan, generated on ${date} from earlier conversation history. Facts and personality age well, but the situational parts — stage and trajectory, open loops, and strategy — describe where things stood ON ${date} and may now be obsolete: treat them as history and context, not as current instructions. If anything here conflicts with the live transcript above, the transcript is authoritative.
 
 <fan_dossier>
-${escapeForPrompt(trimmed)}
+${escapeForPrompt(body)}
 </fan_dossier>`;
+}
+
+/** Head-bound an untrusted section body without ever splitting a surrogate
+ * pair. Callers keep the surrounding heading/XML outside this helper, so even
+ * a heavily reduced value cannot leave a half-section in the final prompt. */
+function boundHeadOnCodePoints(body: string, maxChars: number, marker: string): string {
+  const codePoints = Array.from(body);
+  return codePoints.length > maxChars
+    ? codePoints.slice(0, maxChars).join('') + marker
+    : body;
 }
 
 // Coach dialog can grow unbounded across a session; shed the oldest exchanges
@@ -299,6 +318,20 @@ ${escapeForPrompt(trimmed)}
 // longer caps the aggregate (option "c" removed the 120k gate); this is the
 // authoritative prompt-side bound, applied to the EXACT rendered size.
 const COACH_PROMPT_HISTORY_BUDGET_CHARS = 60_000;
+
+/** Whole rendered Coach prompt ceiling (system + user, UTF-16 code units).
+ * 300k clears every protected worst-legal fixed field together — max 50k
+ * persona, escaped max earnings/bio and escaped max 2k current question take
+ * about 287.1k with the production template — while still reserving room for
+ * the newest transcript. Optional context is shed below before that transcript
+ * is tail-trimmed. This is separate from the 64k answer transport ceiling. */
+export const COACH_PROMPT_MAX_CHARS = 300_000;
+
+// The context compiler already hard-caps a stored dossier at 20k. Repeat the
+// bound at the final assembly boundary so direct/future callers cannot bypass
+// the whole-prompt policy.
+const COACH_DOSSIER_MAX_CHARS = 20_000;
+const COACH_TRANSCRIPT_OMISSION_MARKER = '[older transcript omitted]\n';
 
 // Core-side replay projection (spec §3/§7, option "c"): the model's replay
 // memory is intentionally lossy. A committed coach answer may be up to the 64k
@@ -433,7 +466,10 @@ function formatAge(ageMs: number): string {
 /** The dated "## Fan Recaps" section. Each present slot is labeled with its age
  * before the escaped recap body; the label carries "Full recap"/"Short recap"
  * so the reader knows which summary it is reading and how stale it is. */
-function recapSection(attach: RecapAttach | undefined): string {
+function recapSection(
+  attach: RecapAttach | undefined,
+  maxBodyChars?: { full: number; short: number },
+): string {
   if (!attach || (!attach.full && !attach.short)) {
     return '';
   }
@@ -442,24 +478,24 @@ function recapSection(attach: RecapAttach | undefined): string {
   // slice at RECAP_ATTACH_MAX_CHARS could split one, emitting a lone surrogate
   // into the escaped prompt / JSON body. Slice on code points, exactly as
   // projectCoachAnswer does.
-  const bounded = (body: string): string => {
-    const codePoints = Array.from(body);
-    return codePoints.length > RECAP_ATTACH_MAX_CHARS
-      ? codePoints.slice(0, RECAP_ATTACH_MAX_CHARS).join('') + '\n[recap truncated]'
-      : body;
-  };
-  const parts: string[] = ['## Fan Recaps\n'];
-  if (attach.full) {
+  const bounded = (body: string, slot: 'full' | 'short'): string =>
+    boundHeadOnCodePoints(
+      body,
+      Math.min(RECAP_ATTACH_MAX_CHARS, maxBodyChars?.[slot] ?? RECAP_ATTACH_MAX_CHARS),
+      '\n[recap truncated]',
+    );
+  const parts: string[] = [];
+  if (attach.full && maxBodyChars?.full !== 0) {
     parts.push(
-      `Full recap — generated ${formatAge(attach.full.ageMs)}:\n<full_recap>\n${escapeForPrompt(bounded(attach.full.body))}\n</full_recap>`,
+      `Full recap — generated ${formatAge(attach.full.ageMs)}:\n<full_recap>\n${escapeForPrompt(bounded(attach.full.body, 'full'))}\n</full_recap>`,
     );
   }
-  if (attach.short) {
+  if (attach.short && maxBodyChars?.short !== 0) {
     parts.push(
-      `Short recap — generated ${formatAge(attach.short.ageMs)}:\n<short_recap>\n${escapeForPrompt(bounded(attach.short.body))}\n</short_recap>`,
+      `Short recap — generated ${formatAge(attach.short.ageMs)}:\n<short_recap>\n${escapeForPrompt(bounded(attach.short.body, 'short'))}\n</short_recap>`,
     );
   }
-  return parts.join('\n');
+  return parts.length > 0 ? `## Fan Recaps\n\n${parts.join('\n')}` : '';
 }
 
 /** Honest framing of how much of the conversation the transcript shows (spec
@@ -569,6 +605,176 @@ function buildUserBlocks(
   ];
 }
 
+function dedupeCoachRecaps(
+  attach: RecapAttach | undefined,
+  fanProfile: PromptBuildInput['fanProfile'],
+): RecapAttach | undefined {
+  if (!attach) {
+    return undefined;
+  }
+  let full = attach.full ? { ...attach.full } : null;
+  let short = attach.short ? { ...attach.short } : null;
+  const dossierBody = fanProfile?.body.trim() ?? '';
+  const sameBody = (left: string, right: string): boolean =>
+    left.trim().length > 0 && left.trim() === right.trim();
+
+  // The feature service normally removes the raw full-recap/dossier duplicate.
+  // Keep the final assembly boundary honest too: direct/future callers should
+  // not pay for two byte-identical summaries.
+  if (full && dossierBody && sameBody(full.body, dossierBody)) {
+    full = null;
+  }
+  if (short && dossierBody && sameBody(short.body, dossierBody)) {
+    short = null;
+  }
+  if (full && short && sameBody(full.body, short.body)) {
+    // Identical recap bodies add no information; retain the fresher slot (full
+    // wins an exact age tie because it carries the more durable role label).
+    if (full.ageMs <= short.ageMs) {
+      short = null;
+    } else {
+      full = null;
+    }
+  }
+  return { full, short };
+}
+
+function tailBoundedTranscript(
+  original: string,
+  codePoints: string[],
+  maxChars: number,
+): string {
+  if (maxChars >= codePoints.length) {
+    return original;
+  }
+  if (maxChars <= 0) {
+    return '';
+  }
+  return COACH_TRANSCRIPT_OMISSION_MARKER + codePoints.slice(-maxChars).join('');
+}
+
+/** Apply the Coach's whole-prompt runtime policy to VALUES, before template
+ * substitution. This is deliberately not a slice of the finished prompt:
+ * history exchanges and recap/dossier/transcript wrappers always remain
+ * syntactically intact. Every fit check measures the exact rendered system +
+ * user blocks, including escaping, headings, cache splits and wrapper bytes. */
+function budgetCoachTemplateValues(
+  input: PromptBuildInput,
+  template: string,
+  systemBlocks: PromptBlock[],
+  initialValues: TemplateValues,
+): TemplateValues {
+  let history = [...(input.coachHistory ?? [])];
+  let recapAttach: RecapAttach | undefined = input.recapAttach
+    ? {
+        full: input.recapAttach.full ? { ...input.recapAttach.full } : null,
+        short: input.recapAttach.short ? { ...input.recapAttach.short } : null,
+      }
+    : undefined;
+  const transcriptCodePoints = Array.from(input.transcript);
+  let transcriptChars = transcriptCodePoints.length;
+  let dossierChars = Math.min(
+    COACH_DOSSIER_MAX_CHARS,
+    Array.from(input.fanProfile?.body.trim() ?? '').length,
+  );
+  let fullRecapChars = Math.min(
+    RECAP_ATTACH_MAX_CHARS,
+    Array.from(recapAttach?.full?.body ?? '').length,
+  );
+  let shortRecapChars = Math.min(
+    RECAP_ATTACH_MAX_CHARS,
+    Array.from(recapAttach?.short?.body ?? '').length,
+  );
+
+  const makeValues = (): TemplateValues => ({
+    ...initialValues,
+    transcript:
+      transcriptChars === transcriptCodePoints.length
+        ? initialValues.transcript!
+        : escapeForPrompt(
+            tailBoundedTranscript(input.transcript, transcriptCodePoints, transcriptChars),
+          ),
+    fanProfileSection: fanProfileSection(input.fanProfile, dossierChars),
+    recapSection: recapSection(recapAttach, {
+      full: fullRecapChars,
+      short: shortRecapChars,
+    }),
+    coachHistorySection: coachHistorySection(history),
+  });
+  const fits = (values: TemplateValues): boolean => {
+    const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
+    const userChars = buildUserBlocks('coach-chat', template, values).reduce(
+      (total, block) => total + block.text.length,
+      0,
+    );
+    return systemChars + userChars <= COACH_PROMPT_MAX_CHARS;
+  };
+
+  let values = makeValues();
+
+  // 1. Dialog is expendable before fan context: shed whole oldest exchanges,
+  // never a fragment of an XML-wrapped exchange.
+  while (!fits(values) && history.length > 0) {
+    history = history.slice(1);
+    values = makeValues();
+  }
+
+  // 2. Remove exact summary duplicates, then shed the least-current bounded
+  // summary sections first: dossier, full recap, short recap. Whole-section
+  // removal is intentionally coarse and keeps every heading/tag pair intact.
+  recapAttach = dedupeCoachRecaps(recapAttach, input.fanProfile);
+  if (!recapAttach?.full) fullRecapChars = 0;
+  if (!recapAttach?.short) shortRecapChars = 0;
+  values = makeValues();
+  if (fits(values)) {
+    return values;
+  }
+  dossierChars = 0;
+  values = makeValues();
+  if (fits(values)) return values;
+  fullRecapChars = 0;
+  values = makeValues();
+  if (fits(values)) return values;
+  shortRecapChars = 0;
+  values = makeValues();
+  if (fits(values)) return values;
+
+  // 3. Only after every older/summary source is exhausted may the transcript
+  // lose its oldest prefix. The current question and system/persona never enter
+  // this reducer. Legal contract maxima guarantee at least one newest code point
+  // fits; fail closed if a future caller/schema breaks that invariant.
+  transcriptChars = 0;
+  const withoutTranscript = makeValues();
+  if (!fits(withoutTranscript)) {
+    throw new Error(
+      `Coach prompt protected context exceeds ${COACH_PROMPT_MAX_CHARS} characters`,
+    );
+  }
+  let low = 1;
+  let high = transcriptCodePoints.length - 1; // the full transcript is known not to fit
+  let best = 0;
+  let bestValues = withoutTranscript;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    transcriptChars = middle;
+    const candidate = makeValues();
+    if (fits(candidate)) {
+      best = middle;
+      bestValues = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  if (transcriptCodePoints.length > 0 && best === 0) {
+    throw new Error(
+      `Coach prompt cannot retain newest transcript within ${COACH_PROMPT_MAX_CHARS} characters`,
+    );
+  }
+  transcriptChars = best;
+  return bestValues;
+}
+
 export function flattenPromptBlocks(blocks: ReadonlyArray<PromptBlock>): string {
   return blocks.map((block) => block.text).join('');
 }
@@ -599,11 +805,28 @@ export function buildPrompt(
       : DEFAULT_TEMPLATES[input.feature]);
   const template = applyPlatformWording(selectedTemplate, platform);
   const systemBlocks = buildSystemBlocks(input.feature, input.personality, platform);
-  const userBlocks = buildUserBlocks(input.feature, template, templateValues(input));
+  const initialValues = templateValues(input);
+  const values =
+    input.feature === 'coach-chat'
+      ? budgetCoachTemplateValues(input, template, systemBlocks, initialValues)
+      : initialValues;
+  const userBlocks = buildUserBlocks(input.feature, template, values);
+  const system = flattenPromptBlocks(systemBlocks);
+  const user = flattenPromptBlocks(userBlocks);
   return {
-    system: flattenPromptBlocks(systemBlocks),
-    user: flattenPromptBlocks(userBlocks),
+    system,
+    user,
     systemBlocks,
     userBlocks,
+    ...(input.feature === 'coach-chat'
+      ? {
+          // Fan-derived '<'/'>' are escaped before rendering, so only the
+          // builder-owned wrappers can match these markers.
+          coachRecapSlots: {
+            full: user.includes('<full_recap>'),
+            short: user.includes('<short_recap>'),
+          },
+        }
+      : {}),
   };
 }

@@ -88,6 +88,9 @@ export type AiGenerationContentRow = typeof aiGenerationContent.$inferSelect;
 export interface FreshestRecapsInput {
   pageId: number;
   conversationRefs: string[]; // canonical groupId first, legacy fanAccountId second
+  /** Opaque identity of the resolved persona. Omitted only for rollout
+   * compatibility with callers predating persona-scoped recap status. */
+  personaDefinitionId?: string;
 }
 
 export interface FreshestRecaps {
@@ -98,7 +101,8 @@ export interface FreshestRecaps {
 /** Two-slot recap selection (spec §5): newest usable full + newest usable
  * short for one conversation. Usable = completed outcome, non-empty
  * completion, a PRESENT and non-exhausted stopReason, and modern params
- * (summaryMode present — legacy rows are excluded from attach by design). A
+ * (`summaryMode` plus a matching persona definition when the caller supplies
+ * one — legacy rows are excluded from attach by design). A
  * modern row with a NULL stopReason is fail-closed unusable (P1-5b): a
  * truncated generation that never recorded its terminal reason must never be
  * attached as a recap. The exhausted stop-reason literals mirror the shared
@@ -118,10 +122,15 @@ export async function getFreshestUsableRecaps(
         inArray(aiGenerationContent.conversationRef, input.conversationRefs),
         eq(aiGenerationContent.feature, "fan-summary"),
         sql`${aiGenerationContent.params} ->> 'summaryMode' = ${mode}`,
+        ...(input.personaDefinitionId
+          ? [sql`${aiGenerationContent.params} ->> 'personaDefinitionId' = ${input.personaDefinitionId}`]
+          : []),
         sql`${aiGenerationContent.params} ->> 'outcome' = 'completed'`,
         sql`${aiGenerationContent.params} ->> 'stopReason' is not null`,
         sql`${aiGenerationContent.params} ->> 'stopReason' not in ('max_tokens', 'length')`,
-        sql`${aiGenerationContent.completion} <> ''`,
+        // Defense in depth for rows written before terminal empty-output
+        // rejection: whitespace-only recaps are not usable status/attach slots.
+        sql`btrim(${aiGenerationContent.completion}, ${" \t\n\r\f\v"}) <> ''`,
       ))
       .orderBy(desc(aiGenerationContent.createdAt), desc(aiGenerationContent.id))
       .limit(1);
