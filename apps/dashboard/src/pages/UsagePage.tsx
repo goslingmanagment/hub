@@ -15,6 +15,7 @@ const FEATURE_ORDER: { key: string; label: string }[] = [
   { key: "scan", label: "Scan" },
   { key: "ping", label: "Ping" },
   { key: "hi-greeting", label: "Hi Greeting" },
+  { key: "coach-chat", label: "Coach" },
 ];
 
 const FEATURE_LABELS: Record<string, string> = Object.fromEntries(

@@ -4,13 +4,17 @@ import {
   captureOfapiAttemptResponse,
   completeOfapiInteractiveRequest,
   createOfapiInteractiveRequest,
+  listExpiredOfapiInteractiveResponseCaptures,
+  loadOfapiCaptureObservation,
   markOfapiAttemptDispatching,
   markOfapiAttemptIndeterminate,
   reconcileOfapiCapturedAttemptCredit,
   releaseOfapiAttemptPreDispatch,
   reserveOfapiRequestAttempt,
   type OfapiHttpOutcome,
+  type OfapiParserOutcome,
 } from "@agency_hub_core/db";
+import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -23,11 +27,16 @@ import {
   type OfapiGovernedRawResponse,
   type OfapiRawResponse,
 } from "./ofapi.ts";
-import { parseOfapiJsonBytes } from "./ofapi-capture-contract.ts";
+import {
+  capturePayloadResponse,
+  parseOfapiJsonBytes,
+  validateOfapiInteractiveResponseShape,
+  type ParsedOfapiJsonBody,
+} from "./ofapi-capture-contract.ts";
+import {
+  materializeOfapiCaptureObservation,
+} from "./ofapi-capture-materialization.ts";
 
-const DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET = 7_000;
-const DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP = 4_000;
-const DEFAULT_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP = 4_000;
 const BALANCE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FLOOR_PROBE_COOLDOWN_MS = 60 * 60 * 1000;
 const CAPTURE_COMMIT_ATTEMPTS = 3;
@@ -41,6 +50,21 @@ function httpOutcome(status: number): OfapiHttpOutcome {
   if (status >= 500) return "vendor_5xx";
   if (status === 400 || status === 409 || status === 422) return "request_rejected";
   return "unexpected_http";
+}
+
+function interactiveParserOutcome(
+  operation: string,
+  status: number,
+  parsed: ParsedOfapiJsonBody,
+): OfapiParserOutcome {
+  const successfulHttp = status >= 200 && status < 300;
+  if (!parsed.validJson) {
+    return successfulHttp ? "contract_rejected" : "intentional_noop";
+  }
+  if (!successfulHttp) return "accepted";
+  return !validateOfapiInteractiveResponseShape(operation, parsed.body)
+    ? "contract_rejected"
+    : "accepted";
 }
 
 function denialError(reason: string) {
@@ -99,7 +123,8 @@ export async function executeCaptureFirstInteractiveRead(
   });
   const globalDailyCap = Math.max(
     1,
-    app.config.ofapiMirrorGlobalDailyCreditBudget ?? DEFAULT_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET,
+    app.config.ofapiMirrorGlobalDailyCreditBudget
+      ?? OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
   );
   const reservation = await reserveOfapiRequestAttempt(app.db, {
     ownerKind: "interactive_request",
@@ -130,11 +155,13 @@ export async function executeCaptureFirstInteractiveRead(
     floorProbeCooldownMs: FLOOR_PROBE_COOLDOWN_MS,
     principalCallCap: Math.max(
       1,
-      app.config.ofapiMirrorPrincipalDailyCallCap ?? DEFAULT_MIRROR_PRINCIPAL_DAILY_CALL_CAP,
+      app.config.ofapiMirrorPrincipalDailyCallCap
+        ?? OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCallCap,
     ),
     principalCreditCap: Math.max(
       1,
-      app.config.ofapiMirrorPrincipalDailyCreditCap ?? DEFAULT_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP,
+      app.config.ofapiMirrorPrincipalDailyCreditCap
+        ?? OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCreditCap,
     ),
     deadlineAt,
   });
@@ -238,10 +265,7 @@ export async function executeCaptureFirstInteractiveRead(
     });
   }
 
-  const successfulHttp = raw.status >= 200 && raw.status < 300;
-  const parserOutcome = parsed.validJson || !successfulHttp
-    ? parsed.validJson ? "accepted" as const : "intentional_noop" as const
-    : "contract_rejected" as const;
+  const parserOutcome = interactiveParserOutcome(input.operation, raw.status, parsed);
   const completed = await completeOfapiInteractiveRequest(app.db, {
     requestId: owner.id,
     attemptId: reservation.attemptId,
@@ -258,4 +282,97 @@ export async function executeCaptureFirstInteractiveRead(
     body: parsed.body,
     headers: raw.headers,
   };
+}
+
+export interface OfapiInteractiveResponseRecoveryResult {
+  scanned: number;
+  terminalized: number;
+  materialized: number;
+  raced: number;
+  unavailable: number;
+  errors: number;
+}
+
+/**
+ * Finishes expired capture-first interactive owners from their immutable raw
+ * observation. The intentionally narrow app type makes vendor egress
+ * structurally unavailable to this recovery path.
+ */
+export async function recoverExpiredOfapiInteractiveResponses(
+  app: Pick<AppContext, "db" | "logger">,
+  input?: { now?: Date; limit?: number },
+): Promise<OfapiInteractiveResponseRecoveryResult> {
+  const now = input?.now ?? new Date();
+  const candidates = await listExpiredOfapiInteractiveResponseCaptures(app.db, {
+    now,
+    ...(input?.limit === undefined ? {} : { limit: input.limit }),
+  });
+  const result: OfapiInteractiveResponseRecoveryResult = {
+    scanned: candidates.length,
+    terminalized: 0,
+    materialized: 0,
+    raced: 0,
+    unavailable: 0,
+    errors: 0,
+  };
+
+  for (const candidate of candidates) {
+    const observation = await loadOfapiCaptureObservation(app.db, {
+      observationId: candidate.observationId,
+      observationReceivedAt: candidate.observationReceivedAt,
+    });
+    if (!observation || observation.attemptId !== candidate.attemptId) {
+      result.unavailable += 1;
+      continue;
+    }
+    const captured = capturePayloadResponse(observation.payload);
+    const parsed = captured === null
+      ? { validJson: false, body: null, creditsUsed: null, balanceAfter: null }
+      : parseOfapiJsonBytes(captured.bodyBytes);
+    try {
+      if (parsed.creditsUsed !== null) {
+        await reconcileOfapiCapturedAttemptCredit(app.db, {
+          attemptId: candidate.attemptId,
+          actualCredits: parsed.creditsUsed,
+          balanceAfter: parsed.balanceAfter,
+          now,
+        });
+      }
+    } catch (error) {
+      result.errors += 1;
+      app.logger.error(
+        { error, attemptId: candidate.attemptId },
+        "Failed to reconcile recovered OFAPI interactive response credits",
+      );
+      continue;
+    }
+
+    try {
+      const materialized = await materializeOfapiCaptureObservation(app, observation);
+      if (materialized.kind === "materialized") result.materialized += 1;
+    } catch (error) {
+      // The raw observation remains replayable by the normal materialization
+      // sweep; delivery ownership can still be terminalized independently.
+      result.errors += 1;
+      app.logger.error(
+        { error, observationId: observation.id },
+        "Recovered OFAPI interactive response materialization remains replayable",
+      );
+    }
+
+    const parserOutcome = captured === null
+      ? "failed"
+      : interactiveParserOutcome(candidate.operation, captured.status, parsed);
+    const completed = await completeOfapiInteractiveRequest(app.db, {
+      requestId: candidate.requestId,
+      attemptId: candidate.attemptId,
+      outcome: "failed",
+      parserOutcome,
+      errorCode: "response_delivery_interrupted",
+      now,
+    });
+    if (completed) result.terminalized += 1;
+    else result.raced += 1;
+  }
+  return result;
 }

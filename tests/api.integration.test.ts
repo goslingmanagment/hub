@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,8 +18,11 @@ import {
   getNotificationIncidentByKey,
   insertSyncRequestAttempt,
   insertSyncRunEvent,
+  insertAiGenerationContent,
   insertAiUsageEvents,
   markPageSyncAuthBlocked,
+  purgeExpiredVoiceNoteAudio,
+  upsertVoiceProfile,
   openNotificationIncident,
   recalculateFanPageSpend,
   rebuildFollowerRollups,
@@ -47,8 +51,10 @@ import {
   resolveBusinessDateRange,
 } from "@agency_hub_core/shared";
 
-import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import { buildApiServer, normalizeOpenApiDocument } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import * as effectiveConfigModule from "../apps/runtime/src/services/effective-config.ts";
+import type { VoiceTtsProvider } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
 import {
@@ -8165,6 +8171,19 @@ describe("api integration", () => {
       bearerAuth: expect.any(Object),
       monitoringTokenAuth: expect.any(Object),
     });
+
+    // The voice-note audio route's 200 is a binary MP3 payload, not a JSON
+    // string — external generators must decode it as bytes (review R3-9).
+    const normalized = normalizeOpenApiDocument(
+      server.swagger() as unknown as Record<string, unknown>,
+    ) as {
+      paths?: Record<string, {
+        get?: { responses?: Record<string, { content?: Record<string, { schema?: Record<string, unknown> }> }> };
+      }>;
+    };
+    const audioSchema = normalized.paths?.["/api/v1/pages/{pageLabel}/voice-notes/{id}/audio"]
+      ?.get?.responses?.["200"]?.content?.["audio/mpeg"]?.schema;
+    expect(audioSchema).toMatchObject({ type: "string", format: "binary" });
   });
 
   it("uses UTC day boundaries for Fansly follower and subscriber daily rollups", async (context) => {
@@ -10242,5 +10261,344 @@ describe("api integration", () => {
       "select count(*)::text as n from observations where kind = 'desktop.unknown:harvest.messages'",
     );
     expect(forgedRows).toEqual([{ n: "1" }]);
+  });
+
+  // ── Voice notes lane (Task 6): the three page-scoped routes end-to-end ───────
+  describe("voice notes lane", () => {
+    const VOICE_SCRIPT = "hello [warmly] world";
+    const VOICE_AUDIO = Buffer.from("fake-mp3-voice-note-bytes-payload");
+
+    function fakeVoiceProvider(audio: Buffer = VOICE_AUDIO): VoiceTtsProvider {
+      return {
+        async synthesize() {
+          return {
+            ok: true,
+            audio,
+            characterCost: 12,
+            requestId: "prov-req-voice",
+            traceId: "prov-trace-voice",
+            region: "us-east-1",
+          };
+        },
+      };
+    }
+
+    async function provisionVoice(opts?: {
+      enabled?: boolean;
+      allowlist?: string;
+      retrievalEnabled?: boolean;
+      withProfile?: boolean;
+      profileForLily?: boolean;
+      provider?: VoiceTtsProvider;
+    }) {
+      const appContext: AppContext = createTestAppContext(testDb!);
+      appContext.config.voiceNotesEnabled = opts?.enabled ?? true;
+      appContext.config.voiceNotesRetrievalEnabled = opts?.retrievalEnabled ?? true;
+      appContext.config.voiceNotesPageAllowlist = opts?.allowlist ?? "lana";
+      appContext.config.voiceNotesScriptMaxChars = 600;
+      appContext.config.voiceNotesDailyCharBudget = 100_000;
+      appContext.config.voiceNotesGlobalDailyCharBudget = 100_000;
+      appContext.voiceTtsProvider = opts?.provider ?? fakeVoiceProvider();
+
+      const lanaId = fixture!.lanaPage!.id;
+      if (opts?.withProfile !== false) {
+        await upsertVoiceProfile(appContext.db, {
+          platformAccountId: lanaId,
+          voiceId: "voice-abc",
+          model: "eleven_v3",
+          settings: { stability: 0.5 },
+          outputFormat: "mp3_44100_128",
+        });
+      }
+      if (opts?.profileForLily) {
+        await upsertVoiceProfile(appContext.db, {
+          platformAccountId: fixture!.lilyPage!.id,
+          voiceId: "voice-lily",
+          model: "eleven_v3",
+          settings: {},
+          outputFormat: "mp3_44100_128",
+        });
+      }
+      const anton = await findUserByUsername(appContext.db, "anton");
+      const sourceRef = `gen-${randomUUID()}`;
+      await insertAiGenerationContent(appContext.db, {
+        usageEventId: null,
+        generationRef: sourceRef,
+        feature: "voice-script",
+        model: "anthropic:claude-sonnet-4-6",
+        provider: "anthropic",
+        userId: anton!.id,
+        pageId: lanaId,
+        conversationRef: "conv-voice-1",
+        fanRef: "conv-voice-1",
+        promptBlocks: [],
+        completion: VOICE_SCRIPT,
+        params: { outcome: "completed" },
+      });
+      const issued = await issueChatterApiKey(
+        appContext,
+        { username: "anton", pageLabel: "lana" },
+        { source: "cli" },
+      );
+      const voiceServer = await buildApiServer(appContext);
+      await voiceServer.ready();
+      return { voiceServer, appContext, key: issued.key, sourceRef, lanaId };
+    }
+
+    function createBody(sourceRef: string, overrides?: Record<string, unknown>) {
+      return {
+        clientRequestId: randomUUID(),
+        conversationRef: "conv-voice-1",
+        sourceGenerationRef: sourceRef,
+        script: VOICE_SCRIPT,
+        ...overrides,
+      };
+    }
+
+    async function pollStatus(
+      voiceServer: Awaited<ReturnType<typeof buildApiServer>>,
+      key: string,
+      id: number,
+      until: (state: string) => boolean,
+    ) {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const res = await voiceServer.inject({
+          method: "GET",
+          url: `/api/v1/pages/lana/voice-notes/${id}`,
+          headers: { authorization: `Bearer ${key}` },
+        });
+        if (res.statusCode === 200 && until(res.json().state)) {
+          return res.json();
+        }
+        await sleep(20);
+      }
+      throw new Error("pollStatus: state condition not met before timeout");
+    }
+
+    it("admits (202), reports status, and streams audio/mpeg bytes with the private headers", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, key, sourceRef } = await provisionVoice();
+      try {
+        const create = await voiceServer.inject({
+          method: "POST",
+          url: "/api/v1/pages/lana/voice-notes",
+          headers: { authorization: `Bearer ${key}` },
+          payload: createBody(sourceRef),
+        });
+        expect(create.statusCode, create.body).toBe(202);
+        const view = create.json();
+        // 202 view shape (voiceNoteStatusSchema): createdAt is REQUIRED.
+        expect(typeof view.voiceNoteId).toBe("number");
+        expect(["queued", "dispatched"]).toContain(view.state);
+        expect(view.scriptChars).toBe(VOICE_SCRIPT.length);
+        expect(typeof view.createdAt).toBe("string");
+        expect(view).not.toHaveProperty("audioBytes");
+
+        const completed = await pollStatus(voiceServer, key, view.voiceNoteId, (s) => s === "completed");
+        expect(completed.audioBytesLen).toBe(VOICE_AUDIO.byteLength);
+        expect(completed.audioSha256).toEqual(expect.any(String));
+
+        const audio = await voiceServer.inject({
+          method: "GET",
+          url: `/api/v1/pages/lana/voice-notes/${view.voiceNoteId}/audio`,
+          headers: { authorization: `Bearer ${key}` },
+        });
+        expect(audio.statusCode).toBe(200);
+        expect(audio.headers["content-type"]).toBe("audio/mpeg");
+        expect(audio.headers["content-length"]).toBe(String(VOICE_AUDIO.byteLength));
+        expect(audio.headers["cache-control"]).toBe("private, no-store");
+        expect(audio.headers["x-content-type-options"]).toBe("nosniff");
+        expect(Buffer.from(audio.rawPayload)).toEqual(VOICE_AUDIO);
+      } finally {
+        await voiceServer.close();
+      }
+    });
+
+    it("returns an indistinguishable 404 for an unknown/foreign voiceNoteId", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, key } = await provisionVoice();
+      try {
+        const status = await voiceServer.inject({
+          method: "GET",
+          url: "/api/v1/pages/lana/voice-notes/999999",
+          headers: { authorization: `Bearer ${key}` },
+        });
+        expect(status.statusCode).toBe(404);
+        const audio = await voiceServer.inject({
+          method: "GET",
+          url: "/api/v1/pages/lana/voice-notes/999999/audio",
+          headers: { authorization: `Bearer ${key}` },
+        });
+        expect(audio.statusCode).toBe(404);
+      } finally {
+        await voiceServer.close();
+      }
+    });
+
+    it("403s when the page is not allowlisted (page-scope gate)", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, key, sourceRef } = await provisionVoice({ allowlist: "" });
+      try {
+        const create = await voiceServer.inject({
+          method: "POST",
+          url: "/api/v1/pages/lana/voice-notes",
+          headers: { authorization: `Bearer ${key}` },
+          payload: createBody(sourceRef),
+        });
+        expect(create.statusCode).toBe(403);
+        expect(create.json().error).toBe("voice_not_allowlisted");
+      } finally {
+        await voiceServer.close();
+      }
+    });
+
+    it("400s a non-UUID clientRequestId at the schema boundary (never a raw 500)", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, key, sourceRef } = await provisionVoice();
+      try {
+        const create = await voiceServer.inject({
+          method: "POST",
+          url: "/api/v1/pages/lana/voice-notes",
+          headers: { authorization: `Bearer ${key}` },
+          payload: createBody(sourceRef, { clientRequestId: "not-a-uuid" }),
+        });
+        // Fastify/zod body validation rejects the malformed id BEFORE the
+        // handler — so a non-UUID never reaches the `uuid` column to raise a
+        // raw Postgres 22P02 that would surface as an unstructured 500.
+        expect(create.statusCode, create.body).toBe(400);
+        expect(create.statusCode).not.toBe(500);
+      } finally {
+        await voiceServer.close();
+      }
+    });
+
+    it("rejects a reused clientRequestId + different body with 409 idempotency_mismatch", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, key, sourceRef } = await provisionVoice();
+      try {
+        const body = createBody(sourceRef);
+        const first = await voiceServer.inject({
+          method: "POST",
+          url: "/api/v1/pages/lana/voice-notes",
+          headers: { authorization: `Bearer ${key}` },
+          payload: body,
+        });
+        expect(first.statusCode).toBe(202);
+
+        const mismatch = await voiceServer.inject({
+          method: "POST",
+          url: "/api/v1/pages/lana/voice-notes",
+          headers: { authorization: `Bearer ${key}` },
+          payload: { ...body, script: "a different [warmly] script" },
+        });
+        expect(mismatch.statusCode).toBe(409);
+        expect(mismatch.json().error).toBe("idempotency_mismatch");
+      } finally {
+        await voiceServer.close();
+      }
+    });
+
+    it("410s a purged artifact with body code artifact_expired", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, key, sourceRef } = await provisionVoice();
+      try {
+        const create = await voiceServer.inject({
+          method: "POST",
+          url: "/api/v1/pages/lana/voice-notes",
+          headers: { authorization: `Bearer ${key}` },
+          payload: createBody(sourceRef),
+        });
+        const id = create.json().voiceNoteId as number;
+        await pollStatus(voiceServer, key, id, (s) => s === "completed");
+
+        // Purge everything created before a future cutoff → state artifact_expired.
+        const purged = await purgeExpiredVoiceNoteAudio(testDb.db, new Date(Date.now() + 60_000));
+        expect(purged).toBeGreaterThanOrEqual(1);
+
+        const status = await pollStatus(voiceServer, key, id, (s) => s === "artifact_expired");
+        expect(status.errorCode).toBe("artifact_expired");
+
+        const audio = await voiceServer.inject({
+          method: "GET",
+          url: `/api/v1/pages/lana/voice-notes/${id}/audio`,
+          headers: { authorization: `Bearer ${key}` },
+        });
+        expect(audio.statusCode).toBe(410);
+        expect(audio.json().error).toBe("artifact_expired");
+      } finally {
+        await voiceServer.close();
+      }
+    });
+
+    it("exposes capabilities.voiceNotes ONLY when switch + allowlist + profile all hold", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      // lana: allowlisted + profile; lily1: allowlisted but NO profile.
+      const { voiceServer, appContext } = await provisionVoice({
+        allowlist: "lana,lily1",
+        profileForLily: false,
+      });
+      try {
+        const cookie = await loginOwnerCookie(voiceServer);
+        const read = async () => {
+          const res = await voiceServer.inject({
+            method: "GET",
+            url: "/api/v1/pages",
+            headers: { cookie },
+          });
+          expect(res.statusCode).toBe(200);
+          const pages = res.json() as Array<{ label: string; capabilities?: { voiceNotes: boolean } }>;
+          return {
+            lana: pages.find((p) => p.label === "lana"),
+            lily: pages.find((p) => p.label === "lily1"),
+          };
+        };
+
+        // All three true for lana → flag present; lily lacks a profile → absent.
+        const all = await read();
+        expect(all.lana?.capabilities).toEqual({ voiceNotes: true });
+        expect(all.lily?.capabilities).toBeUndefined();
+
+        // Allowlist drops lana → flag absent (allowlist requirement).
+        appContext.config.voiceNotesPageAllowlist = "lily1";
+        expect((await read()).lana?.capabilities).toBeUndefined();
+
+        // Switch off, allowlist restored → flag absent (switch requirement).
+        appContext.config.voiceNotesPageAllowlist = "lana";
+        appContext.config.voiceNotesEnabled = false;
+        expect((await read()).lana?.capabilities).toBeUndefined();
+      } finally {
+        await voiceServer.close();
+      }
+    });
+
+    it("keeps GET /pages 200 (no capabilities) when the config lookup fails — fail-open", async (context) => {
+      if (!testDb || !fixture) return context.skip();
+      const { voiceServer, appContext } = await provisionVoice({ allowlist: "lana" });
+      // Obtain the session BEFORE breaking the config read (login must not be
+      // affected by the forced fault).
+      const cookie = await loginOwnerCookie(voiceServer);
+      const warnSpy = vi.spyOn(appContext.logger, "warn");
+      const configSpy = vi
+        .spyOn(effectiveConfigModule, "loadEffectiveConfig")
+        .mockRejectedValue(new Error("config_settings unavailable"));
+      try {
+        const res = await voiceServer.inject({
+          method: "GET",
+          url: "/api/v1/pages",
+          headers: { cookie },
+        });
+        // The optional hint's failure must not 500 the primary list endpoint.
+        expect(res.statusCode).toBe(200);
+        const pages = res.json() as Array<{ label: string; capabilities?: unknown }>;
+        expect(pages.length).toBeGreaterThan(0);
+        // Missing field reads as disabled — no page carries a capabilities hint.
+        expect(pages.every((p) => p.capabilities === undefined)).toBe(true);
+        expect(warnSpy).toHaveBeenCalled();
+      } finally {
+        configSpy.mockRestore();
+        await voiceServer.close();
+      }
+    });
   });
 });

@@ -24,6 +24,7 @@ type FollowersReconcileCursorState = {
   pageCount: number;
   sourceFollowerCount: number;
   snapshotRestartCount: number;
+  restartReason: "snapshot_mismatch" | null;
 };
 
 type DmConversationCursorState = {
@@ -222,7 +223,15 @@ export function parseFollowersReconcileCursorState(
   const observedCount = asNumber(state.observedCount) ?? offset;
   const pageCount = asNumber(state.pageCount);
   const sourceFollowerCount = asNumber(state.sourceFollowerCount);
-  const snapshotRestartCount = asNumber(state.snapshotRestartCount) ?? 0;
+  const restartReason = state.restartReason === "snapshot_mismatch"
+    ? state.restartReason
+    : null;
+  // Counts from older completed checkpoints were lifetime-shaped. Only a
+  // cursor explicitly scoped to the active mismatch may consume this
+  // revision's one-restart allowance.
+  const snapshotRestartCount = restartReason === "snapshot_mismatch"
+    ? asNumber(state.snapshotRestartCount) ?? 0
+    : 0;
   if (
     generation === null ||
     offset === null ||
@@ -242,6 +251,7 @@ export function parseFollowersReconcileCursorState(
     pageCount,
     sourceFollowerCount,
     snapshotRestartCount,
+    restartReason,
   };
 }
 

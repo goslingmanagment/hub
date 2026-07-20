@@ -95,6 +95,67 @@ function capturedMessagePage(payload: unknown) {
   };
 }
 
+export interface OfapiCaptureObservationForMaterialization {
+  id: number;
+  receivedAt: Date;
+  producer: string;
+  accountId: number | null;
+  payload: unknown;
+}
+
+export type OfapiCaptureObservationMaterializationResult =
+  | { kind: "stamped_noop"; rejected: boolean }
+  | { kind: "materialized"; appended: number; deduped: number; itemCount: number }
+  | { kind: "deferred" }
+  | { kind: "account_missing" };
+
+/**
+ * Replays one immutable capture observation locally. This helper deliberately
+ * accepts no vendor client or dispatcher, so recovery cannot create egress.
+ */
+export async function materializeOfapiCaptureObservation(
+  app: Pick<AppContext, "db">,
+  row: OfapiCaptureObservationForMaterialization,
+  input?: { maxItems?: number },
+): Promise<OfapiCaptureObservationMaterializationResult> {
+  const page = capturedMessagePage(row.payload);
+  if (page.kind !== "accepted") {
+    await markObservationParsed(app.db, {
+      observationId: row.id,
+      receivedAt: row.receivedAt,
+      parseVersion: OFAPI_CAPTURE_MATERIALIZER_VERSION,
+    });
+    return { kind: "stamped_noop", rejected: page.kind === "rejected" };
+  }
+  if (page.items.length > (input?.maxItems ?? SWEEP_ITEM_BUDGET)) {
+    return { kind: "deferred" };
+  }
+  if (row.accountId === null) {
+    return { kind: "account_missing" };
+  }
+  const appended = await appendOfapiMessageMaterialPage(app.db as Database, {
+    accountId: row.accountId,
+    observationId: row.id,
+    observationReceivedAt: row.receivedAt,
+    chatId: page.chatId,
+    originClass: row.producer === "ofapi-mirror-background"
+      ? "capture_background"
+      : "capture_interactive",
+    items: page.items,
+  });
+  await markObservationParsed(app.db, {
+    observationId: row.id,
+    receivedAt: row.receivedAt,
+    parseVersion: OFAPI_CAPTURE_MATERIALIZER_VERSION,
+  });
+  return {
+    kind: "materialized",
+    appended: appended.appended,
+    deduped: appended.deduped,
+    itemCount: page.items.length,
+  };
+}
+
 export async function runOfapiCaptureMaterialization(
   app: Pick<AppContext, "db" | "config" | "logger">,
 ): Promise<ReadthroughReconcileRunResult> {
@@ -116,42 +177,24 @@ export async function runOfapiCaptureMaterialization(
     for (const row of rows) {
       totals.scanned += 1;
       try {
-        const page = capturedMessagePage(row.payload);
-        if (page.kind !== "accepted") {
-          await markObservationParsed(app.db, {
-            observationId: row.id,
-            receivedAt: row.receivedAt,
-            parseVersion: OFAPI_CAPTURE_MATERIALIZER_VERSION,
-          });
-          totals.stamped += 1;
-          if (page.kind === "rejected") totals.parseSkips += 1;
-          continue;
-        }
-        if (budget.itemsLeft < page.items.length) {
+        const result = await materializeOfapiCaptureObservation(app, row, {
+          maxItems: budget.itemsLeft,
+        });
+        if (result.kind === "deferred") {
           return totals;
         }
-        if (row.accountId === null) {
+        if (result.kind === "account_missing") {
           totals.parseSkips += 1;
           continue;
         }
-        budget.itemsLeft -= page.items.length;
-        const appended = await appendOfapiMessageMaterialPage(app.db as Database, {
-          accountId: row.accountId,
-          observationId: row.id,
-          observationReceivedAt: row.receivedAt,
-          chatId: page.chatId,
-          originClass: row.producer === "ofapi-mirror-background"
-            ? "capture_background"
-            : "capture_interactive",
-          items: page.items,
-        });
-        totals.upserts += appended.appended;
-        totals.noops += appended.deduped;
-        await markObservationParsed(app.db, {
-          observationId: row.id,
-          receivedAt: row.receivedAt,
-          parseVersion: OFAPI_CAPTURE_MATERIALIZER_VERSION,
-        });
+        if (result.kind === "stamped_noop") {
+          totals.stamped += 1;
+          if (result.rejected) totals.parseSkips += 1;
+          continue;
+        }
+        budget.itemsLeft -= result.itemCount;
+        totals.upserts += result.appended;
+        totals.noops += result.deduped;
         totals.stamped += 1;
       } catch (error) {
         totals.errored += 1;

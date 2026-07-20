@@ -1,5 +1,6 @@
 import {
   routeSchemas,
+  type AssignedPage,
   type UpdateCredentialsBody,
 } from "@agency_hub_core/contracts";
 import {
@@ -13,6 +14,7 @@ import {
   getSyncStreamsForPlatform,
   listAdminModels,
   listAdminPages,
+  listVoiceProfiles,
   ModelHasPagesError,
   pausePageSync,
   updateModelBySlug,
@@ -35,6 +37,8 @@ import {
   requireOwner,
 } from "../../services/auth.ts";
 import { updatePageCredentials } from "../../services/connections.ts";
+import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import type { AppContext } from "../../bootstrap.ts";
 import {
   BadRequestError,
   ConflictError,
@@ -99,6 +103,71 @@ function serializeAssignedPage(page: {
     modelSlug: page.modelSlug,
     modelName: page.modelName,
   };
+}
+
+// The voice-notes page allowlist FAILS CLOSED: empty (or unset) = NO pages.
+// Mirrors isPageAllowlisted in services/voice-notes.ts — kept a local copy so
+// the two never drift on the empty-means-none rule.
+function parseVoiceAllowlist(csv: string | undefined): Set<string> {
+  if (!csv) {
+    return new Set();
+  }
+  return new Set(
+    csv
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+}
+
+// Capability membership, not a new platform branch: Voice is Fansly-only for
+// this pilot, and the platform-branch ratchet keeps dispatch logic centralized.
+const VOICE_NOTE_CAPABILITY_PLATFORMS = new Set<Platform>(["fansly"]);
+
+/**
+ * Attach the OPTIONAL `capabilities.voiceNotes` UI hint to each assigned page.
+ * The field appears ONLY when all four hold: the live voiceNotesEnabled switch
+ * is on, the TTS provider is constructed (ELEVENLABS_API_KEY configured), the
+ * page label is in the (fail-closed) allowlist, AND a voice profile exists for
+ * the page. Any of them false → the field is omitted entirely (a missing field
+ * reads as disabled — old-kernel forward-compat). Gating on the provider keeps
+ * the hint from ever showing a button that would 503 voice_provider_unavailable.
+ * This is a hint only; `POST …/voice-notes` remains the authoritative admission
+ * gate. The profile lookups are batched into a single query.
+ */
+async function attachVoiceNoteCapabilities(
+  app: AppContext,
+  pages: AssignedPage[],
+): Promise<AssignedPage[]> {
+  // The capabilities hint is OPTIONAL enrichment (a missing field reads as
+  // disabled). It must NEVER break GET /api/v1/pages — a high-frequency, primary
+  // list endpoint clients call on startup. So the whole config/profile lookup is
+  // fail-open: any error (a config_settings/page_voice_profiles lock, query
+  // fault, or migration) logs a warn and returns the pages unchanged, mirroring
+  // the fan-dossier fail-open in modules/ai/features/index.ts.
+  try {
+    const effective = await loadEffectiveConfig(app.db, app.config);
+    if (effective.voiceNotesEnabled !== true || app.voiceTtsProvider == null) {
+      return pages;
+    }
+    const allowlist = parseVoiceAllowlist(effective.voiceNotesPageAllowlist);
+    if (allowlist.size === 0) {
+      return pages;
+    }
+    const profiledPageIds = new Set(
+      (await listVoiceProfiles(app.db)).map((profile) => profile.platformAccountId),
+    );
+    return pages.map((page) =>
+      VOICE_NOTE_CAPABILITY_PLATFORMS.has(page.platform)
+        && allowlist.has(page.label)
+        && profiledPageIds.has(page.id)
+        ? { ...page, capabilities: { voiceNotes: true } }
+        : page,
+    );
+  } catch (error) {
+    app.logger.warn({ err: error }, "voice-note capability hint lookup failed; omitting the field");
+    return pages;
+  }
 }
 
 function rethrowAdminCatalogError(error: unknown): never {
@@ -189,7 +258,8 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.pages,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    return listPageSummaries(appContext, pageScopeFor(principal));
+    const pages = await listPageSummaries(appContext, pageScopeFor(principal));
+    return attachVoiceNoteCapabilities(appContext, pages);
   });
 
   server.get("/api/v1/models", {

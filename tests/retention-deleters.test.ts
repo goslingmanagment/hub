@@ -49,6 +49,7 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/sync.ts",
   "packages/db/src/repositories/top-spenders.ts",
   "packages/db/src/repositories/transactions.ts",
+  "packages/db/src/repositories/voice-profiles.ts",
   "packages/db/src/repositories/workboard-v2.ts",
 ];
 

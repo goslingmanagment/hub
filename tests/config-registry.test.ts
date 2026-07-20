@@ -68,7 +68,7 @@ describe("config registry", () => {
     expect(mismatches).toEqual([]);
   });
 
-  // Allowlist guard for the Stage C wiring class. Exactly these 8 keys are wired to the
+  // Allowlist guard for the Stage C wiring class. Exactly these keys are wired to the
   // live runtime overlay; exactly these staged flags are boot-applied; everything else
   // is 'none' (not overridable via the DB). A new 'live'/'boot' key must update this set
   // deliberately — it can't slip in unnoticed.
@@ -94,6 +94,14 @@ describe("config registry", () => {
     "chatMuseAiPromptDebugEchoEnabled",
     // W3.2 (decision #125): queued-command TTL, read live per sweep.
     "ofapiQueuedCommandTtlMs",
+    // Voice notes (ElevenLabs TTS): kill switches + budgets, read live per request.
+    "voiceNotesEnabled",
+    "voiceNotesRetrievalEnabled",
+    "voiceNotesPageAllowlist",
+    "voiceNotesDailyCharBudget",
+    "voiceNotesGlobalDailyCharBudget",
+    "voiceNotesScriptMaxChars",
+    "voiceNotesMaxConcurrentSyntheses",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",
@@ -124,7 +132,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the sixteen live keys, the twenty-three boot keys, and nothing else", () => {
+  it("wires exactly the twenty-three live keys, the twenty-three boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

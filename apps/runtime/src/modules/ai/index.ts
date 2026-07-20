@@ -1,4 +1,4 @@
-import { routeSchemas } from "@agency_hub_core/contracts";
+import { AI_FEATURE_STREAM_BODY_LIMIT_BYTES, routeSchemas } from "@agency_hub_core/contracts";
 import {
   classifyProviderStreamFailure,
   formatObservedError,
@@ -11,21 +11,24 @@ export * from "./context/index.ts";
 export * from "./features/index.ts";
 import {
   getAiGenerationContentByRef,
+  getFreshestUsableRecaps,
   listAiGenerationContent,
   archiveAiPersona,
   AiPersonaVersionConflictError,
+  findPageByLabel,
   listAiPersonaStates,
   listAiPersonas,
   upsertAiPersona,
 } from "@agency_hub_core/db";
 
 import {
+  AiGatewayTerminalStreamConsumer,
   prepareAiGatewayStream,
   serializeAiGatewaySseFrame,
 } from "../../services/ai-gateway.ts";
 import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
-import { requireApiKeyUser, requireOwner } from "../../services/auth.ts";
+import { canAccessPage, requireApiKeyUser, requireOwner } from "../../services/auth.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { hasDebugInputCapability } from "./prompt-debug-echo.ts";
@@ -127,6 +130,43 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
         status: persona.archivedAt === null ? "active" as const : "archived" as const,
       })),
     };
+  });
+
+  // Recap-status metadata read (spec §3): the extension's "recap status line"
+  // source. Same apiKey lane and page resolution as the feature stream, but
+  // metadata ONLY — it reads the freshest usable recap rows and returns their
+  // provenance; it never generates and never spends. Access is checked exactly
+  // like the stream (findPageByLabel + canAccessPage): an unknown page and an
+  // unauthorized page are the same 404 to the caller.
+  server.get("/api/v1/ai/recap-status", {
+    schema: routeSchemas.aiRecapStatus,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    const { pageLabel, conversationRef, fanRef, personaDefinitionId } = request.query;
+    const stored = await findPageByLabel(appContext.db, pageLabel);
+    if (!stored || !canAccessPage(principal, stored.page.id)) {
+      throw new NotFoundError("Page not found");
+    }
+    const conversationRefs = [conversationRef, ...(fanRef ? [fanRef] : [])];
+    const found = await getFreshestUsableRecaps(appContext.db, {
+      pageId: stored.page.id,
+      conversationRefs,
+      ...(personaDefinitionId ? { personaDefinitionId } : {}),
+    });
+    const now = Date.now();
+    const slot = (row: typeof found.full) =>
+      row === null
+        ? null
+        : {
+          generatedAt: row.createdAt.toISOString(),
+          ageMs: Math.max(0, now - row.createdAt.getTime()),
+          transcriptCoverage:
+            (row.params["transcriptCoverage"] as "full-history" | "window" | null) ?? null,
+          requestedCount: (row.params["requestedCount"] as number | null) ?? null,
+          keptCount: (row.params["keptCount"] as number | null) ?? null,
+        };
+    return { full: slot(found.full), short: slot(found.short) };
   });
 
   // Transitional legacy write lane. Omitted expectedVersion retains the
@@ -269,6 +309,15 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // gateway internals; only the prompt is built here instead of the client.
   server.post("/api/v1/ai/features/:feature", {
     schema: routeSchemas.aiFeatureStream,
+    // Coach transport headroom (spec §7, option "c"): the worst-case
+    // schema-valid coach body is ~1.69M chars — 20 history entries × (2k
+    // question + 64k answer) + a 300k transcript + spend/subscription/bio/draft —
+    // which at 3-byte UTF-8 chars serializes to ~5.06MB, over Fastify's 1MB
+    // default AND over the former 4 MiB cap (Blocker 4). A SCOPED route bodyLimit
+    // (not a global raise) gives that worst case room; the exact byte budget and
+    // its worst-case math live with the schema (AI_FEATURE_STREAM_BODY_LIMIT_BYTES
+    // in contracts). Genuine transport abuse still 413s here.
+    bodyLimit: AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
@@ -299,13 +348,12 @@ export async function pipeAiGatewaySse(
     const raw = reply.raw;
     const startedAt = Date.now();
     let terminalOutcome: "completed" | "failed" | "cancelled" = "completed";
-    let terminalUsage: Parameters<typeof stream.recordTerminal>[0]["usage"] = null;
-    let terminalProviderResponseId: string | null = null;
-    let terminalCacheHit = false;
-    let streamedContent = false;
-    let completionText = "";
-    let terminalStopReason: string | null = null;
-    let terminalDoneFrame: Parameters<typeof serializeAiGatewaySseFrame>[0] | null = null;
+    // Shared terminal accounting + coach transport ceiling (P1-5): the CLI smoke
+    // path drives the SAME consumer so the two lanes cannot drift on what counts
+    // as a committed, usable generation. `ceilingExceeded` pins the outcome to
+    // "failed" even if tearing down the aborted provider iterator rejects into
+    // the catch below (which would otherwise reclassify an abort as cancelled).
+    const consumer = new AiGatewayTerminalStreamConsumer(stream.visibleOutputCeilingChars);
     raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-store, no-cache, no-transform",
@@ -329,39 +377,40 @@ export async function pipeAiGatewaySse(
       if (stream.debugFrame) {
         writeFrame(stream.debugFrame);
       }
+      // Coach transport ceiling (spec §3/§7, option "c"): a coach answer whose
+      // accumulated visible output crosses COACH_ANSWER_MAX_CHARS is aborted
+      // mid-stream and errors WITHOUT a `done` frame, so the attempt is
+      // terminal-recorded as failed (never completed) and can never be
+      // attached/committed — the consumer owns that decision (shared with the
+      // CLI). A committed answer is therefore always ≤ the ceiling and replays
+      // verbatim within schema. Only coach-chat carries the ceiling.
       for await (const frame of stream.stream(abort.signal)) {
-        if (frame.type === "usage") {
-          terminalUsage = frame.usage;
-          terminalProviderResponseId = frame.providerResponseId;
-          terminalCacheHit = frame.cacheHit;
-        } else if (frame.type === "content_delta" && frame.text.length > 0) {
-          streamedContent = true;
-          completionText += frame.text;
-        } else if (frame.type === "error") {
-          terminalOutcome = "failed";
-        } else if (frame.type === "done") {
-          terminalDoneFrame = frame;
-          terminalStopReason = frame.stopReason ?? null;
-          continue;
+        const { emit, ceilingCrossed } = consumer.note(frame);
+        for (const out of emit) {
+          writeFrame(out);
         }
-        writeFrame(frame);
+        if (ceilingCrossed) {
+          abortProvider();
+          break;
+        }
       }
-      if (terminalOutcome === "completed" && streamedContent && !terminalUsage) {
-        terminalOutcome = "failed";
+      const finished = consumer.finish();
+      if (finished.usageMissing) {
         request.log.warn({
           requestId: stream.requestId,
         }, "AI gateway provider stream ended without usage metadata");
-        writeFrame({
-          type: "error",
-          code: "provider_usage_missing",
-          message: "AI gateway provider ended without usage metadata",
-          retryAfterMs: null,
-        });
-      } else if (terminalDoneFrame) {
-        writeFrame(terminalDoneFrame);
       }
+      for (const out of finished.emit) {
+        writeFrame(out);
+      }
+      terminalOutcome = consumer.outcome;
     } catch (error) {
-      if (abort.signal.aborted) {
+      if (consumer.ceilingExceeded) {
+        // The ceiling handler already recorded failed, wrote the error frame,
+        // and aborted; a rejection while tearing down the aborted provider
+        // stream must not reclassify this as cancelled or double-write an error.
+        terminalOutcome = "failed";
+      } else if (abort.signal.aborted) {
         terminalOutcome = "cancelled";
       } else {
         terminalOutcome = "failed";
@@ -389,13 +438,16 @@ export async function pipeAiGatewaySse(
       try {
         await stream.recordTerminal({
           outcome: terminalOutcome,
-          usage: terminalUsage,
-          providerResponseId: terminalProviderResponseId,
-          cacheHit: terminalCacheHit,
+          usage: consumer.usage,
+          providerResponseId: consumer.providerResponseId,
+          cacheHit: consumer.cacheHit,
           durationMs: Date.now() - startedAt,
           completedAt: new Date(),
-          completionText,
-          stopReason: terminalStopReason,
+          completionText: consumer.completionText,
+          stopReason: consumer.stopReason,
+          // Ceiling aborts spend real tokens with no usage frame — estimate the
+          // cost so the budget guards see it (P1-1/P2-6).
+          estimateCostOnMissingUsage: consumer.ceilingExceeded,
         });
       } catch (error) {
         request.log.error({

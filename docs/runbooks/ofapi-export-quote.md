@@ -24,9 +24,12 @@ can be checked before an importer or larger cohort exists.
   within approval, and an HTTPS download URL exists. The job then stops at
   `blocked / artifact_capture_required`; importing from the temporary vendor
   URL is forbidden.
-- Status polling is bounded to one request every 15 minutes for at most one
-  day. An uncertain status GET is conservatively counted as billed before a
-  retry is admitted.
+- Quote polling is bounded to one request every 15 minutes by the quote job's
+  existing lifetime cap. After an approved start, the job receives exactly one
+  start call plus at most 288 five-minute status polls (24 hours). Four credits
+  of status-poll headroom sit outside the owner-approved export-charge ceiling;
+  an uncertain status GET is conservatively counted as billed before a retry is
+  admitted, and all polling remains inside the shared physical ceiling.
 - Only a captured quote (`owner_approval_required`) or an explicit vendor
   calculation failure (`export_quote_failed`) can be cancelled to release the
   page slot. HTTP ambiguity, contract drift, and an already-started export keep
@@ -59,7 +62,15 @@ charges the calculated credits only when the separate start operation runs.
 ## Sequence
 
 1. Confirm the credit ledger, capture-first background worker, page proxy, and
-   disk gates are healthy. Do not enable a retired legacy DM crawler.
+   disk gates are healthy. `OFAPI_EXPORT_ARTIFACT_HOST_DIR` must be an absolute
+   path outside the checkout, configured in production before Compose starts,
+   and owned with mode `0700`; create each downloaded CSV with mode `0600`.
+   Before the first deploy with the required mount, copy (do not move or
+   delete) any files from the former checkout-local `ofapi-export-artifacts`
+   directory into the new host directory, compare the file count and every
+   SHA-256 on both sides, then set `.env.production`. Keep the source copy until
+   the post-deploy artifact smoke succeeds.
+   Do not enable a retired legacy DM crawler.
 2. POST `/api/v1/admin/ofapi/export-quotes` as owner with a pilot profile and
    two or three explicit numeric chat IDs. Omit `dryRun` first; inspect the
    `would_create` response. Repeat with `dryRun: false` only in the owner window.

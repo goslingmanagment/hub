@@ -27,7 +27,7 @@ services:
       TZ: UTC
     command: ["node", "apps/runtime/dist/startup.js", "api"]
     volumes:
-      - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:-./ofapi-export-artifacts}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
+      - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:?Set OFAPI_EXPORT_ARTIFACT_HOST_DIR to an absolute host path in .env.production}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -93,7 +93,7 @@ services:
       TZ: UTC
     command: ["node", "apps/runtime/dist/startup.js", "worker"]
     volumes:
-      - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:-./ofapi-export-artifacts}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
+      - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:?Set OFAPI_EXPORT_ARTIFACT_HOST_DIR to an absolute host path in .env.production}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
     depends_on:
       postgres:
         condition: service_healthy

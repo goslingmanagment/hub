@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
+import { ofapiCaptureJobStates } from "@agency_hub_core/shared";
+
 describe("database migration invariants", () => {
   it("ties sync observability rows to their run page and stream", async () => {
     const migration = await readFile(
@@ -156,6 +158,13 @@ describe("database migration invariants", () => {
     expect(correctness).toContain("ofapi_credit_ledger_attempt_shape_check check");
     expect(correctness).toContain("foreign key (attempt_id)");
     expect(correctness).not.toContain("create unique index ofapi_credit_ledger_attempt_phase_uniq");
+    const stateConstraint = correctness.match(
+      /constraint ofapi_capture_jobs_state_check check \(\s*state in \(([^)]+)\)\s*\)/,
+    );
+    const migrationStates = stateConstraint?.[1]
+      ?.match(/'([^']+)'/g)
+      ?.map((state) => state.slice(1, -1));
+    expect(migrationStates).toEqual([...ofapiCaptureJobStates]);
     expect(material).not.toContain("CREATE INDEX");
     expect(indexes.startsWith("-- agency-hub:no-transaction")).toBe(true);
     expect(indexes).toContain("create index concurrently if not exists message_archive_ofapi_native_order_idx");

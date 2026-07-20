@@ -35,6 +35,81 @@ vi.mock("../apps/runtime/src/services/effective-config.ts", () => ({
 
 import { getPublicSyncHealth, getSystemHealth } from "../apps/runtime/src/services/health.ts";
 
+const TASK_HEALTH_NOW = new Date("2026-03-23T12:00:00.000Z");
+
+function mockAudienceTaskHealthScenario(audienceBlock: Record<string, unknown>) {
+  healthMocks.listConnectionStatuses.mockResolvedValue([
+    {
+      id: 7,
+      label: "lora-1",
+      platform: "fansly",
+      modelSlug: "lora",
+      modelName: "Lora",
+      connectionStatus: "active",
+      lastLightSyncAt: TASK_HEALTH_NOW.toISOString(),
+      lastFollowerSyncAt: TASK_HEALTH_NOW.toISOString(),
+      lastSyncError: null,
+    },
+  ]);
+  healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+    generatedAt: TASK_HEALTH_NOW.toISOString(),
+    pages: [{
+      pageId: 7,
+      pageLabel: "lora-1",
+      platform: "fansly",
+      modelSlug: "lora",
+      modelName: "Lora",
+      blocks: {
+        connection: {
+          block: "connection",
+          state: "up_to_date",
+          statusReason: null,
+          error: null,
+          metrics: {},
+          tasks: [],
+        },
+        financials: {
+          block: "financials",
+          state: "up_to_date",
+          statusReason: null,
+          error: null,
+          metrics: {},
+          tasks: [],
+        },
+        audience: audienceBlock,
+        messages_live: {
+          block: "messages_live",
+          state: "up_to_date",
+          statusReason: null,
+          error: null,
+          metrics: {},
+          tasks: [],
+        },
+        messages_history: {
+          block: "messages_history",
+          state: "not_available",
+          statusReason: null,
+          error: null,
+          metrics: {},
+          tasks: [],
+        },
+      },
+    }],
+  });
+}
+
+function readMockedAudienceTaskHealth() {
+  return getPublicSyncHealth({
+    config: {
+      healthSyncLightMaxAgeMinutes: 180,
+      healthSyncFollowerMaxAgeMinutes: 1080,
+      healthSyncMonitoringToken: null,
+    },
+  } as never, {
+    now: TASK_HEALTH_NOW,
+  });
+}
+
 describe("health service", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -210,6 +285,168 @@ describe("health service", () => {
           issues: [],
         },
       ],
+    });
+  });
+
+  it("degrades for a failed supporting task hidden by an up-to-date block", async () => {
+    mockAudienceTaskHealthScenario({
+      block: "audience",
+      state: "up_to_date",
+      statusReason: null,
+      error: null,
+      metrics: {},
+      tasks: [{
+        stream: "followers_reconcile",
+        state: "failed",
+        needsAttention: true,
+        statusReason: {
+          code: "followers_reconcile_inconsistent_snapshot",
+          summary: "Follower snapshot stayed inconsistent after the bounded restart.",
+          waitingFor: null,
+        },
+        error: {
+          code: "followers_reconcile_inconsistent_snapshot",
+          summary: "Follower snapshot stayed inconsistent after the bounded restart.",
+          failedAt: "2026-03-23T11:59:00.000Z",
+          consecutiveFailures: 1,
+        },
+      }],
+    });
+
+    const result = await readMockedAudienceTaskHealth();
+
+    expect(result.statusCode).toBe(503);
+    expect(result.body).toMatchObject({
+      status: "degraded",
+      overall: {
+        failedStreams: 0,
+        unhealthyPageCount: 1,
+      },
+      pages: [{
+        pageId: 7,
+        status: "degraded",
+        failedStreams: 0,
+        issues: ["failed_tasks"],
+        lastErrorSummary: "Follower snapshot stayed inconsistent after the bounded restart.",
+      }],
+    });
+  });
+
+  it("does not treat a dependency-delayed supporting task as failed", async () => {
+    mockAudienceTaskHealthScenario({
+      block: "audience",
+      state: "up_to_date",
+      statusReason: null,
+      error: null,
+      metrics: {},
+      tasks: [{
+        stream: "followers_reconcile",
+        state: "delayed",
+        needsAttention: true,
+        statusReason: {
+          code: "unmet_dependency",
+          summary: "Waiting for followers.",
+          waitingFor: ["followers"],
+        },
+        error: null,
+      }],
+    });
+
+    const result = await readMockedAudienceTaskHealth();
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "ok",
+      overall: {
+        failedStreams: 0,
+        unhealthyPageCount: 0,
+      },
+      pages: [{
+        pageId: 7,
+        status: "ok",
+        issues: [],
+        lastErrorSummary: null,
+      }],
+    });
+  });
+
+  it("does not degrade a paused block when no task failed", async () => {
+    mockAudienceTaskHealthScenario({
+      block: "audience",
+      state: "paused",
+      statusReason: null,
+      error: null,
+      metrics: {},
+      tasks: [{
+        stream: "followers",
+        state: "paused",
+        needsAttention: false,
+        statusReason: null,
+        error: null,
+      }],
+    });
+
+    const result = await readMockedAudienceTaskHealth();
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "ok",
+      overall: {
+        failedStreams: 0,
+        unhealthyPageCount: 0,
+      },
+      pages: [{
+        pageId: 7,
+        status: "ok",
+        issues: [],
+        lastErrorSummary: null,
+      }],
+    });
+  });
+
+  it("degrades a paused aggregate when a supporting sibling task failed", async () => {
+    mockAudienceTaskHealthScenario({
+      block: "audience",
+      state: "paused",
+      statusReason: null,
+      error: null,
+      metrics: {},
+      tasks: [{
+        stream: "followers",
+        state: "paused",
+        needsAttention: false,
+        statusReason: null,
+        error: null,
+      }, {
+        stream: "followers_reconcile",
+        state: "failed",
+        needsAttention: true,
+        statusReason: null,
+        error: {
+          code: "followers_reconcile_inconsistent_snapshot",
+          summary: "Follower reconcile is blocked on an inconsistent snapshot.",
+          failedAt: "2026-03-23T11:59:00.000Z",
+          consecutiveFailures: 1,
+        },
+      }],
+    });
+
+    const result = await readMockedAudienceTaskHealth();
+
+    expect(result.statusCode).toBe(503);
+    expect(result.body).toMatchObject({
+      status: "degraded",
+      overall: {
+        failedStreams: 0,
+        unhealthyPageCount: 1,
+      },
+      pages: [{
+        pageId: 7,
+        status: "degraded",
+        failedStreams: 0,
+        issues: ["failed_tasks"],
+        lastErrorSummary: "Follower reconcile is blocked on an inconsistent snapshot.",
+      }],
     });
   });
 

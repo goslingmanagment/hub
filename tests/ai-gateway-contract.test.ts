@@ -112,6 +112,45 @@ describe("AI gateway contract", () => {
     }).success).toBe(false);
   });
 
+  it("strictly contracts optional coach recap provenance on the existing meta frame", () => {
+    const base = {
+      type: "meta",
+      requestId: randomUUID(),
+      clientRequestId: randomUUID(),
+      feature: "coach-chat",
+      pageLabel: "lora-fs",
+      model: "anthropic:claude-sonnet-4-6",
+      provider: "anthropic",
+      providerResponseId: null,
+      quota: {
+        accepted: true,
+        remainingRequestsToday: 99,
+        remainingMicroUsdToday: 500_000,
+      },
+    };
+    const attachedRecaps = {
+      full: { generatedAt: "2026-07-18T10:00:00.000Z", ageMs: 2_000 },
+      short: null,
+    };
+
+    expect(aiGatewayStreamFrameSchema.parse({ ...base, attachedRecaps }))
+      .toMatchObject({ type: "meta", attachedRecaps });
+    expect(aiGatewayStreamFrameSchema.safeParse({
+      ...base,
+      attachedRecaps: {
+        ...attachedRecaps,
+        unexpected: true,
+      },
+    }).success).toBe(false);
+    expect(aiGatewayStreamFrameSchema.safeParse({
+      ...base,
+      attachedRecaps: {
+        full: { ...attachedRecaps.full, rawBody: "must-not-cross-wire" },
+        short: null,
+      },
+    }).success).toBe(false);
+  });
+
   it("accepts debug_input_v1 only on the feature-lane frame union", () => {
     const frame = {
       type: "debug_input_v1",

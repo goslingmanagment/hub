@@ -38,6 +38,20 @@ function firstErrorSummary(blocks: SyncDomainBlockStatus[]) {
   return first?.statusReason?.summary ?? first?.error?.summary ?? null;
 }
 
+function listFailedTaskEntries(blocks: SyncDomainBlockStatus[]) {
+  return blocks.flatMap((block) => (block.tasks ?? [])
+    .filter((task) => task.state === "failed")
+    .map((task) => ({
+      blockState: block.state,
+      task,
+    })));
+}
+
+function firstFailedTaskSummary(entries: ReturnType<typeof listFailedTaskEntries>) {
+  const first = entries.find(({ task }) => task.statusReason?.summary || task.error?.summary);
+  return first?.task.statusReason?.summary ?? first?.task.error?.summary ?? null;
+}
+
 function numericMetric(block: SyncDomainBlockStatus, key: string) {
   const value = block.metrics?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -235,6 +249,11 @@ export async function getPublicSyncHealth(
       ? ageMinutes(connection?.lastFollowerSyncAt ?? null, now)
       : null;
     const failedStreams = healthBlocks.filter((block) => block.state === "failed").length;
+    const failedTaskEntries = listFailedTaskEntries(blocks);
+    // A failed supporting task can be hidden by an up-to-date or paused primary
+    // aggregate. Keep failedStreams block-level for compatibility, and surface
+    // the otherwise-unrepresented task failure as its own issue.
+    const hiddenFailedTaskEntries = failedTaskEntries.filter(({ blockState }) => blockState !== "failed");
     const stalledStreams = healthBlocks.filter((block) => block.state === "delayed").length;
     const pendingStreams = healthBlocks.filter((block) =>
       block.state === "scheduled" ||
@@ -271,6 +290,10 @@ export async function getPublicSyncHealth(
 
     if (failedStreams > 0) {
       issues.push("failed_streams");
+    }
+
+    if (hiddenFailedTaskEntries.length > 0) {
+      issues.push("failed_tasks");
     }
 
     if (stalledStreams > 0) {
@@ -313,7 +336,9 @@ export async function getPublicSyncHealth(
       failedStreams,
       stalledStreams,
       pendingStreams,
-      lastErrorSummary: firstErrorSummary(healthBlocks) ?? (hasOfapiConnection ? null : connection?.lastSyncError ?? null),
+      lastErrorSummary: firstFailedTaskSummary(hiddenFailedTaskEntries) ??
+        firstErrorSummary(healthBlocks) ??
+        (hasOfapiConnection ? null : connection?.lastSyncError ?? null),
       issues,
     };
   });

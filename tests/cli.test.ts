@@ -56,6 +56,7 @@ const cliMocks = vi.hoisted(() => {
     countHarvestObservations: vi.fn(),
     createAppContext: vi.fn(),
     findPageByLabel: vi.fn(),
+    findUserByUsername: vi.fn(),
     handleSuccessfulPageVerificationRecovery: vi.fn(),
     listPages: vi.fn(),
     listHarvestTransactionResidue: vi.fn(),
@@ -83,6 +84,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
     ...actual,
     countHarvestObservations: cliMocks.countHarvestObservations,
     findPageByLabel: cliMocks.findPageByLabel,
+    findUserByUsername: cliMocks.findUserByUsername,
     listHarvestTransactionResidue: cliMocks.listHarvestTransactionResidue,
   };
 });
@@ -195,6 +197,7 @@ describe("CLI parsing", () => {
     cliMocks.createAppContext.mockReset();
     cliMocks.countHarvestObservations.mockReset();
     cliMocks.findPageByLabel.mockReset();
+    cliMocks.findUserByUsername.mockReset();
     cliMocks.listPages.mockReset();
     cliMocks.listHarvestTransactionResidue.mockReset();
     cliMocks.onboardFanslyPage.mockReset();
@@ -1033,5 +1036,94 @@ describe("CLI parsing", () => {
     expect(nonTty).toContain(
       "- run=13 page=lana stream=light event=phase_started severity=warn Still running",
     );
+  });
+
+  it("ai:feature-smoke fails fast on coach-chat without --question", async () => {
+    // Blocker 5: the T5 gate rejects coach-chat with no chatterQuestion, so the
+    // smoke must fail with a clear CLI message BEFORE opening the app context /
+    // spending a provider call — never a bare server 400.
+    const program = buildProgram();
+    program.exitOverride();
+
+    await expect(program.parseAsync([
+      "ai:feature-smoke",
+      "--feature",
+      "coach-chat",
+      "--page",
+      "svc-of",
+      "--conversation",
+      "group-1",
+      "--as",
+      "owner",
+    ], { from: "user" })).rejects.toThrow("coach-chat requires --question");
+
+    // The guard runs ahead of any I/O — the app context is never created.
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  it("ai:feature-smoke fails on coach-chat without --fan on a FANSLY page", async () => {
+    // Blocker 2 (P1-3): canonical Fansly coach-chat REQUIRES --fan so the stored
+    // record's fan_ref carries the fan identity (conversationRef is the groupId).
+    // The guard now runs AFTER the page resolves (so it can key off platform),
+    // so the app context IS created — the default mocked page is Fansly, so the
+    // --fan tripwire still fires. --question is supplied so this gate is the one.
+    cliMocks.findPageByLabel.mockResolvedValueOnce({
+      page: { id: 44, label: "svc-fs", platform: "fansly" },
+      credentials: null,
+      proxy: null,
+    });
+    const program = buildProgram();
+    program.exitOverride();
+
+    await expect(program.parseAsync([
+      "ai:feature-smoke",
+      "--feature",
+      "coach-chat",
+      "--page",
+      "svc-fs",
+      "--conversation",
+      "group-1",
+      "--as",
+      "owner",
+      "--question",
+      "как продать ppv?",
+    ], { from: "user" })).rejects.toThrow("coach-chat requires --fan <ref> on fansly");
+
+    // The page had to be resolved for the platform-specific guard, so the app
+    // context was opened — and closed again in the finally.
+    const app = await cliMocks.createAppContext.mock.results[0]?.value;
+    expect(app?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("ai:feature-smoke proceeds past the --fan guard for OnlyFans coach-chat with no --fan", async () => {
+    // P1-3: OnlyFans conversationRef IS the fan id, so the server contract does
+    // NOT require fanRef there. A valid OnlyFans smoke without --fan must pass
+    // the CLI guard. Prove it by resolving an OnlyFans page and letting the NEXT
+    // step (user lookup) be the thing that stops — the --fan guard never fires.
+    cliMocks.findPageByLabel.mockResolvedValueOnce({
+      page: { id: 202, label: "svc-of", platform: "onlyfans" },
+      credentials: null,
+      proxy: null,
+    });
+    cliMocks.findUserByUsername.mockResolvedValueOnce(null);
+    const program = buildProgram();
+    program.exitOverride();
+
+    await expect(program.parseAsync([
+      "ai:feature-smoke",
+      "--feature",
+      "coach-chat",
+      "--page",
+      "svc-of",
+      "--conversation",
+      "fan-1",
+      "--as",
+      "owner",
+      "--question",
+      "how to sell ppv?",
+    ], { from: "user" })).rejects.toThrow("unknown user: owner");
+
+    // The guard did not throw the --fan error; control reached the user lookup.
+    expect(cliMocks.findUserByUsername).toHaveBeenCalledTimes(1);
   });
 });

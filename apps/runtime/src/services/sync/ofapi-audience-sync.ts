@@ -15,6 +15,7 @@ import {
   getCurrentSubscribers,
   listPageSyncStates,
   listPagesByPlatform,
+  maxPageSubscriptionGeneration,
   pausePageSync,
   rebuildSubscriberRollups,
   refreshPageSubscriberCount,
@@ -281,6 +282,7 @@ export async function executeOfapiAudienceChunk(
   const requestContext: OfapiRequestContext = {
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     pageId: input.pageContext.page.id,
+    creditBudgetScope: "audience",
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "subscribers");
   await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));
@@ -325,9 +327,13 @@ export async function executeOfapiAudienceChunk(
       };
     }
 
+    const storedGeneration = await maxPageSubscriptionGeneration(
+      app.db,
+      input.pageContext.page.id,
+    );
     state = {
       ...state,
-      generation: state.generation + 1,
+      generation: Math.max(state.generation, storedGeneration) + 1,
       offset: 0,
       pageCount: 0,
       sweepStartedAt: new Date().toISOString(),

@@ -25,11 +25,15 @@ export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v2";
 export const OFAPI_CAPTURE_PROOF_POLICY_VERSION = "ofapi-proof-v1";
 export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v2";
 export const OFAPI_STORAGE_HEALTH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+export const OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS = 30_000;
 
 const OFAPI_STORAGE_HEALTH_RETRY_MS = 5 * 60 * 1000;
 const OFAPI_BUDGET_RECHECK_MS = 15 * 60 * 1000;
 const OFAPI_PAUSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const OFAPI_DEADLINE_RECHECK_MS = 60 * 1000;
+const OFAPI_EXPORT_STATUS_POLL_CREDIT_ALLOWANCE = 4;
+const OFAPI_EXPORT_START_CALL_ALLOWANCE = 1;
+const OFAPI_EXPORT_STARTED_STATUS_POLL_CALL_ALLOWANCE = 288;
 
 export class OfapiCaptureInvariantError extends Error {
   constructor(message: string) {
@@ -613,12 +617,16 @@ export async function loadOfapiCaptureObservation(
     id: string;
     received_at: Date | string;
     kind: string;
+    producer: string;
+    account_id: unknown;
     payload: unknown;
     attempt_id: string | null;
   }>(sql`
     select observation.id::text as id,
            observation.received_at,
            observation.kind,
+           observation.producer,
+           observation.account_id,
            observation.payload,
            attempt.id::text as attempt_id
     from observations observation
@@ -635,10 +643,82 @@ export async function loadOfapiCaptureObservation(
       id: Number(row.id),
       receivedAt: new Date(row.received_at),
       kind: row.kind,
+      producer: row.producer,
+      accountId: asNullableNumber(row.account_id, "observation.account_id"),
       payload: row.payload,
       attemptId: row.attempt_id,
     }
     : null;
+}
+
+export interface ExpiredOfapiInteractiveResponseCapture {
+  requestId: string;
+  attemptId: string;
+  operation: string;
+  observationId: number;
+  observationReceivedAt: Date;
+  deadlineAt: Date;
+  responseCapturedAt: Date;
+}
+
+/**
+ * Returns only locally recoverable interactive responses whose client deadline
+ * and grace period have elapsed. The linked observation is immutable; callers
+ * may safely race because terminalization still uses a conditional owner CAS.
+ */
+export async function listExpiredOfapiInteractiveResponseCaptures(
+  db: Database,
+  input?: { now?: Date; limit?: number },
+): Promise<ExpiredOfapiInteractiveResponseCapture[]> {
+  const now = input?.now ?? new Date();
+  const eligibleBefore = new Date(
+    now.getTime() - OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
+  );
+  const limit = Math.max(1, Math.min(1_000, Math.trunc(input?.limit ?? 100)));
+  const result = await db.execute<{
+    request_id: string;
+    attempt_id: string;
+    operation: string;
+    observation_id: unknown;
+    observation_received_at: Date | string;
+    deadline_at: Date | string;
+    response_captured_at: Date | string;
+  }>(sql`
+    select request.id::text as request_id,
+           attempt.id::text as attempt_id,
+           attempt.operation,
+           attempt.response_observation_id as observation_id,
+           attempt.response_observation_received_at as observation_received_at,
+           attempt.deadline_at,
+           attempt.response_captured_at
+    from ofapi_interactive_requests request
+    join ofapi_request_attempts attempt
+      on attempt.interactive_request_id = request.id
+     and attempt.owner_kind = 'interactive_request'
+    where request.state = 'response_captured'
+      and attempt.state = 'response_captured'
+      and attempt.parser_outcome = 'pending'
+      and attempt.deadline_at <= ${eligibleBefore}
+      and request.response_observation_id = attempt.response_observation_id
+      and request.response_observation_received_at = attempt.response_observation_received_at
+    order by attempt.deadline_at, attempt.id
+    limit ${limit}
+  `);
+  return result.rows.map((row) => ({
+    requestId: row.request_id,
+    attemptId: row.attempt_id,
+    operation: row.operation,
+    observationId: asNumber(row.observation_id, "interactive_recovery.observation_id"),
+    observationReceivedAt: asDate(
+      row.observation_received_at,
+      "interactive_recovery.observation_received_at",
+    ),
+    deadlineAt: asDate(row.deadline_at, "interactive_recovery.deadline_at"),
+    responseCapturedAt: asDate(
+      row.response_captured_at,
+      "interactive_recovery.response_captured_at",
+    ),
+  }));
 }
 
 export type OfapiBudgetDenialReason =
@@ -877,8 +957,8 @@ export async function reserveOfapiRequestAttempt(
   db: Database,
   input: ReserveOfapiRequestAttemptInput,
 ): Promise<ReserveOfapiRequestAttemptResult> {
-  const now = input.now ?? new Date();
-  const day = utcDay(now);
+  let now = input.now ?? new Date();
+  let day = utcDay(now);
   const attemptId = input.attemptId ?? randomUUID();
   const fenceToken = randomUUID();
   const estimate = normalizeCredits(input.reservedCredits);
@@ -947,7 +1027,7 @@ export async function reserveOfapiRequestAttempt(
       consecutive_budget_denials: unknown;
       blocked_until: string | Date | null;
     } | null = null;
-    const principalWindow = principalId === null ? null : utcDayWindow(now);
+    let principalWindow = principalId === null ? null : utcDayWindow(now);
     if (principalId !== null && principalWindow) {
       await database.execute(sql`
         insert into ofapi_principal_budget_state (
@@ -972,26 +1052,6 @@ export async function reserveOfapiRequestAttempt(
       if (!principal) {
         throw new OfapiCaptureInvariantError("Principal budget row disappeared");
       }
-      const storedWindow = asDate(principal.window_started_at, "window_started_at");
-      if (storedWindow.getTime() !== principalWindow.getTime()) {
-        await database.execute(sql`
-          update ofapi_principal_budget_state
-          set window_started_at = ${principalWindow},
-              used_calls = 0,
-              used_credits = 0,
-              consecutive_budget_denials = 0,
-              blocked_until = null,
-              updated_at = ${now}
-          where principal_user_id = ${principalId}
-        `);
-        principal = {
-          window_started_at: principalWindow,
-          used_calls: 0,
-          used_credits: 0,
-          consecutive_budget_denials: 0,
-          blocked_until: null,
-        };
-      }
     }
 
     let job: OfapiCaptureJobRecord | null = null;
@@ -1003,6 +1063,10 @@ export async function reserveOfapiRequestAttempt(
         throw new OfapiCaptureInvariantError(`Capture job ${input.ownerId} not found`);
       }
       job = mapCaptureJob(jobResult.rows[0]);
+      if (input.now === undefined) {
+        now = new Date();
+        day = utcDay(now);
+      }
       if (
         job.pageId !== input.pageId ||
         job.ofapiAccountId !== input.ofapiAccountId ||
@@ -1029,6 +1093,10 @@ export async function reserveOfapiRequestAttempt(
         for update
       `);
       const row = request.rows[0];
+      if (input.now === undefined) {
+        now = new Date();
+        day = utcDay(now);
+      }
       if (
         !row ||
         asNumber(row.page_id, "page_id") !== input.pageId ||
@@ -1039,6 +1107,47 @@ export async function reserveOfapiRequestAttempt(
         input.budgetScope !== "interactive"
       ) {
         throw new OfapiCaptureInvariantError("Interactive request ownership changed before admission");
+      }
+    }
+
+    principalWindow = principalId === null ? null : utcDayWindow(now);
+    if (principalId !== null && principalWindow && principal) {
+      const storedWindow = asDate(principal.window_started_at, "window_started_at");
+      if (storedWindow.getTime() > principalWindow.getTime()) {
+        throw new OfapiCaptureInvariantError(
+          "Principal budget window cannot move backward during admission",
+        );
+      }
+      if (storedWindow.getTime() < principalWindow.getTime()) {
+        await database.execute(sql`
+          update ofapi_principal_budget_state
+          set window_started_at = ${principalWindow},
+              used_calls = 0,
+              used_credits = 0,
+              consecutive_budget_denials = 0,
+              blocked_until = null,
+              updated_at = ${now}
+          where principal_user_id = ${principalId}
+        `);
+        principal = {
+          window_started_at: principalWindow,
+          used_calls: 0,
+          used_credits: 0,
+          consecutive_budget_denials: 0,
+          blocked_until: null,
+        };
+      }
+    }
+
+    for (const [name, value] of [
+      ["spend_day", credit.spend_day],
+      ["governed_scope_day", credit.governed_scope_day],
+    ] as const) {
+      const storedDay = dateOnly(value);
+      if (storedDay !== null && storedDay > day) {
+        throw new OfapiCaptureInvariantError(
+          `${name} cannot move backward during OFAPI admission`,
+        );
       }
     }
 
@@ -1102,26 +1211,21 @@ export async function reserveOfapiRequestAttempt(
     const principalUsedCalls = principal ? asNumber(principal.used_calls, "used_calls") : 0;
     const principalUsedCredits = principal ? asNumber(principal.used_credits, "used_credits") : 0;
 
-    let isFloorProbe = false;
+    const balanceUnavailable = !balanceFresh || lastBalance === null;
+    const floorProbeEligible = balanceUnavailable &&
+      input.allowFloorProbe === true &&
+      input.budgetScope === "live" &&
+      activeFloorProbe.rows.length === 0 &&
+      (!floorProbeNotBefore || floorProbeNotBefore.getTime() <= now.getTime());
     let denial: OfapiBudgetDenialReason | null = null;
-    if (paused.rows.length > 0) {
+    if (input.deadlineAt.getTime() <= now.getTime()) {
+      denial = "deadline";
+    } else if (paused.rows.length > 0) {
       denial = "persistent_pause";
     } else if (!storageHealthy) {
       denial = "storage_unhealthy";
     } else if (principalBlockedUntil && principalBlockedUntil.getTime() > now.getTime()) {
       denial = "principal_storm_block";
-    } else if (!balanceFresh || lastBalance === null) {
-      const probeEligible = input.allowFloorProbe === true &&
-        input.budgetScope === "live" &&
-        activeFloorProbe.rows.length === 0 &&
-        (!floorProbeNotBefore || floorProbeNotBefore.getTime() <= now.getTime());
-      if (probeEligible) {
-        isFloorProbe = true;
-      } else {
-        denial = "balance_stale";
-      }
-    } else if (lastBalance - unsettled - estimate < creditFloor) {
-      denial = "credit_floor";
     } else if (globalSpent + estimate > globalCap) {
       denial = "global_cap";
     } else if (scopeSpent + estimate > scopeCap) {
@@ -1134,11 +1238,29 @@ export async function reserveOfapiRequestAttempt(
       denial = "job_cap";
     } else if (job?.maxCredits !== null && job && job.spentCredits + estimate > job.maxCredits) {
       denial = "job_cap";
+    } else if (balanceUnavailable && !floorProbeEligible) {
+      denial = "balance_stale";
+    } else if (!balanceUnavailable && lastBalance - unsettled - estimate < creditFloor) {
+      denial = "credit_floor";
     }
+    const isFloorProbe = floorProbeEligible && denial === null;
+    const eligibleProbeBlockedByHardCap = floorProbeEligible && (
+      denial === "global_cap" ||
+      denial === "scope_cap" ||
+      denial === "principal_call_cap" ||
+      denial === "principal_credit_cap" ||
+      denial === "job_cap"
+    );
 
     if (denial) {
       let thresholdCrossing = false;
-      if (denial !== "storage_unhealthy" && principalId !== null && principal) {
+      if (
+        denial !== "storage_unhealthy" &&
+        denial !== "deadline" &&
+        !eligibleProbeBlockedByHardCap &&
+        principalId !== null &&
+        principal
+      ) {
         const previousDenials = asNumber(
           principal.consecutive_budget_denials,
           "consecutive_budget_denials",
@@ -1820,7 +1942,13 @@ export async function recoverStaleOfapiCaptureWork(
         select 1
         from ofapi_request_attempts attempt
         where attempt.capture_job_id = job.id
-          and attempt.state in ('reserved', 'dispatching', 'indeterminate')
+          and (
+            attempt.state in ('reserved', 'dispatching')
+            or (
+              attempt.state = 'indeterminate'
+              and attempt.certainty_resolved_at is null
+            )
+          )
       )
     returning job.id::text as id
   `);
@@ -1973,6 +2101,10 @@ export async function captureOfapiAttemptResponse(
       : normalizeCredits(input.settledCredits);
     const estimated = input.settledCredits === null || input.settledCredits === undefined;
     const priorIndeterminate = attempt.state === "indeterminate";
+    const jobCreditDelta = priorIndeterminate
+      ? settledCredits - reservedCredits
+      : settledCredits;
+    const jobDispatchDelta = priorIndeterminate ? 0 : 1;
     if (!priorIndeterminate) {
       await database.execute(sql`
         insert into ofapi_credit_ledger (
@@ -2074,8 +2206,8 @@ export async function captureOfapiAttemptResponse(
         set state = 'awaiting_parse',
             pending_observation_id = ${observation.observationId},
             pending_observation_received_at = ${observation.receivedAt},
-            spent_credits = spent_credits + ${settledCredits},
-            dispatch_count = dispatch_count + 1,
+            spent_credits = greatest(0, spent_credits + ${jobCreditDelta}),
+            dispatch_count = dispatch_count + ${jobDispatchDelta},
             reason_code = null,
             reason_message = null,
             row_version = row_version + 1,
@@ -2600,14 +2732,31 @@ export async function completeOfapiInteractiveRequest(
 ) {
   const now = input.now ?? new Date();
   const result = await db.execute<{ id: string }>(sql`
-    with attempt as (
-      update ofapi_request_attempts
+    with eligible as materialized (
+      select request.id as request_id,
+             attempt.id as attempt_id,
+             attempt.response_observation_id,
+             attempt.response_observation_received_at
+      from ofapi_interactive_requests request
+      join ofapi_request_attempts attempt
+        on attempt.interactive_request_id = request.id
+      where request.id = ${input.requestId}::uuid
+        and request.state = 'response_captured'
+        and attempt.id = ${input.attemptId}::uuid
+        and attempt.state = 'response_captured'
+        and attempt.parser_outcome = 'pending'
+        and request.response_observation_id = attempt.response_observation_id
+        and request.response_observation_received_at = attempt.response_observation_received_at
+      for update of request, attempt
+    ), attempt as (
+      update ofapi_request_attempts target
       set parser_outcome = ${input.parserOutcome},
           updated_at = ${now}
-      where id = ${input.attemptId}::uuid
-        and interactive_request_id = ${input.requestId}::uuid
-        and state = 'response_captured'
-      returning response_observation_id, response_observation_received_at
+      from eligible
+      where target.id = eligible.attempt_id
+      returning eligible.request_id,
+                eligible.response_observation_id,
+                eligible.response_observation_received_at
     )
     update ofapi_interactive_requests request
     set state = ${input.outcome},
@@ -2616,8 +2765,7 @@ export async function completeOfapiInteractiveRequest(
         row_version = row_version + 1,
         updated_at = ${now}
     from attempt
-    where request.id = ${input.requestId}::uuid
-      and request.state = 'response_captured'
+    where request.id = attempt.request_id
       and request.response_observation_id = attempt.response_observation_id
       and request.response_observation_received_at = attempt.response_observation_received_at
     returning request.id::text as id
@@ -3014,7 +3162,7 @@ export async function setOfapiCaptureControl(
       version: version + 1,
     };
     if (input.execute === true) {
-      await database.execute(sql`
+      const updated = await database.execute<{ control_key: string }>(sql`
         insert into ofapi_capture_controls (
           control_key, paused, reason, version, actor_user_id, updated_at
         ) values (
@@ -3032,7 +3180,13 @@ export async function setOfapiCaptureControl(
           actor_user_id = excluded.actor_user_id,
           updated_at = excluded.updated_at
         where ofapi_capture_controls.version = ${version}
+        returning control_key
       `);
+      if (updated.rows.length !== 1) {
+        throw new OfapiCaptureInvariantError(
+          `Control ${input.controlKey} changed during update`,
+        );
+      }
       if (!input.paused) {
         // persistent_pause is reversible operator containment, never a
         // terminal job outcome. Wake all such jobs; admission re-evaluates
@@ -3257,7 +3411,15 @@ export async function approveBlockedOfapiExportPilotJob(
             cursor_hash = ${nextCursorHash},
             max_credits = greatest(
               coalesce(max_credits, 0),
-              spent_credits + ${approvedMaxCredits} + 1
+              spent_credits
+                + ${approvedMaxCredits}
+                + ${OFAPI_EXPORT_STATUS_POLL_CREDIT_ALLOWANCE}
+            ),
+            max_calls = greatest(
+              coalesce(max_calls, 0),
+              attempt_count
+                + ${OFAPI_EXPORT_START_CALL_ALLOWANCE}
+                + ${OFAPI_EXPORT_STARTED_STATUS_POLL_CALL_ALLOWANCE}
             ),
             reason_code = null,
             reason_message = null,
@@ -3356,14 +3518,26 @@ export async function getOfapiCaptureOperatorAttempt(db: Database, attemptId: st
 
 export async function getOfapiCaptureOperatorStatus(
   db: Database,
-  input?: { jobSampleLimit?: number; attemptSampleLimit?: number },
+  input?: { jobSampleLimit?: number; attemptSampleLimit?: number; now?: Date },
 ) {
+  const now = input?.now ?? new Date();
+  const interactiveRecoveryEligibleBefore = new Date(
+    now.getTime() - OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
+  );
   const jobSampleLimit = Math.max(1, Math.min(50, Math.trunc(input?.jobSampleLimit ?? 20)));
   const attemptSampleLimit = Math.max(
     1,
     Math.min(20, Math.trunc(input?.attemptSampleLimit ?? 10)),
   );
-  const [controls, jobGroups, jobSamples, indeterminateSummary, attempts, storage] =
+  const [
+    controls,
+    jobGroups,
+    jobSamples,
+    indeterminateSummary,
+    attempts,
+    strandedInteractiveSummary,
+    storage,
+  ] =
     await Promise.all([
       db.execute<Record<string, unknown>>(sql`
         select control_key, paused, reason, version, updated_at
@@ -3400,12 +3574,27 @@ export async function getOfapiCaptureOperatorStatus(
         limit ${attemptSampleLimit}
       `),
       db.execute<Record<string, unknown>>(sql`
+        select count(*)::bigint as count,
+               min(attempt.response_captured_at) as oldest_at
+        from ofapi_interactive_requests request
+        join ofapi_request_attempts attempt
+          on attempt.interactive_request_id = request.id
+         and attempt.owner_kind = 'interactive_request'
+        where request.state = 'response_captured'
+          and attempt.state = 'response_captured'
+          and attempt.parser_outcome = 'pending'
+          and attempt.deadline_at <= ${interactiveRecoveryEligibleBefore}
+          and request.response_observation_id = attempt.response_observation_id
+          and request.response_observation_received_at = attempt.response_observation_received_at
+      `),
+      db.execute<Record<string, unknown>>(sql`
         select healthy, breached, checked_at, used_bytes, free_bytes, total_bytes, error
         from ofapi_storage_health_state
         where id = 1
       `),
     ]);
   const summary = indeterminateSummary.rows[0];
+  const strandedSummary = strandedInteractiveSummary.rows[0];
   const storageRow = storage.rows[0];
   return {
     controls: controls.rows.map((row) => ({
@@ -3436,6 +3625,14 @@ export async function getOfapiCaptureOperatorStatus(
         ? asNullableDate(summary.oldest_at, "indeterminate.oldest_at")
         : null,
       samples: attempts.rows.map(mapOperatorAttempt),
+    },
+    strandedInteractive: {
+      count: strandedSummary
+        ? asNumber(strandedSummary.count, "stranded_interactive.count")
+        : 0,
+      oldestAt: strandedSummary
+        ? asNullableDate(strandedSummary.oldest_at, "stranded_interactive.oldest_at")
+        : null,
     },
     storageHealth: storageRow
       ? {

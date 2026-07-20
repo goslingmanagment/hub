@@ -50,4 +50,14 @@ describe("resolveMessageForIncident", () => {
       resolveMessageForIncident({ kind: "ops_sampler_silent", pageLabel: null, platform: null }),
     ).toContain("sampler emitting again");
   });
+
+  it("chargebacks reconcile resolves with its own recovery text", () => {
+    expect(
+      resolveMessageForIncident({
+        kind: "ofapi_chargebacks_reconcile_failed",
+        pageLabel: null,
+        platform: null,
+      }),
+    ).toContain("chargebacks reconcile recovered");
+  });
 });

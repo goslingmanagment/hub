@@ -538,6 +538,20 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // threads BEFORE those threads (and their messages) are deleted.
   const threadPred = sql`t.platform_account_id in ${scope.pageIds}
     and (t.fan_id = ${fanId} or t.platform_conversation_id = ${ref})`;
+
+  // Fansly can key fan-owned artifacts by the messaging GROUP id rather than
+  // the partner account id used as fanRef. Resolve those ids once, while the
+  // page_dm_threads linkage still exists, and reuse the static list below: the
+  // thread target runs before the generation and voice-note delete closures.
+  const fanGroupIdRows = await rows<{ group_id: string }>(app, sql`
+    select distinct t.platform_conversation_id as group_id
+    from page_dm_threads t
+    where (${threadPred}) or (t.platform_account_id in ${scope.pageIds}
+      and t.partner_platform_user_id = ${ref})`);
+  const fanGroupIds = fanGroupIdRows
+    .map((row) => row.group_id)
+    .filter((id): id is string => !!id && id !== ref);
+
   targets.push({
     plane: "hot",
     target: "wb_closing_cache",
@@ -626,9 +640,15 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     run: (tx) => execCount(tx, sql`delete from ofapi_commands where ${commandPred}`),
   });
 
-  // Stage 29 restricted class: generations tied to the fan's conversation
-  // (acceptance rows resolve through them, so they go first).
-  const generationPred = sql`page_id in ${scope.pageIds} and conversation_ref = ${ref}`;
+  // Stage 29 restricted class: generations tied to the fan — by legacy
+  // conversation_ref = fanId, canonical fan_ref, OR a resolved Fansly groupId
+  // on pre-fix/unresolved-fan rows whose fan_ref is NULL. Acceptance rows
+  // resolve through them, so they go first.
+  const generationConvPred = fanGroupIds.length > 0
+    ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
+    : sql`conversation_ref = ${ref}`;
+  const generationPred = sql`page_id in ${scope.pageIds}
+    and (${generationConvPred} or fan_ref = ${ref})`;
   targets.push({
     plane: "hot",
     target: "ai_acceptance_events",
@@ -650,6 +670,36 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       select count(*)::text as n from ai_generation_content where ${generationPred}`),
     run: (tx) => execCount(tx, sql`
       delete from ai_generation_content where ${generationPred}`),
+  });
+
+  // Voice-notes lane (0109): a fan's rendered audio + conversation_ref + a
+  // source_generation_ref into an ai_generation_content row this same erasure
+  // deletes. voice_notes has NO FK to `fans`, so the unmapped-FK guard cannot
+  // flag its omission — the delete must be explicit, or a fan erasure leaves up
+  // to 2 MiB of audio addressed to the erased fan behind (now dangling on a
+  // deleted source_generation_ref).
+  //
+  // conversation_ref is the fanRef on OnlyFans, but on Fansly the extension may
+  // fall back to the messaging GROUP id (item.groupId) — a DIFFERENT id space
+  // than the fan's partnerAccountId fanRef (recorded law A49 / decisions.md
+  // ~3570: Fansly conversationRef is the group id, the partner id travels
+  // separately). Matching conversation_ref = fanRef alone leaves those
+  // group-ref'd notes behind. Resolve the fan's group ids from page_dm_threads
+  // (the sync table linking groupId ↔ partnerAccountId ↔ fan) via the SAME
+  // linkage the thread target above uses, plus the partner-id column that
+  // carries the Fansly partnerAccountId, and scope voice notes to fanRef OR
+  // those group ids. The list was resolved above before the thread target can
+  // delete the linkage; a live subquery here would find nothing at execution.
+  const voiceNoteConvPred = fanGroupIds.length > 0
+    ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
+    : sql`conversation_ref = ${ref}`;
+  const voiceNotePred = sql`platform_account_id in ${scope.pageIds} and ${voiceNoteConvPred}`;
+  targets.push({
+    plane: "hot",
+    target: "voice_notes",
+    action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from voice_notes where ${voiceNotePred}`),
+    run: (tx) => execCount(tx, sql`delete from voice_notes where ${voiceNotePred}`),
   });
 
   // Transactions: the money moved — anonymize, never delete (fan scope).
@@ -735,6 +785,14 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
 
   const deletions: Array<[string, string]> = [
     ["ai_generation_content", "page_id"],
+    // Voice-notes lane (0109): both are page-scoped and must be purged
+    // explicitly. voice_notes REFERENCES pages WITHOUT cascade (it would block
+    // a page delete; erasure keeps the pages catalog row, so we delete the
+    // notes — audio bytes, user_id, conversation_ref, provider metadata — here).
+    // page_voice_profiles DOES cascade on pages, but erasure preserves the pages
+    // row, so the cascade never fires — it too needs an explicit delete.
+    ["voice_notes", "platform_account_id"],
+    ["page_voice_profiles", "platform_account_id"],
     ["wb_closing_cache", "platform_account_id"],
     ["page_dm_threads", "platform_account_id"], // messages ride the cascade
     ["message_archive", "account_id"],

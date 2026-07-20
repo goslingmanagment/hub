@@ -27,6 +27,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
+import { AiGatewayTerminalStreamConsumer } from "./services/ai-gateway.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
@@ -37,6 +38,11 @@ import {
 import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-backfill.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
+import {
+  removeVoiceProfile,
+  setVoiceProfile,
+  showVoiceProfile,
+} from "./services/voice-profiles.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
@@ -718,23 +724,47 @@ export function buildProgram() {
   program
     .command("ai:feature-smoke")
     .description("Stage 30: exercise a kernel AI feature end-to-end against this environment (spends provider budget)")
-    .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting")
+    .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting | coach-chat")
     .requiredOption("--page <label>", "page label")
-    .requiredOption("--conversation <ref>", "fan conversation ref (OF: the fan id)")
+    .requiredOption("--conversation <ref>", "conversation ref (OF: the fan id; Fansly canonical: the groupId)")
     .requiredOption("--as <username>", "chatter/owner user the generation is attributed to")
     .option("--draft <text>", "improve-draft input")
+    .option("--question <text>", "coach-chat: the chatter's question (required for coach-chat)")
+    .option("--fan <ref>", "canonical fan ref (Fansly: separate from the --conversation groupId)")
     .option("--model <model>", "gateway model override")
     .action(async (options) => {
+      // Fail fast with a clear CLI message instead of a server 400: the T5 gate
+      // rejects coach-chat without a chatterQuestion before any provider call.
+      // This is platform-independent, so it stays ahead of the app context.
+      if (options.feature === "coach-chat" && !options.question?.trim()) {
+        throw new Error("coach-chat requires --question <text>");
+      }
       const app = await createAppContext();
       try {
         const { prepareAiFeatureStream } = await import("./modules/ai/index.ts");
-        const user = await findUserByUsername(app.db, options.as);
-        if (!user) {
-          throw new Error(`unknown user: ${options.as}`);
-        }
+        // Resolve the page BEFORE the platform-specific --fan guard: the server
+        // requires fanRef only on Fansly (P1-3), where the conversation is the
+        // canonical groupId. On OnlyFans the conversation IS the fan id, so a
+        // valid smoke needs no --fan. Load the page first so the guard keys off
+        // the REAL platform instead of rejecting every coach-chat.
         const pageRow = await findPageByLabel(app.db, options.page);
         if (!pageRow) {
           throw new Error(`unknown page: ${options.page}`);
+        }
+        // Blocker 2 (P1-3): canonical Fansly coach-chat REQUIRES --fan so the
+        // stored record's fan_ref carries the fan identity (conversationRef is
+        // the groupId, which survives fan-scope erasure). Fail fast to match the
+        // server gate before any provider spend.
+        if (
+          options.feature === "coach-chat"
+          && pageRow.page.platform === "fansly"
+          && !options.fan?.trim()
+        ) {
+          throw new Error("coach-chat requires --fan <ref> on fansly");
+        }
+        const user = await findUserByUsername(app.db, options.as);
+        if (!user) {
+          throw new Error(`unknown user: ${options.as}`);
         }
         const startedAt = Date.now();
         // Operator smoke runs as the named user with owner-style page reach
@@ -754,40 +784,51 @@ export function buildProgram() {
             platform: pageRow.page.platform as "onlyfans" | "fansly",
             conversationRef: options.conversation,
             ...(options.draft ? { draftText: options.draft } : {}),
+            ...(options.question ? { chatterQuestion: options.question } : {}),
+            ...(options.fan ? { fanRef: options.fan } : {}),
             ...(options.model ? { model: options.model } : {}),
           },
         );
         const preparedMs = Date.now() - startedAt;
-        let text = "";
-        let usage: Record<string, unknown> | null = null;
         let firstTokenMs: number | null = null;
         const abort = new AbortController();
+        // Blocker 5 (P1-5a): drive the SAME terminal-stream consumer the HTTP
+        // pump uses, so the CLI honors the coach ceiling and threads the real
+        // outcome + stopReason into recordTerminal. Without this the smoke could
+        // store a max_tokens-truncated fan-summary as `completed` with a NULL
+        // stopReason, which the recap selector would then attach to a coach turn.
+        const consumer = new AiGatewayTerminalStreamConsumer(stream.visibleOutputCeilingChars);
         for await (const frame of stream.stream(abort.signal)) {
-          if (frame.type === "content_delta") {
-            if (firstTokenMs === null) {
-              firstTokenMs = Date.now() - startedAt;
-            }
-            text += frame.text;
-          } else if (frame.type === "usage") {
-            usage = frame.usage as unknown as Record<string, unknown>;
+          if (frame.type === "content_delta" && frame.text.length > 0 && firstTokenMs === null) {
+            firstTokenMs = Date.now() - startedAt;
+          }
+          const { ceilingCrossed } = consumer.note(frame);
+          if (ceilingCrossed) {
+            abort.abort();
+            break;
           }
         }
+        consumer.finish();
         const totalMs = Date.now() - startedAt;
         await stream.recordTerminal({
-          outcome: "completed",
-          usage: usage as never,
-          providerResponseId: null,
-          cacheHit: false,
+          outcome: consumer.outcome,
+          usage: consumer.usage,
+          providerResponseId: consumer.providerResponseId,
+          cacheHit: consumer.cacheHit,
           durationMs: totalMs,
           completedAt: new Date(),
-          completionText: text,
+          completionText: consumer.completionText,
+          stopReason: consumer.stopReason,
+          estimateCostOnMissingUsage: consumer.ceilingExceeded,
         });
         console.log(JSON.stringify({
           feature: options.feature,
           generationRef: stream.requestId,
+          outcome: consumer.outcome,
+          stopReason: consumer.stopReason,
           latencyMs: { contextAndPrepare: preparedMs, firstToken: firstTokenMs, total: totalMs },
-          usage,
-          completionPreview: text.slice(0, 200),
+          usage: consumer.usage,
+          completionPreview: consumer.completionText.slice(0, 200),
         }, null, 2));
       } finally {
         await app.close();
@@ -1081,6 +1122,68 @@ export function buildProgram() {
         console.log(`Proxy exit IP: ${proxyIp}`);
         console.log(`Direct exit IP: ${directIp}`);
         console.log(`Differs from direct: ${proxyIp !== directIp ? "yes" : "no"}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  const voiceProfile = program.command("voice-profile");
+  voiceProfile
+    .command("set")
+    .description("Bind an ElevenLabs voice to a Fansly page (upsert; version auto-increments)")
+    .requiredOption("--page <label>")
+    .requiredOption("--voice-id <id>")
+    .option("--model <model>", "ElevenLabs model id", "eleven_v3")
+    .option("--stability <value>", "voice stability preset or number (stored in settings)", "natural")
+    .option("--output-format <format>", "rendered audio format", "mp3_44100_128")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { version } = await setVoiceProfile(app, options.page, {
+          voiceId: options.voiceId,
+          model: options.model,
+          stability: options.stability,
+          outputFormat: options.outputFormat,
+        });
+        console.log(`Set voice profile for page ${options.page} (version ${version})`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  voiceProfile
+    .command("show")
+    .description("Print the Fansly page's voice binding (config only; no secrets)")
+    .requiredOption("--page <label>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const profile = await showVoiceProfile(app, options.page);
+        if (!profile) {
+          console.log(`Page ${options.page}: no voice profile`);
+          return;
+        }
+        console.log(`Page: ${options.page}`);
+        console.log(`Voice id: ${profile.voiceId}`);
+        console.log(`Model: ${profile.model}`);
+        console.log(`Output format: ${profile.outputFormat}`);
+        console.log(`Settings: ${JSON.stringify(profile.settings)}`);
+        console.log(`Version: ${profile.version}`);
+        console.log(`Updated at: ${profile.updatedAt.toISOString()}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  voiceProfile
+    .command("clear")
+    .description("Remove the Fansly page's voice binding (no-op when none exists)")
+    .requiredOption("--page <label>")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        await removeVoiceProfile(app, options.page);
+        console.log(`Cleared voice profile for page ${options.page}`);
       } finally {
         await app.close();
       }

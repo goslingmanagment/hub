@@ -18,6 +18,7 @@ import {
   listNotificationIncidents,
   listPageDmConversationsByPlatformConversationIds,
   recordOfapiCreditSpend,
+  recordOfapiCreditUsage,
   reserveOfapiDayCredits,
   setPageOfapiAccountId,
   settleOfapiDayCreditReservation,
@@ -139,9 +140,21 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
     }, INTEGRATION_TEST_TIMEOUT_MS);
 
     it("keeps the audience counter independent and settles reservations to actuals", async () => {
-      expect(await reserveOfapiDayCredits(appContext.db, { scope: "global", estimate: 1, budget: 5 })).toBe(true);
-      expect(await reserveOfapiDayCredits(appContext.db, { scope: "audience", estimate: 1, budget: 3 })).toBe(true);
-      expect(await reserveOfapiDayCredits(appContext.db, { scope: "audience", estimate: 1, budget: 3 })).toBe(true);
+      const globalReceipt = await reserveOfapiDayCredits(
+        appContext.db,
+        { scope: "global", estimate: 1, budget: 5 },
+      );
+      const audienceReceipt = await reserveOfapiDayCredits(
+        appContext.db,
+        { scope: "audience", estimate: 1, budget: 3 },
+      );
+      expect(globalReceipt).not.toBeNull();
+      expect(audienceReceipt).not.toBeNull();
+      expect(await reserveOfapiDayCredits(
+        appContext.db,
+        { scope: "audience", estimate: 1, budget: 3 },
+      )).not.toBeNull();
+      if (!globalReceipt || !audienceReceipt) throw new Error("reservation receipt missing");
 
       let credit = await getOfapiCreditState(appContext.db);
       expect(credit.spentToday).toBe(1);
@@ -149,9 +162,14 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
 
       // A response that actually cost 3 credits settles +2 over its 1-credit
       // estimate; a released reservation can never push the counter negative.
-      await settleOfapiDayCreditReservation(appContext.db, { scope: "audience", creditsDelta: 2 });
+      await settleOfapiDayCreditReservation(appContext.db, {
+        scope: "audience",
+        receipt: audienceReceipt,
+        creditsDelta: 2,
+      });
       await settleOfapiDayCreditReservation(appContext.db, {
         scope: "global",
+        receipt: globalReceipt,
         creditsDelta: -10,
         balance: 750,
       });
@@ -177,6 +195,85 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       expect(credit.audienceSpentToday).toBe(5);
     }, INTEGRATION_TEST_TIMEOUT_MS);
 
+    it("keeps dedicated lane caps available after shared mirror spend exceeds 500", async () => {
+      await recordOfapiCreditSpend(appContext.db, {
+        operation: "ofapi_chats",
+        credits: 600,
+        balanceAfter: 19_400,
+      });
+
+      const audienceGuards = Array.from({ length: 3 }, () =>
+        createOfapiRestGuard(appContext, {
+          dailyCreditBudget: 2,
+          budgetScope: "audience",
+        }));
+      const backfillGuards = Array.from({ length: 3 }, () =>
+        createOfapiRestGuard(appContext, {
+          dailyCreditBudget: 2,
+          budgetScope: "backfill",
+        }));
+
+      const audienceOutcomes = await Promise.all(
+        audienceGuards.map((guard) => guard.resolveBlock()),
+      );
+      const backfillOutcomes = await Promise.all(
+        backfillGuards.map((guard) => guard.resolveBlock()),
+      );
+
+      expect(audienceOutcomes.filter((outcome) => outcome === null)).toHaveLength(2);
+      expect(backfillOutcomes.filter((outcome) => outcome === null)).toHaveLength(2);
+      expect(audienceOutcomes.filter((outcome) => outcome === "ofapi_daily_credit_budget"))
+        .toHaveLength(1);
+      expect(backfillOutcomes.filter((outcome) => outcome === "ofapi_daily_credit_budget"))
+        .toHaveLength(1);
+
+      const credit = await getOfapiCreditState(appContext.db);
+      expect(credit.spentToday).toBe(604);
+      expect(credit.audienceSpentToday).toBe(2);
+      const { rows } = await testDb!.pool.query<{ backfill_spent_credits: number }>(
+        "select backfill_spent_credits from ofapi_credit_state where id = 1",
+      );
+      expect(rows[0]?.backfill_spent_credits).toBe(2);
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+
+    it("admits only one dedicated reservation at the 7000-credit physical ceiling", async () => {
+      appContext = createTestAppContext(testDb!, {
+        ofapiCreditLedgerEnabled: true,
+        ofapiDmDailyCreditBudget: 10_000,
+        ofapiMirrorGlobalDailyCreditBudget: 7_000,
+      });
+      await recordOfapiCreditSpend(appContext.db, {
+        operation: "ofapi_chats",
+        credits: 6_999,
+        balanceAfter: 13_001,
+      });
+
+      const guards = Array.from({ length: 10 }, (_, index) =>
+        createOfapiRestGuard(appContext, {
+          dailyCreditBudget: 10,
+          budgetScope: index % 2 === 0 ? "audience" : "backfill",
+        }));
+      const outcomes = await Promise.all(guards.map((guard) => guard.resolveBlock()));
+
+      expect(outcomes.filter((outcome) => outcome === null)).toHaveLength(1);
+      expect(outcomes.filter((outcome) => outcome === "ofapi_daily_credit_budget"))
+        .toHaveLength(9);
+      const credit = await getOfapiCreditState(appContext.db);
+      expect(credit.spentToday).toBe(7_000);
+      const { rows } = await testDb!.pool.query<{
+        audience_spent_credits: number;
+        backfill_spent_credits: number;
+      }>(
+        `select audience_spent_credits, backfill_spent_credits
+         from ofapi_credit_state
+         where id = 1`,
+      );
+      expect(
+        (rows[0]?.audience_spent_credits ?? 0) +
+          (rows[0]?.backfill_spent_credits ?? 0),
+      ).toBe(1);
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+
     it("settles a dedicated reservation without double-counting the ledger sink", async () => {
       const guard = createOfapiRestGuard(appContext, {
         dailyCreditBudget: 10,
@@ -192,10 +289,12 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
         operation: "ofapi_fans_active",
         credits: 3,
         balanceAfter: 747,
+        budgetScope: "audience",
       });
       await guard.recordResponse({
         items: [],
         hasNextPage: false,
+        creditSpendAccounted: true,
         meta: {
           creditsUsed: 3,
           creditBalance: 747,
@@ -209,17 +308,54 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       expect(credit.audienceSpentToday).toBe(3);
       expect(credit.lastBalance).toBe(747);
     }, INTEGRATION_TEST_TIMEOUT_MS);
+
+    it("never rewinds a UTC-day counter and settles against the reservation receipt", async () => {
+      const oldReceipt = await reserveOfapiDayCredits(appContext.db, {
+        scope: "global",
+        estimate: 1,
+        budget: 10,
+        now: new Date("2099-01-01T23:59:00.000Z"),
+      });
+      const newReceipt = await reserveOfapiDayCredits(appContext.db, {
+        scope: "global",
+        estimate: 1,
+        budget: 10,
+        now: new Date("2099-01-02T00:01:00.000Z"),
+      });
+      expect(oldReceipt).not.toBeNull();
+      expect(newReceipt).not.toBeNull();
+      if (!oldReceipt) throw new Error("old reservation receipt missing");
+
+      await settleOfapiDayCreditReservation(appContext.db, {
+        scope: "global",
+        receipt: oldReceipt,
+        creditsDelta: 2,
+        now: new Date("2099-01-02T00:02:00.000Z"),
+      });
+      await recordOfapiCreditUsage(appContext.db, {
+        creditsUsed: 5,
+        now: new Date("2099-01-01T23:59:30.000Z"),
+      });
+      expect(await reserveOfapiDayCredits(appContext.db, {
+        scope: "global",
+        estimate: 1,
+        budget: 10,
+        now: new Date("2099-01-01T23:59:45.000Z"),
+      })).toBeNull();
+
+      const state = await testDb!.pool.query<{ spend_day: string; spent_credits: number }>(`
+        select to_char(spend_day, 'YYYY-MM-DD') as spend_day, spent_credits
+        from ofapi_credit_state where id = 1
+      `);
+      expect(state.rows[0]).toEqual({ spend_day: "2099-01-02", spent_credits: 1 });
+    }, INTEGRATION_TEST_TIMEOUT_MS);
   });
 
   describe("F7 — credit-floor park recovery", () => {
     it("lets a stale sub-floor balance probe through and re-parks on fresh data", async () => {
       // Floor 500, balance 100 observed two hours ago: stale, so the guard
       // must let one probe request through instead of parking forever.
-      await settleOfapiDayCreditReservation(appContext.db, {
-        scope: "global",
-        creditsDelta: 0,
-        balance: 100,
-      });
+      await recordOfapiCreditUsage(appContext.db, { creditsUsed: 0, balance: 100 });
       await testDb!.pool.query(
         "update ofapi_credit_state set last_balance_at = now() - interval '2 hours'",
       );
@@ -229,10 +365,21 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
 
       // The probe's response refreshed the observation and the balance is
       // still below the floor: the next check parks again.
-      await settleOfapiDayCreditReservation(appContext.db, {
-        scope: "global",
-        creditsDelta: 0,
-        balance: 100,
+      await recordOfapiCreditSpend(appContext.db, {
+        operation: "ofapi_chats",
+        credits: 1,
+        balanceAfter: 100,
+      });
+      await guard.recordResponse({
+        items: [],
+        hasNextPage: false,
+        creditSpendAccounted: true,
+        meta: {
+          creditsUsed: 1,
+          creditBalance: 100,
+          isCached: false,
+          rateRemainingMinute: null,
+        },
       });
       expect(await guard.resolveBlock()).toBe("ofapi_credit_floor");
     }, INTEGRATION_TEST_TIMEOUT_MS);

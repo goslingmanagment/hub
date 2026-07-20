@@ -4642,7 +4642,98 @@ projection also refresh `pages.subscriber_count` from authoritative current
 the reporting cache stayed null forever, producing the dashboard's false
 `N/A`.
 
-**Decision #167 (2026-07-18, governed interactive OFAPI budgets are per user
+**Decision #167 (2026-07-18, coach-chat feature lane — stateless multi-turn
+coach, two-slot recap attach, short fan-summary variant, `includesFanBio`
+policy flag, recap-status read, and canonical coach/recap identity):** Core
+gains a new AI feature `coach-chat` on the feature lane (`POST
+/api/v1/ai/features/coach-chat`, SSE like every feature, fail-closed on
+transport truncation and on the normalized output-exhaustion signal). The
+coach is stateless server-side: the multi-turn dialog is client-held and
+replayed each turn as `coachHistory` (completed exchanges only, oldest first)
+alongside the required free-form `chatterQuestion`; the kernel keeps no
+session. `chatterQuestion` is 1–2000 chars, required for coach-chat and
+rejected for every other feature; `coachHistory` is coach-only with a hard
+ceiling of ≤20 entries, `question` ≤2000 chars, `answer` ≤64000 chars.
+Serializability follows the owner-approved option "c" (2026-07-18): the coach
+keeps its adaptive thinking budget (16k, no output-token cap games), and the
+`answer` bound is a TRANSPORT ceiling, not a prompt bound. The same
+`COACH_ANSWER_MAX_CHARS` (64000, one shared contract constant) is enforced
+identically on the live coach-chat output stream — a generation whose
+accumulated visible output crosses it errors WITHOUT a `done` frame and is
+terminal-recorded as failed, so it can never be attached/committed. Therefore
+every committed answer is ≤ the ceiling and replays verbatim within schema. The
+old 120k aggregate reject is REMOVED (a schema-valid-yet-gate-rejected zone was
+an API defect): a client trimming to its window setting is never rejected, and
+transport abuse is the route's job (a scoped 12 MiB body limit sized
+content-agnostically for the worst case, NOT a content policy: 20×66k history +
+a 300k transcript + the smaller free-text fields sum to ~1.69M UTF-16 code units,
+and the true per-code-unit worst case on the JSON wire is SIX bytes — a lone
+surrogate (U+D800) or an ASCII control char is a legal JSON string value that
+JSON.stringify escapes to a six-byte `\uXXXX` sequence — so ~1.69M × 6 ≈ 10.1MB
+(a printable 3-byte-UTF-8 char is only ~5.06MB, well under). Round-3 briefly
+banned control chars in the large fields to hold a 3-byte/char ceiling at 8 MiB,
+but round-4 (P2-4) REVERTED that ban: it regressed every live Fansly feature
+whose transcript carries arbitrary fan text (a stray control char 400'd the whole
+request) and was invisible in the generated OpenAPI, so the fields are plain
+bounded strings again and the limit was raised 8 MiB → 12 MiB to absorb the
+six-byte worst case with headroom while genuine transport abuse still 413s). The 2500-token base
+`max_tokens` is NOT a character-serializability guarantee and must not be
+described as one; prompt cost is bounded core-side instead. Before assembly core
+projects each accepted history answer to a ≤10k head+tail replay (6000 head +
+3800 tail + an explicit `[… N chars omitted …]` marker, code-point-safe), then
+the newest-first 60k history budget sheds on the EXACT rendered size (escaping +
+XML-wrapper overhead included), so an oversized newest entry can no longer
+overshoot the budget. The extension applies the same ≤10k projection only as a
+bandwidth optimization; correctness never depends on it. When the prompt still
+cannot fit the worst case, core sheds deterministically: protect the question,
+the safety/methodology system prompt, and the newest transcript, then drop
+oldest coach exchanges, then trim/dedupe recap and dossier. An unrecognized feature
+name returns the structured `unknown_ai_feature` error (not a bare 404) so the
+extension can distinguish "needs a newer Hub" from an unauthorized/missing
+page.
+
+Fan bio inclusion becomes a shared `includesFanBio` policy flag instead of the
+hard-coded `feature === "hi-greeting"` bio check — enabled for `hi-greeting`
+(unchanged), `help-me` (its prior absence was a bug), and `coach-chat`. The
+coach prompt template is laid out cache-safe: the stable, high-reuse sections
+(agency methodology / persona / fan context) precede the volatile ones
+(rolling history, then the current question) so the provider prompt-cache
+prefix survives turn-to-turn, and the prompt-manifest hashes were re-snapshot
+to match.
+
+Recap gains a short variant of `fan-summary`: an optional `summaryMode:
+'short'` (valid only for `fan-summary`, sent only for the short run — omitted
+means legacy full, so an older core never sees the field) drives a fixed
+300-message window and a compact template with a hard mode-specific output cap
+(full's adaptive reservation must not apply). A short recap is stored under a
+mode-qualified local cache key (legacy unqualified keys read as full) and is
+never pushed to the `fan_profiles` dossier, so a short run cannot overwrite the
+durable full profile. Truncation or output-exhaustion fails closed for coach
+and both recap sizes — a truncated recap is never cached, pushed as dossier, or
+attached.
+
+On every coach turn core selects two slots from the restricted generation
+store — the freshest usable full recap and the freshest usable short recap
+(terminal `completed`, non-empty, no exhaustion stop reason, `params` carrying
+`summaryMode`/coverage/requested-and-kept counts/persona so legacy rows are
+excluded, deterministic `ORDER BY created_at DESC, id DESC`) via a composite
+index. Attach rule: only one exists → attach it; both exist and the full is
+newer → attach the full only; the short is newer → attach BOTH, each labeled
+with age and role. Lookup failure fails open (coach proceeds recap-less,
+recorded in the context manifest); a recap identical to the injected dossier is
+injected once. A new metadata-only, page-scoped SDK read `GET
+/api/v1/ai/recap-status` (operation `aiRecapStatus`) returns both slots'
+generated-at/coverage/counts (or "none") with no generation and no AI spend,
+preserving the invariant that opening Coach incurs no AI cost. Coach and recap
+requests adopt the canonical identity `conversationRef = Fansly groupId` and
+`fanRef = fanAccountId` (the contract already separates these); during
+transition the attach lookup searches both the canonical and the legacy
+`fanAccountId ?? groupId` key. Extension spec: chatgoose
+`docs/superpowers/specs/2026-07-17-coach-chat-design.md` (§5 recap, §7 kernel
+contract); the `ai_usage_events.feature` enum gains `coach-chat` via a numbered
+forward migration and the Usage dashboard's fixed feature column list.
+
+**Decision #168 (2026-07-18, governed interactive OFAPI budgets are per user
 per UTC day):** The initial capture-first safety limits of 60 calls per UTC
 hour and 250 shared interactive credits per UTC day blocked ordinary desktop
 reads while the vendor remained healthy. Governed mirror reads now allow each
@@ -4656,20 +4747,20 @@ reservation accounting, per-job bulk caps, and explicit incident pause remain
 unchanged. `OFAPI_DM_DAILY_CREDIT_BUDGET` continues to govern only the legacy
 DM-sync path.
 
-**Decision #168 (2026-07-18, owner adjustment to #167):** The per-principal
+**Decision #169 (2026-07-18, owner adjustment to #168):** The per-principal
 governed mirror allowance is 7,000 calls and 7,000 reserved credits per UTC
-day. This supersedes only the 4,000/4,000 values in #167; its UTC-day window,
+day. This supersedes only the 4,000/4,000 values in #168; its UTC-day window,
 40,000-credit global stop-loss, balance floor, and all other safeguards remain
 unchanged.
 
-**Decision #169 (2026-07-18, owner clarification to #167 and #168):** The
+**Decision #170 (2026-07-18, owner clarification to #168 and #169):** The
 governed mirror budget is 4,000 calls and 4,000 reserved credits per origin
 principal per UTC day, with a 7,000-credit global ceiling across all
-principals for that UTC day. This supersedes the numeric allowances in #167
-and #168; their UTC-day reset, balance floor, and remaining safeguards are
+principals for that UTC day. This supersedes the numeric allowances in #168
+and #169; their UTC-day reset, balance floor, and remaining safeguards are
 unchanged.
 
-**Decision #170 (2026-07-18, partial sync pauses stay precise and
+**Decision #171 (2026-07-18, partial sync pauses stay precise and
 recoverable):** Product surfaces preserve the page summary's distinction
 between a fully paused page and one paused applicable stream instead of
 collapsing both to the same `Data updates paused` banner. Owner links from the
@@ -4686,7 +4777,7 @@ OnlyFans compatibility/no-op rows (`light`, legacy `transactions`, retired
 changes only operator copy and control reachability; applicability, scheduling,
 stored data, and Decision #166 page-health policy remain unchanged.
 
-**Decision #171 (2026-07-18, dist-only releases rebase on one pinned clean
+**Decision #172 (2026-07-18, dist-only releases rebase on one pinned clean
 full image):** A production full build publishes a clean base alias keyed by
 the dependency checksum after the deployed candidate passes all
 health, capability, label, sync, and dashboard verification. A dist-only
@@ -4706,3 +4797,113 @@ binary used by both runtime launch sites, and removes package-manager indexes
 in the same layer. Image/tag garbage collection remains an explicit,
 owner-gated operation so current, rollback, and the checksum-pinned clean base
 cannot be deleted by an unscoped prune.
+
+**Decision #173 (2026-07-19, recovery generations stay monotonic and partial
+production failures stay visible):** Resetting a sync checkpoint does not
+reset the retained projection rows that carry generation numbers. Every fresh
+Fansly follower, Fansly/OFAPI subscriber, and Fansly DM-conversation sweep
+therefore starts at `max(checkpoint generation, retained-row generation) + 1`,
+including inactive or hidden rows. A valid in-progress cursor resumes without
+another high-water read, and finalization keeps the existing `< generation`
+retirement predicate. This makes the existing owner Reset operation safe after
+a consistency block without deleting facts or adding a migration.
+
+Public sync health degrades when any applicable task is terminal `failed`, even
+when an up-to-date or paused primary task hides that failure at block level.
+Only the task state is authoritative: `needsAttention`, dependency delays, and
+ordinary pauses do not trip the gate. Existing block-level counters retain
+their meaning; a hidden failure is reported as `failed_tasks` and supplies the
+public error summary.
+
+OFAPI chargeback reconciliation uses a full-history first walk with neither
+date boundary and paired start/end boundaries from one clock instant on
+trailing walks. An unexpected vendor or database failure is isolated to its
+page so the remaining fleet still converges; only after the fleet pass does the
+worker fail, and a single deduplicated global incident remains open until an
+all-written clean run. The queue is reconciled at startup to a zero retry
+limit, so one scheduled job performs exactly one fleet pass instead of
+repurchasing healthy pages. A request without a response keeps its durable
+credit estimate charged in
+the conservative direction while only its in-memory lifecycle token is
+released for the next page.
+
+**Decision #174 (2026-07-18, voice notes are a page-scoped kernel render lane
+with a durable single-dispatch state machine; supersedes #36 for the bounded
+voice-audio artifact class):** ElevenLabs voice notes ship as a first-class
+kernel feature, not a client-side integration: the extension holds no vendor
+key and never calls ElevenLabs. A new `voice-script` feature rides the existing
+SSE feature lane to compose the spoken script from refs + `clientContext`
+exactly like every other AI feature, and the render itself is driven by three
+page-scoped routes — POST to admit a render, a status poll, and an audio fetch —
+each returning structured `voice_*` error/outcome codes plus `idempotency_mismatch` and `artifact_expired` so the client maps
+failures by code, not by prose. Every render is a durable job in `voice_notes`
+governed by the decision-#158 discipline: admission creates the attempt before
+any dispatch, a CAS transition grants exactly one dispatch under a fenced
+`attempt_token` + `lease_until`, and only the fencing token may settle the
+terminal row; a lease-expiry sweep resolves abandoned dispatches to
+`indeterminate` rather than retrying, because an unacknowledged provider call is
+never silently re-sent. A truncated script stream is an error, never a
+render input.
+
+The rendered audio is stored as bounded `BYTEA` inline on the job row — capped
+at ≤2 MB per row and nulled by a logged 7-day retention purge that flips the row
+to `artifact_expired`. This **explicitly supersedes Decision #36's
+"Postgres text/JSON only; no binary storage" rule for this one bounded,
+short-lived, self-purging artifact class** and for it alone: no object store,
+no unbounded blobs, no other artifact type is admitted by this carve-out. The
+audio bytes and any expiring provider URLs stay out of every projection and
+export.
+
+ElevenLabs is a new `vendor:"elevenlabs"` egress class: a non-platform vendor
+reached directly and unpaced, distinct from the platform (Fansly/OFAPI) egress
+that the per-page proxy pacer governs — it carries no chatter session and no
+model-ban risk, so it does not ride the platform rate limiter, but it is still
+named as its own class for budgeting and observability. Character spend is
+metered by the `voice_notes` rows themselves plus per-day `voice_char_budget`
+scope counters (page and global), reserved atomically before dispatch and
+refunded on settle. This ledger is deliberately kept OUT of `ai_usage_events`,
+whose provider `CHECK` stays `anthropic | openrouter`; voice characters are not
+token spend and must not pollute the AI gateway's accounting or its provider
+domain.
+
+The whole lane is gated behind `VOICE_NOTES_ENABLED` (default off) and a
+fail-closed page allowlist: with the flag off or a page absent from the
+allowlist, the feature, routes, executor dispatch, and capability hint are all
+inert. Owner sign-off for the #36 supersession is requested explicitly in this
+PR's description — merging the code lands the mechanism, but the documented
+carve-out from #36 is the owner's to ratify.
+
+**Decision #175 (2026-07-20, voice pilot hardening clarifies identity,
+artifact, billing-view, and concurrency invariants):** `voice-script` is a
+Fansly-only precursor to synthesis. Before any LLM spend it now requires the
+live voice switch, fail-closed page allowlist, configured ElevenLabs provider,
+page voice profile, and a nonblank fan identity carried identically in
+`conversationRef` and `fanRef`. Synthesis admission accepts the resulting
+restricted generation only when its user, page, conversation, and fan refs all
+match the requested fan. This removes the group-id fallback and makes fan-scope
+erasure address a new voice artifact directly by its canonical fan ref.
+
+The ElevenLabs adapter still performs exactly one client fetch and zero
+automatic retries, but redirects now fail instead of forwarding the API key and
+script. Successful bodies are streamed under the 2 MiB ceiling, require exact
+`audio/mpeg`, and must contain a complete first MPEG Layer III frame (directly
+or after a valid ID3v2 header). Blank `character-cost` is unknown, never zero.
+The database independently binds `audio_bytes_len` to
+`octet_length(audio_bytes)` and the same cap. Invalid, truncated, wrong-MIME,
+or oversized 200 responses remain possibly billed and never become playable
+artifacts.
+
+`VOICE_NOTES_MAX_CONCURRENT_SYNTHESES` is enforced by a process-local gate for
+the current single-API deployment. A saturated job remains `queued` without a
+dispatch lease; only after a permit opens does it re-read the live switch,
+allowlist, and limit and attempt the one queued→dispatched CAS. Thus waiting
+cannot expire a dispatch lease, a disabled/de-allowlisted job cannot slip into
+ElevenLabs later, and a sweep that wins the row prevents provider dispatch.
+Running multiple API replicas would require replacing this gate with a shared
+one before enabling more than one replica.
+
+Finally, the existing 24-hour reservation release for stale
+`indeterminate` rows may use `billed=false` only as an internal one-time budget
+release marker. Every public status projection for an `indeterminate` row
+returns `billed:null`; neither the client nor an operator may interpret the
+internal marker as proof that ElevenLabs did not charge.

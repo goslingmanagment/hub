@@ -14,6 +14,7 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../../bootstrap.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
 import { isOfapiBackgroundCaptureRunnable } from "../ofapi-capture-jobs.ts";
+import { recoverExpiredOfapiInteractiveResponses } from "../ofapi-capture-transport.ts";
 import { resolveStoredProxyEgressKey } from "../page-context.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
@@ -96,6 +97,17 @@ export async function runSyncPlannerCycle(
   const recovered = await recoverStaleOfapiCaptureWork(app.db, { now });
   if (recovered.released + recovered.indeterminate + recovered.requeued > 0) {
     app.logger.warn(recovered, "Recovered expired OFAPI capture work");
+  }
+  const recoveredInteractive = await recoverExpiredOfapiInteractiveResponses(app, { now });
+  if (
+    recoveredInteractive.terminalized
+    + recoveredInteractive.unavailable
+    + recoveredInteractive.errors > 0
+  ) {
+    app.logger.warn(
+      recoveredInteractive,
+      "Recovered captured OFAPI interactive responses without vendor egress",
+    );
   }
 
   if (isOfapiBackgroundCaptureRunnable(app.config)) {

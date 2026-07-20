@@ -91,7 +91,7 @@ describe("egress resolver (Stage 26)", () => {
       .rejects.toThrow(/fail-closed/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("records the vendor address policies: ofapi vendor-direct, fansly refused, unknown throws", async (context) => {
+  it("records the vendor address policies: ofapi vendor-direct, elevenlabs direct+unpaced, fansly refused, unknown throws", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -101,6 +101,14 @@ describe("egress resolver (Stage 26)", () => {
     expect(vendorContext.egressKey).toBe("vendor:ofapi");
     expect(vendorContext.dispatcher).toBeNull();
     await vendorContext.close();
+
+    // Voice notes vendor TTS: a non-platform vendor — direct hub egress
+    // (dispatcher null) and UNPACED (pace resolves 0), no platform masquerade.
+    const elevenlabs = await resolveEgress(appContext, { kind: "vendor", vendor: "elevenlabs" });
+    expect(elevenlabs.egressKey).toBe("vendor:elevenlabs");
+    expect(elevenlabs.dispatcher).toBeNull();
+    await expect(elevenlabs.pace("interactive")).resolves.toBe(0);
+    await elevenlabs.close();
 
     await expect(resolveEgress(appContext, { kind: "vendor", vendor: "fansly" }))
       .rejects.toThrow(/must be page-scoped/);

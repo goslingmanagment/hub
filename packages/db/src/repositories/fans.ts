@@ -568,6 +568,24 @@ export async function countActivePageFollows(db: Database, platformAccountId: nu
   return result.rows[0]?.count ?? 0;
 }
 
+function parseGenerationHighWater(value: unknown, relation: string) {
+  const generation = Number(value ?? 0);
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new Error(`Expected ${relation} generation high-water to be a non-negative safe integer`);
+  }
+  return generation;
+}
+
+export async function maxPageFollowGeneration(db: Database, platformAccountId: number) {
+  const result = await db.execute(sql`
+    select coalesce(max(last_seen_generation), 0)::int as generation
+    from page_follows
+    where platform_account_id = ${platformAccountId}
+  `);
+
+  return parseGenerationHighWater(result.rows[0]?.generation, "page_follows");
+}
+
 export async function countPageFollowsByGeneration(
   db: Database,
   input: {
@@ -750,6 +768,16 @@ export interface UpsertPageSubscriptionInput {
   sourceUpdatedAt?: Date | null;
   endsAt?: Date | null;
   lastSeenGeneration?: number | null;
+}
+
+export async function maxPageSubscriptionGeneration(db: Database, platformAccountId: number) {
+  const result = await db.execute(sql`
+    select coalesce(max(last_seen_generation), 0)::int as generation
+    from page_subscriptions
+    where platform_account_id = ${platformAccountId}
+  `);
+
+  return parseGenerationHighWater(result.rows[0]?.generation, "page_subscriptions");
 }
 
 export async function upsertPageSubscriptions(

@@ -737,14 +737,21 @@ rollback_remote_stack() {
 
 capture_remote_schema_migrations() {
   local output_file="$1"
+  local attempt
+  local max_attempts=30
+  local attempt_output="${output_file}.attempt"
 
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
+  for (( attempt = 1; attempt <= max_attempts; attempt += 1 )); do
+    if run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
 export PGPASSWORD=\"\$POSTGRES_PASSWORD\"
 psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -v ON_ERROR_STOP=1 -Atq <<'\''SQL'\''
 BEGIN;
 DO \$deploy_schema_capture\$
 BEGIN
-  PERFORM pg_advisory_xact_lock(31415, 27182);
+  IF NOT pg_try_advisory_xact_lock(31415, 27182) THEN
+    RAISE EXCEPTION \$message\$deploy schema capture lock is busy\$message\$
+      USING ERRCODE = \$code\$55P03\$code\$;
+  END IF;
   CREATE TEMP TABLE deploy_schema_migrations(id text) ON COMMIT DROP;
   IF to_regclass(\$q\$public.schema_migrations\$q\$) IS NOT NULL THEN
     EXECUTE \$q\$insert into deploy_schema_migrations select id from schema_migrations order by id\$q\$;
@@ -753,7 +760,18 @@ END
 \$deploy_schema_capture\$;
 SELECT id FROM deploy_schema_migrations ORDER BY id;
 COMMIT;
-SQL'" >"$output_file"
+SQL'" >"$attempt_output"; then
+      mv "$attempt_output" "$output_file" || return 1
+      return 0
+    fi
+
+    if (( attempt < max_attempts )); then
+      sleep 1
+    fi
+  done
+
+  rm -f "$attempt_output"
+  return 1
 }
 
 remote_curl_status() {

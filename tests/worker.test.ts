@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
+import type * as CaptureTransportModule from
+  "../apps/runtime/src/services/ofapi-capture-transport.ts";
 import type * as SyncQueueModule from "../apps/runtime/src/services/sync-queue.ts";
 
 const dbMocks = vi.hoisted(() => ({
@@ -17,6 +19,9 @@ const dbMocks = vi.hoisted(() => ({
 
 const queueMocks = vi.hoisted(() => ({
   sendSyncPageWakeup: vi.fn(),
+}));
+const captureTransportMocks = vi.hoisted(() => ({
+  recoverExpiredOfapiInteractiveResponses: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", async () => {
@@ -36,6 +41,16 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", async () => {
     sendSyncPageWakeup: queueMocks.sendSyncPageWakeup,
   };
 });
+vi.mock("../apps/runtime/src/services/ofapi-capture-transport.ts", async () => {
+  const actual = await vi.importActual<typeof CaptureTransportModule>(
+    "../apps/runtime/src/services/ofapi-capture-transport.ts",
+  );
+  return {
+    ...actual,
+    recoverExpiredOfapiInteractiveResponses:
+      captureTransportMocks.recoverExpiredOfapiInteractiveResponses,
+  };
+});
 
 import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
 
@@ -50,6 +65,7 @@ describe("sync planner", () => {
     dbMocks.recoverStaleOfapiCaptureWork.mockReset();
     dbMocks.listRunnableOfapiCapturePages.mockReset();
     dbMocks.findPageById.mockReset();
+    captureTransportMocks.recoverExpiredOfapiInteractiveResponses.mockReset();
     queueMocks.sendSyncPageWakeup.mockReset();
     dbMocks.closeInactiveSyncRuns.mockResolvedValue({
       totalCount: 0,
@@ -63,6 +79,14 @@ describe("sync planner", () => {
       requeued: 0,
     });
     dbMocks.listRunnableOfapiCapturePages.mockResolvedValue([]);
+    captureTransportMocks.recoverExpiredOfapiInteractiveResponses.mockResolvedValue({
+      scanned: 0,
+      terminalized: 0,
+      materialized: 0,
+      raced: 0,
+      unavailable: 0,
+      errors: 0,
+    });
   });
 
   it("runs inactive cleanup before promoting rows and emits one wakeup per runnable page", async () => {
@@ -119,6 +143,10 @@ describe("sync planner", () => {
     });
     expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { now });
     expect(dbMocks.scheduleDuePageSync).toHaveBeenCalledWith({}, { now });
+    expect(captureTransportMocks.recoverExpiredOfapiInteractiveResponses).toHaveBeenCalledWith(
+      expect.objectContaining({ db: {} }),
+      { now },
+    );
     expect(order).toEqual([
       "cleanup",
       "ensurePageSyncStates",
