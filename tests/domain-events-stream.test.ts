@@ -83,7 +83,7 @@ interface ParsedStreamFrame {
  * not (sdk-runtime `frame_validation_failed`), so a manual JSON.parse here
  * would let a contract-breaking frame pass the tests. */
 function parseStreamFrames(writes: string[]): ParsedStreamFrame[] {
-  return writes.join("").split("\n\n").flatMap((block) => {
+  return writes.join("").split("\n\n").flatMap((block): ParsedStreamFrame[] => {
     const lines = block.split("\n");
     const lane = lines.includes("event: domain")
       ? "domain" as const
