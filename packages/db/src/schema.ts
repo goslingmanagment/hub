@@ -1576,6 +1576,74 @@ export const pageFanIdentities = pgTable("page_fan_identities",
   }),
 );
 
+// OFAPI trial/tracking link statistics (2026-07-22): one run row per
+// completed (page, link_kind) list walk; append-only per-link snapshots.
+// Cumulative vendor counters stored as observed; deltas are query-time.
+export const pageLinkStatRuns = pgTable(
+  "page_link_stat_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").notNull(),
+    status: text("status").notNull(),
+    pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull(),
+    apiPages: integer("api_pages").default(0).notNull(),
+    rawItems: integer("raw_items").default(0).notNull(),
+    writtenRows: integer("written_rows").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pageKindPulledIdx: index("page_link_stat_runs_page_kind_pulled_idx").on(
+      table.platformAccountId,
+      table.linkKind,
+      table.pulledAt,
+    ),
+  }),
+);
+
+export const pageLinkStatSnapshots = pgTable(
+  "page_link_stat_snapshots",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    runId: bigint("run_id", { mode: "number" })
+      .references(() => pageLinkStatRuns.id, { onDelete: "restrict" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").notNull(),
+    platformLinkId: text("platform_link_id").notNull(),
+    name: text("name"),
+    url: text("url"),
+    linkCreatedAt: timestamp("link_created_at", { withTimezone: true }),
+    linkEndsAt: timestamp("link_ends_at", { withTimezone: true }),
+    isFinished: boolean("is_finished"),
+    clicksCount: integer("clicks_count").notNull(),
+    claimsCount: integer("claims_count"),
+    subscribersCount: integer("subscribers_count").notNull(),
+    spendersCount: integer("spenders_count").default(0).notNull(),
+    revenueGrossMills: bigint("revenue_gross_mills", { mode: "bigint" })
+      .default(sql`0`)
+      .notNull(),
+    revenueCalculatedAt: timestamp("revenue_calculated_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    runLinkUniq: uniqueIndex("page_link_stat_snapshots_run_link_uniq").on(
+      table.runId,
+      table.platformLinkId,
+    ),
+    pageLinkIdx: index("page_link_stat_snapshots_page_link_idx").on(
+      table.platformAccountId,
+      table.linkKind,
+      table.platformLinkId,
+      table.id,
+    ),
+  }),
+);
+
 export const projectionWatermarks = pgTable(
   "projection_watermarks",
   {
