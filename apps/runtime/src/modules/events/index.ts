@@ -1003,7 +1003,12 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           data: null,
           accountRef: ofapiAccountRefs.get(accountId) ?? null,
         };
-        raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
+        // Same closed-stream guard as writeV2Frame: the awaits above race
+        // lifetime/auth/gap raw.end() calls, and an unlistened write-after-end
+        // is a process-fatal stream error.
+        if (!raw.writableEnded && !raw.destroyed) {
+          raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
+        }
       }
     }
     if (completedSnapshotRecovery) {
@@ -1059,17 +1064,18 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // Live/replay boundary for clients (desktop notification gate): every
     // frame after this marker on this connection is live delivery, not
     // catch-up. Written before the buffered flush so frames that arrived
-    // during replay correctly land on the live side.
-    raw.write(
-      `id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify({
-        accountId: 0,
-        accountSeq: 0,
-        type: "stream.replay_completed",
-        occurredAt: new Date().toISOString(),
-        data: null,
-        accountRef: null,
-      })}\n\n`,
-    );
+    // during replay correctly land on the live side. A dedicated `control`
+    // SSE event keeps the marker outside the DomainEventFrame contract:
+    // SDK subscribers skip non-domain event names by design (the
+    // `event: ephemeral` rule), so no synthetic accountId/accountSeq ever
+    // reaches their frame validation.
+    if (!raw.writableEnded && !raw.destroyed) {
+      raw.write(
+        `id: ${encodedConnectionCursor()}\nevent: control\ndata: ${JSON.stringify({
+          type: "replay_completed",
+        })}\n\n`,
+      );
+    }
     const buffered = bufferedLive.drain();
     for (const event of buffered) {
       liveChain = liveChain.then(() => writeV2FrameEnriched(event));
