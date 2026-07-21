@@ -125,6 +125,7 @@ describe("config registry", () => {
     "onlyFansTopSpendersEnabled",
     // Stage 14: per-job flags (boot-apply per rollback plan).
     "ofapiChargebacksReconcileEnabled",
+    "ofapiLinkStatsReconcileEnabled",
     "ofapiFanIdentitiesSyncEnabled",
     // Fast-reply freshness PR4: readthrough reconcile (own window).
     "ofapiDmReadthroughReconcileEnabled",
@@ -132,7 +133,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the twenty-three live keys, the twenty-three boot keys, and nothing else", () => {
+  it("wires exactly the twenty-three live keys, the twenty-four boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

@@ -153,6 +153,7 @@ const envSchema = z.object({
   OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(300),
   OFAPI_BACKFILL_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(200),
   OFAPI_CHARGEBACKS_RECONCILE_ENABLED: booleanSchema.default(false),
+  OFAPI_LINK_STATS_RECONCILE_ENABLED: booleanSchema.default(false),
   OFAPI_FAN_IDENTITIES_SYNC_ENABLED: booleanSchema.default(false),
   OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
   OFAPI_PRESENCE_PROJECTION_ENABLED: booleanSchema.default(false),
@@ -335,6 +336,7 @@ export interface AppConfig {
   ofapiAudienceDailyCreditBudget?: number;
   ofapiBackfillDailyCreditBudget?: number;
   ofapiChargebacksReconcileEnabled?: boolean;
+  ofapiLinkStatsReconcileEnabled?: boolean;
   ofapiFanIdentitiesSyncEnabled?: boolean;
   ofapiAudienceSweepIntervalMinutes?: number;
   ofapiPresenceProjectionEnabled?: boolean;
@@ -537,6 +539,7 @@ export function loadConfig(
     ofapiAudienceDailyCreditBudget: parsed.OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET,
     ofapiBackfillDailyCreditBudget: parsed.OFAPI_BACKFILL_DAILY_CREDIT_BUDGET,
     ofapiChargebacksReconcileEnabled: parsed.OFAPI_CHARGEBACKS_RECONCILE_ENABLED,
+    ofapiLinkStatsReconcileEnabled: parsed.OFAPI_LINK_STATS_RECONCILE_ENABLED,
     ofapiFanIdentitiesSyncEnabled: parsed.OFAPI_FAN_IDENTITIES_SYNC_ENABLED,
     ofapiAudienceSweepIntervalMinutes: parsed.OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES,
     ofapiPresenceProjectionEnabled: parsed.OFAPI_PRESENCE_PROJECTION_ENABLED,
