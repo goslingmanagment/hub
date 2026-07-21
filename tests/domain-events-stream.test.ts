@@ -414,7 +414,12 @@ describe("domain event v2 replay completion", () => {
     expect(domainSeqs.filter((f) => f.index > markerIndex).map((f) => f.seq)).toEqual([3]);
   });
 
-  it("skips the marker write without throwing when the stream ended during replay", async () => {
+  // Honest scope note (review round 3): on the ORDINARY replay path a dead
+  // stream exits through the pre-existing check before the marker block, so
+  // this case proves end-to-end behavior (no marker, no extra reads, no
+  // throw), not the new snapshot-recovery guards specifically — those need a
+  // recovery-cursor harness (backlog).
+  it("stops all stream work without throwing when the connection died during replay", async () => {
     const frames = await runV2Stream({
       cursor: encodeDomainEventCursor(new Map([[7, 0]])),
       rows: [1, 2],
@@ -423,5 +428,8 @@ describe("domain event v2 replay completion", () => {
     });
 
     expect(frames.filter((frame) => frame.lane === "control")).toHaveLength(0);
+    // The handler must bail after the one replay read — a dead connection
+    // never pays for further batches.
+    expect(dbMocks.listEventsSince).toHaveBeenCalledTimes(1);
   });
 });

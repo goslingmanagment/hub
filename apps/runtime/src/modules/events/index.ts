@@ -1046,6 +1046,12 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
             if (!continuity.ok) {
               throw new Error(`post-snapshot replay interval contains a gap for account ${accountId}`);
             }
+            // The stream may have died during the batch read itself — recheck
+            // before paying for enrichment whose frames would all be skipped.
+            if (raw.writableEnded || raw.destroyed) {
+              cleanup();
+              return;
+            }
             const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
               .catch((error) => {
                 request.log.warn(
