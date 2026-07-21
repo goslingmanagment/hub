@@ -388,15 +388,29 @@ export async function listLinkStatSnapshots(db: Database, input: { runId: number
     ofapiLinkStatsReconcileEnabled: parsed.OFAPI_LINK_STATS_RECONCILE_ENABLED,
 ```
 
-- [ ] Verify: `pnpm check` — the config-registry pin tests (they assert registry↔config consistency) pass.
+- [ ] Step: `tests/config-registry.test.ts` — the boot-apply allowlist is pinned: append `"ofapiLinkStatsReconcileEnabled"` to the `BOOT_KEYS` array (~line 106, next to `"ofapiChargebacksReconcileEnabled"` if present there — otherwise at the list end) and update any asserted count in that test if one exists.
+- [ ] Verify: `pnpm check` — the config-registry pin tests (they assert registry↔config consistency and the BOOT_KEYS pin) pass.
 - [ ] Commit: `feat(config): OFAPI_LINK_STATS_RECONCILE_ENABLED flag`
 
 ### Task 4: Sync service + scheduler/worker registration + branch budget
 
 **Files:**
 - Create: `apps/runtime/src/services/ofapi-link-stats-sync.ts`
+- Create: `packages/db/migrations/0112_ofapi_link_stats_incident.sql` — mirror `0107_ofapi_chargebacks_reconcile_incident.sql` verbatim:
+
+```sql
+-- 0112: make a failed OFAPI link-stats reconcile visible as one durable,
+-- process-global notification incident until a later clean run recovers.
+ALTER TYPE "notification_incident_kind"
+  ADD VALUE IF NOT EXISTS 'ofapi_link_stats_reconcile_failed';
+```
+
+- Modify: `packages/db/src/schema.ts` — append `"ofapi_link_stats_reconcile_failed"` to the `notificationIncidentKindEnum` pgEnum value list (~line 164)
+- Modify: `packages/db/src/repositories/notifications.ts` — append the same literal to the `NotificationIncidentKind` union (~line 11)
+- Modify: `packages/contracts/src/routes.ts` — append the same literal to the `notificationIncidentKindEnum` z.enum (~line 2947), then run `pnpm contracts:generate` (regenerates the OpenAPI/SDK surface; commit the regenerated artifacts in this task's commit; client repos are NOT re-vendored — they don't consume the new literal)
 - Modify: `apps/runtime/src/services/schedules.ts` (add import; add `ensureOfapiLinkStatsQueue(boss, createdQueues)` after the chargebacks queue call; add `ensureOfapiLinkStatsSchedule(boss)` inside the `Promise.all`)
-- Modify: `apps/runtime/src/worker-services.ts` (add `startOfapiLinkStatsWorker` to the import block near line 59; add `await startOfapiLinkStatsWorker(app, boss);` next to the chargebacks call near line 354)
+- Modify: `apps/runtime/src/worker-services.ts` — TWO edits: (a) workers create/reconcile every queue they consume before registering handlers — add `await ensureOfapiLinkStatsQueue(boss, createdQueues);` directly after the `await ensureOfapiChargebacksQueue(boss, createdQueues);` line in the queue block (~line 179); (b) add `startOfapiLinkStatsWorker` to the import block near line 59 and `await startOfapiLinkStatsWorker(app, boss);` next to the chargebacks start call near line 354
+- Modify: `tests/worker-startup.test.ts` — the worker-startup mocks pin the set of queues a worker touches (~line 128); extend the mock/expectation list with `OFAPI_LINK_STATS_RECONCILE_QUEUE` exactly the way `OFAPI_CHARGEBACKS_RECONCILE_QUEUE` appears there
 - Modify: `scripts/platform-branch-budget.json` (budget 52 → 53; append to `note`: `" 2026-07-22: +1 for the link-stats reconcile page filter (ofapi-link-stats-sync.ts) — mirrors the chargebacks reconcile's onlyfans-only fleet selection by design."`)
 - Modify: `NotificationIncidentKind` union — grep for the literal `"ofapi_chargebacks_reconcile_failed"` across `packages/db/src/repositories/notifications.ts` and `apps/runtime/src/services/notification-incidents.ts` and add `"ofapi_link_stats_reconcile_failed"` at EVERY union-type site, plus the two exhaustive switch cases in `notification-incidents.ts`:
 
@@ -415,7 +429,7 @@ export async function listLinkStatSnapshots(db: Database, input: { runId: number
   (in the recovery-title switch, after the chargebacks case at ~line 147). The switches are exhaustive — a missing case is a compile error, which is your checklist.
 
 **Interfaces:**
-- Consumes: Task 2 repo helpers; Task 3 `config.ofapiLinkStatsReconcileEnabled`; existing `OfapiClient.listTrackingLinks/listTrialLinks(context, accountId, { limit, offset }): Promise<OfapiListPage>` (both OPTIONAL on the interface — guard for `undefined`); `listOfapiMappedPages`, `findPageByLabel` from `@agency_hub_core/db`; `createOfapiRestGuard` from `./sync/ofapi-dm-sync.ts`; `resolveStoredProxyConfig`/`resolveStoredProxyEgressKey` from `./page-context.ts`; `createProxyRequestDispatcher`, `dollarsToMills` from `@agency_hub_core/shared`; `asRecord`, `idToString` from `./ofapi-payloads.ts`; `notifyOfapiGlobalIncident`/`resolveOfapiGlobalIncident` from `./notification-incidents.ts`; `ensureQueueCreated` + types from `./sync-queue.ts`.
+- Consumes: Task 2 repo helpers; Task 3 `config.ofapiLinkStatsReconcileEnabled`; existing `OfapiClient.listTrackingLinks/listTrialLinks(context, accountId, { limit, offset }): Promise<OfapiListPage>` (both OPTIONAL on the interface — guard for `undefined`); `listOfapiMappedPages` from `@agency_hub_core/db`; `createOfapiRestGuard` from `./sync/ofapi-dm-sync.ts`; `persistRawPayload` from `./sync/shared.ts` (Stage-7 raw-payload + observation dual-write; works outside the page-executor context via UUID idempotency keys); `dollarsToMills` from `@agency_hub_core/shared`; `asRecord`, `idToString` from `./ofapi-payloads.ts`; `notifyOfapiGlobalIncident`/`resolveOfapiGlobalIncident` from `./notification-incidents.ts`; `ensureQueueCreated` + types from `./sync-queue.ts`.
 - Produces: `OFAPI_LINK_STATS_RECONCILE_QUEUE`, `isOfapiLinkStatsReconcileEnabled(config)`, `runOfapiLinkStatsReconcile(app)`, `ensureOfapiLinkStatsQueue(boss, createdQueues?)`, `ensureOfapiLinkStatsSchedule(boss)`, `startOfapiLinkStatsWorker(app, boss)`, `OfapiLinkStatsPageResult` — consumed by Task 5 tests.
 
 - [ ] Step: create `apps/runtime/src/services/ofapi-link-stats-sync.ts`:
@@ -432,23 +446,16 @@ import {
   insertLinkStatRun,
   insertLinkStatSnapshots,
   listOfapiMappedPages,
-  findPageByLabel,
   type Database,
   type InsertLinkStatSnapshotInput,
   type LinkStatKind,
 } from "@agency_hub_core/db";
-import {
-  createProxyRequestDispatcher,
-  dollarsToMills,
-} from "@agency_hub_core/shared";
+import { dollarsToMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import type { OfapiListPage, OfapiRequestContext } from "./ofapi.ts";
-import {
-  resolveStoredProxyConfig,
-  resolveStoredProxyEgressKey,
-} from "./page-context.ts";
+import { persistRawPayload } from "./sync/shared.ts";
 import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
@@ -474,6 +481,9 @@ const LINK_STATS_PAGE_LIMIT = 100;
 const LINK_STATS_MAX_PAGES_PER_RUN = 20;
 // Backfill-lane default; ofapiBackfillDailyCreditBudget governs real spend.
 const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
+// Stage-7 raw-payload retention for the journaled list pages (pruned by the
+// existing raw-payload cleanup job once expired).
+const LINK_STATS_RAW_PAYLOAD_RETENTION_DAYS = 90;
 
 export function isOfapiLinkStatsReconcileEnabled(
   config?: Pick<AppContext["config"], "ofapiLinkStatsReconcileEnabled">,
@@ -623,6 +633,22 @@ async function reconcileKind(
       offset,
     });
     await input.guard.recordResponse(page);
+    // Stage 7 producer discipline: every fetched page is journaled untrimmed
+    // (raw payload + observation dual-write) before projection. Loud on
+    // failure — a page we cannot journal fails the page's reconcile.
+    await persistRawPayload(input.db, {
+      platformAccountId: input.pageId,
+      endpoint: input.kind === "tracking"
+        ? "/:accountId/tracking-links"
+        : "/:accountId/trial-links",
+      requestParams: { limit: LINK_STATS_PAGE_LIMIT, offset },
+      responsePayload: page.items,
+      mapperVersion: "link-stats-v1",
+      payloadKind: "mapping_critical",
+      retainUntil: new Date(
+        input.pulledAt.getTime() + LINK_STATS_RAW_PAYLOAD_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+      ),
+    }, { action: "journal link-stats page", platform: "onlyfans" });
     apiPages += 1;
     rawItems += page.items.length;
     for (const item of page.items) {
@@ -691,54 +717,38 @@ async function reconcilePage(
     };
   }
 
-  const stored = await findPageByLabel(app.db, input.pageLabel);
-  if (!stored) {
-    return {
-      pageLabel: input.pageLabel,
-      status: "skipped",
-      reason: "page_not_found",
-      kinds: [],
-    };
-  }
-
-  const proxy = resolveStoredProxyConfig(app, stored.proxy);
-  const dispatcher = proxy ? createProxyRequestDispatcher(proxy) : null;
+  // No proxy/dispatcher resolution here on purpose: the OFAPI list transport
+  // (`observedListRequest`) performs a plain fetch and never consumes
+  // `context.dispatcher` — OFAPI fronts each connected account with its own
+  // vendor-side egress. The governed egress seam (`resolveOfapiEgressContext`)
+  // belongs to the capture-jobs/read-gateway paths, not to list reconciles.
+  // If `OfapiRequestContext` requires more fields than these, mirror the
+  // minimal shape the other list-sync callers pass — do not add proxy code.
   const requestContext: OfapiRequestContext = {
     pageId: input.pageId,
-    dispatcher,
-    egressKey: resolveStoredProxyEgressKey(stored.proxy),
+    dispatcher: null,
+    egressKey: null,
     creditBudgetScope: "backfill",
   };
 
   const kinds: OfapiLinkStatsKindResult[] = [];
-  try {
-    // Tracking first, then trial — a mid-page budget block still yields a
-    // complete tracking run; kind isolation keeps one endpoint's failure from
-    // discarding the other's completed walk.
-    for (const [kind, list] of [
-      ["tracking", listTrackingLinks],
-      ["trial", listTrialLinks],
-    ] as const satisfies ReadonlyArray<readonly [LinkStatKind, LinkLister]>) {
-      kinds.push(await reconcileKind({
-        db: app.db,
-        kind,
-        list,
-        requestContext,
-        pageId: input.pageId,
-        ofapiAccountId: input.ofapiAccountId,
-        pulledAt: input.pulledAt,
-        guard: input.guard,
-      }));
-    }
-  } finally {
-    if (dispatcher) {
-      await dispatcher.close().catch((error: unknown) => {
-        app.logger.warn(
-          { error, pageId: input.pageId },
-          "Failed to close OFAPI link-stats dispatcher",
-        );
-      });
-    }
+  // Tracking first, then trial — a mid-page budget block still yields a
+  // complete tracking run; kind isolation keeps one endpoint's failure from
+  // discarding the other's completed walk.
+  for (const [kind, list] of [
+    ["tracking", listTrackingLinks],
+    ["trial", listTrialLinks],
+  ] as const satisfies ReadonlyArray<readonly [LinkStatKind, LinkLister]>) {
+    kinds.push(await reconcileKind({
+      db: app.db,
+      kind,
+      list,
+      requestContext,
+      pageId: input.pageId,
+      ofapiAccountId: input.ofapiAccountId,
+      pulledAt: input.pulledAt,
+      guard: input.guard,
+    }));
   }
 
   const written = kinds.filter((kind) => kind.status === "written").length;
@@ -1020,17 +1030,27 @@ function linksClient(input: {
 ### Task 6: Backlog note (follow-up, no code)
 
 **Files:**
-- Modify: `backlog.md` (repo root; append to the file's existing list format)
+- Create (or append if it exists): `.agentic/backlog.md` — the workspace-toolkit location for deferred improvements. Do NOT touch root `backlog.md`: its header scopes it to reproducible defects and release-safety debt only, and this is neither.
 
-- [ ] Step: append an entry in the file's established format (id/date/status prose style — read the file first and match it):
+- [ ] Step: create `.agentic/backlog.md` with:
 
-```
-- **LINK-001 (2026-07-22, open):** fan_identities Phase-1 link discovery re-buys
-  the same tracking/trial list walks this feature now persists (see
-  docs/plans/2026-07-22-ofapi-link-stats-sync.md). Follow-up: read link ids
-  from the latest complete page_link_stat_runs instead of paying for a fresh
-  discovery walk each fan_identities cycle; requires freshness contract
-  (staleness bound) before wiring.
+```markdown
+# .agentic/backlog.md — отложенные улучшения (agentic workflow)
+
+Формат: `### <ID> — <title>`, поля «Суть / Код / Закрыть». Не для дефектов —
+для них корневой `backlog.md`.
+
+### LINK-001 — fan_identities повторно покупает link-list обходы
+
+- **Суть:** Phase-1 link discovery в fan_identities дёргает те же
+  `/tracking-links` + `/trial-links`, которые теперь персистит link-stats
+  reconcile (см. `docs/plans/2026-07-22-ofapi-link-stats-sync.md`), — двойная
+  трата кредитов на одни и те же списки.
+- **Код:** `apps/runtime/src/services/sync/ofapi-fan-identities.ts` (Phase 1,
+  walkLinkPages) vs `apps/runtime/src/services/ofapi-link-stats-sync.ts`.
+- **Закрыть:** читать link ids из последнего complete `page_link_stat_runs`
+  вместо свежего discovery-обхода; перед этим зафиксировать freshness-контракт
+  (bound на staleness каталога). Добавлено 2026-07-22.
 ```
 
 - [ ] Verify: `pnpm check` still green (docs-only change; the full gate is the plan's exit criterion).
