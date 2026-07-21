@@ -173,3 +173,13 @@ Decision #129 запрещает реальные erasure runs, поэтому �
 Исправленный старый пункт удалён: Fansly groupId теперь входит в
 `generationPred`, а target/bystander generation и acceptance закреплены тестом
 (`fe3a2886`, `tests/erasure.integration.test.ts:1225-1341`).
+
+- 2026-07-22 (PR #21 follow-up): the v2 stream's `event: control` lane is
+  documented in routes.ts/OpenAPI but has no typed SDK surface —
+  `subscribeDomainEvents` silently skips non-domain events. When a second
+  SDK consumer needs the replay boundary, add a control-frame schema plus an
+  `onReplayCompleted` callback and regenerate SDK artifacts (desktop parses
+  the lane with its own SSE parser today). Also from review: a route-level
+  regression test for the snapshot-recovery path with a connection that dies
+  during the completion awaits (the guards exist; the unit harness cannot
+  yet mint a recovery-mode cursor cheaply).

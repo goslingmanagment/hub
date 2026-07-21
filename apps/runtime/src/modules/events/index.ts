@@ -1022,6 +1022,14 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           if (throughSeq <= afterRecoverySeq) continue;
           let afterSeq = afterRecoverySeq;
           for (;;) {
+            // The completion-marker awaits above race lifetime/auth raw.end();
+            // a dead connection must not keep paying for batch reads and
+            // enrichment it can never deliver (writeV2Frame would only skip
+            // each frame after the work was already done).
+            if (raw.writableEnded || raw.destroyed) {
+              cleanup();
+              return;
+            }
             const rows = await listEventsSince(appContext.db, {
               accountId,
               afterSeq,
@@ -1061,6 +1069,13 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
     }
     replayDone = true;
+    // A connection that died during the replay awaits must stop here: the
+    // marker write would be a stream error and the buffered flush would pay
+    // for enrichment it can never deliver.
+    if (raw.writableEnded || raw.destroyed) {
+      cleanup();
+      return;
+    }
     // Live/replay boundary for clients (desktop notification gate): every
     // frame after this marker on this connection is live delivery, not
     // catch-up. Written before the buffered flush so frames that arrived
@@ -1069,13 +1084,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // SDK subscribers skip non-domain event names by design (the
     // `event: ephemeral` rule), so no synthetic accountId/accountSeq ever
     // reaches their frame validation.
-    if (!raw.writableEnded && !raw.destroyed) {
-      raw.write(
-        `id: ${encodedConnectionCursor()}\nevent: control\ndata: ${JSON.stringify({
-          type: "replay_completed",
-        })}\n\n`,
-      );
-    }
+    raw.write(
+      `id: ${encodedConnectionCursor()}\nevent: control\ndata: ${JSON.stringify({
+        type: "replay_completed",
+      })}\n\n`,
+    );
     const buffered = bufferedLive.drain();
     for (const event of buffered) {
       liveChain = liveChain.then(() => writeV2FrameEnriched(event));
