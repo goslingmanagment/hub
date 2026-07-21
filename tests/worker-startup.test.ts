@@ -132,6 +132,13 @@ vi.mock("../apps/runtime/src/services/ofapi-chargebacks-sync.ts", () => ({
   startOfapiChargebacksWorker: vi.fn(),
   runOfapiChargebacksReconcile: vi.fn(),
 }));
+vi.mock("../apps/runtime/src/services/ofapi-link-stats-sync.ts", () => ({
+  OFAPI_LINK_STATS_RECONCILE_QUEUE: "ofapi.link-stats.reconcile",
+  ensureOfapiLinkStatsQueue: vi.fn(),
+  ensureOfapiLinkStatsSchedule: vi.fn(),
+  startOfapiLinkStatsWorker: vi.fn(),
+  runOfapiLinkStatsReconcile: vi.fn(),
+}));
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureQueueCreated: vi.fn(async () => {}),
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,

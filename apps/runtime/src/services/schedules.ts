@@ -6,6 +6,7 @@ import { ensureTieringQueue, ensureTieringSchedule } from "./tiering/index.ts";
 import { ensureDbDiskUsageQueue, ensureDbDiskUsageSchedule } from "./db-disk-alert.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
+import { ensureOfapiLinkStatsQueue, ensureOfapiLinkStatsSchedule } from "./ofapi-link-stats-sync.ts";
 import { ensureOfapiCommandQueues, ensureOfapiCommandSchedules } from "./ofapi-command-executor.ts";
 import { ensureOfapiPendingReconcileQueue, ensureOfapiPendingReconcileSchedule } from "./ofapi-pending-reconcile.ts";
 import { ensureOfapiCreditQueues, ensureOfapiCreditSchedules } from "./ofapi-credits.ts";
@@ -39,6 +40,7 @@ export async function registerAllSchedules(
   await ensureOfapiQueues(boss, createdQueues);
   await ensureOfapiCreditQueues(boss, createdQueues);
   await ensureOfapiChargebacksQueue(boss, createdQueues);
+  await ensureOfapiLinkStatsQueue(boss, createdQueues);
   await ensureOfapiPendingReconcileQueue(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
@@ -58,6 +60,7 @@ export async function registerAllSchedules(
     ensureOfapiSchedules(boss),
     ensureOfapiCreditSchedules(boss),
     ensureOfapiChargebacksSchedule(boss),
+    ensureOfapiLinkStatsSchedule(boss),
     ensureOfapiPendingReconcileSchedule(boss),
     ensureOfapiCommandSchedules(boss),
     ensureOfapiDmAnalyticsSchedules(boss),

@@ -2961,6 +2961,7 @@ const notificationIncidentKindEnum = z.enum([
   "scheduler_silent",
   "ops_sampler_silent",
   "ofapi_chargebacks_reconcile_failed",
+  "ofapi_link_stats_reconcile_failed",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const deliveryKindEnum = z.enum([
