@@ -237,6 +237,102 @@ describe("coach-chat prompt", () => {
   });
 });
 
+describe("coach-chat optional draft", () => {
+  it("renders the escaped, framed draft section in the 5m dynamic block when a draft is present", () => {
+    const built = buildPrompt({
+      ...baseInput,
+      draftText: "  hey <babe> & wanna see more? 😘  ",
+    });
+    const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
+    // The section is present and framed as the chatter's OWN unsent reply.
+    expect(built.user).toContain("## Chatter's Working Draft");
+    expect(built.user).toContain("This is their OWN unsent draft");
+    // Body is trimmed and escaped (untrusted input), wrapped in the builder tag.
+    expect(built.user).toContain(
+      "<chatter_draft>\nhey &lt;babe&gt; &amp; wanna see more? 😘\n</chatter_draft>",
+    );
+    expect(built.user).not.toContain("hey <babe> & wanna");
+    // No leftover placeholder.
+    expect(built.user).not.toContain("{coachDraftSection}");
+    // It rides the ephemeral 5m dynamic block, never the fan-agnostic 1h prefix
+    // or the uncached task block (which carries only the question).
+    expect(staticBlock?.cache).toBe("1h");
+    expect(staticBlock?.text).not.toContain("## Chatter's Working Draft");
+    expect(dynamicBlock?.cache).toBe("5m");
+    expect(dynamicBlock?.text).toContain("## Chatter's Working Draft");
+    expect(dynamicBlock?.text).toContain("<chatter_draft>");
+    expect(taskBlock?.cache).toBe("none");
+    expect(taskBlock?.text).not.toContain("## Chatter's Working Draft");
+  });
+
+  it("omits the draft section entirely when no draft is provided", () => {
+    const built = buildPrompt({ ...baseInput });
+    expect(built.user).not.toContain("## Chatter's Working Draft");
+    expect(built.user).not.toContain("<chatter_draft>");
+    expect(built.user).not.toContain("{coachDraftSection}");
+  });
+
+  it("omits the draft section when the draft is whitespace-only", () => {
+    const built = buildPrompt({ ...baseInput, draftText: "   \n\t  " });
+    expect(built.user).not.toContain("## Chatter's Working Draft");
+    expect(built.user).not.toContain("<chatter_draft>");
+  });
+
+  it("sheds the draft whole under budget pressure while keeping the question and newest transcript", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "OLDEST_TX\n" + amp.repeat(299_940) + "\nNEWEST_TX_🎉",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(1_980) + "QUESTION_SENTINEL",
+      // Worst-legal draft (20k chars, ~100k escaped) — cannot be protected.
+      draftText: "DRAFT_SENTINEL " + amp.repeat(19_980),
+    });
+    const text = built.system + built.user;
+    expect(text.length).toBeLessThanOrEqual(COACH_PROMPT_MAX_CHARS);
+    // The draft is dropped whole — no fragment leaks through, no dangling heading.
+    expect(built.user).not.toContain("DRAFT_SENTINEL");
+    expect(built.user).not.toContain("## Chatter's Working Draft");
+    // The protected fields survive: the question and the newest transcript.
+    expect(built.user).toContain("QUESTION_SENTINEL");
+    expect(built.user).toContain("NEWEST_TX_🎉");
+    expect(built.user).toContain("[older transcript omitted]");
+    expect(built.user).not.toContain("OLDEST_TX");
+  });
+
+  it("keeps the working draft while shedding an older summary that alone covers the overage", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "TX_HEAD TX_TAIL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      draftText: "DRAFT_KEEP " + amp.repeat(200),
+      fanProfile: {
+        body: "DOSSIER_TO_SHED " + amp.repeat(4_000),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+    });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    // The stale dossier is shed BEFORE the draft is even considered...
+    expect(built.user).not.toContain("DOSSIER_TO_SHED");
+    // ...so the freshest current-turn context — the working draft — survives,
+    // and the transcript is never trimmed.
+    expect(built.user).toContain("## Chatter's Working Draft");
+    expect(built.user).toContain("DRAFT_KEEP");
+    expect(built.user).toContain("TX_HEAD TX_TAIL");
+    expect(built.user).not.toContain("older transcript omitted");
+  });
+});
+
 describe("coach answer replay projection (option c)", () => {
   it("preserves the beginning and ending, dropping the middle with a marker", () => {
     const head = "HEAD_SENTINEL " + "h".repeat(6_000);

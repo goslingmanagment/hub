@@ -532,6 +532,8 @@ method you were given.
 
 {coachHistorySection}
 
+{coachDraftSection}
+
 ## Your Task
 
 The chatter asks:

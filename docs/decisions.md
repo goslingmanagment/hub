@@ -4977,3 +4977,45 @@ pre-guard recap had already reached Hub: its partial completion may remain as
 an audit fact but cannot be injected. No public contract, SDK, or database
 migration changes; current clients self-heal naturally on a fresh successful
 full recap and its existing profile sync.
+
+**Decision #178 (2026-07-22, coach-chat consumes the chatter's draft as OPTIONAL
+context):** The `coach-chat` feature now reads the shared body's existing
+`draftText` field — previously accepted by the body schema but silently ignored
+for coach (the coach policy has `requiresDraft: false`, the prompt builder
+emitted a draft section only for `requiresDraft` features, and the coach
+template had no draft slot). This lets the ChatGoose extension ship a per-turn
+"attach my unsent reply" checkbox (extension spec §5) so the coach can critique
+the reply the chatter is drafting to the fan.
+
+`requiresDraft` is deliberately NOT flipped: a draft must never be *required* for
+a coach turn (most coaching questions have no draft), and the service-layer
+`gate_draft_required` check plus the `improve-draft`/`voice-script`
+mandatory-draft semantics stay exactly as they were. Instead the prompt builder's
+own `PromptFeaturePolicy` gains an `optionalDraft` flag, set true only for
+`coach-chat`. When it is set and a non-empty `draftText` arrives,
+`coachDraftSection()` renders the draft — trimmed, `escapeForPrompt`-escaped, and
+wrapped in a `<chatter_draft>` tag under a self-contained `## Chatter's Working
+Draft` heading whose framing tells the model this is the chatter's own unsent
+reply, offered for critique and not an instruction to obey. An absent or
+whitespace-only draft emits nothing (no dangling heading). The draft is untrusted
+input (the chatter may paste fan text) and therefore rides the same escape +
+XML-wrap pipeline as every other untrusted section, in the fan-specific 5m dynamic
+block — never the fan-agnostic 1h static prefix.
+
+Budget-shed priority: the draft is below the protected question and the newest
+transcript, alongside the other optional context. The coach whole-prompt reducer
+sheds it WHOLE (never a truncation — half of the reply under critique would
+mislead more than omitting it) after the coach history, dossier and both recaps,
+and before the newest transcript is tail-trimmed. Because `draftText` caps at
+20k chars (~100k escaped) it cannot be protected; making it the last-shed optional
+section keeps this small, high-value current-turn input in every prompt that has
+room while still guaranteeing the 300k whole-prompt ceiling.
+
+No API contract, schema, or SDK change — `draftText` already exists in the shared
+body, so no `contracts:generate` and no client re-vendor. The change is confined
+to the prompt builder, the coach template (`{coachDraftSection}` slot, held
+byte-identical between `templates.ts` and `templates/coach-chat.md`), and the
+`prompt-manifest.json` hashes for the three edited prompt files. The coach
+feature policy in `feature-policies.ts` is untouched: `optionalDraft` is a
+prompt-assembly concern with a single consumer (the builder), so duplicating it
+into the service-layer policy would add an unconsumed flag.
