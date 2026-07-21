@@ -1,19 +1,27 @@
 import { EventEmitter } from "node:events";
 
+import { encodeDomainEventCursor } from "@agency_hub_core/contracts";
+import type * as DbModule from "@agency_hub_core/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
+  getMaxOfapiFanoutSeq: vi.fn(),
+  getOfapiSyncReplayFloor: vi.fn(),
   listDomainEventAccountBounds: vi.fn(),
+  listDomainEventContiguousReplayEnds: vi.fn(),
   listDomainEventHighWaters: vi.fn(),
   listEventsSince: vi.fn(),
+  listPageOfapiAccountRefs: vi.fn(),
 }));
 
-vi.mock("@agency_hub_core/db", () => ({
+vi.mock("@agency_hub_core/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof DbModule>()),
   DOMAIN_EVENTS_APPENDED_CHANNEL: "domain_events_appended",
   ...dbMocks,
 }));
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { registerEventsRoutes } from "../apps/runtime/src/modules/events/index.ts";
 import {
   createAccountSeqGuards,
   createDomainEventHub,
@@ -62,6 +70,143 @@ function event(accountSeq: number) {
     dedupKey: `event-${accountSeq}`,
     createdAt: new Date("2026-07-13T00:00:00.000Z"),
   };
+}
+
+interface ParsedDomainFrame {
+  id: string;
+  event: {
+    accountId: number;
+    accountSeq: number;
+    type: string;
+    occurredAt: string;
+    data: unknown;
+    accountRef: string | null;
+  };
+}
+
+function parseDomainFrames(writes: string[]): ParsedDomainFrame[] {
+  return writes.join("").split("\n\n").flatMap((block) => {
+    const lines = block.split("\n");
+    if (!lines.includes("event: domain")) {
+      return [];
+    }
+    const id = lines.find((line) => line.startsWith("id: "))?.slice(4);
+    const data = lines.find((line) => line.startsWith("data: "))?.slice(6);
+    if (id === undefined || data === undefined) {
+      throw new Error(`Incomplete domain frame: ${block}`);
+    }
+    return [{
+      id,
+      event: JSON.parse(data) as ParsedDomainFrame["event"],
+    }];
+  });
+}
+
+async function runV2Stream(input: { cursor: string | null; rows: number[]; head: number }) {
+  dbMocks.getMaxOfapiFanoutSeq.mockResolvedValue(0);
+  dbMocks.getOfapiSyncReplayFloor.mockResolvedValue(0);
+  dbMocks.listDomainEventHighWaters.mockResolvedValue(new Map([[7, input.head]]));
+  dbMocks.listDomainEventAccountBounds.mockResolvedValue(new Map([[7, {
+    accountId: 7,
+    oldestRetainedSeq: input.rows[0] ?? null,
+    currentSeq: input.head,
+  }]]));
+  dbMocks.listDomainEventContiguousReplayEnds.mockResolvedValue(new Map([[7, input.head]]));
+  dbMocks.listEventsSince.mockImplementation(
+    async (_db: unknown, query: { afterSeq: number; throughSeq: number; limit: number }) => input.rows
+      .filter((seq) => seq > query.afterSeq && seq <= query.throughSeq)
+      .slice(0, query.limit)
+      .map(event),
+  );
+  dbMocks.listPageOfapiAccountRefs.mockResolvedValue(new Map());
+
+  const listenClient = () => Object.assign(new EventEmitter(), {
+    query: vi.fn(async () => undefined),
+    release: vi.fn(),
+  });
+  const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  const appContext = {
+    db: {},
+    pool: { connect: vi.fn(async () => listenClient()) },
+    logger,
+  } as unknown as AppContext;
+  const principal = {
+    authMethod: "session",
+    user: {
+      id: 1,
+      username: "owner",
+      role: "owner",
+      assignedPages: [],
+      mustChangePassword: false,
+    },
+    assignedPageIds: [],
+  } as const;
+
+  type RouteHandler = (request: unknown, reply: unknown) => Promise<unknown>;
+  const routes = new Map<string, RouteHandler>();
+  const closeHooks: Array<() => Promise<void>> = [];
+  const server = {
+    addHook: (_name: string, hook: unknown) => {
+      closeHooks.push(hook as () => Promise<void>);
+    },
+    get: (path: string, _options: unknown, handler: unknown) => {
+      routes.set(path, handler as RouteHandler);
+    },
+  };
+  registerEventsRoutes(
+    server as unknown as Parameters<typeof registerEventsRoutes>[0],
+    {
+      appContext,
+      auth: { requirePrincipal: vi.fn(async () => principal) },
+      boss: null,
+    } as unknown as Parameters<typeof registerEventsRoutes>[1],
+  );
+
+  const writes: string[] = [];
+  const raw = {
+    writableEnded: false,
+    destroyed: false,
+    writableLength: 0,
+    writeHead: vi.fn(),
+    write: vi.fn(),
+    end: vi.fn(),
+    destroy: vi.fn(),
+  };
+  raw.write.mockImplementation((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  });
+  raw.end.mockImplementation(() => {
+    raw.writableEnded = true;
+  });
+  raw.destroy.mockImplementation(() => {
+    raw.destroyed = true;
+  });
+  const requestRaw = Object.assign(new EventEmitter(), { destroyed: false });
+  const handler = routes.get("/api/v1/events/v2/stream");
+  if (handler === undefined) {
+    throw new Error("v2 stream route was not registered");
+  }
+
+  try {
+    await handler({
+      headers: {},
+      cookies: {},
+      query: input.cursor === null ? {} : { cursor: input.cursor },
+      log: logger,
+      raw: requestRaw,
+    }, {
+      hijack: vi.fn(),
+      raw,
+    });
+  } finally {
+    requestRaw.emit("close");
+    for (const close of closeHooks) {
+      await close();
+    }
+  }
+
+  return parseDomainFrames(writes);
 }
 
 async function makeLiveHarness(rows: number[], head: number) {
@@ -142,5 +287,43 @@ describe("domain event hub live continuity", () => {
       gap: true,
     });
     expect(rejected.watermarks().get(7)).toBe(10);
+  });
+});
+
+describe("domain event v2 replay completion", () => {
+  it("writes every replayed domain frame before the replay-completed marker", async () => {
+    const frames = await runV2Stream({
+      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
+      rows: [1, 2],
+      head: 2,
+    });
+
+    const markerIndex = frames.findIndex((frame) => frame.event.type === "stream.replay_completed");
+    const replayed = frames.filter((frame) => frame.event.accountId === 7);
+    expect(replayed.length).toBeGreaterThan(0);
+    expect(markerIndex).toBeGreaterThan(0);
+    expect(replayed.every((frame) => frames.indexOf(frame) < markerIndex)).toBe(true);
+    expect(frames[markerIndex]?.event).toMatchObject({
+      accountId: 0,
+      accountSeq: 0,
+      type: "stream.replay_completed",
+      occurredAt: expect.any(String),
+      data: null,
+      accountRef: null,
+    });
+  });
+
+  it("writes the replay-completed marker immediately on a fresh connection", async () => {
+    const frames = await runV2Stream({ cursor: null, rows: [1, 2], head: 2 });
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.event).toEqual({
+      accountId: 0,
+      accountSeq: 0,
+      type: "stream.replay_completed",
+      occurredAt: expect.any(String),
+      data: null,
+      accountRef: null,
+    });
   });
 });

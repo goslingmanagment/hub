@@ -1056,6 +1056,20 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
     }
     replayDone = true;
+    // Live/replay boundary for clients (desktop notification gate): every
+    // frame after this marker on this connection is live delivery, not
+    // catch-up. Written before the buffered flush so frames that arrived
+    // during replay correctly land on the live side.
+    raw.write(
+      `id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify({
+        accountId: 0,
+        accountSeq: 0,
+        type: "stream.replay_completed",
+        occurredAt: new Date().toISOString(),
+        data: null,
+        accountRef: null,
+      })}\n\n`,
+    );
     const buffered = bufferedLive.drain();
     for (const event of buffered) {
       liveChain = liveChain.then(() => writeV2FrameEnriched(event));
