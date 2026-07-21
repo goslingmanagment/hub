@@ -574,7 +574,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
     }]);
   });
 
-  it("allows an empty stream without usage to complete as zero cost", async () => {
+  it("rejects an empty stream without usage as unusable output", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
     appContext.aiGatewayProvider = {
       provider: "anthropic",
@@ -587,7 +587,30 @@ describe("ChatMuse AI gateway runtime gate", () => {
 
     expect(response.statusCode, response.body).toBe(200);
     const frames = parseAiSseFrames(response.body);
-    expect(frames.map((frame) => frame.data.type)).toEqual(["meta", "done"]);
+    expect(frames.map((frame) => frame.data.type)).toEqual(["meta", "error"]);
+    expect(frames[1]?.data).toEqual({
+      type: "error",
+      code: "provider_output_empty",
+      message: "AI gateway provider completed without usable output",
+      retryAfterMs: null,
+    });
+
+    const outcomeRows = await testDb!.pool.query<{
+      gatewayOutcome: string | null;
+      generationOutcome: string | null;
+      completion: string;
+    }>(
+      `select u.gateway_outcome as "gatewayOutcome",
+              g.params ->> 'outcome' as "generationOutcome",
+              g.completion
+       from ai_usage_events u
+       join ai_generation_content g on g.usage_event_id = u.id`,
+    );
+    expect(outcomeRows.rows).toEqual([{
+      gatewayOutcome: "failed",
+      generationOutcome: "failed",
+      completion: "",
+    }]);
   });
 
   it("recovers stale gateway reservations before a new provider attempt", async () => {
