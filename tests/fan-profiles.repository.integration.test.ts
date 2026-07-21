@@ -7,6 +7,8 @@ import {
   getFanProfileVersion,
   getLatestFanProfile,
   getLatestFanProfileForConversation,
+  getLatestPromptEligibleFanProfile,
+  insertAiGenerationContent,
   listFanProfileVersionSummaries,
   upsertFans,
   upsertPageDmConversation,
@@ -177,6 +179,131 @@ describe("fan profile repository integration", () => {
       platformAccountId: page.id,
     });
     expect(latest?.version).toBe(3);
+  });
+
+  it("admits only dossiers proven by a usable full fan-summary terminal record", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createProfilePage(testDb, "fan-profile-proof");
+    const [fan] = await upsertFans(testDb.db, [{
+      platform: "fansly",
+      platformUserId: "fan-profile-proof-001",
+      username: "fan_profile_proof_001",
+      displayName: "Fan Profile Proof 001",
+    }]);
+    if (!page || !fan) {
+      throw new Error("test setup: page/fan creation failed");
+    }
+    const base = { fanId: fan.id, platformAccountId: page.id, source: "chatmuse" };
+    const versionOne = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "trusted older dossier",
+    });
+    const versionTwo = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "untrusted newer dossier",
+    });
+    if (!versionOne || !versionTwo) {
+      throw new Error("test setup: profile creation failed");
+    }
+    expect(versionOne.version).toBe(1);
+    expect(versionTwo.version).toBe(2);
+
+    const insertProof = async (input: {
+      ref: string;
+      body: string;
+      mode?: "full" | "short";
+      outcome?: string;
+      stopReason?: string | null;
+      fanRef?: string | null;
+      conversationRef?: string | null;
+      createdAt: Date;
+    }) => {
+      await insertAiGenerationContent(testDb!.db, {
+        usageEventId: null,
+        generationRef: input.ref,
+        feature: "fan-summary",
+        model: "test-model",
+        provider: "anthropic",
+        userId: null,
+        pageId: page.id,
+        conversationRef: input.conversationRef ?? "conversation-proof",
+        fanRef: input.fanRef === undefined ? fan.platformUserId : input.fanRef,
+        promptBlocks: [],
+        completion: input.body,
+        params: {
+          summaryMode: input.mode ?? "full",
+          outcome: input.outcome ?? "completed",
+          stopReason: input.stopReason === undefined ? "end_turn" : input.stopReason,
+        },
+      });
+      await testDb!.pool.query(
+        "update ai_generation_content set created_at = $1 where generation_ref = $2",
+        [input.createdAt.toISOString(), input.ref],
+      );
+    };
+
+    const proofTime = new Date("2026-06-01T12:00:00.000Z");
+    await insertProof({
+      ref: "profile-proof-v1",
+      body: versionOne.body,
+      createdAt: proofTime,
+    });
+    await insertProof({
+      ref: "profile-proof-v2-exhausted",
+      body: versionTwo.body,
+      stopReason: "max_tokens",
+      createdAt: new Date("2026-06-02T12:00:00.000Z"),
+    });
+
+    const olderTrusted = await getLatestPromptEligibleFanProfile(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      platformUserId: fan.platformUserId,
+    });
+    expect(olderTrusted).toMatchObject({
+      version: 1,
+      body: versionOne.body,
+      proofCreatedAt: proofTime,
+    });
+
+    // OnlyFans/desktop and legacy Fansly terminal rows identify the fan through
+    // conversationRef when no separate fan_ref is present.
+    await insertProof({
+      ref: "profile-proof-v2-legacy-identity",
+      body: versionTwo.body,
+      fanRef: null,
+      conversationRef: fan.platformUserId,
+      createdAt: new Date("2026-06-03T12:00:00.000Z"),
+    });
+    const newestTrusted = await getLatestPromptEligibleFanProfile(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      platformUserId: fan.platformUserId,
+    });
+    expect(newestTrusted).toMatchObject({ version: 2, body: versionTwo.body });
+
+    const whitespaceOnly = await appendFanProfile(testDb.db, {
+      ...base,
+      body: "\u00a0\u2003",
+    });
+    if (!whitespaceOnly) {
+      throw new Error("test setup: Unicode-whitespace profile creation failed");
+    }
+    await insertProof({
+      ref: "profile-proof-v3-unicode-whitespace",
+      body: whitespaceOnly.body,
+      createdAt: new Date("2026-06-04T12:00:00.000Z"),
+    });
+    const afterWhitespaceOnly = await getLatestPromptEligibleFanProfile(testDb.db, {
+      fanId: fan.id,
+      platformAccountId: page.id,
+      platformUserId: fan.platformUserId,
+    });
+    expect(afterWhitespaceOnly).toMatchObject({ version: 2, body: versionTwo.body });
   });
 
   it("resolves the latest profile by visible conversation mapping", async (context) => {

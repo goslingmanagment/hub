@@ -1,7 +1,8 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, isNull, or, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { fanPages, fanProfiles, fans } from "../schema.ts";
+import { aiGenerationContent, fanPages, fanProfiles, fans } from "../schema.ts";
+import { ECMASCRIPT_TRIM_CHARACTERS } from "./ai-completion.ts";
 import { findVisiblePageDmConversationByPlatformConversationId } from "./page-dm.ts";
 
 export interface AppendFanProfileInput {
@@ -87,6 +88,59 @@ export async function getLatestFanProfile(
     ),
     orderBy: (table, { desc: orderDesc }) => [orderDesc(table.version)],
   });
+}
+
+/**
+ * Newest dossier that Core can independently prove came from a complete full
+ * fan-summary generation. The profile write is a separate, client-driven
+ * request, so eligibility is established by an exact body match against the
+ * restricted generation ledger plus page/fan identity and the same terminal
+ * rules used by recap attachment. Filtering happens before version ordering:
+ * an unproven newer profile must never hide an older proven one.
+ */
+export async function getLatestPromptEligibleFanProfile(
+  db: Database,
+  input: {
+    fanId: number;
+    platformAccountId: number;
+    platformUserId: string;
+  },
+) {
+  const [row] = await db
+    .select({
+      ...getTableColumns(fanProfiles),
+      proofCreatedAt: aiGenerationContent.createdAt,
+    })
+    .from(fanProfiles)
+    .innerJoin(aiGenerationContent, and(
+      eq(aiGenerationContent.pageId, fanProfiles.platformAccountId),
+      eq(aiGenerationContent.completion, fanProfiles.body),
+    ))
+    .where(and(
+      eq(fanProfiles.fanId, input.fanId),
+      eq(fanProfiles.platformAccountId, input.platformAccountId),
+      eq(aiGenerationContent.feature, "fan-summary"),
+      sql`${aiGenerationContent.params} ->> 'summaryMode' = 'full'`,
+      sql`${aiGenerationContent.params} ->> 'outcome' = 'completed'`,
+      sql`${aiGenerationContent.params} ->> 'stopReason' is not null`,
+      sql`${aiGenerationContent.params} ->> 'stopReason' not in ('max_tokens', 'length')`,
+      sql`btrim(${aiGenerationContent.completion}, ${ECMASCRIPT_TRIM_CHARACTERS}) <> ''`,
+      or(
+        eq(aiGenerationContent.fanRef, input.platformUserId),
+        and(
+          isNull(aiGenerationContent.fanRef),
+          eq(aiGenerationContent.conversationRef, input.platformUserId),
+        ),
+      ),
+    ))
+    .orderBy(
+      desc(fanProfiles.version),
+      desc(aiGenerationContent.createdAt),
+      desc(aiGenerationContent.id),
+    )
+    .limit(1);
+
+  return row ?? null;
 }
 
 export async function listFanProfileVersionSummaries(

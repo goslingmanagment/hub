@@ -2380,6 +2380,7 @@ describe("fan-dossier context (Decision #136)", () => {
     body?: string;
     createdAt?: string;
     sourceGeneratedAt?: string | null;
+    proofCreatedAt?: string;
   }): Promise<void> {
     const existing = await testDb!.pool.query<{ id: string }>(
       `select id::text as id from fans where platform = $1 and platform_user_id = $2`,
@@ -2396,17 +2397,47 @@ describe("fan-dossier context (Decision #136)", () => {
       );
       fanId = Number(inserted.rows[0]!.id);
     }
+    const body = input.body ?? DOSSIER_BODY;
     await testDb!.pool.query(
       `insert into fan_profiles (fan_id, platform_account_id, version, body, source, created_at, source_generated_at)
        values ($1, $2, 1, $3, 'chatmuse', $4, $5)`,
       [
         fanId,
         input.targetPageId,
-        input.body ?? DOSSIER_BODY,
+        body,
         input.createdAt ?? new Date().toISOString(),
         input.sourceGeneratedAt ?? null,
       ],
     );
+    const proofRef = randomUUID();
+    const proofIdentity = {
+      onlyfans: { conversationRef: FAN, fanRef: null },
+      fansly: { conversationRef: `dossier-group-${proofRef}`, fanRef: FAN },
+    }[input.platform];
+    await insertAiGenerationContent(testDb!.db, {
+      usageEventId: null,
+      generationRef: proofRef,
+      feature: "fan-summary",
+      model: "test-model",
+      provider: "anthropic",
+      userId: null,
+      pageId: input.targetPageId,
+      conversationRef: proofIdentity.conversationRef,
+      fanRef: proofIdentity.fanRef,
+      promptBlocks: [],
+      completion: body,
+      params: {
+        summaryMode: "full",
+        outcome: "completed",
+        stopReason: "end_turn",
+      },
+    });
+    if (input.proofCreatedAt) {
+      await testDb!.pool.query(
+        "update ai_generation_content set created_at = $1 where generation_ref = $2",
+        [input.proofCreatedAt, proofRef],
+      );
+    }
   }
 
   function makeCall(capture: { input?: AiGatewayProviderInput }) {
@@ -2462,6 +2493,36 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(userText(capture)).not.toContain("## Fan Dossier");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("falls back to an older proven dossier instead of injecting a newer unproven profile", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    await seedFanProfile({
+      platform: "onlyfans",
+      targetPageId: pageId,
+      body: "PROVEN_DOSSIER_BODY",
+    });
+    const fan = await testDb.pool.query<{ id: string }>(
+      "select id::text as id from fans where platform = 'onlyfans' and platform_user_id = $1",
+      [FAN],
+    );
+    await testDb.pool.query(
+      `insert into fan_profiles (fan_id, platform_account_id, version, body, source)
+       values ($1, $2, 2, 'UNPROVEN_PRE_GUARD_BODY', 'chatmuse')`,
+      [Number(fan.rows[0]!.id), pageId],
+    );
+    const capture: { input?: AiGatewayProviderInput } = {};
+    const call = makeCall(capture);
+
+    const reply = await call("fast-reply");
+    expect(reply.statusCode, reply.body).toBe(200);
+    const text = userText(capture);
+    expect(text).toContain("PROVEN_DOSSIER_BODY");
+    expect(text).not.toContain("UNPROVEN_PRE_GUARD_BODY");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("degrades silently when no profile exists or the fan is marked deleted", async (context) => {
     if (!testDb) {
       context.skip();
@@ -2511,23 +2572,23 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(userText(capture)).toContain("## Fan Dossier");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("dates the dossier by its SOURCE generation time, not the hub append time", async (context) => {
+  it("dates the dossier by Core's successful generation proof, not client or Hub timestamps", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     await seedConversation();
-    // Delayed re-push scenario: the row was APPENDED just now, but the Scan
-    // itself ran 60 days ago. Sections are no longer age-dropped (#136 addendum) —
-    // instead the disclaimer must stamp the SOURCE date, not today's append date.
+    // The profile row claims today, but the matching successful full summary is
+    // 60 days old. Only Core's terminal ledger is trusted for prompt age.
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
-    const sourceDate = sixtyDaysAgo.toISOString().slice(0, 10);
+    const proofDate = sixtyDaysAgo.toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
     await seedFanProfile({
       platform: "onlyfans",
       targetPageId: pageId,
       createdAt: new Date().toISOString(),
-      sourceGeneratedAt: sixtyDaysAgo.toISOString(),
+      sourceGeneratedAt: new Date().toISOString(),
+      proofCreatedAt: sixtyDaysAgo.toISOString(),
     });
     const capture: { input?: AiGatewayProviderInput } = {};
     const call = makeCall(capture);
@@ -2538,19 +2599,25 @@ describe("fan-dossier context (Decision #136)", () => {
     expect(text).toContain("красном Ducati");
     // Volatile sections stay in now; the disclaimer carries the source date.
     expect(text).toContain("Обещала фото с пляжа");
-    expect(text).toContain(`generated on ${sourceDate}`);
+    expect(text).toContain(`generated on ${proofDate}`);
     expect(text).not.toContain(`generated on ${today}`);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("falls back to created_at for legacy rows without a source time", async (context) => {
+  it("does not trust an old profile created_at when the successful proof is fresh", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     await seedConversation();
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
-    const createdDate = sixtyDaysAgo.toISOString().slice(0, 10);
-    await seedFanProfile({ platform: "onlyfans", targetPageId: pageId, createdAt: sixtyDaysAgo.toISOString() });
+    const oldProfileDate = sixtyDaysAgo.toISOString().slice(0, 10);
+    const proofDate = new Date().toISOString().slice(0, 10);
+    await seedFanProfile({
+      platform: "onlyfans",
+      targetPageId: pageId,
+      createdAt: sixtyDaysAgo.toISOString(),
+      proofCreatedAt: new Date().toISOString(),
+    });
     const capture: { input?: AiGatewayProviderInput } = {};
     const call = makeCall(capture);
 
@@ -2559,7 +2626,8 @@ describe("fan-dossier context (Decision #136)", () => {
     const text = userText(capture);
     expect(text).toContain("красном Ducati");
     expect(text).toContain("Обещала фото с пляжа");
-    expect(text).toContain(`generated on ${createdDate}`);
+    expect(text).toContain(`generated on ${proofDate}`);
+    expect(text).not.toContain(`generated on ${oldProfileDate}`);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("injects on the fansly clientContext path alongside the client transcript", async (context) => {

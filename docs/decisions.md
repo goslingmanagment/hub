@@ -4956,3 +4956,24 @@ package-index cleanup, and CI launches that bundled browser from the final
 runtime image. This does not change #172's checksum-pinned clean-base lifecycle
 or its owner-gated image/tag garbage collection; deploys do not automatically
 promote a local cache tag or delete candidate image tags.
+
+**Decision #177 (2026-07-21, prompt dossiers require Core-owned usable full-recap
+proof):** A `fan_profiles` row is preserved and remains visible through the
+profile/history APIs regardless of provenance, but it may enter an AI prompt
+only when Core's restricted generation ledger independently proves the exact
+body came from a usable full `fan-summary`. Eligibility requires the same
+terminal facts as recap attachment: `summaryMode = full`, completed outcome,
+nonblank completion, a present stop reason other than `max_tokens`/`length`,
+the same page and fan identity, and byte-for-byte equality between the stored
+profile body and the terminal completion. Modern Fansly rows match `fan_ref`;
+OnlyFans and legacy Fansly full-recap rows may match `conversation_ref` only
+while `fan_ref` is null. Filtering precedes profile-version ordering, so a newer unproven dossier
+cannot hide an older proven one.
+
+The prompt's dossier date is the matching Core terminal record's `created_at`,
+not client-supplied `source_generated_at` or the later Hub append time. This
+closes the Decision #136 / ChatGoose E45 residual where an output-exhausted
+pre-guard recap had already reached Hub: its partial completion may remain as
+an audit fact but cannot be injected. No public contract, SDK, or database
+migration changes; current clients self-heal naturally on a fresh successful
+full recap and its existing profile sync.

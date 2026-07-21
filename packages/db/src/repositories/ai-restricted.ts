@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { aiAcceptanceEvents, aiGenerationContent } from "../schema.ts";
+import { ECMASCRIPT_TRIM_CHARACTERS } from "./ai-completion.ts";
 
 // Stage 29 restricted capture class (DP 6-A). Writes happen at gateway
 // finalize and via the acceptance canonicalizer; reads are owner-only at
@@ -130,7 +131,7 @@ export async function getFreshestUsableRecaps(
         sql`${aiGenerationContent.params} ->> 'stopReason' not in ('max_tokens', 'length')`,
         // Defense in depth for rows written before terminal empty-output
         // rejection: whitespace-only recaps are not usable status/attach slots.
-        sql`btrim(${aiGenerationContent.completion}, ${" \t\n\r\f\v"}) <> ''`,
+        sql`btrim(${aiGenerationContent.completion}, ${ECMASCRIPT_TRIM_CHARACTERS}) <> ''`,
       ))
       .orderBy(desc(aiGenerationContent.createdAt), desc(aiGenerationContent.id))
       .limit(1);
