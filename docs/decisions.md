@@ -5018,4 +5018,12 @@ byte-identical between `templates.ts` and `templates/coach-chat.md`), and the
 `prompt-manifest.json` hashes for the three edited prompt files. The coach
 feature policy in `feature-policies.ts` is untouched: `optionalDraft` is a
 prompt-assembly concern with a single consumer (the builder), so duplicating it
-into the service-layer policy would add an unconsumed flag.
+into the service-layer policy would add an unconsumed flag. Review follow-up
+(same PR): when the whole-prompt reducer sheds the ENTIRE supplied dialog, the
+history section renders an explicit budget-omission marker instead of falsely
+claiming "(no prior coach dialog — this is the first question)" — a stateless
+coach must never be told a dialog it was sent does not exist; and the coach
+integration test pins body.draftText end-to-end through prepareAiFeatureStream
+into the assembled prompt's <chatter_draft> wrapper, so a future feature-gating
+of the service-layer forwarding line cannot silently disable the draft while
+builder-level unit tests stay green.

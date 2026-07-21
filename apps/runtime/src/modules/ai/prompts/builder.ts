@@ -436,9 +436,17 @@ const RECAP_ATTACH_MAX_CHARS = 30_000;
  * newline-joined) would blow the 60k budget. Projecting every entry first closes
  * the old "oversized newest entry kept whole" hole: no single entry can overshoot
  * the budget, and the budget is exact because it counts what is actually sent. */
-export function coachHistorySection(history: CoachHistoryEntry[] | undefined): string {
+export function coachHistorySection(
+  history: CoachHistoryEntry[] | undefined,
+  omittedForBudget = 0,
+): string {
   if (!history?.length) {
-    return '(no prior coach dialog — this is the first question)';
+    // A budget-emptied dialog must not claim first-question status: the caller
+    // DID send history, the reducer shed it. The marker keeps the stateless
+    // coach from re-greeting or contradicting an exchange it can no longer see.
+    return omittedForBudget > 0
+      ? '(earlier coach dialog omitted to fit the prompt budget)'
+      : '(no prior coach dialog — this is the first question)';
   }
   const projected: CoachHistoryEntry[] = history.map((entry) => ({
     question: entry.question,
@@ -725,6 +733,7 @@ function budgetCoachTemplateValues(
   initialValues: TemplateValues,
 ): TemplateValues {
   let history = [...(input.coachHistory ?? [])];
+  const suppliedHistoryCount = history.length;
   let recapAttach: RecapAttach | undefined = input.recapAttach
     ? {
         full: input.recapAttach.full ? { ...input.recapAttach.full } : null,
@@ -765,7 +774,7 @@ function budgetCoachTemplateValues(
       full: fullRecapChars,
       short: shortRecapChars,
     }),
-    coachHistorySection: coachHistorySection(history),
+    coachHistorySection: coachHistorySection(history, suppliedHistoryCount - history.length),
     coachDraftSection: includeDraft ? initialValues.coachDraftSection! : '',
   });
   const fits = (values: TemplateValues): boolean => {

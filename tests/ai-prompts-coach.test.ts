@@ -331,6 +331,43 @@ describe("coach-chat optional draft", () => {
     expect(built.user).toContain("TX_HEAD TX_TAIL");
     expect(built.user).not.toContain("older transcript omitted");
   });
+
+  it("marks a budget-evicted dialog as omitted instead of claiming a first question", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "TX_HEAD TX_TAIL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      draftText: "DRAFT_KEEP " + amp.repeat(200),
+      // One prior exchange whose projected answer (~10k chars → ~50k escaped)
+      // pushes the prompt over the ceiling; step 1 sheds the WHOLE dialog.
+      coachHistory: [{ question: "PRIOR_Q", answer: amp.repeat(10_000) }],
+    });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    expect(built.user).not.toContain("PRIOR_Q");
+    // The section owns up to the eviction — it must NOT claim first-question
+    // status for a dialog the caller actually sent.
+    expect(built.user).toContain(
+      "(earlier coach dialog omitted to fit the prompt budget)",
+    );
+    expect(built.user).not.toContain("this is the first question");
+    // The draft (shed only at step 2b, after history) survives.
+    expect(built.user).toContain("DRAFT_KEEP");
+  });
+
+  it("keeps the first-question claim only for a genuinely empty dialog", () => {
+    expect(coachHistorySection(undefined)).toContain("this is the first question");
+    expect(coachHistorySection([], 0)).toContain("this is the first question");
+    expect(coachHistorySection([], 2)).toBe(
+      "(earlier coach dialog omitted to fit the prompt budget)",
+    );
+  });
 });
 
 describe("coach answer replay projection (option c)", () => {
