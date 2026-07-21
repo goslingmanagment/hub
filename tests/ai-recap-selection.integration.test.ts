@@ -81,6 +81,8 @@ describe("getFreshestUsableRecaps", () => {
     await insertAiGenerationContent(db, row({ completion: "", params: { ...completedParams("full"), stopReason: null } }));
     await insertAiGenerationContent(db, row({ completion: " \t\n ", params: completedParams("full") }));
     await insertAiGenerationContent(db, row({ completion: " \t\n ", params: completedParams("short") }));
+    await insertAiGenerationContent(db, row({ completion: "\u00a0\u2003", params: completedParams("full") }));
+    await insertAiGenerationContent(db, row({ completion: "\u00a0\u2003", params: completedParams("short") }));
     await insertAiGenerationContent(db, row({ params: { outcome: "completed", stopReason: null } })); // legacy
     await insertAiGenerationContent(db, row({ feature: "help-me" }));
     // P1-5b: a MODERN row (summaryMode present) with a NULL stopReason is now

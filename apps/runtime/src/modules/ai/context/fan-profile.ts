@@ -1,4 +1,4 @@
-import { findPlatformFan, getLatestFanProfile } from "@agency_hub_core/db";
+import { findPlatformFan, getLatestPromptEligibleFanProfile } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
 
@@ -257,7 +257,7 @@ export interface FanProfilePromptContext {
    * what makes the dedupe fire on real sectioned dossiers. */
   rawBody: string;
   version: number;
-  /** createdAt of the latest profile version. */
+  /** Core-recorded completion time of the full summary proving this body. */
   generatedAt: Date;
   ageDays: number;
   truncated: boolean;
@@ -285,19 +285,19 @@ export async function loadFanProfileContext(
     return undefined;
   }
 
-  const profile = await getLatestFanProfile(app.db, {
+  const profile = await getLatestPromptEligibleFanProfile(app.db, {
     fanId: fan.id,
     platformAccountId: input.pageId,
+    platformUserId: fan.platformUserId,
   });
   if (!profile || profile.body.trim().length === 0) {
     return undefined;
   }
 
-  // sourceGeneratedAt is when the Scan actually RAN; createdAt is only the
-  // hub append time (a delayed client re-push must not zero the age). ageDays is
-  // reported in the manifest and stamped on the prompt disclaimer; compilation
-  // itself no longer age-drops sections (Decision #136 addendum).
-  const generatedAt = profile.sourceGeneratedAt ?? profile.createdAt;
+  // The proof row is Core's own successful full fan-summary terminal record.
+  // Client sourceGeneratedAt and Hub append time are useful profile metadata,
+  // but neither proves that the stored body was complete and non-exhausted.
+  const generatedAt = profile.proofCreatedAt;
   const ageDays = Math.max(0, Math.floor((input.now - generatedAt.getTime()) / DAY_MS));
   const compiled = compileDossierForPrompt(profile.body, {});
   if (compiled.body.length === 0) {
