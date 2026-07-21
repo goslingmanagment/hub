@@ -455,7 +455,7 @@ import { dollarsToMills } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import type { OfapiListPage, OfapiRequestContext } from "./ofapi.ts";
-import { persistRawPayload } from "./sync/shared.ts";
+import { persistRawPayload, retentionDate } from "./sync/shared.ts";
 import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
@@ -481,9 +481,6 @@ const LINK_STATS_PAGE_LIMIT = 100;
 const LINK_STATS_MAX_PAGES_PER_RUN = 20;
 // Backfill-lane default; ofapiBackfillDailyCreditBudget governs real spend.
 const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
-// Stage-7 raw-payload retention for the journaled list pages (pruned by the
-// existing raw-payload cleanup job once expired).
-const LINK_STATS_RAW_PAYLOAD_RETENTION_DAYS = 90;
 
 export function isOfapiLinkStatsReconcileEnabled(
   config?: Pick<AppContext["config"], "ofapiLinkStatsReconcileEnabled">,
@@ -645,9 +642,9 @@ async function reconcileKind(
       responsePayload: page.items,
       mapperVersion: "link-stats-v1",
       payloadKind: "mapping_critical",
-      retainUntil: new Date(
-        input.pulledAt.getTime() + LINK_STATS_RAW_PAYLOAD_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-      ),
+      // Stage 1 retention stand-down: captured facts are stamped far-future
+      // (the cleanup job is a deliberate no-op) — never a real deletion date.
+      retainUntil: retentionDate(input.pulledAt),
     }, { action: "journal link-stats page", platform: "onlyfans" });
     apiPages += 1;
     rawItems += page.items.length;
