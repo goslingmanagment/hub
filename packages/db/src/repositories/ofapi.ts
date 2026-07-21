@@ -1,10 +1,12 @@
-import { and, asc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
   ofapiCreditLedger,
   ofapiCreditState,
   ofapiFanoutReplayState,
+  pageLinkStatRuns,
+  pageLinkStatSnapshots,
   ofapiSpendProjectionEvents,
   ofapiWebhookConfig,
   ofapiWebhookEvents,
@@ -2879,4 +2881,109 @@ export async function getLatestOfapiEventTimesForPages(
   }
 
   return result;
+}
+
+export type LinkStatKind = "tracking" | "trial";
+
+export interface InsertLinkStatRunInput {
+  platformAccountId: number;
+  linkKind: LinkStatKind;
+  status: "complete" | "truncated";
+  pulledAt: Date;
+  apiPages: number;
+  rawItems: number;
+  writtenRows: number;
+}
+
+export interface InsertLinkStatSnapshotInput {
+  platformAccountId: number;
+  linkKind: LinkStatKind;
+  platformLinkId: string;
+  name: string | null;
+  url: string | null;
+  linkCreatedAt: Date | null;
+  linkEndsAt: Date | null;
+  isFinished: boolean | null;
+  clicksCount: number;
+  claimsCount: number | null;
+  subscribersCount: number;
+  spendersCount: number;
+  revenueGrossMills: bigint;
+  revenueCalculatedAt: Date | null;
+}
+
+export async function insertLinkStatRun(
+  db: Database,
+  input: InsertLinkStatRunInput,
+): Promise<{ id: number }> {
+  const [row] = await db
+    .insert(pageLinkStatRuns)
+    .values({
+      platformAccountId: input.platformAccountId,
+      linkKind: input.linkKind,
+      status: input.status,
+      pulledAt: input.pulledAt,
+      apiPages: input.apiPages,
+      rawItems: input.rawItems,
+      writtenRows: input.writtenRows,
+    })
+    .returning({ id: pageLinkStatRuns.id });
+  if (!row) {
+    throw new Error("insertLinkStatRun returned no row");
+  }
+  return row;
+}
+
+export async function insertLinkStatSnapshots(
+  db: Database,
+  runId: number,
+  rows: InsertLinkStatSnapshotInput[],
+): Promise<number> {
+  if (rows.length === 0) {
+    return 0;
+  }
+  const inserted = await db
+    .insert(pageLinkStatSnapshots)
+    .values(rows.map((row) => ({
+      runId,
+      platformAccountId: row.platformAccountId,
+      linkKind: row.linkKind,
+      platformLinkId: row.platformLinkId,
+      name: row.name,
+      url: row.url,
+      linkCreatedAt: row.linkCreatedAt,
+      linkEndsAt: row.linkEndsAt,
+      isFinished: row.isFinished,
+      clicksCount: row.clicksCount,
+      claimsCount: row.claimsCount,
+      subscribersCount: row.subscribersCount,
+      spendersCount: row.spendersCount,
+      revenueGrossMills: row.revenueGrossMills,
+      revenueCalculatedAt: row.revenueCalculatedAt,
+    })))
+    .returning({ id: pageLinkStatSnapshots.id });
+  return inserted.length;
+}
+
+export async function listLinkStatRuns(
+  db: Database,
+  input: { platformAccountId: number; linkKind?: LinkStatKind },
+) {
+  const conditions = [eq(pageLinkStatRuns.platformAccountId, input.platformAccountId)];
+  if (input.linkKind !== undefined) {
+    conditions.push(eq(pageLinkStatRuns.linkKind, input.linkKind));
+  }
+  return db
+    .select()
+    .from(pageLinkStatRuns)
+    .where(and(...conditions))
+    .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id));
+}
+
+export async function listLinkStatSnapshots(db: Database, input: { runId: number }) {
+  return db
+    .select()
+    .from(pageLinkStatSnapshots)
+    .where(eq(pageLinkStatSnapshots.runId, input.runId))
+    .orderBy(pageLinkStatSnapshots.platformLinkId);
 }
