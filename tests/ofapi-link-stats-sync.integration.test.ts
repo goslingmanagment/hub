@@ -3,10 +3,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   createModel,
   createOnlyFansPage,
+  insertLinkStatRunWithSnapshots,
   listLinkStatRuns,
   listLinkStatSnapshots,
   listNotificationIncidents,
   setPageOfapiAccountId,
+  type InsertLinkStatSnapshotInput,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -109,6 +111,7 @@ function linksClient(input: {
   trackingByAccount: Map<string, Record<string, unknown>[]>;
   trialByAccount: Map<string, Record<string, unknown>[]>;
   failTrialFor?: string | undefined;
+  failTrackingFor?: string | undefined;
 }): OfapiClient {
   const empty: Record<string, unknown>[] = [];
   const page = (items: Record<string, unknown>[]): OfapiListPage => ({
@@ -120,6 +123,9 @@ function linksClient(input: {
   });
   return {
     async listTrackingLinks(_context: unknown, accountId: string): Promise<OfapiListPage> {
+      if (input.failTrackingFor === accountId) {
+        throw new Error("tracking endpoint down");
+      }
       return page(input.trackingByAccount.get(accountId) ?? empty);
     },
     async listTrialLinks(_context: unknown, accountId: string): Promise<OfapiListPage> {
@@ -363,16 +369,20 @@ describe("OFAPI link-stats reconcile", () => {
     };
 
     const result = await runOfapiLinkStatsReconcile(appContext);
-    expect(result.pages[0]).toMatchObject({ status: "written" });
+    // Normalization drops demote the kind (and the page) to 'partial' — a
+    // walk that lost items must be visible, not a quiet 'written'.
+    expect(result.pages[0]).toMatchObject({ status: "partial" });
     expect(result.pages[0]?.kinds).toEqual([
       expect.objectContaining({
         linkKind: "tracking",
+        status: "partial",
         rawItems: 2,
         writtenRows: 1,
         skippedReasons: { missing_link_id: 1 },
       }),
       expect.objectContaining({
         linkKind: "trial",
+        status: "partial",
         rawItems: 2,
         writtenRows: 1,
         skippedReasons: { invalid_clicks_count: 1 },
@@ -484,12 +494,142 @@ describe("OFAPI link-stats reconcile", () => {
       platformAccountId: page.id,
       linkKind: "tracking",
     });
-    expect(trackingRun).toMatchObject({ status: "complete", apiPages: 2, writtenRows: 2 });
+    // A multi-page offset walk is never absence-proving (the live list can
+    // shift between pages), so the run is 'partial' even though every fetched
+    // row landed.
+    expect(trackingRun).toMatchObject({ status: "partial", apiPages: 2, writtenRows: 2 });
     const snapshots = await listLinkStatSnapshots(appContext.db, { runId: trackingRun!.id });
     expect(snapshots.map((snapshot) => snapshot.platformLinkId).sort()).toEqual([
       "1001",
       "1002",
     ]);
+  });
+
+  it("keeps the trial walk when the tracking endpoint fails (both-direction isolation)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-failtrk-of", "acct_failtrk");
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_failtrk", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_failtrk", [trialItem()]]]),
+        failTrackingFor: "acct_failtrk",
+      }),
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages[0]).toMatchObject({
+      status: "failed",
+      reason: "tracking endpoint down",
+    });
+    expect(result.pages[0]?.kinds).toEqual([
+      expect.objectContaining({ linkKind: "tracking", status: "failed" }),
+      expect.objectContaining({ linkKind: "trial", status: "written", writtenRows: 1 }),
+    ]);
+
+    // The healthy second endpoint still landed its run + snapshot.
+    const trialRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "trial",
+    });
+    expect(trialRuns).toHaveLength(1);
+    expect(trialRuns[0]).toMatchObject({ status: "complete", writtenRows: 1 });
+    expect(await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    })).toEqual([]);
+  });
+
+  it("treats a total mapping collapse as failure, not a quiet 'written'", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-collapse-of", "acct_collapse");
+    // Vendor renamed the counter field: every item fails normalization.
+    const renamed = { ...trackingItem(), clicksCount: undefined, clicks: 82 };
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_collapse", [renamed]]]),
+        trialByAccount: new Map([["acct_collapse", [trialItem()]]]),
+      }),
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages[0]).toMatchObject({ status: "failed", reason: "all_items_skipped" });
+    expect(result.pages[0]?.kinds).toEqual([
+      expect.objectContaining({
+        linkKind: "tracking",
+        status: "failed",
+        rawItems: 1,
+        writtenRows: 0,
+      }),
+      expect.objectContaining({ linkKind: "trial", status: "written" }),
+    ]);
+
+    // Durable evidence survives (run row 'partial', zero snapshots), and the
+    // fleet incident opens so the outage is operator-visible.
+    const trackingRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    });
+    expect(trackingRuns[0]).toMatchObject({ status: "partial", rawItems: 1, writtenRows: 0 });
+    const incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
+      kind: "ofapi_link_stats_reconcile_failed",
+      status: "open",
+    });
+  });
+
+  it("splits a >4095-row snapshot insert into chunks inside one transaction", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-bulk-of", "acct_bulk");
+    // 16 bind params per row × 4096 rows would exceed the 65535 protocol cap
+    // in a single VALUES insert — the repository must chunk.
+    const rows: InsertLinkStatSnapshotInput[] = Array.from({ length: 4200 }, (_, index) => ({
+      platformAccountId: page.id,
+      linkKind: "tracking",
+      platformLinkId: String(index + 1),
+      name: null,
+      url: null,
+      linkCreatedAt: null,
+      linkEndsAt: null,
+      isFinished: null,
+      clicksCount: index,
+      claimsCount: null,
+      subscribersCount: 0,
+      spendersCount: null,
+      revenueGrossMills: null,
+      revenueIsLoading: null,
+      revenueCalculatedAt: null,
+    }));
+
+    const { runId, writtenRows } = await insertLinkStatRunWithSnapshots(
+      appContext.db,
+      {
+        platformAccountId: page.id,
+        linkKind: "tracking",
+        status: "partial",
+        pulledAt: new Date(),
+        apiPages: 42,
+        rawItems: 4200,
+        writtenRows: 4200,
+      },
+      rows,
+    );
+    expect(writtenRows).toBe(4200);
+    expect(await listLinkStatSnapshots(appContext.db, { runId })).toHaveLength(4200);
   });
 
   it("does no work while the flag is off", async (context) => {

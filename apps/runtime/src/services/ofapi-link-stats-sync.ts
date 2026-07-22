@@ -153,7 +153,10 @@ function normalizeLinkItem(
 
 export interface OfapiLinkStatsKindResult {
   linkKind: LinkStatKind;
-  status: "written" | "truncated" | "skipped";
+  // 'partial' = walk finished but some items were dropped; 'failed' = the
+  // endpoint threw, or every fetched item failed normalization (a mapping
+  // collapse must be as loud as an outage, not a quiet 'written').
+  status: "written" | "partial" | "truncated" | "failed";
   reason: string | null;
   apiPages: number;
   rawItems: number;
@@ -258,13 +261,16 @@ async function reconcileKind(
   const rows = [...deduped.values()];
 
   const skippedTotal = Object.values(skippedReasons).reduce((sum, count) => sum + count, 0);
-  // 'complete' (zero drops) is the ONLY absence-proving status. A full walk
-  // with normalization drops is 'partial': its snapshots are still real data,
-  // but a skipped-yet-existing link must not read as deleted. A truncated
-  // walk records the attempt and writes NO snapshots. Run row + snapshots
-  // commit atomically — a 'complete' run without its rows is a lie.
+  // 'complete' (single atomic vendor read, zero drops) is the ONLY
+  // absence-proving status. Two demotions to 'partial': (a) normalization
+  // drops — a skipped-yet-existing link must not read as deleted; (b) a
+  // MULTI-PAGE offset walk — the vendor list can shift between pages and
+  // silently omit a boundary item, so only a single-page walk is an atomic
+  // read (upgrade path: stable cursor or vendor-total verification). A
+  // truncated walk records the attempt and writes NO snapshots. Run row +
+  // snapshots commit atomically — a 'complete' run without its rows is a lie.
   const runStatus = walkComplete
-    ? (skippedTotal > 0 ? "partial" as const : "complete" as const)
+    ? (skippedTotal > 0 || apiPages > 1 ? "partial" as const : "complete" as const)
     : "truncated" as const;
   const { writtenRows } = await insertLinkStatRunWithSnapshots(
     input.db,
@@ -280,10 +286,22 @@ async function reconcileKind(
     walkComplete ? rows : [],
   );
 
+  // Every fetched item failing normalization is a mapping collapse (vendor
+  // renamed a field, adapter rot) — report it as loudly as an outage. The run
+  // row above still records the durable evidence.
+  const status: OfapiLinkStatsKindResult["status"] = !walkComplete
+    ? "truncated"
+    : rawItems > 0 && writtenRows === 0
+      ? "failed"
+      : skippedTotal > 0
+        ? "partial"
+        : "written";
   return {
     linkKind: input.kind,
-    status: walkComplete ? "written" : "truncated",
-    reason: walkComplete ? null : blockedReason ?? "walk_truncated",
+    status,
+    reason: status === "failed"
+      ? "all_items_skipped"
+      : walkComplete ? null : blockedReason ?? "walk_truncated",
     apiPages,
     rawItems,
     writtenRows,
@@ -327,36 +345,62 @@ async function reconcilePage(
   };
 
   const kinds: OfapiLinkStatsKindResult[] = [];
-  // Tracking first, then trial — a mid-page budget block still yields a
-  // complete tracking run; kind isolation keeps one endpoint's failure from
-  // discarding the other's completed walk.
+  // Kind isolation must hold in BOTH directions: a throwing tracking endpoint
+  // must not prevent the trial walk (and vice versa). Each kind gets its own
+  // catch; the page is reported failed afterwards so the incident still fires.
   for (const [kind, list] of [
     ["tracking", listTrackingLinks],
     ["trial", listTrialLinks],
   ] as const satisfies ReadonlyArray<readonly [LinkStatKind, LinkLister]>) {
-    kinds.push(await reconcileKind({
-      db: app.db,
-      kind,
-      list,
-      requestContext,
-      pageId: input.pageId,
-      ofapiAccountId: input.ofapiAccountId,
-      pulledAt: input.pulledAt,
-      guard: input.guard,
-    }));
+    try {
+      kinds.push(await reconcileKind({
+        db: app.db,
+        kind,
+        list,
+        requestContext,
+        pageId: input.pageId,
+        ofapiAccountId: input.ofapiAccountId,
+        pulledAt: input.pulledAt,
+        guard: input.guard,
+      }));
+    } catch (error) {
+      // A failed request never settled its credit reservation — release the
+      // in-memory token so the other kind (and other pages) can proceed.
+      input.guard.abandonPendingReservation();
+      kinds.push({
+        linkKind: kind,
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+        apiPages: 0,
+        rawItems: 0,
+        writtenRows: 0,
+        skippedReasons: {},
+      });
+      app.logger.error({
+        err: error,
+        pageId: input.pageId,
+        linkKind: kind,
+      }, "OFAPI link-stats kind walk failed; continuing with the other kind");
+    }
   }
 
   const written = kinds.filter((kind) => kind.status === "written").length;
-  const status: OfapiLinkStatsPageResult["status"] = written === kinds.length
-    ? "written"
-    : written > 0
-      ? "partial"
-      : "truncated";
-  const firstBlocked = kinds.find((kind) => kind.status !== "written");
+  const failed = kinds.find((kind) => kind.status === "failed");
+  const anyLanded = kinds.some(
+    (kind) => kind.status === "written" || kind.status === "partial",
+  );
+  const status: OfapiLinkStatsPageResult["status"] = failed
+    ? "failed"
+    : written === kinds.length
+      ? "written"
+      : anyLanded
+        ? "partial"
+        : "truncated";
+  const firstDegraded = failed ?? kinds.find((kind) => kind.status !== "written");
   return {
     pageLabel: input.pageLabel,
     status,
-    reason: firstBlocked?.reason ?? null,
+    reason: firstDegraded?.reason ?? null,
     kinds,
   };
 }
@@ -370,9 +414,11 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     .filter((page) => page.platform === "onlyfans");
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: LINK_STATS_MAX_PAGES_PER_RUN * 2 * Math.max(1, mapped.length),
-    // Deliberately NOT the shared ofapiBackfillDailyCreditBudget: link-stats
-    // runs before chargebacks' daily window and must never eat the lane the
-    // chargebacks first-walk depends on. Own modest quota, own config knob.
+    // A SUB-CAP within the shared backfill spend lane (same day counter as
+    // chargebacks), not an isolated counter: link-stats can take at most 50
+    // of the lane's 200, and the cron runs AFTER chargebacks' 03:10 window so
+    // its all-or-nothing first walk is served first. On a heavy chargebacks
+    // day link-stats yields — that is the declared priority, not starvation.
     dailyCreditBudget:
       app.config.ofapiLinkStatsDailyCreditBudget ?? DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET,
     budgetScope: "backfill",

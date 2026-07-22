@@ -2940,6 +2940,11 @@ export async function insertLinkStatRun(
   return row;
 }
 
+// node-postgres extended protocol caps bind parameters at 65535; with 16
+// columns per row a single VALUES insert breaks past 4095 rows. Chunk well
+// below that; callers wrap this in a transaction when atomicity matters.
+const LINK_STAT_SNAPSHOT_INSERT_CHUNK = 1000;
+
 export async function insertLinkStatSnapshots(
   db: Database,
   runId: number,
@@ -2948,28 +2953,33 @@ export async function insertLinkStatSnapshots(
   if (rows.length === 0) {
     return 0;
   }
-  const inserted = await db
-    .insert(pageLinkStatSnapshots)
-    .values(rows.map((row) => ({
-      runId,
-      platformAccountId: row.platformAccountId,
-      linkKind: row.linkKind,
-      platformLinkId: row.platformLinkId,
-      name: row.name,
-      url: row.url,
-      linkCreatedAt: row.linkCreatedAt,
-      linkEndsAt: row.linkEndsAt,
-      isFinished: row.isFinished,
-      clicksCount: row.clicksCount,
-      claimsCount: row.claimsCount,
-      subscribersCount: row.subscribersCount,
-      spendersCount: row.spendersCount,
-      revenueGrossMills: row.revenueGrossMills,
-      revenueIsLoading: row.revenueIsLoading,
-      revenueCalculatedAt: row.revenueCalculatedAt,
-    })))
-    .returning({ id: pageLinkStatSnapshots.id });
-  return inserted.length;
+  let insertedTotal = 0;
+  for (let start = 0; start < rows.length; start += LINK_STAT_SNAPSHOT_INSERT_CHUNK) {
+    const chunk = rows.slice(start, start + LINK_STAT_SNAPSHOT_INSERT_CHUNK);
+    const inserted = await db
+      .insert(pageLinkStatSnapshots)
+      .values(chunk.map((row) => ({
+        runId,
+        platformAccountId: row.platformAccountId,
+        linkKind: row.linkKind,
+        platformLinkId: row.platformLinkId,
+        name: row.name,
+        url: row.url,
+        linkCreatedAt: row.linkCreatedAt,
+        linkEndsAt: row.linkEndsAt,
+        isFinished: row.isFinished,
+        clicksCount: row.clicksCount,
+        claimsCount: row.claimsCount,
+        subscribersCount: row.subscribersCount,
+        spendersCount: row.spendersCount,
+        revenueGrossMills: row.revenueGrossMills,
+        revenueIsLoading: row.revenueIsLoading,
+        revenueCalculatedAt: row.revenueCalculatedAt,
+      })))
+      .returning({ id: pageLinkStatSnapshots.id });
+    insertedTotal += inserted.length;
+  }
+  return insertedTotal;
 }
 
 /** Atomic run + snapshots: a 'complete'/'partial' run row must never exist
