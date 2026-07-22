@@ -81,7 +81,7 @@ export interface OfapiRequestContext {
   actorUserId?: number | null;
   // Attributes physical retry spend to a dedicated legacy lane as well as
   // the shared global ceiling. Governed mirror calls use their own plane.
-  creditBudgetScope?: "audience" | "backfill" | null;
+  creditBudgetScope?: "audience" | "backfill" | "link_stats" | null;
 }
 
 // Every OFAPI REST response carries _meta with the remaining credit balance —
@@ -166,7 +166,7 @@ export interface OfapiCreditSpendObservation {
   attemptNumber: number;
   isCached: boolean | null;
   actorUserId: number | null;
-  budgetScope?: "audience" | "backfill" | null;
+  budgetScope?: "audience" | "backfill" | "link_stats" | null;
 }
 
 export type OfapiCreditSpendSink = (
@@ -636,7 +636,7 @@ export function createOfapiClient(input: {
      * reaches the sink and is never hidden. */
     suppressZeroCredits?: boolean;
     actorUserId?: number | null;
-    budgetScope?: "audience" | "backfill" | null;
+    budgetScope?: "audience" | "backfill" | "link_stats" | null;
   }) {
     if (!onCreditSpend) {
       return null;

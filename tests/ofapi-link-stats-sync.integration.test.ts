@@ -208,6 +208,17 @@ describe("OFAPI link-stats reconcile", () => {
       revenueGrossMills: 144800n,
     });
     expect(trialSnapshot?.revenueCalculatedAt).toBeInstanceOf(Date);
+
+    // Lane attribution: the fake client never acknowledges spend, so the two
+    // 1-credit reservations stay charged — and they must sit on the DEDICATED
+    // link_stats counter, with the chargebacks backfill lane untouched.
+    const counters = await testDb!.pool.query(
+      `select link_stats_spent_credits, backfill_spent_credits from ofapi_credit_state where id = 1`,
+    );
+    expect(counters.rows[0]).toMatchObject({
+      link_stats_spent_credits: 2,
+      backfill_spent_credits: 0,
+    });
   });
 
   it("second run appends, never overwrites", async (context) => {
@@ -334,6 +345,16 @@ describe("OFAPI link-stats reconcile", () => {
     incidents = await listNotificationIncidents(appContext.db);
     expect(incidents).toHaveLength(1);
     expect(incidents[0]!.status).toBe("open");
+
+    // A pass that runs NOTHING (client without the stored methods => every
+    // page 'skipped') proves nothing and must NOT close the latch.
+    const savedClient = appContext.ofapi;
+    appContext = { ...appContext, ofapi: {} as unknown as OfapiClient };
+    const skippedPass = await runOfapiLinkStatsReconcile(appContext);
+    expect(skippedPass.pages[0]).toMatchObject({ status: "skipped" });
+    incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents[0]!.status).toBe("open");
+    appContext = { ...appContext, ofapi: savedClient };
 
     // A fully written recovery pass resolves the incident.
     clientInput.failTrialFor = undefined;
@@ -673,38 +694,35 @@ describe("OFAPI link-stats reconcile", () => {
     appContext = createTestAppContext(testDb, {
       ofapiLinkStatsReconcileEnabled: true,
       ofapiCreditLedgerEnabled: true,
-      ofapiLinkStatsDailyCreditBudget: 1,
     });
+    const listStoredTrackingLinks = vi.fn();
+    const listStoredTrialLinks = vi.fn();
     appContext = {
       ...appContext,
-      ofapi: linksClient({
-        trackingByAccount: new Map([["acct_budget", [trackingItem()]]]),
-        trialByAccount: new Map([["acct_budget", [trialItem()]]]),
-      }),
+      ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
     };
+    // Deterministic exhaustion: the DEDICATED link_stats day counter is
+    // pre-seeded at the 50-credit default before the run (not an artifact of
+    // unreleased reservations — the real client releases them).
+    await testDb.pool.query(
+      `insert into ofapi_credit_state (id, link_stats_spend_day, link_stats_spent_credits)
+       values (1, (now() at time zone 'utc')::date, 50)
+       on conflict (id) do update
+         set link_stats_spend_day = excluded.link_stats_spend_day,
+             link_stats_spent_credits = excluded.link_stats_spent_credits`,
+    );
 
     const result = await runOfapiLinkStatsReconcile(appContext);
-    // Budget 1: tracking spends the single credit, trial blocks before its
-    // first request — truncated run row, zero snapshots, page 'partial'.
-    expect(result.pages[0]).toMatchObject({ status: "partial" });
-    expect(result.pages[0]?.kinds).toEqual([
-      expect.objectContaining({ linkKind: "tracking", status: "written", writtenRows: 1 }),
-      expect.objectContaining({ linkKind: "trial", status: "truncated", writtenRows: 0 }),
-    ]);
-    const trialRuns = await listLinkStatRuns(appContext.db, {
-      platformAccountId: page.id,
-      linkKind: "trial",
-    });
-    expect(trialRuns[0]).toMatchObject({ status: "truncated", writtenRows: 0 });
-    expect(await listLinkStatSnapshots(appContext.db, { runId: trialRuns[0]!.id }))
-      .toHaveLength(0);
-    // Mixed pass (tracking landed) is not a fleet outage — no incident...
-    expect(await listNotificationIncidents(appContext.db)).toEqual([]);
-
-    // ...but a SECOND pass with the budget already burned truncates BOTH
-    // kinds on the fleet's only page — that silence must open the incident.
-    const second = await runOfapiLinkStatsReconcile(appContext);
-    expect(second.pages[0]).toMatchObject({ status: "truncated" });
+    // Both kinds block before their first request: truncated run rows with
+    // zero snapshots and zero client calls...
+    expect(listStoredTrackingLinks).not.toHaveBeenCalled();
+    expect(listStoredTrialLinks).not.toHaveBeenCalled();
+    expect(result.pages[0]).toMatchObject({ status: "truncated" });
+    const runs = await listLinkStatRuns(appContext.db, { platformAccountId: page.id });
+    expect(runs).toHaveLength(2);
+    expect(runs.every((run) => run.status === "truncated" && run.writtenRows === 0)).toBe(true);
+    // ...and the fully-truncated fleet pass opens the incident — silent empty
+    // passes are impossible.
     const incidents = await listNotificationIncidents(appContext.db);
     expect(incidents).toHaveLength(1);
     expect(incidents[0]).toMatchObject({
@@ -776,11 +794,60 @@ describe("OFAPI link-stats reconcile", () => {
       // empty inventory stays 'written' with a 'complete' run.
       expect.objectContaining({ linkKind: "trial", status: "written" }),
     ]);
-    const trackingRuns = await listLinkStatRuns(appContext.db, {
+    let trackingRuns = await listLinkStatRuns(appContext.db, {
       platformAccountId: page.id,
       linkKind: "tracking",
     });
     expect(trackingRuns.map((run) => run.status)).toEqual(["partial", "complete"]);
+
+    // Third empty walk: the baseline is now the empty 'partial' run, so the
+    // emptiness is confirmed and the guard converges to a genuine 'complete'.
+    const third = await runOfapiLinkStatsReconcile(appContext);
+    expect(third.pages[0]?.kinds).toEqual([
+      expect.objectContaining({ linkKind: "tracking", status: "written" }),
+      expect.objectContaining({ linkKind: "trial", status: "written" }),
+    ]);
+    trackingRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    });
+    expect(trackingRuns.map((run) => run.status)).toEqual(["complete", "partial", "complete"]);
+  });
+
+  it("flags a wipe even when the non-empty baseline was only 'partial'", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-vanish2-of", "acct_vanish2");
+    // First walk lands one row but drops one item => 'partial' with data.
+    const inventory = {
+      trackingByAccount: new Map([[
+        "acct_vanish2",
+        [trackingItem(), { ...trackingItem(), id: undefined }],
+      ]]),
+      trialByAccount: new Map([["acct_vanish2", [] as Record<string, unknown>[]]]),
+    };
+    appContext = { ...appContext, ofapi: linksClient(inventory) };
+    await runOfapiLinkStatsReconcile(appContext);
+
+    inventory.trackingByAccount.set("acct_vanish2", []);
+    const second = await runOfapiLinkStatsReconcile(appContext);
+    // A partial-but-non-empty baseline still makes a sudden wipe suspicious.
+    expect(second.pages[0]?.kinds).toEqual([
+      expect.objectContaining({
+        linkKind: "tracking",
+        status: "partial",
+        reason: "inventory_vanished",
+      }),
+      expect.objectContaining({ linkKind: "trial", status: "written" }),
+    ]);
+    const trackingRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    });
+    expect(trackingRuns.map((run) => run.status)).toEqual(["partial", "partial"]);
   });
 
   it("skips auth-dead pages entirely (Stage-26 pause)", async (context) => {

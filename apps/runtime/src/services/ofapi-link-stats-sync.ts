@@ -6,7 +6,7 @@
 // semantics. List endpoints only: cost stays O(pages).
 
 import {
-  findLatestCompleteLinkStatRun,
+  findLatestFinishedLinkStatRun,
   insertLinkStatRunWithSnapshots,
   listOfapiMappedPages,
   type Database,
@@ -282,10 +282,12 @@ async function reconcileKind(
   // real wipe re-proves itself on the next run against the new baseline.
   let inventoryVanished = false;
   if (walkComplete && rawItems === 0) {
-    const baseline = await findLatestCompleteLinkStatRun(input.db, {
+    const baseline = await findLatestFinishedLinkStatRun(input.db, {
       platformAccountId: input.pageId,
       linkKind: input.kind,
     });
+    // Converges: this run lands as 'partial' with 0 rows, so the NEXT empty
+    // walk sees an empty baseline and records a genuine 'complete'.
     inventoryVanished = baseline !== null && baseline.writtenRows > 0;
   }
   // 'complete' (single atomic vendor read, zero drops) is the ONLY
@@ -379,7 +381,9 @@ async function reconcilePage(
     pageId: input.pageId,
     dispatcher: null,
     egressKey: null,
-    creditBudgetScope: "backfill",
+    // Same lane as the guard's reservation scope: physical spend attribution
+    // and the day-counter reservation must never split across lanes.
+    creditBudgetScope: "link_stats",
   };
 
   const kinds: OfapiLinkStatsKindResult[] = [];
@@ -516,10 +520,16 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
         `fleet fully truncated (${pages.length} page(s)): no snapshots written — ` +
         `check the link_stats credit budget`,
     });
-  } else if (pages.length > 0) {
-    // Recovery = no failed pages and at least one page landed data. A page
-    // stuck at 'partial' (e.g. one permanently unparseable vendor item) must
-    // not pin a stale incident open forever.
+  } else if (
+    pages.length > 0 &&
+    pages.every((page) =>
+      page.kinds.length > 0 &&
+      page.kinds.every((kind) => kind.status === "written" || kind.status === "partial"))
+  ) {
+    // Recovery = every processed page finished BOTH walks (written/partial).
+    // A skipped page (no client) or any truncated kind proves nothing and
+    // must not close the latch; a page stuck at 'partial' (one permanently
+    // unparseable vendor item) must not pin it open either.
     await resolveOfapiGlobalIncident(app, {
       kind: "ofapi_link_stats_reconcile_failed",
     });
@@ -585,9 +595,9 @@ export async function ensureOfapiLinkStatsSchedule(boss: QueueCreationClient) {
     return;
   }
   // Twice daily at 04:45/16:45 UTC — two observations per day (one failed
-  // window still leaves a daily point), and the morning run fires AFTER the
-  // chargebacks reconcile (03:10) so the shared backfill spend lane serves
-  // chargebacks' all-or-nothing first walk before link-stats touches it.
+  // window still leaves a daily point). The stored endpoints are free and the
+  // credit lane is dedicated (0113), so the placement after chargebacks'
+  // 03:10 window is just polite scheduling, not a budget dependency.
   await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, "45 4,16 * * *", null, { tz: "UTC" });
 }
 

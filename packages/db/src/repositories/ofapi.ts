@@ -3019,9 +3019,13 @@ export async function listLinkStatRuns(
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id));
 }
 
-/** Latest 'complete' run for (page, kind) — the absence-proof baseline a new
- * empty walk is checked against (inventory-vanished guard). */
-export async function findLatestCompleteLinkStatRun(
+/** Latest FINISHED walk (complete or partial, never truncated) for
+ * (page, kind) — the baseline the inventory-vanished guard compares a new
+ * empty walk against. Including partial runs makes the guard converge (the
+ * second consecutive empty walk sees an empty baseline and proves absence)
+ * and closes the reverse hole (a non-empty partial baseline still flags a
+ * sudden wipe as suspicious). */
+export async function findLatestFinishedLinkStatRun(
   db: Database,
   input: { platformAccountId: number; linkKind: LinkStatKind },
 ) {
@@ -3031,7 +3035,7 @@ export async function findLatestCompleteLinkStatRun(
     .where(and(
       eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
       eq(pageLinkStatRuns.linkKind, input.linkKind),
-      eq(pageLinkStatRuns.status, "complete"),
+      inArray(pageLinkStatRuns.status, ["complete", "partial"]),
     ))
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
     .limit(1);
