@@ -7,7 +7,10 @@ CREATE TABLE IF NOT EXISTS page_link_stat_runs (
   id BIGSERIAL PRIMARY KEY,
   platform_account_id BIGINT NOT NULL REFERENCES pages(id) ON DELETE RESTRICT,
   link_kind TEXT NOT NULL CHECK (link_kind IN ('tracking', 'trial')),
-  status TEXT NOT NULL CHECK (status IN ('complete', 'truncated')),
+  -- 'complete' = full walk, zero dropped items (the ONLY status that proves
+  -- link absence); 'partial' = full walk but some items failed normalization;
+  -- 'truncated' = walk did not finish (budget/cap/pagination contradiction).
+  status TEXT NOT NULL CHECK (status IN ('complete', 'partial', 'truncated')),
   pulled_at TIMESTAMPTZ NOT NULL,
   api_pages INTEGER NOT NULL DEFAULT 0,
   raw_items INTEGER NOT NULL DEFAULT 0,
@@ -32,8 +35,11 @@ CREATE TABLE IF NOT EXISTS page_link_stat_snapshots (
   clicks_count INTEGER NOT NULL,
   claims_count INTEGER,
   subscribers_count INTEGER NOT NULL,
-  spenders_count INTEGER NOT NULL DEFAULT 0,
-  revenue_gross_mills BIGINT NOT NULL DEFAULT 0,
+  -- NULL money/spenders = vendor value unknown (revenue block missing, still
+  -- computing, or unparseable) — deliberately distinct from a real zero.
+  spenders_count INTEGER,
+  revenue_gross_mills BIGINT,
+  revenue_is_loading BOOLEAN,
   revenue_calculated_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT page_link_stat_snapshots_run_link_uniq UNIQUE (run_id, platform_link_id)

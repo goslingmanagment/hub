@@ -5,11 +5,15 @@ import {
   createOnlyFansPage,
   listLinkStatRuns,
   listLinkStatSnapshots,
+  listNotificationIncidents,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { runOfapiLinkStatsReconcile } from "../apps/runtime/src/services/ofapi-link-stats-sync.ts";
+import {
+  runOfapiLinkStatsReconcile,
+  startOfapiLinkStatsWorker,
+} from "../apps/runtime/src/services/ofapi-link-stats-sync.ts";
 import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
@@ -104,7 +108,7 @@ function trialItem(): Record<string, unknown> {
 function linksClient(input: {
   trackingByAccount: Map<string, Record<string, unknown>[]>;
   trialByAccount: Map<string, Record<string, unknown>[]>;
-  failTrialFor?: string;
+  failTrialFor?: string | undefined;
 }): OfapiClient {
   const empty: Record<string, unknown>[] = [];
   const page = (items: Record<string, unknown>[]): OfapiListPage => ({
@@ -181,6 +185,11 @@ describe("OFAPI link-stats reconcile", () => {
       clicksCount: 82,
       subscribersCount: 19,
       claimsCount: null,
+      // A computed vendor zero stays a REAL zero (isLoading=false) — nullable
+      // money is only for unknown values.
+      spendersCount: 0,
+      revenueGrossMills: 0n,
+      revenueIsLoading: false,
     });
     expect(trialSnapshot).toMatchObject({
       runId: trialRun.id,
@@ -262,14 +271,12 @@ describe("OFAPI link-stats reconcile", () => {
     }
 
     const page = await seedOfapiPage("links-fail-of", "acct_fail");
-    appContext = {
-      ...appContext,
-      ofapi: linksClient({
-        trackingByAccount: new Map([["acct_fail", [trackingItem()]]]),
-        trialByAccount: new Map([["acct_fail", [trialItem()]]]),
-        failTrialFor: "acct_fail",
-      }),
+    const clientInput = {
+      trackingByAccount: new Map([["acct_fail", [trackingItem()]]]),
+      trialByAccount: new Map([["acct_fail", [trialItem()]]]),
+      failTrialFor: "acct_fail" as string | undefined,
     };
+    appContext = { ...appContext, ofapi: linksClient(clientInput) };
 
     const result = await runOfapiLinkStatsReconcile(appContext);
     expect(result.pages).toEqual([
@@ -295,6 +302,43 @@ describe("OFAPI link-stats reconcile", () => {
       linkKind: "trial",
     });
     expect(trialRuns).toEqual([]);
+
+    // The failed fleet pass opens ONE durable global incident.
+    let incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
+      incidentKey: "ofapi_link_stats_reconcile_failed:global",
+      kind: "ofapi_link_stats_reconcile_failed",
+      platformAccountId: null,
+      status: "open",
+    });
+
+    // The pg-boss worker surfaces the failure as a terminal job error.
+    let workerHandler: (() => Promise<void>) | null = null;
+    await startOfapiLinkStatsWorker(appContext, {
+      async work(_queue, _options, handler) {
+        workerHandler = handler;
+        return null;
+      },
+    });
+    expect(workerHandler).not.toBeNull();
+    await expect(workerHandler!()).rejects.toThrow(
+      "OFAPI link-stats reconcile failed for 1 page(s)",
+    );
+    incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]!.status).toBe("open");
+
+    // A fully written recovery pass resolves the incident.
+    clientInput.failTrialFor = undefined;
+    const recovered = await runOfapiLinkStatsReconcile(appContext);
+    expect(recovered.pages.map((result_) => result_.status)).toEqual(["written"]);
+    incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
+      kind: "ofapi_link_stats_reconcile_failed",
+      status: "resolved",
+    });
   });
 
   it("skips invalid items with reasons", async (context) => {
@@ -335,12 +379,117 @@ describe("OFAPI link-stats reconcile", () => {
       }),
     ]);
 
+    // A walk with normalization drops is 'partial', never 'complete': the
+    // skipped link still exists at the vendor and must not read as deleted.
     const runs = await listLinkStatRuns(appContext.db, { platformAccountId: page.id });
     expect(runs).toHaveLength(2);
     expect(runs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ linkKind: "tracking", rawItems: 2, writtenRows: 1 }),
-      expect.objectContaining({ linkKind: "trial", rawItems: 2, writtenRows: 1 }),
+      expect.objectContaining({
+        linkKind: "tracking", status: "partial", rawItems: 2, writtenRows: 1,
+      }),
+      expect.objectContaining({
+        linkKind: "trial", status: "partial", rawItems: 2, writtenRows: 1,
+      }),
     ]));
+  });
+
+  it("stores unknown revenue as NULL, never a fake zero", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-loading-of", "acct_loading");
+    const loadingTracking = {
+      ...trackingItem(),
+      id: 111,
+      revenue: {
+        total: 0,
+        spendersCount: 0,
+        calculatedAt: null,
+        isLoading: true,
+      },
+    };
+    const noRevenueTrial = { ...trialItem(), id: 222, revenue: undefined };
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_loading", [loadingTracking]]]),
+        trialByAccount: new Map([["acct_loading", [noRevenueTrial]]]),
+      }),
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages[0]).toMatchObject({ status: "written" });
+
+    const runs = await listLinkStatRuns(appContext.db, { platformAccountId: page.id });
+    const trackingRun = runs.find((run) => run.linkKind === "tracking");
+    const trialRun = runs.find((run) => run.linkKind === "trial");
+    const [loadingSnapshot] = await listLinkStatSnapshots(appContext.db, {
+      runId: trackingRun!.id,
+    });
+    const [absentSnapshot] = await listLinkStatSnapshots(appContext.db, {
+      runId: trialRun!.id,
+    });
+    // isLoading=true: the vendor has not finished computing — the zeros in
+    // the payload are placeholders, not earnings.
+    expect(loadingSnapshot).toMatchObject({
+      platformLinkId: "111",
+      spendersCount: null,
+      revenueGrossMills: null,
+      revenueIsLoading: true,
+    });
+    // Missing revenue block entirely: unknown, not zero.
+    expect(absentSnapshot).toMatchObject({
+      platformLinkId: "222",
+      spendersCount: null,
+      revenueGrossMills: null,
+      revenueIsLoading: null,
+    });
+  });
+
+  it("keeps walking past a short page while hasNextPage is true", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-paged-of", "acct_paged");
+    const first = { ...trackingItem(), id: 1001 };
+    const second = { ...trackingItem(), id: 1002 };
+    const listTrackingLinks = vi.fn(async (
+      _context: unknown,
+      _accountId: string,
+      params: { offset?: number },
+    ): Promise<OfapiListPage> => (
+      (params.offset ?? 0) === 0
+        ? { items: [first], hasNextPage: true, nextMarker: null, nextPageUrl: null, meta: null }
+        : { items: [second], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null }
+    ));
+    const listTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
+      items: [], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
+    }));
+    appContext = {
+      ...appContext,
+      ofapi: { listTrackingLinks, listTrialLinks } as unknown as OfapiClient,
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages[0]).toMatchObject({ status: "written" });
+    // Terminality is the vendor's hasNextPage, not the page size: the short
+    // first page (1 item < limit) must NOT end the walk.
+    expect(listTrackingLinks).toHaveBeenCalledTimes(2);
+
+    const [trackingRun] = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    });
+    expect(trackingRun).toMatchObject({ status: "complete", apiPages: 2, writtenRows: 2 });
+    const snapshots = await listLinkStatSnapshots(appContext.db, { runId: trackingRun!.id });
+    expect(snapshots.map((snapshot) => snapshot.platformLinkId).sort()).toEqual([
+      "1001",
+      "1002",
+    ]);
   });
 
   it("does no work while the flag is off", async (context) => {

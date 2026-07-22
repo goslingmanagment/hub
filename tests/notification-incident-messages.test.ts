@@ -60,4 +60,14 @@ describe("resolveMessageForIncident", () => {
       }),
     ).toContain("chargebacks reconcile recovered");
   });
+
+  it("link-stats reconcile resolves with its own recovery text", () => {
+    expect(
+      resolveMessageForIncident({
+        kind: "ofapi_link_stats_reconcile_failed",
+        pageLabel: null,
+        platform: null,
+      }),
+    ).toContain("link-stats reconcile recovered");
+  });
 });

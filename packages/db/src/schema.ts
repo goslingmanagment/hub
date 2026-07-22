@@ -1624,10 +1624,11 @@ export const pageLinkStatSnapshots = pgTable(
     clicksCount: integer("clicks_count").notNull(),
     claimsCount: integer("claims_count"),
     subscribersCount: integer("subscribers_count").notNull(),
-    spendersCount: integer("spenders_count").default(0).notNull(),
-    revenueGrossMills: bigint("revenue_gross_mills", { mode: "bigint" })
-      .default(sql`0`)
-      .notNull(),
+    // NULL money/spenders = vendor value unknown (revenue block missing, still
+    // computing, or unparseable) — deliberately distinct from a real zero.
+    spendersCount: integer("spenders_count"),
+    revenueGrossMills: bigint("revenue_gross_mills", { mode: "bigint" }),
+    revenueIsLoading: boolean("revenue_is_loading"),
     revenueCalculatedAt: timestamp("revenue_calculated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },

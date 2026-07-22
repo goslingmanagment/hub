@@ -6,8 +6,7 @@
 // semantics. List endpoints only: cost stays O(pages).
 
 import {
-  insertLinkStatRun,
-  insertLinkStatSnapshots,
+  insertLinkStatRunWithSnapshots,
   listOfapiMappedPages,
   type Database,
   type InsertLinkStatSnapshotInput,
@@ -40,10 +39,14 @@ const OFAPI_LINK_STATS_QUEUE_OPTIONS = {
 } as const;
 
 const LINK_STATS_PAGE_LIMIT = 100;
-// Offset-walk backstop per (page, kind) per run: 20 pages = 2000 links.
-const LINK_STATS_MAX_PAGES_PER_RUN = 20;
-// Backfill-lane default; ofapiBackfillDailyCreditBudget governs real spend.
-const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
+// Offset-walk backstop per (page, kind) per run. There is no cross-run
+// cursor, so a page whose inventory exceeds this cap could NEVER complete a
+// walk — size it far beyond any real link inventory (200 pages = 20k links),
+// exactly the chargebacks first-walk reasoning.
+const LINK_STATS_MAX_PAGES_PER_RUN = 200;
+// Own quota (config: ofapiLinkStatsDailyCreditBudget) so link-stats walks can
+// never starve the shared backfill lane that chargebacks depends on.
+const DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET = 50;
 
 export function isOfapiLinkStatsReconcileEnabled(
   config?: Pick<AppContext["config"], "ofapiLinkStatsReconcileEnabled">,
@@ -117,6 +120,13 @@ function normalizeLinkItem(
     }
   }
   const revenue = asRecord(item.revenue);
+  const revenueIsLoading = revenue && typeof revenue.isLoading === "boolean"
+    ? revenue.isLoading
+    : null;
+  // Unknown money is NULL, never a fake zero: a missing revenue block, a
+  // still-computing vendor value (isLoading), or an unparseable total must be
+  // distinguishable from a link that genuinely earned $0.
+  const revenueKnown = revenue !== null && revenueIsLoading !== true;
   return {
     status: "ok",
     row: {
@@ -133,8 +143,9 @@ function normalizeLinkItem(
       clicksCount,
       claimsCount,
       subscribersCount,
-      spendersCount: parseCounter(revenue?.spendersCount) ?? 0,
-      revenueGrossMills: parseDollarMills(revenue?.total) ?? 0n,
+      spendersCount: revenueKnown ? parseCounter(revenue.spendersCount) : null,
+      revenueGrossMills: revenueKnown ? parseDollarMills(revenue.total) : null,
+      revenueIsLoading,
       revenueCalculatedAt: parseDate(revenue?.calculatedAt),
     },
   };
@@ -152,7 +163,10 @@ export interface OfapiLinkStatsKindResult {
 
 export interface OfapiLinkStatsPageResult {
   pageLabel: string;
-  status: "written" | "partial" | "skipped" | "failed";
+  // 'truncated' (walks ran but none finished) is distinct from 'skipped'
+  // (nothing ran at all, e.g. no OFAPI client) — conflating them would hide
+  // a page burning credits without ever landing a snapshot.
+  status: "written" | "partial" | "truncated" | "skipped" | "failed";
   reason: string | null;
   kinds: OfapiLinkStatsKindResult[];
 }
@@ -219,35 +233,56 @@ async function reconcileKind(
         skippedReasons[result.reason] = (skippedReasons[result.reason] ?? 0) + 1;
       }
     }
-    if (page.items.length < LINK_STATS_PAGE_LIMIT) {
+    // Terminality comes from the vendor's pagination signal, not from the
+    // page size: a short page with hasNextPage=true must keep walking, and a
+    // full page with hasNextPage=false is complete. An empty page that still
+    // claims continuation is a vendor contradiction — never mark it complete.
+    if (page.items.length === 0 && page.hasNextPage) {
+      blockedReason = "pagination_contradiction";
+      break;
+    }
+    if (!page.hasNextPage) {
       walkComplete = true;
       break;
     }
     offset += page.items.length;
   }
 
-  // A truncated walk still records its run row (status 'truncated') so the
-  // attempt is visible, but writes NO snapshots: link absence is only
-  // meaningful against a complete walk, and a partial snapshot set would
-  // read as deletions downstream.
-  const status: OfapiLinkStatsKindResult["status"] = walkComplete ? "written" : "truncated";
-  const run = await insertLinkStatRun(input.db, {
-    platformAccountId: input.pageId,
-    linkKind: input.kind,
-    status: walkComplete ? "complete" : "truncated",
-    pulledAt: input.pulledAt,
-    apiPages,
-    rawItems,
-    writtenRows: walkComplete ? normalized.length : 0,
-  });
-  let writtenRows = 0;
-  if (walkComplete) {
-    writtenRows = await insertLinkStatSnapshots(input.db, run.id, normalized);
+  // Offset pagination over a live list can re-return a boundary item when a
+  // link is created/deleted mid-walk; last write wins so the unique
+  // (run_id, platform_link_id) can never abort the insert.
+  const deduped = new Map<string, InsertLinkStatSnapshotInput>();
+  for (const row of normalized) {
+    deduped.set(row.platformLinkId, row);
   }
+  const rows = [...deduped.values()];
+
+  const skippedTotal = Object.values(skippedReasons).reduce((sum, count) => sum + count, 0);
+  // 'complete' (zero drops) is the ONLY absence-proving status. A full walk
+  // with normalization drops is 'partial': its snapshots are still real data,
+  // but a skipped-yet-existing link must not read as deleted. A truncated
+  // walk records the attempt and writes NO snapshots. Run row + snapshots
+  // commit atomically — a 'complete' run without its rows is a lie.
+  const runStatus = walkComplete
+    ? (skippedTotal > 0 ? "partial" as const : "complete" as const)
+    : "truncated" as const;
+  const { writtenRows } = await insertLinkStatRunWithSnapshots(
+    input.db,
+    {
+      platformAccountId: input.pageId,
+      linkKind: input.kind,
+      status: runStatus,
+      pulledAt: input.pulledAt,
+      apiPages,
+      rawItems,
+      writtenRows: walkComplete ? rows.length : 0,
+    },
+    walkComplete ? rows : [],
+  );
 
   return {
     linkKind: input.kind,
-    status,
+    status: walkComplete ? "written" : "truncated",
     reason: walkComplete ? null : blockedReason ?? "walk_truncated",
     apiPages,
     rawItems,
@@ -316,7 +351,7 @@ async function reconcilePage(
     ? "written"
     : written > 0
       ? "partial"
-      : "skipped";
+      : "truncated";
   const firstBlocked = kinds.find((kind) => kind.status !== "written");
   return {
     pageLabel: input.pageLabel,
@@ -335,8 +370,11 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     .filter((page) => page.platform === "onlyfans");
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: LINK_STATS_MAX_PAGES_PER_RUN * 2 * Math.max(1, mapped.length),
+    // Deliberately NOT the shared ofapiBackfillDailyCreditBudget: link-stats
+    // runs before chargebacks' daily window and must never eat the lane the
+    // chargebacks first-walk depends on. Own modest quota, own config knob.
     dailyCreditBudget:
-      app.config.ofapiBackfillDailyCreditBudget ?? DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET,
+      app.config.ofapiLinkStatsDailyCreditBudget ?? DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET,
     budgetScope: "backfill",
   });
   const pulledAt = new Date();
@@ -384,7 +422,9 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     });
   }
 
-  const degraded = pages.filter((page) => page.status === "partial" || page.status === "skipped");
+  const degraded = pages.filter((page) =>
+    page.status === "partial" || page.status === "truncated" || page.status === "skipped",
+  );
   if (degraded.length > 0) {
     app.logger.warn({
       degraded: degraded.map((page) => ({ label: page.pageLabel, reason: page.reason })),
@@ -441,9 +481,11 @@ export async function ensureOfapiLinkStatsSchedule(boss: QueueCreationClient) {
   if (!boss.schedule) {
     return;
   }
-  // Twice daily at 00:15/12:15 UTC — two observations per day; one failed
-  // window still leaves a daily point for delta reports.
-  await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, "15 0,12 * * *", null, { tz: "UTC" });
+  // Twice daily at 04:45/16:45 UTC — two observations per day (one failed
+  // window still leaves a daily point), and the morning run fires AFTER the
+  // chargebacks reconcile (03:10) so the shared backfill spend lane serves
+  // chargebacks' all-or-nothing first walk before link-stats touches it.
+  await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, "45 4,16 * * *", null, { tz: "UTC" });
 }
 
 export async function startOfapiLinkStatsWorker(

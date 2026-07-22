@@ -2888,7 +2888,10 @@ export type LinkStatKind = "tracking" | "trial";
 export interface InsertLinkStatRunInput {
   platformAccountId: number;
   linkKind: LinkStatKind;
-  status: "complete" | "truncated";
+  // 'complete' = full walk, zero dropped items (the only absence-proving
+  // status); 'partial' = full walk with normalization drops; 'truncated' =
+  // walk did not finish.
+  status: "complete" | "partial" | "truncated";
   pulledAt: Date;
   apiPages: number;
   rawItems: number;
@@ -2907,8 +2910,11 @@ export interface InsertLinkStatSnapshotInput {
   clicksCount: number;
   claimsCount: number | null;
   subscribersCount: number;
-  spendersCount: number;
-  revenueGrossMills: bigint;
+  // null = vendor value unknown (revenue block missing, still computing, or
+  // unparseable) — deliberately distinct from a real zero.
+  spendersCount: number | null;
+  revenueGrossMills: bigint | null;
+  revenueIsLoading: boolean | null;
   revenueCalculatedAt: Date | null;
 }
 
@@ -2959,10 +2965,32 @@ export async function insertLinkStatSnapshots(
       subscribersCount: row.subscribersCount,
       spendersCount: row.spendersCount,
       revenueGrossMills: row.revenueGrossMills,
+      revenueIsLoading: row.revenueIsLoading,
       revenueCalculatedAt: row.revenueCalculatedAt,
     })))
     .returning({ id: pageLinkStatSnapshots.id });
   return inserted.length;
+}
+
+/** Atomic run + snapshots: a 'complete'/'partial' run row must never exist
+ * without its snapshot rows (that state reads as mass link deletion
+ * downstream), so both inserts commit or neither does. */
+export async function insertLinkStatRunWithSnapshots(
+  db: Database,
+  run: InsertLinkStatRunInput,
+  rows: InsertLinkStatSnapshotInput[],
+): Promise<{ runId: number; writtenRows: number }> {
+  return db.transaction(async (tx) => {
+    const dbTx = tx as Database;
+    const inserted = await insertLinkStatRun(dbTx, run);
+    const writtenRows = await insertLinkStatSnapshots(dbTx, inserted.id, rows);
+    if (writtenRows !== rows.length) {
+      throw new Error(
+        `link-stat snapshot insert wrote ${writtenRows} of ${rows.length} rows`,
+      );
+    }
+    return { runId: inserted.id, writtenRows };
+  });
 }
 
 export async function listLinkStatRuns(
