@@ -5,11 +5,20 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+# A superseded head has nothing left to prove — cancel its run instead of
+# letting it burn the minutes budget (July 2026: stacked stale runs were the
+# main Actions cost driver).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
     name: Quality Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -46,14 +55,39 @@ jobs:
       - name: Production build
         run: pnpm build:production
 
+      - name: Reliable unit tests
+        run: pnpm test:unit
+
+  # The heavy half (Docker image + runtime smoke + prerequisites suite,
+  # ~20 min) validates integration, not the PR iteration loop — it runs on
+  # main and on demand, while "Quality Gate" stays the required PR check.
+  full-suite:
+    name: Full Suite
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Production Docker image build
         run: docker build --target runtime -t agency_hub_core/runtime:ci .
 
       - name: Chromium Headless Shell runtime smoke
         run: docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs
-
-      - name: Reliable unit tests
-        run: pnpm test:unit
 
       - name: Sync-critical DB/schema/network tests
         run: pnpm test:prerequisites
