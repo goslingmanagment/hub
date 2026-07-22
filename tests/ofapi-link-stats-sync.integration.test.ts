@@ -985,6 +985,49 @@ describe("OFAPI link-stats reconcile", () => {
     ]);
   });
 
+  it("a failing snapshot insert rolls the run row back — no orphaned absence evidence", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-atomic-of", "acct_atomic");
+    const row = (platformLinkId: string): InsertLinkStatSnapshotInput => ({
+      platformAccountId: page.id,
+      linkKind: "tracking",
+      platformLinkId,
+      name: null,
+      url: null,
+      linkCreatedAt: null,
+      linkEndsAt: null,
+      isFinished: null,
+      clicksCount: 1,
+      claimsCount: null,
+      subscribersCount: 0,
+      spendersCount: null,
+      revenueGrossMills: null,
+      revenueIsLoading: null,
+      revenueCalculatedAt: null,
+    });
+
+    // Duplicate platform_link_id violates the (run_id, platform_link_id)
+    // unique inside the transaction — the run row must not survive either.
+    await expect(insertLinkStatRunWithSnapshots(
+      appContext.db,
+      {
+        platformAccountId: page.id,
+        linkKind: "tracking",
+        status: "complete",
+        pulledAt: new Date(),
+        apiPages: 1,
+        rawItems: 2,
+        writtenRows: 2,
+      },
+      [row("77"), row("77")],
+    )).rejects.toThrow();
+    expect(await listLinkStatRuns(appContext.db, { platformAccountId: page.id })).toEqual([]);
+  });
+
   it("does no work while the flag is off", async (context) => {
     if (!testDb) {
       context.skip();

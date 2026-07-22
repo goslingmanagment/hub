@@ -48,9 +48,9 @@ const OFAPI_LINK_STATS_QUEUE_OPTIONS = {
 const LINK_STATS_PAGE_LIMIT = 1000;
 // Offset-walk backstop per (page, kind) per run. There is no cross-run
 // cursor, so a page whose inventory exceeds this cap could NEVER complete a
-// walk — size it far beyond any real link inventory (200 pages = 20k links),
-// exactly the chargebacks first-walk reasoning.
-const LINK_STATS_MAX_PAGES_PER_RUN = 200;
+// walk — size it far beyond any real link inventory (20 pages x 1000 = 20k
+// links), exactly the chargebacks first-walk reasoning.
+const LINK_STATS_MAX_PAGES_PER_RUN = 20;
 // Own quota (config: ofapiLinkStatsDailyCreditBudget) on the DEDICATED
 // link_stats day counter — isolated from the chargebacks backfill lane in
 // both directions (neither job can starve the other).
@@ -568,12 +568,22 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
   // silence must be an incident, not a warn line.
   const allTruncated = pages.length > 0 && pages.every((page) => page.status === "truncated");
   // Fleet-wide mapping collapse below the per-kind threshold: small pages
-  // (1-2 links) never trip the absolute per-kind collapse alarm, but when
-  // EVERY kind that saw items wrote nothing, the adapter is broken fleet-wide.
-  const kindsThatSaw = pages.flatMap((page) => page.kinds)
-    .filter((kind) => kind.rawItems > 0);
-  const fleetCollapse = kindsThatSaw.length > 0 &&
-    kindsThatSaw.every((kind) => kind.writtenRows === 0);
+  // (1-2 links) never trip the absolute per-kind alarm, but when every FULL
+  // walk of one link kind across the fleet wrote nothing (with enough total
+  // evidence), that kind's adapter is broken fleet-wide. Judged PER KIND — a
+  // healthy trial adapter must not mask a collapsed tracking one — and only
+  // over completed walks: a truncated walk has writtenRows=0 by construction
+  // and says nothing about the adapter.
+  const collapsedKinds = (["tracking", "trial"] as const).filter((kindName) => {
+    const walked = pages.flatMap((page) => page.kinds).filter((kind) =>
+      kind.linkKind === kindName && kind.status !== "truncated" && kind.rawItems > 0,
+    );
+    const totalRawItems = walked.reduce((sum, kind) => sum + kind.rawItems, 0);
+    return walked.length > 0 &&
+      totalRawItems >= MAPPING_COLLAPSE_MIN_ITEMS &&
+      walked.every((kind) => kind.writtenRows === 0);
+  });
+  const fleetCollapse = collapsedKinds.length > 0;
   if (failed.length > 0) {
     const shown = failed.slice(0, 5)
       .map((page) => `${page.pageLabel}: ${page.reason ?? "unknown error"}`)
@@ -584,18 +594,21 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
       errorSummary: `${failed.length} page(s) failed: ${shown}${remainder}`,
     });
   } else if (allTruncated) {
+    const reasons = [...new Set(
+      pages.map((page) => page.reason).filter((reason): reason is string => reason !== null),
+    )];
     await notifyOfapiGlobalIncident(app, {
       kind: "ofapi_link_stats_reconcile_failed",
       errorSummary:
-        `fleet fully truncated (${pages.length} page(s)): no snapshots written — ` +
-        `check the link_stats credit budget`,
+        `fleet fully truncated (${pages.length} page(s)): no snapshots written` +
+        (reasons.length > 0 ? ` — ${reasons.join("; ")}` : ""),
     });
   } else if (fleetCollapse) {
     await notifyOfapiGlobalIncident(app, {
       kind: "ofapi_link_stats_reconcile_failed",
       errorSummary:
-        `fleet-wide mapping collapse: every fetched link failed normalization ` +
-        `(${kindsThatSaw.length} kind walk(s)) — vendor schema change?`,
+        `fleet-wide mapping collapse (${collapsedKinds.join(", ")}): every ` +
+        `fetched link of the kind failed normalization — vendor schema change?`,
     });
   } else if (
     pages.length > 0 &&
