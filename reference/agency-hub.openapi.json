@@ -25545,7 +25545,7 @@
         "tags": [
           "events"
         ],
-        "description": "`text/event-stream` of DomainEventFrame rows (`event: domain`, `data` = JSON frame, `id` = the OPAQUE resume cursor — pass it back verbatim via `Last-Event-ID` or `cursor`). Per-account gapless ordering; all platforms. A cursor below an account's retained floor (or ahead of its head) answers 409 sync_snapshot_required with the per-account detail.",
+        "description": "`text/event-stream` of DomainEventFrame rows (`event: domain`, `data` = JSON frame, `id` = the OPAQUE resume cursor — pass it back verbatim via `Last-Event-ID` or `cursor`). Per-account gapless ordering; all platforms. A cursor below an account's retained floor (or ahead of its head) answers 409 sync_snapshot_required with the per-account detail. The stream may interleave `event: ephemeral` frames (serve-time-only, no id) and `event: control` frames (connection signals — `{\"type\":\"replay_completed\"}` marks the end of replay; frames after it are live delivery). Skip control types you don't recognize.",
         "parameters": [
           {
             "schema": {
@@ -25566,12 +25566,12 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream — `event: domain` frames (see domainEventFrameSchema); `id` is the opaque v2 cursor.",
+            "description": "text/event-stream — `event: domain` frames (see domainEventFrameSchema); `id` is the opaque v2 cursor. Interleaved lanes: `event: ephemeral` (serve-time-only) and `event: control` (`replay_completed` = end of replay).",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "string",
-                  "description": "text/event-stream — `event: domain` frames (see domainEventFrameSchema); `id` is the opaque v2 cursor."
+                  "description": "text/event-stream — `event: domain` frames (see domainEventFrameSchema); `id` is the opaque v2 cursor. Interleaved lanes: `event: ephemeral` (serve-time-only) and `event: control` (`replay_completed` = end of replay)."
                 }
               }
             }
