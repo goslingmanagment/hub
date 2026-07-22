@@ -1646,7 +1646,7 @@ describe("coach-chat gates", () => {
     expect(prompt).toContain("как продать ppv?");
     expect(prompt).toContain("нащупай боль");
     expect(prompt).toContain("most recent window only");
-    // Decision #178 end-to-end pin: body.draftText survives the SERVICE layer
+    // Decision #179 end-to-end pin: body.draftText survives the SERVICE layer
     // (features/index.ts forwards it unguarded — buildPrompt-level tests would
     // stay green if that line ever got feature-gated away) and lands escaped
     // inside the builder's wrapper.

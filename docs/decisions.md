@@ -4978,7 +4978,28 @@ an audit fact but cannot be injected. No public contract, SDK, or database
 migration changes; current clients self-heal naturally on a fresh successful
 full recap and its existing profile sync.
 
-**Decision #178 (2026-07-22, coach-chat consumes the chatter's draft as OPTIONAL
+**Decision #178 (2026-07-22, v2 stream control lane and the replay-completion
+marker):** The v2 domain-event stream carries a third SSE lane, `event:
+control` — connection-scoped signals that are not domain events and never
+enter DomainEventFrame validation (the vendored SDK's `subscribeDomainEvents`
+consumes only `event: domain` and hard-fails the subscription on an invalid
+domain frame, which is exactly why the marker must NOT be a synthetic domain
+frame with zero accountId/accountSeq). Its first member is
+`{"type":"replay_completed"}`, written once per connection after all replay
+work (cursor resume and/or post-snapshot catch-up) has flushed and before
+buffered live frames drain: every frame after it is live delivery. Unknown
+control types must be skipped by clients (the same forward-compat rule as
+unknown event names). The lane's `id` line repeats the delivered watermark
+cursor. Synthetic stream writes (this marker and the snapshot-recovery
+completion frame) carry the same writableEnded/destroyed guard as
+writeV2Frame, and a connection found dead at the replay boundary or inside
+the post-snapshot catch-up loop stops paying for reads/enrichment it cannot
+deliver. Consumer: ChatGoose Desktop's notification attention gate (its
+decisions.md D23) uses the marker as the replay/live boundary; a typed SDK
+surface for control frames (e.g. an `onReplayCompleted` callback) is deferred
+until a second SDK consumer needs it (backlog).
+
+**Decision #179 (2026-07-22, coach-chat consumes the chatter's draft as OPTIONAL
 context):** The `coach-chat` feature now reads the shared body's existing
 `draftText` field — previously accepted by the body schema but silently ignored
 for coach (the coach policy has `requiresDraft: false`, the prompt builder

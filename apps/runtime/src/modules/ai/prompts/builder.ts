@@ -1022,7 +1022,7 @@ function budgetCoachTemplateValues(
   // nothing; the rebuild restores it. A KEPT draft displaces at SECTION
   // granularity by the pre-existing cascade design (transcript is trimmed only
   // after every summary section is exhausted) — that trade is documented in
-  // decision #178 round 11, not covered by this guarantee.
+  // decision #179 round 11, not covered by this guarantee.
   // When NOTHING optional existed to displace, the two passes are provably
   // byte-identical — skip the rerun (review round 4: it doubled the transcript
   // binary search on the common first-question-with-draft path).
