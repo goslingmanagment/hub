@@ -551,12 +551,15 @@ describe("OFAPI link-stats reconcile", () => {
     }
 
     const page = await seedOfapiPage("links-collapse-of", "acct_collapse");
-    // Vendor renamed the counter field: every item fails normalization.
-    const renamed = { ...trackingItem(), clicksCount: undefined, clicks: 82 };
+    // Vendor renamed the counter field: every item fails normalization. Three
+    // items clear the absolute evidence threshold (MAPPING_COLLAPSE_MIN_ITEMS).
+    const renamed = (id: number) => ({
+      ...trackingItem(), id, clicksCount: undefined, clicks: 82,
+    });
     appContext = {
       ...appContext,
       ofapi: linksClient({
-        trackingByAccount: new Map([["acct_collapse", [renamed]]]),
+        trackingByAccount: new Map([["acct_collapse", [renamed(1), renamed(2), renamed(3)]]]),
         trialByAccount: new Map([["acct_collapse", [trialItem()]]]),
       }),
     };
@@ -567,7 +570,7 @@ describe("OFAPI link-stats reconcile", () => {
       expect.objectContaining({
         linkKind: "tracking",
         status: "failed",
-        rawItems: 1,
+        rawItems: 3,
         writtenRows: 0,
       }),
       expect.objectContaining({ linkKind: "trial", status: "written" }),
@@ -579,7 +582,7 @@ describe("OFAPI link-stats reconcile", () => {
       platformAccountId: page.id,
       linkKind: "tracking",
     });
-    expect(trackingRuns[0]).toMatchObject({ status: "partial", rawItems: 1, writtenRows: 0 });
+    expect(trackingRuns[0]).toMatchObject({ status: "partial", rawItems: 3, writtenRows: 0 });
     const incidents = await listNotificationIncidents(appContext.db);
     expect(incidents).toHaveLength(1);
     expect(incidents[0]).toMatchObject({
@@ -630,6 +633,154 @@ describe("OFAPI link-stats reconcile", () => {
     );
     expect(writtenRows).toBe(4200);
     expect(await listLinkStatSnapshots(appContext.db, { runId })).toHaveLength(4200);
+  });
+
+  it("single bad item on a one-link page stays partial, not a fleet incident", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-onebad-of", "acct_onebad");
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([[
+          "acct_onebad",
+          [{ ...trackingItem(), clicksCount: undefined, clicks: 82 }],
+        ]]),
+        trialByAccount: new Map([["acct_onebad", [trialItem()]]]),
+      }),
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages[0]).toMatchObject({ status: "partial" });
+    expect(result.pages[0]?.kinds).toEqual([
+      expect.objectContaining({ linkKind: "tracking", status: "partial", writtenRows: 0 }),
+      expect.objectContaining({ linkKind: "trial", status: "written" }),
+    ]);
+    expect(await listNotificationIncidents(appContext.db)).toEqual([]);
+    void page;
+  });
+
+  it("budget exhaustion truncates loudly enough: run rows land, fleet-wide truncation opens an incident", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-budget-of", "acct_budget");
+    appContext = createTestAppContext(testDb, {
+      ofapiLinkStatsReconcileEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiLinkStatsDailyCreditBudget: 1,
+    });
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_budget", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_budget", [trialItem()]]]),
+      }),
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    // Budget 1: tracking spends the single credit, trial blocks before its
+    // first request — truncated run row, zero snapshots, page 'partial'.
+    expect(result.pages[0]).toMatchObject({ status: "partial" });
+    expect(result.pages[0]?.kinds).toEqual([
+      expect.objectContaining({ linkKind: "tracking", status: "written", writtenRows: 1 }),
+      expect.objectContaining({ linkKind: "trial", status: "truncated", writtenRows: 0 }),
+    ]);
+    const trialRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "trial",
+    });
+    expect(trialRuns[0]).toMatchObject({ status: "truncated", writtenRows: 0 });
+    expect(await listLinkStatSnapshots(appContext.db, { runId: trialRuns[0]!.id }))
+      .toHaveLength(0);
+    // Mixed pass (tracking landed) is not a fleet outage — no incident...
+    expect(await listNotificationIncidents(appContext.db)).toEqual([]);
+
+    // ...but a SECOND pass with the budget already burned truncates BOTH
+    // kinds on the fleet's only page — that silence must open the incident.
+    const second = await runOfapiLinkStatsReconcile(appContext);
+    expect(second.pages[0]).toMatchObject({ status: "truncated" });
+    const incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
+      kind: "ofapi_link_stats_reconcile_failed",
+      status: "open",
+    });
+  });
+
+  it("marks a contradictory pagination walk truncated, never complete", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-contra-of", "acct_contra");
+    const listTrackingLinks = vi.fn(async (): Promise<OfapiListPage> => ({
+      // Empty page that still claims continuation: vendor contradiction.
+      items: [], hasNextPage: true, nextMarker: null, nextPageUrl: null, meta: null,
+    }));
+    const listTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
+      items: [], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
+    }));
+    appContext = {
+      ...appContext,
+      ofapi: { listTrackingLinks, listTrialLinks } as unknown as OfapiClient,
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages[0]?.kinds).toEqual([
+      expect.objectContaining({
+        linkKind: "tracking",
+        status: "truncated",
+        reason: "pagination_contradiction",
+      }),
+      expect.objectContaining({ linkKind: "trial", status: "written" }),
+    ]);
+    const trackingRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    });
+    expect(trackingRuns[0]).toMatchObject({ status: "truncated", writtenRows: 0 });
+  });
+
+  it("withholds the absence proof when a non-empty inventory vanishes in one step", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-vanish-of", "acct_vanish");
+    const inventory = {
+      trackingByAccount: new Map([["acct_vanish", [trackingItem()]]]),
+      trialByAccount: new Map([["acct_vanish", [] as Record<string, unknown>[]]]),
+    };
+    appContext = { ...appContext, ofapi: linksClient(inventory) };
+    await runOfapiLinkStatsReconcile(appContext);
+
+    // The whole tracking inventory disappears at once — exactly what a
+    // malformed-but-200 response looks like after client normalization.
+    inventory.trackingByAccount.set("acct_vanish", []);
+    const second = await runOfapiLinkStatsReconcile(appContext);
+    expect(second.pages[0]?.kinds).toEqual([
+      expect.objectContaining({
+        linkKind: "tracking",
+        status: "partial",
+        reason: "inventory_vanished",
+      }),
+      // Trial was empty from the start (no non-empty baseline) — a genuinely
+      // empty inventory stays 'written' with a 'complete' run.
+      expect.objectContaining({ linkKind: "trial", status: "written" }),
+    ]);
+    const trackingRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    });
+    expect(trackingRuns.map((run) => run.status)).toEqual(["partial", "complete"]);
   });
 
   it("does no work while the flag is off", async (context) => {

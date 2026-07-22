@@ -2360,6 +2360,10 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   // machinery, without competing against the DM/audience ceilings.
   backfillSpendDay: date("backfill_spend_day"),
   backfillSpentCredits: integer("backfill_spent_credits").default(0).notNull(),
+  // Link-stats reconcile's own day counter — isolated from the backfill lane
+  // so neither job can starve the other (review round 3, PR #23).
+  linkStatsSpendDay: date("link_stats_spend_day"),
+  linkStatsSpentCredits: integer("link_stats_spent_credits").default(0).notNull(),
   governedScopeDay: date("governed_scope_day"),
   liveSpentCredits: integer("live_spent_credits").default(0).notNull(),
   interactiveSpentCredits: integer("interactive_spent_credits").default(0).notNull(),

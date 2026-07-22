@@ -1335,7 +1335,7 @@ export async function recordOfapiCreditUsage(
   `);
 }
 
-export type OfapiDayBudgetScope = "global" | "audience" | "backfill";
+export type OfapiDayBudgetScope = "global" | "audience" | "backfill" | "link_stats";
 
 export interface OfapiDayCreditReservationReceipt {
   scope: OfapiDayBudgetScope;
@@ -1347,6 +1347,7 @@ const OFAPI_DAY_COUNTER_COLUMNS = {
   global: { day: "spend_day", credits: "spent_credits" },
   audience: { day: "audience_spend_day", credits: "audience_spent_credits" },
   backfill: { day: "backfill_spend_day", credits: "backfill_spent_credits" },
+  link_stats: { day: "link_stats_spend_day", credits: "link_stats_spent_credits" },
 } as const;
 
 /**
@@ -3016,6 +3017,25 @@ export async function listLinkStatRuns(
     .from(pageLinkStatRuns)
     .where(and(...conditions))
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id));
+}
+
+/** Latest 'complete' run for (page, kind) — the absence-proof baseline a new
+ * empty walk is checked against (inventory-vanished guard). */
+export async function findLatestCompleteLinkStatRun(
+  db: Database,
+  input: { platformAccountId: number; linkKind: LinkStatKind },
+) {
+  const [row] = await db
+    .select()
+    .from(pageLinkStatRuns)
+    .where(and(
+      eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
+      eq(pageLinkStatRuns.linkKind, input.linkKind),
+      eq(pageLinkStatRuns.status, "complete"),
+    ))
+    .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function listLinkStatSnapshots(db: Database, input: { runId: number }) {

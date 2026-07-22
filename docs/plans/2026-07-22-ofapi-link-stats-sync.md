@@ -880,7 +880,8 @@ export async function ensureOfapiLinkStatsSchedule(boss: QueueCreationClient) {
   }
   // Twice daily at 00:15/12:15 UTC — two observations per day; one failed
   // window still leaves a daily point for delta reports.
-  await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, "15 0,12 * * *", null, { tz: "UTC" });
+  await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, "45 4,16 * * *", null, { tz: "UTC" });
+  // (revised post-review: 04:45/16:45 UTC, after the chargebacks 03:10 window)
 }
 
 export async function startOfapiLinkStatsWorker(

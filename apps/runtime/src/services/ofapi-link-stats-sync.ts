@@ -6,6 +6,7 @@
 // semantics. List endpoints only: cost stays O(pages).
 
 import {
+  findLatestCompleteLinkStatRun,
   insertLinkStatRunWithSnapshots,
   listOfapiMappedPages,
   type Database,
@@ -44,9 +45,14 @@ const LINK_STATS_PAGE_LIMIT = 100;
 // walk — size it far beyond any real link inventory (200 pages = 20k links),
 // exactly the chargebacks first-walk reasoning.
 const LINK_STATS_MAX_PAGES_PER_RUN = 200;
-// Own quota (config: ofapiLinkStatsDailyCreditBudget) so link-stats walks can
-// never starve the shared backfill lane that chargebacks depends on.
+// Own quota (config: ofapiLinkStatsDailyCreditBudget) on the DEDICATED
+// link_stats day counter — isolated from the chargebacks backfill lane in
+// both directions (neither job can starve the other).
 const DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET = 50;
+// A mapping collapse (every fetched item failing normalization) is only
+// meaningful with enough evidence: a single bad vendor item on a one-link
+// page must not page the operator as a fleet outage.
+const MAPPING_COLLAPSE_MIN_ITEMS = 3;
 
 export function isOfapiLinkStatsReconcileEnabled(
   config?: Pick<AppContext["config"], "ofapiLinkStatsReconcileEnabled">,
@@ -219,7 +225,10 @@ async function reconcileKind(
         ? "/:accountId/tracking-links"
         : "/:accountId/trial-links",
       requestParams: { limit: LINK_STATS_PAGE_LIMIT, offset },
-      responsePayload: page.items,
+      // Record shape, not a bare array: the sync-pull canonicalizer starts
+      // with isRecord(payload) — a top-level array would be unparseable by
+      // the very "capture now, parse later" machinery this write feeds.
+      responsePayload: { items: page.items, hasNextPage: page.hasNextPage },
       mapperVersion: "link-stats-v1",
       payloadKind: "mapping_critical",
       // Stage 1 retention stand-down: captured facts are stamped far-future
@@ -261,16 +270,33 @@ async function reconcileKind(
   const rows = [...deduped.values()];
 
   const skippedTotal = Object.values(skippedReasons).reduce((sum, count) => sum + count, 0);
+  // A complete walk that suddenly sees ZERO items where the last complete run
+  // had links is suspicious, not proof of mass deletion: the client
+  // normalizes any malformed HTTP 200 (renamed list field, data:null) into an
+  // empty page with hasNextPage=false, which is indistinguishable from a
+  // genuinely emptied inventory. Withhold the absence proof ('partial'); a
+  // real wipe re-proves itself on the next run against the new baseline.
+  let inventoryVanished = false;
+  if (walkComplete && rawItems === 0) {
+    const baseline = await findLatestCompleteLinkStatRun(input.db, {
+      platformAccountId: input.pageId,
+      linkKind: input.kind,
+    });
+    inventoryVanished = baseline !== null && baseline.writtenRows > 0;
+  }
   // 'complete' (single atomic vendor read, zero drops) is the ONLY
-  // absence-proving status. Two demotions to 'partial': (a) normalization
-  // drops — a skipped-yet-existing link must not read as deleted; (b) a
-  // MULTI-PAGE offset walk — the vendor list can shift between pages and
-  // silently omit a boundary item, so only a single-page walk is an atomic
-  // read (upgrade path: stable cursor or vendor-total verification). A
-  // truncated walk records the attempt and writes NO snapshots. Run row +
-  // snapshots commit atomically — a 'complete' run without its rows is a lie.
+  // absence-proving status. Demotions to 'partial': (a) normalization drops —
+  // a skipped-yet-existing link must not read as deleted; (b) a MULTI-PAGE
+  // offset walk — the vendor list can shift between pages and silently omit
+  // a boundary item, so only a single-page walk is an atomic read (upgrade
+  // path: stable cursor or vendor-total verification); (c) the vanished-
+  // inventory guard above. A truncated walk records the attempt and writes NO
+  // snapshots. Run row + snapshots commit atomically — a 'complete' run
+  // without its rows is a lie.
   const runStatus = walkComplete
-    ? (skippedTotal > 0 || apiPages > 1 ? "partial" as const : "complete" as const)
+    ? (skippedTotal > 0 || apiPages > 1 || inventoryVanished
+      ? "partial" as const
+      : "complete" as const)
     : "truncated" as const;
   const { writtenRows } = await insertLinkStatRunWithSnapshots(
     input.db,
@@ -287,13 +313,15 @@ async function reconcileKind(
   );
 
   // Every fetched item failing normalization is a mapping collapse (vendor
-  // renamed a field, adapter rot) — report it as loudly as an outage. The run
-  // row above still records the durable evidence.
+  // renamed a field, adapter rot) — report it as loudly as an outage, but
+  // only with enough evidence (absolute threshold): one bad item on a
+  // one-link page stays 'partial', not a fleet incident. The run row above
+  // records the durable evidence either way.
   const status: OfapiLinkStatsKindResult["status"] = !walkComplete
     ? "truncated"
-    : rawItems > 0 && writtenRows === 0
+    : rawItems >= MAPPING_COLLAPSE_MIN_ITEMS && writtenRows === 0
       ? "failed"
-      : skippedTotal > 0
+      : skippedTotal > 0 || inventoryVanished
         ? "partial"
         : "written";
   return {
@@ -301,7 +329,9 @@ async function reconcileKind(
     status,
     reason: status === "failed"
       ? "all_items_skipped"
-      : walkComplete ? null : blockedReason ?? "walk_truncated",
+      : inventoryVanished
+        ? "inventory_vanished"
+        : walkComplete ? null : blockedReason ?? "walk_truncated",
     apiPages,
     rawItems,
     writtenRows,
@@ -414,14 +444,15 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     .filter((page) => page.platform === "onlyfans");
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: LINK_STATS_MAX_PAGES_PER_RUN * 2 * Math.max(1, mapped.length),
-    // A SUB-CAP within the shared backfill spend lane (same day counter as
-    // chargebacks), not an isolated counter: link-stats can take at most 50
-    // of the lane's 200, and the cron runs AFTER chargebacks' 03:10 window so
-    // its all-or-nothing first walk is served first. On a heavy chargebacks
-    // day link-stats yields — that is the declared priority, not starvation.
+    // Dedicated link_stats day counter (migration 0113): the quota is
+    // isolated from the chargebacks backfill lane in BOTH directions —
+    // chargebacks spend cannot block link-stats, and link-stats cannot eat
+    // the lane the chargebacks first-walk depends on. Requires the credit
+    // ledger ON; with it off the guard falls back to the global counter
+    // (see the config-registry note on the flag).
     dailyCreditBudget:
       app.config.ofapiLinkStatsDailyCreditBudget ?? DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET,
-    budgetScope: "backfill",
+    budgetScope: "link_stats",
   });
   const pulledAt = new Date();
 
@@ -453,6 +484,10 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
   }
 
   const failed = pages.filter((page) => page.status === "failed");
+  // A fleet pass where EVERY page truncated (budget exhaustion, pagination
+  // contradictions) writes zero snapshots while the job stays green — that
+  // silence must be an incident, not a warn line.
+  const allTruncated = pages.length > 0 && pages.every((page) => page.status === "truncated");
   if (failed.length > 0) {
     const shown = failed.slice(0, 5)
       .map((page) => `${page.pageLabel}: ${page.reason ?? "unknown error"}`)
@@ -462,7 +497,17 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
       kind: "ofapi_link_stats_reconcile_failed",
       errorSummary: `${failed.length} page(s) failed: ${shown}${remainder}`,
     });
-  } else if (pages.length > 0 && pages.every((page) => page.status === "written")) {
+  } else if (allTruncated) {
+    await notifyOfapiGlobalIncident(app, {
+      kind: "ofapi_link_stats_reconcile_failed",
+      errorSummary:
+        `fleet fully truncated (${pages.length} page(s)): no snapshots written — ` +
+        `check the link_stats credit budget`,
+    });
+  } else if (pages.length > 0) {
+    // Recovery = no failed pages and at least one page landed data. A page
+    // stuck at 'partial' (e.g. one permanently unparseable vendor item) must
+    // not pin a stale incident open forever.
     await resolveOfapiGlobalIncident(app, {
       kind: "ofapi_link_stats_reconcile_failed",
     });
