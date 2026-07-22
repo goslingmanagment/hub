@@ -1652,6 +1652,18 @@ describe("coach-chat gates", () => {
     // inside the builder's wrapper.
     expect(prompt).toContain("<chatter_draft>");
     expect(prompt).toContain("черновик &lt;wip&gt; &amp; не отправлен");
+    // …and the restricted-store audit row records the draft as INCLUDED with
+    // its supplied size (review round 4 — mirrors the recapAttach pin).
+    const { rows: draftRows } = await testDb.pool.query<{
+      params: { contextManifest?: { chatterDraft?: { chars: number; included: boolean } } };
+    }>(
+      `select params from ai_generation_content
+       where feature = 'coach-chat' order by id desc limit 1`,
+    );
+    expect(draftRows[0]?.params.contextManifest?.chatterDraft).toEqual({
+      chars: "черновик <wip> & не отправлен".length,
+      included: true,
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("aborts a coach stream that crosses the transport ceiling: error, no done, failed outcome", async (context) => {
@@ -2225,6 +2237,9 @@ describe("coach-chat recap attach (spec §5)", () => {
     const amp = "&";
     const { res, promptText, frames } = await runCoach({
       chatterQuestion: amp.repeat(2_000),
+      // Worst-legal draft: shed whole at step 2b under the same pressure. The
+      // audit row must record it as supplied-but-NOT-included (review round 4).
+      draftText: "DRAFT_PRESSURE " + amp.repeat(19_980),
       clientContext: {
         transcript:
           "OLDEST_RECAP_PRESSURE\n"
@@ -2258,6 +2273,12 @@ describe("coach-chat recap attach (spec §5)", () => {
       full: null,
       short: null,
     });
+    expect(promptText).not.toContain("DRAFT_PRESSURE");
+    expect(promptText).not.toContain("<chatter_draft>");
+    expect(
+      (rows[0]?.params.contextManifest as { chatterDraft?: { chars: number; included: boolean } })
+        ?.chatterDraft,
+    ).toEqual({ chars: ("DRAFT_PRESSURE " + amp.repeat(19_980)).length, included: false });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(d) both exist, full newer -> full only", async (context) => {

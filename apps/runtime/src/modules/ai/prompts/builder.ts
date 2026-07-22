@@ -784,137 +784,148 @@ function budgetCoachTemplateValues(
   /** One full shed cascade. `draftAllowed` gates the draft from the very start,
    * so the second pass below never trades context away for a section it already
    * knows it cannot keep. */
-  const reduce = (draftAllowed: boolean): { values: TemplateValues; draftKept: boolean } => {
-  let history = [...(input.coachHistory ?? [])];
-  const suppliedHistoryCount = history.length;
-  let recapAttach: RecapAttach | undefined = input.recapAttach
-    ? {
-        full: input.recapAttach.full ? { ...input.recapAttach.full } : null,
-        short: input.recapAttach.short ? { ...input.recapAttach.short } : null,
-      }
-    : undefined;
-  let transcriptChars = transcriptCodePoints.length;
-  let dossierChars = Math.min(
-    COACH_DOSSIER_MAX_CHARS,
-    Array.from(input.fanProfile?.body.trim() ?? '').length,
-  );
-  let fullRecapChars = Math.min(
-    RECAP_ATTACH_MAX_CHARS,
-    Array.from(recapAttach?.full?.body ?? '').length,
-  );
-  let shortRecapChars = Math.min(
-    RECAP_ATTACH_MAX_CHARS,
-    Array.from(recapAttach?.short?.body ?? '').length,
-  );
-  // The chatter's working draft is optional context, shed whole (not truncated).
-  // A worst-legal draft (draftText caps at 20k chars, up to 100k escaped) cannot
-  // be protected without blowing the budget, so it is dropped before the newest
-  // transcript is trimmed — but as the freshest current-turn input it is shed
-  // LAST of the optional sections (see step 2b below).
-  let includeDraft = draftAllowed && hasDraft;
-  const done = (values: TemplateValues): { values: TemplateValues; draftKept: boolean } => ({
-    values,
-    draftKept: includeDraft,
-  });
-
-  const makeValues = (): TemplateValues => ({
-    ...initialValues,
-    transcript:
-      transcriptChars === transcriptCodePoints.length
-        ? initialValues.transcript!
-        : escapeForPrompt(
-            tailBoundedTranscript(input.transcript, transcriptCodePoints, transcriptChars),
-          ),
-    fanProfileSection: fanProfileSection(input.fanProfile, dossierChars),
-    recapSection: recapSection(recapAttach, {
-      full: fullRecapChars,
-      short: shortRecapChars,
-    }),
-    coachHistorySection: coachHistorySection(history, suppliedHistoryCount - history.length),
-    coachDraftSection: includeDraft ? initialValues.coachDraftSection! : '',
-  });
-  const fits = (values: TemplateValues): boolean => {
-    const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
-    const userChars = buildUserBlocks('coach-chat', template, values).reduce(
-      (total, block) => total + block.text.length,
-      0,
+  const reduce = (
+    draftAllowed: boolean,
+  ): { values: TemplateValues; draftKept: boolean; displacedContext: boolean } => {
+    let history = [...(input.coachHistory ?? [])];
+    const suppliedHistoryCount = history.length;
+    let recapAttach: RecapAttach | undefined = input.recapAttach
+      ? {
+          full: input.recapAttach.full ? { ...input.recapAttach.full } : null,
+          short: input.recapAttach.short ? { ...input.recapAttach.short } : null,
+        }
+      : undefined;
+    let transcriptChars = transcriptCodePoints.length;
+    let dossierChars = Math.min(
+      COACH_DOSSIER_MAX_CHARS,
+      Array.from(input.fanProfile?.body.trim() ?? '').length,
     );
-    return systemChars + userChars <= COACH_PROMPT_MAX_CHARS;
-  };
-
-  let values = makeValues();
-
-  // 1. Dialog is expendable before fan context: shed whole oldest exchanges,
-  // never a fragment of an XML-wrapped exchange.
-  while (!fits(values) && history.length > 0) {
-    history = history.slice(1);
-    values = makeValues();
-  }
-
-  // 2. Remove exact summary duplicates, then shed the least-current bounded
-  // summary sections first: dossier, full recap, short recap. Whole-section
-  // removal is intentionally coarse and keeps every heading/tag pair intact.
-  recapAttach = dedupeCoachRecaps(recapAttach, input.fanProfile);
-  if (!recapAttach?.full) fullRecapChars = 0;
-  if (!recapAttach?.short) shortRecapChars = 0;
-  values = makeValues();
-  if (fits(values)) {
-    return done(values);
-  }
-  dossierChars = 0;
-  values = makeValues();
-  if (fits(values)) return done(values);
-  fullRecapChars = 0;
-  values = makeValues();
-  if (fits(values)) return done(values);
-  shortRecapChars = 0;
-  values = makeValues();
-  if (fits(values)) return done(values);
-
-  // 2b. Drop the chatter's working draft whole. It is below the protected
-  // question and the newest transcript, so it goes before the transcript is
-  // trimmed — but as the freshest current-turn context it is shed LAST of the
-  // optional sections (after history, dossier and both recaps). Whole-section
-  // drop, never a truncation: half of the reply the coach was asked to critique
-  // would mislead more than omitting it.
-  includeDraft = false;
-  values = makeValues();
-  if (fits(values)) return done(values);
-
-  // 3. Only after every older/summary source is exhausted may the transcript
-  // lose its oldest prefix. The current question and system/persona never enter
-  // this reducer. Legal contract maxima guarantee at least one newest code point
-  // fits; fail closed if a future caller/schema breaks that invariant.
-  transcriptChars = 0;
-  const withoutTranscript = makeValues();
-  if (!fits(withoutTranscript)) {
-    throw new Error(
-      `Coach prompt protected context exceeds ${COACH_PROMPT_MAX_CHARS} characters`,
+    let fullRecapChars = Math.min(
+      RECAP_ATTACH_MAX_CHARS,
+      Array.from(recapAttach?.full?.body ?? '').length,
     );
-  }
-  let low = 1;
-  let high = transcriptCodePoints.length - 1; // the full transcript is known not to fit
-  let best = 0;
-  let bestValues = withoutTranscript;
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    transcriptChars = middle;
-    const candidate = makeValues();
-    if (fits(candidate)) {
-      best = middle;
-      bestValues = candidate;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
+    let shortRecapChars = Math.min(
+      RECAP_ATTACH_MAX_CHARS,
+      Array.from(recapAttach?.short?.body ?? '').length,
+    );
+    // The chatter's working draft is optional context, shed whole (not truncated).
+    // A worst-legal draft (draftText caps at 20k chars, up to 100k escaped) cannot
+    // be protected without blowing the budget, so it is dropped before the newest
+    // transcript is trimmed — but as the freshest current-turn input it is shed
+    // LAST of the optional sections (see step 2b below).
+    let includeDraft = draftAllowed && hasDraft;
+    // Whether ANY optional context existed to displace (review round 4): reaching
+    // step 2b implies it was all shed, so when nothing existed the post-2b state
+    // is byte-identical to a draftless first pass — the caller can skip pass 2
+    // (and its transcript binary search) entirely.
+    const hadOptionalContext =
+      suppliedHistoryCount > 0 || dossierChars > 0 || fullRecapChars > 0 || shortRecapChars > 0;
+    const done = (
+      values: TemplateValues,
+    ): { values: TemplateValues; draftKept: boolean; displacedContext: boolean } => ({
+      values,
+      draftKept: includeDraft,
+      displacedContext: hadOptionalContext,
+    });
+
+    const makeValues = (): TemplateValues => ({
+      ...initialValues,
+      transcript:
+        transcriptChars === transcriptCodePoints.length
+          ? initialValues.transcript!
+          : escapeForPrompt(
+              tailBoundedTranscript(input.transcript, transcriptCodePoints, transcriptChars),
+            ),
+      fanProfileSection: fanProfileSection(input.fanProfile, dossierChars),
+      recapSection: recapSection(recapAttach, {
+        full: fullRecapChars,
+        short: shortRecapChars,
+      }),
+      coachHistorySection: coachHistorySection(history, suppliedHistoryCount - history.length),
+      coachDraftSection: includeDraft ? initialValues.coachDraftSection! : '',
+    });
+    const fits = (values: TemplateValues): boolean => {
+      const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
+      const userChars = buildUserBlocks('coach-chat', template, values).reduce(
+        (total, block) => total + block.text.length,
+        0,
+      );
+      return systemChars + userChars <= COACH_PROMPT_MAX_CHARS;
+    };
+
+    let values = makeValues();
+
+    // 1. Dialog is expendable before fan context: shed whole oldest exchanges,
+    // never a fragment of an XML-wrapped exchange.
+    while (!fits(values) && history.length > 0) {
+      history = history.slice(1);
+      values = makeValues();
     }
-  }
-  if (transcriptCodePoints.length > 0 && best === 0) {
-    throw new Error(
-      `Coach prompt cannot retain newest transcript within ${COACH_PROMPT_MAX_CHARS} characters`,
-    );
-  }
-  transcriptChars = best;
-  return done(bestValues);
+
+    // 2. Remove exact summary duplicates, then shed the least-current bounded
+    // summary sections first: dossier, full recap, short recap. Whole-section
+    // removal is intentionally coarse and keeps every heading/tag pair intact.
+    recapAttach = dedupeCoachRecaps(recapAttach, input.fanProfile);
+    if (!recapAttach?.full) fullRecapChars = 0;
+    if (!recapAttach?.short) shortRecapChars = 0;
+    values = makeValues();
+    if (fits(values)) {
+      return done(values);
+    }
+    dossierChars = 0;
+    values = makeValues();
+    if (fits(values)) return done(values);
+    fullRecapChars = 0;
+    values = makeValues();
+    if (fits(values)) return done(values);
+    shortRecapChars = 0;
+    values = makeValues();
+    if (fits(values)) return done(values);
+
+    // 2b. Drop the chatter's working draft whole. It is below the protected
+    // question and the newest transcript, so it goes before the transcript is
+    // trimmed — but as the freshest current-turn context it is shed LAST of the
+    // optional sections (after history, dossier and both recaps). Whole-section
+    // drop, never a truncation: half of the reply the coach was asked to critique
+    // would mislead more than omitting it.
+    includeDraft = false;
+    values = makeValues();
+    if (fits(values)) return done(values);
+
+    // 3. Only after every older/summary source is exhausted may the transcript
+    // lose its oldest prefix. The current question and system/persona never enter
+    // this reducer. Legal contract maxima guarantee at least one newest code point
+    // fits; fail closed if a future caller/schema breaks that invariant.
+    transcriptChars = 0;
+    const withoutTranscript = makeValues();
+    if (!fits(withoutTranscript)) {
+      throw new Error(
+        `Coach prompt protected context exceeds ${COACH_PROMPT_MAX_CHARS} characters`,
+      );
+    }
+    let low = 1;
+    let high = transcriptCodePoints.length - 1; // the full transcript is known not to fit
+    let best = 0;
+    let bestValues = withoutTranscript;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      transcriptChars = middle;
+      const candidate = makeValues();
+      if (fits(candidate)) {
+        best = middle;
+        bestValues = candidate;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    if (transcriptCodePoints.length > 0 && best === 0) {
+      throw new Error(
+        `Coach prompt cannot retain newest transcript within ${COACH_PROMPT_MAX_CHARS} characters`,
+      );
+    }
+    transcriptChars = best;
+    return done(bestValues);
   };
 
   const first = reduce(true);
@@ -924,7 +935,10 @@ function budgetCoachTemplateValues(
   // everything it displaced was displaced for nothing. Rebuild from the original
   // inputs with the draft off: sections are then shed only on their own merits,
   // and the result is exactly the pre-draft prompt.
-  if (hasDraft && !first.draftKept) {
+  // When NOTHING optional existed to displace, the two passes are provably
+  // byte-identical — skip the rerun (review round 4: it doubled the transcript
+  // binary search on the common first-question-with-draft path).
+  if (hasDraft && !first.draftKept && first.displacedContext) {
     return reduce(false).values;
   }
   return first.values;
