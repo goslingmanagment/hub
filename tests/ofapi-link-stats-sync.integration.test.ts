@@ -229,8 +229,8 @@ describe("OFAPI link-stats reconcile", () => {
     );
     expect(journal.rows).toHaveLength(2);
     expect(journal.rows.map((row) => row.endpoint)).toEqual([
-      "/:accountId/stored/tracking-links",
-      "/:accountId/stored/trial-links",
+      "link_stats_tracking",
+      "link_stats_trial",
     ]);
     expect(journal.rows.every((row) =>
       row.payload_kind === "mapping_critical" &&
@@ -704,7 +704,7 @@ describe("OFAPI link-stats reconcile", () => {
     void page;
   });
 
-  it("budget exhaustion truncates loudly enough: run rows land, fleet-wide truncation opens an incident", async (context) => {
+  it("budget exhaustion truncates quietly: run rows land, but money blocks never page (ofapi_low_credit owns that)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -741,14 +741,11 @@ describe("OFAPI link-stats reconcile", () => {
     const runs = await listLinkStatRuns(appContext.db, { platformAccountId: page.id });
     expect(runs).toHaveLength(2);
     expect(runs.every((run) => run.status === "truncated" && run.writtenRows === 0)).toBe(true);
-    // ...and the fully-truncated fleet pass opens the incident — silent empty
-    // passes are impossible.
-    const incidents = await listNotificationIncidents(appContext.db);
-    expect(incidents).toHaveLength(1);
-    expect(incidents[0]).toMatchObject({
-      kind: "ofapi_link_stats_reconcile_failed",
-      status: "open",
-    });
+    // ...and NO incident: a money-guard block is a symptom of the account's
+    // credit state, which ofapi_low_credit already pages — this lane logs a
+    // warn (chargebacks precedent). Non-monetary truncation still pages (see
+    // the pagination-contradiction policy).
+    expect(await listNotificationIncidents(appContext.db)).toEqual([]);
   });
 
   it("marks a contradictory pagination walk truncated, never complete", async (context) => {

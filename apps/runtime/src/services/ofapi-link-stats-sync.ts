@@ -229,10 +229,17 @@ async function reconcileKind(
     // failure — a page we cannot journal fails the page's reconcile.
     await persistRawPayload(input.db, {
       platformAccountId: input.pageId,
-      endpoint: input.kind === "tracking"
-        ? "/:accountId/stored/tracking-links"
-        : "/:accountId/stored/trial-links",
-      requestParams: { limit: LINK_STATS_PAGE_LIMIT, offset },
+      // Logical stream name, not a URL template: this string keys
+      // observations.kind / producer for the canonicalizer and health floors.
+      // The HTTP path lives in requestParams.
+      endpoint: input.kind === "tracking" ? "link_stats_tracking" : "link_stats_trial",
+      requestParams: {
+        limit: LINK_STATS_PAGE_LIMIT,
+        offset,
+        path: input.kind === "tracking"
+          ? "/:accountId/stored/tracking-links"
+          : "/:accountId/stored/trial-links",
+      },
       // Record shape, not a bare array: the sync-pull canonicalizer starts
       // with isRecord(payload) — a top-level array would be unparseable by
       // the very "capture now, parse later" machinery this write feeds.
@@ -563,10 +570,30 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
   }
 
   const failed = pages.filter((page) => page.status === "failed");
-  // A fleet pass where EVERY page truncated (budget exhaustion, pagination
-  // contradictions) writes zero snapshots while the job stays green — that
-  // silence must be an incident, not a warn line.
+  // Truncation blocks caused by the MONEY guards never page: the stored
+  // endpoints are free, so a credit-floor/day-budget block is a symptom of
+  // the account-wide credit state, which the ofapi_low_credit incident
+  // already covers — a second alert adds nothing (chargebacks precedent:
+  // warn only). Non-monetary fleet-wide truncation (pagination
+  // contradictions, request caps) still pages.
+  const MONEY_BLOCK_REASONS = new Set(["ofapi_credit_floor", "ofapi_daily_credit_budget"]);
+  const isMoneyReason = (reason: string | null) =>
+    reason !== null && MONEY_BLOCK_REASONS.has(reason);
+  // A fleet pass where EVERY page truncated writes zero snapshots while the
+  // job stays green — that silence must be an incident, not a warn line.
   const allTruncated = pages.length > 0 && pages.every((page) => page.status === "truncated");
+  const allTruncatedLoud = allTruncated &&
+    pages.some((page) => !isMoneyReason(page.reason));
+  // One link kind fully stopped across the fleet (every walk of the kind
+  // truncated) is the same silence per kind — a healthy other kind must not
+  // mask it.
+  const walkedKinds = pages.flatMap((page) => page.kinds);
+  const truncatedKinds = (["tracking", "trial"] as const).filter((kindName) => {
+    const ofKind = walkedKinds.filter((kind) => kind.linkKind === kindName);
+    return ofKind.length > 0 &&
+      ofKind.every((kind) => kind.status === "truncated") &&
+      ofKind.some((kind) => !isMoneyReason(kind.reason));
+  });
   // Fleet-wide mapping collapse below the per-kind threshold: small pages
   // (1-2 links) never trip the absolute per-kind alarm, but when every FULL
   // walk of one link kind across the fleet wrote nothing (with enough total
@@ -593,14 +620,18 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
       kind: "ofapi_link_stats_reconcile_failed",
       errorSummary: `${failed.length} page(s) failed: ${shown}${remainder}`,
     });
-  } else if (allTruncated) {
+  } else if (allTruncatedLoud || truncatedKinds.length > 0) {
+    const scope = allTruncatedLoud
+      ? `fleet fully truncated (${pages.length} page(s))`
+      : `link kind(s) fully truncated fleet-wide: ${truncatedKinds.join(", ")}`;
     const reasons = [...new Set(
-      pages.map((page) => page.reason).filter((reason): reason is string => reason !== null),
+      walkedKinds.map((kind) => kind.reason)
+        .filter((reason): reason is string => reason !== null && !isMoneyReason(reason)),
     )];
     await notifyOfapiGlobalIncident(app, {
       kind: "ofapi_link_stats_reconcile_failed",
       errorSummary:
-        `fleet fully truncated (${pages.length} page(s)): no snapshots written` +
+        `${scope}: no snapshots written` +
         (reasons.length > 0 ? ` — ${reasons.join("; ")}` : ""),
     });
   } else if (fleetCollapse) {
@@ -614,12 +645,17 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     pages.length > 0 &&
     pages.every((page) =>
       page.kinds.length > 0 &&
-      page.kinds.every((kind) => kind.status === "written" || kind.status === "partial"))
+      page.kinds.every((kind) => kind.status === "written" || kind.status === "partial")) &&
+    pages.some((page) => page.kinds.some(
+      (kind) => kind.status === "written" || kind.writtenRows > 0,
+    ))
   ) {
-    // Recovery = every processed page finished BOTH walks (written/partial).
-    // A skipped page (no client) or any truncated kind proves nothing and
-    // must not close the latch; a page stuck at 'partial' (one permanently
-    // unparseable vendor item) must not pin it open either.
+    // Recovery = every processed page finished BOTH walks (written/partial)
+    // AND the fleet demonstrably landed real data somewhere: a pass made of
+    // nothing but unverified-empty walks proves nothing and must not close
+    // the latch. A skipped page or any truncated kind keeps it open too; a
+    // page stuck at 'partial' (one permanently unparseable vendor item) must
+    // not pin it open either.
     await resolveOfapiGlobalIncident(app, {
       kind: "ofapi_link_stats_reconcile_failed",
     });
