@@ -801,6 +801,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["ofapi_commands", "page_id"],
     ["fan_earnings_stats", "account_id"],
     ["page_fan_identities", "platform_account_id"],
+    // Link-stats lane (0111): both page-scoped, RESTRICT FKs; snapshots first
+    // (they reference runs).
+    ["page_link_stat_snapshots", "platform_account_id"],
+    ["page_link_stat_runs", "platform_account_id"],
     ["fan_spend_daily", "platform_account_id"],
     ["fan_spend_lifetime", "platform_account_id"],
     ["fan_notes", "platform_account_id"],

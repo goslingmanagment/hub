@@ -178,6 +178,7 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "scheduler_silent",
   "ops_sampler_silent",
   "ofapi_chargebacks_reconcile_failed",
+  "ofapi_link_stats_reconcile_failed",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -1576,6 +1577,75 @@ export const pageFanIdentities = pgTable("page_fan_identities",
   }),
 );
 
+// OFAPI trial/tracking link statistics (2026-07-22): one run row per
+// completed (page, link_kind) list walk; append-only per-link snapshots.
+// Cumulative vendor counters stored as observed; deltas are query-time.
+export const pageLinkStatRuns = pgTable(
+  "page_link_stat_runs",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").notNull(),
+    status: text("status").notNull(),
+    pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull(),
+    apiPages: integer("api_pages").default(0).notNull(),
+    rawItems: integer("raw_items").default(0).notNull(),
+    writtenRows: integer("written_rows").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pageKindPulledIdx: index("page_link_stat_runs_page_kind_pulled_idx").on(
+      table.platformAccountId,
+      table.linkKind,
+      table.pulledAt,
+    ),
+  }),
+);
+
+export const pageLinkStatSnapshots = pgTable(
+  "page_link_stat_snapshots",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    runId: bigint("run_id", { mode: "number" })
+      .references(() => pageLinkStatRuns.id, { onDelete: "restrict" })
+      .notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").notNull(),
+    platformLinkId: text("platform_link_id").notNull(),
+    name: text("name"),
+    url: text("url"),
+    linkCreatedAt: timestamp("link_created_at", { withTimezone: true }),
+    linkEndsAt: timestamp("link_ends_at", { withTimezone: true }),
+    isFinished: boolean("is_finished"),
+    clicksCount: integer("clicks_count").notNull(),
+    claimsCount: integer("claims_count"),
+    subscribersCount: integer("subscribers_count").notNull(),
+    // NULL money/spenders = vendor value unknown (revenue block missing, still
+    // computing, or unparseable) — deliberately distinct from a real zero.
+    spendersCount: integer("spenders_count"),
+    revenueGrossMills: bigint("revenue_gross_mills", { mode: "bigint" }),
+    revenueIsLoading: boolean("revenue_is_loading"),
+    revenueCalculatedAt: timestamp("revenue_calculated_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    runLinkUniq: uniqueIndex("page_link_stat_snapshots_run_link_uniq").on(
+      table.runId,
+      table.platformLinkId,
+    ),
+    pageLinkIdx: index("page_link_stat_snapshots_page_link_idx").on(
+      table.platformAccountId,
+      table.linkKind,
+      table.platformLinkId,
+      table.id,
+    ),
+  }),
+);
+
 export const projectionWatermarks = pgTable(
   "projection_watermarks",
   {
@@ -2290,6 +2360,10 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   // machinery, without competing against the DM/audience ceilings.
   backfillSpendDay: date("backfill_spend_day"),
   backfillSpentCredits: integer("backfill_spent_credits").default(0).notNull(),
+  // Link-stats reconcile's own day counter — isolated from the backfill lane
+  // so neither job can starve the other (review round 3, PR #23).
+  linkStatsSpendDay: date("link_stats_spend_day"),
+  linkStatsSpentCredits: integer("link_stats_spent_credits").default(0).notNull(),
   governedScopeDay: date("governed_scope_day"),
   liveSpentCredits: integer("live_spent_credits").default(0).notNull(),
   interactiveSpentCredits: integer("interactive_spent_credits").default(0).notNull(),

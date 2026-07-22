@@ -81,7 +81,7 @@ export interface OfapiRequestContext {
   actorUserId?: number | null;
   // Attributes physical retry spend to a dedicated legacy lane as well as
   // the shared global ceiling. Governed mirror calls use their own plane.
-  creditBudgetScope?: "audience" | "backfill" | null;
+  creditBudgetScope?: "audience" | "backfill" | "link_stats" | null;
 }
 
 // Every OFAPI REST response carries _meta with the remaining credit balance —
@@ -166,7 +166,7 @@ export interface OfapiCreditSpendObservation {
   attemptNumber: number;
   isCached: boolean | null;
   actorUserId: number | null;
-  budgetScope?: "audience" | "backfill" | null;
+  budgetScope?: "audience" | "backfill" | "link_stats" | null;
 }
 
 export type OfapiCreditSpendSink = (
@@ -289,6 +289,20 @@ export interface OfapiClient {
     context: OfapiRequestContext,
     accountId: string,
     trialLinkId: string,
+    params: { limit?: number; offset?: number },
+  ): Promise<OfapiListPage>;
+  // Free stored-cache variants of the two link lists (no OnlyFans call,
+  // `_credits.used: 0` per the vendored spec; live-verified 2026-07-22): same
+  // item shape as the live endpoints, limit up to 1000, and the cache also
+  // returns finished/removed links the live list hides.
+  listStoredTrackingLinks?(
+    context: OfapiRequestContext,
+    accountId: string,
+    params: { limit?: number; offset?: number },
+  ): Promise<OfapiListPage>;
+  listStoredTrialLinks?(
+    context: OfapiRequestContext,
+    accountId: string,
     params: { limit?: number; offset?: number },
   ): Promise<OfapiListPage>;
   // One cheap (1-credit) account-scoped request purely to observe the credit
@@ -622,7 +636,7 @@ export function createOfapiClient(input: {
      * reaches the sink and is never hidden. */
     suppressZeroCredits?: boolean;
     actorUserId?: number | null;
-    budgetScope?: "audience" | "backfill" | null;
+    budgetScope?: "audience" | "backfill" | "link_stats" | null;
   }) {
     if (!onCreditSpend) {
       return null;
@@ -1753,6 +1767,38 @@ export function createOfapiClient(input: {
         pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
         cursorPresent: false,
         requestMetadata: { limit, offset: params.offset ?? 0, trialLinkId },
+      });
+    },
+    async listStoredTrackingLinks(context, accountId, params) {
+      const limit = Math.min(params.limit ?? 1000, 1000);
+      return observedListRequest({
+        context,
+        operation: "ofapi_stored_tracking_links",
+        endpointTemplate: "/:accountId/stored/tracking-links",
+        pathname: `/${encodeURIComponent(accountId)}/stored/tracking-links`,
+        query: {
+          limit: String(limit),
+          offset: params.offset != null ? String(params.offset) : undefined,
+        },
+        pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
+        cursorPresent: false,
+        requestMetadata: { limit, offset: params.offset ?? 0 },
+      });
+    },
+    async listStoredTrialLinks(context, accountId, params) {
+      const limit = Math.min(params.limit ?? 1000, 1000);
+      return observedListRequest({
+        context,
+        operation: "ofapi_stored_trial_links",
+        endpointTemplate: "/:accountId/stored/trial-links",
+        pathname: `/${encodeURIComponent(accountId)}/stored/trial-links`,
+        query: {
+          limit: String(limit),
+          offset: params.offset != null ? String(params.offset) : undefined,
+        },
+        pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
+        cursorPresent: false,
+        requestMetadata: { limit, offset: params.offset ?? 0 },
       });
     },
     async pingBalance(context, accountId) {

@@ -1,10 +1,12 @@
-import { and, asc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
   ofapiCreditLedger,
   ofapiCreditState,
   ofapiFanoutReplayState,
+  pageLinkStatRuns,
+  pageLinkStatSnapshots,
   ofapiSpendProjectionEvents,
   ofapiWebhookConfig,
   ofapiWebhookEvents,
@@ -1333,7 +1335,7 @@ export async function recordOfapiCreditUsage(
   `);
 }
 
-export type OfapiDayBudgetScope = "global" | "audience" | "backfill";
+export type OfapiDayBudgetScope = "global" | "audience" | "backfill" | "link_stats";
 
 export interface OfapiDayCreditReservationReceipt {
   scope: OfapiDayBudgetScope;
@@ -1345,6 +1347,7 @@ const OFAPI_DAY_COUNTER_COLUMNS = {
   global: { day: "spend_day", credits: "spent_credits" },
   audience: { day: "audience_spend_day", credits: "audience_spent_credits" },
   backfill: { day: "backfill_spend_day", credits: "backfill_spent_credits" },
+  link_stats: { day: "link_stats_spend_day", credits: "link_stats_spent_credits" },
 } as const;
 
 /**
@@ -2879,4 +2882,192 @@ export async function getLatestOfapiEventTimesForPages(
   }
 
   return result;
+}
+
+export type LinkStatKind = "tracking" | "trial";
+
+export interface InsertLinkStatRunInput {
+  platformAccountId: number;
+  linkKind: LinkStatKind;
+  // 'complete' = full walk, zero dropped items (the only absence-proving
+  // status); 'partial' = full walk with normalization drops; 'truncated' =
+  // walk did not finish.
+  status: "complete" | "partial" | "truncated";
+  pulledAt: Date;
+  apiPages: number;
+  rawItems: number;
+  writtenRows: number;
+}
+
+export interface InsertLinkStatSnapshotInput {
+  platformAccountId: number;
+  linkKind: LinkStatKind;
+  platformLinkId: string;
+  name: string | null;
+  url: string | null;
+  linkCreatedAt: Date | null;
+  linkEndsAt: Date | null;
+  isFinished: boolean | null;
+  clicksCount: number;
+  claimsCount: number | null;
+  subscribersCount: number;
+  // null = vendor value unknown (revenue block missing, still computing, or
+  // unparseable) — deliberately distinct from a real zero.
+  spendersCount: number | null;
+  revenueGrossMills: bigint | null;
+  revenueIsLoading: boolean | null;
+  revenueCalculatedAt: Date | null;
+}
+
+export async function insertLinkStatRun(
+  db: Database,
+  input: InsertLinkStatRunInput,
+): Promise<{ id: number }> {
+  const [row] = await db
+    .insert(pageLinkStatRuns)
+    .values({
+      platformAccountId: input.platformAccountId,
+      linkKind: input.linkKind,
+      status: input.status,
+      pulledAt: input.pulledAt,
+      apiPages: input.apiPages,
+      rawItems: input.rawItems,
+      writtenRows: input.writtenRows,
+    })
+    .returning({ id: pageLinkStatRuns.id });
+  if (!row) {
+    throw new Error("insertLinkStatRun returned no row");
+  }
+  return row;
+}
+
+// node-postgres extended protocol caps bind parameters at 65535; with 16
+// columns per row a single VALUES insert breaks past 4095 rows. Chunk well
+// below that; callers wrap this in a transaction when atomicity matters.
+const LINK_STAT_SNAPSHOT_INSERT_CHUNK = 1000;
+
+export async function insertLinkStatSnapshots(
+  db: Database,
+  runId: number,
+  rows: InsertLinkStatSnapshotInput[],
+): Promise<number> {
+  if (rows.length === 0) {
+    return 0;
+  }
+  let insertedTotal = 0;
+  for (let start = 0; start < rows.length; start += LINK_STAT_SNAPSHOT_INSERT_CHUNK) {
+    const chunk = rows.slice(start, start + LINK_STAT_SNAPSHOT_INSERT_CHUNK);
+    const inserted = await db
+      .insert(pageLinkStatSnapshots)
+      .values(chunk.map((row) => ({
+        runId,
+        platformAccountId: row.platformAccountId,
+        linkKind: row.linkKind,
+        platformLinkId: row.platformLinkId,
+        name: row.name,
+        url: row.url,
+        linkCreatedAt: row.linkCreatedAt,
+        linkEndsAt: row.linkEndsAt,
+        isFinished: row.isFinished,
+        clicksCount: row.clicksCount,
+        claimsCount: row.claimsCount,
+        subscribersCount: row.subscribersCount,
+        spendersCount: row.spendersCount,
+        revenueGrossMills: row.revenueGrossMills,
+        revenueIsLoading: row.revenueIsLoading,
+        revenueCalculatedAt: row.revenueCalculatedAt,
+      })))
+      .returning({ id: pageLinkStatSnapshots.id });
+    insertedTotal += inserted.length;
+  }
+  return insertedTotal;
+}
+
+/** Atomic run + snapshots: a 'complete'/'partial' run row must never exist
+ * without its snapshot rows (that state reads as mass link deletion
+ * downstream), so both inserts commit or neither does. */
+export async function insertLinkStatRunWithSnapshots(
+  db: Database,
+  run: InsertLinkStatRunInput,
+  rows: InsertLinkStatSnapshotInput[],
+): Promise<{ runId: number; writtenRows: number }> {
+  return db.transaction(async (tx) => {
+    const dbTx = tx as Database;
+    const inserted = await insertLinkStatRun(dbTx, run);
+    const writtenRows = await insertLinkStatSnapshots(dbTx, inserted.id, rows);
+    if (writtenRows !== rows.length) {
+      throw new Error(
+        `link-stat snapshot insert wrote ${writtenRows} of ${rows.length} rows`,
+      );
+    }
+    return { runId: inserted.id, writtenRows };
+  });
+}
+
+export async function listLinkStatRuns(
+  db: Database,
+  input: { platformAccountId: number; linkKind?: LinkStatKind },
+) {
+  const conditions = [eq(pageLinkStatRuns.platformAccountId, input.platformAccountId)];
+  if (input.linkKind !== undefined) {
+    conditions.push(eq(pageLinkStatRuns.linkKind, input.linkKind));
+  }
+  return db
+    .select()
+    .from(pageLinkStatRuns)
+    .where(and(...conditions))
+    .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id));
+}
+
+/** Latest FINISHED walk (complete or partial, never truncated) for
+ * (page, kind) — the baseline the inventory-vanished guard compares a new
+ * empty walk against. Including partial runs makes the guard converge (the
+ * second consecutive empty walk sees an empty baseline and proves absence)
+ * and closes the reverse hole (a non-empty partial baseline still flags a
+ * sudden wipe as suspicious). */
+export async function findLatestFinishedLinkStatRun(
+  db: Database,
+  input: { platformAccountId: number; linkKind: LinkStatKind },
+) {
+  const [row] = await db
+    .select()
+    .from(pageLinkStatRuns)
+    .where(and(
+      eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
+      eq(pageLinkStatRuns.linkKind, input.linkKind),
+      inArray(pageLinkStatRuns.status, ["complete", "partial"]),
+    ))
+    .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Latest finished walk that actually SAW links (rawItems > 0). A page with
+ * no such run has never demonstrated a non-empty inventory — an empty walk
+ * there is unverifiable (cold vendor cache?) and must never mint an
+ * absence-proving 'complete'. */
+export async function findLatestNonEmptyFinishedLinkStatRun(
+  db: Database,
+  input: { platformAccountId: number; linkKind: LinkStatKind },
+) {
+  const [row] = await db
+    .select()
+    .from(pageLinkStatRuns)
+    .where(and(
+      eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
+      eq(pageLinkStatRuns.linkKind, input.linkKind),
+      inArray(pageLinkStatRuns.status, ["complete", "partial"]),
+      gt(pageLinkStatRuns.rawItems, 0),
+    ))
+    .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function listLinkStatSnapshots(db: Database, input: { runId: number }) {
+  return db
+    .select()
+    .from(pageLinkStatSnapshots)
+    .where(eq(pageLinkStatSnapshots.runId, input.runId))
+    .orderBy(pageLinkStatSnapshots.platformLinkId);
 }
