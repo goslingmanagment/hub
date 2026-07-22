@@ -86,6 +86,8 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 Golden-signal sampler silent — ops telemetry is blind";
     case "ofapi_chargebacks_reconcile_failed":
       return "🚨 OFAPI chargebacks reconcile failed";
+    case "ofapi_link_stats_reconcile_failed":
+      return "🚨 OFAPI link-stats reconcile failed";
   }
 }
 
@@ -145,6 +147,8 @@ function resolveDetailForIncident(
       return "Golden-signal sampler emitting again";
     case "ofapi_chargebacks_reconcile_failed":
       return "OFAPI chargebacks reconcile recovered";
+    case "ofapi_link_stats_reconcile_failed":
+      return "OFAPI link-stats reconcile recovered";
   }
 }
 
@@ -580,7 +584,8 @@ type GlobalIncidentKind =
   | "golden_signal_lag"
   | "scheduler_silent"
   | "ops_sampler_silent"
-  | "ofapi_chargebacks_reconcile_failed";
+  | "ofapi_chargebacks_reconcile_failed"
+  | "ofapi_link_stats_reconcile_failed";
 
 /** Process-global conditions (low credit balance, webhook silence, burn rate,
  * disk usage, partition lead, watchdog deadmen). W5.1 (A25): `subKey` splits

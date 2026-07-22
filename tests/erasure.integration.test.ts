@@ -1161,6 +1161,59 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`page_voice_profiles where platform_account_id = ${page.id}`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("page-scope erasure purges the page's link-stat runs and snapshots (0111)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Link-stats lane (migration 0111): both tables are page-scoped with
+    // RESTRICT FKs, so neither rides a cascade when erasure keeps the pages
+    // catalog row — both are explicit page-hot targets (snapshots before runs).
+    const model = await createModel(testDb.db, { slug: "erasure-links", name: "Erasure Links" });
+    const page = model
+      ? await createOnlyFansPage(testDb.db, { modelId: model.id, label: "erasure-links-page" })
+      : undefined;
+    if (!page) {
+      throw new Error("Failed to seed link-stats erasure page");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ('erasure-links-owner', 'owner') returning id::text as id`,
+    );
+
+    const run = await one<{ id: string }>(
+      `insert into page_link_stat_runs (
+         platform_account_id, link_kind, status, pulled_at, api_pages, raw_items, written_rows)
+       values ($1, 'tracking', 'complete', now(), 1, 1, 1) returning id::text as id`,
+      [page.id],
+    );
+    await testDb.pool.query(
+      `insert into page_link_stat_snapshots (
+         run_id, platform_account_id, link_kind, platform_link_id, name, url,
+         clicks_count, subscribers_count)
+       values ($1, $2, 'tracking', '42', 'reddit_rsr', 'https://onlyfans.com/x/c1', 10, 2)`,
+      [run.id, page.id],
+    );
+    expect(await count(`page_link_stat_snapshots where platform_account_id = ${page.id}`)).toBe(1);
+    expect(await count(`page_link_stat_runs where platform_account_id = ${page.id}`)).toBe(1);
+
+    const result = await executeErasure(
+      appStub(),
+      { scopeType: "page", pageLabel: "erasure-links-page" },
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(
+      result.executedCounts["hot:page_link_stat_snapshots:delete"],
+      "page_link_stat_snapshots target",
+    ).toBe(1);
+    expect(
+      result.executedCounts["hot:page_link_stat_runs:delete"],
+      "page_link_stat_runs target",
+    ).toBe(1);
+    expect(await count(`page_link_stat_snapshots where platform_account_id = ${page.id}`)).toBe(0);
+    expect(await count(`page_link_stat_runs where platform_account_id = ${page.id}`)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("fan-scope erasure purges the fan's voice notes (audio + metadata); a co-resident different fan's note survives (0109)", async (context) => {
     if (!testDb) {
       context.skip();

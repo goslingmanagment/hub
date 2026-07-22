@@ -209,7 +209,8 @@ export function createOfapiRestGuard(app: AppContext, options?: {
   // the same statement as the shared cap; off, both fall back to that global
   // counter exactly as before.
   const scope: OfapiDayBudgetScope =
-    (options?.budgetScope === "audience" || options?.budgetScope === "backfill") &&
+    (options?.budgetScope === "audience" || options?.budgetScope === "backfill" ||
+      options?.budgetScope === "link_stats") &&
       isOfapiCreditLedgerEnabled(app.config)
       ? options.budgetScope
       : "global";
