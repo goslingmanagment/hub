@@ -458,16 +458,6 @@ export async function prepareAiFeatureStream(
     }
   }
   if (fanProfile) {
-    // debug, not info — fast-reply is high-frequency; never log the body.
-    app.logger.debug({
-      feature,
-      pageId,
-      profileVersion: fanProfile.version,
-      profileAgeDays: fanProfile.ageDays,
-      profileChars: fanProfile.body.length,
-      truncated: fanProfile.truncated,
-      droppedSections: fanProfile.droppedSections,
-    }, "ai feature dossier injected");
     // Rides the restricted generation record's params.contextManifest on BOTH
     // context paths — the Fansly clientContext lane has no transcript manifest,
     // but the dossier injection still needs a per-generation audit trail.
@@ -625,6 +615,23 @@ export async function prepareAiFeatureStream(
         },
       };
     }
+  }
+  if (fanProfile) {
+    // debug, not info — fast-reply is high-frequency; never log the body.
+    // Logged POST-budget (review round 8) so the log and the manifest cannot
+    // contradict each other about the same generation.
+    app.logger.debug({
+      feature,
+      pageId,
+      profileVersion: fanProfile.version,
+      profileAgeDays: fanProfile.ageDays,
+      profileChars: fanProfile.body.length,
+      truncated: fanProfile.truncated,
+      droppedSections: fanProfile.droppedSections,
+      ...(feature === "coach-chat"
+        ? { included: prompt.coachDossierIncluded === true }
+        : {}),
+    }, "ai feature dossier injected");
   }
   // The same what-the-provider-actually-received rule for the chatter draft: a
   // supplied draft the coach budget reducer shed leaves an audit trace (its

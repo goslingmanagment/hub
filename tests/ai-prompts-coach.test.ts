@@ -301,10 +301,12 @@ describe("coach-chat optional draft", () => {
     expect(built.user).not.toContain("## Chatter's Working Draft");
     // Review round 3: the shed is visible to the audit trail, never silent.
     expect(built.coachDraftIncluded).toBe(false);
-    // Review round 7: at a binary-search-filled boundary the omission note does
-    // NOT fit — it is dropped rather than displacing a single transcript char;
-    // the fact survives in coachDraftIncluded / the manifest.
-    expect(built.user).not.toContain("(the chatter attached a working draft");
+    // Review round 8: on the trimmed path the note rides the search itself —
+    // it costs ~78 chars of the OLDEST transcript tail, never a section — so
+    // the «critique my draft» turn always sees the omission owned up to.
+    expect(built.user).toContain(
+      "(the chatter attached a working draft; it was omitted to fit the prompt budget)",
+    );
     // The protected fields survive: the question and the newest transcript.
     expect(built.user).toContain("QUESTION_SENTINEL");
     expect(built.user).toContain("NEWEST_TX_🎉");
@@ -450,8 +452,59 @@ describe("coach-chat optional draft", () => {
     expect(built.user).toContain("NEWEST_MEMO");
     expect(built.user).not.toContain("OLDEST_MEMO");
     expect(built.user).toContain("[older transcript omitted]");
-    // Boundary-filled → the note is dropped, never displacing (review round 7).
-    expect(built.user).not.toContain("(the chatter attached a working draft");
+    // Round 8: the note rides the memoized search too — identical across passes.
+    expect(built.user).toContain("(the chatter attached a working draft");
+  });
+
+  it("a transient duplicate recap never evicts history (dedupe precedes measurement)", () => {
+    const amp = "&";
+    const dupBody = "DUP_RECAP " + amp.repeat(200);
+    const base = {
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      coachHistory: [{ question: "HISTORY_SENTINEL", answer: "hist " + amp.repeat(100) }],
+      draftText: "DRAFT_KEEP " + amp.repeat(100),
+      recapAttach: {
+        full: { body: dupBody, ageMs: 86_400_000 },
+        short: { body: dupBody, ageMs: 60_000 },
+      },
+    };
+    // Calibrate: with ONE recap copy (post-dedupe truth) everything fits at the
+    // exact ceiling.
+    const probe = buildPrompt({ ...base, transcript: "X" });
+    const slack = COACH_PROMPT_MAX_CHARS - (probe.system.length + probe.user.length);
+    const built = buildPrompt({ ...base, transcript: "X" + "y".repeat(slack) });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(COACH_PROMPT_MAX_CHARS);
+    // Round 8: the duplicate is dead weight and must be gone BEFORE the shed
+    // loop measures anything — history survives.
+    expect(built.user).toContain("HISTORY_SENTINEL");
+    expect(built.user).toContain("DRAFT_KEEP");
+  });
+
+  it("marker/absolute-number overhead compensation stays exactly within the 60k budget", () => {
+    // Calibrate a single-entry section to land exactly on the 60k boundary
+    // WITHOUT a marker, then request it with omitted entries so the marker +
+    // wider numbers overflow and the compensation loops must recover exactly.
+    const probeAnswer = "a".repeat(10_000);
+    const probeLen = coachHistorySection(
+      [{ question: "q", answer: probeAnswer }],
+    ).length;
+    // Plain chars render 1:1 — pad the answer so the markerless section is
+    // exactly 60_000... but the answer projection caps at 10k chars, so pad the
+    // QUESTION instead (bounded at 2k — enough for the ≤61-byte calibration).
+    const filler = 60_000 - probeLen;
+    const question = "q" + "x".repeat(Math.min(filler, 1_900));
+    const section = coachHistorySection(
+      [{ question, answer: probeAnswer }],
+      15,
+    );
+    expect(section.length).toBeLessThanOrEqual(60_000);
+    expect(section).toContain("omitted to fit the prompt budget");
+    expect(section).toContain('<coach_exchange n="16">');
   });
 
   it("a dropped draft displaces NOTHING even at the exact ceiling (twin equivalence)", () => {

@@ -2238,6 +2238,16 @@ describe("coach-chat recap attach (spec §5)", () => {
        values ($1, $2, 1, 'DOSSIER_SHED_BY_PROMPT_BUDGET', 'chatmuse', now())`,
       [Number(shedFanRows[0]!.id), pageId],
     );
+    // The dossier loader requires a usable full fan-summary PROOF whose
+    // completion equals the profile body (round 8 — without it the dossier is
+    // never injected and the included=false pin below is vacuous). Older than
+    // the recap-attach candidates so it never wins the attach itself.
+    await seedRecap({
+      pageId,
+      mode: "full",
+      completion: "DOSSIER_SHED_BY_PROMPT_BUDGET",
+      createdAt: daysAgo(9),
+    });
     appContext.config.chatMuseAiFanProfileContextFeatures = "all";
     await seedRecap({
       pageId,
@@ -2292,6 +2302,7 @@ describe("coach-chat recap attach (spec §5)", () => {
     });
     expect(promptText).not.toContain("DRAFT_PRESSURE");
     expect(promptText).not.toContain("<chatter_draft>");
+    expect(promptText).toContain("(the chatter attached a working draft");
     expect(
       (rows[0]?.params.contextManifest as { chatterDraft?: { chars: number; included: boolean } })
         ?.chatterDraft,

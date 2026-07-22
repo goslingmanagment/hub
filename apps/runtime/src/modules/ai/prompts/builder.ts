@@ -530,8 +530,13 @@ export function coachHistorySection(
     section.length > COACH_PROMPT_HISTORY_BUDGET_CHARS
     && (headChars > 0 || tailChars > 0)
   ) {
-    headChars = Math.floor(headChars / 2);
-    tailChars = Math.floor(tailChars / 2);
+    // Subtract the MEASURED overflow (review round 8: halving threw away up to
+    // half the newest answer to recover ≤61 marker bytes). Escaping can expand
+    // a removed char up to 5×, so the loop converges in ≤2 iterations.
+    const overflow = section.length - COACH_PROMPT_HISTORY_BUDGET_CHARS;
+    const cut = Math.max(1, Math.ceil(overflow / 2));
+    headChars = Math.max(0, headChars - cut);
+    tailChars = Math.max(0, tailChars - cut);
     kept = [
       {
         question: history[history.length - 1]!.question,
@@ -803,6 +808,12 @@ function budgetCoachTemplateValues(
   // the rerun used to double the ~18-probe search over a 300k transcript on
   // the shed-draft path).
   let transcriptSearchMemo: number | null = null;
+  // Review round 8: during the transcript search the omission note RIDES the
+  // measurement — post-trim slack is < 5 chars, so a post-choice append could
+  // never fit exactly where the note matters most (a boundary-trimmed
+  // «critique my draft» turn). Inside step 3 it costs ≤78 chars of the OLDEST
+  // transcript tail — a bounded, deliberate trade, never a section.
+  let inTranscriptSearch = false;
   const fits = (values: TemplateValues): boolean => {
     const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
     const userChars = buildUserBlocks('coach-chat', template, values).reduce(
@@ -873,9 +884,20 @@ function budgetCoachTemplateValues(
         short: shortRecapChars,
       }),
       coachHistorySection: coachHistorySection(history, suppliedHistoryCount - history.length),
-      coachDraftSection: includeDraft ? initialValues.coachDraftSection! : '',
+      coachDraftSection: includeDraft
+        ? initialValues.coachDraftSection!
+        : hasDraft && inTranscriptSearch
+          ? draftOmissionNote
+          : '',
     });
 
+    // 0. Remove exact summary duplicates BEFORE anything is measured (review
+    // round 8): a duplicate recap is pure dead weight, and measuring the prompt
+    // with it still aboard let a transient duplicate evict real history that
+    // the deduped prompt would have kept.
+    recapAttach = dedupeCoachRecaps(recapAttach, input.fanProfile);
+    if (!recapAttach?.full) fullRecapChars = 0;
+    if (!recapAttach?.short) shortRecapChars = 0;
     let values = makeValues();
 
     // 1. Dialog is expendable before fan context: shed whole oldest exchanges,
@@ -885,12 +907,9 @@ function budgetCoachTemplateValues(
       values = makeValues();
     }
 
-    // 2. Remove exact summary duplicates, then shed the least-current bounded
-    // summary sections first: dossier, full recap, short recap. Whole-section
-    // removal is intentionally coarse and keeps every heading/tag pair intact.
-    recapAttach = dedupeCoachRecaps(recapAttach, input.fanProfile);
-    if (!recapAttach?.full) fullRecapChars = 0;
-    if (!recapAttach?.short) shortRecapChars = 0;
+    // 2. Shed the least-current bounded summary sections first: dossier, full
+    // recap, short recap. Whole-section removal is intentionally coarse and
+    // keeps every heading/tag pair intact.
     values = makeValues();
     if (fits(values)) {
       return done(values);
@@ -920,6 +939,7 @@ function budgetCoachTemplateValues(
     // this reducer. Legal contract maxima guarantee at least one newest code point
     // fits; fail closed if a future caller/schema breaks that invariant.
     if (transcriptSearchMemo !== null) {
+      inTranscriptSearch = true;
       transcriptChars = transcriptSearchMemo;
       const memoValues = makeValues();
       // Cheap insurance on the state-identity invariant (review round 6): if a
@@ -930,6 +950,7 @@ function budgetCoachTemplateValues(
       }
     }
     coachBudgetStats.transcriptSearches += 1;
+    inTranscriptSearch = true;
     transcriptChars = 0;
     const withoutTranscript = makeValues();
     if (!fits(withoutTranscript)) {

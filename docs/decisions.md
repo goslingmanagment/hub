@@ -5056,4 +5056,14 @@ draftless twin kept; it is now appended only after the context is chosen and
 only when it fits as-is (boundary-filled prompts drop it — the fact stays in
 the manifest), with a calibrated exact-ceiling twin-equivalence test; the memo
 gains a search-count regression guard; and fanProfile.included is pinned at the
-service layer for both the kept and the shed dossier.
+service layer for both the kept and the shed dossier. Round 8: recap dedupe
+moved BEFORE the first shed measurement (a transient full/short duplicate could
+evict history the deduped prompt would have kept — boundary-pinned); the
+omission note rides the transcript search itself, costing ≤78 chars of the
+oldest tail on the trimmed path where the post-choice append provably never fit
+(post-trim slack <5 chars), while pre-trim exits keep the round-7 append-only-
+if-it-fits rule; the single-entry history compensation subtracts the measured
+overflow instead of halving away half the newest answer; the dossier-injected
+debug log moved post-budget and carries `included` for coach, so log and
+manifest cannot contradict; the dossier integration pin seeds the loader's
+required completion-equality proof.
