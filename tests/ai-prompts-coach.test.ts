@@ -264,6 +264,7 @@ describe("coach-chat optional draft", () => {
     expect(taskBlock?.cache).toBe("none");
     expect(taskBlock?.text).toContain("## Chatter's Working Draft");
     expect(taskBlock?.text).toContain("<chatter_draft>");
+    expect(built.coachDraftIncluded).toBe(true);
   });
 
   it("omits the draft section entirely when no draft is provided", () => {
@@ -297,6 +298,8 @@ describe("coach-chat optional draft", () => {
     // The draft is dropped whole — no fragment leaks through, no dangling heading.
     expect(built.user).not.toContain("DRAFT_SENTINEL");
     expect(built.user).not.toContain("## Chatter's Working Draft");
+    // Review round 3: the shed is visible to the audit trail, never silent.
+    expect(built.coachDraftIncluded).toBe(false);
     // The protected fields survive: the question and the newest transcript.
     expect(built.user).toContain("QUESTION_SENTINEL");
     expect(built.user).toContain("NEWEST_TX_🎉");
@@ -393,6 +396,7 @@ describe("coach-chat optional draft", () => {
     );
     expect(built.user).not.toContain("DRAFT_TOO_BIG");
     expect(built.user).not.toContain("## Chatter's Working Draft");
+    expect(built.coachDraftIncluded).toBe(false);
     expect(built.user).toContain("HIST_KEEP_Q");
     expect(built.user).toContain("DOSSIER_KEEP");
     expect(built.user).toContain("FULLREC_KEEP");

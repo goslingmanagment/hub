@@ -113,6 +113,11 @@ export interface PromptPayload {
   /** Exact recap slots present in the final rendered Coach prompt, after the
    * whole-prompt reducer. Omitted for every other feature. */
   coachRecapSlots?: { full: boolean; short: boolean };
+  /** Whether the chatter's working draft survived into the final rendered Coach
+   * prompt (review round 3): a supplied draft the reducer shed must be visible
+   * to the audit trail like every other optional coach context. Omitted for
+   * every other feature. */
+  coachDraftIncluded?: boolean;
 }
 
 interface PromptFeaturePolicy {
@@ -976,6 +981,7 @@ export function buildPrompt(
             full: user.includes('<full_recap>'),
             short: user.includes('<short_recap>'),
           },
+          coachDraftIncluded: user.includes('<chatter_draft>'),
         }
       : {}),
   };

@@ -5038,4 +5038,9 @@ honest as total eviction — kept exchanges carry their ABSOLUTE dialog numbers
 and every drop (the reducer's shed AND coachHistorySection's internal 60k shed)
 renders a counted "(earlier N coach exchanges omitted to fit the prompt
 budget)" marker, with the final rendered section still held to the 60k budget
-exactly.
+exactly. Round 3: a supplied draft is never a SILENT shed — the builder
+reports post-budget `coachDraftIncluded` (final-wrapper probe, spoof-proof via
+escaping, mirroring `coachRecapSlots`) and the feature layer records
+`contextManifest.chatterDraft = { chars, included }` (additive manifest key —
+no contract change); surfacing the flag to the extension's meta frame is a
+recorded follow-up for when the client UI wants to render it.

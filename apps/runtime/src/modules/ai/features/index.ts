@@ -610,6 +610,19 @@ export async function prepareAiFeatureStream(
       };
     }
   }
+  // The same what-the-provider-actually-received rule for the chatter draft: a
+  // supplied draft the coach budget reducer shed leaves an audit trace (its
+  // chars and final inclusion), like the recaps and the dossier above. Additive
+  // manifest key — no contract change, no client re-vendor.
+  if (feature === "coach-chat" && typeof body.draftText === "string" && body.draftText.trim() !== "") {
+    contextManifest = {
+      ...(contextManifest ?? {}),
+      chatterDraft: {
+        chars: body.draftText.length,
+        included: prompt.coachDraftIncluded === true,
+      },
+    };
+  }
 
   const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
