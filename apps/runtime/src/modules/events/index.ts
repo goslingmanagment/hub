@@ -906,6 +906,13 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           if (continuity !== null && !continuity.ok) {
             throw new Error(`domain-event replay interval contains a gap for account ${accountId}`);
           }
+          // Same post-read recheck as the post-snapshot loop: the stream may
+          // have died during the batch read, and this is the HOT path —
+          // enrichment for frames writeV2Frame would only discard is the
+          // costliest work a dead connection could still buy.
+          if (raw.writableEnded || raw.destroyed) {
+            return;
+          }
           const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
             .catch((error) => {
               request.log.warn({ err: error }, "v2 replay enrichment failed; serving thin frames");

@@ -370,6 +370,10 @@ describe("domain event v2 replay completion", () => {
     expect(markerIndex).toBeGreaterThan(0);
     expect(replayed.every((frame) => frames.indexOf(frame) < markerIndex)).toBe(true);
     expect(frames[markerIndex]?.event).toEqual({ type: "replay_completed" });
+    // The marker's id is contract-documented as a resume-safe cursor: it must
+    // repeat the delivered watermark (all replayed rows), not a zero/genesis
+    // cursor that would force a full re-replay or a 409 on reconnect.
+    expect(frames[markerIndex]?.id).toBe(encodeDomainEventCursor(new Map([[7, 2]])));
   });
 
   it("writes the replay-completed marker immediately on a fresh connection", async () => {
@@ -378,6 +382,12 @@ describe("domain event v2 replay completion", () => {
     expect(frames).toHaveLength(1);
     expect(frames[0]?.lane).toBe("control");
     expect(frames[0]?.event).toEqual({ type: "replay_completed" });
+    // On a cursor-less connect the marker is the FIRST (and on a quiet page
+    // the only) id a client sees — it must already encode the account heads
+    // (grant-scoped: fresh connects mint the bound v3 cursor).
+    expect(frames[0]?.id).toBe(
+      encodeDomainEventCursor(new Map([[7, 2]]), { scope: 'granted' }),
+    );
   });
 
   it("flushes a live frame buffered during replay only after the marker", async () => {
