@@ -7,18 +7,17 @@ on:
       - main
   workflow_dispatch:
 
-# A superseded head has nothing left to prove — cancel its run instead of
-# letting it burn the minutes budget (July 2026: stacked stale runs were the
-# main Actions cost driver).
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   quality:
     name: Quality Gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Superseded PR heads cancel their runs (July 2026: stacked stale runs
+    # were the main Actions cost driver); main runs always complete so every
+    # main commit keeps a finished fast-gate record.
+    concurrency:
+      group: qg-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
     steps:
       - name: Checkout
@@ -66,6 +65,13 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # Integration validation targets the branch tip: a newer main push
+    # supersedes an in-flight Full Suite (that collapse is the minutes diet).
+    # Per-commit history comes from Quality Gate above; nightly runs the deep
+    # integration suite.
+    concurrency:
+      group: fs-${{ github.ref }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout
