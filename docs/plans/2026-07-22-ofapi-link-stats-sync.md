@@ -1061,3 +1061,27 @@ function linksClient(input: {
 - Placeholder scan: none — every step carries code or exact text.
 - Type consistency: `LinkStatKind`/`InsertLinkStatSnapshotInput` defined in T2, consumed by T4/T5 under the same names; queue constant name matches between T4 and T5; flag field name matches T3↔T4↔T5.
 - Known asymmetry documented: SQL CHECK constraints vs drizzle `text()` columns; SQL UNIQUE constraint vs drizzle `uniqueIndex` (T1 caveat).
+
+---
+
+## Post-review revision (2026-07-22, after dual review of PR #23 @ 243639dd)
+
+All 8 confirmed findings addressed:
+
+1. Run + snapshots now commit atomically (`insertLinkStatRunWithSnapshots`,
+   one `db.transaction`) with a written-count assertion.
+2. Unknown vendor revenue is NULL, never a fake zero: `revenue_gross_mills`
+   and `spenders_count` are nullable, `revenue_is_loading` persisted;
+   `isLoading===true`, missing revenue block, or unparseable total → NULL.
+3. Run status gains `'partial'` (full walk, normalization drops): `'complete'`
+   is the only absence-proving status.
+4. Walk terminality now comes from `hasNextPage` (page size is only a guard);
+   empty page + `hasNextPage=true` → `pagination_contradiction`, truncated.
+5. Own credit quota `OFAPI_LINK_STATS_DAILY_CREDIT_BUDGET` (default 50) and
+   cron moved to `45 4,16 * * *` UTC — after the chargebacks 03:10 window.
+6. Snapshot rows dedupe by `platform_link_id` (last write wins) before the
+   unique-constrained insert.
+7. Incident open/refresh/resolve, worker throw path, and the recovery text
+   are integration-tested; `notification-incident-messages` extended.
+8. Per-run page cap raised to 200 (20k links) and page status distinguishes
+   `'truncated'` from `'skipped'`.
