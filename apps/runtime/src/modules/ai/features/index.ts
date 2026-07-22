@@ -458,16 +458,6 @@ export async function prepareAiFeatureStream(
     }
   }
   if (fanProfile) {
-    // debug, not info — fast-reply is high-frequency; never log the body.
-    app.logger.debug({
-      feature,
-      pageId,
-      profileVersion: fanProfile.version,
-      profileAgeDays: fanProfile.ageDays,
-      profileChars: fanProfile.body.length,
-      truncated: fanProfile.truncated,
-      droppedSections: fanProfile.droppedSections,
-    }, "ai feature dossier injected");
     // Rides the restricted generation record's params.contextManifest on BOTH
     // context paths — the Fansly clientContext lane has no transcript manifest,
     // but the dossier injection still needs a per-generation audit trail.
@@ -609,6 +599,54 @@ export async function prepareAiFeatureStream(
         },
       };
     }
+  }
+  // The same what-the-provider-actually-received rule for the DOSSIER (review
+  // round 6): the pre-build fanProfile manifest entry claims injection, but the
+  // coach reducer may shed the dossier (e.g. displaced by a kept draft) — record
+  // the post-budget truth exactly like the recap slots above.
+  if (feature === "coach-chat" && prompt.coachDossierIncluded !== undefined) {
+    const fanProfileManifest = contextManifest?.["fanProfile"];
+    if (typeof fanProfileManifest === "object" && fanProfileManifest !== null) {
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        fanProfile: {
+          ...(fanProfileManifest as Record<string, unknown>),
+          included: prompt.coachDossierIncluded,
+        },
+      };
+    }
+  }
+  if (fanProfile) {
+    // debug, not info — fast-reply is high-frequency; never log the body.
+    // Logged POST-budget (review round 8) so the log and the manifest cannot
+    // contradict each other about the same generation.
+    app.logger.debug({
+      feature,
+      pageId,
+      profileVersion: fanProfile.version,
+      profileAgeDays: fanProfile.ageDays,
+      profileChars: fanProfile.body.length,
+      truncated: fanProfile.truncated,
+      droppedSections: fanProfile.droppedSections,
+      ...(feature === "coach-chat"
+        ? { included: prompt.coachDossierIncluded === true }
+        : {}),
+    }, feature === "coach-chat" && prompt.coachDossierIncluded !== true
+      ? "ai feature dossier omitted by prompt budget"
+      : "ai feature dossier injected");
+  }
+  // The same what-the-provider-actually-received rule for the chatter draft: a
+  // supplied draft the coach budget reducer shed leaves an audit trace (its
+  // chars and final inclusion), like the recaps and the dossier above. Additive
+  // manifest key — no contract change, no client re-vendor.
+  if (feature === "coach-chat" && typeof body.draftText === "string" && body.draftText.trim() !== "") {
+    contextManifest = {
+      ...(contextManifest ?? {}),
+      chatterDraft: {
+        chars: body.draftText.length,
+        included: prompt.coachDraftIncluded === true,
+      },
+    };
   }
 
   const gatewayBody: AiGatewayStreamInput = {

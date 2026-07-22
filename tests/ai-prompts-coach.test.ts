@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildPrompt,
+  coachBudgetStats,
   coachHistorySection,
   COACH_CHAT_TEMPLATE,
   COACH_PROMPT_MAX_CHARS,
@@ -237,6 +238,395 @@ describe("coach-chat prompt", () => {
   });
 });
 
+describe("coach-chat optional draft", () => {
+  it("renders the escaped, framed draft section in the uncached task block when a draft is present", () => {
+    const built = buildPrompt({
+      ...baseInput,
+      draftText: "  hey <babe> & wanna see more? 😘  ",
+    });
+    const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
+    // The section is present and framed as the chatter's OWN unsent reply.
+    expect(built.user).toContain("## Chatter's Working Draft");
+    expect(built.user).toContain("This is their OWN unsent draft");
+    // Body is trimmed and escaped (untrusted input), wrapped in the builder tag.
+    expect(built.user).toContain(
+      "<chatter_draft>\nhey &lt;babe&gt; &amp; wanna see more? 😘\n</chatter_draft>",
+    );
+    expect(built.user).not.toContain("hey <babe> & wanna");
+    // No leftover placeholder.
+    expect(built.user).not.toContain("{coachDraftSection}");
+    // Review P2: the draft is a per-turn volatile input — it rides the UNCACHED
+    // task block next to the question, so a changed/attached draft never
+    // invalidates the 5m dynamic prefix (retry / fresh-dialog cache hits).
+    expect(staticBlock?.cache).toBe("1h");
+    expect(staticBlock?.text).not.toContain("## Chatter's Working Draft");
+    expect(dynamicBlock?.cache).toBe("5m");
+    expect(dynamicBlock?.text).not.toContain("## Chatter's Working Draft");
+    expect(taskBlock?.cache).toBe("none");
+    expect(taskBlock?.text).toContain("## Chatter's Working Draft");
+    expect(taskBlock?.text).toContain("<chatter_draft>");
+    expect(built.coachDraftIncluded).toBe(true);
+  });
+
+  it("omits the draft section entirely when no draft is provided", () => {
+    const built = buildPrompt({ ...baseInput });
+    expect(built.user).not.toContain("## Chatter's Working Draft");
+    expect(built.user).not.toContain("<chatter_draft>");
+    expect(built.user).not.toContain("{coachDraftSection}");
+  });
+
+  it("omits the draft section when the draft is whitespace-only", () => {
+    const built = buildPrompt({ ...baseInput, draftText: "   \n\t  " });
+    expect(built.user).not.toContain("## Chatter's Working Draft");
+    expect(built.user).not.toContain("<chatter_draft>");
+  });
+
+  it("sheds the draft whole under budget pressure while keeping the question and newest transcript", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "OLDEST_TX\n" + amp.repeat(299_940) + "\nNEWEST_TX_🎉",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(1_980) + "QUESTION_SENTINEL",
+      // Worst-legal draft (20k chars, ~100k escaped) — cannot be protected.
+      draftText: "DRAFT_SENTINEL " + amp.repeat(19_980),
+    });
+    const text = built.system + built.user;
+    expect(text.length).toBeLessThanOrEqual(COACH_PROMPT_MAX_CHARS);
+    // The draft is dropped whole — no fragment leaks through, no dangling heading.
+    expect(built.user).not.toContain("DRAFT_SENTINEL");
+    expect(built.user).not.toContain("## Chatter's Working Draft");
+    // Review round 3: the shed is visible to the audit trail, never silent.
+    expect(built.coachDraftIncluded).toBe(false);
+    // Review round 8: on the trimmed path the note rides the search itself —
+    // it costs ~78 chars of the OLDEST transcript tail, never a section — so
+    // the «critique my draft» turn always sees the omission owned up to.
+    expect(built.user).toContain(
+      "(the chatter attached a working draft; it was omitted to fit the prompt budget)",
+    );
+    // The protected fields survive: the question and the newest transcript.
+    expect(built.user).toContain("QUESTION_SENTINEL");
+    expect(built.user).toContain("NEWEST_TX_🎉");
+    expect(built.user).toContain("[older transcript omitted]");
+    expect(built.user).not.toContain("OLDEST_TX");
+  });
+
+  it("keeps the working draft while shedding an older summary that alone covers the overage", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "TX_HEAD TX_TAIL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      draftText: "DRAFT_KEEP " + amp.repeat(200),
+      fanProfile: {
+        body: "DOSSIER_TO_SHED " + amp.repeat(4_000),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+    });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    // The stale dossier is shed BEFORE the draft is even considered...
+    expect(built.user).not.toContain("DOSSIER_TO_SHED");
+    // ...and the shed is reported for the manifest correction (review round 6).
+    expect(built.coachDossierIncluded).toBe(false);
+    // ...so the freshest current-turn context — the working draft — survives,
+    // and the transcript is never trimmed.
+    expect(built.user).toContain("## Chatter's Working Draft");
+    expect(built.user).toContain("DRAFT_KEEP");
+    expect(built.user).toContain("TX_HEAD TX_TAIL");
+    expect(built.user).not.toContain("older transcript omitted");
+  });
+
+  it("marks a budget-evicted dialog as omitted instead of claiming a first question", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "TX_HEAD TX_TAIL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      draftText: "DRAFT_KEEP " + amp.repeat(200),
+      // One prior exchange whose projected answer (~10k chars → ~50k escaped)
+      // pushes the prompt over the ceiling; step 1 sheds the WHOLE dialog.
+      coachHistory: [{ question: "PRIOR_Q", answer: amp.repeat(10_000) }],
+    });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    expect(built.user).not.toContain("PRIOR_Q");
+    // The section owns up to the eviction — it must NOT claim first-question
+    // status for a dialog the caller actually sent.
+    expect(built.user).toContain(
+      "(earlier 1 coach exchange omitted to fit the prompt budget)",
+    );
+    expect(built.user).not.toContain("this is the first question");
+    // The draft (shed only at step 2b, after history) survives.
+    expect(built.user).toContain("DRAFT_KEEP");
+  });
+
+  it("never sheds context to make room for a draft that itself cannot fit", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "TX_HEAD TX_TAIL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      coachHistory: [{ question: "HIST_KEEP_Q", answer: "hist " + amp.repeat(500) }],
+      fanProfile: {
+        body: "DOSSIER_KEEP " + amp.repeat(800),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      recapAttach: {
+        full: { body: "FULLREC_KEEP " + amp.repeat(400), ageMs: 60_000 },
+        short: { body: "SHORTREC_KEEP " + amp.repeat(400), ageMs: 30_000 },
+      },
+      // Worst-legal draft (~100k escaped): cannot fit even after every optional
+      // section is gone.
+      draftText: "DRAFT_TOO_BIG " + amp.repeat(19_980),
+    });
+    // Review P1: the draftless prompt fits WITH all context, so attaching an
+    // unfittable draft must not cost the coach that context — the reducer's
+    // second pass rebuilds from the original inputs with the draft off.
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    expect(built.user).not.toContain("DRAFT_TOO_BIG");
+    expect(built.user).not.toContain("## Chatter's Working Draft");
+    expect(built.coachDraftIncluded).toBe(false);
+    expect(built.user).toContain("HIST_KEEP_Q");
+    expect(built.user).toContain("DOSSIER_KEEP");
+    expect(built.user).toContain("FULLREC_KEEP");
+    expect(built.user).toContain("SHORTREC_KEEP");
+    expect(built.user).toContain("TX_HEAD TX_TAIL");
+    // No HISTORY was evicted (the draftless pass kept everything)…
+    expect(built.user).not.toContain("coach exchange");
+    // …but the attached draft's own omission is owned up to (review round 6),
+    // and the kept dossier reports included for the manifest.
+    expect(built.user).toContain("(the chatter attached a working draft");
+    expect(built.coachDossierIncluded).toBe(true);
+  });
+
+  it("reuses the pass-1 transcript search when the draftless pass re-trims (memo path)", () => {
+    const amp = "&";
+    const searchesBefore = coachBudgetStats.transcriptSearches;
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      // Transcript that must be tail-trimmed even AFTER every optional section
+      // is shed — both passes reach step 3, the second via the memoized search.
+      transcript: "OLDEST_MEMO\n" + amp.repeat(40_000) + "\nNEWEST_MEMO",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      coachHistory: [{ question: "MEMO_HIST_Q", answer: "hist " + amp.repeat(500) }],
+      fanProfile: {
+        body: "MEMO_DOSSIER " + amp.repeat(500),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      draftText: "MEMO_DRAFT " + amp.repeat(19_980),
+    });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    // The draft could not fit; the second pass also shed everything and trimmed
+    // the transcript via the memo — the ceiling still holds exactly.
+    // Review round 7 regression guard: the memo means exactly ONE binary
+    // search ran across both passes — without it this asserts 2.
+    expect(coachBudgetStats.transcriptSearches - searchesBefore).toBe(1);
+    expect(built.coachDraftIncluded).toBe(false);
+    expect(built.coachDossierIncluded).toBe(false);
+    expect(built.user).toContain("NEWEST_MEMO");
+    expect(built.user).not.toContain("OLDEST_MEMO");
+    expect(built.user).toContain("[older transcript omitted]");
+    // Round 8: the note rides the memoized search too — identical across passes.
+    expect(built.user).toContain("(the chatter attached a working draft");
+  });
+
+  it("a transient duplicate recap never evicts history (dedupe precedes measurement)", () => {
+    const amp = "&";
+    const dupBody = "DUP_RECAP " + amp.repeat(200);
+    const base = {
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      coachHistory: [{ question: "HISTORY_SENTINEL", answer: "hist " + amp.repeat(100) }],
+      draftText: "DRAFT_KEEP " + amp.repeat(100),
+      recapAttach: {
+        full: { body: dupBody, ageMs: 86_400_000 },
+        short: { body: dupBody, ageMs: 60_000 },
+      },
+    };
+    // Calibrate: with ONE recap copy (post-dedupe truth) everything fits at the
+    // exact ceiling.
+    const probe = buildPrompt({ ...base, transcript: "X" });
+    const slack = COACH_PROMPT_MAX_CHARS - (probe.system.length + probe.user.length);
+    const built = buildPrompt({ ...base, transcript: "X" + "y".repeat(slack) });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(COACH_PROMPT_MAX_CHARS);
+    // Round 8: the duplicate is dead weight and must be gone BEFORE the shed
+    // loop measures anything — history survives.
+    expect(built.user).toContain("HISTORY_SENTINEL");
+    expect(built.user).toContain("DRAFT_KEEP");
+  });
+
+  it("multi-entry marker compensation sheds exactly one more entry (loop 1 fires)", () => {
+    // Calibrate SIX entries whose markerless render is exactly 59_999 (walk
+    // keeps all six with 1 char of slack); the counted marker + wider absolute
+    // numbers then overflow, and the compensation loop must shed exactly one
+    // (review round 10: the previous calibration missed the join newlines and
+    // fired neither loop — verified by instrumented execution).
+    const probe = coachHistorySection([{ question: "q", answer: "a".repeat(100) }]).length;
+    const wrapper = probe - 100; // per-entry non-answer chars at n="1"
+    const answer = "a".repeat(9_999 - wrapper);
+    const entries = Array.from({ length: 6 }, () => ({ question: "q", answer }));
+    // Baseline sanity: without outer omissions the walk keeps ALL six.
+    const baseline = coachHistorySection(entries);
+    expect(baseline.length).toBeGreaterThan(59_900);
+    expect(baseline.length).toBeLessThanOrEqual(60_000);
+    expect(baseline).not.toContain("omitted to fit the prompt budget");
+
+    const section = coachHistorySection(entries, 3);
+    expect(section.length).toBeLessThanOrEqual(60_000);
+    // 3 outer + 1 compensation-shed = 4 omitted; the newest keeps its absolute
+    // number (dialog of 9), the compensation victim's number is gone.
+    expect(section).toContain("(earlier 4 coach exchanges omitted to fit the prompt budget)");
+    expect(section).toContain('<coach_exchange n="9">');
+    expect(section).not.toContain('<coach_exchange n="4">');
+  });
+
+  it("a SMALL draft rides the transcript search instead of being shed (review round 10)", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "OLDEST_SMALL\n" + amp.repeat(40_000) + "\nNEWEST_SMALL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: "оцени мой черновик?",
+      draftText: "привет, скучал? у меня для тебя кое-что есть…",
+    });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    // The tiny draft costs oldest-tail chars, not its own existence: the coach
+    // SEES the draft on a «critique my draft» turn even under max pressure.
+    expect(built.coachDraftIncluded).toBe(true);
+    expect(built.user).toContain("привет, скучал?");
+    expect(built.user).toContain("NEWEST_SMALL");
+    expect(built.user).not.toContain("OLDEST_SMALL");
+    expect(built.user).not.toContain("(the chatter attached a working draft");
+  });
+
+  it("single-entry compensation loses only the marker's worth, not hundreds of chars (loop 2)", () => {
+    // Escaped near-boundary single entry (review round 9): markerless ≈ 59_941,
+    // marker + wider number ≈ +63 → overflow ≈ 4. The binary search must find
+    // the LARGEST fitting projection — the old fixed cut lost 200+ chars.
+    const amp = "&";
+    const section = coachHistorySection(
+      [{ question: amp.repeat(1_973), answer: amp.repeat(10_000) }],
+      15,
+    );
+    expect(section.length).toBeLessThanOrEqual(60_000);
+    expect(section.length).toBeGreaterThanOrEqual(59_900);
+    expect(section).toContain("omitted to fit the prompt budget");
+    expect(section).toContain('<coach_exchange n="16">');
+  });
+
+  it("a dropped draft displaces NOTHING even at the exact ceiling (twin equivalence)", () => {
+    const amp = "&";
+    const base = {
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      fanProfile: {
+        body: "DOSSIER_KEEP " + amp.repeat(300),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+    };
+    // Calibrate a plain-text transcript so the DRAFTLESS prompt lands exactly
+    // on the ceiling while keeping the dossier.
+    const probe = buildPrompt({ ...base, transcript: "X" });
+    const slack = COACH_PROMPT_MAX_CHARS - (probe.system.length + probe.user.length);
+    const transcript = "X" + "y".repeat(slack);
+    const twin = buildPrompt({ ...base, transcript });
+    expect(twin.system.length + twin.user.length).toBe(COACH_PROMPT_MAX_CHARS);
+    expect(twin.user).toContain("DOSSIER_KEEP");
+
+    // Round-6 regression (review round 7): the omission note used to ride the
+    // cascade and evict the dossier here. Attaching an unfittable draft must
+    // change NOTHING at the boundary — the note is dropped, the dossier stays.
+    const withDraft = buildPrompt({
+      ...base,
+      transcript,
+      draftText: "DRAFT_TOO_BIG " + amp.repeat(19_980),
+    });
+    expect(withDraft.system.length + withDraft.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    expect(withDraft.user).toContain("DOSSIER_KEEP");
+    expect(withDraft.coachDossierIncluded).toBe(true);
+    expect(withDraft.coachDraftIncluded).toBe(false);
+    expect(withDraft.user).not.toContain("(the chatter attached a working draft");
+    expect(withDraft.user).toBe(twin.user);
+  });
+
+  it("a shed draft leaves the CACHED dynamic block byte-identical to the draftless twin (final P1)", () => {
+    const amp = "&";
+    const base = {
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "OLDEST_EQ\n" + amp.repeat(40_000) + "\nNEWEST_EQ",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+    };
+    const draftless = buildPrompt(base);
+    const shed = buildPrompt({ ...base, draftText: "DRAFT_EQ " + amp.repeat(19_980) });
+    expect(shed.coachDraftIncluded).toBe(false);
+    expect(shed.user).toContain("(the chatter attached a working draft");
+    // The 5m-cached dynamic block (userBlocks[1]) must not differ by a byte —
+    // a differing prefix re-bills the whole block at the provider.
+    expect(shed.userBlocks[1]?.text).toBe(draftless.userBlocks[1]?.text);
+  });
+
+  it("keeps the first-question claim only for a genuinely empty dialog", () => {
+    expect(coachHistorySection(undefined)).toContain("this is the first question");
+    expect(coachHistorySection([], 0)).toContain("this is the first question");
+    expect(coachHistorySection([], 2)).toBe(
+      "(earlier 2 coach exchanges omitted to fit the prompt budget)",
+    );
+    // Partial eviction is owned up to too: counted marker + ABSOLUTE numbering
+    // (review P2 — the survivor must not be renumbered as the dialog opener).
+    const partial = coachHistorySection([{ question: "q16", answer: "a16" }], 15);
+    expect(partial).toContain(
+      "(earlier 15 coach exchanges omitted to fit the prompt budget)",
+    );
+    expect(partial).toContain('<coach_exchange n="16">');
+    expect(partial).not.toContain('<coach_exchange n="1">');
+  });
+});
+
 describe("coach answer replay projection (option c)", () => {
   it("preserves the beginning and ending, dropping the middle with a marker", () => {
     const head = "HEAD_SENTINEL " + "h".repeat(6_000);
@@ -290,6 +680,11 @@ describe("coach history section budget (exact rendered size)", () => {
     expect(section.length).toBeLessThanOrEqual(60_000);
     expect(section).toContain("A19"); // newest kept
     expect(section).not.toContain("A0 "); // oldest shed
+    // Review P2: this internal shed is owned up to as well — counted marker,
+    // and the newest entry keeps its ABSOLUTE dialog number.
+    expect(section).toContain("omitted to fit the prompt budget");
+    expect(section).toContain('<coach_exchange n="20">');
+    expect(section).not.toContain('<coach_exchange n="1">');
   });
 
   it("renders a within-cap answer byte-identical (escaped), no projection marker", () => {

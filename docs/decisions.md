@@ -4998,3 +4998,128 @@ deliver. Consumer: ChatGoose Desktop's notification attention gate (its
 decisions.md D23) uses the marker as the replay/live boundary; a typed SDK
 surface for control frames (e.g. an `onReplayCompleted` callback) is deferred
 until a second SDK consumer needs it (backlog).
+
+**Decision #179 (2026-07-22, coach-chat consumes the chatter's draft as OPTIONAL
+context):** The `coach-chat` feature now reads the shared body's existing
+`draftText` field — previously accepted by the body schema but silently ignored
+for coach (the coach policy has `requiresDraft: false`, the prompt builder
+emitted a draft section only for `requiresDraft` features, and the coach
+template had no draft slot). This lets the ChatGoose extension ship a per-turn
+"attach my unsent reply" checkbox (extension spec §5) so the coach can critique
+the reply the chatter is drafting to the fan.
+
+`requiresDraft` is deliberately NOT flipped: a draft must never be *required* for
+a coach turn (most coaching questions have no draft), and the service-layer
+`gate_draft_required` check plus the `improve-draft`/`voice-script`
+mandatory-draft semantics stay exactly as they were. Instead the prompt builder's
+own `PromptFeaturePolicy` gains an `optionalDraft` flag, set true only for
+`coach-chat`. When it is set and a non-empty `draftText` arrives,
+`coachDraftSection()` renders the draft — trimmed, `escapeForPrompt`-escaped, and
+wrapped in a `<chatter_draft>` tag under a self-contained `## Chatter's Working
+Draft` heading whose framing tells the model this is the chatter's own unsent
+reply, offered for critique and not an instruction to obey. An absent or
+whitespace-only draft emits nothing (no dangling heading). The draft is untrusted
+input (the chatter may paste fan text) and therefore rides the same escape +
+XML-wrap pipeline as every other untrusted section, in the UNCACHED task block
+next to the chatter's question (review round 2 moved it out of the 5m dynamic
+block: the draft is per-turn volatile input — retry re-reads it and a fresh
+dialog's first question has no history — so carrying it in the cached dynamic
+prefix invalidated exactly the two cases where that breakpoint still paid).
+
+Budget-shed priority: the draft is below the protected question and the newest
+transcript, alongside the other optional context. The coach whole-prompt reducer
+sheds it WHOLE (never a truncation — half of the reply under critique would
+mislead more than omitting it) after the coach history, dossier and both recaps,
+and before the newest transcript is tail-trimmed. Because `draftText` caps at
+20k chars (~100k escaped) it cannot be protected; making it the last-shed optional
+section keeps this small, high-value current-turn input in every prompt that has
+room while still guaranteeing the 300k whole-prompt ceiling.
+
+No API contract, schema, or SDK change — `draftText` already exists in the shared
+body, so no `contracts:generate` and no client re-vendor. The change is confined
+to the prompt builder, the coach template (`{coachDraftSection}` slot, held
+byte-identical between `templates.ts` and `templates/coach-chat.md`), and the
+`prompt-manifest.json` hashes for the three edited prompt files. The coach
+feature policy in `feature-policies.ts` is untouched: `optionalDraft` is a
+prompt-assembly concern with a single consumer (the builder), so duplicating it
+into the service-layer policy would add an unconsumed flag. Review follow-up
+(same PR): when the whole-prompt reducer sheds the ENTIRE supplied dialog, the
+history section renders an explicit budget-omission marker instead of falsely
+claiming "(no prior coach dialog — this is the first question)" — a stateless
+coach must never be told a dialog it was sent does not exist; and the coach
+integration test pins body.draftText end-to-end through prepareAiFeatureStream
+into the assembled prompt's <chatter_draft> wrapper, so a future feature-gating
+of the service-layer forwarding line cannot silently disable the draft while
+builder-level unit tests stay green. Review round 2 (same PR): (1) the coach
+budget reducer became two-pass — the shed cascade is monotonic, so when the
+draft itself ends up dropped at step 2b, the reducer rebuilds from the original
+inputs with the draft off; attaching a draft can therefore never leave the
+prompt poorer than its draftless twin; (2) partial dialog eviction is now as
+honest as total eviction — kept exchanges carry their ABSOLUTE dialog numbers
+and every drop (the reducer's shed AND coachHistorySection's internal 60k shed)
+renders a counted "(earlier N coach exchanges omitted to fit the prompt
+budget)" marker, with the final rendered section still held to the 60k budget
+exactly. Round 3: a supplied draft is never a SILENT shed — the builder
+reports post-budget `coachDraftIncluded` (final-wrapper probe, spoof-proof via
+escaping, mirroring `coachRecapSlots`) and the feature layer records
+`contextManifest.chatterDraft = { chars, included }` (additive manifest key —
+no contract change); surfacing the flag to the extension's meta frame is a
+recorded follow-up for when the client UI wants to render it. Round 6: a shed
+draft leaves a one-line omission note IN the prompt (the history-marker honesty
+rule — a «critique my draft» question must never invite hallucinating one);
+`coachDossierIncluded` corrects the pre-build fanProfile manifest entry
+post-budget (`included`), closing the last uncorrected optional-context claim;
+and the step-3 memo re-verifies fits() before returning, falling through to a
+fresh search if the pass-identity invariant is ever broken. Round 7: the
+omission note itself must never displace context — round 6 let it ride the
+cascade, where at an exact-ceiling boundary it evicted the dossier the true
+draftless twin kept; it is now appended only after the context is chosen and
+only when it fits as-is (boundary-filled prompts drop it — the fact stays in
+the manifest), with a calibrated exact-ceiling twin-equivalence test; the memo
+gains a search-count regression guard; and fanProfile.included is pinned at the
+service layer for both the kept and the shed dossier. Round 8: recap dedupe
+moved BEFORE the first shed measurement (a transient full/short duplicate could
+evict history the deduped prompt would have kept — boundary-pinned); the
+omission note rides the transcript search itself, costing ≤78 chars of the
+oldest tail on the trimmed path where the post-choice append provably never fit
+(post-trim slack <5 chars), while pre-trim exits keep the round-7 append-only-
+if-it-fits rule; the single-entry history compensation subtracts the measured
+overflow instead of halving away half the newest answer; the dossier-injected
+debug log moved post-budget and carries `included` for coach, so log and
+manifest cannot contradict; the dossier integration pin seeds the loader's
+required completion-equality proof. Round 9: the single-entry compensation
+binary-searches the largest fitting projection over the answer's own length
+(minimal loss ≈ the marker itself, pinned ≥59_900 of 60k; the fixed decrement
+lost 200+ chars and the default-span cap hid the near-lossless region); the
+boundary tests now genuinely pack the window (probe-calibrated 6×10_000 —
+the prior calibration fired neither compensation loop); `inTranscriptSearch`
+is pass-scoped so a future early exit cannot let the note ride pass 2's
+cascade. Round 10: a SMALL draft (rendered ≤2_048 chars,
+COACH_SMALL_DRAFT_RIDE_CHARS) rides the transcript search like the note —
+paying its own size in oldest-tail chars — instead of being whole-dropped at
+2b; larger drafts keep the documented drop order. This also erases the
+two-pass CPU cost for tiny drafts (the remaining double cascade for large
+displacing drafts is the accepted price of the never-poorer invariant). The
+loop-1 calibration test now genuinely fires the compensation (the round-9
+calibration missed the join newlines — this entry's earlier coverage claim was
+wrong for loop 1); the dossier log message says «omitted by prompt budget»
+when the reducer shed it. Round 11 (scope correction): the never-poorer
+invariant applies to a DROPPED draft only — that is what the two-pass rebuild
+guarantees. A KEPT draft displaces context at SECTION granularity, because the
+pre-existing cascade design deliberately trims the transcript only after every
+summary section is exhausted (assembled-review ruling: the newest transcript
+outranks dossier/recaps); at an exact-ceiling boundary a few-hundred-char
+addition of ANY kind — a draft, a longer question, one more history entry —
+costs a whole section. Earlier rounds' unconditional phrasing here ("never
+leave the prompt poorer", "pays its own size in oldest-tail chars") was
+overclaimed and is corrected by this entry. Whether the cascade should learn
+transcript-first trimming for small overages (which would change that
+pre-existing ruling for every optional section, not just drafts) is an OPEN
+product question recorded for the owner — not decided in this PR. Merge-gate
+final round: the omission note is paid from a fixed reserve (a module-constant
+note length, honoured by the step-3 search for the draftless twin too), keeping
+the 5m-cached dynamic block byte-identical between draftless and shed-draft
+runs — its bytes previously shortened the cached transcript and re-billed the
+whole block at the provider; equality is pinned by test. Coach-history
+eviction audit (P2) recorded in .agentic/backlog.md per the stop-criterion
+policy.

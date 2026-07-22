@@ -1625,6 +1625,7 @@ describe("coach-chat gates", () => {
       payload: coachPayload({
         chatterQuestion: "как продать ppv?",
         coachHistory: [{ question: "с чего начать?", answer: "нащупай боль" }],
+        draftText: "черновик <wip> & не отправлен",
         clientContext: {
           transcript: "[10:00] Fan: hey babe",
           messageCount: 3,
@@ -1645,6 +1646,24 @@ describe("coach-chat gates", () => {
     expect(prompt).toContain("как продать ppv?");
     expect(prompt).toContain("нащупай боль");
     expect(prompt).toContain("most recent window only");
+    // Decision #179 end-to-end pin: body.draftText survives the SERVICE layer
+    // (features/index.ts forwards it unguarded — buildPrompt-level tests would
+    // stay green if that line ever got feature-gated away) and lands escaped
+    // inside the builder's wrapper.
+    expect(prompt).toContain("<chatter_draft>");
+    expect(prompt).toContain("черновик &lt;wip&gt; &amp; не отправлен");
+    // …and the restricted-store audit row records the draft as INCLUDED with
+    // its supplied size (review round 4 — mirrors the recapAttach pin).
+    const { rows: draftRows } = await testDb.pool.query<{
+      params: { contextManifest?: { chatterDraft?: { chars: number; included: boolean } } };
+    }>(
+      `select params from ai_generation_content
+       where feature = 'coach-chat' order by id desc limit 1`,
+    );
+    expect(draftRows[0]?.params.contextManifest?.chatterDraft).toEqual({
+      chars: "черновик <wip> & не отправлен".length,
+      included: true,
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("aborts a coach stream that crosses the transport ceiling: error, no done, failed outcome", async (context) => {
@@ -2203,6 +2222,33 @@ describe("coach-chat recap attach (spec §5)", () => {
       return;
     }
     const pageId = await svcFsPageId();
+    // Round-7 pin: an injected-then-shed dossier must report included=false.
+    await testDb.pool.query(
+      `insert into fans (platform, platform_user_id, username, display_name)
+       values ('fansly', $1, 'shed-fan', 'Shed Fan')
+       on conflict do nothing`,
+      [fanRef],
+    );
+    const { rows: shedFanRows } = await testDb.pool.query<{ id: string }>(
+      `select id::text as id from fans where platform = 'fansly' and platform_user_id = $1`,
+      [fanRef],
+    );
+    await testDb.pool.query(
+      `insert into fan_profiles (fan_id, platform_account_id, version, body, source, source_generated_at)
+       values ($1, $2, 1, 'DOSSIER_SHED_BY_PROMPT_BUDGET', 'chatmuse', now())`,
+      [Number(shedFanRows[0]!.id), pageId],
+    );
+    // The dossier loader requires a usable full fan-summary PROOF whose
+    // completion equals the profile body (round 8 — without it the dossier is
+    // never injected and the included=false pin below is vacuous). Older than
+    // the recap-attach candidates so it never wins the attach itself.
+    await seedRecap({
+      pageId,
+      mode: "full",
+      completion: "DOSSIER_SHED_BY_PROMPT_BUDGET",
+      createdAt: daysAgo(9),
+    });
+    appContext.config.chatMuseAiFanProfileContextFeatures = "all";
     await seedRecap({
       pageId,
       mode: "full",
@@ -2218,6 +2264,9 @@ describe("coach-chat recap attach (spec §5)", () => {
     const amp = "&";
     const { res, promptText, frames } = await runCoach({
       chatterQuestion: amp.repeat(2_000),
+      // Worst-legal draft: shed whole at step 2b under the same pressure. The
+      // audit row must record it as supplied-but-NOT-included (review round 4).
+      draftText: "DRAFT_PRESSURE " + amp.repeat(19_980),
       clientContext: {
         transcript:
           "OLDEST_RECAP_PRESSURE\n"
@@ -2251,6 +2300,18 @@ describe("coach-chat recap attach (spec §5)", () => {
       full: null,
       short: null,
     });
+    expect(promptText).not.toContain("DRAFT_PRESSURE");
+    expect(promptText).not.toContain("<chatter_draft>");
+    expect(promptText).toContain("(the chatter attached a working draft");
+    expect(
+      (rows[0]?.params.contextManifest as { chatterDraft?: { chars: number; included: boolean } })
+        ?.chatterDraft,
+    ).toEqual({ chars: ("DRAFT_PRESSURE " + amp.repeat(19_980)).length, included: false });
+    expect(promptText).not.toContain("DOSSIER_SHED_BY_PROMPT_BUDGET");
+    expect(
+      (rows[0]?.params.contextManifest as { fanProfile?: { included?: boolean } })?.fanProfile
+        ?.included,
+    ).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(d) both exist, full newer -> full only", async (context) => {
@@ -2307,6 +2368,14 @@ describe("coach-chat recap attach (spec §5)", () => {
       type: "meta",
       attachedRecaps: { full: null, short: null },
     });
+    // Round-6/7 pin: the kept dossier reports included=true on the audit row.
+    const { rows: dossierRows } = await testDb.pool.query<{
+      params: { contextManifest?: { fanProfile?: { included?: boolean } } };
+    }>(
+      `select params from ai_generation_content
+       where feature = 'coach-chat' order by id desc limit 1`,
+    );
+    expect(dossierRows[0]?.params.contextManifest?.fanProfile?.included).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(g) dedupe fires on a REAL sectioned recap even though compilation drops its financial section (P2-10)", async (context) => {

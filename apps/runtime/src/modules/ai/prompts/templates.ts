@@ -540,6 +540,8 @@ The chatter asks:
 {chatterQuestion}
 </chatter_question>
 
+{coachDraftSection}
+
 Answer the chatter now. Use a draft fence for any proposed fan message.
 `;
 
