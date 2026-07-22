@@ -906,6 +906,13 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           if (continuity !== null && !continuity.ok) {
             throw new Error(`domain-event replay interval contains a gap for account ${accountId}`);
           }
+          // Same post-read recheck as the post-snapshot loop: the stream may
+          // have died during the batch read, and this is the HOT path —
+          // enrichment for frames writeV2Frame would only discard is the
+          // costliest work a dead connection could still buy.
+          if (raw.writableEnded || raw.destroyed) {
+            return;
+          }
           const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
             .catch((error) => {
               request.log.warn({ err: error }, "v2 replay enrichment failed; serving thin frames");
@@ -1003,7 +1010,12 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           data: null,
           accountRef: ofapiAccountRefs.get(accountId) ?? null,
         };
-        raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
+        // Same closed-stream guard as writeV2Frame: the awaits above race
+        // lifetime/auth/gap raw.end() calls, and an unlistened write-after-end
+        // is a process-fatal stream error.
+        if (!raw.writableEnded && !raw.destroyed) {
+          raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
+        }
       }
     }
     if (completedSnapshotRecovery) {
@@ -1017,6 +1029,14 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           if (throughSeq <= afterRecoverySeq) continue;
           let afterSeq = afterRecoverySeq;
           for (;;) {
+            // The completion-marker awaits above race lifetime/auth raw.end();
+            // a dead connection must not keep paying for batch reads and
+            // enrichment it can never deliver (writeV2Frame would only skip
+            // each frame after the work was already done).
+            if (raw.writableEnded || raw.destroyed) {
+              cleanup();
+              return;
+            }
             const rows = await listEventsSince(appContext.db, {
               accountId,
               afterSeq,
@@ -1032,6 +1052,12 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
             });
             if (!continuity.ok) {
               throw new Error(`post-snapshot replay interval contains a gap for account ${accountId}`);
+            }
+            // The stream may have died during the batch read itself — recheck
+            // before paying for enrichment whose frames would all be skipped.
+            if (raw.writableEnded || raw.destroyed) {
+              cleanup();
+              return;
             }
             const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
               .catch((error) => {
@@ -1056,6 +1082,26 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
     }
     replayDone = true;
+    // A connection that died during the replay awaits must stop here: the
+    // marker write would be a stream error and the buffered flush would pay
+    // for enrichment it can never deliver.
+    if (raw.writableEnded || raw.destroyed) {
+      cleanup();
+      return;
+    }
+    // Live/replay boundary for clients (desktop notification gate): every
+    // frame after this marker on this connection is live delivery, not
+    // catch-up. Written before the buffered flush so frames that arrived
+    // during replay correctly land on the live side. A dedicated `control`
+    // SSE event keeps the marker outside the DomainEventFrame contract:
+    // SDK subscribers skip non-domain event names by design (the
+    // `event: ephemeral` rule), so no synthetic accountId/accountSeq ever
+    // reaches their frame validation.
+    raw.write(
+      `id: ${encodedConnectionCursor()}\nevent: control\ndata: ${JSON.stringify({
+        type: "replay_completed",
+      })}\n\n`,
+    );
     const buffered = bufferedLive.drain();
     for (const event of buffered) {
       liveChain = liveChain.then(() => writeV2FrameEnriched(event));
