@@ -2222,6 +2222,23 @@ describe("coach-chat recap attach (spec §5)", () => {
       return;
     }
     const pageId = await svcFsPageId();
+    // Round-7 pin: an injected-then-shed dossier must report included=false.
+    await testDb.pool.query(
+      `insert into fans (platform, platform_user_id, username, display_name)
+       values ('fansly', $1, 'shed-fan', 'Shed Fan')
+       on conflict do nothing`,
+      [fanRef],
+    );
+    const { rows: shedFanRows } = await testDb.pool.query<{ id: string }>(
+      `select id::text as id from fans where platform = 'fansly' and platform_user_id = $1`,
+      [fanRef],
+    );
+    await testDb.pool.query(
+      `insert into fan_profiles (fan_id, platform_account_id, version, body, source, source_generated_at)
+       values ($1, $2, 1, 'DOSSIER_SHED_BY_PROMPT_BUDGET', 'chatmuse', now())`,
+      [Number(shedFanRows[0]!.id), pageId],
+    );
+    appContext.config.chatMuseAiFanProfileContextFeatures = "all";
     await seedRecap({
       pageId,
       mode: "full",
@@ -2275,11 +2292,15 @@ describe("coach-chat recap attach (spec §5)", () => {
     });
     expect(promptText).not.toContain("DRAFT_PRESSURE");
     expect(promptText).not.toContain("<chatter_draft>");
-    expect(promptText).toContain("(the chatter attached a working draft");
     expect(
       (rows[0]?.params.contextManifest as { chatterDraft?: { chars: number; included: boolean } })
         ?.chatterDraft,
     ).toEqual({ chars: ("DRAFT_PRESSURE " + amp.repeat(19_980)).length, included: false });
+    expect(promptText).not.toContain("DOSSIER_SHED_BY_PROMPT_BUDGET");
+    expect(
+      (rows[0]?.params.contextManifest as { fanProfile?: { included?: boolean } })?.fanProfile
+        ?.included,
+    ).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(d) both exist, full newer -> full only", async (context) => {
@@ -2336,6 +2357,14 @@ describe("coach-chat recap attach (spec §5)", () => {
       type: "meta",
       attachedRecaps: { full: null, short: null },
     });
+    // Round-6/7 pin: the kept dossier reports included=true on the audit row.
+    const { rows: dossierRows } = await testDb.pool.query<{
+      params: { contextManifest?: { fanProfile?: { included?: boolean } } };
+    }>(
+      `select params from ai_generation_content
+       where feature = 'coach-chat' order by id desc limit 1`,
+    );
+    expect(dossierRows[0]?.params.contextManifest?.fanProfile?.included).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("(g) dedupe fires on a REAL sectioned recap even though compilation drops its financial section (P2-10)", async (context) => {

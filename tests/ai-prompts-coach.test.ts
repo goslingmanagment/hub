@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildPrompt,
+  coachBudgetStats,
   coachHistorySection,
   COACH_CHAT_TEMPLATE,
   COACH_PROMPT_MAX_CHARS,
@@ -300,11 +301,10 @@ describe("coach-chat optional draft", () => {
     expect(built.user).not.toContain("## Chatter's Working Draft");
     // Review round 3: the shed is visible to the audit trail, never silent.
     expect(built.coachDraftIncluded).toBe(false);
-    // Review round 6: …and visible to the MODEL — a «critique my draft» question
-    // must not leave the coach to hallucinate a draft it never saw.
-    expect(built.user).toContain(
-      "(the chatter attached a working draft; it was omitted to fit the prompt budget)",
-    );
+    // Review round 7: at a binary-search-filled boundary the omission note does
+    // NOT fit — it is dropped rather than displacing a single transcript char;
+    // the fact survives in coachDraftIncluded / the manifest.
+    expect(built.user).not.toContain("(the chatter attached a working draft");
     // The protected fields survive: the question and the newest transcript.
     expect(built.user).toContain("QUESTION_SENTINEL");
     expect(built.user).toContain("NEWEST_TX_🎉");
@@ -419,6 +419,7 @@ describe("coach-chat optional draft", () => {
 
   it("reuses the pass-1 transcript search when the draftless pass re-trims (memo path)", () => {
     const amp = "&";
+    const searchesBefore = coachBudgetStats.transcriptSearches;
     const built = buildPrompt({
       ...baseInput,
       personality: { ...baseInput.personality, content: amp.repeat(50_000) },
@@ -441,12 +442,57 @@ describe("coach-chat optional draft", () => {
     );
     // The draft could not fit; the second pass also shed everything and trimmed
     // the transcript via the memo — the ceiling still holds exactly.
+    // Review round 7 regression guard: the memo means exactly ONE binary
+    // search ran across both passes — without it this asserts 2.
+    expect(coachBudgetStats.transcriptSearches - searchesBefore).toBe(1);
     expect(built.coachDraftIncluded).toBe(false);
     expect(built.coachDossierIncluded).toBe(false);
     expect(built.user).toContain("NEWEST_MEMO");
     expect(built.user).not.toContain("OLDEST_MEMO");
     expect(built.user).toContain("[older transcript omitted]");
-    expect(built.user).toContain("(the chatter attached a working draft");
+    // Boundary-filled → the note is dropped, never displacing (review round 7).
+    expect(built.user).not.toContain("(the chatter attached a working draft");
+  });
+
+  it("a dropped draft displaces NOTHING even at the exact ceiling (twin equivalence)", () => {
+    const amp = "&";
+    const base = {
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      fanProfile: {
+        body: "DOSSIER_KEEP " + amp.repeat(300),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+    };
+    // Calibrate a plain-text transcript so the DRAFTLESS prompt lands exactly
+    // on the ceiling while keeping the dossier.
+    const probe = buildPrompt({ ...base, transcript: "X" });
+    const slack = COACH_PROMPT_MAX_CHARS - (probe.system.length + probe.user.length);
+    const transcript = "X" + "y".repeat(slack);
+    const twin = buildPrompt({ ...base, transcript });
+    expect(twin.system.length + twin.user.length).toBe(COACH_PROMPT_MAX_CHARS);
+    expect(twin.user).toContain("DOSSIER_KEEP");
+
+    // Round-6 regression (review round 7): the omission note used to ride the
+    // cascade and evict the dossier here. Attaching an unfittable draft must
+    // change NOTHING at the boundary — the note is dropped, the dossier stays.
+    const withDraft = buildPrompt({
+      ...base,
+      transcript,
+      draftText: "DRAFT_TOO_BIG " + amp.repeat(19_980),
+    });
+    expect(withDraft.system.length + withDraft.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    expect(withDraft.user).toContain("DOSSIER_KEEP");
+    expect(withDraft.coachDossierIncluded).toBe(true);
+    expect(withDraft.coachDraftIncluded).toBe(false);
+    expect(withDraft.user).not.toContain("(the chatter attached a working draft");
+    expect(withDraft.user).toBe(twin.user);
   });
 
   it("keeps the first-question claim only for a genuinely empty dialog", () => {

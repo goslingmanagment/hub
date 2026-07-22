@@ -772,6 +772,12 @@ function tailBoundedTranscript(
   return COACH_TRANSCRIPT_OMISSION_MARKER + codePoints.slice(-maxChars).join('');
 }
 
+/** Test-only observability for the coach reducer (review round 7): counts
+ * transcript binary searches so the step-3 memo has a regression guard —
+ * without it, a broken pass-identity invariant silently restores the doubled
+ * search on the shed-draft hot path. Not part of any runtime contract. */
+export const coachBudgetStats = { transcriptSearches: 0 };
+
 /** Apply the Coach's whole-prompt runtime policy to VALUES, before template
  * substitution. This is deliberately not a slice of the finished prompt:
  * history exchanges and recap/dossier/transcript wrappers always remain
@@ -797,6 +803,14 @@ function budgetCoachTemplateValues(
   // the rerun used to double the ~18-probe search over a 300k transcript on
   // the shed-draft path).
   let transcriptSearchMemo: number | null = null;
+  const fits = (values: TemplateValues): boolean => {
+    const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
+    const userChars = buildUserBlocks('coach-chat', template, values).reduce(
+      (total, block) => total + block.text.length,
+      0,
+    );
+    return systemChars + userChars <= COACH_PROMPT_MAX_CHARS;
+  };
 
   /** One full shed cascade. `draftAllowed` gates the draft from the very start,
    * so the second pass below never trades context away for a section it already
@@ -859,16 +873,8 @@ function budgetCoachTemplateValues(
         short: shortRecapChars,
       }),
       coachHistorySection: coachHistorySection(history, suppliedHistoryCount - history.length),
-      coachDraftSection: includeDraft ? initialValues.coachDraftSection! : draftOmissionNote,
+      coachDraftSection: includeDraft ? initialValues.coachDraftSection! : '',
     });
-    const fits = (values: TemplateValues): boolean => {
-      const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
-      const userChars = buildUserBlocks('coach-chat', template, values).reduce(
-        (total, block) => total + block.text.length,
-        0,
-      );
-      return systemChars + userChars <= COACH_PROMPT_MAX_CHARS;
-    };
 
     let values = makeValues();
 
@@ -923,6 +929,7 @@ function budgetCoachTemplateValues(
         return done(memoValues);
       }
     }
+    coachBudgetStats.transcriptSearches += 1;
     transcriptChars = 0;
     const withoutTranscript = makeValues();
     if (!fits(withoutTranscript)) {
@@ -966,10 +973,20 @@ function budgetCoachTemplateValues(
   // When NOTHING optional existed to displace, the two passes are provably
   // byte-identical — skip the rerun (review round 4: it doubled the transcript
   // binary search on the common first-question-with-draft path).
-  if (hasDraft && !first.draftKept && first.displacedContext) {
-    return reduce(false).values;
+  const chosen =
+    hasDraft && !first.draftKept && first.displacedContext ? reduce(false) : first;
+  if (hasDraft && !chosen.draftKept) {
+    // Review round 7: the omission note must never DISPLACE context. Round 6
+    // let it ride the cascade, where at an exact-ceiling boundary the note
+    // itself evicted the dossier its draftless twin kept. Append it only after
+    // the context is chosen, and only when it fits AS-IS; otherwise the fact
+    // survives in coachDraftIncluded / the manifest alone.
+    const withNote: TemplateValues = { ...chosen.values, coachDraftSection: draftOmissionNote };
+    if (fits(withNote)) {
+      return withNote;
+    }
   }
-  return first.values;
+  return chosen.values;
 }
 
 export function flattenPromptBlocks(blocks: ReadonlyArray<PromptBlock>): string {

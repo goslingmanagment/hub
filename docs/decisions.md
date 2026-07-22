@@ -5049,4 +5049,11 @@ rule — a «critique my draft» question must never invite hallucinating one);
 `coachDossierIncluded` corrects the pre-build fanProfile manifest entry
 post-budget (`included`), closing the last uncorrected optional-context claim;
 and the step-3 memo re-verifies fits() before returning, falling through to a
-fresh search if the pass-identity invariant is ever broken.
+fresh search if the pass-identity invariant is ever broken. Round 7: the
+omission note itself must never displace context — round 6 let it ride the
+cascade, where at an exact-ceiling boundary it evicted the dossier the true
+draftless twin kept; it is now appended only after the context is chosen and
+only when it fits as-is (boundary-filled prompts drop it — the fact stays in
+the manifest), with a calibrated exact-ceiling twin-equivalence test; the memo
+gains a search-count regression guard; and fanProfile.included is pinned at the
+service layer for both the kept and the shed dossier.
