@@ -485,23 +485,53 @@ describe("coach-chat optional draft", () => {
     expect(built.user).toContain("DRAFT_KEEP");
   });
 
-  it("multi-entry marker compensation packs the window to the boundary (loop 1 fires)", () => {
-    // Calibrate entries so each renders EXACTLY 10_000 chars: the pre-marker
-    // walk then packs 6 exchanges to exactly 60_000, and the marker + absolute
-    // numbers force the compensation to shed exactly one more (review round 9:
-    // the previous calibration sat ~48k below the boundary and fired nothing).
+  it("multi-entry marker compensation sheds exactly one more entry (loop 1 fires)", () => {
+    // Calibrate SIX entries whose markerless render is exactly 59_999 (walk
+    // keeps all six with 1 char of slack); the counted marker + wider absolute
+    // numbers then overflow, and the compensation loop must shed exactly one
+    // (review round 10: the previous calibration missed the join newlines and
+    // fired neither loop — verified by instrumented execution).
     const probe = coachHistorySection([{ question: "q", answer: "a".repeat(100) }]).length;
     const wrapper = probe - 100; // per-entry non-answer chars at n="1"
-    const answer = "a".repeat(10_000 - wrapper);
-    const entries = Array.from({ length: 20 }, () => ({ question: "q", answer }));
+    const answer = "a".repeat(9_999 - wrapper);
+    const entries = Array.from({ length: 6 }, () => ({ question: "q", answer }));
+    // Baseline sanity: without outer omissions the walk keeps ALL six.
+    const baseline = coachHistorySection(entries);
+    expect(baseline.length).toBeGreaterThan(59_900);
+    expect(baseline.length).toBeLessThanOrEqual(60_000);
+    expect(baseline).not.toContain("omitted to fit the prompt budget");
+
     const section = coachHistorySection(entries, 3);
     expect(section.length).toBeLessThanOrEqual(60_000);
-    // Dense packing PROVES the compensation engaged: dropping one whole entry
-    // leaves less than one entry of slack.
-    expect(section.length).toBeGreaterThan(60_000 - 10_200);
-    expect(section).toContain("omitted to fit the prompt budget");
-    // 20 supplied + 3 outer-shed = 23 total; kept window numbering is absolute.
-    expect(section).toContain('<coach_exchange n="23">');
+    // 3 outer + 1 compensation-shed = 4 omitted; the newest keeps its absolute
+    // number (dialog of 9), the compensation victim's number is gone.
+    expect(section).toContain("(earlier 4 coach exchanges omitted to fit the prompt budget)");
+    expect(section).toContain('<coach_exchange n="9">');
+    expect(section).not.toContain('<coach_exchange n="4">');
+  });
+
+  it("a SMALL draft rides the transcript search instead of being shed (review round 10)", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "OLDEST_SMALL\n" + amp.repeat(40_000) + "\nNEWEST_SMALL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: "оцени мой черновик?",
+      draftText: "привет, скучал? у меня для тебя кое-что есть…",
+    });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    // The tiny draft costs oldest-tail chars, not its own existence: the coach
+    // SEES the draft on a «critique my draft» turn even under max pressure.
+    expect(built.coachDraftIncluded).toBe(true);
+    expect(built.user).toContain("привет, скучал?");
+    expect(built.user).toContain("NEWEST_SMALL");
+    expect(built.user).not.toContain("OLDEST_SMALL");
+    expect(built.user).not.toContain("(the chatter attached a working draft");
   });
 
   it("single-entry compensation loses only the marker's worth, not hundreds of chars (loop 2)", () => {

@@ -446,6 +446,12 @@ function coachOmissionMarker(count: number): string {
 // TAIL beyond this and keep the head (recap sections lead with the most
 // load-bearing facts).
 const RECAP_ATTACH_MAX_CHARS = 30_000;
+/** A draft whose RENDERED section is at most this many chars rides the
+ * transcript search like the omission note does (review round 10): dropping a
+ * ~450-char draft to protect transcript bytes and then spending 78 of those
+ * bytes on a note about the drop was incoherent. Larger drafts keep the
+ * documented step-2b whole-drop semantics. */
+const COACH_SMALL_DRAFT_RIDE_CHARS = 2_048;
 
 /** Renders the coach dialog so far. Each answer is FIRST projected to the ≤10k
  * replay bound (spec §3/§7, option "c"), THEN the newest exchanges are kept and
@@ -947,10 +953,17 @@ function budgetCoachTemplateValues(
     // trimmed — but as the freshest current-turn context it is shed LAST of the
     // optional sections (after history, dossier and both recaps). Whole-section
     // drop, never a truncation: half of the reply the coach was asked to critique
-    // would mislead more than omitting it.
-    includeDraft = false;
-    values = makeValues();
-    if (fits(values)) return done(values);
+    // would mislead more than omitting it. Exception (review round 10): a SMALL
+    // draft rides the transcript search instead — it then costs its own size in
+    // oldest-tail chars, exactly like the omission note it would otherwise buy.
+    if (
+      includeDraft &&
+      (initialValues.coachDraftSection ?? '').length > COACH_SMALL_DRAFT_RIDE_CHARS
+    ) {
+      includeDraft = false;
+      values = makeValues();
+      if (fits(values)) return done(values);
+    }
 
     // 3. Only after every older/summary source is exhausted may the transcript
     // lose its oldest prefix. The current question and system/persona never enter

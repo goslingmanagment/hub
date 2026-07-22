@@ -5073,4 +5073,13 @@ lost 200+ chars and the default-span cap hid the near-lossless region); the
 boundary tests now genuinely pack the window (probe-calibrated 6×10_000 —
 the prior calibration fired neither compensation loop); `inTranscriptSearch`
 is pass-scoped so a future early exit cannot let the note ride pass 2's
-cascade.
+cascade. Round 10: a SMALL draft (rendered ≤2_048 chars,
+COACH_SMALL_DRAFT_RIDE_CHARS) rides the transcript search like the note —
+paying its own size in oldest-tail chars — instead of being whole-dropped at
+2b; larger drafts keep the documented drop order. This also erases the
+two-pass CPU cost for tiny drafts (the remaining double cascade for large
+displacing drafts is the accepted price of the never-poorer invariant). The
+loop-1 calibration test now genuinely fires the compensation (the round-9
+calibration missed the join newlines — this entry's earlier coverage claim was
+wrong for loop 1); the dossier log message says «omitted by prompt budget»
+when the reducer shed it.

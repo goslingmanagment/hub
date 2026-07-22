@@ -631,7 +631,9 @@ export async function prepareAiFeatureStream(
       ...(feature === "coach-chat"
         ? { included: prompt.coachDossierIncluded === true }
         : {}),
-    }, "ai feature dossier injected");
+    }, feature === "coach-chat" && prompt.coachDossierIncluded !== true
+      ? "ai feature dossier omitted by prompt budget"
+      : "ai feature dossier injected");
   }
   // The same what-the-provider-actually-received rule for the chatter draft: a
   // supplied draft the coach budget reducer shed leaves an audit trace (its
