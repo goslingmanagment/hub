@@ -238,7 +238,7 @@ describe("coach-chat prompt", () => {
 });
 
 describe("coach-chat optional draft", () => {
-  it("renders the escaped, framed draft section in the 5m dynamic block when a draft is present", () => {
+  it("renders the escaped, framed draft section in the uncached task block when a draft is present", () => {
     const built = buildPrompt({
       ...baseInput,
       draftText: "  hey <babe> & wanna see more? 😘  ",
@@ -254,15 +254,16 @@ describe("coach-chat optional draft", () => {
     expect(built.user).not.toContain("hey <babe> & wanna");
     // No leftover placeholder.
     expect(built.user).not.toContain("{coachDraftSection}");
-    // It rides the ephemeral 5m dynamic block, never the fan-agnostic 1h prefix
-    // or the uncached task block (which carries only the question).
+    // Review P2: the draft is a per-turn volatile input — it rides the UNCACHED
+    // task block next to the question, so a changed/attached draft never
+    // invalidates the 5m dynamic prefix (retry / fresh-dialog cache hits).
     expect(staticBlock?.cache).toBe("1h");
     expect(staticBlock?.text).not.toContain("## Chatter's Working Draft");
     expect(dynamicBlock?.cache).toBe("5m");
-    expect(dynamicBlock?.text).toContain("## Chatter's Working Draft");
-    expect(dynamicBlock?.text).toContain("<chatter_draft>");
+    expect(dynamicBlock?.text).not.toContain("## Chatter's Working Draft");
     expect(taskBlock?.cache).toBe("none");
-    expect(taskBlock?.text).not.toContain("## Chatter's Working Draft");
+    expect(taskBlock?.text).toContain("## Chatter's Working Draft");
+    expect(taskBlock?.text).toContain("<chatter_draft>");
   });
 
   it("omits the draft section entirely when no draft is provided", () => {
@@ -354,19 +355,66 @@ describe("coach-chat optional draft", () => {
     // The section owns up to the eviction — it must NOT claim first-question
     // status for a dialog the caller actually sent.
     expect(built.user).toContain(
-      "(earlier coach dialog omitted to fit the prompt budget)",
+      "(earlier 1 coach exchange omitted to fit the prompt budget)",
     );
     expect(built.user).not.toContain("this is the first question");
     // The draft (shed only at step 2b, after history) survives.
     expect(built.user).toContain("DRAFT_KEEP");
   });
 
+  it("never sheds context to make room for a draft that itself cannot fit", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "TX_HEAD TX_TAIL",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      coachHistory: [{ question: "HIST_KEEP_Q", answer: "hist " + amp.repeat(500) }],
+      fanProfile: {
+        body: "DOSSIER_KEEP " + amp.repeat(800),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      recapAttach: {
+        full: { body: "FULLREC_KEEP " + amp.repeat(400), ageMs: 60_000 },
+        short: { body: "SHORTREC_KEEP " + amp.repeat(400), ageMs: 30_000 },
+      },
+      // Worst-legal draft (~100k escaped): cannot fit even after every optional
+      // section is gone.
+      draftText: "DRAFT_TOO_BIG " + amp.repeat(19_980),
+    });
+    // Review P1: the draftless prompt fits WITH all context, so attaching an
+    // unfittable draft must not cost the coach that context — the reducer's
+    // second pass rebuilds from the original inputs with the draft off.
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    expect(built.user).not.toContain("DRAFT_TOO_BIG");
+    expect(built.user).not.toContain("## Chatter's Working Draft");
+    expect(built.user).toContain("HIST_KEEP_Q");
+    expect(built.user).toContain("DOSSIER_KEEP");
+    expect(built.user).toContain("FULLREC_KEEP");
+    expect(built.user).toContain("SHORTREC_KEEP");
+    expect(built.user).toContain("TX_HEAD TX_TAIL");
+    expect(built.user).not.toContain("omitted to fit the prompt budget");
+  });
+
   it("keeps the first-question claim only for a genuinely empty dialog", () => {
     expect(coachHistorySection(undefined)).toContain("this is the first question");
     expect(coachHistorySection([], 0)).toContain("this is the first question");
     expect(coachHistorySection([], 2)).toBe(
-      "(earlier coach dialog omitted to fit the prompt budget)",
+      "(earlier 2 coach exchanges omitted to fit the prompt budget)",
     );
+    // Partial eviction is owned up to too: counted marker + ABSOLUTE numbering
+    // (review P2 — the survivor must not be renumbered as the dialog opener).
+    const partial = coachHistorySection([{ question: "q16", answer: "a16" }], 15);
+    expect(partial).toContain(
+      "(earlier 15 coach exchanges omitted to fit the prompt budget)",
+    );
+    expect(partial).toContain('<coach_exchange n="16">');
+    expect(partial).not.toContain('<coach_exchange n="1">');
   });
 });
 
@@ -423,6 +471,11 @@ describe("coach history section budget (exact rendered size)", () => {
     expect(section.length).toBeLessThanOrEqual(60_000);
     expect(section).toContain("A19"); // newest kept
     expect(section).not.toContain("A0 "); // oldest shed
+    // Review P2: this internal shed is owned up to as well — counted marker,
+    // and the newest entry keeps its ABSOLUTE dialog number.
+    expect(section).toContain("omitted to fit the prompt budget");
+    expect(section).toContain('<coach_exchange n="20">');
+    expect(section).not.toContain('<coach_exchange n="1">');
   });
 
   it("renders a within-cap answer byte-identical (escaped), no projection marker", () => {

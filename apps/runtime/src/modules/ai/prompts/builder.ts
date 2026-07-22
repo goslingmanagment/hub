@@ -417,13 +417,20 @@ function projectCoachAnswerSized(answer: string, headChars: number, tailChars: n
 /** Renders the kept coach exchanges (oldest-first, 1-indexed) into their escaped,
  * XML-wrapped section string. Measuring THIS output — not the raw question+answer
  * sum — is what makes the budget exact (escaping and wrapper overhead included).*/
-function renderCoachExchanges(entries: CoachHistoryEntry[]): string {
+function renderCoachExchanges(entries: CoachHistoryEntry[], startNumber = 1): string {
   return entries
     .map(
       (entry, index) =>
-        `<coach_exchange n="${index + 1}">\n<chatter>${escapeForPrompt(entry.question)}</chatter>\n<coach>${escapeForPrompt(entry.answer)}</coach>\n</coach_exchange>`,
+        `<coach_exchange n="${startNumber + index}">\n<chatter>${escapeForPrompt(entry.question)}</chatter>\n<coach>${escapeForPrompt(entry.answer)}</coach>\n</coach_exchange>`,
     )
     .join('\n');
+}
+
+/** One honest line for exchanges the prompt no longer carries (review P2): the
+ * stateless coach must never see a trimmed dialog renumbered from n="1" as if
+ * nothing preceded it. */
+function coachOmissionMarker(count: number): string {
+  return `(earlier ${count} coach exchange${count === 1 ? '' : 's'} omitted to fit the prompt budget)`;
 }
 // Per recap slot. The oldest recap text is itself a summary — hard-truncate the
 // TAIL beyond this and keep the head (recap sections lead with the most
@@ -445,7 +452,7 @@ export function coachHistorySection(
     // DID send history, the reducer shed it. The marker keeps the stateless
     // coach from re-greeting or contradicting an exchange it can no longer see.
     return omittedForBudget > 0
-      ? '(earlier coach dialog omitted to fit the prompt budget)'
+      ? coachOmissionMarker(omittedForBudget)
       : '(no prior coach dialog — this is the first question)';
   }
   const projected: CoachHistoryEntry[] = history.map((entry) => ({
@@ -489,7 +496,41 @@ export function coachHistorySection(
     }
     kept = candidate;
   }
-  return renderCoachExchanges(kept);
+  // Honest accounting (review P2): number the kept exchanges by their ABSOLUTE
+  // position in the supplied dialog and own up to EVERY drop with a counted
+  // marker — the outer reducer's shed (omittedForBudget) plus this function's
+  // own 60k-budget shed. Renumbering the survivors from n="1" would actively
+  // claim the oldest kept exchange opened the dialog.
+  let omittedTotal = omittedForBudget + (history.length - kept.length);
+  const render = (): string => {
+    const rendered = renderCoachExchanges(kept, omittedTotal + 1);
+    return omittedTotal > 0 ? `${coachOmissionMarker(omittedTotal)}\n${rendered}` : rendered;
+  };
+  let section = render();
+  // The marker line and wider absolute numbers add bytes the walk above did not
+  // measure — restore budget EXACTNESS by shedding further oldest kept entries,
+  // then (single-entry corner) re-shrinking the newest answer, so the final
+  // rendered section never overshoots.
+  while (section.length > COACH_PROMPT_HISTORY_BUDGET_CHARS && kept.length > 1) {
+    kept = kept.slice(1);
+    omittedTotal += 1;
+    section = render();
+  }
+  while (
+    section.length > COACH_PROMPT_HISTORY_BUDGET_CHARS
+    && (headChars > 0 || tailChars > 0)
+  ) {
+    headChars = Math.floor(headChars / 2);
+    tailChars = Math.floor(tailChars / 2);
+    kept = [
+      {
+        question: history[history.length - 1]!.question,
+        answer: projectCoachAnswerSized(history[history.length - 1]!.answer, headChars, tailChars),
+      },
+    ];
+    section = render();
+  }
+  return section;
 }
 
 /** Coarse human age label for a dated recap ("10 min ago", "3 days ago"). */
@@ -732,6 +773,13 @@ function budgetCoachTemplateValues(
   systemBlocks: PromptBlock[],
   initialValues: TemplateValues,
 ): TemplateValues {
+  const transcriptCodePoints = Array.from(input.transcript);
+  const hasDraft = (initialValues.coachDraftSection ?? '') !== '';
+
+  /** One full shed cascade. `draftAllowed` gates the draft from the very start,
+   * so the second pass below never trades context away for a section it already
+   * knows it cannot keep. */
+  const reduce = (draftAllowed: boolean): { values: TemplateValues; draftKept: boolean } => {
   let history = [...(input.coachHistory ?? [])];
   const suppliedHistoryCount = history.length;
   let recapAttach: RecapAttach | undefined = input.recapAttach
@@ -740,7 +788,6 @@ function budgetCoachTemplateValues(
         short: input.recapAttach.short ? { ...input.recapAttach.short } : null,
       }
     : undefined;
-  const transcriptCodePoints = Array.from(input.transcript);
   let transcriptChars = transcriptCodePoints.length;
   let dossierChars = Math.min(
     COACH_DOSSIER_MAX_CHARS,
@@ -759,7 +806,11 @@ function budgetCoachTemplateValues(
   // be protected without blowing the budget, so it is dropped before the newest
   // transcript is trimmed — but as the freshest current-turn input it is shed
   // LAST of the optional sections (see step 2b below).
-  let includeDraft = true;
+  let includeDraft = draftAllowed && hasDraft;
+  const done = (values: TemplateValues): { values: TemplateValues; draftKept: boolean } => ({
+    values,
+    draftKept: includeDraft,
+  });
 
   const makeValues = (): TemplateValues => ({
     ...initialValues,
@@ -803,17 +854,17 @@ function budgetCoachTemplateValues(
   if (!recapAttach?.short) shortRecapChars = 0;
   values = makeValues();
   if (fits(values)) {
-    return values;
+    return done(values);
   }
   dossierChars = 0;
   values = makeValues();
-  if (fits(values)) return values;
+  if (fits(values)) return done(values);
   fullRecapChars = 0;
   values = makeValues();
-  if (fits(values)) return values;
+  if (fits(values)) return done(values);
   shortRecapChars = 0;
   values = makeValues();
-  if (fits(values)) return values;
+  if (fits(values)) return done(values);
 
   // 2b. Drop the chatter's working draft whole. It is below the protected
   // question and the newest transcript, so it goes before the transcript is
@@ -823,7 +874,7 @@ function budgetCoachTemplateValues(
   // would mislead more than omitting it.
   includeDraft = false;
   values = makeValues();
-  if (fits(values)) return values;
+  if (fits(values)) return done(values);
 
   // 3. Only after every older/summary source is exhausted may the transcript
   // lose its oldest prefix. The current question and system/persona never enter
@@ -858,7 +909,20 @@ function budgetCoachTemplateValues(
     );
   }
   transcriptChars = best;
-  return bestValues;
+  return done(bestValues);
+  };
+
+  const first = reduce(true);
+  // Review P1: attaching a draft must never leave the prompt POORER than its
+  // draftless twin. The cascade is monotonic — context shed to make room for the
+  // draft is never restored — so when the draft itself ends up dropped,
+  // everything it displaced was displaced for nothing. Rebuild from the original
+  // inputs with the draft off: sections are then shed only on their own merits,
+  // and the result is exactly the pre-draft prompt.
+  if (hasDraft && !first.draftKept) {
+    return reduce(false).values;
+  }
+  return first.values;
 }
 
 export function flattenPromptBlocks(blocks: ReadonlyArray<PromptBlock>): string {

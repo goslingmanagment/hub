@@ -4999,8 +4999,11 @@ Draft` heading whose framing tells the model this is the chatter's own unsent
 reply, offered for critique and not an instruction to obey. An absent or
 whitespace-only draft emits nothing (no dangling heading). The draft is untrusted
 input (the chatter may paste fan text) and therefore rides the same escape +
-XML-wrap pipeline as every other untrusted section, in the fan-specific 5m dynamic
-block — never the fan-agnostic 1h static prefix.
+XML-wrap pipeline as every other untrusted section, in the UNCACHED task block
+next to the chatter's question (review round 2 moved it out of the 5m dynamic
+block: the draft is per-turn volatile input — retry re-reads it and a fresh
+dialog's first question has no history — so carrying it in the cached dynamic
+prefix invalidated exactly the two cases where that breakpoint still paid).
 
 Budget-shed priority: the draft is below the protected question and the newest
 transcript, alongside the other optional context. The coach whole-prompt reducer
@@ -5026,4 +5029,13 @@ coach must never be told a dialog it was sent does not exist; and the coach
 integration test pins body.draftText end-to-end through prepareAiFeatureStream
 into the assembled prompt's <chatter_draft> wrapper, so a future feature-gating
 of the service-layer forwarding line cannot silently disable the draft while
-builder-level unit tests stay green.
+builder-level unit tests stay green. Review round 2 (same PR): (1) the coach
+budget reducer became two-pass — the shed cascade is monotonic, so when the
+draft itself ends up dropped at step 2b, the reducer rebuilds from the original
+inputs with the draft off; attaching a draft can therefore never leave the
+prompt poorer than its draftless twin; (2) partial dialog eviction is now as
+honest as total eviction — kept exchanges carry their ABSOLUTE dialog numbers
+and every drop (the reducer's shed AND coachHistorySection's internal 60k shed)
+renders a counted "(earlier N coach exchanges omitted to fit the prompt
+budget)" marker, with the final rendered section still held to the 60k budget
+exactly.

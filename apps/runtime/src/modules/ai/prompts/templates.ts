@@ -532,8 +532,6 @@ method you were given.
 
 {coachHistorySection}
 
-{coachDraftSection}
-
 ## Your Task
 
 The chatter asks:
@@ -541,6 +539,8 @@ The chatter asks:
 <chatter_question>
 {chatterQuestion}
 </chatter_question>
+
+{coachDraftSection}
 
 Answer the chatter now. Use a draft fence for any proposed fan message.
 `;
