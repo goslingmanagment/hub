@@ -5082,4 +5082,16 @@ displacing drafts is the accepted price of the never-poorer invariant). The
 loop-1 calibration test now genuinely fires the compensation (the round-9
 calibration missed the join newlines — this entry's earlier coverage claim was
 wrong for loop 1); the dossier log message says «omitted by prompt budget»
-when the reducer shed it.
+when the reducer shed it. Round 11 (scope correction): the never-poorer
+invariant applies to a DROPPED draft only — that is what the two-pass rebuild
+guarantees. A KEPT draft displaces context at SECTION granularity, because the
+pre-existing cascade design deliberately trims the transcript only after every
+summary section is exhausted (assembled-review ruling: the newest transcript
+outranks dossier/recaps); at an exact-ceiling boundary a few-hundred-char
+addition of ANY kind — a draft, a longer question, one more history entry —
+costs a whole section. Earlier rounds' unconditional phrasing here ("never
+leave the prompt poorer", "pays its own size in oldest-tail chars") was
+overclaimed and is corrected by this entry. Whether the cascade should learn
+transcript-first trimming for small overages (which would change that
+pre-existing ruling for every optional section, not just drafts) is an OPEN
+product question recorded for the owner — not decided in this PR.

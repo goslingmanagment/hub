@@ -1016,12 +1016,13 @@ function budgetCoachTemplateValues(
   };
 
   const first = reduce(true);
-  // Review P1: attaching a draft must never leave the prompt POORER than its
-  // draftless twin. The cascade is monotonic — context shed to make room for the
-  // draft is never restored — so when the draft itself ends up dropped,
-  // everything it displaced was displaced for nothing. Rebuild from the original
-  // inputs with the draft off: sections are then shed only on their own merits,
-  // and the result is exactly the pre-draft prompt.
+  // Review P1 (scope narrowed in round 11): a DROPPED draft must never leave
+  // the prompt poorer than its draftless twin — the cascade is monotonic, so
+  // when the draft ends up dropped, everything it displaced was displaced for
+  // nothing; the rebuild restores it. A KEPT draft displaces at SECTION
+  // granularity by the pre-existing cascade design (transcript is trimmed only
+  // after every summary section is exhausted) — that trade is documented in
+  // decision #178 round 11, not covered by this guarantee.
   // When NOTHING optional existed to displace, the two passes are provably
   // byte-identical — skip the rerun (review round 4: it doubled the transcript
   // binary search on the common first-question-with-draft path).
