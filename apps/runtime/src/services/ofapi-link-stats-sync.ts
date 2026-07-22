@@ -7,6 +7,7 @@
 
 import {
   findLatestFinishedLinkStatRun,
+  findLatestNonEmptyFinishedLinkStatRun,
   findPageByLabel,
   insertLinkStatRunWithSnapshots,
   listOfapiMappedPages,
@@ -77,7 +78,9 @@ function parseCounter(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return null;
   }
-  if (!Number.isInteger(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) {
+  // The snapshot columns are PostgreSQL INTEGER: a larger vendor counter must
+  // fail normalization (controlled skip), never abort the insert transaction.
+  if (!Number.isInteger(value) || value < 0 || value > 2_147_483_647) {
     return null;
   }
   return value;
@@ -284,22 +287,30 @@ async function reconcileKind(
   let inventoryVanished = false;
   let emptyUnverified = false;
   if (walkComplete && rawItems === 0) {
-    const baseline = await findLatestFinishedLinkStatRun(input.db, {
+    // A page that has NEVER shown a non-empty inventory can never prove
+    // absence: an empty stored read there is indistinguishable from an
+    // unpopulated vendor cache (Computed endpoint) or a malformed-200
+    // normalized to []. Such pages stay 'partial' (empty_unverified) forever
+    // until a non-empty walk is ever observed — absence proofs are reserved
+    // for inventories we have actually seen.
+    const everNonEmpty = await findLatestNonEmptyFinishedLinkStatRun(input.db, {
       platformAccountId: input.pageId,
       linkKind: input.kind,
     });
-    // Baseline emptiness is judged by rawItems (what the vendor SHOWED), not
-    // writtenRows: a mapping-collapse run (items seen, all dropped) is a
-    // NON-empty baseline — its links did not stop existing.
-    // Converges: this run lands as 'partial' with rawItems=0, so the NEXT
-    // empty walk sees an empty baseline and records a genuine 'complete'.
-    inventoryVanished = baseline !== null && baseline.rawItems > 0;
-    // Cold-cache guard: the stored endpoints are the vendor's Computed cache;
-    // a page whose cache was never populated returns an empty 200 that is
-    // indistinguishable from a genuinely link-less page. The FIRST empty walk
-    // (no finished baseline at all) is therefore 'partial'; the second one
-    // proves the emptiness.
-    emptyUnverified = baseline === null;
+    if (everNonEmpty === null) {
+      emptyUnverified = true;
+    } else {
+      const baseline = await findLatestFinishedLinkStatRun(input.db, {
+        platformAccountId: input.pageId,
+        linkKind: input.kind,
+      });
+      // Baseline emptiness is judged by rawItems (what the vendor SHOWED),
+      // not writtenRows: a mapping-collapse run (items seen, all dropped) is
+      // a NON-empty baseline — its links did not stop existing. Post-wipe
+      // convergence is two-step by documented design: the first empty walk is
+      // 'partial' (inventory_vanished), the second proves the emptiness.
+      inventoryVanished = baseline !== null && baseline.rawItems > 0;
+    }
   }
   // 'complete' (single atomic vendor read, zero drops) is the ONLY
   // absence-proving status. Demotions to 'partial': (a) normalization drops —
@@ -410,6 +421,14 @@ async function reconcilePage(
       pageLabel: input.pageLabel,
       status: "skipped",
       reason: "ofapi_mapping_changed",
+      kinds: [],
+    };
+  }
+  if (ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {
+    return {
+      pageLabel: input.pageLabel,
+      status: "skipped",
+      reason: "page_auth_dead",
       kinds: [],
     };
   }
@@ -548,6 +567,13 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
   // contradictions) writes zero snapshots while the job stays green — that
   // silence must be an incident, not a warn line.
   const allTruncated = pages.length > 0 && pages.every((page) => page.status === "truncated");
+  // Fleet-wide mapping collapse below the per-kind threshold: small pages
+  // (1-2 links) never trip the absolute per-kind collapse alarm, but when
+  // EVERY kind that saw items wrote nothing, the adapter is broken fleet-wide.
+  const kindsThatSaw = pages.flatMap((page) => page.kinds)
+    .filter((kind) => kind.rawItems > 0);
+  const fleetCollapse = kindsThatSaw.length > 0 &&
+    kindsThatSaw.every((kind) => kind.writtenRows === 0);
   if (failed.length > 0) {
     const shown = failed.slice(0, 5)
       .map((page) => `${page.pageLabel}: ${page.reason ?? "unknown error"}`)
@@ -563,6 +589,13 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
       errorSummary:
         `fleet fully truncated (${pages.length} page(s)): no snapshots written — ` +
         `check the link_stats credit budget`,
+    });
+  } else if (fleetCollapse) {
+    await notifyOfapiGlobalIncident(app, {
+      kind: "ofapi_link_stats_reconcile_failed",
+      errorSummary:
+        `fleet-wide mapping collapse: every fetched link failed normalization ` +
+        `(${kindsThatSaw.length} kind walk(s)) — vendor schema change?`,
     });
   } else if (
     pages.length > 0 &&
@@ -584,7 +617,11 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
   );
   if (degraded.length > 0) {
     app.logger.warn({
-      degraded: degraded.map((page) => ({ label: page.pageLabel, reason: page.reason })),
+      degraded: degraded.map((page) => ({
+        label: page.pageLabel,
+        reason: page.reason,
+        skippedReasons: page.kinds.map((kind) => kind.skippedReasons),
+      })),
     }, "OFAPI link-stats reconcile incomplete for some pages");
   }
   app.logger.info({
@@ -598,6 +635,7 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
         apiPages: kind.apiPages,
         rawItems: kind.rawItems,
         writtenRows: kind.writtenRows,
+        skippedReasons: kind.skippedReasons,
       })),
     })),
   }, "OFAPI link-stats reconcile complete");

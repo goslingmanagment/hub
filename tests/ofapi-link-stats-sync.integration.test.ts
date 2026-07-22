@@ -219,6 +219,26 @@ describe("OFAPI link-stats reconcile", () => {
       link_stats_spent_credits: 2,
       backfill_spent_credits: 0,
     });
+
+    // Stage-7 journaling is load-bearing: one raw-payload row per fetched API
+    // page, record-shaped (the sync-pull canonicalizer gates on isRecord).
+    const journal = await testDb!.pool.query(
+      `select endpoint, payload_kind, response_payload
+       from sync_raw_payloads where page_id = $1 order by endpoint`,
+      [page.id],
+    );
+    expect(journal.rows).toHaveLength(2);
+    expect(journal.rows.map((row) => row.endpoint)).toEqual([
+      "/:accountId/stored/tracking-links",
+      "/:accountId/stored/trial-links",
+    ]);
+    expect(journal.rows.every((row) =>
+      row.payload_kind === "mapping_critical" &&
+      typeof row.response_payload === "object" &&
+      !Array.isArray(row.response_payload) &&
+      Array.isArray(row.response_payload.items) &&
+      typeof row.response_payload.hasNextPage === "boolean",
+    )).toBe(true);
   });
 
   it("second run appends, never overwrites", async (context) => {
@@ -790,9 +810,13 @@ describe("OFAPI link-stats reconcile", () => {
         status: "partial",
         reason: "inventory_vanished",
       }),
-      // Trial was empty from the start (no non-empty baseline) — a genuinely
-      // empty inventory stays 'written' with a 'complete' run.
-      expect.objectContaining({ linkKind: "trial", status: "written" }),
+      // Trial has NEVER shown a non-empty inventory — its emptiness stays
+      // unverifiable ('partial'), never an absence proof.
+      expect.objectContaining({
+        linkKind: "trial",
+        status: "partial",
+        reason: "empty_unverified",
+      }),
     ]);
     let trackingRuns = await listLinkStatRuns(appContext.db, {
       platformAccountId: page.id,
@@ -805,7 +829,7 @@ describe("OFAPI link-stats reconcile", () => {
     const third = await runOfapiLinkStatsReconcile(appContext);
     expect(third.pages[0]?.kinds).toEqual([
       expect.objectContaining({ linkKind: "tracking", status: "written" }),
-      expect.objectContaining({ linkKind: "trial", status: "written" }),
+      expect.objectContaining({ linkKind: "trial", status: "partial" }),
     ]);
     trackingRuns = await listLinkStatRuns(appContext.db, {
       platformAccountId: page.id,
@@ -841,7 +865,7 @@ describe("OFAPI link-stats reconcile", () => {
         status: "partial",
         reason: "inventory_vanished",
       }),
-      expect.objectContaining({ linkKind: "trial", status: "written" }),
+      expect.objectContaining({ linkKind: "trial", status: "partial" }),
     ]);
     const trackingRuns = await listLinkStatRuns(appContext.db, {
       platformAccountId: page.id,
@@ -912,33 +936,43 @@ describe("OFAPI link-stats reconcile", () => {
     expect(trackingRuns.map((run) => run.status)).toEqual(["partial", "partial"]);
   });
 
-  it("cold stored cache: the first-ever empty walk is partial, the second proves emptiness", async (context) => {
+  it("never-nonempty pages cannot mint absence proofs; the full wipe lifecycle converges", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
     const page = await seedOfapiPage("links-cold-of", "acct_cold");
-    appContext = {
-      ...appContext,
-      ofapi: linksClient({
-        trackingByAccount: new Map([["acct_cold", []]]),
-        trialByAccount: new Map([["acct_cold", [trialItem()]]]),
-      }),
+    const inventory = {
+      trackingByAccount: new Map([["acct_cold", [] as Record<string, unknown>[]]]),
+      trialByAccount: new Map([["acct_cold", [trialItem()]]]),
     };
+    appContext = { ...appContext, ofapi: linksClient(inventory) };
 
-    const first = await runOfapiLinkStatsReconcile(appContext);
-    expect(first.pages[0]?.kinds).toEqual([
-      expect.objectContaining({
-        linkKind: "tracking",
-        status: "partial",
-        reason: "empty_unverified",
-      }),
-      expect.objectContaining({ linkKind: "trial", status: "written" }),
-    ]);
-
+    // Cold cache: empty walks on a page that never showed links stay
+    // 'partial' (empty_unverified) FOREVER — no absence proof from nothing.
+    await runOfapiLinkStatsReconcile(appContext);
     const second = await runOfapiLinkStatsReconcile(appContext);
     expect(second.pages[0]?.kinds[0]).toMatchObject({
+      linkKind: "tracking",
+      status: "partial",
+      reason: "empty_unverified",
+    });
+
+    // Inventory appears: a genuine complete run.
+    inventory.trackingByAccount.set("acct_cold", [trackingItem()]);
+    await runOfapiLinkStatsReconcile(appContext);
+    // Then a wipe: the first empty walk is suspicious (vanished)...
+    inventory.trackingByAccount.set("acct_cold", []);
+    const wipe = await runOfapiLinkStatsReconcile(appContext);
+    expect(wipe.pages[0]?.kinds[0]).toMatchObject({
+      linkKind: "tracking",
+      status: "partial",
+      reason: "inventory_vanished",
+    });
+    // ...and the second empty walk proves it (two-step convergence).
+    const confirmed = await runOfapiLinkStatsReconcile(appContext);
+    expect(confirmed.pages[0]?.kinds[0]).toMatchObject({
       linkKind: "tracking",
       status: "written",
     });
@@ -946,7 +980,9 @@ describe("OFAPI link-stats reconcile", () => {
       platformAccountId: page.id,
       linkKind: "tracking",
     });
-    expect(trackingRuns.map((run) => run.status)).toEqual(["complete", "partial"]);
+    expect(trackingRuns.map((run) => run.status)).toEqual([
+      "complete", "partial", "complete", "partial", "partial",
+    ]);
   });
 
   it("does no work while the flag is off", async (context) => {

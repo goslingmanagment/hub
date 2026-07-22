@@ -3042,6 +3042,28 @@ export async function findLatestFinishedLinkStatRun(
   return row ?? null;
 }
 
+/** Latest finished walk that actually SAW links (rawItems > 0). A page with
+ * no such run has never demonstrated a non-empty inventory — an empty walk
+ * there is unverifiable (cold vendor cache?) and must never mint an
+ * absence-proving 'complete'. */
+export async function findLatestNonEmptyFinishedLinkStatRun(
+  db: Database,
+  input: { platformAccountId: number; linkKind: LinkStatKind },
+) {
+  const [row] = await db
+    .select()
+    .from(pageLinkStatRuns)
+    .where(and(
+      eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
+      eq(pageLinkStatRuns.linkKind, input.linkKind),
+      inArray(pageLinkStatRuns.status, ["complete", "partial"]),
+      gt(pageLinkStatRuns.rawItems, 0),
+    ))
+    .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
+    .limit(1);
+  return row ?? null;
+}
+
 export async function listLinkStatSnapshots(db: Database, input: { runId: number }) {
   return db
     .select()

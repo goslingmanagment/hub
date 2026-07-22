@@ -1,5 +1,17 @@
 # OFAPI Link Stats Sync — Implementation Plan
 
+> **SUPERSEDED BY REVIEW — read the code, not the Task blocks.** The plan was
+> executed, then hardened through seven dual-review rounds; the shipped
+> implementation diverges from the Task-4 code below in load-bearing ways:
+> free `/stored/*` endpoints instead of the paid live lists (limit 1000);
+> dedicated `link_stats` credit lane (migration 0113) instead of the backfill
+> sub-cap; NULL-able unknown money + `revenue_is_loading`; run statuses
+> complete/partial/truncated with vanished-inventory and never-nonempty
+> absence guards; cron `45 4,16 * * *` UTC; Stage-26 auth-dead pause +
+> tombstone re-check; page-erasure hot targets; counters capped to
+> PG INTEGER. The Post-review revision sections record per-round deltas;
+> `apps/runtime/src/services/ofapi-link-stats-sync.ts` is truth.
+
 **Goal:** persist OnlyFans trial-link and tracking-link statistics (clicks, claims, subscribers, revenue, spenders) into core's Postgres on a twice-daily schedule, as append-only snapshots grouped by completed reconcile runs.
 
 **Architecture:** a standalone pg-boss reconcile job modeled 1:1 on the existing chargebacks reconcile (`apps/runtime/src/services/ofapi-chargebacks-sync.ts`): scheduler fires a queue twice a day, the worker walks `GET /{account}/tracking-links` and `GET /{account}/trial-links` per OFAPI-mapped OnlyFans page via the existing `OfapiClient` methods, normalizes items, and appends one *run* row per (page, link kind) plus one *snapshot* row per link. Deltas/reports are computed later from snapshot differences; this feature only stores facts.
