@@ -590,6 +590,26 @@ describe("coach-chat optional draft", () => {
     expect(withDraft.user).toBe(twin.user);
   });
 
+  it("a shed draft leaves the CACHED dynamic block byte-identical to the draftless twin (final P1)", () => {
+    const amp = "&";
+    const base = {
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      transcript: "OLDEST_EQ\n" + amp.repeat(40_000) + "\nNEWEST_EQ",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+    };
+    const draftless = buildPrompt(base);
+    const shed = buildPrompt({ ...base, draftText: "DRAFT_EQ " + amp.repeat(19_980) });
+    expect(shed.coachDraftIncluded).toBe(false);
+    expect(shed.user).toContain("(the chatter attached a working draft");
+    // The 5m-cached dynamic block (userBlocks[1]) must not differ by a byte —
+    // a differing prefix re-bills the whole block at the provider.
+    expect(shed.userBlocks[1]?.text).toBe(draftless.userBlocks[1]?.text);
+  });
+
   it("keeps the first-question claim only for a genuinely empty dialog", () => {
     expect(coachHistorySection(undefined)).toContain("this is the first question");
     expect(coachHistorySection([], 0)).toContain("this is the first question");

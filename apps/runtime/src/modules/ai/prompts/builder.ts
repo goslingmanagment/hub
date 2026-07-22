@@ -452,6 +452,12 @@ const RECAP_ATTACH_MAX_CHARS = 30_000;
  * bytes on a note about the drop was incoherent. Larger drafts keep the
  * documented step-2b whole-drop semantics. */
 const COACH_SMALL_DRAFT_RIDE_CHARS = 2_048;
+/** The in-prompt trace of a budget-shed draft. A module constant: the step-3
+ * NOTE RESERVE derives from ITS length UNCONDITIONALLY — deriving from the
+ * per-call note made the draftless twin reserve 2 chars while the shed run
+ * reserved 81, splitting the cached transcript bytes (final-round P1). */
+const COACH_DRAFT_OMISSION_NOTE =
+  '(the chatter attached a working draft; it was omitted to fit the prompt budget)';
 
 /** Renders the coach dialog so far. Each answer is FIRST projected to the ≤10k
  * replay bound (spec §3/§7, option "c"), THEN the newest exchanges are kept and
@@ -820,9 +826,7 @@ function budgetCoachTemplateValues(
   // Review round 6 — same honesty rule as the history omission marker: when an
   // ATTACHED draft is shed, the coach must not be left to hallucinate one on a
   // «critique my draft» question. The note is tiny and participates in fits().
-  const draftOmissionNote = hasDraft
-    ? '(the chatter attached a working draft; it was omitted to fit the prompt budget)'
-    : '';
+  const draftOmissionNote = hasDraft ? COACH_DRAFT_OMISSION_NOTE : '';
   // Step 3 is reachable ONLY in one state — every optional section shed, draft
   // off (step 2b precedes it) — which is identical across both passes, so the
   // first pass's binary-search result is reusable verbatim (review round 5:
@@ -838,6 +842,22 @@ function budgetCoachTemplateValues(
     );
     return systemChars + userChars <= COACH_PROMPT_MAX_CHARS;
   };
+  // Final-round P1: the omission note must cost the RESERVE, never the cached
+  // transcript. The step-3 search always leaves this many chars free - for the
+  // draftless twin too, so the 5m dynamic block stays byte-identical between a
+  // draftless run and a shed-draft run (a differing prefix re-bills the whole
+  // block). The shed-draft run then places the note into the reserved space of
+  // the UNCACHED task block; the draftless run leaves the reserve unused
+  // (~80 of 300_000 chars - the price of prefix stability).
+  const NOTE_RESERVE_CHARS = COACH_DRAFT_OMISSION_NOTE.length + 2;
+  const fitsWithNoteReserve = (values: TemplateValues): boolean => {
+    const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
+    const userChars = buildUserBlocks('coach-chat', template, values).reduce(
+      (total, block) => total + block.text.length,
+      0,
+    );
+    return systemChars + userChars <= COACH_PROMPT_MAX_CHARS - NOTE_RESERVE_CHARS;
+  };
 
   /** One full shed cascade. `draftAllowed` gates the draft from the very start,
    * so the second pass below never trades context away for a section it already
@@ -847,14 +867,6 @@ function budgetCoachTemplateValues(
   ): { values: TemplateValues; draftKept: boolean; displacedContext: boolean } => {
     let history = [...(input.coachHistory ?? [])];
     const suppliedHistoryCount = history.length;
-    // Review round 8: during the transcript search the omission note RIDES
-    // the measurement — post-trim slack is < 5 chars, so a post-choice append
-    // could never fit exactly where the note matters (a boundary-trimmed
-    // «critique my draft» turn). Inside step 3 it costs ≤78 chars of the
-    // OLDEST transcript tail — a bounded trade, never a section. Declared IN
-    // the pass (round 9 hygiene): it must reset for pass 2, or the note would
-    // ride pass 2's whole cascade and re-open the round-7 displacement.
-    let inTranscriptSearch = false;
     let recapAttach: RecapAttach | undefined = input.recapAttach
       ? {
           full: input.recapAttach.full ? { ...input.recapAttach.full } : null,
@@ -908,11 +920,7 @@ function budgetCoachTemplateValues(
         short: shortRecapChars,
       }),
       coachHistorySection: coachHistorySection(history, suppliedHistoryCount - history.length),
-      coachDraftSection: includeDraft
-        ? initialValues.coachDraftSection!
-        : hasDraft && inTranscriptSearch
-          ? draftOmissionNote
-          : '',
+      coachDraftSection: includeDraft ? initialValues.coachDraftSection! : '',
     });
 
     // 0. Remove exact summary duplicates BEFORE anything is measured (review
@@ -970,21 +978,22 @@ function budgetCoachTemplateValues(
     // this reducer. Legal contract maxima guarantee at least one newest code point
     // fits; fail closed if a future caller/schema breaks that invariant.
     if (transcriptSearchMemo !== null) {
-      inTranscriptSearch = true;
       transcriptChars = transcriptSearchMemo;
       const memoValues = makeValues();
       // Cheap insurance on the state-identity invariant (review round 6): if a
       // future edit ever lets the passes diverge, fall through to a fresh
       // search instead of silently returning an over-budget prompt.
-      if (fits(memoValues)) {
+      if (fitsWithNoteReserve(memoValues)) {
+        if (hasDraft && !includeDraft) {
+          return done({ ...memoValues, coachDraftSection: draftOmissionNote });
+        }
         return done(memoValues);
       }
     }
     coachBudgetStats.transcriptSearches += 1;
-    inTranscriptSearch = true;
     transcriptChars = 0;
     const withoutTranscript = makeValues();
-    if (!fits(withoutTranscript)) {
+    if (!fitsWithNoteReserve(withoutTranscript)) {
       throw new Error(
         `Coach prompt protected context exceeds ${COACH_PROMPT_MAX_CHARS} characters`,
       );
@@ -997,7 +1006,7 @@ function budgetCoachTemplateValues(
       const middle = Math.floor((low + high) / 2);
       transcriptChars = middle;
       const candidate = makeValues();
-      if (fits(candidate)) {
+      if (fitsWithNoteReserve(candidate)) {
         best = middle;
         bestValues = candidate;
         low = middle + 1;
@@ -1012,6 +1021,11 @@ function budgetCoachTemplateValues(
     }
     transcriptChars = best;
     transcriptSearchMemo = best;
+    if (hasDraft && !includeDraft) {
+      // The note occupies the reserve (uncached task block) - guaranteed to
+      // fit, and the cached transcript bytes match the draftless twin.
+      return done({ ...bestValues, coachDraftSection: draftOmissionNote });
+    }
     return done(bestValues);
   };
 

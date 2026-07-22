@@ -5115,4 +5115,11 @@ leave the prompt poorer", "pays its own size in oldest-tail chars") was
 overclaimed and is corrected by this entry. Whether the cascade should learn
 transcript-first trimming for small overages (which would change that
 pre-existing ruling for every optional section, not just drafts) is an OPEN
-product question recorded for the owner — not decided in this PR.
+product question recorded for the owner — not decided in this PR. Merge-gate
+final round: the omission note is paid from a fixed reserve (a module-constant
+note length, honoured by the step-3 search for the draftless twin too), keeping
+the 5m-cached dynamic block byte-identical between draftless and shed-draft
+runs — its bytes previously shortened the cached transcript and re-billed the
+whole block at the provider; equality is pinned by test. Coach-history
+eviction audit (P2) recorded in .agentic/backlog.md per the stop-criterion
+policy.
