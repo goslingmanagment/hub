@@ -300,6 +300,11 @@ describe("coach-chat optional draft", () => {
     expect(built.user).not.toContain("## Chatter's Working Draft");
     // Review round 3: the shed is visible to the audit trail, never silent.
     expect(built.coachDraftIncluded).toBe(false);
+    // Review round 6: …and visible to the MODEL — a «critique my draft» question
+    // must not leave the coach to hallucinate a draft it never saw.
+    expect(built.user).toContain(
+      "(the chatter attached a working draft; it was omitted to fit the prompt budget)",
+    );
     // The protected fields survive: the question and the newest transcript.
     expect(built.user).toContain("QUESTION_SENTINEL");
     expect(built.user).toContain("NEWEST_TX_🎉");
@@ -328,6 +333,8 @@ describe("coach-chat optional draft", () => {
     );
     // The stale dossier is shed BEFORE the draft is even considered...
     expect(built.user).not.toContain("DOSSIER_TO_SHED");
+    // ...and the shed is reported for the manifest correction (review round 6).
+    expect(built.coachDossierIncluded).toBe(false);
     // ...so the freshest current-turn context — the working draft — survives,
     // and the transcript is never trimmed.
     expect(built.user).toContain("## Chatter's Working Draft");
@@ -402,7 +409,44 @@ describe("coach-chat optional draft", () => {
     expect(built.user).toContain("FULLREC_KEEP");
     expect(built.user).toContain("SHORTREC_KEEP");
     expect(built.user).toContain("TX_HEAD TX_TAIL");
-    expect(built.user).not.toContain("omitted to fit the prompt budget");
+    // No HISTORY was evicted (the draftless pass kept everything)…
+    expect(built.user).not.toContain("coach exchange");
+    // …but the attached draft's own omission is owned up to (review round 6),
+    // and the kept dossier reports included for the manifest.
+    expect(built.user).toContain("(the chatter attached a working draft");
+    expect(built.coachDossierIncluded).toBe(true);
+  });
+
+  it("reuses the pass-1 transcript search when the draftless pass re-trims (memo path)", () => {
+    const amp = "&";
+    const built = buildPrompt({
+      ...baseInput,
+      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      // Transcript that must be tail-trimmed even AFTER every optional section
+      // is shed — both passes reach step 3, the second via the memoized search.
+      transcript: "OLDEST_MEMO\n" + amp.repeat(40_000) + "\nNEWEST_MEMO",
+      fanSpendingData: amp.repeat(20_000),
+      fanSubscriptionData: amp.repeat(20_000),
+      fanBio: amp.repeat(5_000),
+      chatterQuestion: amp.repeat(2_000),
+      coachHistory: [{ question: "MEMO_HIST_Q", answer: "hist " + amp.repeat(500) }],
+      fanProfile: {
+        body: "MEMO_DOSSIER " + amp.repeat(500),
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      draftText: "MEMO_DRAFT " + amp.repeat(19_980),
+    });
+    expect(built.system.length + built.user.length).toBeLessThanOrEqual(
+      COACH_PROMPT_MAX_CHARS,
+    );
+    // The draft could not fit; the second pass also shed everything and trimmed
+    // the transcript via the memo — the ceiling still holds exactly.
+    expect(built.coachDraftIncluded).toBe(false);
+    expect(built.coachDossierIncluded).toBe(false);
+    expect(built.user).toContain("NEWEST_MEMO");
+    expect(built.user).not.toContain("OLDEST_MEMO");
+    expect(built.user).toContain("[older transcript omitted]");
+    expect(built.user).toContain("(the chatter attached a working draft");
   });
 
   it("keeps the first-question claim only for a genuinely empty dialog", () => {

@@ -610,6 +610,22 @@ export async function prepareAiFeatureStream(
       };
     }
   }
+  // The same what-the-provider-actually-received rule for the DOSSIER (review
+  // round 6): the pre-build fanProfile manifest entry claims injection, but the
+  // coach reducer may shed the dossier (e.g. displaced by a kept draft) — record
+  // the post-budget truth exactly like the recap slots above.
+  if (feature === "coach-chat" && prompt.coachDossierIncluded !== undefined) {
+    const fanProfileManifest = contextManifest?.["fanProfile"];
+    if (typeof fanProfileManifest === "object" && fanProfileManifest !== null) {
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        fanProfile: {
+          ...(fanProfileManifest as Record<string, unknown>),
+          included: prompt.coachDossierIncluded,
+        },
+      };
+    }
+  }
   // The same what-the-provider-actually-received rule for the chatter draft: a
   // supplied draft the coach budget reducer shed leaves an audit trace (its
   // chars and final inclusion), like the recaps and the dossier above. Additive

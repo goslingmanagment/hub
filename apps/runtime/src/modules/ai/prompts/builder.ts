@@ -118,6 +118,11 @@ export interface PromptPayload {
    * to the audit trail like every other optional coach context. Omitted for
    * every other feature. */
   coachDraftIncluded?: boolean;
+  /** Whether the injected fan dossier survived the Coach whole-prompt reducer
+   * (review round 6): the pre-build manifest/log claim «dossier injected» must
+   * be correctable post-budget, exactly like the recap slots. Omitted for every
+   * other feature. */
+  coachDossierIncluded?: boolean;
 }
 
 interface PromptFeaturePolicy {
@@ -780,6 +785,12 @@ function budgetCoachTemplateValues(
 ): TemplateValues {
   const transcriptCodePoints = Array.from(input.transcript);
   const hasDraft = (initialValues.coachDraftSection ?? '') !== '';
+  // Review round 6 — same honesty rule as the history omission marker: when an
+  // ATTACHED draft is shed, the coach must not be left to hallucinate one on a
+  // «critique my draft» question. The note is tiny and participates in fits().
+  const draftOmissionNote = hasDraft
+    ? '(the chatter attached a working draft; it was omitted to fit the prompt budget)'
+    : '';
   // Step 3 is reachable ONLY in one state — every optional section shed, draft
   // off (step 2b precedes it) — which is identical across both passes, so the
   // first pass's binary-search result is reusable verbatim (review round 5:
@@ -848,7 +859,7 @@ function budgetCoachTemplateValues(
         short: shortRecapChars,
       }),
       coachHistorySection: coachHistorySection(history, suppliedHistoryCount - history.length),
-      coachDraftSection: includeDraft ? initialValues.coachDraftSection! : '',
+      coachDraftSection: includeDraft ? initialValues.coachDraftSection! : draftOmissionNote,
     });
     const fits = (values: TemplateValues): boolean => {
       const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
@@ -904,7 +915,13 @@ function budgetCoachTemplateValues(
     // fits; fail closed if a future caller/schema breaks that invariant.
     if (transcriptSearchMemo !== null) {
       transcriptChars = transcriptSearchMemo;
-      return done(makeValues());
+      const memoValues = makeValues();
+      // Cheap insurance on the state-identity invariant (review round 6): if a
+      // future edit ever lets the passes diverge, fall through to a fresh
+      // search instead of silently returning an over-budget prompt.
+      if (fits(memoValues)) {
+        return done(memoValues);
+      }
     }
     transcriptChars = 0;
     const withoutTranscript = makeValues();
@@ -1007,6 +1024,7 @@ export function buildPrompt(
             short: user.includes('<short_recap>'),
           },
           coachDraftIncluded: user.includes('<chatter_draft>'),
+          coachDossierIncluded: user.includes('<fan_dossier>'),
         }
       : {}),
   };

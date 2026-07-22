@@ -5043,4 +5043,10 @@ reports post-budget `coachDraftIncluded` (final-wrapper probe, spoof-proof via
 escaping, mirroring `coachRecapSlots`) and the feature layer records
 `contextManifest.chatterDraft = { chars, included }` (additive manifest key —
 no contract change); surfacing the flag to the extension's meta frame is a
-recorded follow-up for when the client UI wants to render it.
+recorded follow-up for when the client UI wants to render it. Round 6: a shed
+draft leaves a one-line omission note IN the prompt (the history-marker honesty
+rule — a «critique my draft» question must never invite hallucinating one);
+`coachDossierIncluded` corrects the pre-build fanProfile manifest entry
+post-budget (`included`), closing the last uncorrected optional-context claim;
+and the step-3 memo re-verifies fits() before returning, falling through to a
+fresh search if the pass-identity invariant is ever broken.

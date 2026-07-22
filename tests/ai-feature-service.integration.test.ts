@@ -2275,6 +2275,7 @@ describe("coach-chat recap attach (spec §5)", () => {
     });
     expect(promptText).not.toContain("DRAFT_PRESSURE");
     expect(promptText).not.toContain("<chatter_draft>");
+    expect(promptText).toContain("(the chatter attached a working draft");
     expect(
       (rows[0]?.params.contextManifest as { chatterDraft?: { chars: number; included: boolean } })
         ?.chatterDraft,
