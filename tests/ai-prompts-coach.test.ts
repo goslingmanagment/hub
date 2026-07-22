@@ -485,24 +485,36 @@ describe("coach-chat optional draft", () => {
     expect(built.user).toContain("DRAFT_KEEP");
   });
 
-  it("marker/absolute-number overhead compensation stays exactly within the 60k budget", () => {
-    // Calibrate a single-entry section to land exactly on the 60k boundary
-    // WITHOUT a marker, then request it with omitted entries so the marker +
-    // wider numbers overflow and the compensation loops must recover exactly.
-    const probeAnswer = "a".repeat(10_000);
-    const probeLen = coachHistorySection(
-      [{ question: "q", answer: probeAnswer }],
-    ).length;
-    // Plain chars render 1:1 — pad the answer so the markerless section is
-    // exactly 60_000... but the answer projection caps at 10k chars, so pad the
-    // QUESTION instead (bounded at 2k — enough for the ≤61-byte calibration).
-    const filler = 60_000 - probeLen;
-    const question = "q" + "x".repeat(Math.min(filler, 1_900));
+  it("multi-entry marker compensation packs the window to the boundary (loop 1 fires)", () => {
+    // Calibrate entries so each renders EXACTLY 10_000 chars: the pre-marker
+    // walk then packs 6 exchanges to exactly 60_000, and the marker + absolute
+    // numbers force the compensation to shed exactly one more (review round 9:
+    // the previous calibration sat ~48k below the boundary and fired nothing).
+    const probe = coachHistorySection([{ question: "q", answer: "a".repeat(100) }]).length;
+    const wrapper = probe - 100; // per-entry non-answer chars at n="1"
+    const answer = "a".repeat(10_000 - wrapper);
+    const entries = Array.from({ length: 20 }, () => ({ question: "q", answer }));
+    const section = coachHistorySection(entries, 3);
+    expect(section.length).toBeLessThanOrEqual(60_000);
+    // Dense packing PROVES the compensation engaged: dropping one whole entry
+    // leaves less than one entry of slack.
+    expect(section.length).toBeGreaterThan(60_000 - 10_200);
+    expect(section).toContain("omitted to fit the prompt budget");
+    // 20 supplied + 3 outer-shed = 23 total; kept window numbering is absolute.
+    expect(section).toContain('<coach_exchange n="23">');
+  });
+
+  it("single-entry compensation loses only the marker's worth, not hundreds of chars (loop 2)", () => {
+    // Escaped near-boundary single entry (review round 9): markerless ≈ 59_941,
+    // marker + wider number ≈ +63 → overflow ≈ 4. The binary search must find
+    // the LARGEST fitting projection — the old fixed cut lost 200+ chars.
+    const amp = "&";
     const section = coachHistorySection(
-      [{ question, answer: probeAnswer }],
+      [{ question: amp.repeat(1_973), answer: amp.repeat(10_000) }],
       15,
     );
     expect(section.length).toBeLessThanOrEqual(60_000);
+    expect(section.length).toBeGreaterThanOrEqual(59_900);
     expect(section).toContain("omitted to fit the prompt budget");
     expect(section).toContain('<coach_exchange n="16">');
   });

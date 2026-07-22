@@ -5066,4 +5066,11 @@ if-it-fits rule; the single-entry history compensation subtracts the measured
 overflow instead of halving away half the newest answer; the dossier-injected
 debug log moved post-budget and carries `included` for coach, so log and
 manifest cannot contradict; the dossier integration pin seeds the loader's
-required completion-equality proof.
+required completion-equality proof. Round 9: the single-entry compensation
+binary-searches the largest fitting projection over the answer's own length
+(minimal loss ≈ the marker itself, pinned ≥59_900 of 60k; the fixed decrement
+lost 200+ chars and the default-span cap hid the near-lossless region); the
+boundary tests now genuinely pack the window (probe-calibrated 6×10_000 —
+the prior calibration fired neither compensation loop); `inTranscriptSearch`
+is pass-scoped so a future early exit cannot let the note ride pass 2's
+cascade.

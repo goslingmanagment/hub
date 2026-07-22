@@ -526,24 +526,39 @@ export function coachHistorySection(
     omittedTotal += 1;
     section = render();
   }
-  while (
-    section.length > COACH_PROMPT_HISTORY_BUDGET_CHARS
-    && (headChars > 0 || tailChars > 0)
-  ) {
-    // Subtract the MEASURED overflow (review round 8: halving threw away up to
-    // half the newest answer to recover ≤61 marker bytes). Escaping can expand
-    // a removed char up to 5×, so the loop converges in ≤2 iterations.
-    const overflow = section.length - COACH_PROMPT_HISTORY_BUDGET_CHARS;
-    const cut = Math.max(1, Math.ceil(overflow / 2));
-    headChars = Math.max(0, headChars - cut);
-    tailChars = Math.max(0, tailChars - cut);
-    kept = [
-      {
-        question: history[history.length - 1]!.question,
-        answer: projectCoachAnswerSized(history[history.length - 1]!.answer, headChars, tailChars),
-      },
-    ];
-    section = render();
+  if (section.length > COACH_PROMPT_HISTORY_BUDGET_CHARS) {
+    // Single-entry corner: binary-search the LARGEST projection that fits
+    // (review round 9: a fixed decrement over-trimmed — ANY cut also inserts
+    // the projection marker, so the minimal loss must be found exactly).
+    const last = history[history.length - 1]!;
+    const headShare =
+      headChars + tailChars > 0 ? headChars / (headChars + tailChars) : 0.5;
+    let lo = 0;
+    // The search space is the ANSWER itself, not the default projection span
+    // (review round 9 follow-up: capping at head+tail hid the near-lossless
+    // region for answers longer than the default projection).
+    let hi = Array.from(last.answer).length;
+    let best: string | null = null;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const h = Math.ceil(mid * headShare);
+      const t = Math.max(0, mid - h);
+      kept = [{ question: last.question, answer: projectCoachAnswerSized(last.answer, h, t) }];
+      const candidate = render();
+      if (candidate.length <= COACH_PROMPT_HISTORY_BUDGET_CHARS) {
+        best = candidate;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (best !== null) {
+      return best;
+    }
+    // A fully-omitted answer always fits in practice (question ≤2k chars,
+    // ≤10k escaped, marker ≤70) — return the smallest projection regardless.
+    kept = [{ question: last.question, answer: projectCoachAnswerSized(last.answer, 0, 0) }];
+    return render();
   }
   return section;
 }
@@ -808,12 +823,7 @@ function budgetCoachTemplateValues(
   // the rerun used to double the ~18-probe search over a 300k transcript on
   // the shed-draft path).
   let transcriptSearchMemo: number | null = null;
-  // Review round 8: during the transcript search the omission note RIDES the
-  // measurement — post-trim slack is < 5 chars, so a post-choice append could
-  // never fit exactly where the note matters most (a boundary-trimmed
-  // «critique my draft» turn). Inside step 3 it costs ≤78 chars of the OLDEST
-  // transcript tail — a bounded, deliberate trade, never a section.
-  let inTranscriptSearch = false;
+
   const fits = (values: TemplateValues): boolean => {
     const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
     const userChars = buildUserBlocks('coach-chat', template, values).reduce(
@@ -831,6 +841,14 @@ function budgetCoachTemplateValues(
   ): { values: TemplateValues; draftKept: boolean; displacedContext: boolean } => {
     let history = [...(input.coachHistory ?? [])];
     const suppliedHistoryCount = history.length;
+    // Review round 8: during the transcript search the omission note RIDES
+    // the measurement — post-trim slack is < 5 chars, so a post-choice append
+    // could never fit exactly where the note matters (a boundary-trimmed
+    // «critique my draft» turn). Inside step 3 it costs ≤78 chars of the
+    // OLDEST transcript tail — a bounded trade, never a section. Declared IN
+    // the pass (round 9 hygiene): it must reset for pass 2, or the note would
+    // ride pass 2's whole cascade and re-open the round-7 displacement.
+    let inTranscriptSearch = false;
     let recapAttach: RecapAttach | undefined = input.recapAttach
       ? {
           full: input.recapAttach.full ? { ...input.recapAttach.full } : null,
