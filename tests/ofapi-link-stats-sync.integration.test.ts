@@ -498,7 +498,7 @@ describe("OFAPI link-stats reconcile", () => {
         : { items: [second], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null }
     ));
     const listStoredTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
-      items: [], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
+      items: [trialItem()], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
     }));
     appContext = {
       ...appContext,
@@ -743,7 +743,7 @@ describe("OFAPI link-stats reconcile", () => {
       items: [], hasNextPage: true, nextMarker: null, nextPageUrl: null, meta: null,
     }));
     const listStoredTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
-      items: [], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
+      items: [trialItem()], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
     }));
     appContext = {
       ...appContext,
@@ -873,6 +873,80 @@ describe("OFAPI link-stats reconcile", () => {
     expect(listStoredTrackingLinks).not.toHaveBeenCalled();
     expect(listStoredTrialLinks).not.toHaveBeenCalled();
     expect(await listLinkStatRuns(appContext.db, { platformAccountId: page.id })).toEqual([]);
+  });
+
+  it("a mapping-collapse baseline still counts as non-empty for the vanished guard", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-collapse2-of", "acct_collapse2");
+    const renamed = (id: number) => ({
+      ...trackingItem(), id, clicksCount: undefined, clicks: 82,
+    });
+    const inventory = {
+      trackingByAccount: new Map([["acct_collapse2", [renamed(1), renamed(2), renamed(3)]]]),
+      trialByAccount: new Map([["acct_collapse2", [trialItem()]]]),
+    };
+    appContext = { ...appContext, ofapi: linksClient(inventory) };
+    // Collapse run: rawItems=3, writtenRows=0 — links exist, we failed to map.
+    await runOfapiLinkStatsReconcile(appContext);
+
+    // The vendor then "shows" zero items (same rename normalizing to empty):
+    // the baseline SAW links, so this must be vanished-partial, not complete.
+    inventory.trackingByAccount.set("acct_collapse2", []);
+    const second = await runOfapiLinkStatsReconcile(appContext);
+    expect(second.pages[0]?.kinds).toEqual([
+      expect.objectContaining({
+        linkKind: "tracking",
+        status: "partial",
+        reason: "inventory_vanished",
+      }),
+      expect.objectContaining({ linkKind: "trial", status: "written" }),
+    ]);
+    const trackingRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    });
+    expect(trackingRuns.map((run) => run.status)).toEqual(["partial", "partial"]);
+  });
+
+  it("cold stored cache: the first-ever empty walk is partial, the second proves emptiness", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-cold-of", "acct_cold");
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_cold", []]]),
+        trialByAccount: new Map([["acct_cold", [trialItem()]]]),
+      }),
+    };
+
+    const first = await runOfapiLinkStatsReconcile(appContext);
+    expect(first.pages[0]?.kinds).toEqual([
+      expect.objectContaining({
+        linkKind: "tracking",
+        status: "partial",
+        reason: "empty_unverified",
+      }),
+      expect.objectContaining({ linkKind: "trial", status: "written" }),
+    ]);
+
+    const second = await runOfapiLinkStatsReconcile(appContext);
+    expect(second.pages[0]?.kinds[0]).toMatchObject({
+      linkKind: "tracking",
+      status: "written",
+    });
+    const trackingRuns = await listLinkStatRuns(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "tracking",
+    });
+    expect(trackingRuns.map((run) => run.status)).toEqual(["complete", "partial"]);
   });
 
   it("does no work while the flag is off", async (context) => {

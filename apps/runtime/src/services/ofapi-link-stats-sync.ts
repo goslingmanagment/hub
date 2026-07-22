@@ -7,6 +7,7 @@
 
 import {
   findLatestFinishedLinkStatRun,
+  findPageByLabel,
   insertLinkStatRunWithSnapshots,
   listOfapiMappedPages,
   type Database,
@@ -281,14 +282,24 @@ async function reconcileKind(
   // genuinely emptied inventory. Withhold the absence proof ('partial'); a
   // real wipe re-proves itself on the next run against the new baseline.
   let inventoryVanished = false;
+  let emptyUnverified = false;
   if (walkComplete && rawItems === 0) {
     const baseline = await findLatestFinishedLinkStatRun(input.db, {
       platformAccountId: input.pageId,
       linkKind: input.kind,
     });
-    // Converges: this run lands as 'partial' with 0 rows, so the NEXT empty
-    // walk sees an empty baseline and records a genuine 'complete'.
-    inventoryVanished = baseline !== null && baseline.writtenRows > 0;
+    // Baseline emptiness is judged by rawItems (what the vendor SHOWED), not
+    // writtenRows: a mapping-collapse run (items seen, all dropped) is a
+    // NON-empty baseline — its links did not stop existing.
+    // Converges: this run lands as 'partial' with rawItems=0, so the NEXT
+    // empty walk sees an empty baseline and records a genuine 'complete'.
+    inventoryVanished = baseline !== null && baseline.rawItems > 0;
+    // Cold-cache guard: the stored endpoints are the vendor's Computed cache;
+    // a page whose cache was never populated returns an empty 200 that is
+    // indistinguishable from a genuinely link-less page. The FIRST empty walk
+    // (no finished baseline at all) is therefore 'partial'; the second one
+    // proves the emptiness.
+    emptyUnverified = baseline === null;
   }
   // 'complete' (single atomic vendor read, zero drops) is the ONLY
   // absence-proving status. Demotions to 'partial': (a) normalization drops —
@@ -300,7 +311,7 @@ async function reconcileKind(
   // snapshots. Run row + snapshots commit atomically — a 'complete' run
   // without its rows is a lie.
   const runStatus = walkComplete
-    ? (skippedTotal > 0 || apiPages > 1 || inventoryVanished
+    ? (skippedTotal > 0 || apiPages > 1 || inventoryVanished || emptyUnverified
       ? "partial" as const
       : "complete" as const)
     : "truncated" as const;
@@ -327,7 +338,7 @@ async function reconcileKind(
     ? "truncated"
     : rawItems >= MAPPING_COLLAPSE_MIN_ITEMS && writtenRows === 0
       ? "failed"
-      : skippedTotal > 0 || inventoryVanished
+      : skippedTotal > 0 || inventoryVanished || emptyUnverified
         ? "partial"
         : "written";
   return {
@@ -337,7 +348,9 @@ async function reconcileKind(
       ? "all_items_skipped"
       : inventoryVanished
         ? "inventory_vanished"
-        : walkComplete ? null : blockedReason ?? "walk_truncated",
+        : emptyUnverified
+          ? "empty_unverified"
+          : walkComplete ? null : blockedReason ?? "walk_truncated",
     apiPages,
     rawItems,
     writtenRows,
@@ -359,6 +372,13 @@ async function reconcilePage(
   // 1000, and the cache includes finished links the live list hides
   // (live-verified 2026-07-22). The credit guard stays as a safety belt —
   // reservations settle to the server-reported 0.
+  // Freshness contract: stored is the vendor's Computed cache — counters are
+  // as fresh as the vendor's own sync, revenue freshness is queryable per
+  // row via revenue_calculated_at, and pulled_at stamps OUR read, not the
+  // vendor's refresh. Two identical consecutive snapshots therefore mean
+  // "no vendor refresh in between", which daily-delta reports must treat as
+  // zero-change, not data loss. The cold-cache guard below keeps an
+  // unpopulated cache from minting a false absence proof.
   const listTrackingLinks = app.ofapi?.listStoredTrackingLinks?.bind(app.ofapi);
   const listTrialLinks = app.ofapi?.listStoredTrialLinks?.bind(app.ofapi);
   if (!listTrackingLinks || !listTrialLinks) {
@@ -366,6 +386,30 @@ async function reconcilePage(
       pageLabel: input.pageLabel,
       status: "skipped",
       reason: "ofapi_client_not_configured",
+      kinds: [],
+    };
+  }
+
+  // Tombstone re-check: the fleet list is snapshotted once at run start, but
+  // an admin can soft-delete or remap a page while earlier pages walk.
+  // Re-verifying right before this page's walk narrows the race to one page;
+  // rows written in the residual window are page-scoped facts that the
+  // erasure hot targets purge (the tombstone->erasure path), so no fact
+  // outlives the contract.
+  const stored = await findPageByLabel(app.db, input.pageLabel);
+  if (!stored) {
+    return {
+      pageLabel: input.pageLabel,
+      status: "skipped",
+      reason: "page_not_active",
+      kinds: [],
+    };
+  }
+  if (stored.page.ofapiAccountId !== input.ofapiAccountId) {
+    return {
+      pageLabel: input.pageLabel,
+      status: "skipped",
+      reason: "ofapi_mapping_changed",
       kinds: [],
     };
   }
