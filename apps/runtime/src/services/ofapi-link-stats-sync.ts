@@ -17,6 +17,7 @@ import { dollarsToMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
+import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import type { OfapiListPage, OfapiRequestContext } from "./ofapi.ts";
 import { persistRawPayload, retentionDate } from "./sync/shared.ts";
 import {
@@ -39,7 +40,10 @@ const OFAPI_LINK_STATS_QUEUE_OPTIONS = {
   retryLimit: 0,
 } as const;
 
-const LINK_STATS_PAGE_LIMIT = 100;
+// Stored-cache page size (the free endpoints accept up to 1000, so a real
+// inventory is virtually always a single page => an atomic, absence-proving
+// read).
+const LINK_STATS_PAGE_LIMIT = 1000;
 // Offset-walk backstop per (page, kind) per run. There is no cross-run
 // cursor, so a page whose inventory exceeds this cap could NEVER complete a
 // walk — size it far beyond any real link inventory (200 pages = 20k links),
@@ -222,8 +226,8 @@ async function reconcileKind(
     await persistRawPayload(input.db, {
       platformAccountId: input.pageId,
       endpoint: input.kind === "tracking"
-        ? "/:accountId/tracking-links"
-        : "/:accountId/trial-links",
+        ? "/:accountId/stored/tracking-links"
+        : "/:accountId/stored/trial-links",
       requestParams: { limit: LINK_STATS_PAGE_LIMIT, offset },
       // Record shape, not a bare array: the sync-pull canonicalizer starts
       // with isRecord(payload) — a top-level array would be unparseable by
@@ -349,8 +353,12 @@ async function reconcilePage(
     guard: ReturnType<typeof createOfapiRestGuard>;
   },
 ): Promise<OfapiLinkStatsPageResult> {
-  const listTrackingLinks = app.ofapi?.listTrackingLinks?.bind(app.ofapi);
-  const listTrialLinks = app.ofapi?.listTrialLinks?.bind(app.ofapi);
+  // The STORED variants: identical item shape, `_credits.used: 0`, limit
+  // 1000, and the cache includes finished links the live list hides
+  // (live-verified 2026-07-22). The credit guard stays as a safety belt —
+  // reservations settle to the server-reported 0.
+  const listTrackingLinks = app.ofapi?.listStoredTrackingLinks?.bind(app.ofapi);
+  const listTrialLinks = app.ofapi?.listStoredTrialLinks?.bind(app.ofapi);
   if (!listTrackingLinks || !listTrialLinks) {
     return {
       pageLabel: input.pageLabel,
@@ -440,8 +448,12 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     return { pages: [] as OfapiLinkStatsPageResult[] };
   }
 
+  // Stage-26 auth-dead pause: a page whose OFAPI session needs owner action
+  // (authentication_failed / otp / face-otp) gets no scheduled spend — the
+  // account-health incident already covers it.
   const mapped = (await listOfapiMappedPages(app.db))
-    .filter((page) => page.platform === "onlyfans");
+    .filter((page) => page.platform === "onlyfans")
+    .filter((page) => !ofapiAuthStatusNeedsAction(page.ofapiAuthStatus));
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: LINK_STATS_MAX_PAGES_PER_RUN * 2 * Math.max(1, mapped.length),
     // Dedicated link_stats day counter (migration 0113): the quota is

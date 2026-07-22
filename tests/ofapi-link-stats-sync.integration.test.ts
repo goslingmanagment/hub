@@ -122,13 +122,13 @@ function linksClient(input: {
     meta: null,
   });
   return {
-    async listTrackingLinks(_context: unknown, accountId: string): Promise<OfapiListPage> {
+    async listStoredTrackingLinks(_context: unknown, accountId: string): Promise<OfapiListPage> {
       if (input.failTrackingFor === accountId) {
         throw new Error("tracking endpoint down");
       }
       return page(input.trackingByAccount.get(accountId) ?? empty);
     },
-    async listTrialLinks(_context: unknown, accountId: string): Promise<OfapiListPage> {
+    async listStoredTrialLinks(_context: unknown, accountId: string): Promise<OfapiListPage> {
       if (input.failTrialFor === accountId) {
         throw new Error("trial endpoint down");
       }
@@ -467,7 +467,7 @@ describe("OFAPI link-stats reconcile", () => {
     const page = await seedOfapiPage("links-paged-of", "acct_paged");
     const first = { ...trackingItem(), id: 1001 };
     const second = { ...trackingItem(), id: 1002 };
-    const listTrackingLinks = vi.fn(async (
+    const listStoredTrackingLinks = vi.fn(async (
       _context: unknown,
       _accountId: string,
       params: { offset?: number },
@@ -476,19 +476,19 @@ describe("OFAPI link-stats reconcile", () => {
         ? { items: [first], hasNextPage: true, nextMarker: null, nextPageUrl: null, meta: null }
         : { items: [second], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null }
     ));
-    const listTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
+    const listStoredTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
       items: [], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
     }));
     appContext = {
       ...appContext,
-      ofapi: { listTrackingLinks, listTrialLinks } as unknown as OfapiClient,
+      ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
     };
 
     const result = await runOfapiLinkStatsReconcile(appContext);
     expect(result.pages[0]).toMatchObject({ status: "written" });
     // Terminality is the vendor's hasNextPage, not the page size: the short
     // first page (1 item < limit) must NOT end the walk.
-    expect(listTrackingLinks).toHaveBeenCalledTimes(2);
+    expect(listStoredTrackingLinks).toHaveBeenCalledTimes(2);
 
     const [trackingRun] = await listLinkStatRuns(appContext.db, {
       platformAccountId: page.id,
@@ -720,16 +720,16 @@ describe("OFAPI link-stats reconcile", () => {
     }
 
     const page = await seedOfapiPage("links-contra-of", "acct_contra");
-    const listTrackingLinks = vi.fn(async (): Promise<OfapiListPage> => ({
+    const listStoredTrackingLinks = vi.fn(async (): Promise<OfapiListPage> => ({
       // Empty page that still claims continuation: vendor contradiction.
       items: [], hasNextPage: true, nextMarker: null, nextPageUrl: null, meta: null,
     }));
-    const listTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
+    const listStoredTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
       items: [], hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
     }));
     appContext = {
       ...appContext,
-      ofapi: { listTrackingLinks, listTrialLinks } as unknown as OfapiClient,
+      ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
     };
 
     const result = await runOfapiLinkStatsReconcile(appContext);
@@ -783,6 +783,31 @@ describe("OFAPI link-stats reconcile", () => {
     expect(trackingRuns.map((run) => run.status)).toEqual(["partial", "complete"]);
   });
 
+  it("skips auth-dead pages entirely (Stage-26 pause)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-authdead-of", "acct_authdead");
+    await testDb.pool.query(
+      `update pages set ofapi_auth_status = 'authentication_failed' where id = $1`,
+      [page.id],
+    );
+    const listStoredTrackingLinks = vi.fn();
+    const listStoredTrialLinks = vi.fn();
+    appContext = {
+      ...appContext,
+      ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages).toEqual([]);
+    expect(listStoredTrackingLinks).not.toHaveBeenCalled();
+    expect(listStoredTrialLinks).not.toHaveBeenCalled();
+    expect(await listLinkStatRuns(appContext.db, { platformAccountId: page.id })).toEqual([]);
+  });
+
   it("does no work while the flag is off", async (context) => {
     if (!testDb) {
       context.skip();
@@ -794,14 +819,14 @@ describe("OFAPI link-stats reconcile", () => {
       ofapiCreditLedgerEnabled: true,
     });
     const page = await seedOfapiPage("links-off-of", "acct_off");
-    const listTrackingLinks = vi.fn(async (): Promise<OfapiListPage> => ({
+    const listStoredTrackingLinks = vi.fn(async (): Promise<OfapiListPage> => ({
       items: [],
       hasNextPage: false,
       nextMarker: null,
       nextPageUrl: null,
       meta: null,
     }));
-    const listTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
+    const listStoredTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
       items: [],
       hasNextPage: false,
       nextMarker: null,
@@ -810,13 +835,13 @@ describe("OFAPI link-stats reconcile", () => {
     }));
     appContext = {
       ...appContext,
-      ofapi: { listTrackingLinks, listTrialLinks } as unknown as OfapiClient,
+      ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
     };
 
     const result = await runOfapiLinkStatsReconcile(appContext);
     expect(result.pages).toEqual([]);
-    expect(listTrackingLinks).not.toHaveBeenCalled();
-    expect(listTrialLinks).not.toHaveBeenCalled();
+    expect(listStoredTrackingLinks).not.toHaveBeenCalled();
+    expect(listStoredTrialLinks).not.toHaveBeenCalled();
     expect(await listLinkStatRuns(appContext.db, {
       platformAccountId: page.id,
     })).toEqual([]);
