@@ -780,6 +780,12 @@ function budgetCoachTemplateValues(
 ): TemplateValues {
   const transcriptCodePoints = Array.from(input.transcript);
   const hasDraft = (initialValues.coachDraftSection ?? '') !== '';
+  // Step 3 is reachable ONLY in one state — every optional section shed, draft
+  // off (step 2b precedes it) — which is identical across both passes, so the
+  // first pass's binary-search result is reusable verbatim (review round 5:
+  // the rerun used to double the ~18-probe search over a 300k transcript on
+  // the shed-draft path).
+  let transcriptSearchMemo: number | null = null;
 
   /** One full shed cascade. `draftAllowed` gates the draft from the very start,
    * so the second pass below never trades context away for a section it already
@@ -896,6 +902,10 @@ function budgetCoachTemplateValues(
     // lose its oldest prefix. The current question and system/persona never enter
     // this reducer. Legal contract maxima guarantee at least one newest code point
     // fits; fail closed if a future caller/schema breaks that invariant.
+    if (transcriptSearchMemo !== null) {
+      transcriptChars = transcriptSearchMemo;
+      return done(makeValues());
+    }
     transcriptChars = 0;
     const withoutTranscript = makeValues();
     if (!fits(withoutTranscript)) {
@@ -925,6 +935,7 @@ function budgetCoachTemplateValues(
       );
     }
     transcriptChars = best;
+    transcriptSearchMemo = best;
     return done(bestValues);
   };
 
