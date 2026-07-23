@@ -27,6 +27,9 @@ function baseConfig(): AppConfig {
     ofapiDmProjectionEnabled: false,
     // A runtimeApply:'none' editable key (must never be overlaid by the live overlay).
     ofapiDmDailyCreditBudget: 500,
+    serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
+    serviceEgressProxyUsername: "fake-service-user",
+    serviceEgressProxyPassword: "fake-service-password",
     encryptionKey: Buffer.alloc(0),
   } as unknown as AppConfig;
 }
@@ -98,6 +101,21 @@ describe("applyEffectiveOverrides", () => {
       overrides([["transactionLookbackDays", 3.5]]),
     );
     expect(merged.transactionLookbackDays).toBe(7);
+  });
+
+  it("never overlays the boot-only service proxy tuple", () => {
+    const config = baseConfig();
+    const merged = applyEffectiveOverrides(
+      config,
+      overrides([
+        ["serviceEgressProxyUrl", "socks5://other.example.internal:1080"],
+        ["serviceEgressProxyUsername", "other-fake-user"],
+        ["serviceEgressProxyPassword", "other-fake-password"],
+      ]),
+    );
+    expect(merged.serviceEgressProxyUrl).toBe(config.serviceEgressProxyUrl);
+    expect(merged.serviceEgressProxyUsername).toBe(config.serviceEgressProxyUsername);
+    expect(merged.serviceEgressProxyPassword).toBe(config.serviceEgressProxyPassword);
   });
 });
 

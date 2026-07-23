@@ -78,9 +78,12 @@ describe("egress resolver (Stage 26)", () => {
       return;
     }
 
-    const proxied = await seedFanslyPage("egress-proxied", "socks5://proxy.example:1080");
+    const proxied = await seedFanslyPage(
+      "egress-proxied",
+      "socks5://proxy.example.internal:1080",
+    );
     const proxiedContext = await resolveEgress(appContext, { kind: "page", pageId: proxied.id });
-    expect(proxiedContext.egressKey).toBe("socks5://proxy.example:1080");
+    expect(proxiedContext.egressKey).toBe("socks5://proxy.example.internal:1080");
     expect(proxiedContext.dispatcher).not.toBeNull();
     await proxiedContext.close();
 
@@ -91,7 +94,7 @@ describe("egress resolver (Stage 26)", () => {
       .rejects.toThrow(/fail-closed/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("records the vendor address policies: ofapi vendor-direct, elevenlabs direct+unpaced, fansly refused, unknown throws", async (context) => {
+  it("records service-vendor identity while preserving OFAPI/Fansly policies", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -102,12 +105,18 @@ describe("egress resolver (Stage 26)", () => {
     expect(vendorContext.dispatcher).toBeNull();
     await vendorContext.close();
 
-    // Voice notes vendor TTS: a non-platform vendor — direct hub egress
-    // (dispatcher null) and UNPACED (pace resolves 0), no platform masquerade.
     const elevenlabs = await resolveEgress(appContext, { kind: "vendor", vendor: "elevenlabs" });
-    expect(elevenlabs.egressKey).toBe("vendor:elevenlabs");
-    expect(elevenlabs.dispatcher).toBeNull();
+    const telegram = await resolveEgress(appContext, { kind: "vendor", vendor: "telegram" });
+    expect(elevenlabs.egressKey).toBe(
+      "service:socks5://proxy.example.internal:1080",
+    );
+    expect(telegram.egressKey).toBe(elevenlabs.egressKey);
+    expect(elevenlabs.dispatcher).not.toBeNull();
+    expect(telegram.dispatcher).not.toBeNull();
+    expect(telegram.dispatcher).not.toBe(elevenlabs.dispatcher);
     await expect(elevenlabs.pace("interactive")).resolves.toBe(0);
+    await expect(telegram.pace("bulk")).resolves.toBe(0);
+    await telegram.close();
     await elevenlabs.close();
 
     await expect(resolveEgress(appContext, { kind: "vendor", vendor: "fansly" }))
@@ -116,6 +125,64 @@ describe("egress resolver (Stage 26)", () => {
       .rejects.toThrow(/Unknown egress vendor/);
     await expect(resolveEgress(appContext, { kind: "page", pageId: 999_999 }))
       .rejects.toThrow(/not found/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("fails closed when the service tuple is absent and allows only Telegram's transition fallback", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const missing = createTestAppContext(testDb, {
+      serviceEgressProxyUrl: null,
+      serviceEgressProxyUsername: null,
+      serviceEgressProxyPassword: null,
+    });
+    await expect(resolveEgress(missing, { kind: "vendor", vendor: "elevenlabs" }))
+      .rejects.toThrow(/requires the service proxy/);
+    await expect(resolveEgress(missing, { kind: "vendor", vendor: "telegram" }))
+      .rejects.toThrow(/no transition legacy page route/);
+
+    await seedFanslyPage(
+      "fake-telegram-legacy",
+      "socks5://legacy-proxy.example.internal:1080",
+    );
+    const transition = createTestAppContext(testDb, {
+      telegramProxyPageLabel: "fake-telegram-legacy",
+      serviceEgressProxyUrl: null,
+      serviceEgressProxyUsername: null,
+      serviceEgressProxyPassword: null,
+    });
+    const legacy = await resolveEgress(transition, {
+      kind: "vendor",
+      vendor: "telegram",
+    });
+    expect(legacy.egressKey).toBe(
+      "legacy-page:socks5://legacy-proxy.example.internal:1080",
+    );
+    expect(legacy.dispatcher).not.toBeNull();
+    await legacy.close();
+    await expect(resolveEgress(transition, {
+      kind: "vendor",
+      vendor: "elevenlabs",
+    })).rejects.toThrow(/requires the service proxy/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("gives the dedicated tuple strict precedence over a configured legacy label", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext.config.telegramProxyPageLabel = "page-that-does-not-exist";
+    const telegram = await resolveEgress(appContext, {
+      kind: "vendor",
+      vendor: "telegram",
+    });
+    expect(telegram.egressKey).toBe(
+      "service:socks5://proxy.example.internal:1080",
+    );
+    await telegram.close();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

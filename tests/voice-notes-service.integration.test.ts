@@ -355,16 +355,28 @@ describe("voice-notes service: admission gates", () => {
   it("distinguishes provider-absent (503) from disabled (403)", async (ctx) => {
     if (!testDb) return ctx.skip();
 
-    // Flag on, provider never built (no ELEVENLABS_API_KEY) → distinct
-    // key-required error that names the key and the restart hint.
+    // Flag on, provider never built because the service proxy was absent at
+    // boot → distinct readiness error before any row or budget reservation.
     const absent = await provision({ enabled: true });
+    appContext.config.serviceEgressProxyUrl = null;
+    appContext.config.serviceEgressProxyUsername = null;
+    appContext.config.serviceEgressProxyPassword = null;
+    const absentBody = absent.body();
     await expect(
-      createVoiceNote(appContext, absent.principal, absent.page.label, absent.body()),
+      createVoiceNote(appContext, absent.principal, absent.page.label, absentBody),
     ).rejects.toMatchObject({ code: "voice_provider_unavailable", statusCode: 503 });
-    const providerErr = await createVoiceNote(appContext, absent.principal, absent.page.label, absent.body())
+    const providerErr = await createVoiceNote(appContext, absent.principal, absent.page.label, absentBody)
       .catch((e) => e);
     expect(String(providerErr.message)).toMatch(/ELEVENLABS_API_KEY/);
+    expect(String(providerErr.message)).toMatch(/SERVICE_EGRESS_PROXY/);
     expect(String(providerErr.message)).toMatch(/restart/i);
+    expect(await getVoiceNoteByClientRequestId(
+      testDb.db,
+      absent.principal.user.id,
+      absentBody.clientRequestId,
+    )).toBeNull();
+    expect(await spentForScope(`page:${absent.page.id}`)).toBe(0);
+    expect(await spentForScope("global")).toBe(0);
 
     // Flag off → generic disabled, even with a provider present.
     appContext.config.voiceNotesEnabled = false;
@@ -720,7 +732,12 @@ describe("voice-notes service: detached dispatch settle paths", () => {
   it("refusedBeforeBilling → failed_definite and full reservation release", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider } = fakeProvider(() => ({
-      ok: false, refusedBeforeBilling: true, status: 401, snippet: "unauthorized",
+      ok: false,
+      refusedBeforeBilling: true,
+      status: 401,
+      snippet: "unauthorized",
+      failureKind: "http_4xx",
+      detail: "unauthorized",
     }));
     const p = await provision({ provider });
 
@@ -736,7 +753,12 @@ describe("voice-notes service: detached dispatch settle paths", () => {
   it("definite non-refused HTTP failure → failed_after_dispatch, estimate kept (billed-unknown)", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider } = fakeProvider(() => ({
-      ok: false, refusedBeforeBilling: false, status: 500, snippet: "HTTP 500",
+      ok: false,
+      refusedBeforeBilling: false,
+      status: 500,
+      snippet: "HTTP 500",
+      failureKind: "http_5xx",
+      detail: "HTTP 500",
     }));
     const p = await provision({ provider });
 
@@ -784,7 +806,12 @@ describe("voice-notes service: detached dispatch settle paths", () => {
   it("network/timeout (status 0) → left dispatched for the lease sweep → indeterminate", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider, state } = fakeProvider(() => ({
-      ok: false, refusedBeforeBilling: false, status: 0, snippet: "network down",
+      ok: false,
+      refusedBeforeBilling: false,
+      status: 0,
+      snippet: "network down",
+      failureKind: "connect",
+      detail: "network down",
     }));
     const p = await provision({ provider });
 
@@ -862,6 +889,75 @@ describe("voice-notes service: status + audio reads", () => {
 });
 
 describe("voice-notes service: dispatch log hygiene", () => {
+  it("logs status-0 failure detail structurally without any key, proxy credential, or script", async () => {
+    const fakeKey = "fake-elevenlabs-key";
+    const fakeUser = "fake-service-user";
+    const fakePassword = "fake-service-password";
+    const fakeScript = "PRIVATE_SCRIPT_TEXT";
+    const records: Array<{ level: string; obj: unknown; msg: string }> = [];
+    const record = (level: string) => (obj: unknown, msg?: string) => {
+      records.push({ level, obj, msg: msg ?? "" });
+    };
+    const app = {
+      config: {
+        elevenLabsApiKey: fakeKey,
+        serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
+        serviceEgressProxyUsername: fakeUser,
+        serviceEgressProxyPassword: fakePassword,
+      },
+      db: {},
+      logger: {
+        error: record("error"),
+        warn: record("warn"),
+        info: record("info"),
+        debug: record("debug"),
+      },
+      voiceTtsProvider: fakeProvider(() => ({
+        ok: false,
+        refusedBeforeBilling: false,
+        status: 0,
+        snippet: "proxy connect failed",
+        failureKind: "connect",
+        detail: `${fakeKey} ${fakeUser} ${fakePassword} ${fakeScript} `
+          + `socks5://${fakeUser}:${fakePassword}@proxy.example.internal:1080`,
+      })).provider,
+    } as unknown as AppContext;
+    const row = {
+      id: 41,
+      platformAccountId: 1,
+      profileVoiceId: "voice-abc",
+      profileModel: "eleven_v3",
+      profileSettings: {},
+      profileOutputFormat: "mp3_44100_128",
+    } as unknown as VoiceNoteRow;
+
+    await dispatchVoiceNote(app, {
+      row,
+      attemptToken: "fake-attempt-token",
+      reservedChars: fakeScript.length,
+      canonicalScript: fakeScript,
+      now: new Date(),
+    });
+
+    const warning = records.find((record) => record.level === "warn");
+    expect(warning?.obj).toEqual(expect.objectContaining({
+      component: "voice_notes",
+      event: "voice_note_synthesis_failed",
+      vendor: "elevenlabs",
+      voiceNoteId: 41,
+      egressKey: "service:socks5://proxy.example.internal:1080",
+      providerStatus: 0,
+      failureKind: "connect",
+      durationMs: expect.any(Number),
+      outcome: "indeterminate",
+    }));
+    const serialized = JSON.stringify(records);
+    expect(serialized).not.toContain(fakeKey);
+    expect(serialized).not.toContain(fakeUser);
+    expect(serialized).not.toContain(fakePassword);
+    expect(serialized).not.toContain(fakeScript);
+  });
+
   it("never spills the audio buffer when a DB settle fault is logged", async () => {
     // A completed synthesis settle is a DrizzleQueryError whose params (and
     // message) embed the bound SQL — including the audio BYTEA. The catch must
@@ -892,6 +988,11 @@ describe("voice-notes service: dispatch log hygiene", () => {
     const fakeApp = {
       voiceTtsProvider: fakeProvider(() => okAudio(100)).provider,
       logger,
+      config: {
+        serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
+        serviceEgressProxyUsername: "fake-service-user",
+        serviceEgressProxyPassword: "fake-service-password",
+      },
       // The terminal settle runs inside app.db.transaction — force it to throw.
       db: {
         transaction: async () => {

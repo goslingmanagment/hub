@@ -72,6 +72,9 @@ export function createTestAppContext(
     syncSharedRateLimitEnabled?: boolean;
     healthSyncMonitoringToken?: string | null;
     telegramProxyPageLabel?: string | null;
+    serviceEgressProxyUrl?: string | null;
+    serviceEgressProxyUsername?: string | null;
+    serviceEgressProxyPassword?: string | null;
     trustProxy?: boolean;
     authPolicyEnforcement?: "log" | "enforce";
     accessGrantsReadEnabled?: boolean;
@@ -121,6 +124,18 @@ export function createTestAppContext(
       telegramEnabled: false,
       telegramReportHourUtc: 9,
       telegramProxyPageLabel: overrides?.telegramProxyPageLabel ?? null,
+      serviceEgressProxyUrl:
+        overrides?.serviceEgressProxyUrl === undefined
+          ? "socks5://proxy.example.internal:1080"
+          : overrides.serviceEgressProxyUrl,
+      serviceEgressProxyUsername:
+        overrides?.serviceEgressProxyUsername === undefined
+          ? "fake-service-user"
+          : overrides.serviceEgressProxyUsername,
+      serviceEgressProxyPassword:
+        overrides?.serviceEgressProxyPassword === undefined
+          ? "fake-service-password"
+          : overrides.serviceEgressProxyPassword,
       ofapiEventRetentionDays: overrides?.ofapiEventRetentionDays ?? 7,
       ofapiEventWorkerReplicas: overrides?.ofapiEventWorkerReplicas ?? 1,
       ofapiDmProjectionEnabled: overrides?.ofapiDmProjectionEnabled ?? false,

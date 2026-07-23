@@ -1,17 +1,18 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-import { findPageByLabel, getTelegramSettings, type TelegramSettingsRow } from "@agency_hub_core/db";
+import { getTelegramSettings, type TelegramSettingsRow } from "@agency_hub_core/db";
 import {
-  classifyTransportError,
-  createProxyRequestDispatcher,
+  classifyTransportFailure,
   decryptJsonWithKeyVersion,
+  formatObservedError,
   redactSensitiveText,
   resolveRetryDelayMs,
 } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../bootstrap.ts";
-import { resolveStoredProxyConfig } from "./page-context.ts";
+import { fetchWithEgress } from "./egress/fetch.ts";
+import { resolveEgress } from "./egress/resolver.ts";
 
 export type TelegramSendResult =
   | {
@@ -37,10 +38,10 @@ const TELEGRAM_SEND_TIMEOUT_MS = 10_000;
 const TELEGRAM_SEND_MAX_RETRIES = 2;
 const TELEGRAM_DISCOVER_TIMEOUT_MS = 10_000;
 
-type TelegramRequestInit = RequestInit & { dispatcher?: Dispatcher };
-
 export interface TelegramRequestOptions {
-  dispatcher?: Dispatcher;
+  dispatcher: Dispatcher;
+  egressKey: string;
+  close(): Promise<void>;
 }
 
 function buildTelegramApiUrl(botToken: string, method: string) {
@@ -48,10 +49,14 @@ function buildTelegramApiUrl(botToken: string, method: string) {
 }
 
 function describeTelegramFailure(error: unknown) {
-  if (classifyTransportError(error) === "timeout") {
-    return "Telegram API request timed out — configure a Telegram proxy page or retry later.";
+  const failureKind = classifyTransportFailure(error);
+  if (failureKind === "connect") {
+    return "Telegram service proxy connection failed; check proxy auth and reachability.";
   }
-  return redactSensitiveText(error instanceof Error ? error.message : String(error));
+  if (failureKind === "timeout") {
+    return "Telegram API request timed out through the service proxy.";
+  }
+  return formatObservedError(error).slice(0, 512);
 }
 
 function shouldRetryTelegramResponse(status: number) {
@@ -116,53 +121,30 @@ function describeTelegramChat(chat: TelegramChatPayload): string {
   return String(chat.id ?? "");
 }
 
-function withTelegramRequestOptions(
-  init: RequestInit,
-  options: TelegramRequestOptions,
-): TelegramRequestInit {
-  if (!options.dispatcher) {
-    return init;
-  }
-
-  return {
-    ...init,
-    dispatcher: options.dispatcher,
-  };
-}
-
 export async function closeTelegramRequestOptions(options: TelegramRequestOptions) {
-  await options.dispatcher?.close().catch(() => undefined);
+  await options.close().catch(() => undefined);
 }
 
 export async function resolveTelegramRequestOptions(
   app: Pick<AppContext, "config" | "db">,
 ): Promise<TelegramRequestOptions> {
-  const pageLabel = app.config.telegramProxyPageLabel;
-  if (!pageLabel) {
-    return {};
-  }
-
-  const stored = await findPageByLabel(app.db, pageLabel);
-  if (!stored) {
-    throw new TelegramProxyConfigError(`Telegram proxy page "${pageLabel}" was not found`);
-  }
-  if (!stored.proxy) {
-    throw new TelegramProxyConfigError(`Telegram proxy page "${pageLabel}" has no proxy configured`);
-  }
-
   try {
-    const proxy = resolveStoredProxyConfig(app, stored.proxy);
-    if (!proxy) {
-      throw new Error("stored proxy resolved to empty config");
+    const egress = await resolveEgress(app as AppContext, {
+      kind: "vendor",
+      vendor: "telegram",
+    });
+    if (!egress.dispatcher) {
+      await egress.close().catch(() => undefined);
+      throw new Error("Telegram egress resolved without a dispatcher");
     }
     return {
-      dispatcher: createProxyRequestDispatcher(proxy),
+      dispatcher: egress.dispatcher,
+      egressKey: egress.egressKey,
+      close: egress.close,
     };
   } catch (error) {
     throw new TelegramProxyConfigError(
-      `Telegram proxy page "${pageLabel}" has invalid proxy config: ${redactSensitiveText(
-        error instanceof Error ? error.message : String(error),
-      )}`,
+      redactSensitiveText(error instanceof Error ? error.message : String(error)).slice(0, 512),
     );
   }
 }
@@ -176,13 +158,14 @@ export async function resolveTelegramRequestOptions(
  */
 export async function discoverTelegramChats(
   botToken: string,
-  options: TelegramRequestOptions = {},
+  options: TelegramRequestOptions,
 ): Promise<TelegramDiscoveryResult> {
   let meResponse: Response;
   try {
-    meResponse = await fetch(buildTelegramApiUrl(botToken, "getMe"), withTelegramRequestOptions({
+    meResponse = await fetchWithEgress(fetch, options.dispatcher, buildTelegramApiUrl(botToken, "getMe"), {
       signal: AbortSignal.timeout(TELEGRAM_DISCOVER_TIMEOUT_MS),
-    }, options));
+      redirect: "error",
+    });
   } catch (error) {
     throw new TelegramDiscoveryError(describeTelegramFailure(error));
   }
@@ -196,9 +179,10 @@ export async function discoverTelegramChats(
 
   let updatesResponse: Response;
   try {
-    updatesResponse = await fetch(buildTelegramApiUrl(botToken, "getUpdates"), withTelegramRequestOptions({
+    updatesResponse = await fetchWithEgress(fetch, options.dispatcher, buildTelegramApiUrl(botToken, "getUpdates"), {
       signal: AbortSignal.timeout(TELEGRAM_DISCOVER_TIMEOUT_MS),
-    }, options));
+      redirect: "error",
+    });
   } catch (error) {
     throw new TelegramDiscoveryError(describeTelegramFailure(error));
   }
@@ -351,16 +335,23 @@ export async function sendTelegramMessage(
     };
   }
 
+  const operationStartedAt = Date.now();
   let requestOptions: TelegramRequestOptions;
   try {
     requestOptions = await resolveTelegramRequestOptions(app);
   } catch (error) {
     const described = describeTelegramFailure(error);
     app.logger.warn({
-      chatId: creds.chatId,
-      error: described,
-      err: error,
-    }, "Telegram notification proxy configuration failed; continuing");
+      component: "telegram",
+      event: "egress_resolution_failed",
+      vendor: "telegram",
+      method: "sendMessage",
+      attemptCount: 0,
+      egressKey: "service:unresolved",
+      failureKind: classifyTransportFailure(error),
+      observedError: described,
+      durationMs: Date.now() - operationStartedAt,
+    }, "Telegram notification egress resolution failed; continuing");
     return {
       status: "failed",
       error: described,
@@ -370,19 +361,25 @@ export async function sendTelegramMessage(
   try {
     for (let attemptNumber = 1; attemptNumber <= TELEGRAM_SEND_MAX_RETRIES + 1; attemptNumber += 1) {
       try {
-        const response = await fetch(buildTelegramApiUrl(creds.botToken, "sendMessage"), withTelegramRequestOptions({
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
+        const response = await fetchWithEgress(
+          fetch,
+          requestOptions.dispatcher,
+          buildTelegramApiUrl(creds.botToken, "sendMessage"),
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              chat_id: creds.chatId,
+              text: input.text,
+              ...(input.parseMode && { parse_mode: input.parseMode }),
+              disable_web_page_preview: true,
+            }),
+            signal: AbortSignal.timeout(TELEGRAM_SEND_TIMEOUT_MS),
+            redirect: "error",
           },
-          body: JSON.stringify({
-            chat_id: creds.chatId,
-            text: input.text,
-            ...(input.parseMode && { parse_mode: input.parseMode }),
-            disable_web_page_preview: true,
-          }),
-          signal: AbortSignal.timeout(TELEGRAM_SEND_TIMEOUT_MS),
-        }, requestOptions));
+        );
         const body = await response.json().catch(() => null) as
           | {
             ok?: boolean;
@@ -411,9 +408,16 @@ export async function sendTelegramMessage(
         }
 
         app.logger.warn({
-          chatId: creds.chatId,
+          component: "telegram",
+          event: "delivery_failed",
+          vendor: "telegram",
+          method: "sendMessage",
+          attemptCount: attemptNumber,
+          egressKey: requestOptions.egressKey,
           httpStatus: response.status,
-          error,
+          failureKind: "http",
+          observedError: error,
+          durationMs: Date.now() - operationStartedAt,
         }, "Telegram notification failed; continuing");
         return {
           status: "failed",
@@ -421,8 +425,9 @@ export async function sendTelegramMessage(
         };
       } catch (error) {
         const described = describeTelegramFailure(error);
+        const failureKind = classifyTransportFailure(error);
         const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
-          && (classifyTransportError(error) === "timeout" || classifyTransportError(error) === "transport");
+          && failureKind !== "connect";
 
         if (canRetry) {
           await delay(resolveRetryDelayMs(null, attemptNumber));
@@ -430,9 +435,15 @@ export async function sendTelegramMessage(
         }
 
         app.logger.warn({
-          chatId: creds.chatId,
-          error: described,
-          err: error,
+          component: "telegram",
+          event: "delivery_failed",
+          vendor: "telegram",
+          method: "sendMessage",
+          attemptCount: attemptNumber,
+          egressKey: requestOptions.egressKey,
+          failureKind,
+          observedError: described,
+          durationMs: Date.now() - operationStartedAt,
         }, "Telegram notification failed; continuing");
         return {
           status: "failed",
@@ -472,16 +483,23 @@ export async function sendTelegramPhoto(
     return { status: "skipped", reason: "unconfigured" };
   }
 
+  const operationStartedAt = Date.now();
   let requestOptions: TelegramRequestOptions;
   try {
     requestOptions = await resolveTelegramRequestOptions(app);
   } catch (error) {
     const described = describeTelegramFailure(error);
     app.logger.warn({
-      chatId: creds.chatId,
-      error: described,
-      err: error,
-    }, "Telegram notification proxy configuration failed; continuing");
+      component: "telegram",
+      event: "egress_resolution_failed",
+      vendor: "telegram",
+      method: "sendPhoto",
+      attemptCount: 0,
+      egressKey: "service:unresolved",
+      failureKind: classifyTransportFailure(error),
+      observedError: described,
+      durationMs: Date.now() - operationStartedAt,
+    }, "Telegram notification egress resolution failed; continuing");
     return {
       status: "failed",
       error: described,
@@ -497,11 +515,17 @@ export async function sendTelegramPhoto(
         if (input.parseMode) form.set("parse_mode", input.parseMode);
         form.set("photo", new Blob([new Uint8Array(input.photo)], { type: "image/png" }), "report.png");
 
-        const response = await fetch(buildTelegramApiUrl(creds.botToken, "sendPhoto"), withTelegramRequestOptions({
-          method: "POST",
-          body: form,
-          signal: AbortSignal.timeout(TELEGRAM_PHOTO_TIMEOUT_MS),
-        }, requestOptions));
+        const response = await fetchWithEgress(
+          fetch,
+          requestOptions.dispatcher,
+          buildTelegramApiUrl(creds.botToken, "sendPhoto"),
+          {
+            method: "POST",
+            body: form,
+            signal: AbortSignal.timeout(TELEGRAM_PHOTO_TIMEOUT_MS),
+            redirect: "error",
+          },
+        );
         const body = await response.json().catch(() => null) as
           | { ok?: boolean; description?: string; result?: { message_id?: number } }
           | null;
@@ -522,18 +546,40 @@ export async function sendTelegramPhoto(
           continue;
         }
 
-        app.logger.warn({ chatId: creds.chatId, httpStatus: response.status, error }, "Telegram photo failed; continuing");
+        app.logger.warn({
+          component: "telegram",
+          event: "delivery_failed",
+          vendor: "telegram",
+          method: "sendPhoto",
+          attemptCount: attemptNumber,
+          egressKey: requestOptions.egressKey,
+          httpStatus: response.status,
+          failureKind: "http",
+          observedError: error,
+          durationMs: Date.now() - operationStartedAt,
+        }, "Telegram photo failed; continuing");
         return { status: "failed", error };
       } catch (error) {
         const described = describeTelegramFailure(error);
+        const failureKind = classifyTransportFailure(error);
         const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
-          && (classifyTransportError(error) === "timeout" || classifyTransportError(error) === "transport");
+          && failureKind !== "connect";
         if (canRetry) {
           await delay(resolveRetryDelayMs(null, attemptNumber));
           continue;
         }
 
-        app.logger.warn({ chatId: creds.chatId, error: described, err: error }, "Telegram photo failed; continuing");
+        app.logger.warn({
+          component: "telegram",
+          event: "delivery_failed",
+          vendor: "telegram",
+          method: "sendPhoto",
+          attemptCount: attemptNumber,
+          egressKey: requestOptions.egressKey,
+          failureKind,
+          observedError: described,
+          durationMs: Date.now() - operationStartedAt,
+        }, "Telegram photo failed; continuing");
         return { status: "failed", error: described };
       }
     }

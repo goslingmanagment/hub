@@ -69,6 +69,32 @@ describe("assembleConfigView", () => {
     expect(apiKey.running.map((r) => r.state).sort()).toEqual(["set", "unset"]);
   });
 
+  it("shows every service-proxy field as masked set/unset metadata only", () => {
+    const config = {
+      serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
+      serviceEgressProxyUsername: "fake-service-user",
+      serviceEgressProxyPassword: "fake-service-password",
+    };
+    const view = assembleConfigView([row("api", "a1", config, FRESH)], NOW);
+
+    for (const key of [
+      "serviceEgressProxyUrl",
+      "serviceEgressProxyUsername",
+      "serviceEgressProxyPassword",
+    ]) {
+      const proxyItem = item(view, key);
+      expect(proxyItem.editability).toBe("never");
+      expect(proxyItem.runtimeApply).toBe("none");
+      expect(proxyItem.running).toEqual([
+        expect.objectContaining({ value: null, masked: true, state: "set" }),
+      ]);
+    }
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain("proxy.example.internal");
+    expect(serialized).not.toContain("fake-service-user");
+    expect(serialized).not.toContain("fake-service-password");
+  });
+
   it("surfaces a stale instance instead of hiding it, and excludes it from drift", () => {
     const view = assembleConfigView(
       [row("api", "a1", API_CONFIG, FRESH), row("worker", "w1", WORKER_CONFIG, STALE)],

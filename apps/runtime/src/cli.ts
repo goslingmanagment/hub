@@ -10,6 +10,7 @@ import {
   createModel,
   findPageByLabel,
   findUserByUsername,
+  insertDeliveryAttempt,
   insertErasureLog,
 } from "@agency_hub_core/db";
 import {
@@ -75,6 +76,10 @@ import { getModelRevenueReport, getPageRevenueReport } from "./services/reportin
 import { sendManualDailyRevenueTelegramReport } from "./services/telegram-report.ts";
 import { sendTelegramTestMessage } from "./services/telegram.ts";
 import {
+  verifyServiceEgress,
+  type ServiceEgressConsumerSelection,
+} from "./services/service-egress-verify.ts";
+import {
   loadFanslySessionBundleFromFile,
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
@@ -119,6 +124,13 @@ function parsePositiveInt(value: string) {
     throw new Error(`Expected a positive integer, received "${value}"`);
   }
   return parsed;
+}
+
+function parseServiceEgressConsumer(value: string): ServiceEgressConsumerSelection {
+  if (value === "elevenlabs" || value === "telegram" || value === "all") {
+    return value;
+  }
+  throw new InvalidArgumentError("Expected elevenlabs, telegram, or all");
 }
 
 function parseDateOption(value: string) {
@@ -676,6 +688,7 @@ export function buildProgram() {
   sync.enablePositionalOptions();
   const queue = program.command("queue");
   const telegram = program.command("telegram");
+  const serviceEgress = program.command("service-egress");
   program
     .command("tiering:run")
     .description("Stage 28: export→verify→detach aged ledger partitions into the lake")
@@ -1921,17 +1934,51 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         const result = await sendTelegramTestMessage(app);
+        await insertDeliveryAttempt(app.db, {
+          kind: "test",
+          status: result.status,
+          messageId: result.status === "sent" ? result.messageId : null,
+          error: result.status === "failed"
+            ? result.error
+            : result.status === "skipped"
+              ? result.reason
+              : null,
+        });
         if (result.status === "skipped") {
           console.log("Telegram is not configured; skipping");
+          process.exitCode = 1;
           return;
         }
 
         if (result.status === "failed") {
           console.log(`Telegram test delivery failed: ${result.error}`);
+          process.exitCode = 1;
           return;
         }
 
         console.log(`Sent Telegram test message to ${result.chatId}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  serviceEgress
+    .command("verify")
+    .requiredOption(
+      "--consumer <consumer>",
+      "consumer to verify: elevenlabs, telegram, or all",
+      parseServiceEgressConsumer,
+    )
+    .action(async (options: { consumer: ServiceEgressConsumerSelection }) => {
+      const app = await createAppContext();
+      try {
+        const results = await verifyServiceEgress(app, options.consumer);
+        for (const result of results) {
+          console.log(
+            `${result.consumer}\troute=${result.route}\tegress_key=${result.egressKey}`
+              + `\texit_ip=${result.exitIp}`,
+          );
+        }
       } finally {
         await app.close();
       }

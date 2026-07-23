@@ -39,7 +39,33 @@ import {
   resolveTelegramCredentialSources,
   sendTelegramMessage,
   sendTelegramPhoto,
+  type TelegramRequestOptions,
 } from "../apps/runtime/src/services/telegram.ts";
+import { resolveEgress } from "../apps/runtime/src/services/egress/resolver.ts";
+
+function fakeDispatcher() {
+  return {
+    dispatch: vi.fn(),
+    close: vi.fn(async () => undefined),
+    destroy: vi.fn(),
+  } as unknown as TelegramRequestOptions["dispatcher"];
+}
+
+function requestOptions(dispatcher = fakeDispatcher()) {
+  return {
+    dispatcher,
+    egressKey: "service:socks5://proxy.example.internal:1080",
+    close: vi.fn(async () => undefined),
+  };
+}
+
+function serviceProxyConfig() {
+  return {
+    serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
+    serviceEgressProxyUsername: "fake-service-user",
+    serviceEgressProxyPassword: "fake-service-password",
+  };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -164,7 +190,7 @@ describe("telegram service", () => {
         ],
       }), { status: 200, headers: { "content-type": "application/json" } }));
 
-    const result = await discoverTelegramChats("123:abc");
+    const result = await discoverTelegramChats("123:abc", requestOptions());
 
     expect(result.botUsername).toBe("mybot");
     expect(result.chats).toEqual([
@@ -175,11 +201,7 @@ describe("telegram service", () => {
   });
 
   it("uses a configured dispatcher for chat discovery requests", async () => {
-    const dispatcher = {
-      dispatch: vi.fn(),
-      close: vi.fn(),
-      destroy: vi.fn(),
-    } as never;
+    const dispatcher = fakeDispatcher();
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -191,7 +213,7 @@ describe("telegram service", () => {
         result: [],
       }), { status: 200, headers: { "content-type": "application/json" } }));
 
-    await discoverTelegramChats("123:abc", { dispatcher });
+    await discoverTelegramChats("123:abc", requestOptions(dispatcher));
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy).toHaveBeenNthCalledWith(
@@ -212,7 +234,8 @@ describe("telegram service", () => {
       description: "Unauthorized",
     }), { status: 401, headers: { "content-type": "application/json" } }));
 
-    await expect(discoverTelegramChats("bad-token")).rejects.toThrow(/Invalid bot token/);
+    await expect(discoverTelegramChats("bad-token", requestOptions()))
+      .rejects.toThrow(/Invalid bot token/);
   });
 
   it("throws a friendly discovery error when Telegram API times out", async () => {
@@ -220,10 +243,13 @@ describe("telegram service", () => {
     timeoutError.name = "TimeoutError";
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(timeoutError);
 
-    await expect(discoverTelegramChats("123:abc")).rejects.toThrow(/Telegram API request timed out/);
+    await expect(discoverTelegramChats("123:abc", requestOptions()))
+      .rejects.toThrow(/Telegram API request timed out/);
   });
 
   it("redacts Telegram bot tokens from transport failures", async () => {
+    const dispatcher = fakeDispatcher();
+    sharedMocks.createProxyRequestDispatcher.mockReturnValue(dispatcher);
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValue(new Error("request to https://api.telegram.org/bot123:abc/sendMessage failed"));
@@ -240,6 +266,7 @@ describe("telegram service", () => {
         telegramBotToken: null,
         telegramChatId: null,
         telegramReportHourUtc: 9,
+        ...serviceProxyConfig(),
       },
     } as never, {
       text: "hello",
@@ -250,13 +277,18 @@ describe("telegram service", () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledTimes(3);
-    expect(result).toEqual({
-      status: "failed",
-      error: "request to https://api.telegram.org/bot[REDACTED]/sendMessage failed",
-    });
+    expect(result).toMatchObject({ status: "failed" });
+    expect(result.status === "failed" ? result.error : "").toContain(
+      "https://api.telegram.org/bot[REDACTED]/sendMessage",
+    );
     expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({
-      chatId: "6065935464",
-      error: "request to https://api.telegram.org/bot[REDACTED]/sendMessage failed",
+      method: "sendMessage",
+      attemptCount: 3,
+      egressKey: "service:socks5://proxy.example.internal:1080",
+      durationMs: expect.any(Number),
+      observedError: expect.stringContaining(
+        "https://api.telegram.org/bot[REDACTED]/sendMessage",
+      ),
     }), "Telegram notification failed; continuing");
     expect(result.status).toBe("failed");
     if (result.status === "failed") {
@@ -265,6 +297,8 @@ describe("telegram service", () => {
   });
 
   it("retries transient Telegram failures before succeeding with a bounded timeout signal", async () => {
+    const dispatcher = fakeDispatcher();
+    sharedMocks.createProxyRequestDispatcher.mockReturnValue(dispatcher);
     const timeoutError = new Error("socket timed out");
     timeoutError.name = "TimeoutError";
     const fetchSpy = vi
@@ -294,6 +328,7 @@ describe("telegram service", () => {
         telegramBotToken: null,
         telegramChatId: null,
         telegramReportHourUtc: 9,
+        ...serviceProxyConfig(),
       },
     } as never, {
       text: "hello",
@@ -306,6 +341,7 @@ describe("telegram service", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       signal: expect.any(AbortSignal),
+      dispatcher,
     }));
     expect(result).toEqual({
       status: "sent",
@@ -315,7 +351,7 @@ describe("telegram service", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("uses the configured page proxy dispatcher for photo sends and closes it", async () => {
+  it("uses the transition legacy page proxy for photo sends only when the service tuple is absent", async () => {
     const dispatcher = {
       dispatch: vi.fn(),
       close: vi.fn(async () => undefined),
@@ -326,7 +362,7 @@ describe("telegram service", () => {
       page: { id: 7, label: "lilly-1" },
       credentials: null,
       proxy: {
-        url: "socks5://proxy.example:1080",
+        url: "socks5://proxy.example.internal:1080",
         encryptedAuth: null,
         keyVersion: null,
         rateLimitScopeKey: null,
@@ -357,6 +393,9 @@ describe("telegram service", () => {
         telegramChatId: null,
         telegramReportHourUtc: 9,
         telegramProxyPageLabel: "lilly-1",
+        serviceEgressProxyUrl: null,
+        serviceEgressProxyUsername: null,
+        serviceEgressProxyPassword: null,
       },
     } as never, {
       photo: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
@@ -375,7 +414,7 @@ describe("telegram service", () => {
     });
     expect(dbMocks.findPageByLabel).toHaveBeenCalledWith({}, "lilly-1");
     expect(sharedMocks.createProxyRequestDispatcher).toHaveBeenCalledWith({
-      url: "socks5://proxy.example:1080",
+      url: "socks5://proxy.example.internal:1080",
       username: null,
       password: null,
     });
@@ -390,6 +429,108 @@ describe("telegram service", () => {
     );
     expect(dispatcher.close).toHaveBeenCalledTimes(1);
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("fails closed without a dedicated or legacy route and performs zero fetches", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const logger = { warn: vi.fn() };
+    const result = await sendTelegramMessage({
+      db: {},
+      logger,
+      config: {
+        encryptionKeysByVersion: new Map([[1, Buffer.alloc(32, 7)]]),
+        telegramBotToken: null,
+        telegramChatId: null,
+        telegramReportHourUtc: 9,
+        telegramProxyPageLabel: null,
+        serviceEgressProxyUrl: null,
+        serviceEgressProxyUsername: null,
+        serviceEgressProxyPassword: null,
+      },
+    } as never, {
+      text: "hello",
+      credentials: { botToken: "123:abc", chatId: "6065935464" },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(sharedMocks.createProxyRequestDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("does not retry or fall back when the configured service proxy cannot connect", async () => {
+    const dispatcher = fakeDispatcher();
+    sharedMocks.createProxyRequestDispatcher.mockReturnValue(dispatcher);
+    const connectError = Object.assign(new Error("fake proxy auth rejected"), {
+      name: "SocksClientError",
+      code: "ECONNREFUSED",
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(connectError);
+    const logger = { warn: vi.fn() };
+
+    const result = await sendTelegramMessage({
+      db: {},
+      logger,
+      config: {
+        encryptionKeysByVersion: new Map([[1, Buffer.alloc(32, 7)]]),
+        telegramBotToken: null,
+        telegramChatId: null,
+        telegramReportHourUtc: 9,
+        telegramProxyPageLabel: "fake-legacy-page",
+        ...serviceProxyConfig(),
+      },
+    } as never, {
+      text: "hello",
+      credentials: { botToken: "123:abc", chatId: "6065935464" },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(dbMocks.findPageByLabel).not.toHaveBeenCalled();
+    expect(dispatcher.close).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({
+      method: "sendMessage",
+      attemptCount: 1,
+      egressKey: "service:socks5://proxy.example.internal:1080",
+      failureKind: "connect",
+      durationMs: expect.any(Number),
+    }), "Telegram notification failed; continuing");
+  });
+
+  it("closes only the per-operation Telegram dispatcher, never a voice dispatcher", async () => {
+    const voiceDispatcher = fakeDispatcher();
+    const telegramDispatcher = fakeDispatcher();
+    sharedMocks.createProxyRequestDispatcher
+      .mockReturnValueOnce(voiceDispatcher)
+      .mockReturnValueOnce(telegramDispatcher);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      result: { message_id: 44 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const app = {
+      db: {},
+      logger: { warn: vi.fn() },
+      config: {
+        encryptionKeysByVersion: new Map([[1, Buffer.alloc(32, 7)]]),
+        telegramBotToken: null,
+        telegramChatId: null,
+        telegramReportHourUtc: 9,
+        ...serviceProxyConfig(),
+      },
+    } as never;
+
+    const voiceEgress = await resolveEgress(app, {
+      kind: "vendor",
+      vendor: "elevenlabs",
+    });
+    await sendTelegramMessage(app, {
+      text: "hello",
+      credentials: { botToken: "123:abc", chatId: "6065935464" },
+    });
+
+    expect(voiceDispatcher.close).not.toHaveBeenCalled();
+    expect(telegramDispatcher.close).toHaveBeenCalledTimes(1);
+    await voiceEgress.close();
+    expect(voiceDispatcher.close).toHaveBeenCalledTimes(1);
   });
 });
 

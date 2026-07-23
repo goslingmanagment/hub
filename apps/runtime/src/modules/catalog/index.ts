@@ -127,11 +127,12 @@ const VOICE_NOTE_CAPABILITY_PLATFORMS = new Set<Platform>(["fansly"]);
 /**
  * Attach the OPTIONAL `capabilities.voiceNotes` UI hint to each assigned page.
  * The field appears ONLY when all four hold: the live voiceNotesEnabled switch
- * is on, the TTS provider is constructed (ELEVENLABS_API_KEY configured), the
- * page label is in the (fail-closed) allowlist, AND a voice profile exists for
- * the page. Any of them false → the field is omitted entirely (a missing field
- * reads as disabled — old-kernel forward-compat). Gating on the provider keeps
- * the hint from ever showing a button that would 503 voice_provider_unavailable.
+ * is on, the TTS provider is constructed (ELEVENLABS_API_KEY + complete service
+ * proxy configured), the page label is in the (fail-closed) allowlist, AND a
+ * voice profile exists for the page. Any of them false → the field is omitted
+ * entirely (a missing field reads as disabled — old-kernel forward-compat).
+ * Gating on the provider keeps the hint from ever showing a button that would
+ * 503 voice_provider_unavailable.
  * This is a hint only; `POST …/voice-notes` remains the authoritative admission
  * gate. The profile lookups are batched into a single query.
  */

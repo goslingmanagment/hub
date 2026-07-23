@@ -94,6 +94,9 @@ describe("db write safety", () => {
         telegramChatId: null,
         telegramEnabled: false,
         telegramReportHourUtc: 9,
+        serviceEgressProxyUrl: null,
+        serviceEgressProxyUsername: null,
+        serviceEgressProxyPassword: null,
         isProduction: false,
       },
       adapter: {
@@ -149,6 +152,9 @@ describe("db write safety", () => {
         telegramChatId: null,
         telegramEnabled: false,
         telegramReportHourUtc: 9,
+        serviceEgressProxyUrl: null,
+        serviceEgressProxyUsername: null,
+        serviceEgressProxyPassword: null,
         isProduction: false,
       },
       ofapi: {

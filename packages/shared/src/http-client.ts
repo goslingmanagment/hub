@@ -151,6 +151,18 @@ export function classifyTransportError(error: unknown): "timeout" | "transport" 
   return "transport";
 }
 
+/** Generic service-vendor transport classifier. Connect failures are separated
+ * because retrying a dead/auth-rejected proxy cannot change within one
+ * operation and must never trigger a direct-route fallback. */
+export function classifyTransportFailure(
+  error: unknown,
+): "connect" | "timeout" | "transport" {
+  if (isConnectFailure(error)) {
+    return "connect";
+  }
+  return classifyTransportError(error);
+}
+
 // Failure shapes that mean the upstream CONNECTION never came up (proxy dead,
 // host unreachable) — as opposed to an established stream dying mid-flight.
 const CONNECT_FAILURE_NAMES = new Set(["ConnectTimeoutError", "SocksClientError"]);
@@ -160,6 +172,9 @@ const CONNECT_FAILURE_CODES = new Set([
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTDOWN",
+  "ENETDOWN",
 ]);
 
 function isConnectFailure(error: unknown): boolean {

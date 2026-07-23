@@ -58,6 +58,7 @@ const cliMocks = vi.hoisted(() => {
     findPageByLabel: vi.fn(),
     findUserByUsername: vi.fn(),
     handleSuccessfulPageVerificationRecovery: vi.fn(),
+    insertDeliveryAttempt: vi.fn(),
     listPages: vi.fn(),
     listHarvestTransactionResidue: vi.fn(),
     onboardFanslyPage: vi.fn(),
@@ -70,6 +71,7 @@ const cliMocks = vi.hoisted(() => {
     sendManualDailyRevenueTelegramReport: vi.fn(),
     sendTelegramTestMessage: vi.fn(),
     setPageProxy: vi.fn(),
+    verifyServiceEgress: vi.fn(),
   };
 });
 
@@ -85,6 +87,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
     countHarvestObservations: cliMocks.countHarvestObservations,
     findPageByLabel: cliMocks.findPageByLabel,
     findUserByUsername: cliMocks.findUserByUsername,
+    insertDeliveryAttempt: cliMocks.insertDeliveryAttempt,
     listHarvestTransactionResidue: cliMocks.listHarvestTransactionResidue,
   };
 });
@@ -122,6 +125,10 @@ vi.mock("../apps/runtime/src/services/sync-control.ts", () => ({
 
 vi.mock("../apps/runtime/src/services/telegram.ts", () => ({
   sendTelegramTestMessage: cliMocks.sendTelegramTestMessage,
+}));
+
+vi.mock("../apps/runtime/src/services/service-egress-verify.ts", () => ({
+  verifyServiceEgress: cliMocks.verifyServiceEgress,
 }));
 
 vi.mock("../apps/runtime/src/services/telegram-report.ts", () => ({
@@ -190,6 +197,7 @@ describe("CLI parsing", () => {
   const cleanupDirectories = new Set<string>();
 
   beforeEach(() => {
+    process.exitCode = undefined;
     cliMocks.bossBehavior.sendError = null;
     cliMocks.bossBehavior.sendResult = "job-1";
     cliMocks.bossInstances.length = 0;
@@ -211,10 +219,15 @@ describe("CLI parsing", () => {
     cliMocks.sendTelegramTestMessage.mockReset();
     cliMocks.setPageProxy.mockReset();
     cliMocks.handleSuccessfulPageVerificationRecovery.mockReset();
+    cliMocks.insertDeliveryAttempt.mockReset();
+    cliMocks.verifyServiceEgress.mockReset();
 
     cliMocks.createAppContext.mockResolvedValue({
       config: {
         databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/testdb",
+        serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
+        serviceEgressProxyUsername: "fake-service-user",
+        serviceEgressProxyPassword: "fake-service-password",
       },
       db: {},
       pool: {},
@@ -281,6 +294,13 @@ describe("CLI parsing", () => {
       status: "skipped",
       reason: "unconfigured",
     });
+    cliMocks.insertDeliveryAttempt.mockResolvedValue({});
+    cliMocks.verifyServiceEgress.mockResolvedValue([{
+      consumer: "elevenlabs",
+      route: "socks5://proxy.example.internal:1080 (auth)",
+      egressKey: "service:socks5://proxy.example.internal:1080",
+      exitIp: "203.0.113.10",
+    }]);
     cliMocks.sendDailyRevenueTelegramReport.mockResolvedValue({
       delivery: {
         status: "skipped",
@@ -697,8 +717,15 @@ describe("CLI parsing", () => {
 
     const app = await cliMocks.createAppContext.mock.results[0]?.value;
     expect(cliMocks.sendTelegramTestMessage).toHaveBeenCalledWith(expect.anything());
+    expect(cliMocks.insertDeliveryAttempt).toHaveBeenCalledWith(expect.anything(), {
+      kind: "test",
+      status: "sent",
+      messageId: 123,
+      error: null,
+    });
     expect(app?.close).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith("Sent Telegram test message to 6065935464");
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("reports skipped Telegram test messages when unconfigured", async () => {
@@ -715,6 +742,65 @@ describe("CLI parsing", () => {
     ], { from: "user" });
 
     expect(logSpy).toHaveBeenCalledWith("Telegram is not configured; skipping");
+    expect(cliMocks.insertDeliveryAttempt).toHaveBeenCalledWith(expect.anything(), {
+      kind: "test",
+      status: "skipped",
+      messageId: null,
+      error: "unconfigured",
+    });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("persists failed Telegram tests and exits nonzero", async () => {
+    cliMocks.sendTelegramTestMessage.mockResolvedValue({
+      status: "failed",
+      error: "fake service proxy unavailable",
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await buildProgram().parseAsync(["telegram", "test"], { from: "user" });
+
+    expect(cliMocks.insertDeliveryAttempt).toHaveBeenCalledWith(expect.anything(), {
+      kind: "test",
+      status: "failed",
+      messageId: null,
+      error: "fake service proxy unavailable",
+    });
+    expect(logSpy).toHaveBeenCalledWith(
+      "Telegram test delivery failed: fake service proxy unavailable",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("prints only masked service-egress verification summaries", async () => {
+    cliMocks.verifyServiceEgress.mockResolvedValue([
+      {
+        consumer: "elevenlabs",
+        route: "socks5://proxy.example.internal:1080 (auth)",
+        egressKey: "service:socks5://proxy.example.internal:1080",
+        exitIp: "203.0.113.10",
+      },
+      {
+        consumer: "telegram",
+        route: "socks5://proxy.example.internal:1080 (auth)",
+        egressKey: "service:socks5://proxy.example.internal:1080",
+        exitIp: "203.0.113.10",
+      },
+    ]);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await buildProgram().parseAsync(
+      ["service-egress", "verify", "--consumer", "all"],
+      { from: "user" },
+    );
+
+    expect(cliMocks.verifyServiceEgress).toHaveBeenCalledWith(expect.anything(), "all");
+    const output = logSpy.mock.calls.flat().join("\n");
+    expect(output).toContain("route=socks5://proxy.example.internal:1080 (auth)");
+    expect(output).toContain("egress_key=service:socks5://proxy.example.internal:1080");
+    expect(output).toContain("exit_ip=203.0.113.10");
+    expect(output).not.toContain("fake-service-user");
+    expect(output).not.toContain("fake-service-password");
   });
 
   it("sends the Telegram daily report when configured", async () => {
