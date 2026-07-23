@@ -217,6 +217,7 @@ describe("DM corrections reconciler (Wave 2)", () => {
     const enriched = await buildMessagePayloadEnrichments(appStub() as never, [{
       id: Number(superseding.id),
       accountId: page.id,
+      currentAccountRef: ACCT,
       accountSeq: Number(superseding.account_seq),
       type: superseding.type,
       occurredAt: new Date("2026-07-06T10:00:00Z"),

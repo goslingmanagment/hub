@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   appendDomainEvents,
   appendProjectionOnlyDomainEvents,
+  createModel,
+  createOnlyFansPage,
   ensureDomainEventPartitions,
   getAccountHighWater,
   getDomainEventPartitionLeadMonths,
@@ -11,6 +13,7 @@ import {
   listObservationsForReplay,
   markObservationParsed,
   insertObservation,
+  setPageOfapiAccountId,
   type DomainEventInput,
 } from "@agency_hub_core/db";
 import { createHash } from "node:crypto";
@@ -122,6 +125,51 @@ describe("domain events append protocol (Stage 8)", () => {
       Array.from({ length: distinctKeys.size }, (_, i) => i + 1),
     );
     expect(await getAccountHighWater(testDb.db, 42)).toBe(distinctKeys.size);
+  });
+
+  it("reads historical events with the page's current OFAPI account ref", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = await createModel(testDb.db, {
+      slug: "domain-event-current-ref",
+      name: "Domain Event Current Ref",
+    });
+    if (!model) {
+      throw new Error("Expected current-ref test model to be created");
+    }
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model.id,
+      label: "domain-event-current-ref",
+    });
+    if (!page) {
+      throw new Error("Expected current-ref test page to be created");
+    }
+    await setPageOfapiAccountId(testDb.db, {
+      pageId: page.id,
+      ofapiAccountId: "acct_domain_event_old",
+    });
+    await appendDomainEvents(testDb.db, page.id, [
+      event({ dedupKey: "msg:received:current-ref" }),
+    ]);
+
+    const beforeRemap = await listEventsSince(testDb.db, {
+      accountId: page.id,
+      afterSeq: 0,
+    });
+    expect(beforeRemap[0]?.currentAccountRef).toBe("acct_domain_event_old");
+
+    await setPageOfapiAccountId(testDb.db, {
+      pageId: page.id,
+      ofapiAccountId: "acct_domain_event_new",
+    });
+    const afterRemap = await listEventsSince(testDb.db, {
+      accountId: page.id,
+      afterSeq: 0,
+    });
+    expect(afterRemap[0]?.currentAccountRef).toBe("acct_domain_event_new");
   });
 
   it("atomically checkpoints projection-only rows and filters them from v2 replay", async (context) => {

@@ -7,9 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   getMaxOfapiFanoutSeq: vi.fn(),
   getOfapiSyncReplayFloor: vi.fn(),
+  getDomainEventErasureEpoch: vi.fn(),
   listDomainEventAccountBounds: vi.fn(),
   listDomainEventContiguousReplayEnds: vi.fn(),
   listDomainEventHighWaters: vi.fn(),
+  listDomainEventRecoveryRetainedCounts: vi.fn(),
   listEventsSince: vi.fn(),
   listPageOfapiAccountRefs: vi.fn(),
 }));
@@ -53,10 +55,11 @@ describe("domain event hub readiness", () => {
   });
 });
 
-function event(accountSeq: number) {
+function event(accountSeq: number, currentAccountRef: string | null = null) {
   return {
     id: accountSeq,
     accountId: 7,
+    currentAccountRef,
     accountSeq,
     type: "message.created",
     occurredAt: new Date("2026-07-13T00:00:00.000Z"),
@@ -120,6 +123,15 @@ async function runV2Stream(input: {
   /** Ledger head as the live hub sees it AFTER connect (bounds calls #2+);
    * defaults to `head`. A higher value models an append racing the replay. */
   liveHead?: number;
+  /** Page mapping read with each ledger row. Different values prove a remap
+   * can be surfaced within one open connection. */
+  currentAccountRefForSeq?: (accountSeq: number) => string | null;
+  /** Legacy per-connection mapping mock. Tests can make it deliberately stale
+   * to prove domain frames no longer use it. */
+  snapshottedAccountRef?: string | null;
+  /** Fresh mapping used only by the synthetic snapshot-recovery completion
+   * frame. Undefined means the stream is not expected to take that path. */
+  completionAccountRef?: string | null;
   /** Called once the (gated) replay query is pending; resolves to release it. */
   duringReplay?: (harness: {
     /** Emits a NOTIFY on every captured LISTEN connection (the route keeps
@@ -155,6 +167,7 @@ async function runV2Stream(input: {
   let replayQuerySeen = false;
   dbMocks.getMaxOfapiFanoutSeq.mockResolvedValue(0);
   dbMocks.getOfapiSyncReplayFloor.mockResolvedValue(0);
+  dbMocks.getDomainEventErasureEpoch.mockResolvedValue({ epoch: 9, incomplete: false });
   dbMocks.listDomainEventHighWaters.mockResolvedValue(
     new Map([[7, input.liveWatermark ?? input.head]]),
   );
@@ -167,6 +180,9 @@ async function runV2Stream(input: {
     currentSeq: replayQuerySeen ? (input.liveHead ?? input.head) : input.head,
   }]]));
   dbMocks.listDomainEventContiguousReplayEnds.mockResolvedValue(new Map([[7, input.head]]));
+  dbMocks.listDomainEventRecoveryRetainedCounts.mockResolvedValue(
+    new Map([[7, input.rows.length]]),
+  );
   dbMocks.listEventsSince.mockImplementation(
     async (_db: unknown, query: { afterSeq: number; throughSeq: number; limit: number }) => {
       // The FIRST query is the connection's replay read (the hub live lane
@@ -192,10 +208,22 @@ async function runV2Stream(input: {
       return input.rows
         .filter((seq) => seq > query.afterSeq && seq <= query.throughSeq)
         .slice(0, query.limit)
-        .map(event);
+        .map((seq) => event(seq, input.currentAccountRefForSeq?.(seq) ?? null));
     },
   );
-  dbMocks.listPageOfapiAccountRefs.mockResolvedValue(new Map());
+  const initialAccountRefs = input.snapshottedAccountRef == null
+    ? new Map<number, string>()
+    : new Map([[7, input.snapshottedAccountRef]]);
+  dbMocks.listPageOfapiAccountRefs.mockResolvedValue(initialAccountRefs);
+  if (input.completionAccountRef !== undefined) {
+    dbMocks.listPageOfapiAccountRefs
+      .mockResolvedValueOnce(initialAccountRefs)
+      .mockResolvedValueOnce(
+        input.completionAccountRef === null
+          ? new Map()
+          : new Map([[7, input.completionAccountRef]]),
+      );
+  }
 
   const listenClient = () => {
     const client = Object.assign(new EventEmitter(), {
@@ -288,7 +316,7 @@ async function makeLiveHarness(rows: number[], head: number) {
     async (_db: unknown, input: { afterSeq: number; throughSeq: number; limit: number }) => rows
       .filter((seq) => seq > input.afterSeq && seq <= input.throughSeq)
       .slice(0, input.limit)
-      .map(event),
+      .map((seq) => event(seq)),
   );
   const app = {
     db: {},
@@ -390,7 +418,7 @@ describe("domain event v2 replay completion", () => {
     );
   });
 
-  it("flushes a live frame buffered during replay only after the marker", async () => {
+  it("flushes a remapped live frame after replay with its per-row current account ref", async () => {
     const frames = await runV2Stream({
       cursor: encodeDomainEventCursor(new Map([[7, 0]])),
       rows: [1, 2, 3],
@@ -399,6 +427,8 @@ describe("domain event v2 replay completion", () => {
       head: 2,
       liveHead: 3,
       liveWatermark: 0,
+      snapshottedAccountRef: "acct_connection_snapshot",
+      currentAccountRefForSeq: (seq) => seq <= 2 ? "acct_replay" : "acct_live_remapped",
       // While the replay query is pending, a NOTIFY delivers rows through the
       // live hub lane; replayDone is false, so the connection must buffer
       // them and flush strictly after the control marker.
@@ -416,19 +446,53 @@ describe("domain event v2 replay completion", () => {
       .filter((frame) => frame.lane === "domain")
       .map((frame) => ({
         seq: frame.event["accountSeq"] as number,
+        accountRef: frame.event["accountRef"] as string | null,
         index: frames.indexOf(frame),
       }));
     // Replay wrote 1..2 before the marker; the buffered live row 3 (delivered
     // during replay) must come after it, exactly once.
     expect(domainSeqs.filter((f) => f.index < markerIndex).map((f) => f.seq)).toEqual([1, 2]);
     expect(domainSeqs.filter((f) => f.index > markerIndex).map((f) => f.seq)).toEqual([3]);
+    expect(domainSeqs.map(({ seq, accountRef }) => ({ seq, accountRef }))).toEqual([
+      { seq: 1, accountRef: "acct_replay" },
+      { seq: 2, accountRef: "acct_replay" },
+      { seq: 3, accountRef: "acct_live_remapped" },
+    ]);
+    // One connection-time read remains for the owner-only ephemeral page set;
+    // the deliberately stale value above did not stamp either domain lane.
+    expect(dbMocks.listPageOfapiAccountRefs).toHaveBeenCalledTimes(1);
   });
 
-  // Honest scope note (review round 3): on the ORDINARY replay path a dead
-  // stream exits through the pre-existing check before the marker block, so
-  // this case proves end-to-end behavior (no marker, no extra reads, no
-  // throw), not the new snapshot-recovery guards specifically — those need a
-  // recovery-cursor harness (backlog).
+  it("refreshes the account ref for the synthetic snapshot-recovery completion frame", async () => {
+    const cursor = encodeDomainEventCursor(new Map([[7, 0]]), {
+      recovery: {
+        kind: "snapshot",
+        erasureEpoch: 9,
+        base: new Map([[7, 0]]),
+        targets: new Map([[7, 2]]),
+        retainedCounts: new Map([[7, 2]]),
+      },
+    });
+    const frames = await runV2Stream({
+      cursor,
+      rows: [1, 2],
+      head: 2,
+      snapshottedAccountRef: "acct_connection_snapshot",
+      completionAccountRef: "acct_fresh_completion",
+      currentAccountRefForSeq: () => "acct_fresh_completion",
+    });
+
+    const completion = frames.find(
+      (frame) => frame.lane === "domain"
+        && frame.event["type"] === "stream.snapshot_replay_completed",
+    );
+    expect(completion?.event["accountRef"]).toBe("acct_fresh_completion");
+    expect(dbMocks.listPageOfapiAccountRefs).toHaveBeenCalledTimes(2);
+  });
+
+  // On the ordinary replay path a dead stream exits through the pre-existing
+  // check before the marker block, so this case proves end-to-end behavior
+  // (no marker, no extra reads, no throw).
   it("stops all stream work without throwing when the connection died during replay", async () => {
     const frames = await runV2Stream({
       cursor: encodeDomainEventCursor(new Map([[7, 0]])),

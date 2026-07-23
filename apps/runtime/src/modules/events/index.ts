@@ -614,10 +614,9 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       throw new ServiceUnavailableError("Event stream is temporarily unavailable");
     }
 
-    // Stage 24: OFAPI-keyed clients (the desktop) filter frames by the
-    // platform-native account ref; snapshot the mapping per connection (the
-    // 15-min stream lifetime bounds staleness).
-    const ofapiAccountRefs = await listPageOfapiAccountRefs(appContext.db);
+    // The owner-scoped ephemeral typing lane still needs the current set of
+    // OFAPI page ids. Durable domain frames do not use this connection snapshot.
+    const initialOfapiAccountRefs = await listPageOfapiAccountRefs(appContext.db);
 
     // Everything below bypasses fastify's serializer; errors must not bubble out.
     reply.hijack();
@@ -691,7 +690,10 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         fanRef: event.fanIdentityRef,
         conversationRef: event.conversationRef,
         messageRef: event.messageRef,
-        accountRef: ofapiAccountRefs.get(event.accountId) ?? null,
+        // The repository reads this current page mapping in the same statement
+        // as the event. A remap may therefore change accountRef within one
+        // connection, which lets OFAPI-keyed clients rebaseline before apply.
+        accountRef: event.currentAccountRef,
         ...(payload !== undefined ? { payload } : {}),
       };
       raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
@@ -803,7 +805,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // `event: ephemeral` frames — no id line, never advancing the cursor.
     // Live-only by design: a missed typing hint has no replay value.
     syncEventHub ??= createSyncEventHub(appContext);
-    const ephemeralPages: ReadonlySet<number> = granted ?? new Set(ofapiAccountRefs.keys());
+    const ephemeralPages: ReadonlySet<number> = granted ?? new Set(initialOfapiAccountRefs.keys());
     const unsubscribeEphemeral = syncEventHub.subscribe({
       pageIds: ephemeralPages,
       deliver(frame) {
@@ -998,6 +1000,21 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         return;
       }
       const checkpoint = [...guards.watermarks()].find(([, seq]) => seq > 0);
+      let completionAccountRef: string | null = null;
+      if (checkpoint !== undefined) {
+        try {
+          completionAccountRef = (await listPageOfapiAccountRefs(appContext.db))
+            .get(checkpoint[0]) ?? null;
+        } catch (error) {
+          request.log.warn(
+            { err: error, accountId: checkpoint[0] },
+            "v2 snapshot recovery account-ref refresh failed; closing before ordinary checkpoint",
+          );
+          cleanup();
+          raw.end();
+          return;
+        }
+      }
       snapshotRecoveryReplay = false;
       completedSnapshotRecovery = true;
       if (checkpoint !== undefined) {
@@ -1008,7 +1025,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           type: "stream.snapshot_replay_completed",
           occurredAt: new Date().toISOString(),
           data: null,
-          accountRef: ofapiAccountRefs.get(accountId) ?? null,
+          accountRef: completionAccountRef,
         };
         // Same closed-stream guard as writeV2Frame: the awaits above race
         // lifetime/auth/gap raw.end() calls, and an unlistened write-after-end

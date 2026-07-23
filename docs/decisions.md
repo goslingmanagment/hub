@@ -5167,3 +5167,35 @@ ChatGoose extension and every other current client must freshly re-vendor the
 SDK before its next release because their deploy gates pin vendored hash parity
 to production. Regenerating `docs/generated/*` is a separate follow-up using
 its regeneration prompt; these generated maps are not hand-edited here.
+
+**Decision #181 (2026-07-24, v2 domain frames carry the current OFAPI page
+mapping at ledger-read time):** Stage 24's `accountRef =
+pages.ofapi_account_id` remains a serve-time page mapping, not historical
+event provenance, but it is no longer snapshotted once for a 15-minute SSE
+connection. `listEventsSince` reads the page's current OFAPI ref in the same
+PostgreSQL statement as every domain-event batch, and ordinary replay,
+buffered-live, and live frames carry that per-row value. A page remap may
+therefore change `accountRef` within one numeric-account connection.
+Compatible clients do not apply or checkpoint an unexpected ref: they refresh
+the current snapshot and grants, bind the new ref, and reconnect with the
+unchanged cursor so the same ledger row replays under the current mapping.
+
+The alternative of closing before the foreign frame was rejected because a
+cursorless connection would reconnect cursorless, baseline at the new head,
+and silently skip the event that exposed the remap. Reading
+`observations.native_account_ref` was also rejected: replaying old account A
+after the page currently maps to B would violate Decision #95's current-page
+contract, while module-emitted events with `observation_id = 0` would remain
+unprotected. The legacy synthetic
+`stream.snapshot_replay_completed` frame has no ledger row, so it performs a
+fresh page-mapping read immediately before publishing its recovery-clearing
+cursor and fails closed if that read fails.
+
+This is an internal repository-row addition and a serve-time value correction:
+the SSE frame shape, opaque cursor, auth scope, SDK, OpenAPI, and append-only
+ledgers are unchanged; there is no migration or contract regeneration.
+Rollout order is Desktop recovery first, then Core, because older Desktop
+builds checkpoint foreign refs without applying them. The remaining
+current-page semantic deliberately serves retained A history with B after an
+A→B remap, as Decision #95 requires; `accountRef` does not claim ledger
+provenance.

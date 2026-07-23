@@ -656,6 +656,10 @@ export async function getAccountHighWater(db: Database, accountId: number): Prom
 export interface DomainEventRow {
   id: number;
   accountId: number;
+  /** Current page → OFAPI mapping read in the same statement as this row.
+   * This binds delivery to current page state; it is not historical event
+   * provenance. */
+  currentAccountRef: string | null;
   accountSeq: number;
   type: string;
   occurredAt: Date;
@@ -674,6 +678,7 @@ function mapEventRow(row: Record<string, unknown>): DomainEventRow {
   return {
     id: Number(row.id),
     accountId: Number(row.account_id),
+    currentAccountRef: (row.current_account_ref as string | null) ?? null,
     accountSeq: Number(row.account_seq),
     type: String(row.type),
     occurredAt: new Date(row.occurred_at as string | Date),
@@ -705,11 +710,13 @@ export async function listEventsSince(
   // NB: ORDER BY must use the QUALIFIED column — a bare account_seq would
   // resolve to the ::text output alias and sort lexicographically (1,10,11,…,2).
   const result = await db.execute<Record<string, unknown>>(sql`
-    select de.id::text as id, de.account_id, de.account_seq::text as account_seq, de.type,
+    select de.id::text as id, de.account_id, page.ofapi_account_id as current_account_ref,
+           de.account_seq::text as account_seq, de.type,
            de.occurred_at, de.fan_identity_ref, de.conversation_ref, de.message_ref,
            de.transaction_ref, de.data, de.schema_version, de.observation_id::text as observation_id,
            de.dedup_key, de.created_at
     from domain_events de
+    left join pages page on page.id = de.account_id
     where de.account_id = ${input.accountId}
       and de.account_seq > ${input.afterSeq}
       ${input.throughSeq === undefined ? sql`` : sql`and de.account_seq <= ${input.throughSeq}`}
