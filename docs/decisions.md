@@ -5123,3 +5123,47 @@ runs — its bytes previously shortened the cached transcript and re-billed the
 whole block at the provider; equality is pinned by test. Coach-history
 eviction audit (P2) recorded in .agentic/backlog.md per the stop-criterion
 policy.
+
+**Decision #180 (2026-07-23, Telegram and ElevenLabs share one fail-closed
+service SOCKS5 identity; supersedes only #174's direct-ElevenLabs egress
+clause):** The two service vendors now resolve through one boot-only,
+all-or-none `SERVICE_EGRESS_PROXY_URL` / username / password tuple. It is
+separate from page-owned proxy rows because it has service-infrastructure
+custody and no page lifecycle. Both vendor scopes are unpaced, return a
+non-null dispatcher, and expose the same credential-free
+`service:socks5://host:port` egress key. Each operation owns and closes its own
+dispatcher, so Telegram cannot close a voice transport. This leaves #174's
+single-dispatch voice state machine, billing, artifact, and page-gating rules
+unchanged while replacing only its statement that ElevenLabs is reached
+directly.
+
+Routing fails closed. A malformed or partial tuple is a boot error.
+ElevenLabs has no direct or page fallback. Telegram's transition-only
+`TELEGRAM_PROXY_PAGE_LABEL` branch is reachable only when the whole dedicated
+tuple is absent; a configured route that fails authentication, connection, or
+vendor allowlisting never falls back. A later cleanup release removes that
+legacy branch after activation and a 24–48 hour soak. All ElevenLabs and
+Telegram fetches require an explicit dispatcher. Voice keeps exactly one
+synthesis attempt and its conservative status-0 semantics: an unacknowledged
+attempt stays dispatched, is swept to indeterminate, and retains its character
+reservation. Telegram keeps at most two retries for 429/5xx and non-connect
+transient transport or timeout failures, but never retries a connect/auth
+failure against the immutable route; business callers remain best-effort while
+delivery failures are persisted.
+
+Activation is owner-gated by the read-only `service-egress verify` CLI. It
+checks the observed exit IP, Telegram `getMe`, and ElevenLabs
+`GET /v1/user/subscription` with `xi-api-key`, without synthesis or message
+delivery, and requires equal consumer egress keys. The owner must rotate any
+exposed ElevenLabs key, provision and restrict the proxy/key, pass preflight
+before recreating runtime roles, run the persisted Telegram test, complete a
+one-page voice canary, and monitor the soak; none of those production actions
+is performed merely by landing this code.
+
+There is no database migration. Changing the
+`voice_provider_unavailable` contract description intentionally changes the
+kernel contract hash. After this Core revision lands and deploys, the
+ChatGoose extension and every other current client must freshly re-vendor the
+SDK before its next release because their deploy gates pin vendored hash parity
+to production. Regenerating `docs/generated/*` is a separate follow-up using
+its regeneration prompt; these generated maps are not hand-edited here.

@@ -64,6 +64,11 @@ const bootstrapMocks = vi.hoisted(() => {
       telegramChatId: null,
       telegramEnabled: false,
       telegramReportHourUtc: 9,
+      telegramProxyPageLabel: null as string | null,
+      serviceEgressProxyUrl: null as string | null,
+      serviceEgressProxyUsername: null as string | null,
+      serviceEgressProxyPassword: null as string | null,
+      elevenLabsApiKey: undefined as string | undefined,
       // Staged boot flags default off (mirrors loadConfig) so the fallback-normalization test
       // can override them to an invalid env-only graph.
       ofapiDmProjectionEnabled: false,
@@ -162,6 +167,51 @@ describe("bootstrap", () => {
       { envVar: "FANSLY_GLOBAL_DELAY_MS" },
       "Deprecated Fansly delay env var in use; prefer FANSLY_DEFAULT_DELAY_MS",
     );
+  });
+
+  it("constructs the voice provider only when both the key and proxy tuple are ready", async () => {
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
+    const base = bootstrapMocks.loadConfig();
+    bootstrapMocks.loadConfig.mockReturnValueOnce({
+      ...base,
+      elevenLabsApiKey: "fake-elevenlabs-key",
+    });
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+
+    const missingProxy = await createAppContext();
+    expect(missingProxy.voiceTtsProvider).toBeUndefined();
+    await missingProxy.close();
+
+    bootstrapMocks.loadConfig.mockReturnValueOnce({
+      ...base,
+      elevenLabsApiKey: "fake-elevenlabs-key",
+      serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
+      serviceEgressProxyUsername: "fake-service-user",
+      serviceEgressProxyPassword: "fake-service-password",
+    });
+    const ready = await createAppContext();
+    expect(ready.voiceTtsProvider).toBeDefined();
+    await ready.close();
+  });
+
+  it("warns once when Telegram is using the transition legacy-page route", async () => {
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
+    bootstrapMocks.loadConfig.mockReturnValueOnce({
+      ...bootstrapMocks.loadConfig(),
+      telegramProxyPageLabel: "fake-legacy-page",
+    });
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+
+    const app = await createAppContext();
+    await app.close();
+
+    expect(bootstrapMocks.logger.warn).toHaveBeenCalledWith({
+      component: "service_egress",
+      event: "legacy_route_active",
+      vendor: "telegram",
+      egressKey: "legacy-page",
+    }, "Telegram is using the deprecated transition legacy-page egress route");
+    expect(bootstrapMocks.logger.warn).toHaveBeenCalledTimes(1);
   });
 
   it("rejects executor concurrency above 1 when shared limiting is disabled", async () => {

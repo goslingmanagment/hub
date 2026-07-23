@@ -217,12 +217,18 @@ describe("config registry", () => {
     const snapshot = buildRunningSnapshot({
       ofapiApiKey: "leak-me",
       anthropicApiKey: "also-leak",
+      serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
+      serviceEgressProxyUsername: "fake-service-user",
+      serviceEgressProxyPassword: "fake-service-password",
       encryptionKeysByVersion: new Map([[1, Buffer.alloc(32)]]),
       ofapiDmSyncEnabled: true,
     } as never);
 
     expect(snapshot.values.ofapiApiKey).toMatchObject({ masked: true, value: null, state: "set" });
     expect(snapshot.values.encryptionKeyRing).toMatchObject({ masked: true, state: "set" });
+    expect(snapshot.values.serviceEgressProxyUrl).toMatchObject({ masked: true, state: "set" });
+    expect(snapshot.values.serviceEgressProxyUsername).toMatchObject({ masked: true, state: "set" });
+    expect(snapshot.values.serviceEgressProxyPassword).toMatchObject({ masked: true, state: "set" });
     expect(snapshot.values.ofapiDmSyncEnabled).toEqual({ value: true });
     // Real secret material must never appear anywhere in the serialized snapshot.
     expect(JSON.stringify(snapshot)).not.toContain("leak");
@@ -243,6 +249,9 @@ describe("config registry", () => {
       "telegramChatId",
       "ofapiApiKey",
       "anthropicApiKey",
+      "serviceEgressProxyUrl",
+      "serviceEgressProxyUsername",
+      "serviceEgressProxyPassword",
     ];
     for (const key of SENSITIVE_KEYS) {
       const descriptor = getDescriptor(key);

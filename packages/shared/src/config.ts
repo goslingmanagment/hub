@@ -1,6 +1,12 @@
 import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
 
+import { assertProxyTargetAllowed } from "./proxy.ts";
+import {
+  buildProxyConfig,
+  getServiceEgressProxyUrlError,
+} from "./proxy-string.ts";
+
 const MIN_FANSLY_DM_DELAY_MS = 5000;
 
 export const OFAPI_MIRROR_BUDGET_DEFAULTS = {
@@ -116,6 +122,9 @@ const envSchema = z.object({
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
   TELEGRAM_PROXY_PAGE_LABEL: optionalTrimmedStringSchema,
+  SERVICE_EGRESS_PROXY_URL: optionalTrimmedStringSchema,
+  SERVICE_EGRESS_PROXY_USERNAME: optionalTrimmedStringSchema,
+  SERVICE_EGRESS_PROXY_PASSWORD: optionalTrimmedStringSchema,
   OFAPI_BASE_URL: z.string().url().default("https://app.onlyfansapi.com/api"),
   OFAPI_API_KEY: optionalTrimmedStringSchema,
   // Stage 1 retention stand-down: the webhook journal holds business facts; the
@@ -304,6 +313,9 @@ export interface AppConfig {
   // Optional so existing AppConfig literals (tests, codegen) need not enumerate them;
   // loadConfig always populates them, so production behavior is exact.
   telegramProxyPageLabel?: string | null;
+  serviceEgressProxyUrl: string | null;
+  serviceEgressProxyUsername: string | null;
+  serviceEgressProxyPassword: string | null;
   ofapiBaseUrl?: string;
   ofapiApiKey?: string | null;
   ofapiEventRetentionDays?: number;
@@ -408,6 +420,45 @@ function enforceFanslyDmDelayFloor(delayMs: number) {
   return Math.max(delayMs, MIN_FANSLY_DM_DELAY_MS);
 }
 
+function resolveServiceEgressProxyTuple(input: {
+  SERVICE_EGRESS_PROXY_URL?: string | undefined;
+  SERVICE_EGRESS_PROXY_USERNAME?: string | undefined;
+  SERVICE_EGRESS_PROXY_PASSWORD?: string | undefined;
+}) {
+  const url = input.SERVICE_EGRESS_PROXY_URL ?? null;
+  const username = input.SERVICE_EGRESS_PROXY_USERNAME ?? null;
+  const password = input.SERVICE_EGRESS_PROXY_PASSWORD ?? null;
+  const configuredCount = [url, username, password].filter((value) => value !== null).length;
+
+  if (configuredCount === 0) {
+    return { url: null, username: null, password: null };
+  }
+  if (configuredCount !== 3) {
+    throw new Error(
+      "SERVICE_EGRESS_PROXY_URL, SERVICE_EGRESS_PROXY_USERNAME, and "
+        + "SERVICE_EGRESS_PROXY_PASSWORD must be configured together",
+    );
+  }
+
+  const urlError = getServiceEgressProxyUrlError(url!);
+  if (urlError) {
+    throw new Error(urlError);
+  }
+  const proxy = buildProxyConfig(url!);
+  if (!proxy) {
+    throw new Error("SERVICE_EGRESS_PROXY_URL must be a valid SOCKS5 URL");
+  }
+  try {
+    assertProxyTargetAllowed(proxy);
+  } catch {
+    throw new Error(
+      "SERVICE_EGRESS_PROXY_URL must not target a local or private address",
+    );
+  }
+
+  return { url: url!, username: username!, password: password! };
+}
+
 export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = process.env) {
   if (hasConfiguredValue(env.FANSLY_DEFAULT_DELAY_MS)) {
     return "FANSLY_DEFAULT_DELAY_MS" as const;
@@ -468,6 +519,7 @@ export function loadConfig(
   const telegramBotToken = parsed.TELEGRAM_BOT_TOKEN ?? null;
   const telegramChatId = parsed.TELEGRAM_CHAT_ID ?? null;
   const telegramEnabled = telegramBotToken !== null && telegramChatId !== null;
+  const serviceEgressProxy = resolveServiceEgressProxyTuple(parsed);
 
   return {
     databaseUrl: parsed.DATABASE_URL,
@@ -508,6 +560,9 @@ export function loadConfig(
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
     telegramProxyPageLabel: parsed.TELEGRAM_PROXY_PAGE_LABEL ?? null,
+    serviceEgressProxyUrl: serviceEgressProxy.url,
+    serviceEgressProxyUsername: serviceEgressProxy.username,
+    serviceEgressProxyPassword: serviceEgressProxy.password,
     ofapiBaseUrl: parsed.OFAPI_BASE_URL,
     ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
     ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,

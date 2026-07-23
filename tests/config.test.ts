@@ -255,6 +255,68 @@ describe("config", () => {
     expect(config.telegramProxyPageLabel).toBe("lilly-1");
   });
 
+  it("accepts a complete credential-separated service egress proxy tuple", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      SERVICE_EGRESS_PROXY_URL: "socks5://proxy.example.internal:1080",
+      SERVICE_EGRESS_PROXY_USERNAME: "fake-service-user",
+      SERVICE_EGRESS_PROXY_PASSWORD: "fake-service-password",
+    });
+
+    expect(config.serviceEgressProxyUrl).toBe("socks5://proxy.example.internal:1080");
+    expect(config.serviceEgressProxyUsername).toBe("fake-service-user");
+    expect(config.serviceEgressProxyPassword).toBe("fake-service-password");
+  });
+
+  it("normalizes an entirely blank service egress tuple to unconfigured", () => {
+    const config = loadConfig({
+      ...baseEnv,
+      SERVICE_EGRESS_PROXY_URL: " ",
+      SERVICE_EGRESS_PROXY_USERNAME: "",
+      SERVICE_EGRESS_PROXY_PASSWORD: "   ",
+    });
+
+    expect(config.serviceEgressProxyUrl).toBeNull();
+    expect(config.serviceEgressProxyUsername).toBeNull();
+    expect(config.serviceEgressProxyPassword).toBeNull();
+  });
+
+  it("rejects partial service egress tuples without exposing credentials", () => {
+    const fakePassword = "fake-partial-password";
+    expect(() => loadConfig({
+      ...baseEnv,
+      SERVICE_EGRESS_PROXY_URL: "socks5://proxy.example.internal:1080",
+      SERVICE_EGRESS_PROXY_PASSWORD: fakePassword,
+    })).toThrow(/must be configured together/);
+
+    try {
+      loadConfig({
+        ...baseEnv,
+        SERVICE_EGRESS_PROXY_URL: "socks5://proxy.example.internal:1080",
+        SERVICE_EGRESS_PROXY_PASSWORD: fakePassword,
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain(fakePassword);
+    }
+  });
+
+  it.each([
+    ["non-SOCKS5", "http://proxy.example.internal:1080"],
+    ["inline auth", "socks5://fake-user:fake-password@proxy.example.internal:1080"],
+    ["missing port", "socks5://proxy.example.internal"],
+    ["path", "socks5://proxy.example.internal:1080/path"],
+    ["query", "socks5://proxy.example.internal:1080?mode=fake"],
+    ["fragment", "socks5://proxy.example.internal:1080#fake"],
+    ["disallowed loopback literal", "socks5://127.0.0.1:1080"],
+  ])("rejects a service egress URL with %s", (_case, url) => {
+    expect(() => loadConfig({
+      ...baseEnv,
+      SERVICE_EGRESS_PROXY_URL: url,
+      SERVICE_EGRESS_PROXY_USERNAME: "fake-service-user",
+      SERVICE_EGRESS_PROXY_PASSWORD: "fake-service-password",
+    })).toThrow(/SERVICE_EGRESS_PROXY_URL/);
+  });
+
   it("rejects Telegram report hours outside the UTC 0-23 range", () => {
     expect(() => loadConfig({
       ...baseEnv,

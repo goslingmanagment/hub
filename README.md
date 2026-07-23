@@ -56,6 +56,10 @@ openssl rand -base64 32
 - `APP_ENCRYPTION_KEY`
 - `TRUST_PROXY=1` when the app is behind the production TLS reverse proxy (one trusted hop; the proxy must append the client address to `X-Forwarded-For` — see `.env.production.example`)
 - any optional Telegram values you want enabled
+- the complete `SERVICE_EGRESS_PROXY_URL` / `SERVICE_EGRESS_PROXY_USERNAME` /
+  `SERVICE_EGRESS_PROXY_PASSWORD` tuple before enabling Telegram delivery or
+  ElevenLabs voice synthesis (see
+  [`docs/runbooks/service-egress-proxy.md`](docs/runbooks/service-egress-proxy.md))
 
 The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port. Compose reads interpolation values from `.env.production`; the API, scheduler, and worker receive the application environment, while Postgres receives only `POSTGRES_*`.
 

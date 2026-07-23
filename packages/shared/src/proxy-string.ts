@@ -97,6 +97,40 @@ export function getProxyStringError(raw: string): string | null {
 }
 
 /**
+ * Validate the deliberately narrow service-egress proxy URL shape.
+ *
+ * Service credentials live in separate env vars, so this accepts only a
+ * credential-free, explicit-port SOCKS5 origin. Boot config and the runtime
+ * builder both use this helper to keep one URL policy.
+ */
+export function getServiceEgressProxyUrlError(raw: string): string | null {
+  const parserError = getProxyStringError(raw);
+  if (parserError) {
+    return "SERVICE_EGRESS_PROXY_URL must be a valid SOCKS5 URL";
+  }
+
+  const proxy = buildProxyConfig(raw);
+  if (!proxy) {
+    return "SERVICE_EGRESS_PROXY_URL must be configured";
+  }
+
+  const parsed = new URL(raw);
+  if (parsed.protocol !== "socks5:") {
+    return "SERVICE_EGRESS_PROXY_URL must use socks5://";
+  }
+  if (parsed.username.length > 0 || parsed.password.length > 0) {
+    return "SERVICE_EGRESS_PROXY_URL must not contain inline credentials";
+  }
+  if (parsed.hostname.length === 0 || parsed.port.length === 0) {
+    return "SERVICE_EGRESS_PROXY_URL must include a host and explicit port";
+  }
+  if (parsed.pathname.length > 0 || parsed.search.length > 0 || parsed.hash.length > 0) {
+    return "SERVICE_EGRESS_PROXY_URL must not contain a path, query, or fragment";
+  }
+  return null;
+}
+
+/**
  * Convenience wrapper for form submission.
  * Returns a ProxyConfig if the raw string is non-empty, otherwise `undefined`.
  */

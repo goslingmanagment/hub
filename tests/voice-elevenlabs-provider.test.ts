@@ -6,14 +6,15 @@ import {
   type VoiceTtsProvider,
 } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 
-// Voice notes — the ElevenLabs TTS provider (non-platform vendor, direct
-// egress). Every test drives the REAL provider through an injected fetch: the
+// Voice notes — the ElevenLabs TTS provider over mandatory service egress.
+// Every test drives the REAL provider through an injected fetch: the
 // provider is under test, not a mock of it. Invariants exercised here:
 // exactly one attempt (zero retries), the 4xx-refused vs 5xx/network/timeout
 // indeterminate split, header capture, and that neither the script text nor the
 // audio bytes ever leak into an error snippet.
 
 const SCRIPT_TEXT = "SECRET_SCRIPT_hey babe this is my private voice note xoxo";
+const FAKE_DISPATCHER = {} as Parameters<VoiceTtsProvider["synthesize"]>[0]["dispatcher"];
 
 // One complete MPEG-1 Layer III frame: 128 kbps, 44.1 kHz, no padding.
 // The first-frame structural check deliberately does not require a decoder.
@@ -44,6 +45,7 @@ function synthInput(
     outputFormat: "mp3_44100_128",
     text: SCRIPT_TEXT,
     signal: new AbortController().signal,
+    dispatcher: FAKE_DISPATCHER,
     ...overrides,
   };
 }
@@ -141,12 +143,16 @@ describe("ElevenLabs voice provider", () => {
     await provider.synthesize(synthInput());
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [
+      string,
+      RequestInit & { dispatcher: typeof FAKE_DISPATCHER },
+    ];
     expect(url).toBe(
       "https://api.elevenlabs.io/v1/text-to-speech/voice_1?output_format=mp3_44100_128",
     );
     expect(init.method).toBe("POST");
     expect(init.redirect).toBe("error");
+    expect(init.dispatcher).toBe(FAKE_DISPATCHER);
     expect((init.headers as Record<string, string>)["xi-api-key"]).toBe("secret-key");
     expect(JSON.parse(init.body as string)).toEqual({
       text: SCRIPT_TEXT,
@@ -184,6 +190,8 @@ describe("ElevenLabs voice provider", () => {
       if (!result.ok) {
         expect(result.refusedBeforeBilling).toBe(true);
         expect(result.status).toBe(status);
+        expect(result.failureKind).toBe("http_4xx");
+        expect(result.detail).toBe(result.snippet);
         expect(result.snippet).toContain("invalid api key");
         expect(result.snippet.length).toBeLessThanOrEqual(200);
         expect(result.snippet).not.toContain(SCRIPT_TEXT);
@@ -334,6 +342,7 @@ describe("ElevenLabs voice provider", () => {
     if (!result.ok) {
       expect(result.refusedBeforeBilling).toBe(false);
       expect(result.status).toBe(500);
+      expect(result.failureKind).toBe("http_5xx");
       expect(result.snippet).not.toContain("upstream boom");
     }
   });
@@ -351,6 +360,7 @@ describe("ElevenLabs voice provider", () => {
     if (!result.ok) {
       expect(result.refusedBeforeBilling).toBe(false);
       expect(result.status).toBe(0);
+      expect(result.failureKind).toBe("transport");
     }
   });
 
@@ -378,6 +388,7 @@ describe("ElevenLabs voice provider", () => {
     if (!result.ok) {
       expect(result.refusedBeforeBilling).toBe(false);
       expect(result.status).toBe(0);
+      expect(result.failureKind).toBe("timeout");
     }
   });
 
@@ -427,5 +438,47 @@ describe("ElevenLabs voice provider", () => {
       fetchImpl: throwFetch,
     }).synthesize(synthInput());
     expect(JSON.stringify(thrown)).not.toContain(SCRIPT_TEXT);
+  });
+
+  it("retains nested transport detail while redacting the key, script, and proxy credentials", async () => {
+    const apiKey = "fake-elevenlabs-key";
+    const credentialedProxyUrl =
+      "socks5://fake-service-user:fake-service-password@proxy.example.internal:1080";
+    const nested = Object.assign(new Error(
+      `connect failed via ${credentialedProxyUrl} for ${apiKey} ${SCRIPT_TEXT}`,
+    ), {
+      name: "SocksClientError",
+      code: "ECONNREFUSED",
+    });
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", { cause: nested });
+    });
+
+    const result = await createElevenLabsVoiceProvider({ apiKey, fetchImpl })
+      .synthesize(synthInput());
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ok: false,
+      status: 0,
+      failureKind: "connect",
+    });
+    expect(JSON.stringify(result)).toContain("cause(1)");
+    expect(JSON.stringify(result)).not.toContain(apiKey);
+    expect(JSON.stringify(result)).not.toContain("fake-service-user");
+    expect(JSON.stringify(result)).not.toContain("fake-service-password");
+    expect(JSON.stringify(result)).not.toContain(SCRIPT_TEXT);
+  });
+
+  it("redacts even an invalid one-character key when it appears as a standalone value", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("provider rejected api_key=k");
+    });
+
+    const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+      .synthesize(synthInput());
+
+    expect(JSON.stringify(result)).not.toContain("api_key=k");
+    expect(JSON.stringify(result)).toContain("[REDACTED]");
   });
 });

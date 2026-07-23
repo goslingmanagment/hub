@@ -1,7 +1,6 @@
-// Voice notes — the ElevenLabs TTS provider, behind the egress seam as a
-// NON-platform vendor class (egress key "vendor:elevenlabs": direct, unpaced;
-// never in PLATFORM_VENDORS / EGRESS_VENDOR_PROVIDERS). Constructed at boot when
-// ELEVENLABS_API_KEY is set; spend is gated live at admission (voiceNotesEnabled).
+// Voice notes — the ElevenLabs TTS provider, behind the service-egress SOCKS5
+// seam. Constructed at boot only when both ELEVENLABS_API_KEY and the complete
+// proxy tuple exist; spend is gated live at admission (voiceNotesEnabled).
 //
 // Semantics the design mandates:
 //   - EXACTLY ONE fetch per synthesize() — ZERO retries anywhere.
@@ -11,12 +10,21 @@
 //     refused — the caller treats those as possibly-billed → indeterminate.
 //   - NEVER log or return the script text or the audio bytes. The only body
 //     excerpt surfaced is a bounded 4xx response snippet (never the request);
-//     5xx / network / timeout carry a short, text-free reason.
+//     5xx / network / timeout carry a bounded, redacted reason.
 //
 // The API key is captured in the factory closure and never leaves it (mirrors
 // the Anthropic provider's createSdkClient key encapsulation). Constructed at
-// boot whenever ELEVENLABS_API_KEY is set (independent of the live
+// boot whenever the key + proxy tuple are set (independent of the live
 // voiceNotesEnabled flag, which is the admission-time spend gate).
+
+import {
+  classifyTransportFailure,
+  formatObservedError,
+  redactSensitiveText,
+} from "@agency_hub_core/shared";
+import type { Dispatcher } from "undici";
+
+import { fetchWithEgress } from "./egress/fetch.ts";
 
 const ELEVENLABS_TTS_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
 const SYNTHESIS_TIMEOUT_MS = 60_000;
@@ -33,6 +41,16 @@ const SNIPPET_MAX_BYTES = 1024;
  */
 export const VOICE_AUDIO_MAX_BYTES = 2_097_152;
 
+export type VoiceTtsFailureKind =
+  | "connect"
+  | "timeout"
+  | "transport"
+  | "redirect"
+  | "http_4xx"
+  | "http_5xx"
+  | "http_error"
+  | "invalid_response";
+
 export interface VoiceTtsProvider {
   synthesize(input: {
     voiceId: string;
@@ -41,6 +59,7 @@ export interface VoiceTtsProvider {
     outputFormat: string;
     text: string;
     signal: AbortSignal;
+    dispatcher: Dispatcher;
   }): Promise<
     | {
         ok: true;
@@ -50,7 +69,14 @@ export interface VoiceTtsProvider {
         traceId: string | null;
         region: string | null;
       }
-    | { ok: false; refusedBeforeBilling: boolean; status: number; snippet: string }
+    | {
+        ok: false;
+        refusedBeforeBilling: boolean;
+        status: number;
+        snippet: string;
+        failureKind: VoiceTtsFailureKind;
+        detail: string;
+      }
   >;
 }
 
@@ -185,9 +211,38 @@ async function readBoundedSnippet(response: Response): Promise<string> {
   }
 }
 
-function boundedReason(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, SNIPPET_MAX_CHARS);
+function sanitizeDetail(value: string, secrets: string[]): string {
+  let detail = redactSensitiveText(value);
+  for (const secret of secrets) {
+    if (secret.length >= 4) {
+      detail = detail.replaceAll(secret, "[REDACTED]");
+    } else if (secret.length > 0) {
+      // Test/misconfiguration keys can be very short. Replacing every character
+      // would destroy useful diagnostics ("key" for a one-byte "k"), but a
+      // standalone occurrence such as `key=k` still must be removed.
+      const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      detail = detail.replace(
+        new RegExp(`(^|[^A-Za-z0-9_])${escaped}(?=$|[^A-Za-z0-9_])`, "g"),
+        (_match, prefix: string) => `${prefix}[REDACTED]`,
+      );
+    }
+  }
+  return detail.slice(0, SNIPPET_MAX_CHARS);
+}
+
+function failure(
+  input: {
+    refusedBeforeBilling: boolean;
+    status: number;
+    failureKind: VoiceTtsFailureKind;
+    detail: string;
+  },
+) {
+  return {
+    ok: false as const,
+    ...input,
+    snippet: input.detail,
+  };
 }
 
 export function createElevenLabsVoiceProvider(
@@ -197,12 +252,7 @@ export function createElevenLabsVoiceProvider(
   if (!apiKey) {
     throw new Error("ElevenLabs voice provider requires an API key");
   }
-  // Direct, non-platform vendor egress — no page proxy / dispatcher to hide
-  // behind, so the global fetch here is the one recorded raw-egress site for
-  // this vendor (scripts/raw-fetch-budget.json).
-  const doFetch: typeof fetch = options.fetchImpl
-    ? options.fetchImpl
-    : (input, init) => fetch(input, init);
+  const doFetch: typeof fetch = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
 
   return {
     async synthesize(input) {
@@ -222,8 +272,11 @@ export function createElevenLabsVoiceProvider(
       // the 60s timeout OR the caller's signal. Zero retries — the caller owns
       // recovery.
       const controller = new AbortController();
-      const onTimeout = () =>
+      let timedOut = false;
+      const onTimeout = () => {
+        timedOut = true;
         controller.abort(new Error("ElevenLabs synthesis timed out after 60s"));
+      };
       const onCallerAbort = () => controller.abort(input.signal.reason);
       if (input.signal.aborted) {
         controller.abort(input.signal.reason);
@@ -231,9 +284,8 @@ export function createElevenLabsVoiceProvider(
         input.signal.addEventListener("abort", onCallerAbort, { once: true });
       }
       const timeout = setTimeout(onTimeout, SYNTHESIS_TIMEOUT_MS);
-
       try {
-        const response = await doFetch(url, {
+        const response = await fetchWithEgress(doFetch, input.dispatcher, url, {
           method: "POST",
           headers: {
             "xi-api-key": apiKey,
@@ -257,39 +309,39 @@ export function createElevenLabsVoiceProvider(
           const advertised = parseNumberHeader(response.headers.get("content-length"));
           if (advertised != null && advertised > VOICE_AUDIO_MAX_BYTES) {
             await response.body?.cancel().catch(() => {});
-            return {
-              ok: false,
+            return failure({
               refusedBeforeBilling: false,
               status: response.status,
-              snippet: "audio exceeds size cap",
-            };
+              failureKind: "invalid_response",
+              detail: "audio exceeds size cap",
+            });
           }
           if (!contentTypeIsMp3(response)) {
             await response.body?.cancel().catch(() => {});
-            return {
-              ok: false,
+            return failure({
               refusedBeforeBilling: false,
               status: response.status,
-              snippet: "unexpected audio content type",
-            };
+              failureKind: "invalid_response",
+              detail: "unexpected audio content type",
+            });
           }
           const body = await readBoundedBody(response, VOICE_AUDIO_MAX_BYTES);
           if (body.exceeded) {
-            return {
-              ok: false,
+            return failure({
               refusedBeforeBilling: false,
               status: response.status,
-              snippet: "audio exceeds size cap",
-            };
+              failureKind: "invalid_response",
+              detail: "audio exceeds size cap",
+            });
           }
           const audio = body.bytes;
           if (!isMp3Artifact(audio)) {
-            return {
-              ok: false,
+            return failure({
               refusedBeforeBilling: false,
               status: response.status,
-              snippet: "invalid MP3 artifact",
-            };
+              failureKind: "invalid_response",
+              detail: "invalid MP3 artifact",
+            });
           }
           return {
             ok: true,
@@ -304,31 +356,44 @@ export function createElevenLabsVoiceProvider(
         // 4xx = a pre-synthesis rejection (auth / validation / not-found): the
         // vendor never began billing. Surface a bounded body excerpt.
         if (response.status >= 400 && response.status < 500) {
-          return {
-            ok: false,
+          const detail = sanitizeDetail(await readBoundedSnippet(response), [
+            apiKey,
+            input.text,
+          ]);
+          return failure({
             refusedBeforeBilling: true,
             status: response.status,
-            snippet: await readBoundedSnippet(response),
-          };
+            failureKind: "http_4xx",
+            detail,
+          });
         }
 
         // 5xx (or any other non-ok): synthesis may have begun → possibly billed.
         // NOT refused, and the 5xx body is deliberately not surfaced.
-        return {
-          ok: false,
+        return failure({
           refusedBeforeBilling: false,
           status: response.status,
-          snippet: `HTTP ${response.status}`,
-        };
+          failureKind: response.status >= 500 ? "http_5xx" : "http_error",
+          detail: `HTTP ${response.status}`,
+        });
       } catch (error) {
         // Network failure, caller abort, or the 60s timeout: no HTTP status, and
         // billing is indeterminate → NOT refused.
-        return {
-          ok: false,
+        const observed = sanitizeDetail(formatObservedError(error), [
+          apiKey,
+          input.text,
+        ]);
+        const failureKind = timedOut
+          ? "timeout"
+          : observed.toLowerCase().includes("redirect")
+            ? "redirect"
+            : classifyTransportFailure(error);
+        return failure({
           refusedBeforeBilling: false,
           status: 0,
-          snippet: boundedReason(error),
-        };
+          failureKind,
+          detail: observed,
+        });
       } finally {
         clearTimeout(timeout);
         input.signal.removeEventListener("abort", onCallerAbort);

@@ -110,10 +110,13 @@ describe("notifications dashboard", () => {
     expect(body.reportHourUtc).toBe(6);
   });
 
-  it("POST discover-chats reports a missing Telegram proxy page label", async (context) => {
+  it("POST discover-chats fails closed when no service or transition route exists", async (context) => {
     if (!testDb) { context.skip(); return; }
     const { server, cookie, appContext } = await buildServer();
-    appContext.config.telegramProxyPageLabel = "missing-page";
+    appContext.config.serviceEgressProxyUrl = null;
+    appContext.config.serviceEgressProxyUsername = null;
+    appContext.config.serviceEgressProxyPassword = null;
+    appContext.config.telegramProxyPageLabel = null;
 
     const res = await server.inject({
       method: "POST",
@@ -125,7 +128,7 @@ describe("notifications dashboard", () => {
     });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json().message).toContain('Telegram proxy page "missing-page" was not found');
+    expect(res.json().message).toContain("Telegram egress requires the service proxy");
   });
 
   it("PATCH settings updates and returns new values", async (context) => {
@@ -221,6 +224,48 @@ describe("notifications dashboard", () => {
     const body = res.json();
     // Not configured, so will be skipped
     expect(body.status).toBe("skipped");
+  });
+
+  it("persists a service-route failure and reports last_message_failed", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const { server, cookie, appContext } = await buildServer();
+    await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+      payload: {
+        botToken: "7123456789:AAHabcdefghijklmnopqrstuvwxyz0123456",
+        chatId: "123456789",
+      },
+    });
+    appContext.config.serviceEgressProxyUrl = null;
+    appContext.config.serviceEgressProxyUsername = null;
+    appContext.config.serviceEgressProxyPassword = null;
+    appContext.config.telegramProxyPageLabel = null;
+
+    const testResponse = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/notifications/test",
+      headers: { cookie },
+    });
+    expect(testResponse.statusCode).toBe(200);
+    expect(testResponse.json().status).toBe("failed");
+
+    const attempts = await testDb.pool.query<{
+      status: string;
+      error: string | null;
+    }>(
+      "select status, error from telegram_delivery_attempts where kind = 'test' order by id desc limit 1",
+    );
+    expect(attempts.rows[0]?.status).toBe("failed");
+    expect(attempts.rows[0]?.error).toContain("service proxy");
+
+    const settings = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/notifications/settings",
+      headers: { cookie },
+    });
+    expect(settings.json().connectionStatus).toBe("last_message_failed");
   });
 
   it("ignores skipped delivery attempts when deriving connection status", async (context) => {

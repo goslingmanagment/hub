@@ -310,6 +310,22 @@ describe("shared http client helpers", () => {
     expect(classifyTransportError(error)).toBe("timeout");
   });
 
+  it("separates proxy connect failures from retryable timeouts and transport faults", async () => {
+    const { classifyTransportFailure } = await loadHttpClientModule();
+    const refused = Object.assign(new Error("proxy refused"), {
+      name: "SocksClientError",
+      code: "ECONNREFUSED",
+    });
+    expect(classifyTransportFailure(new TypeError("fetch failed", { cause: refused })))
+      .toBe("connect");
+
+    const timeout = new Error("body timed out");
+    timeout.name = "BodyTimeoutError";
+    expect(classifyTransportFailure(new TypeError("fetch failed", { cause: timeout })))
+      .toBe("timeout");
+    expect(classifyTransportFailure(new Error("socket closed"))).toBe("transport");
+  });
+
   it("parses retry-after seconds and http-date values", async () => {
     const { parseRetryAfterDelayMs } = await loadHttpClientModule();
     const now = Date.parse("2026-03-13T00:00:00.000Z");

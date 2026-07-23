@@ -51,10 +51,9 @@ import {
 } from "./voice-script-validation.ts";
 
 // The subset of the app context the service reads. `voiceTtsProvider` is
-// present whenever ELEVENLABS_API_KEY was configured at boot; the presence
+// present whenever ELEVENLABS_API_KEY and the service proxy were configured at boot; the presence
 // check below is deliberately separate from the live `voiceNotesEnabled` flag
-// (the flag is the spend gate; the provider's presence is the key-configured
-// gate).
+// (the flag is the spend gate; provider presence is the boot-readiness gate).
 type VoiceNotesApp = Pick<AppContext, "db" | "config" | "logger" | "voiceTtsProvider">;
 
 /** Single-dispatch lease: matches the sweep's reclaim window. */
@@ -164,14 +163,14 @@ export class VoiceDisabledError extends AppError {
   }
 }
 
-/** Operator trap: the live flag is on but no ELEVENLABS_API_KEY was configured,
- * so the provider was never built. Distinct from voice_disabled (403). */
+/** Operator trap: the live flag is on but the key/proxy boot dependencies were
+ * incomplete, so the provider was never built. Distinct from voice_disabled. */
 export class VoiceProviderUnavailableError extends AppError {
   constructor() {
     super(
-      "Voice notes are enabled but ELEVENLABS_API_KEY is not configured, so the TTS "
-        + "provider was not constructed; set the key and restart the runtime before "
-        + "syntheses can run",
+      "Voice notes are enabled but ELEVENLABS_API_KEY or the complete "
+        + "SERVICE_EGRESS_PROXY_* tuple is not configured; set both and restart "
+        + "the runtime before syntheses can run",
       503,
       "voice_provider_unavailable",
     );
@@ -291,9 +290,9 @@ export async function createVoiceNote(
   if (effective.voiceNotesEnabled !== true) {
     throw new VoiceDisabledError();
   }
-  // Distinct from the flag: the provider is built at boot iff ELEVENLABS_API_KEY
-  // is configured. Enabled-but-no-provider means the key is unset — an
-  // actionable 503 ("configure the key and restart"), not a generic "disabled".
+  // Distinct from the flag: the provider is built at boot iff the key and
+  // complete service-proxy tuple are configured. This check remains before
+  // profile/budget/row work, so an unavailable route cannot admit spend.
   if (!app.voiceTtsProvider) {
     throw new VoiceProviderUnavailableError();
   }
@@ -760,21 +759,17 @@ export async function dispatchVoiceNote(
   // client disconnect must never abort an in-flight, billable synthesis.
   const controller = new AbortController();
   const startedAt = Date.now();
-  // The ElevenLabs vendor egress seam, resolved once per dispatch. This is a
-  // NON-platform vendor class (egressKey "vendor:elevenlabs"): dispatcher is
-  // null and pace('interactive') is a 0 ms no-op, so the provider keeps its ONE
-  // recorded raw fetch — we deliberately do NOT rewire its transport. Resolving
-  // it anyway keeps the seam symmetric (a page/proxy dispatcher WOULD need
-  // closing) and exercises the resolver branch; the resolved key is stamped onto
-  // this dispatch's diagnostic log points below, so WHICH egress identity carried
-  // a non-clean synthesis is telemetry-visible rather than inferred. Declared
-  // before the try so the finally can always close it; a resolve fault is caught
-  // like any other and leaves the row 'dispatched' for the lease sweep.
+  // Resolve a fresh service dispatcher once per dispatch. It is reused for the
+  // provider's sole request and closed in finally; Telegram operations resolve
+  // independent dispatchers carrying the same stable service egress identity.
   let egress: AppEgressContext | undefined;
 
   try {
     egress = await resolveEgress(app, { kind: "vendor", vendor: "elevenlabs" });
     await egress.pace("interactive");
+    if (!egress.dispatcher) {
+      throw new Error("ElevenLabs service egress resolved without a dispatcher");
+    }
     const result = await provider.synthesize({
       voiceId: row.profileVoiceId,
       model: row.profileModel,
@@ -782,6 +777,7 @@ export async function dispatchVoiceNote(
       outputFormat: row.profileOutputFormat,
       text: input.canonicalScript,
       signal: controller.signal,
+      dispatcher: egress.dispatcher,
     });
 
     if (result.ok) {
@@ -861,6 +857,27 @@ export async function dispatchVoiceNote(
       return;
     }
 
+    const outcome = result.refusedBeforeBilling
+      ? "failed_definite"
+      : result.status === 0
+        ? "indeterminate"
+        : "failed_after_dispatch";
+    app.logger.warn(
+      {
+        component: "voice_notes",
+        event: "voice_note_synthesis_failed",
+        vendor: "elevenlabs",
+        voiceNoteId: row.id,
+        egressKey: egress.egressKey,
+        providerStatus: result.status,
+        failureKind: result.failureKind,
+        observedError: sanitizeVoiceFailureDetail(app, result.detail, input.canonicalScript),
+        durationMs: Date.now() - startedAt,
+        outcome,
+      },
+      "voice note provider request failed",
+    );
+
     if (result.refusedBeforeBilling) {
       // Pre-synthesis rejection (4xx): the vendor never began billing → not
       // billed, full refund. Settle + refund atomically (same fence rationale).
@@ -914,10 +931,6 @@ export async function dispatchVoiceNote(
     // status 0 = network error / timeout: truly indeterminate. Leave the row
     // 'dispatched' for the lease sweep to reclaim as 'indeterminate' — never
     // settle a verdict we cannot justify, and keep the estimate charged.
-    app.logger.warn(
-      { voiceNoteId: row.id, egressKey: egress?.egressKey },
-      "voice note synthesis indeterminate; leaving dispatched for the lease sweep",
-    );
   } catch (error) {
     // The provider is contractually non-throwing, but a settle/DB fault must not
     // surface as an unhandled rejection on the detached task. The terminal
@@ -928,15 +941,44 @@ export async function dispatchVoiceNote(
     // NEVER log the raw error object here: a settle fault is a DrizzleQueryError
     // whose `params` (and message text) embed the bound SQL params — including
     // the up-to-2 MB audio BYTEA. Log only sanitized type/code/message.
-    app.logger.error(
-      { voiceNoteId: row.id, egressKey: egress?.egressKey, error: describeErrorForLog(error) },
-      "voice note dispatch failed unexpectedly",
-    );
+    const observed = describeErrorForLog(error);
+    app.logger.error({
+      component: "voice_notes",
+      event: "voice_note_synthesis_failed",
+      vendor: "elevenlabs",
+      voiceNoteId: row.id,
+      egressKey: egress?.egressKey ?? "service:unresolved",
+      providerStatus: 0,
+      failureKind: "unexpected",
+      observedError: sanitizeVoiceFailureDetail(app, observed.message, input.canonicalScript),
+      durationMs: Date.now() - startedAt,
+      outcome: "indeterminate",
+    }, "voice note dispatch failed unexpectedly");
   } finally {
-    // Close the egress seam on every path (no-op for the elevenlabs class, but
-    // the seam is symmetric — a page/proxy dispatcher WOULD need closing).
-    await egress?.close();
+    // Close the per-dispatch service dispatcher on every path. Close errors
+    // must not escape this detached task after its terminal/billing decision.
+    await egress?.close().catch(() => undefined);
   }
+}
+
+function sanitizeVoiceFailureDetail(
+  app: Pick<AppContext, "config">,
+  detail: string,
+  script: string,
+): string {
+  let sanitized = redactSensitiveText(detail);
+  const knownSecrets = [
+    app.config.elevenLabsApiKey,
+    app.config.serviceEgressProxyUsername,
+    app.config.serviceEgressProxyPassword,
+    script,
+  ];
+  for (const secret of knownSecrets) {
+    if (secret) {
+      sanitized = sanitized.replaceAll(secret, "[REDACTED]");
+    }
+  }
+  return sanitized.slice(0, 512);
 }
 
 /** Pull a string `code` off an error (or its `cause` chain), else null. */

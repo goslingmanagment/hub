@@ -1,4 +1,4 @@
-import { findPageById } from "@agency_hub_core/db";
+import { findPageById, findPageByLabel } from "@agency_hub_core/db";
 import type { EgressContext, EgressScope } from "@agency_hub_core/platform-core";
 import {
   createProxyRequestDispatcher,
@@ -13,6 +13,11 @@ import {
   resolveStoredProxyEgressKey,
 } from "../page-context.ts";
 import { createEgressPacer } from "./pacer.ts";
+import {
+  buildServiceEgressContext,
+  resolveServiceEgressProxy,
+  ServiceEgressProxyConfigError,
+} from "./service-proxy.ts";
 
 // Kernel Stage 26: THE egress resolver — the only legal way to obtain an
 // outbound transport for platform traffic. No default path: a caller must
@@ -26,6 +31,10 @@ import { createEgressPacer } from "./pacer.ts";
 //   Stage-26 recorded direct fallback): a direct request would ride the
 //   shared VPS IP. OnlyFans pages without a proxy still egress direct under
 //   egress key "direct" (their platform traffic is vendor-side anyway).
+// - vendor "elevenlabs" / "telegram" — the boot-only service SOCKS5 identity.
+//   Telegram alone retains a transition fallback to its deprecated page proxy
+//   when the entire dedicated tuple is absent. A configured tuple never falls
+//   back after an auth/connect failure.
 // - vendor "ofapi"   — vendor-DIRECT (dispatcher null, hub address). The
 //   OFAPI gateway terminates at onlyfansapi.com, not at the platform;
 //   address consistency to the vendor gateway is deliberately not
@@ -52,17 +61,20 @@ export async function resolveEgress(
         'Egress scope vendor:"fansly" is refused: Fansly egress is direct-to-platform and must be page-scoped',
       );
     }
-    if (scope.vendor === "elevenlabs") {
-      // Voice notes vendor TTS: a NON-platform vendor (deliberately absent from
-      // PLATFORM_VENDORS and the pacer's EGRESS_VENDOR_PROVIDERS). Direct hub
-      // egress (dispatcher null), UNPACED — the provider makes exactly one
-      // attempt and this vendor is not rate-limit-governed by the seam.
-      return {
-        egressKey: "vendor:elevenlabs",
-        dispatcher: null,
-        pace: async () => 0,
-        close: async () => {},
-      };
+    if (scope.vendor === "elevenlabs" || scope.vendor === "telegram") {
+      // Calling the strict resolver first is the transition precedence guard:
+      // a partial/malformed dedicated tuple throws and can never reach the
+      // Telegram legacy branch.
+      const serviceProxy = resolveServiceEgressProxy(app.config);
+      if (serviceProxy) {
+        return buildServiceEgressContext(app.config);
+      }
+      if (scope.vendor === "elevenlabs") {
+        throw new ServiceEgressProxyConfigError(
+          "ElevenLabs egress requires the service proxy",
+        );
+      }
+      return resolveLegacyTelegramEgress(app);
     }
     if (scope.vendor !== "ofapi") {
       throw new Error(`Unknown egress vendor "${scope.vendor}"`);
@@ -105,4 +117,45 @@ export async function resolveEgress(
       await dispatcher.close();
     },
   };
+}
+
+async function resolveLegacyTelegramEgress(app: AppContext): Promise<AppEgressContext> {
+  const pageLabel = app.config.telegramProxyPageLabel;
+  if (!pageLabel) {
+    throw new ServiceEgressProxyConfigError(
+      "Telegram egress requires the service proxy; no transition legacy page route is configured",
+    );
+  }
+
+  const stored = await findPageByLabel(app.db, pageLabel);
+  if (!stored) {
+    throw new ServiceEgressProxyConfigError(
+      "The Telegram transition legacy page route was not found",
+    );
+  }
+  if (!stored.proxy) {
+    throw new ServiceEgressProxyConfigError(
+      "The Telegram transition legacy page route has no proxy",
+    );
+  }
+
+  try {
+    const proxy = resolveStoredProxyConfig(app, stored.proxy);
+    if (!proxy) {
+      throw new Error("empty proxy");
+    }
+    const dispatcher = createProxyRequestDispatcher(proxy);
+    return {
+      egressKey: `legacy-page:${resolveStoredProxyEgressKey(stored.proxy)}`,
+      dispatcher,
+      pace: async () => 0,
+      close: async () => {
+        await dispatcher.close();
+      },
+    };
+  } catch {
+    throw new ServiceEgressProxyConfigError(
+      "The Telegram transition legacy page route has invalid proxy configuration",
+    );
+  }
 }
