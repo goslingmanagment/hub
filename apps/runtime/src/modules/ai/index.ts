@@ -1,8 +1,5 @@
 import { AI_FEATURE_STREAM_BODY_LIMIT_BYTES, routeSchemas } from "@agency_hub_core/contracts";
-import {
-  classifyProviderStreamFailure,
-  formatObservedError,
-} from "@agency_hub_core/shared";
+import { formatObservedError } from "@agency_hub_core/shared";
 
 // Stage 30: the migrated prompt unit's public surface (tests and feature
 // services reach it through this module index — boundary rule).
@@ -24,6 +21,7 @@ import {
 import {
   AiGatewayTerminalStreamConsumer,
   prepareAiGatewayStream,
+  providerStreamFailureFrame,
   serializeAiGatewaySseFrame,
 } from "../../services/ai-gateway.ts";
 import { prepareAiFeatureStream } from "./features/index.ts";
@@ -417,27 +415,23 @@ export async function pipeAiGatewaySse(
         // The frame code NAMES the failure class for clients (a dead page
         // proxy is escalate-not-retry); the redacted cause chain goes to the
         // log only — frame messages stay static, no provider text leaks.
-        const code = classifyProviderStreamFailure(error);
+        const failureFrame = providerStreamFailureFrame(error);
         request.log.warn({
           requestId: stream.requestId,
           errorName: error instanceof Error ? error.name : "UnknownError",
           observedError: formatObservedError(error),
-          code,
+          code: failureFrame.code,
         }, "AI gateway provider stream failed");
-        writeFrame({
-          type: "error",
-          code,
-          message: code === "provider_proxy_unreachable"
-            ? "AI gateway could not reach the page's egress proxy"
-            : "AI gateway provider stream failed",
-          retryAfterMs: null,
-        });
+        writeFrame(failureFrame);
       }
     } finally {
       raw.off("close", abortProvider);
       try {
         await stream.recordTerminal({
           outcome: terminalOutcome,
+          errorCode: null,
+          failurePhase: null,
+          providerHttpStatus: null,
           usage: consumer.usage,
           providerResponseId: consumer.providerResponseId,
           cacheHit: consumer.cacheHit,

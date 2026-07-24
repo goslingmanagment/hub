@@ -89,6 +89,7 @@ describe("notifications dashboard", () => {
     expect(body.enabled).toBe(true);
     expect(body.dailyReportEnabled).toBe(true);
     expect(body.syncFailureAlertsEnabled).toBe(true);
+    expect(body.aiCriticalAlertsEnabled).toBe(false);
     expect(body.reportHourUtc).toBe(9);
   });
 
@@ -142,6 +143,7 @@ describe("notifications dashboard", () => {
       payload: {
         enabled: false,
         dailyReportEnabled: false,
+        aiCriticalAlertsEnabled: true,
         reportHourUtc: 14,
       },
     });
@@ -150,6 +152,7 @@ describe("notifications dashboard", () => {
     const body = res.json();
     expect(body.enabled).toBe(false);
     expect(body.dailyReportEnabled).toBe(false);
+    expect(body.aiCriticalAlertsEnabled).toBe(true);
     expect(body.reportHourUtc).toBe(14);
     expect(body.syncFailureAlertsEnabled).toBe(true);
 
@@ -161,6 +164,7 @@ describe("notifications dashboard", () => {
     });
     const getBody = getRes.json();
     expect(getBody.enabled).toBe(false);
+    expect(getBody.aiCriticalAlertsEnabled).toBe(true);
     expect(getBody.reportHourUtc).toBe(14);
   });
 
@@ -444,6 +448,41 @@ describe("notifications dashboard", () => {
     });
     expect(resolveRes.statusCode).toBe(200);
     expect(resolveRes.json().ok).toBe(true);
+  });
+
+  it("serves reader-first AI kinds with visible suppressed delivery state", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const { server, cookie } = await buildServer();
+
+    await openNotificationIncident(testDb.db, {
+      incidentKey: "ai_provider_billing:global:dashboard-fixture",
+      kind: "ai_provider_billing",
+      platformAccountId: null,
+      errorCode: "provider_billing",
+      errorSummary: "AI provider billing needs attention",
+      outbox: {
+        channel: "telegram",
+        messageText: "AI provider billing needs attention",
+        pagingPolicy: "ai_critical",
+      },
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/notifications/incidents?kind=ai_provider_billing",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().items).toEqual([
+      expect.objectContaining({
+        kind: "ai_provider_billing",
+        outboxState: "suppressed",
+        outboxAttemptCount: 0,
+        outboxLastError: null,
+        outboxSuppressionReason: "ai_critical_alerts_disabled",
+      }),
+    ]);
   });
 
   it("report preview returns text", async (context) => {

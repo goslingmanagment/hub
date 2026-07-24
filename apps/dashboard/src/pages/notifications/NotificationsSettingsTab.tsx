@@ -47,7 +47,14 @@ export function NotificationsSettingsTab() {
 
   const settings = data;
 
-  function handleToggle(field: "enabled" | "dailyReportEnabled" | "syncFailureAlertsEnabled", value: boolean) {
+  function handleToggle(
+    field:
+      | "enabled"
+      | "dailyReportEnabled"
+      | "syncFailureAlertsEnabled"
+      | "aiCriticalAlertsEnabled",
+    value: boolean,
+  ) {
     updateSettings.mutate({ [field]: value });
   }
 
@@ -299,6 +306,13 @@ export function NotificationsSettingsTab() {
         description="Send alerts when sync incidents open or resolve"
         checked={settings.syncFailureAlertsEnabled}
         onChange={(value) => handleToggle("syncFailureAlertsEnabled", value)}
+      />
+
+      <ToggleRow
+        label="AI Critical Alerts"
+        description="Page critical AI provider failures separately from sync incidents. Defaults off until Stage 1B activation."
+        checked={settings.aiCriticalAlertsEnabled}
+        onChange={(value) => handleToggle("aiCriticalAlertsEnabled", value)}
       />
     </div>
   );

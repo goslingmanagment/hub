@@ -29,6 +29,7 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { providerStreamInterruptionFixture } from "./fixtures/provider-failures.ts";
 
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
@@ -491,6 +492,55 @@ describe("ChatMuse AI gateway runtime gate", () => {
       quotaAccepted: true,
       gatewayOutcome: "failed",
       isCacheHit: false,
+    }]);
+  });
+
+  it("fails closed after a first chunk: static error and no done frame", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        yield providerStreamInterruptionFixture.firstFrame;
+        throw providerStreamInterruptionFixture.createError();
+      },
+    };
+
+    const response = await streamGateway(gatewayBody());
+
+    expect(response.statusCode, response.body).toBe(200);
+    const frames = parseAiSseFrames(response.body);
+    expect(frames.map((frame) => frame.data.type)).toEqual([
+      "meta",
+      "content_delta",
+      "error",
+    ]);
+    expect(frames[1]?.data).toEqual(providerStreamInterruptionFixture.firstFrame);
+    expect(frames[2]?.data).toEqual({
+      type: "error",
+      code: "provider_stream_failed",
+      message: "AI gateway provider stream failed",
+      retryAfterMs: null,
+    });
+    expect(frames.some((frame) => frame.data.type === "done")).toBe(false);
+    expect(response.body).not.toContain("socket closed after first chunk");
+
+    const usageRows = await testDb!.pool.query<{
+      gatewayOutcome: string | null;
+      errorCode: string | null;
+      failurePhase: string | null;
+      providerHttpStatus: number | null;
+    }>(
+      `select gateway_outcome as "gatewayOutcome",
+              error_code as "errorCode",
+              failure_phase as "failurePhase",
+              provider_http_status as "providerHttpStatus"
+       from ai_usage_events`,
+    );
+    expect(usageRows.rows).toEqual([{
+      gatewayOutcome: "failed",
+      errorCode: null,
+      failurePhase: null,
+      providerHttpStatus: null,
     }]);
   });
 

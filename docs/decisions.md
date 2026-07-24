@@ -5199,3 +5199,31 @@ builds checkpoint foreign refs without applying them. The remaining
 current-page semantic deliberately serves retained A history with B after an
 A→B remap, as Decision #95 requires; `accountRef` does not claim ledger
 provenance.
+
+**Decision #182 (2026-07-24, the kernel owns family-wide AI failure
+classification; Stage 1A is expand-only):** Core is the sole classifier of
+provider and transport failures for every client in the Agency Hub family.
+Clients consume the precise kernel wire code; they do not repeat provider-body
+parsing or infer a different class locally. Per the owner ruling on 2026-07-24,
+chatters see the true actionable cause rather than a generic substitute.
+Operator and engineering visibility are not alternatives to that chatter
+result: every failed generation must reach the chatter-facing terminal path,
+the operator incident/paging path, and durable engineering telemetry.
+
+Frame messages remain static and bounded: raw provider bodies, prompts, and
+credentials stay in redacted server observability, never in SSE text. Adding a
+new error `code` inside the existing error frame is contract-free and clients
+must handle unknown codes safely. Adding a new frame `type` is not
+contract-free; it requires a lockstep contract/SDK/client rollout gate.
+
+The first release is deliberately the rollback-safe expand half only. It adds
+nullable ledger detail (`error_code`, `failure_phase`,
+`provider_http_status`), reader-first `ai_provider_billing` and
+`ai_provider_failed` incident kinds, a separate default-off critical-AI paging
+flag, and a leased durable notification outbox. Paging-off transitions persist
+with visible `suppressed` state; retry exhaustion is explicit and outbox queue
+age is a golden signal. Existing sync incidents retain their direct-send
+behavior. No Stage 1A production path creates either new incident kind,
+populates the new ledger detail, or changes SSE classification or wire
+behavior. Precise classification, incident producers, and activation belong to
+Stage 1B.

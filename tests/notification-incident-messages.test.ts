@@ -70,4 +70,21 @@ describe("resolveMessageForIncident", () => {
       }),
     ).toContain("link-stats reconcile recovered");
   });
+
+  it("reader-first AI incident kinds have explicit recovery texts", () => {
+    expect(
+      resolveMessageForIncident({
+        kind: "ai_provider_billing",
+        pageLabel: null,
+        platform: null,
+      }),
+    ).toContain("billing recovered");
+    expect(
+      resolveMessageForIncident({
+        kind: "ai_provider_failed",
+        pageLabel: "p1",
+        platform: "onlyfans",
+      }),
+    ).toContain("generation recovered");
+  });
 });

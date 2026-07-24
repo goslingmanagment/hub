@@ -1036,6 +1036,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       enabled: settings.enabled,
       dailyReportEnabled: settings.dailyReportEnabled,
       syncFailureAlertsEnabled: settings.syncFailureAlertsEnabled,
+      aiCriticalAlertsEnabled: settings.aiCriticalAlertsEnabled,
       reportHourUtc: settings.reportHourUtc,
       connectionStatus,
       lastMessageAt: recentAttempt?.createdAt?.toISOString() ?? null,

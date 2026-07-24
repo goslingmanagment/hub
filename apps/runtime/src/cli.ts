@@ -825,6 +825,9 @@ export function buildProgram() {
         const totalMs = Date.now() - startedAt;
         await stream.recordTerminal({
           outcome: consumer.outcome,
+          errorCode: null,
+          failurePhase: null,
+          providerHttpStatus: null,
           usage: consumer.usage,
           providerResponseId: consumer.providerResponseId,
           cacheHit: consumer.cacheHit,

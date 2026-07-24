@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { NotificationsIncidentItem } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
 import { useNotificationIncidents, useResolveIncident } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -6,13 +7,74 @@ import { formatRelativeTime } from "@/lib/format";
 
 const LIMIT = 50;
 
-function kindLabel(kind: string) {
-  switch (kind) {
-    case "auth_blocked": return "Auth Blocked";
-    case "proxy_failed": return "Proxy Failed";
-    case "proxy_missing": return "Proxy Missing";
-    case "stream_failed_threshold": return "Stream Failed 3x";
-    default: return kind;
+type IncidentKind = NotificationsIncidentItem["kind"];
+
+const INCIDENT_KIND_LABELS = {
+  auth_blocked: "Auth Blocked",
+  proxy_failed: "Proxy Failed",
+  proxy_missing: "Proxy Missing",
+  stream_failed_threshold: "Stream Failed 3x",
+  ofapi_auth: "OFAPI Auth",
+  ofapi_low_credit: "OFAPI Low Credit",
+  ofapi_webhook_silence: "OFAPI Webhook Silence",
+  ofapi_burn_rate: "OFAPI Burn Rate",
+  db_disk_usage: "Database Disk Usage",
+  observations_partitions: "Observations Partitions",
+  wrong_transactions_writer: "Wrong Transactions Writer",
+  read_gateway_capture: "Read Gateway Capture",
+  golden_signal_lag: "Golden Signal Lag",
+  scheduler_silent: "Scheduler Silent",
+  ops_sampler_silent: "Ops Sampler Silent",
+  ofapi_chargebacks_reconcile_failed: "OFAPI Chargebacks Reconcile",
+  ofapi_link_stats_reconcile_failed: "OFAPI Link Stats Reconcile",
+  ai_provider_billing: "AI Provider Billing",
+  ai_provider_failed: "AI Provider Failed",
+} satisfies Record<IncidentKind, string>;
+
+function deliveryState(item: NotificationsIncidentItem): {
+  label: string;
+  className: string;
+  title?: string;
+} {
+  switch (item.outboxState) {
+    case null:
+      return {
+        label: String(item.notificationCount),
+        className: "text-text-muted",
+      };
+    case "pending":
+      return {
+        label: `Queued (${item.outboxAttemptCount ?? 0})`,
+        className: "text-warning",
+        title: item.outboxLastError ?? "Waiting for the notification worker",
+      };
+    case "leased":
+      return {
+        label: `Sending (${item.outboxAttemptCount ?? 0})`,
+        className: "text-warning",
+        title: item.outboxLastError ?? "Notification delivery is leased",
+      };
+    case "delivered":
+      return {
+        label: `Delivered (${item.outboxAttemptCount ?? 0})`,
+        className: "text-green",
+      };
+    case "suppressed":
+      return {
+        label: "Suppressed",
+        className: "text-warning",
+        title: item.outboxSuppressionReason === "ai_critical_alerts_disabled"
+          ? "AI critical paging was off when this transition was recorded"
+          : item.outboxSuppressionReason === "sync_failure_alerts_disabled"
+            ? "Sync failure paging was off when this transition was recorded"
+            : "Notifications were off when this transition was recorded",
+      };
+    case "exhausted":
+      return {
+        label: `Exhausted (${item.outboxAttemptCount ?? 0})`,
+        className: "text-danger",
+        title: item.outboxLastError ?? undefined,
+      };
   }
 }
 
@@ -57,10 +119,8 @@ export function NotificationsIncidentsTab() {
           className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-text-primary"
         >
           <option value="">All Types</option>
-          <option value="auth_blocked">Auth Blocked</option>
-          <option value="proxy_failed">Proxy Failed</option>
-          <option value="proxy_missing">Proxy Missing</option>
-          <option value="stream_failed_threshold">Stream Failed 3x</option>
+          {(Object.entries(INCIDENT_KIND_LABELS) as Array<[IncidentKind, string]>)
+            .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
 
         <input
@@ -83,7 +143,7 @@ export function NotificationsIncidentsTab() {
       ) : data.items.length === 0 ? (
         <StatusPanel
           title="No incidents recorded"
-          description="Incidents appear when sync encounters authentication or proxy errors."
+          description="Incidents appear when an operational condition opens an alert."
         />
       ) : (
         <>
@@ -113,11 +173,20 @@ export function NotificationsIncidentsTab() {
                       </div>
                     </td>
                     <td className="px-4 py-2.5 text-[13px] font-medium text-text-primary">{item.pageLabel ?? "Global"}</td>
-                    <td className="px-4 py-2.5 text-[12px] text-text-secondary">{kindLabel(item.kind)}</td>
+                    <td className="px-4 py-2.5 text-[12px] text-text-secondary">
+                      {INCIDENT_KIND_LABELS[item.kind]}
+                    </td>
                     <td className="px-4 py-2.5 text-[12px] text-text-muted">{item.stream ?? "—"}</td>
                     <td className="px-4 py-2.5 text-[12px] text-text-muted">{formatRelativeTime(item.openedAt)}</td>
                     <td className="max-w-[200px] truncate px-4 py-2.5 text-[12px] text-text-muted">{item.errorSummary ?? "—"}</td>
-                    <td className="px-4 py-2.5 text-right text-[12px] tabular-nums text-text-muted">{item.notificationCount}</td>
+                    <td
+                      className={`px-4 py-2.5 text-right text-[12px] tabular-nums ${
+                        deliveryState(item).className
+                      }`}
+                      title={deliveryState(item).title}
+                    >
+                      {deliveryState(item).label}
+                    </td>
                     <td className="px-4 py-2.5 text-right">
                       {item.status === "open" && (
                         <button

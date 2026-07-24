@@ -4111,7 +4111,9 @@
                 "scheduler_silent",
                 "ops_sampler_silent",
                 "ofapi_chargebacks_reconcile_failed",
-                "ofapi_link_stats_reconcile_failed"
+                "ofapi_link_stats_reconcile_failed",
+                "ai_provider_billing",
+                "ai_provider_failed"
               ]
             },
             "in": "query",
@@ -4195,7 +4197,9 @@
                               "scheduler_silent",
                               "ops_sampler_silent",
                               "ofapi_chargebacks_reconcile_failed",
-                              "ofapi_link_stats_reconcile_failed"
+                              "ofapi_link_stats_reconcile_failed",
+                              "ai_provider_billing",
+                              "ai_provider_failed"
                             ]
                           },
                           "pageLabel": {
@@ -4279,6 +4283,55 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "outboxState": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "pending",
+                                  "leased",
+                                  "delivered",
+                                  "suppressed",
+                                  "exhausted"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outboxAttemptCount": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outboxLastError": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outboxSuppressionReason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -4294,7 +4347,11 @@
                           "resolvedAt",
                           "errorCode",
                           "errorSummary",
-                          "notificationCount"
+                          "notificationCount",
+                          "outboxState",
+                          "outboxAttemptCount",
+                          "outboxLastError",
+                          "outboxSuppressionReason"
                         ],
                         "additionalProperties": false
                       }
@@ -4929,6 +4986,9 @@
                     "syncFailureAlertsEnabled": {
                       "type": "boolean"
                     },
+                    "aiCriticalAlertsEnabled": {
+                      "type": "boolean"
+                    },
                     "reportHourUtc": {
                       "type": "integer",
                       "minimum": 0,
@@ -4973,6 +5033,7 @@
                     "enabled",
                     "dailyReportEnabled",
                     "syncFailureAlertsEnabled",
+                    "aiCriticalAlertsEnabled",
                     "reportHourUtc",
                     "connectionStatus",
                     "lastMessageAt",
@@ -5064,6 +5125,9 @@
                   "syncFailureAlertsEnabled": {
                     "type": "boolean"
                   },
+                  "aiCriticalAlertsEnabled": {
+                    "type": "boolean"
+                  },
                   "reportHourUtc": {
                     "type": "integer",
                     "minimum": 0,
@@ -5150,6 +5214,9 @@
                     "syncFailureAlertsEnabled": {
                       "type": "boolean"
                     },
+                    "aiCriticalAlertsEnabled": {
+                      "type": "boolean"
+                    },
                     "reportHourUtc": {
                       "type": "integer",
                       "minimum": 0,
@@ -5194,6 +5261,7 @@
                     "enabled",
                     "dailyReportEnabled",
                     "syncFailureAlertsEnabled",
+                    "aiCriticalAlertsEnabled",
                     "reportHourUtc",
                     "connectionStatus",
                     "lastMessageAt",

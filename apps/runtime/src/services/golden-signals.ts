@@ -55,6 +55,9 @@ export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {
   // The W3.2 queued-TTL sweep cancels parked sends at 10 min — so a queued
   // row older than 15 min means the sweep ITSELF is dead (A4 visibility).
   command_queued_age: 900_000,
+  // Error handling Stage 1A: a durable page that cannot leave the outbox
+  // must become an operator-visible queue-age breach rather than disappear.
+  notification_outbox_age: 300_000,
   // Stage 29 (DP 6 owner note): restricted-class volume guard — a gauge in
   // BYTES riding the p95 slot so the existing breach latch covers it.
   ai_content_bytes: 5_000_000_000,
@@ -203,6 +206,13 @@ export async function computeGoldenSignals(
   `);
   const commandQueuedAge = Number(queuedCommands.rows[0]?.age_ms ?? 0);
 
+  const notificationOutbox = await app.db.execute<{ age_ms: string | null }>(sql`
+    select coalesce(extract(epoch from (now() - min(created_at))) * 1000, 0) as age_ms
+    from notification_delivery_outbox
+    where state in ('pending', 'leased')
+  `);
+  const notificationOutboxAge = Number(notificationOutbox.rows[0]?.age_ms ?? 0);
+
   // W5.5 (D9): acceptance projection liveness — events per trailing hour.
   // Gauge only (no threshold): visibility, not alerting.
   const acceptance = await app.db.execute<{ n: string }>(sql`
@@ -246,6 +256,10 @@ export async function computeGoldenSignals(
       ...toSamples("sse_delivery", { p50: staleness, p95: staleness }),
       ...toSamples("capture_pending_age", { p50: capturePendingAge, p95: capturePendingAge }),
       ...toSamples("command_queued_age", { p50: commandQueuedAge, p95: commandQueuedAge }),
+      ...toSamples("notification_outbox_age", {
+        p50: notificationOutboxAge,
+        p95: notificationOutboxAge,
+      }),
       ...toSamples("acceptance_events_1h", { p50: acceptanceEvents1h, p95: acceptanceEvents1h }),
       ...toSamples("ai_content_rows", { p50: aiRows, p95: aiRows }),
       ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),

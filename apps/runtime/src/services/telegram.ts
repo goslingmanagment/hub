@@ -319,6 +319,9 @@ export async function sendTelegramMessage(
     text: string;
     parseMode?: "HTML" | "MarkdownV2";
     credentials?: ResolvedTelegramCredentials;
+    /** Stable outbox identity for traceability; Telegram has no native
+     * idempotency parameter, so it is deliberately not sent over the wire. */
+    idempotencyKey?: string;
   },
 ): Promise<TelegramSendResult> {
   const creds = input.credentials ?? resolveTelegramCredentials(
@@ -351,6 +354,7 @@ export async function sendTelegramMessage(
       failureKind: classifyTransportFailure(error),
       observedError: described,
       durationMs: Date.now() - operationStartedAt,
+      idempotencyKey: input.idempotencyKey,
     }, "Telegram notification egress resolution failed; continuing");
     return {
       status: "failed",
@@ -418,6 +422,7 @@ export async function sendTelegramMessage(
           failureKind: "http",
           observedError: error,
           durationMs: Date.now() - operationStartedAt,
+          idempotencyKey: input.idempotencyKey,
         }, "Telegram notification failed; continuing");
         return {
           status: "failed",
@@ -444,6 +449,7 @@ export async function sendTelegramMessage(
           failureKind,
           observedError: described,
           durationMs: Date.now() - operationStartedAt,
+          idempotencyKey: input.idempotencyKey,
         }, "Telegram notification failed; continuing");
         return {
           status: "failed",

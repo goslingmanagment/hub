@@ -6,6 +6,7 @@ import {
   createModel,
   createOnlyFansPage,
   createUser,
+  finalizeAiGatewayUsageEvent,
   insertAiUsageEvents,
   markStaleAiGatewayReservationsFailed,
   reserveAiGatewayUsageEvent,
@@ -75,6 +76,9 @@ describe("AI usage ledger repository", () => {
       cost_approximate: boolean;
       quota_accepted: boolean | null;
       gateway_outcome: string | null;
+      error_code: string | null;
+      failure_phase: string | null;
+      provider_http_status: number | null;
     }>(`
       select page_id,
              provider,
@@ -82,7 +86,10 @@ describe("AI usage ledger repository", () => {
              cost_micro_usd,
              cost_approximate,
              quota_accepted,
-             gateway_outcome
+             gateway_outcome,
+             error_code,
+             failure_phase,
+             provider_http_status
       from ai_usage_events
       where client_event_id = 'direct-usage-001'
     `);
@@ -95,6 +102,70 @@ describe("AI usage ledger repository", () => {
       cost_approximate: false,
       quota_accepted: null,
       gateway_outcome: null,
+      error_code: null,
+      failure_phase: null,
+      provider_http_status: null,
+    }]);
+  });
+
+  it("passes nullable failure detail through the gateway terminal write", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const clientEventId = randomUUID();
+    const reservedAt = new Date("2026-07-24T10:00:00.000Z");
+    const reserved = await reserveAiGatewayUsageEvent(testDb.db, {
+      userId: null,
+      event: {
+        clientEventId,
+        feature: "workboard-closing",
+        model: "anthropic:claude-sonnet-4-6",
+        pageId: null,
+        provider: "anthropic",
+        conversationId: null,
+        isRegeneration: false,
+        reservedAt,
+      },
+    });
+    expect(reserved).toBe(true);
+
+    const usageEventId = await finalizeAiGatewayUsageEvent(testDb.db, {
+      userId: null,
+      event: {
+        clientEventId,
+        providerResponseId: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        costMicroUsd: 0,
+        costApproximate: false,
+        gatewayOutcome: "failed",
+        errorCode: "provider_rate_limited",
+        failurePhase: "provider_response",
+        providerHttpStatus: 429,
+        durationMs: 125,
+        isCacheHit: false,
+        completedAt: new Date("2026-07-24T10:00:00.125Z"),
+      },
+    });
+    expect(usageEventId).not.toBeNull();
+
+    const rows = await testDb.pool.query<{
+      error_code: string | null;
+      failure_phase: string | null;
+      provider_http_status: number | null;
+    }>(`
+      select error_code, failure_phase, provider_http_status
+      from ai_usage_events
+      where client_event_id = $1
+    `, [clientEventId]);
+    expect(rows.rows).toEqual([{
+      error_code: "provider_rate_limited",
+      failure_phase: "provider_response",
+      provider_http_status: 429,
     }]);
   });
 

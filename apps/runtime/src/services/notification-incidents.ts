@@ -21,7 +21,7 @@ const STREAM_FAILURE_THRESHOLD = 3;
 // the re-send loop gives up. Pacing comes free from the monitor cadence.
 const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 
-function incidentKey(
+export function incidentKey(
   input: {
     kind: NotificationIncidentKind;
     platformAccountId: number | null;
@@ -38,9 +38,13 @@ function incidentKey(
       ? `${input.kind}:global:${input.subKey}`
       : `${input.kind}:global`;
   }
-  return input.kind === "stream_failed_threshold" && input.stream
+  const pageKey = input.kind === "stream_failed_threshold" && input.stream
     ? `${input.kind}:${input.platformAccountId}:${input.stream}`
     : `${input.kind}:${input.platformAccountId}`;
+  // No pre-Stage-1A caller combined a page id with subKey, so adding the
+  // suffix fixes the silently-colliding shape without changing an existing
+  // latch identity. Stream keeps its historical position before the suffix.
+  return input.subKey ? `${pageKey}:${input.subKey}` : pageKey;
 }
 
 function summarizeError(errorSummary: string | null | undefined) {
@@ -88,6 +92,10 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 OFAPI chargebacks reconcile failed";
     case "ofapi_link_stats_reconcile_failed":
       return "🚨 OFAPI link-stats reconcile failed";
+    case "ai_provider_billing":
+      return "🚨 AI provider billing needs attention";
+    case "ai_provider_failed":
+      return "🚨 AI provider generation failed";
   }
 }
 
@@ -149,6 +157,10 @@ function resolveDetailForIncident(
       return "OFAPI chargebacks reconcile recovered";
     case "ofapi_link_stats_reconcile_failed":
       return "OFAPI link-stats reconcile recovered";
+    case "ai_provider_billing":
+      return "AI provider billing recovered";
+    case "ai_provider_failed":
+      return "AI provider generation recovered";
   }
 }
 
@@ -195,6 +207,7 @@ async function openIncidentAndNotify(
     errorCode?: string | null;
     errorSummary?: string | null;
     occurredAt?: Date;
+    deliveryMode?: "direct" | "critical_outbox";
   },
 ): Promise<boolean> {
   // Returns whether an incident row exists for this condition (opened now or
@@ -203,6 +216,12 @@ async function openIncidentAndNotify(
   // never throws, so a rejected promise can't carry that signal.
   try {
     const occurredAt = input.occurredAt ?? new Date();
+    const outboxMessage = input.deliveryMode === "critical_outbox"
+      ? openMessageForIncident({
+        ...input,
+        errorSummary: input.errorSummary ?? null,
+      })
+      : null;
     const result = await openNotificationIncidentWithRecoveryGuard(app.db, {
       incidentKey: incidentKey(input),
       kind: input.kind,
@@ -216,6 +235,16 @@ async function openIncidentAndNotify(
         stream: input.stream ?? null,
       },
       occurredAt,
+      ...(outboxMessage
+        ? {
+          outbox: {
+            channel: "telegram" as const,
+            messageText: outboxMessage,
+            pagingPolicy: "ai_critical" as const,
+            maxAttempts: MAX_OPEN_DELIVERY_ATTEMPTS,
+          },
+        }
+        : {}),
     });
 
     if (result.transition === "existing" || result.transition === "suppressed" || !result.incident) {
@@ -226,9 +255,17 @@ async function openIncidentAndNotify(
       // re-send here (capped; delivery is at-least-once — a process death
       // between the Telegram accept and the attempt insert can page twice,
       // preferable to permanent pager loss).
-      if (result.transition === "existing" && result.incident && result.incident.status === "open") {
+      if (
+        input.deliveryMode !== "critical_outbox"
+        && result.transition === "existing"
+        && result.incident
+        && result.incident.status === "open"
+      ) {
         await retryUndeliveredOpenNotification(app, input, result.incident);
       }
+      return true;
+    }
+    if (input.deliveryMode === "critical_outbox") {
       return true;
     }
 
@@ -347,6 +384,7 @@ async function resolveIncidentAndNotify(
     recoveredAt?: Date;
     stream?: SyncStream | null;
     subKey?: string | null;
+    deliveryMode?: "direct" | "critical_outbox";
   },
 ) {
   const recoveredAt = input.recoveredAt ?? new Date();
@@ -367,9 +405,22 @@ async function resolveIncidentAndNotify(
       maxLastSeenAt: recoveredAt,
       now: recoveredAt,
       metadata,
+      ...(input.deliveryMode === "critical_outbox"
+        ? {
+          outbox: {
+            channel: "telegram" as const,
+            messageText: resolveMessageForIncident(input),
+            pagingPolicy: "ai_critical" as const,
+            maxAttempts: MAX_OPEN_DELIVERY_ATTEMPTS,
+          },
+        }
+        : {}),
     });
 
     if (!resolved) {
+      return;
+    }
+    if (input.deliveryMode === "critical_outbox") {
       return;
     }
 
@@ -396,6 +447,55 @@ async function resolveIncidentAndNotify(
       err: error,
     }, "Notification incident resolve failed; continuing");
   }
+}
+
+export type CriticalNotificationIncidentKind =
+  | "ai_provider_billing"
+  | "ai_provider_failed";
+
+/**
+ * Stage 1A infrastructure seam for Stage 1B's AI producers. It is deliberately
+ * uncalled in this release: once used, the incident transition and its durable
+ * Telegram outbox row commit atomically. Critical paging is independent from
+ * syncFailureAlertsEnabled and defaults to persisted suppression.
+ */
+export async function openCriticalNotificationIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    kind: CriticalNotificationIncidentKind;
+    platformAccountId: number | null;
+    pageLabel: string | null;
+    platform: "fansly" | "onlyfans" | null;
+    stream?: SyncStream | null;
+    subKey?: string | null;
+    errorCode?: string | null;
+    errorSummary?: string | null;
+    occurredAt?: Date;
+  },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    ...input,
+    deliveryMode: "critical_outbox",
+  });
+}
+
+/** Matching resolve seam; also remains uncalled until Stage 1B activation. */
+export async function resolveCriticalNotificationIncident(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    kind: CriticalNotificationIncidentKind;
+    platformAccountId: number | null;
+    pageLabel: string | null;
+    platform: "fansly" | "onlyfans" | null;
+    stream?: SyncStream | null;
+    subKey?: string | null;
+    recoveredAt?: Date;
+  },
+) {
+  await resolveIncidentAndNotify(app, {
+    ...input,
+    deliveryMode: "critical_outbox",
+  });
 }
 
 async function hasTerminalProxyFailure(

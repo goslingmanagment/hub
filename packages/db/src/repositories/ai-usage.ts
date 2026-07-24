@@ -8,6 +8,7 @@ import { aiUsageEvents, users } from "../schema.ts";
 type NumericValue = number | bigint | null | undefined;
 export type AiGatewayProvider = "anthropic" | "openrouter";
 export type AiGatewayOutcome = "completed" | "failed" | "cancelled" | "quota_denied";
+export type AiGatewayFailurePhase = "connect" | "provider_response" | "stream" | "terminal";
 
 export interface InsertAiUsageEventInput {
   clientEventId: string;
@@ -24,6 +25,9 @@ export interface InsertAiUsageEventInput {
   costApproximate?: boolean;
   quotaAccepted?: boolean | null;
   gatewayOutcome?: AiGatewayOutcome | null;
+  errorCode?: string | null;
+  failurePhase?: AiGatewayFailurePhase | null;
+  providerHttpStatus?: number | null;
   conversationId?: string | null;
   durationMs?: number | null;
   isCacheHit: boolean;
@@ -53,6 +57,9 @@ export interface FinalizeAiGatewayUsageEventInput {
   costMicroUsd: number;
   costApproximate: boolean;
   gatewayOutcome: Exclude<AiGatewayOutcome, "quota_denied">;
+  errorCode?: string | null;
+  failurePhase?: AiGatewayFailurePhase | null;
+  providerHttpStatus?: number | null;
   durationMs: number;
   isCacheHit: boolean;
   completedAt: Date;
@@ -204,6 +211,9 @@ export async function insertAiUsageEvents(
       costApproximate: event.costApproximate ?? false,
       quotaAccepted: event.quotaAccepted ?? null,
       gatewayOutcome: event.gatewayOutcome ?? null,
+      errorCode: event.errorCode ?? null,
+      failurePhase: event.failurePhase ?? null,
+      providerHttpStatus: event.providerHttpStatus ?? null,
       conversationId: event.conversationId ?? null,
       durationMs: event.durationMs ?? null,
       isCacheHit: event.isCacheHit,
@@ -243,6 +253,9 @@ export async function reserveAiGatewayUsageEvent(
     costApproximate: false,
     quotaAccepted: true,
     gatewayOutcome: null,
+    errorCode: null,
+    failurePhase: null,
+    providerHttpStatus: null,
     conversationId: input.event.conversationId ?? null,
     durationMs: null,
     isCacheHit: false,
@@ -282,6 +295,9 @@ export async function recordAiGatewayQuotaDenied(
     costApproximate: false,
     quotaAccepted: false,
     gatewayOutcome: "quota_denied",
+    errorCode: null,
+    failurePhase: null,
+    providerHttpStatus: null,
     conversationId: input.event.conversationId ?? null,
     durationMs: null,
     isCacheHit: false,
@@ -309,6 +325,9 @@ export async function finalizeAiGatewayUsageEvent(
       costMicroUsd: input.event.costMicroUsd,
       costApproximate: input.event.costApproximate,
       gatewayOutcome: input.event.gatewayOutcome,
+      errorCode: input.event.errorCode ?? null,
+      failurePhase: input.event.failurePhase ?? null,
+      providerHttpStatus: input.event.providerHttpStatus ?? null,
       durationMs: Math.max(0, Math.floor(input.event.durationMs)),
       isCacheHit: input.event.isCacheHit,
       completedAt: input.event.completedAt,

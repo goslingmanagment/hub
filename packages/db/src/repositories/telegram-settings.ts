@@ -41,6 +41,7 @@ export async function updateTelegramSettings(
     enabled?: boolean;
     dailyReportEnabled?: boolean;
     syncFailureAlertsEnabled?: boolean;
+    aiCriticalAlertsEnabled?: boolean;
     reportHourUtc?: number;
     encryptedBotToken?: string | null;
     chatId?: string | null;

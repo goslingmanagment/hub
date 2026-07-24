@@ -173,4 +173,27 @@ describe("database migration invariants", () => {
     expect(indexes).toContain("create index concurrently if not exists %I");
     expect(indexes).toContain("alter index domain_events_v2_deliverable_account_seq_idx attach partition");
   });
+
+  it("keeps error-handling Stage 1A additive and producer-free", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0114_error_handling_stage_1a.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain('ADD COLUMN "error_code" text');
+    expect(migration).toContain('ADD COLUMN "failure_phase" text');
+    expect(migration).toContain('ADD COLUMN "provider_http_status" integer');
+    expect(migration).toContain('"ai_usage_events_failure_reason_window_idx"');
+    expect(migration).toContain("ADD VALUE IF NOT EXISTS 'ai_provider_billing'");
+    expect(migration).toContain("ADD VALUE IF NOT EXISTS 'ai_provider_failed'");
+    expect(migration).toContain(
+      'ADD COLUMN "ai_critical_alerts_enabled" boolean DEFAULT false NOT NULL',
+    );
+    expect(migration).toContain('CREATE TABLE "notification_delivery_outbox"');
+    expect(migration).toContain('"paging_policy" text NOT NULL');
+    expect(migration).toContain('"idempotency_key" text NOT NULL UNIQUE');
+    expect(migration).toContain("'suppressed'");
+    expect(migration).toContain("'exhausted'");
+    expect(migration).not.toMatch(/\bUPDATE\s+"?ai_usage_events"?/i);
+  });
 });

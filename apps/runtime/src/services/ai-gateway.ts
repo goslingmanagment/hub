@@ -17,8 +17,12 @@ import {
   markStaleAiGatewayReservationsFailed,
   recordAiGatewayQuotaDenied,
   reserveAiGatewayUsageEvent,
+  type AiGatewayFailurePhase,
 } from "@agency_hub_core/db";
-import type { ProxyConfig } from "@agency_hub_core/shared";
+import {
+  classifyProviderStreamFailure,
+  type ProxyConfig,
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
@@ -79,6 +83,11 @@ export interface PreparedAiGatewayStream {
 
 export interface AiGatewayTerminalRecordInput {
   outcome: "completed" | "failed" | "cancelled";
+  /** Stage 1A reader/type substrate. Stage 1B owns classification and begins
+   * populating these fields; every Stage 1A caller deliberately passes null. */
+  errorCode?: string | null;
+  failurePhase?: AiGatewayFailurePhase | null;
+  providerHttpStatus?: number | null;
   usage: AiGatewayUsage | null;
   providerResponseId: string | null;
   cacheHit: boolean;
@@ -445,6 +454,9 @@ export async function prepareAiGatewayStream(
           costMicroUsd: usage.costMicroUsd,
           costApproximate: usage.costApproximate,
           gatewayOutcome: record.outcome,
+          errorCode: record.errorCode ?? null,
+          failurePhase: record.failurePhase ?? null,
+          providerHttpStatus: record.providerHttpStatus ?? null,
           durationMs: Math.max(0, Math.floor(record.durationMs)),
           isCacheHit: record.cacheHit,
           completedAt: record.completedAt,
@@ -492,6 +504,25 @@ export async function prepareAiGatewayStream(
 
 export function serializeAiGatewaySseFrame(frame: AiGatewayStreamFrame | AiFeatureDebugInputFrame) {
   return `event: ai\ndata: ${JSON.stringify(frame)}\n\n`;
+}
+
+/**
+ * Stage 1A characterization seam: this intentionally preserves the current
+ * two-bucket classifier and static client messages. Stage 1B replaces the
+ * classification, so its wire diff is isolated and reviewable.
+ */
+export function providerStreamFailureFrame(
+  error: unknown,
+): Extract<AiGatewayStreamFrame, { type: "error" }> {
+  const code = classifyProviderStreamFailure(error);
+  return {
+    type: "error",
+    code,
+    message: code === "provider_proxy_unreachable"
+      ? "AI gateway could not reach the page's egress proxy"
+      : "AI gateway provider stream failed",
+    retryAfterMs: null,
+  };
 }
 
 // The coach ceiling error frame (spec §3/§7): emitted WITHOUT a `done` frame so
