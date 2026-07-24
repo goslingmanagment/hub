@@ -34,11 +34,16 @@ import {
   type VoiceNoteStatusRow,
 } from "@agency_hub_core/db";
 import { findPageByLabel } from "@agency_hub_core/db";
-import { redactSensitiveText } from "@agency_hub_core/shared";
+import {
+  redactSensitiveText,
+  sanitizeError,
+  type SanitizeErrorOptions,
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { resolveEgress, type AppEgressContext } from "./egress/resolver.ts";
+import { hasServiceEgressProxy } from "./egress/service-proxy.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { AppError, NotFoundError } from "./errors.ts";
 import { VOICE_AUDIO_MAX_BYTES } from "./voice-elevenlabs-provider.ts";
@@ -66,6 +71,11 @@ const DEFAULT_SCRIPT_MAX_CHARS = 600;
 const DEFAULT_PAGE_BUDGET = 5000;
 const DEFAULT_GLOBAL_BUDGET = 20000;
 const DEFAULT_MAX_CONCURRENT_SYNTHESES = 2;
+const VOICE_LOG_ERROR_OPTIONS = {
+  maxChars: 512,
+  truncation: "clip",
+  queryStyleMessage: ({ name, code }) => `${name}${code ? ` (${code})` : ""}`,
+} satisfies SanitizeErrorOptions;
 
 type ReleaseVoiceSynthesisPermit = () => void;
 
@@ -168,9 +178,7 @@ export class VoiceDisabledError extends AppError {
 export class VoiceProviderUnavailableError extends AppError {
   constructor() {
     super(
-      "Voice notes are enabled but ELEVENLABS_API_KEY or the complete "
-        + "SERVICE_EGRESS_PROXY_* tuple is not configured; set both and restart "
-        + "the runtime before syntheses can run",
+      "Voice notes are temporarily unavailable. Please try again later.",
       503,
       "voice_provider_unavailable",
     );
@@ -294,6 +302,12 @@ export async function createVoiceNote(
   // complete service-proxy tuple are configured. This check remains before
   // profile/budget/row work, so an unavailable route cannot admit spend.
   if (!app.voiceTtsProvider) {
+    app.logger.warn({
+      component: "voice_notes",
+      event: "voice_provider_unavailable",
+      elevenLabsApiKeyConfigured: Boolean(app.config.elevenLabsApiKey?.trim()),
+      serviceEgressProxyConfigured: hasServiceEgressProxy(app.config),
+    }, "Voice provider unavailable: configure ELEVENLABS_API_KEY and the complete SERVICE_EGRESS_PROXY_* tuple, then restart the runtime");
     throw new VoiceProviderUnavailableError();
   }
   // Check the RESOLVED canonical label, never the caller's raw pageLabel string.
@@ -513,8 +527,16 @@ async function runGrantedVoiceNoteDispatch(
   } catch (error) {
     // dispatchVoiceNote handles provider/settle faults itself; this final guard
     // covers only an unexpected failure from its cleanup path.
+    const observed = sanitizeError(error, VOICE_LOG_ERROR_OPTIONS);
     app.logger.error(
-      { voiceNoteId: input.row.id, error: describeErrorForLog(error) },
+      {
+        voiceNoteId: input.row.id,
+        error: {
+          name: observed.name,
+          code: observed.code,
+          message: observed.message,
+        },
+      },
       "voice note dispatch cleanup failed unexpectedly",
     );
   } finally {
@@ -564,8 +586,16 @@ async function dispatchVoiceNoteAfterPermit(
     permit();
     // A CAS/read fault happened before provider dispatch. The permit has already
     // been released; leave the row queued for the existing recovery sweep.
+    const observed = sanitizeError(error, VOICE_LOG_ERROR_OPTIONS);
     app.logger.error(
-      { voiceNoteId: input.row.id, error: describeErrorForLog(error) },
+      {
+        voiceNoteId: input.row.id,
+        error: {
+          name: observed.name,
+          code: observed.code,
+          message: observed.message,
+        },
+      },
       "queued voice note could not claim a dispatch slot",
     );
   }
@@ -941,7 +971,7 @@ export async function dispatchVoiceNote(
     // NEVER log the raw error object here: a settle fault is a DrizzleQueryError
     // whose `params` (and message text) embed the bound SQL params — including
     // the up-to-2 MB audio BYTEA. Log only sanitized type/code/message.
-    const observed = describeErrorForLog(error);
+    const observed = sanitizeError(error, VOICE_LOG_ERROR_OPTIONS);
     app.logger.error({
       component: "voice_notes",
       event: "voice_note_synthesis_failed",
@@ -979,44 +1009,6 @@ function sanitizeVoiceFailureDetail(
     }
   }
   return sanitized.slice(0, 512);
-}
-
-/** Pull a string `code` off an error (or its `cause` chain), else null. */
-function extractErrorCode(error: unknown): string | null {
-  if (!error || typeof error !== "object") {
-    return null;
-  }
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === "string" && code.trim().length > 0) {
-    return code.trim();
-  }
-  if ("cause" in error) {
-    return extractErrorCode((error as { cause?: unknown }).cause);
-  }
-  return null;
-}
-
-/**
- * Safe log projection for a caught error. A Drizzle settle fault embeds the bound
- * SQL params — for a voice-note that includes the up-to-2 MB audio buffer — in
- * BOTH `error.params` and the message ("Failed query: … params: …"). For any
- * query-style error we therefore report ONLY the type/code and drop the message
- * body (mirroring the sync error sanitizer); other errors keep a redacted,
- * length-capped message. Never returns the raw object.
- */
-function describeErrorForLog(
-  error: unknown,
-): { name: string; code: string | null; message: string } {
-  const name = error instanceof Error && error.name ? error.name : "Error";
-  const code = extractErrorCode(error);
-  const rawMessage = error instanceof Error ? error.message : String(error);
-  const isQueryStyle = name === "DrizzleQueryError"
-    || rawMessage.includes("Failed query:")
-    || rawMessage.includes("params:");
-  const message = isQueryStyle
-    ? `${name}${code ? ` (${code})` : ""}`
-    : redactSensitiveText(rawMessage).slice(0, 512);
-  return { name, code, message };
 }
 
 export function isPageAllowlisted(csv: string | undefined, pageLabel: string): boolean {

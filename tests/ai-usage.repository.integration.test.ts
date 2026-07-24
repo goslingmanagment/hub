@@ -169,6 +169,77 @@ describe("AI usage ledger repository", () => {
     }]);
   });
 
+  it("clears failure detail on successful and cancelled terminals", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    for (const [index, gatewayOutcome] of ["completed", "cancelled"].entries()) {
+      const clientEventId = randomUUID();
+      const reservedAt = new Date(`2026-07-24T10:0${index}:00.000Z`);
+      await reserveAiGatewayUsageEvent(testDb.db, {
+        userId: null,
+        event: {
+          clientEventId,
+          feature: "workboard-closing",
+          model: "anthropic:claude-sonnet-4-6",
+          pageId: null,
+          provider: "anthropic",
+          conversationId: null,
+          isRegeneration: false,
+          reservedAt,
+        },
+      });
+      await finalizeAiGatewayUsageEvent(testDb.db, {
+        userId: null,
+        event: {
+          clientEventId,
+          providerResponseId: null,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          costMicroUsd: 0,
+          costApproximate: false,
+          gatewayOutcome: gatewayOutcome as "completed" | "cancelled",
+          // Deliberately dirty input proves the repository invariant.
+          errorCode: "must_be_cleared",
+          failurePhase: "provider_response",
+          providerHttpStatus: 503,
+          durationMs: 1,
+          isCacheHit: false,
+          completedAt: new Date(reservedAt.getTime() + 1),
+        },
+      });
+    }
+
+    const rows = await testDb.pool.query<{
+      gateway_outcome: string;
+      error_code: string | null;
+      failure_phase: string | null;
+      provider_http_status: number | null;
+    }>(`
+      select gateway_outcome, error_code, failure_phase, provider_http_status
+      from ai_usage_events
+      order by completed_at
+    `);
+    expect(rows.rows).toEqual([
+      {
+        gateway_outcome: "completed",
+        error_code: null,
+        failure_phase: null,
+        provider_http_status: null,
+      },
+      {
+        gateway_outcome: "cancelled",
+        error_code: null,
+        failure_phase: null,
+        provider_http_status: null,
+      },
+    ]);
+  });
+
   it("persists gateway metadata and dedupes by client request id per chatter", async (context) => {
     if (!testDb) {
       context.skip();
@@ -325,6 +396,9 @@ describe("AI usage ledger repository", () => {
       cost_micro_usd: number;
       duration_ms: number | null;
       completed_at: Date;
+      error_code: string | null;
+      failure_phase: string | null;
+      provider_http_status: number | null;
     }>(`
       select client_event_id,
              gateway_outcome,
@@ -332,7 +406,10 @@ describe("AI usage ledger repository", () => {
              output_tokens::int as output_tokens,
              cost_micro_usd::int as cost_micro_usd,
              duration_ms::int as duration_ms,
-             completed_at
+             completed_at,
+             error_code,
+             failure_phase,
+             provider_http_status
       from ai_usage_events
     `);
     const rowsByClientRequestId = new Map(rows.rows.map((row) => [row.client_event_id, row]));
@@ -346,6 +423,9 @@ describe("AI usage ledger repository", () => {
         cost_micro_usd: 0,
         duration_ms: null,
         completed_at: new Date("2026-06-19T10:45:00.000Z"),
+        error_code: null,
+        failure_phase: null,
+        provider_http_status: null,
       }],
       [staleClientRequestId, {
         client_event_id: staleClientRequestId,
@@ -355,6 +435,9 @@ describe("AI usage ledger repository", () => {
         cost_micro_usd: 0,
         duration_ms: 3_600_000,
         completed_at: new Date("2026-06-19T10:00:00.000Z"),
+        error_code: "provider_stream_failed",
+        failure_phase: "stream",
+        provider_http_status: null,
       }],
     ]));
   });

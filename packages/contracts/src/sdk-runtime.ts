@@ -83,6 +83,7 @@ export type KernelErrorCategory =
   | "conflict"
   | "rate_limit"
   | "server"
+  | "http"
   | "network"
   | "contract";
 
@@ -100,12 +101,13 @@ export class KernelApiError extends Error {
 }
 
 function categoryForStatus(status: number): KernelErrorCategory {
+  if (status === 400) return "validation";
   if (status === 401 || status === 403) return "auth";
   if (status === 404) return "not_found";
   if (status === 409) return "conflict";
   if (status === 429) return "rate_limit";
   if (status >= 500) return "server";
-  return "validation";
+  return "http";
 }
 
 export interface KernelClientOptions {

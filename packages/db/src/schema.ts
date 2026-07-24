@@ -1934,7 +1934,7 @@ export const aiUsageEvents = pgTable(
     >(),
     errorCode: text("error_code"),
     failurePhase: text("failure_phase").$type<
-      "connect" | "provider_response" | "stream" | "terminal"
+      "connect" | "provider_response" | "stream"
     >(),
     providerHttpStatus: integer("provider_http_status"),
     conversationId: text("conversation_id"),

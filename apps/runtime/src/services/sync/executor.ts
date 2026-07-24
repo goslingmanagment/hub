@@ -48,9 +48,9 @@ import {
 } from "../sync-queue.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import {
+  buildNormalizedSyncError,
   FanslyPurchaseHistoryContractError,
   FollowersReconcileConsistencyError,
-  normalizeSyncError,
 } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
@@ -203,7 +203,7 @@ async function resolveSyncPageWakeupTarget(
 
 function classifyTaskFailure(
   error: unknown,
-  failure: ReturnType<typeof normalizeSyncError>,
+  failure: ReturnType<typeof buildNormalizedSyncError>,
   input: {
     previousConsecutiveFailures: number;
     previousRetryKind: string | null;
@@ -607,7 +607,7 @@ export async function executeNextSyncPageChunk(
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
     }
 
-    const failure = normalizeSyncError(error, {
+    const failure = buildNormalizedSyncError(error, {
       endpoint: taskLease.stream,
       action: `executing ${taskLease.stream} sync chunk`,
     });

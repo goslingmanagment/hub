@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AiGatewayStreamBody } from "@agency_hub_core/contracts";
+import { normalizeProviderStreamFailure } from "@agency_hub_core/shared";
 import {
   buildOpenrouterGatewayStreamRequest,
   createOpenrouterAiGatewayProvider,
@@ -123,9 +124,12 @@ describe("OpenRouter gateway provider (Stage 29)", () => {
     expect(frames[frames.length - 1]).toEqual({ type: "done", stopReason: "stop" });
   });
 
-  it("fails loudly on a non-2xx response", async () => {
+  it("carries non-2xx status and Retry-After structurally", async () => {
     const provider = createOpenrouterAiGatewayProvider({
-      fetchImpl: async () => new Response("nope", { status: 402 }),
+      fetchImpl: async () => new Response("provider body must stay private", {
+        status: 429,
+        headers: { "retry-after": "17" },
+      }),
     });
     const iterate = async () => {
       for await (const frame of provider.stream({
@@ -139,6 +143,19 @@ describe("OpenRouter gateway provider (Stage 29)", () => {
         void frame;
       }
     };
-    await expect(iterate()).rejects.toThrow("HTTP 402");
+    const error = await iterate().then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+    expect(error).not.toBeNull();
+    expect(normalizeProviderStreamFailure(error, { provider: "openrouter" })).toEqual({
+      code: "provider_rate_limited",
+      failurePhase: "provider_response",
+      providerHttpStatus: 429,
+      retryAfterMs: 17_000,
+    });
+    expect(error).not.toMatchObject({
+      message: expect.stringContaining("provider body must stay private"),
+    });
   });
 });

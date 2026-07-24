@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   classifyProviderStreamFailure,
   createStickyConnectFailureFetch,
+  normalizeProviderStreamFailure,
 } from "@agency_hub_core/shared";
 
 function connectTimeoutError() {
@@ -29,12 +30,20 @@ describe("classifyProviderStreamFailure", () => {
     const wrapped = new Error("Connection error.");
     wrapped.cause = connectTimeoutError();
     expect(classifyProviderStreamFailure(wrapped)).toBe("provider_proxy_unreachable");
+    expect(normalizeProviderStreamFailure(wrapped)).toMatchObject({
+      code: "provider_proxy_unreachable",
+      failurePhase: "connect",
+    });
   });
 
   it("names a SOCKS handshake failure as proxy-unreachable", () => {
     const wrapped = new Error("Connection error.");
     wrapped.cause = socksError("Proxy connection timed out");
     expect(classifyProviderStreamFailure(wrapped)).toBe("provider_proxy_unreachable");
+    expect(normalizeProviderStreamFailure(wrapped)).toMatchObject({
+      code: "provider_proxy_unreachable",
+      failurePhase: "connect",
+    });
   });
 
   it("names a refused proxy TCP connection as proxy-unreachable", () => {
@@ -43,14 +52,40 @@ describe("classifyProviderStreamFailure", () => {
     const wrapped = new Error("Connection error.");
     wrapped.cause = refused;
     expect(classifyProviderStreamFailure(wrapped)).toBe("provider_proxy_unreachable");
+    expect(normalizeProviderStreamFailure(wrapped)).toMatchObject({
+      code: "provider_proxy_unreachable",
+      failurePhase: "connect",
+    });
   });
 
   it("keeps mid-stream provider failures as the generic stream failure", () => {
-    expect(classifyProviderStreamFailure(new Error("terminated")))
-      .toBe("provider_stream_failed");
+    expect(normalizeProviderStreamFailure(new Error("terminated"))).toMatchObject({
+      code: "provider_stream_failed",
+      failurePhase: "stream",
+    });
     const reset = new Error("other side closed");
     (reset as Error & { code?: string }).code = "UND_ERR_SOCKET";
-    expect(classifyProviderStreamFailure(reset)).toBe("provider_stream_failed");
+    expect(normalizeProviderStreamFailure(reset)).toMatchObject({
+      code: "provider_stream_failed",
+      failurePhase: "stream",
+    });
+  });
+
+  it("does not broaden proxy detection to every SDK connection error", () => {
+    const sdkConnection = new Error("Connection error.");
+    sdkConnection.name = "APIConnectionError";
+
+    expect(classifyProviderStreamFailure(sdkConnection, {
+      provider: "anthropic",
+      failurePhase: "provider_response",
+    })).toBe("provider_stream_failed");
+    expect(normalizeProviderStreamFailure(sdkConnection, {
+      provider: "anthropic",
+      failurePhase: "provider_response",
+    })).toMatchObject({
+      code: "provider_stream_failed",
+      failurePhase: "provider_response",
+    });
   });
 });
 

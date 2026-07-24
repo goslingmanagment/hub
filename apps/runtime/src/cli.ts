@@ -22,7 +22,9 @@ import {
   parsePeriod,
   redactSensitiveText,
   millsFromInteger,
+  normalizeProviderStreamFailure,
   undiciRequest,
+  type AiProviderFailureClassification,
   type ProxyConfig,
   type TransactionType,
 } from "@agency_hub_core/shared";
@@ -811,23 +813,57 @@ export function buildProgram() {
         // store a max_tokens-truncated fan-summary as `completed` with a NULL
         // stopReason, which the recap selector would then attach to a coach turn.
         const consumer = new AiGatewayTerminalStreamConsumer(stream.visibleOutputCeilingChars);
-        for await (const frame of stream.stream(abort.signal)) {
-          if (frame.type === "content_delta" && frame.text.length > 0 && firstTokenMs === null) {
-            firstTokenMs = Date.now() - startedAt;
+        let terminalFailure: AiProviderFailureClassification | null = null;
+        let providerError: unknown;
+        let rethrowProviderError = false;
+        try {
+          for await (const frame of stream.stream(abort.signal)) {
+            if (frame.type === "content_delta" && frame.text.length > 0 && firstTokenMs === null) {
+              firstTokenMs = Date.now() - startedAt;
+            }
+            const { ceilingCrossed } = consumer.note(frame);
+            if (ceilingCrossed) {
+              abort.abort();
+              break;
+            }
           }
-          const { ceilingCrossed } = consumer.note(frame);
-          if (ceilingCrossed) {
-            abort.abort();
-            break;
+          consumer.finish();
+        } catch (error) {
+          if (consumer.ceilingExceeded) {
+            consumer.outcome = "failed";
+          } else if (abort.signal.aborted) {
+            consumer.outcome = "cancelled";
+            providerError = error;
+            rethrowProviderError = true;
+          } else {
+            consumer.outcome = "failed";
+            terminalFailure = normalizeProviderStreamFailure(error, {
+              provider: stream.provider,
+              ...(consumer.streamedContent ? { failurePhase: "stream" as const } : {}),
+            });
+            providerError = error;
+            rethrowProviderError = true;
           }
         }
-        consumer.finish();
         const totalMs = Date.now() - startedAt;
+        const failed = consumer.outcome === "failed";
         await stream.recordTerminal({
           outcome: consumer.outcome,
-          errorCode: null,
-          failurePhase: null,
-          providerHttpStatus: null,
+          errorCode: failed
+            ? terminalFailure?.code
+              ?? consumer.failureDetail?.errorCode
+              ?? "provider_stream_failed"
+            : null,
+          failurePhase: failed
+            ? terminalFailure?.failurePhase
+              ?? consumer.failureDetail?.failurePhase
+              ?? "stream"
+            : null,
+          providerHttpStatus: failed
+            ? terminalFailure?.providerHttpStatus
+              ?? consumer.failureDetail?.providerHttpStatus
+              ?? null
+            : null,
           usage: consumer.usage,
           providerResponseId: consumer.providerResponseId,
           cacheHit: consumer.cacheHit,
@@ -837,6 +873,9 @@ export function buildProgram() {
           stopReason: consumer.stopReason,
           estimateCostOnMissingUsage: consumer.ceilingExceeded,
         });
+        if (rethrowProviderError) {
+          throw providerError;
+        }
         console.log(JSON.stringify({
           feature: options.feature,
           generationRef: stream.requestId,

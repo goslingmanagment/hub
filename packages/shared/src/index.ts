@@ -4,6 +4,7 @@ export * from "./config-registry.ts";
 export * from "./config-settings.ts";
 export * from "./crypto.ts";
 export * from "./dm-text.ts";
+export * from "./error-sanitizer.ts";
 export * from "./fans.ts";
 export * from "./http-client.ts";
 export * from "./http-request.ts";
