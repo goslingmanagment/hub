@@ -10,22 +10,20 @@ compute no money; everything privileged happens here, behind the generated SDK.
 Production: one VPS (Docker: api + worker + scheduler + Postgres 16), deployed
 by `scripts/deploy-production.sh` (owner-gated).
 
-**Current state (2026-07-07): the Project Kernel migration (35 stages) is
-essentially complete — stages 1–32 built and in production, the extension 1.7.0
-and desktop 0.1.31 kernel cutovers shipped. The dashboard rebuild was CANCELLED
-(decision #117 reversing #112): `apps/dashboard` is the live, maintained admin
-console; the in-core workboard direction is deprecated (#117), but the
-STANDALONE workboard app (Stage 34, repo `~/code/workboard`) was REOPENED by
-#119 — design pass pending, owner-approved PRD before any code. Stage 35 (this
-documentation standard) is the closing stage. The migration's historical record
-lives in `docs/migration-history/` (per-stage specs, roadmap, execution log);
-living docs are `docs/` + `docs/generated/`.**
+**The Project Kernel migration (35 stages) is complete and in production; its
+historical record lives in `docs/migration-history/` (per-stage specs, roadmap,
+execution log) — living docs are `docs/` + `docs/generated/`. `apps/dashboard`
+is the live, maintained admin console (#117 reversed the #112 rebuild); the
+standalone workboard app lives in its own repo, `~/code/workboard` (#119). Do
+not maintain a hand-written "current state" narrative in this file — statuses
+date instantly; current truth lives in `docs/decisions.md` (append-only,
+quick-ref table up top), Git tags, and production itself.**
 
 ## Read these before designing or building anything
 
 | Doc | What it answers |
 |---|---|
-| `docs/decisions.md` | Every technical decision, numbered, append-only — including the family law (anti-deletion, updated-in-change) and cross-repo rulings clients reference |
+| `docs/decisions.md` | Every technical decision, numbered, append-only — scan the Quick Reference table up top, then grep the full entry by number; includes the family law (anti-deletion, updated-in-change) and cross-repo rulings clients reference |
 | `docs/error-handling.md` | The family-wide error taxonomy, retry laws, client mappings, ledger/incident policy, and boundary/redaction rules |
 | `docs/generated/` | Machine-generated reference (auth policy table + 24 code maps) — start at `00-overview.md`, it indexes which map covers what; regenerate, never hand-edit; each file's banner says how (`REGENERATION-PROMPT.md` there is the generator) |
 | `docs/migration-history/stages/` | The 35 stage specs of the Project Kernel migration — the WHY behind most of today's architecture; superseded ones carry banners |
