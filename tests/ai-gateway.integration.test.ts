@@ -5,6 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createFanslyPage,
   deleteProxyConfig,
+  getNotificationDeliveryOutboxByIncident,
+  getNotificationIncidentByKey,
   insertAiUsageEvents,
   createModel,
   createOnlyFansPage,
@@ -29,7 +31,11 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
-import { providerStreamInterruptionFixture } from "./fixtures/provider-failures.ts";
+import {
+  errorFromProviderHttpFixture,
+  providerHttpFailureFixtures,
+  providerStreamInterruptionFixture,
+} from "./fixtures/provider-failures.ts";
 
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
@@ -138,6 +144,31 @@ function parseAiSseFrames(body: string) {
         data: JSON.parse(data) as Record<string, unknown>,
       };
     });
+}
+
+function successfulProvider(
+  provider: AiGatewayProvider["provider"] = "anthropic",
+): AiGatewayProvider {
+  return {
+    provider,
+    async *stream() {
+      yield { type: "content_delta", text: "recovered" };
+      yield {
+        type: "usage",
+        providerResponseId: "msg_recovered",
+        cacheHit: false,
+        usage: {
+          inputTokens: 10,
+          outputTokens: 2,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          costMicroUsd: 35,
+          costApproximate: false,
+        },
+      };
+      yield { type: "done", stopReason: "end_turn" };
+    },
+  };
 }
 
 describe("ChatMuse AI gateway runtime gate", () => {
@@ -472,6 +503,9 @@ describe("ChatMuse AI gateway runtime gate", () => {
       quotaAccepted: boolean | null;
       gatewayOutcome: string | null;
       isCacheHit: boolean;
+      errorCode: string | null;
+      failurePhase: string | null;
+      providerHttpStatus: number | null;
     }>(
       `select provider,
               provider_response_id as "providerResponseId",
@@ -480,7 +514,10 @@ describe("ChatMuse AI gateway runtime gate", () => {
               cost_micro_usd::int as "costMicroUsd",
               quota_accepted as "quotaAccepted",
               gateway_outcome as "gatewayOutcome",
-              is_cache_hit as "isCacheHit"
+              is_cache_hit as "isCacheHit",
+              error_code as "errorCode",
+              failure_phase as "failurePhase",
+              provider_http_status as "providerHttpStatus"
        from ai_usage_events`,
     );
     expect(usageRows.rows).toEqual([{
@@ -492,7 +529,140 @@ describe("ChatMuse AI gateway runtime gate", () => {
       quotaAccepted: true,
       gatewayOutcome: "failed",
       isCacheHit: false,
+      errorCode: "provider_stream_failed",
+      failurePhase: "stream",
+      providerHttpStatus: null,
     }]);
+  });
+
+  it("turns the Anthropic billing fixture into a precise frame and suppressed global incident", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    const billing = providerHttpFailureFixtures.find(
+      (fixture) => fixture.id === "anthropic-billing-400",
+    )!;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        yield* [];
+        throw errorFromProviderHttpFixture(billing);
+      },
+    };
+
+    const response = await streamGateway(gatewayBody());
+
+    expect(response.statusCode, response.body).toBe(200);
+    const frames = parseAiSseFrames(response.body);
+    expect(frames[1]?.data).toEqual({
+      type: "error",
+      code: "provider_billing",
+      message: "AI provider billing requires attention",
+      retryAfterMs: null,
+    });
+    expect(response.body).not.toContain(billing.body.error.message);
+
+    const ledger = await testDb!.pool.query<{
+      errorCode: string | null;
+      failurePhase: string | null;
+      providerHttpStatus: number | null;
+    }>(`
+      select error_code as "errorCode",
+             failure_phase as "failurePhase",
+             provider_http_status as "providerHttpStatus"
+      from ai_usage_events
+    `);
+    expect(ledger.rows).toEqual([{
+      errorCode: "provider_billing",
+      failurePhase: "provider_response",
+      providerHttpStatus: 400,
+    }]);
+
+    const incident = await getNotificationIncidentByKey(
+      appContext.db,
+      "ai_provider_billing:global",
+    );
+    expect(incident).toMatchObject({
+      kind: "ai_provider_billing",
+      platformAccountId: null,
+      status: "open",
+      errorCode: "provider_billing",
+    });
+    expect(incident?.errorSummary).not.toContain(billing.body.error.message);
+    const openOutbox = await getNotificationDeliveryOutboxByIncident(
+      appContext.db,
+      incident!.id,
+    );
+    expect(openOutbox).toEqual([
+      expect.objectContaining({
+        transition: "opened",
+        state: "suppressed",
+        suppressionReason: "ai_critical_alerts_disabled",
+        attemptCount: 0,
+      }),
+    ]);
+
+    // The billing/auth incident is one GLOBAL latch: a success through a
+    // different provider still resolves it.
+    appContext.aiGatewayProvider = successfulProvider("openrouter");
+    const recovered = await streamGateway(gatewayBody());
+    expect(recovered.statusCode, recovered.body).toBe(200);
+    expect(await getNotificationIncidentByKey(
+      appContext.db,
+      "ai_provider_billing:global",
+    )).toMatchObject({
+      status: "resolved",
+    });
+  });
+
+  it("opens one page incident after three classified failures, dedupes, and resolves on success", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        yield* [];
+        throw new Error("private provider failure body");
+      },
+    };
+    const incidentKey = `ai_provider_failed:${onlyFansPageId}:provider`;
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const response = await streamGateway(gatewayBody());
+      expect(response.statusCode, response.body).toBe(200);
+    }
+    expect(await getNotificationIncidentByKey(appContext.db, incidentKey)).toBeNull();
+
+    const thresholdResponse = await streamGateway(gatewayBody());
+    expect(thresholdResponse.statusCode, thresholdResponse.body).toBe(200);
+    const opened = await getNotificationIncidentByKey(appContext.db, incidentKey);
+    expect(opened).toMatchObject({
+      kind: "ai_provider_failed",
+      platformAccountId: onlyFansPageId,
+      status: "open",
+      errorCode: "provider_stream_failed",
+    });
+    expect(opened?.errorSummary).not.toContain("private provider failure body");
+    expect(await getNotificationDeliveryOutboxByIncident(appContext.db, opened!.id)).toHaveLength(1);
+
+    const repeat = await streamGateway(gatewayBody());
+    expect(repeat.statusCode, repeat.body).toBe(200);
+    const incidentCount = await testDb!.pool.query<{ count: number }>(`
+      select count(*)::int as count
+      from notification_incidents
+      where kind = 'ai_provider_failed'
+        and platform_account_id = $1
+    `, [onlyFansPageId]);
+    expect(incidentCount.rows[0]?.count).toBe(1);
+    expect(await getNotificationDeliveryOutboxByIncident(appContext.db, opened!.id)).toHaveLength(1);
+
+    appContext.aiGatewayProvider = successfulProvider();
+    const recovered = await streamGateway(gatewayBody());
+    expect(recovered.statusCode, recovered.body).toBe(200);
+    expect(await getNotificationIncidentByKey(appContext.db, incidentKey)).toMatchObject({
+      status: "resolved",
+    });
+    expect(await getNotificationDeliveryOutboxByIncident(appContext.db, opened!.id)).toEqual([
+      expect.objectContaining({ transition: "opened", state: "suppressed" }),
+      expect.objectContaining({ transition: "resolved", state: "suppressed" }),
+    ]);
   });
 
   it("fails closed after a first chunk: static error and no done frame", async () => {
@@ -538,8 +708,8 @@ describe("ChatMuse AI gateway runtime gate", () => {
     );
     expect(usageRows.rows).toEqual([{
       gatewayOutcome: "failed",
-      errorCode: null,
-      failurePhase: null,
+      errorCode: "provider_stream_failed",
+      failurePhase: "stream",
       providerHttpStatus: null,
     }]);
   });

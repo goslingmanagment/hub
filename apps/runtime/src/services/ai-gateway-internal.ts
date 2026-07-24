@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 
 import type { AiGatewayPromptBlock, AiGatewayUsage } from "@agency_hub_core/contracts";
-import type { AiUsageFeature } from "@agency_hub_core/shared";
+import {
+  formatObservedError,
+  normalizeProviderStreamFailure,
+  type AiProviderFailureClassification,
+  type AiUsageFeature,
+} from "@agency_hub_core/shared";
 import {
   finalizeAiGatewayUsageEvent,
   getAiGatewayFeatureDailyTotals,
@@ -17,6 +22,7 @@ import {
   createDirectAnthropicClientResolver,
 } from "./ai-gateway-anthropic-provider.ts";
 import { parseAiGatewayFeatureLimits } from "./ai-gateway.ts";
+import { reconcileAiProviderTerminalIncident } from "./ai-gateway-incidents.ts";
 import { QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 
 // Kernel Stage 29 Task 5 — the internal completion lane. System-initiated
@@ -132,6 +138,8 @@ export async function runGatewayCompletion(
   let cacheHit = false;
   let stopReason: string | null = null;
   let outcome: "completed" | "failed" = "completed";
+  let terminalFailure: AiProviderFailureClassification | null = null;
+  let framedErrorCode: string | null = null;
   const abort = new AbortController();
   try {
     for await (const frame of provider.stream({
@@ -158,16 +166,37 @@ export async function runGatewayCompletion(
         stopReason = frame.stopReason ?? null;
       } else if (frame.type === "error") {
         outcome = "failed";
+        framedErrorCode = frame.code;
       }
     }
   } catch (error) {
     outcome = "failed";
+    terminalFailure = normalizeProviderStreamFailure(error, {
+      provider: provider.provider,
+      ...(text.length > 0 ? { failurePhase: "stream" as const } : {}),
+    });
     app.logger.warn(
-      { feature: input.feature, error: error instanceof Error ? error.message : String(error) },
+      {
+        feature: input.feature,
+        observedError: formatObservedError(error),
+        code: terminalFailure.code,
+        failurePhase: terminalFailure.failurePhase,
+        providerHttpStatus: terminalFailure.providerHttpStatus,
+      },
       "AI gateway internal completion failed",
     );
     throw error;
   } finally {
+    const completedAt = new Date();
+    const errorCode = outcome === "failed"
+      ? terminalFailure?.code ?? framedErrorCode ?? "provider_stream_failed"
+      : null;
+    const failurePhase = outcome === "failed"
+      ? terminalFailure?.failurePhase ?? "stream"
+      : null;
+    const providerHttpStatus = outcome === "failed"
+      ? terminalFailure?.providerHttpStatus ?? null
+      : null;
     const settledUsage = usage ?? {
       inputTokens: 0,
       outputTokens: 0,
@@ -188,12 +217,12 @@ export async function runGatewayCompletion(
         costMicroUsd: settledUsage.costMicroUsd,
         costApproximate: settledUsage.costApproximate,
         gatewayOutcome: outcome,
-        errorCode: null,
-        failurePhase: null,
-        providerHttpStatus: null,
+        errorCode,
+        failurePhase,
+        providerHttpStatus,
         durationMs: Date.now() - startedAt,
         isCacheHit: cacheHit,
-        completedAt: new Date(),
+        completedAt,
       },
     });
     await insertAiGenerationContent(app.db, {
@@ -222,6 +251,17 @@ export async function runGatewayCompletion(
         stopReason,
       },
     });
+    if (usageEventId !== null) {
+      await reconcileAiProviderTerminalIncident(app, {
+        provider: provider.provider,
+        outcome,
+        pageId: input.pageId ?? null,
+        errorCode,
+        failurePhase,
+        providerHttpStatus,
+        completedAt,
+      });
+    }
   }
 
   return { text, usage, generationRef };

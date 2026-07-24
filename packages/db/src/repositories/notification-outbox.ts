@@ -23,7 +23,7 @@ export interface NotificationDeliveryOutboxRequest {
   channel: NotificationDeliveryChannel;
   messageText: string;
   /** Existing sync incidents can migrate later by changing only the caller
-   * from direct send to this request; Stage 1A activates neither policy. */
+   * from direct send to this request. Stage 1B activates only ai_critical. */
   pagingPolicy: "sync_failure" | "ai_critical";
   maxAttempts?: number;
 }

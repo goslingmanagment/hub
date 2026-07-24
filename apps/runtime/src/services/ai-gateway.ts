@@ -20,7 +20,11 @@ import {
   type AiGatewayFailurePhase,
 } from "@agency_hub_core/db";
 import {
-  classifyProviderStreamFailure,
+  normalizeProviderStreamFailure,
+  type AiProviderFailureClassification,
+  type AiProviderFailureCode,
+  type AiProviderFailurePhase,
+  type AiProviderId,
   type ProxyConfig,
 } from "@agency_hub_core/shared";
 
@@ -29,6 +33,7 @@ import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 import { estimateAnthropicGatewayRequestCost } from "./ai-gateway-anthropic.ts";
 import { estimateOpenrouterGatewayRequestCost } from "./ai-gateway-openrouter-provider.ts";
+import { reconcileAiProviderTerminalIncident } from "./ai-gateway-incidents.ts";
 import { aiGatewayProviderForModel } from "./ai-gateway-pricing.ts";
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey } from "./page-context.ts";
 
@@ -69,6 +74,12 @@ export interface AiGatewayProvider {
 
 export interface PreparedAiGatewayStream {
   requestId: string;
+  provider: AiGatewayProvider["provider"];
+  page: {
+    id: number;
+    label: string;
+    platform: AiGatewayStreamBody["platform"];
+  };
   meta: AiGatewayStreamFrame;
   debugFrame?: AiFeatureDebugInputFrame;
   stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
@@ -83,8 +94,8 @@ export interface PreparedAiGatewayStream {
 
 export interface AiGatewayTerminalRecordInput {
   outcome: "completed" | "failed" | "cancelled";
-  /** Stage 1A reader/type substrate. Stage 1B owns classification and begins
-   * populating these fields; every Stage 1A caller deliberately passes null. */
+  /** Populated for failed terminals only; successful/cancelled rows are
+   * normalized back to null at the repository boundary. */
   errorCode?: string | null;
   failurePhase?: AiGatewayFailurePhase | null;
   providerHttpStatus?: number | null;
@@ -364,6 +375,12 @@ export async function prepareAiGatewayStream(
 
   return {
     requestId,
+    provider: provider.provider,
+    page: {
+      id: page.id,
+      label: page.label,
+      platform: page.platform,
+    },
     meta: {
       type: "meta",
       requestId,
@@ -405,6 +422,15 @@ export async function prepareAiGatewayStream(
       });
     },
     async recordTerminal(record) {
+      const errorCode = record.outcome === "failed"
+        ? (record.errorCode ?? "provider_stream_failed")
+        : null;
+      const failurePhase = record.outcome === "failed"
+        ? (record.failurePhase ?? "stream")
+        : null;
+      const providerHttpStatus = record.outcome === "failed"
+        ? (record.providerHttpStatus ?? null)
+        : null;
       // Ceiling abort (P1-1/P2-6): the provider was torn down mid-stream before
       // its terminal usage frame, so record.usage is null even though the
       // request already spent tokens (a ~100k-token prompt plus the streamed
@@ -454,9 +480,9 @@ export async function prepareAiGatewayStream(
           costMicroUsd: usage.costMicroUsd,
           costApproximate: usage.costApproximate,
           gatewayOutcome: record.outcome,
-          errorCode: record.errorCode ?? null,
-          failurePhase: record.failurePhase ?? null,
-          providerHttpStatus: record.providerHttpStatus ?? null,
+          errorCode,
+          failurePhase,
+          providerHttpStatus,
           durationMs: Math.max(0, Math.floor(record.durationMs)),
           isCacheHit: record.cacheHit,
           completedAt: record.completedAt,
@@ -497,6 +523,22 @@ export async function prepareAiGatewayStream(
             : {}),
         },
       });
+      if (usageEventId !== null) {
+        // Incidents are strictly downstream of chatter fail-closed handling,
+        // terminal ledger settlement, and restricted capture. The producer
+        // guards its own query/open/resolve failures and never throws here.
+        await reconcileAiProviderTerminalIncident(app, {
+          provider: provider.provider,
+          outcome: record.outcome,
+          pageId: page.id,
+          pageLabel: page.label,
+          platform: page.platform,
+          errorCode,
+          failurePhase,
+          providerHttpStatus,
+          completedAt: record.completedAt,
+        });
+      }
       return usageEventId !== null;
     },
   };
@@ -506,63 +548,91 @@ export function serializeAiGatewaySseFrame(frame: AiGatewayStreamFrame | AiFeatu
   return `event: ai\ndata: ${JSON.stringify(frame)}\n\n`;
 }
 
-/**
- * Stage 1A characterization seam: this intentionally preserves the current
- * two-bucket classifier and static client messages. Stage 1B replaces the
- * classification, so its wire diff is isolated and reviewable.
- */
+const PROVIDER_FAILURE_MESSAGES = {
+  provider_billing: "AI provider billing requires attention",
+  provider_auth: "AI provider authentication failed",
+  provider_rate_limited: "AI provider rate limit reached",
+  provider_unavailable: "AI provider is temporarily unavailable",
+  provider_proxy_unreachable: "AI gateway could not reach the page's egress proxy",
+  provider_stream_failed: "AI gateway provider stream failed",
+} satisfies Record<AiProviderFailureCode, string>;
+
+/** Stage 1B wire rendering: one bounded, provider-text-free message per code. */
 export function providerStreamFailureFrame(
-  error: unknown,
+  failureOrError: AiProviderFailureClassification | unknown,
+  input?: {
+    provider?: AiProviderId;
+    failurePhase?: AiProviderFailurePhase;
+    now?: number;
+  },
 ): Extract<AiGatewayStreamFrame, { type: "error" }> {
-  const code = classifyProviderStreamFailure(error);
+  const failure = isProviderFailureClassification(failureOrError)
+    ? failureOrError
+    : normalizeProviderStreamFailure(failureOrError, input);
   return {
     type: "error",
-    code,
-    message: code === "provider_proxy_unreachable"
-      ? "AI gateway could not reach the page's egress proxy"
-      : "AI gateway provider stream failed",
-    retryAfterMs: null,
+    code: failure.code,
+    message: PROVIDER_FAILURE_MESSAGES[failure.code],
+    retryAfterMs: failure.retryAfterMs,
   };
+}
+
+function isProviderFailureClassification(
+  value: unknown,
+): value is AiProviderFailureClassification {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<AiProviderFailureClassification>;
+  return typeof candidate.code === "string"
+    && candidate.code in PROVIDER_FAILURE_MESSAGES
+    && (
+      candidate.failurePhase === "connect"
+      || candidate.failurePhase === "provider_response"
+      || candidate.failurePhase === "stream"
+    )
+    && (candidate.providerHttpStatus === null || typeof candidate.providerHttpStatus === "number")
+    && (candidate.retryAfterMs === null || typeof candidate.retryAfterMs === "number");
 }
 
 // The coach ceiling error frame (spec §3/§7): emitted WITHOUT a `done` frame so
 // no client treats an over-ceiling answer as a committed result.
-export const COACH_OUTPUT_TOO_LONG_ERROR_FRAME: AiGatewayStreamFrame = {
+export const COACH_OUTPUT_TOO_LONG_ERROR_FRAME = {
   type: "error",
   code: "coach_output_too_long",
   message: "AI gateway output exceeded the coach transport ceiling",
   retryAfterMs: null,
-};
+} satisfies AiGatewayStreamFrame;
 
 // A provider that streamed content but never sent usage metadata is a broken
 // (truncated) stream, recorded as failed — never presented as a result.
-export const PROVIDER_USAGE_MISSING_ERROR_FRAME: AiGatewayStreamFrame = {
+export const PROVIDER_USAGE_MISSING_ERROR_FRAME = {
   type: "error",
   code: "provider_usage_missing",
   message: "AI gateway provider ended without usage metadata",
   retryAfterMs: null,
-};
+} satisfies AiGatewayStreamFrame;
 
 // A provider that streamed content but reached EOF WITHOUT a terminal stopReason
 // (no done frame, or a synthetic done carrying stopReason == null) was cut
 // mid-generation — recorded as failed and emitted WITHOUT a done frame, so no
 // client can commit an aborted coach answer or attach a truncated recap (P1-2).
-export const PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME: AiGatewayStreamFrame = {
+export const PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME = {
   type: "error",
   code: "provider_stream_incomplete",
   message: "AI gateway provider stream ended without a terminal stop reason",
   retryAfterMs: null,
-};
+} satisfies AiGatewayStreamFrame;
 
 // Empty or whitespace-only output is not a completed generation. Reject it in
 // the shared terminal consumer so HTTP and CLI callers agree, no `done` frame
 // reaches a client, and the restricted record cannot become a usable recap.
-export const PROVIDER_OUTPUT_EMPTY_ERROR_FRAME: AiGatewayStreamFrame = {
+export const PROVIDER_OUTPUT_EMPTY_ERROR_FRAME = {
   type: "error",
   code: "provider_output_empty",
   message: "AI gateway provider completed without usable output",
   retryAfterMs: null,
-};
+} satisfies AiGatewayStreamFrame;
 
 /**
  * Shared terminal-stream consumer (P1-5): the coach transport ceiling check and
@@ -584,6 +654,11 @@ export class AiGatewayTerminalStreamConsumer {
   stopReason: string | null = null;
   streamedContent = false;
   ceilingExceeded = false;
+  failureDetail: {
+    errorCode: string;
+    failurePhase: AiGatewayFailurePhase;
+    providerHttpStatus: number | null;
+  } | null = null;
   private doneFrame: AiGatewayStreamFrame | null = null;
 
   constructor(private readonly visibleOutputCeilingChars?: number | undefined) {}
@@ -608,12 +683,14 @@ export class AiGatewayTerminalStreamConsumer {
       ) {
         this.ceilingExceeded = true;
         this.outcome = "failed";
+        this.noteFailureFrame(COACH_OUTPUT_TOO_LONG_ERROR_FRAME);
         return { emit: [frame, COACH_OUTPUT_TOO_LONG_ERROR_FRAME], ceilingCrossed: true };
       }
       return { emit: [frame], ceilingCrossed: false };
     }
     if (frame.type === "error") {
       this.outcome = "failed";
+      this.noteFailureFrame(frame);
       return { emit: [frame], ceilingCrossed: false };
     }
     if (frame.type === "done") {
@@ -645,6 +722,7 @@ export class AiGatewayTerminalStreamConsumer {
   finish(): { emit: AiGatewayStreamFrame[]; usageMissing: boolean } {
     if (this.outcome === "completed" && this.streamedContent && !this.usage) {
       this.outcome = "failed";
+      this.noteFailureFrame(PROVIDER_USAGE_MISSING_ERROR_FRAME);
       return { emit: [PROVIDER_USAGE_MISSING_ERROR_FRAME], usageMissing: true };
     }
     // Premature EOF (P1-2): the stream emitted content (and, past the check
@@ -654,15 +732,25 @@ export class AiGatewayTerminalStreamConsumer {
     // below, once the stronger incomplete-terminal condition is ruled out.
     if (this.outcome === "completed" && this.streamedContent && !this.hasUsableTerminal()) {
       this.outcome = "failed";
+      this.noteFailureFrame(PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME);
       return { emit: [PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME], usageMissing: false };
     }
     if (this.outcome === "completed" && this.completionText.trim().length === 0) {
       this.outcome = "failed";
+      this.noteFailureFrame(PROVIDER_OUTPUT_EMPTY_ERROR_FRAME);
       return { emit: [PROVIDER_OUTPUT_EMPTY_ERROR_FRAME], usageMissing: false };
     }
     if (this.doneFrame) {
       return { emit: [this.doneFrame], usageMissing: false };
     }
     return { emit: [], usageMissing: false };
+  }
+
+  private noteFailureFrame(frame: Extract<AiGatewayStreamFrame, { type: "error" }>) {
+    this.failureDetail = {
+      errorCode: frame.code,
+      failurePhase: "stream",
+      providerHttpStatus: null,
+    };
   }
 }

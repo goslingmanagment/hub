@@ -3,6 +3,8 @@ import type { Dispatcher } from "undici";
 
 import type { AiGatewayStreamFrame } from "@agency_hub_core/contracts";
 import {
+  AiProviderFailureError,
+  classifyTransportFailure,
   createProxyRequestDispatcher,
   createStickyConnectFailureFetch,
 } from "@agency_hub_core/shared";
@@ -128,6 +130,70 @@ function createSdkClient(apiKey: string, fetchImpl?: typeof fetch): AnthropicGat
   };
 }
 
+function anthropicSdkFailureKind(error: unknown) {
+  if (error instanceof Anthropic.AuthenticationError) {
+    return "authentication" as const;
+  }
+  if (error instanceof Anthropic.PermissionDeniedError) {
+    return "permission" as const;
+  }
+  if (error instanceof Anthropic.RateLimitError) {
+    return "rate_limited" as const;
+  }
+  if (error instanceof Anthropic.InternalServerError) {
+    return "unavailable" as const;
+  }
+  if (error instanceof Anthropic.BadRequestError) {
+    return "bad_request" as const;
+  }
+  if (error instanceof Anthropic.APIConnectionTimeoutError) {
+    return "connection_timeout" as const;
+  }
+  if (error instanceof Anthropic.APIConnectionError) {
+    return "connection" as const;
+  }
+  if (error instanceof Anthropic.APIError) {
+    return "api" as const;
+  }
+  return null;
+}
+
+function anthropicProviderErrorPayload(error: { error: unknown }) {
+  if (!isRecord(error.error)) {
+    return null;
+  }
+  return isRecord(error.error.error) ? error.error.error : error.error;
+}
+
+function normalizeAnthropicProviderFailure(
+  error: unknown,
+  requestedPhase: "provider_response" | "stream",
+) {
+  if (error instanceof AiProviderFailureError) {
+    return error;
+  }
+  const sdkKind = anthropicSdkFailureKind(error);
+  const apiError = error instanceof Anthropic.APIError ? error : null;
+  const payload = apiError ? anthropicProviderErrorPayload(apiError) : null;
+  const failurePhase = requestedPhase === "stream"
+    ? "stream"
+    : classifyTransportFailure(error) === "connect"
+      ? "connect"
+      : "provider_response";
+
+  return new AiProviderFailureError({
+    provider: "anthropic",
+    failurePhase,
+    providerHttpStatus: apiError?.status ?? null,
+    providerErrorType: apiError?.type
+      ?? (typeof payload?.type === "string" ? payload.type : null),
+    providerErrorMessage: typeof payload?.message === "string" ? payload.message : null,
+    retryAfterHeader: apiError?.headers?.get("retry-after") ?? null,
+    sdkFailureKind: sdkKind,
+    cause: error,
+  });
+}
+
 /** Stage 29 internal lane: a direct (no page proxy) SDK client — server
  * egress, exactly what the pre-gateway direct classifier call did. */
 export function createDirectAnthropicClientResolver(
@@ -189,57 +255,66 @@ export function createAnthropicAiGatewayProvider(
       let usageEmitted = false;
 
       try {
-        const events = await clientResolution.client.messages.create(request, { signal: input.signal });
+        let events: AsyncIterable<unknown>;
+        try {
+          events = await clientResolution.client.messages.create(request, { signal: input.signal });
+        } catch (error) {
+          throw normalizeAnthropicProviderFailure(error, "provider_response");
+        }
 
-        for await (const rawEvent of events) {
-          if (!isRecord(rawEvent) || typeof rawEvent.type !== "string") {
-            continue;
-          }
-
-          if (rawEvent.type === "message_start") {
-            providerResponseId = extractProviderResponseId(rawEvent) ?? providerResponseId;
-            const message = rawEvent.message;
-            if (isRecord(message) && isRecord(message.usage)) {
-              lastUsage = message.usage;
+        try {
+          for await (const rawEvent of events) {
+            if (!isRecord(rawEvent) || typeof rawEvent.type !== "string") {
+              continue;
             }
-            continue;
-          }
 
-          if (rawEvent.type === "content_block_delta") {
-            const text = extractTextDelta(rawEvent);
-            if (text) {
-              yield { type: "content_delta", text };
-            }
-            const reasoning = extractReasoningDelta(rawEvent);
-            if (reasoning) {
-              yield { type: "reasoning_delta", text: reasoning };
-            }
-            continue;
-          }
-
-          if (rawEvent.type === "message_delta") {
-            stopReason = extractStopReason(rawEvent) ?? stopReason;
-            if (isRecord(rawEvent.usage)) {
-              // W7.1 (B1): on the real wire the 5m/1h cache-write breakdown
-              // (`cache_creation`) arrives ONLY on message_start; the delta
-              // carries scalars. A plain overwrite dropped the breakdown, so
-              // pricing's no-breakdown branch priced every cache write at the
-              // 5m rate (the 1h component under-recorded 37.5%). Delta
-              // scalars win; the breakdown is preserved from message_start
-              // when the incoming frame lacks it.
-              const merged: AnthropicGatewayUsageLike = { ...rawEvent.usage };
-              if (
-                merged.cache_creation == null
-                && lastUsage
-                && isRecord(lastUsage.cache_creation)
-              ) {
-                merged.cache_creation = lastUsage.cache_creation;
+            if (rawEvent.type === "message_start") {
+              providerResponseId = extractProviderResponseId(rawEvent) ?? providerResponseId;
+              const message = rawEvent.message;
+              if (isRecord(message) && isRecord(message.usage)) {
+                lastUsage = message.usage;
               }
-              lastUsage = merged;
-              usageEmitted = true;
-              yield usageFrame(input, merged, providerResponseId);
+              continue;
+            }
+
+            if (rawEvent.type === "content_block_delta") {
+              const text = extractTextDelta(rawEvent);
+              if (text) {
+                yield { type: "content_delta", text };
+              }
+              const reasoning = extractReasoningDelta(rawEvent);
+              if (reasoning) {
+                yield { type: "reasoning_delta", text: reasoning };
+              }
+              continue;
+            }
+
+            if (rawEvent.type === "message_delta") {
+              stopReason = extractStopReason(rawEvent) ?? stopReason;
+              if (isRecord(rawEvent.usage)) {
+                // W7.1 (B1): on the real wire the 5m/1h cache-write breakdown
+                // (`cache_creation`) arrives ONLY on message_start; the delta
+                // carries scalars. A plain overwrite dropped the breakdown, so
+                // pricing's no-breakdown branch priced every cache write at the
+                // 5m rate (the 1h component under-recorded 37.5%). Delta
+                // scalars win; the breakdown is preserved from message_start
+                // when the incoming frame lacks it.
+                const merged: AnthropicGatewayUsageLike = { ...rawEvent.usage };
+                if (
+                  merged.cache_creation == null
+                  && lastUsage
+                  && isRecord(lastUsage.cache_creation)
+                ) {
+                  merged.cache_creation = lastUsage.cache_creation;
+                }
+                lastUsage = merged;
+                usageEmitted = true;
+                yield usageFrame(input, merged, providerResponseId);
+              }
             }
           }
+        } catch (error) {
+          throw normalizeAnthropicProviderFailure(error, "stream");
         }
 
         if (lastUsage && !usageEmitted) {
