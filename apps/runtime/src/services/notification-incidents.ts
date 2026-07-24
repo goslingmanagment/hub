@@ -20,6 +20,15 @@ const STREAM_FAILURE_THRESHOLD = 3;
 // W3.3 (D3-N1): total incident_opened attempts allowed per incident before
 // the re-send loop gives up. Pacing comes free from the monitor cadence.
 const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
+type CriticalIncidentApp = Pick<AppContext, "db"> & {
+  logger: Pick<AppContext["logger"], "warn">;
+};
+type DirectIncidentApp = Pick<AppContext, "db" | "logger" | "config">;
+type IncidentApp = CriticalIncidentApp | DirectIncidentApp;
+
+function isDirectIncidentApp(app: IncidentApp): app is DirectIncidentApp {
+  return "config" in app;
+}
 
 export function incidentKey(
   input: {
@@ -196,7 +205,7 @@ function deliveryAttemptFields(delivery: TelegramSendResult) {
 }
 
 async function openIncidentAndNotify(
-  app: Pick<AppContext, "db" | "logger" | "config">,
+  app: IncidentApp,
   input: {
     kind: NotificationIncidentKind;
     platformAccountId: number | null;
@@ -261,12 +270,18 @@ async function openIncidentAndNotify(
         && result.incident
         && result.incident.status === "open"
       ) {
+        if (!isDirectIncidentApp(app)) {
+          throw new Error("Direct notification incident delivery requires runtime config");
+        }
         await retryUndeliveredOpenNotification(app, input, result.incident);
       }
       return true;
     }
     if (input.deliveryMode === "critical_outbox") {
       return true;
+    }
+    if (!isDirectIncidentApp(app)) {
+      throw new Error("Direct notification incident delivery requires runtime config");
     }
 
     const settings = await getTelegramSettings(app.db, {
@@ -375,7 +390,7 @@ export async function notifyWrongTransactionsWriterIncident(
 }
 
 async function resolveIncidentAndNotify(
-  app: Pick<AppContext, "db" | "logger" | "config">,
+  app: IncidentApp,
   input: {
     kind: NotificationIncidentKind;
     platformAccountId: number | null;
@@ -423,6 +438,9 @@ async function resolveIncidentAndNotify(
     if (input.deliveryMode === "critical_outbox") {
       return;
     }
+    if (!isDirectIncidentApp(app)) {
+      throw new Error("Direct notification incident delivery requires runtime config");
+    }
 
     const settings = await getTelegramSettings(app.db, {
       defaultReportHourUtc: app.config.telegramReportHourUtc,
@@ -454,13 +472,13 @@ export type CriticalNotificationIncidentKind =
   | "ai_provider_failed";
 
 /**
- * Stage 1A infrastructure seam for Stage 1B's AI producers. It is deliberately
- * uncalled in this release: once used, the incident transition and its durable
- * Telegram outbox row commit atomically. Critical paging is independent from
- * syncFailureAlertsEnabled and defaults to persisted suppression.
+ * Stage 1A infrastructure seam, activated by Stage 1B's AI producers. The
+ * incident transition and its durable Telegram outbox row commit atomically.
+ * Critical paging is independent from syncFailureAlertsEnabled and defaults
+ * to persisted suppression.
  */
 export async function openCriticalNotificationIncident(
-  app: Pick<AppContext, "config" | "db" | "logger">,
+  app: CriticalIncidentApp,
   input: {
     kind: CriticalNotificationIncidentKind;
     platformAccountId: number | null;
@@ -479,9 +497,9 @@ export async function openCriticalNotificationIncident(
   });
 }
 
-/** Matching resolve seam; also remains uncalled until Stage 1B activation. */
+/** Matching durable resolve seam used by Stage 1B success terminals. */
 export async function resolveCriticalNotificationIncident(
-  app: Pick<AppContext, "config" | "db" | "logger">,
+  app: CriticalIncidentApp,
   input: {
     kind: CriticalNotificationIncidentKind;
     platformAccountId: number | null;

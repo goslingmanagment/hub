@@ -42,6 +42,18 @@ export const providerHttpFailureFixtures = [
     },
   },
   {
+    id: "provider-unknown-400",
+    status: 400,
+    headers: {},
+    body: {
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message: "The request body is invalid.",
+      },
+    },
+  },
+  {
     id: "provider-auth-403",
     status: 403,
     headers: {},

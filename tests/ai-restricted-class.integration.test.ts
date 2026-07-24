@@ -329,4 +329,47 @@ describe("restricted capture class (Stage 29)", () => {
     expect(content).toHaveLength(1);
     expect(content[0]).toMatchObject({ feature: "workboard-closing", completion: verdictJson });
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("classifies and settles an internal gateway stream failure before rethrowing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext.config.anthropicApiKey = "test-key";
+    const classifier = createGatewayClosingClassifier(appContext, {
+      model: "claude-haiku-4-5",
+      providerOverride: fakeProvider(["partial internal output"], { failAfterFirst: true }),
+    });
+
+    await expect(classifier.classifyBatch([
+      { id: "m1", context: [{ role: "fan", text: "hello" }] },
+    ])).rejects.toThrow("boom");
+
+    const { rows } = await testDb.pool.query<{
+      gateway_outcome: string | null;
+      error_code: string | null;
+      failure_phase: string | null;
+      provider_http_status: number | null;
+    }>(`
+      select gateway_outcome, error_code, failure_phase, provider_http_status
+      from ai_usage_events
+    `);
+    expect(rows).toEqual([{
+      gateway_outcome: "failed",
+      error_code: "provider_stream_failed",
+      failure_phase: "stream",
+      provider_http_status: null,
+    }]);
+    const captured = await testDb.pool.query<{
+      completion: string;
+      outcome: string | null;
+    }>(`
+      select completion, params ->> 'outcome' as outcome
+      from ai_generation_content
+    `);
+    expect(captured.rows).toEqual([{
+      completion: "partial internal output",
+      outcome: "failed",
+    }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -1,5 +1,9 @@
 import { AI_FEATURE_STREAM_BODY_LIMIT_BYTES, routeSchemas } from "@agency_hub_core/contracts";
-import { formatObservedError } from "@agency_hub_core/shared";
+import {
+  formatObservedError,
+  normalizeProviderStreamFailure,
+  type AiProviderFailureClassification,
+} from "@agency_hub_core/shared";
 
 // Stage 30: the migrated prompt unit's public surface (tests and feature
 // services reach it through this module index — boundary rule).
@@ -346,6 +350,7 @@ export async function pipeAiGatewaySse(
     const raw = reply.raw;
     const startedAt = Date.now();
     let terminalOutcome: "completed" | "failed" | "cancelled" = "completed";
+    let terminalFailure: AiProviderFailureClassification | null = null;
     // Shared terminal accounting + coach transport ceiling (P1-5): the CLI smoke
     // path drives the SAME consumer so the two lanes cannot drift on what counts
     // as a committed, usable generation. `ceilingExceeded` pins the outcome to
@@ -415,23 +420,42 @@ export async function pipeAiGatewaySse(
         // The frame code NAMES the failure class for clients (a dead page
         // proxy is escalate-not-retry); the redacted cause chain goes to the
         // log only — frame messages stay static, no provider text leaks.
-        const failureFrame = providerStreamFailureFrame(error);
+        terminalFailure = normalizeProviderStreamFailure(error, {
+          provider: stream.provider,
+          ...(consumer.streamedContent ? { failurePhase: "stream" as const } : {}),
+        });
+        const failureFrame = providerStreamFailureFrame(terminalFailure);
         request.log.warn({
           requestId: stream.requestId,
           errorName: error instanceof Error ? error.name : "UnknownError",
           observedError: formatObservedError(error),
           code: failureFrame.code,
+          failurePhase: terminalFailure.failurePhase,
+          providerHttpStatus: terminalFailure.providerHttpStatus,
         }, "AI gateway provider stream failed");
         writeFrame(failureFrame);
       }
     } finally {
       raw.off("close", abortProvider);
       try {
+        const failed = terminalOutcome === "failed";
         await stream.recordTerminal({
           outcome: terminalOutcome,
-          errorCode: null,
-          failurePhase: null,
-          providerHttpStatus: null,
+          errorCode: failed
+            ? terminalFailure?.code
+              ?? consumer.failureDetail?.errorCode
+              ?? "provider_stream_failed"
+            : null,
+          failurePhase: failed
+            ? terminalFailure?.failurePhase
+              ?? consumer.failureDetail?.failurePhase
+              ?? "stream"
+            : null,
+          providerHttpStatus: failed
+            ? terminalFailure?.providerHttpStatus
+              ?? consumer.failureDetail?.providerHttpStatus
+              ?? null
+            : null,
           usage: consumer.usage,
           providerResponseId: consumer.providerResponseId,
           cacheHit: consumer.cacheHit,

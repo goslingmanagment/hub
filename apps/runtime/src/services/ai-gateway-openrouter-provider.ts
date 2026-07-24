@@ -5,7 +5,11 @@ import type {
   AiGatewayStreamBody,
   AiGatewayStreamFrame,
 } from "@agency_hub_core/contracts";
-import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
+import {
+  AiProviderFailureError,
+  classifyTransportFailure,
+  createProxyRequestDispatcher,
+} from "@agency_hub_core/shared";
 
 import type { AiGatewayProvider, AiGatewayProviderInput } from "./ai-gateway.ts";
 import { createAnthropicGatewayProxyFetch } from "./ai-gateway-anthropic-provider.ts";
@@ -172,55 +176,81 @@ export function createOpenrouterAiGatewayProvider(
       let usageEmitted = false;
 
       try {
-        const response = await fetchImpl(OPENROUTER_COMPLETIONS_URL, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${options.apiKey ?? ""}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(request),
-          signal: input.signal,
-        });
+        let response: Response;
+        try {
+          response = await fetchImpl(OPENROUTER_COMPLETIONS_URL, {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${options.apiKey ?? ""}`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(request),
+            signal: input.signal,
+          });
+        } catch (error) {
+          throw new AiProviderFailureError({
+            provider: "openrouter",
+            failurePhase: classifyTransportFailure(error) === "connect"
+              ? "connect"
+              : "provider_response",
+            cause: error,
+          });
+        }
         if (!response.ok || !response.body) {
-          throw new Error(`OpenRouter stream failed: HTTP ${response.status}`);
+          throw new AiProviderFailureError({
+            provider: "openrouter",
+            failurePhase: "provider_response",
+            providerHttpStatus: response.status,
+            retryAfterHeader: response.headers.get("retry-after"),
+          });
         }
 
-        for await (const data of sseDataLines(response.body)) {
-          if (data === "[DONE]") {
-            break;
-          }
-          let event: unknown;
-          try {
-            event = JSON.parse(data);
-          } catch {
-            continue;
-          }
-          if (!isRecord(event)) {
-            continue;
-          }
-          if (typeof event.id === "string") {
-            providerResponseId = event.id;
-          }
-          const choice = Array.isArray(event.choices) && isRecord(event.choices[0])
-            ? event.choices[0]
-            : null;
-          if (choice) {
-            if (typeof choice.finish_reason === "string") {
-              stopReason = choice.finish_reason;
+        try {
+          for await (const data of sseDataLines(response.body)) {
+            if (data === "[DONE]") {
+              break;
             }
-            const delta = isRecord(choice.delta) ? choice.delta : null;
-            if (delta && typeof delta.content === "string" && delta.content.length > 0) {
-              yield { type: "content_delta", text: delta.content };
+            let event: unknown;
+            try {
+              event = JSON.parse(data);
+            } catch {
+              continue;
             }
-            if (delta && typeof delta.reasoning === "string" && delta.reasoning.length > 0) {
-              yield { type: "reasoning_delta", text: delta.reasoning };
+            if (!isRecord(event)) {
+              continue;
+            }
+            if (typeof event.id === "string") {
+              providerResponseId = event.id;
+            }
+            const choice = Array.isArray(event.choices) && isRecord(event.choices[0])
+              ? event.choices[0]
+              : null;
+            if (choice) {
+              if (typeof choice.finish_reason === "string") {
+                stopReason = choice.finish_reason;
+              }
+              const delta = isRecord(choice.delta) ? choice.delta : null;
+              if (delta && typeof delta.content === "string" && delta.content.length > 0) {
+                yield { type: "content_delta", text: delta.content };
+              }
+              if (delta && typeof delta.reasoning === "string" && delta.reasoning.length > 0) {
+                yield { type: "reasoning_delta", text: delta.reasoning };
+              }
+            }
+            if (isRecord(event.usage)) {
+              lastUsage = event.usage as OpenrouterUsageLike;
+              usageEmitted = true;
+              yield usageFrame(input, lastUsage, providerResponseId);
             }
           }
-          if (isRecord(event.usage)) {
-            lastUsage = event.usage as OpenrouterUsageLike;
-            usageEmitted = true;
-            yield usageFrame(input, lastUsage, providerResponseId);
-          }
+        } catch (error) {
+          throw error instanceof AiProviderFailureError
+            ? error
+            : new AiProviderFailureError({
+              provider: "openrouter",
+              failurePhase: "stream",
+              cause: error,
+            });
         }
 
         if (lastUsage && !usageEmitted) {

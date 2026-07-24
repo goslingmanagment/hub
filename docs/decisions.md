@@ -5227,3 +5227,43 @@ behavior. No Stage 1A production path creates either new incident kind,
 populates the new ledger detail, or changes SSE classification or wire
 behavior. Precise classification, incident producers, and activation belong to
 Stage 1B.
+
+**Decision #183 (2026-07-24, Stage 1B activates precise AI failure telemetry
+and guarded incident producers):** Provider adapters now normalize failures at
+the shared AI transport boundary before the terminal caller renders or records
+them. Anthropic SDK subclass/status/`error.type` evidence wins; its observed
+HTTP 400 `invalid_request_error` low-credit response is billing only when the
+provider message exactly matches the one production signature. Any other 400
+stays `provider_stream_failed`. OpenRouter no longer encodes status only in an
+`Error.message`: non-2xx responses carry structured status and Retry-After.
+The wire classes are `provider_billing`, `provider_auth`,
+`provider_rate_limited`, `provider_unavailable`,
+`provider_proxy_unreachable`, and `provider_stream_failed`; every class has one
+static message, and only a 429 carries the provider's parsed Retry-After value.
+An interruption after provider output begins is always the generic stream
+class. Failure phase is exactly `connect | provider_response | stream`.
+
+Every failed provider terminal now records `error_code`, `failure_phase`, and
+the HTTP status when one exists. Completed and cancelled terminals force all
+three fields to null. The HTTP SSE lane, operator feature-smoke CLI, internal
+gateway lane, and stale-reservation recovery follow that law; no prompt,
+completion, provider body, or credential is added to the usage ledger.
+
+Billing and authentication open the existing `ai_provider_billing` incident
+immediately on one GLOBAL latch; any later successful generation resolves it.
+Other classified page failures use the ledger to require three consecutive
+failed provider generations (old unclassified rows, quota denials,
+cancellations, billing, and auth cannot manufacture the streak), then open
+`ai_provider_failed` on a PAGE latch split between upstream-provider and
+page-proxy causes. The page's next successful generation resolves both cause
+latches. The incident `error_code` is the wire code; summaries are static and
+derived only from provider name, code/phase, and optional HTTP status, then
+passed through the existing redactor — never a provider body.
+
+The chatter error frame is written first, terminal ledger/restricted capture
+settles second, and incident work runs last behind a log-and-continue guard.
+All transitions use the Stage 1A durable critical-outbox seam. The
+`aiCriticalAlertsEnabled` policy remains default-off, so deployment creates
+dashboard-visible `suppressed` rows but cannot page until the owner separately
+enables the flag. There is no migration, owner API change, OpenAPI/SDK
+regeneration, or change to sync, voice, send, or Voice retry laws.

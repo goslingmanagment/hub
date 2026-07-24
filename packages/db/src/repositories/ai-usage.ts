@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { aiUsageFeatures, type AiUsageFeature } from "@agency_hub_core/shared";
 
@@ -8,7 +8,7 @@ import { aiUsageEvents, users } from "../schema.ts";
 type NumericValue = number | bigint | null | undefined;
 export type AiGatewayProvider = "anthropic" | "openrouter";
 export type AiGatewayOutcome = "completed" | "failed" | "cancelled" | "quota_denied";
-export type AiGatewayFailurePhase = "connect" | "provider_response" | "stream" | "terminal";
+export type AiGatewayFailurePhase = "connect" | "provider_response" | "stream";
 
 export interface InsertAiUsageEventInput {
   clientEventId: string;
@@ -315,6 +315,7 @@ export async function finalizeAiGatewayUsageEvent(
     event: FinalizeAiGatewayUsageEventInput;
   },
 ) {
+  const failed = input.event.gatewayOutcome === "failed";
   const updated = await db.update(aiUsageEvents)
     .set({
       providerResponseId: input.event.providerResponseId ?? null,
@@ -325,9 +326,12 @@ export async function finalizeAiGatewayUsageEvent(
       costMicroUsd: input.event.costMicroUsd,
       costApproximate: input.event.costApproximate,
       gatewayOutcome: input.event.gatewayOutcome,
-      errorCode: input.event.errorCode ?? null,
-      failurePhase: input.event.failurePhase ?? null,
-      providerHttpStatus: input.event.providerHttpStatus ?? null,
+      // Successful/cancelled terminals never retain stale failure detail.
+      // A failed production caller supplies the precise values; the fallback
+      // keeps an unforeseen terminal failure classified rather than blank.
+      errorCode: failed ? (input.event.errorCode ?? "provider_stream_failed") : null,
+      failurePhase: failed ? (input.event.failurePhase ?? "stream") : null,
+      providerHttpStatus: failed ? (input.event.providerHttpStatus ?? null) : null,
       durationMs: Math.max(0, Math.floor(input.event.durationMs)),
       isCacheHit: input.event.isCacheHit,
       completedAt: input.event.completedAt,
@@ -343,6 +347,54 @@ export async function finalizeAiGatewayUsageEvent(
   return updated[0]?.id ?? null;
 }
 
+/**
+ * Stage 1B AI failure streak. Only provider attempts with classified failure
+ * detail participate, so pre-Stage-1B failed rows and quota denials cannot
+ * manufacture an incident. Completed/cancelled provider attempts stop the
+ * streak; quota denials are ignored because no generation reached a provider.
+ */
+export async function getAiGatewayPageConsecutiveFailureCount(
+  db: Database,
+  input: {
+    pageId: number;
+    threshold?: number;
+  },
+) {
+  const threshold = Math.max(1, Math.floor(input.threshold ?? 3));
+  const rows = await db.select({
+    gatewayOutcome: aiUsageEvents.gatewayOutcome,
+    errorCode: aiUsageEvents.errorCode,
+    failurePhase: aiUsageEvents.failurePhase,
+    providerHttpStatus: aiUsageEvents.providerHttpStatus,
+  })
+    .from(aiUsageEvents)
+    .where(and(
+      eq(aiUsageEvents.pageId, input.pageId),
+      eq(aiUsageEvents.quotaAccepted, true),
+      inArray(aiUsageEvents.gatewayOutcome, ["completed", "failed", "cancelled"]),
+    ))
+    .orderBy(desc(aiUsageEvents.completedAt), desc(aiUsageEvents.id))
+    .limit(threshold);
+
+  let consecutiveFailures = 0;
+  for (const row of rows) {
+    if (
+      row.gatewayOutcome !== "failed"
+      || row.errorCode === null
+      || row.failurePhase === null
+      // Billing/auth have their own immediate GLOBAL incident. They stop a
+      // page-local streak so a later unrelated failure cannot duplicate the
+      // same global access outage as an ai_provider_failed page incident.
+      || row.errorCode === "provider_billing"
+      || row.errorCode === "provider_auth"
+    ) {
+      break;
+    }
+    consecutiveFailures += 1;
+  }
+  return consecutiveFailures;
+}
+
 export async function markStaleAiGatewayReservationsFailed(
   db: Database,
   input: MarkStaleAiGatewayReservationsInput,
@@ -350,6 +402,9 @@ export async function markStaleAiGatewayReservationsFailed(
   const updated = await db.update(aiUsageEvents)
     .set({
       gatewayOutcome: "failed",
+      errorCode: "provider_stream_failed",
+      failurePhase: "stream",
+      providerHttpStatus: null,
       durationMs: sql<number>`
         greatest(
           0,

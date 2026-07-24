@@ -23,6 +23,8 @@ const DISPATCHER_KEEP_ALIVE_TIMEOUT_THRESHOLD_MS = 250;
 const HTTP_RETRY_BASE_DELAY_MS = 5_000;
 const MAX_RETRY_DELAY_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 10_000;
+const ANTHROPIC_LOW_CREDIT_MESSAGE =
+  "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
 
 const TIMEOUT_ERROR_NAMES = new Set([
   "AbortError",
@@ -193,14 +195,334 @@ function isConnectFailure(error: unknown): boolean {
   return false;
 }
 
-/** AI-lane frame code for a failed provider stream: a connect-level failure
- * is the page's egress proxy being unreachable — page-scoped infrastructure
- * the chatter must escalate, not retry — while anything else stays the
- * generic provider stream failure. */
+export type AiProviderId = "anthropic" | "openrouter";
+export type AiProviderFailurePhase = "connect" | "provider_response" | "stream";
+export type AiProviderFailureCode =
+  | "provider_billing"
+  | "provider_auth"
+  | "provider_rate_limited"
+  | "provider_unavailable"
+  | "provider_proxy_unreachable"
+  | "provider_stream_failed";
+
+export type AiProviderSdkFailureKind =
+  | "authentication"
+  | "permission"
+  | "rate_limited"
+  | "unavailable"
+  | "bad_request"
+  | "connection"
+  | "connection_timeout"
+  | "api";
+
+/**
+ * Adapter-owned envelope for provider failures. Anthropic supplies SDK class,
+ * status, body type, and headers here; OpenRouter supplies the fetch response
+ * status and headers. The raw provider error remains only on `cause` for the
+ * existing redacted server log path.
+ */
+export class AiProviderFailureError extends Error {
+  readonly provider: AiProviderId;
+  readonly failurePhase: AiProviderFailurePhase;
+  readonly providerHttpStatus: number | null;
+  readonly providerErrorType: string | null;
+  readonly providerErrorMessage: string | null;
+  readonly retryAfterHeader: string | null;
+  readonly sdkFailureKind: AiProviderSdkFailureKind | null;
+
+  constructor(input: {
+    provider: AiProviderId;
+    failurePhase: AiProviderFailurePhase;
+    providerHttpStatus?: number | null;
+    providerErrorType?: string | null;
+    providerErrorMessage?: string | null;
+    retryAfterHeader?: string | null;
+    sdkFailureKind?: AiProviderSdkFailureKind | null;
+    cause?: unknown;
+  }) {
+    super(`${input.provider} provider ${input.failurePhase} failure`);
+    this.name = "AiProviderFailureError";
+    this.provider = input.provider;
+    this.failurePhase = input.failurePhase;
+    this.providerHttpStatus = input.providerHttpStatus ?? null;
+    this.providerErrorType = input.providerErrorType ?? null;
+    this.providerErrorMessage = input.providerErrorMessage ?? null;
+    this.retryAfterHeader = input.retryAfterHeader ?? null;
+    this.sdkFailureKind = input.sdkFailureKind ?? null;
+    if (input.cause !== undefined) {
+      this.cause = input.cause;
+    }
+  }
+}
+
+export interface AiProviderFailureClassification {
+  code: AiProviderFailureCode;
+  failurePhase: AiProviderFailurePhase;
+  providerHttpStatus: number | null;
+  retryAfterMs: number | null;
+}
+
+interface ProviderHttpMetadata {
+  providerHttpStatus: number | null;
+  providerErrorType: string | null;
+  providerErrorMessage: string | null;
+  retryAfterHeader: string | null;
+  sdkFailureKind: AiProviderSdkFailureKind | null;
+}
+
+/**
+ * Family-wide AI provider classifier. Adapter metadata wins; structural
+ * fallbacks keep injected/test providers and SDK-compatible errors honest.
+ * A failure after streaming has begun is always a stream interruption, even
+ * if a nested transport error happens to resemble a connect failure.
+ */
+export function normalizeProviderStreamFailure(
+  error: unknown,
+  input?: {
+    provider?: AiProviderId;
+    failurePhase?: AiProviderFailurePhase;
+    now?: number;
+  },
+): AiProviderFailureClassification {
+  const normalized = findAiProviderFailure(error);
+  const provider = normalized?.provider ?? input?.provider ?? null;
+  const phaseHint = input?.failurePhase ?? normalized?.failurePhase ?? null;
+  const metadata = providerHttpMetadata(error, normalized);
+  const status = metadata.providerHttpStatus;
+
+  // Once provider output has started, the useful truth is that the stream was
+  // interrupted. Do not mislabel a late socket failure as a page-proxy dial
+  // failure or an HTTP response rejection.
+  if (phaseHint === "stream") {
+    return providerFailureClassification("provider_stream_failed", "stream", status, null);
+  }
+
+  // Anthropic SDK subclasses are the strongest signal, followed by the
+  // provider's typed body, then the numeric HTTP status.
+  if (
+    metadata.sdkFailureKind === "authentication"
+    || metadata.sdkFailureKind === "permission"
+    || metadata.providerErrorType === "authentication_error"
+    || metadata.providerErrorType === "permission_error"
+  ) {
+    return providerFailureClassification("provider_auth", "provider_response", status, null);
+  }
+  if (
+    metadata.sdkFailureKind === "rate_limited"
+    || metadata.providerErrorType === "rate_limit_error"
+  ) {
+    return providerFailureClassification(
+      "provider_rate_limited",
+      "provider_response",
+      status,
+      parseProviderRetryAfterFrameMs(metadata.retryAfterHeader, input?.now),
+    );
+  }
+  if (
+    metadata.sdkFailureKind === "unavailable"
+    || metadata.providerErrorType === "overloaded_error"
+  ) {
+    return providerFailureClassification("provider_unavailable", "provider_response", status, null);
+  }
+
+  // The observed Anthropic production billing response has no distinct
+  // billing type: it is a BadRequestError / HTTP 400 invalid_request_error.
+  // Keep the sole message fallback exact and gated by provider+status+type.
+  if (
+    provider === "anthropic"
+    && status === 400
+    && metadata.providerErrorType === "invalid_request_error"
+    && metadata.providerErrorMessage === ANTHROPIC_LOW_CREDIT_MESSAGE
+  ) {
+    return providerFailureClassification("provider_billing", "provider_response", status, null);
+  }
+
+  if (status === 401 || status === 403) {
+    return providerFailureClassification("provider_auth", "provider_response", status, null);
+  }
+  if (status === 429) {
+    return providerFailureClassification(
+      "provider_rate_limited",
+      "provider_response",
+      status,
+      parseProviderRetryAfterFrameMs(metadata.retryAfterHeader, input?.now),
+    );
+  }
+  if (status === 529 || (status !== null && status >= 500 && status <= 599)) {
+    return providerFailureClassification("provider_unavailable", "provider_response", status, null);
+  }
+  if (isConnectFailure(error) || phaseHint === "connect") {
+    return providerFailureClassification("provider_proxy_unreachable", "connect", status, null);
+  }
+
+  return providerFailureClassification(
+    "provider_stream_failed",
+    phaseHint ?? (status === null ? "stream" : "provider_response"),
+    status,
+    null,
+  );
+}
+
+/** Backward-compatible code-only classifier used by existing callers/tests. */
 export function classifyProviderStreamFailure(
   error: unknown,
-): "provider_proxy_unreachable" | "provider_stream_failed" {
-  return isConnectFailure(error) ? "provider_proxy_unreachable" : "provider_stream_failed";
+  input?: {
+    provider?: AiProviderId;
+    failurePhase?: AiProviderFailurePhase;
+    now?: number;
+  },
+): AiProviderFailureCode {
+  return normalizeProviderStreamFailure(error, input).code;
+}
+
+function providerFailureClassification(
+  code: AiProviderFailureCode,
+  failurePhase: AiProviderFailurePhase,
+  providerHttpStatus: number | null,
+  retryAfterMs: number | null,
+): AiProviderFailureClassification {
+  return {
+    code,
+    failurePhase,
+    providerHttpStatus,
+    retryAfterMs,
+  };
+}
+
+function findAiProviderFailure(error: unknown) {
+  for (const cause of iterateErrorChain(error)) {
+    if (cause instanceof AiProviderFailureError) {
+      return cause;
+    }
+  }
+  return null;
+}
+
+function providerHttpMetadata(
+  error: unknown,
+  normalized: AiProviderFailureError | null,
+): ProviderHttpMetadata {
+  let providerHttpStatus = normalized?.providerHttpStatus ?? null;
+  let providerErrorType = normalized?.providerErrorType ?? null;
+  let providerErrorMessage = normalized?.providerErrorMessage ?? null;
+  let retryAfterHeader = normalized?.retryAfterHeader ?? null;
+  let sdkFailureKind = normalized?.sdkFailureKind ?? null;
+
+  for (const cause of iterateErrorChain(error)) {
+    if (!cause || typeof cause !== "object") {
+      continue;
+    }
+    const fields = cause as Record<string, unknown>;
+    if (providerHttpStatus === null && isHttpStatus(fields.status)) {
+      providerHttpStatus = fields.status;
+    }
+    if (providerErrorType === null) {
+      providerErrorType = providerTypeFromFields(fields);
+    }
+    if (providerErrorMessage === null) {
+      providerErrorMessage = providerMessageFromFields(fields);
+    }
+    if (retryAfterHeader === null) {
+      retryAfterHeader = headerValue(fields.headers, "retry-after");
+    }
+    if (sdkFailureKind === null && cause instanceof Error) {
+      sdkFailureKind = sdkFailureKindFromName(cause.constructor.name)
+        ?? sdkFailureKindFromName(cause.name);
+    }
+  }
+
+  return {
+    providerHttpStatus,
+    providerErrorType,
+    providerErrorMessage,
+    retryAfterHeader,
+    sdkFailureKind,
+  };
+}
+
+function isHttpStatus(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isInteger(value)
+    && value >= 100
+    && value <= 599;
+}
+
+function providerTypeFromFields(fields: Record<string, unknown>): string | null {
+  if (typeof fields.type === "string" && fields.type !== "error") {
+    return fields.type;
+  }
+  const payload = providerErrorPayload(fields.error);
+  return typeof payload?.type === "string" ? payload.type : null;
+}
+
+function providerMessageFromFields(fields: Record<string, unknown>): string | null {
+  const payload = providerErrorPayload(fields.error);
+  return typeof payload?.message === "string" ? payload.message : null;
+}
+
+function providerErrorPayload(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.error && typeof record.error === "object") {
+    return record.error as Record<string, unknown>;
+  }
+  return record;
+}
+
+function headerValue(value: unknown, name: string): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if ("get" in value && typeof value.get === "function") {
+    const header = value.get(name);
+    return typeof header === "string" ? header : null;
+  }
+  for (const [key, header] of Object.entries(value)) {
+    if (key.toLowerCase() === name && typeof header === "string") {
+      return header;
+    }
+  }
+  return null;
+}
+
+function sdkFailureKindFromName(name: string): AiProviderSdkFailureKind | null {
+  switch (name) {
+    case "AuthenticationError":
+      return "authentication";
+    case "PermissionDeniedError":
+      return "permission";
+    case "RateLimitError":
+      return "rate_limited";
+    case "InternalServerError":
+      return "unavailable";
+    case "BadRequestError":
+      return "bad_request";
+    case "APIConnectionTimeoutError":
+      return "connection_timeout";
+    case "APIConnectionError":
+      return "connection";
+    case "APIError":
+      return "api";
+    default:
+      return null;
+  }
+}
+
+function parseProviderRetryAfterFrameMs(retryAfterHeader: string | null, now = Date.now()) {
+  if (!retryAfterHeader) {
+    return null;
+  }
+  const seconds = Number(retryAfterHeader);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(Math.ceil(seconds * 1000), Number.MAX_SAFE_INTEGER);
+  }
+  const retryAt = Date.parse(retryAfterHeader);
+  if (Number.isNaN(retryAt)) {
+    return null;
+  }
+  return Math.min(Math.max(0, retryAt - now), Number.MAX_SAFE_INTEGER);
 }
 
 /** Wraps a fetch so that once a connect-level failure is observed, every
