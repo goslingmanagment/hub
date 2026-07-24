@@ -26,6 +26,7 @@ docs/
 docs/*
 !docs/runbooks/
 docs/runbooks/*
+!docs/error-handling.md
 !docs/runbooks/desktop-lifecycle-v2-cutover.md
 *.sql.gz
 

@@ -26,6 +26,7 @@ living docs are `docs/` + `docs/generated/`.**
 | Doc | What it answers |
 |---|---|
 | `docs/decisions.md` | Every technical decision, numbered, append-only — including the family law (anti-deletion, updated-in-change) and cross-repo rulings clients reference |
+| `docs/error-handling.md` | The family-wide error taxonomy, retry laws, client mappings, ledger/incident policy, and boundary/redaction rules |
 | `docs/generated/` | Machine-generated reference (auth policy table + 24 code maps) — start at `00-overview.md`, it indexes which map covers what; regenerate, never hand-edit; each file's banner says how (`REGENERATION-PROMPT.md` there is the generator) |
 | `docs/migration-history/stages/` | The 35 stage specs of the Project Kernel migration — the WHY behind most of today's architecture; superseded ones carry banners |
 | `docs/migration-history/execution-log.md` | Per-stage status board of the migration |

@@ -5303,3 +5303,14 @@ mandatory for the source edit, but the OpenAPI document is unchanged, so the
 contract hash and generated SDK artifacts do not move. This stage adds no wire
 code, frame shape, incident kind, database migration, or sync-executor
 classification change.
+
+**Decision #185 (2026-07-24, the error-handling canon is family law):**
+`docs/error-handling.md` is the single canonical reference for error handling
+across core, the ChatGoose Firefox extension, and ChatGoose Desktop. Any change
+to classification, wire code/message, HTTP `AppError`, retry disposition,
+failure-ledger fields, incident kind/latch/threshold/resolve rule, notification
+outbox policy, client mapping, or error-boundary/redaction behavior must update
+the canon in the same family change. Clients reference this decision and the
+canon rather than maintaining normative copies. The existing evolution rule
+stands: adding a code to the open error frame is contract-free and must degrade
+safely in every client; adding or reshaping a frame type is lockstep-gated.
