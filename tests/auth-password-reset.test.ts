@@ -29,6 +29,7 @@ type MockDb = {
 const repoMocks = vi.hoisted(() => ({
   assignUserToPage: vi.fn(),
   advanceDeviceTokenEpoch: vi.fn(),
+  advanceSessionEpoch: vi.fn(),
   insertAccessGrant: vi.fn(),
   revokeAccessGrants: vi.fn(),
   updateUserMustChangePassword: vi.fn(),
@@ -104,6 +105,7 @@ beforeEach(() => {
   repoMocks.lockUserForDeviceTokenMutation.mockImplementation(async (db: MockDb, userId: number) =>
     db.state.users.find((user) => user.id === userId) ?? null);
   repoMocks.advanceDeviceTokenEpoch.mockResolvedValue({ deviceTokenEpoch: 1 });
+  repoMocks.advanceSessionEpoch.mockResolvedValue({ sessionEpoch: 1 });
   repoMocks.deletePendingDeviceTokensForUser.mockResolvedValue([]);
   repoMocks.updateUserPasswordHash.mockImplementation(async (db: MockDb, userId: number, passwordHash: string) => {
     const user = db.state.users.find((entry) => entry.id === userId) ?? null;

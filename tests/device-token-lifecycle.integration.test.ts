@@ -7,6 +7,7 @@ import { findUserByUsername } from "@agency_hub_core/db";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
+  SESSION_COOKIE_NAME,
   authenticateSessionToken,
   cleanupExpiredSessions,
   changeOwnPassword,
@@ -15,6 +16,7 @@ import {
   deviceTokenAdoptionReport,
   issueChatterApiKey,
   issueDeviceToken,
+  loginWithPassword,
   revokeDeviceTokensForUsername,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
@@ -454,6 +456,261 @@ describe("legacy/admin issuance authority races", () => {
       url: "/api/v1/auth/login",
       payload: { username: "anton", password: "second-new-secret" },
     })).statusCode).toBe(401);
+  });
+});
+
+/**
+ * UV-001: the session plane's half of the same authority argument the block
+ * above makes for device tokens.  These races live here because the harness
+ * (waitForUserLockWaiters + a blocking user-row lock) and the fixtures are the
+ * ones the device-token races already proved deterministic.
+ */
+describe("password-authority to session-login linearization (UV-001)", () => {
+  type LoginOutcome =
+    | { ok: true; value: Awaited<ReturnType<typeof loginWithPassword>> }
+    | { ok: false; error: unknown };
+
+  const RACER_PASSWORD = "racer-secret";
+
+  /**
+   * Counts every backend blocked on a lock in this database.  The probe above
+   * matches on query text, which only sees an explicit `for update`; a login
+   * that takes no user lock at all still blocks here, because inserting into
+   * auth_sessions needs a KEY SHARE lock on the referenced users row that the
+   * blocker's FOR UPDATE conflicts with.  Waiting on this instead keeps the
+   * interleaving deterministic for both the fixed and the unfixed login path.
+   */
+  async function waitForBlockedBackends(db: StartedTestDatabase, minimum: number) {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const result = await db.pool.query<{ count: string }>(`
+        select count(*)::text as count
+        from pg_stat_activity
+        where datname = current_database()
+          and wait_event_type = 'Lock'
+      `);
+      if (Number(result.rows[0]?.count ?? 0) >= minimum) return;
+      await sleep(10);
+    }
+    throw new Error(`Timed out waiting for ${minimum} blocked backend(s)`);
+  }
+
+  /** Each race burns one login failure; a dedicated username per test keeps
+   * the per-account backoff registry (in-memory, not reset with the db) from
+   * coupling these tests to each other. */
+  async function createRacer(
+    setup: NonNullable<ReturnType<typeof requireSetup>>,
+    username: string,
+  ) {
+    await createUserAccount(setup.app, {
+      username,
+      role: "team_lead",
+      password: RACER_PASSWORD,
+    }, { source: "cli" });
+    const user = await findUserByUsername(setup.testDb.db, username);
+    if (!user) throw new Error(`Expected fixture user ${username}`);
+    return user;
+  }
+
+  /**
+   * Drives exactly the reported interleaving: the boundary reaches the user
+   * row lock first, the login then verifies the (still current) old password
+   * and queues behind it, and the blocker commit releases both in that order.
+   * The login therefore has a fully verified pre-boundary password authority
+   * in hand and no session row yet — the UV-001 window.
+   */
+  async function raceLoginAgainstBoundary(
+    setup: NonNullable<ReturnType<typeof requireSetup>>,
+    userId: number,
+    username: string,
+    boundary: () => Promise<unknown>,
+  ): Promise<LoginOutcome> {
+    const blocker = await setup.testDb.pool.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query("select id from users where id = $1 for update", [userId]);
+      const boundaryPromise = boundary();
+      await waitForBlockedBackends(setup.testDb, 1);
+      const loginPromise = loginWithPassword(setup.app, {
+        username,
+        password: RACER_PASSWORD,
+      }).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await waitForBlockedBackends(setup.testDb, 2);
+      await blocker.query("commit");
+      await boundaryPromise;
+      return await loginPromise;
+    } finally {
+      await blocker.query("rollback").catch(() => undefined);
+      blocker.release();
+    }
+  }
+
+  /** Losing the race (rejected) and winning it (session created, then revoked
+   * by the boundary) are both acceptable; a USABLE session is not. */
+  async function expectNoUsableSession(
+    setup: NonNullable<ReturnType<typeof requireSetup>>,
+    userId: number,
+    outcome: LoginOutcome,
+  ) {
+    if (outcome.ok) {
+      const token = outcome.value.sessionToken;
+      expect(await authenticateSessionToken(setup.app, token)).toBeNull();
+      const me = await setup.server.inject({
+        method: "GET",
+        url: "/api/v1/auth/me",
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
+      });
+      expect(me.statusCode).toBe(401);
+    } else {
+      expect(outcome.error).toBeInstanceOf(Error);
+      // The generic credential 401, not a new "authority changed" oracle.
+      expect((outcome.error as Error).message).toBe("Invalid username or password");
+    }
+
+    const live = await setup.testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from auth_sessions where user_id = $1 and revoked_at is null",
+      [userId],
+    );
+    expect(live.rows[0]?.count).toBe("0");
+  }
+
+  it("admin password reset invalidates a login that verified the old password", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const racer = await createRacer(setup, "resetracer");
+    const outcome = await raceLoginAgainstBoundary(
+      setup,
+      racer.id,
+      racer.username,
+      () => setUserPassword(setup.app, {
+        username: racer.username,
+        password: "post-reset-secret",
+      }, { source: "cli" }),
+    );
+    await expectNoUsableSession(setup, racer.id, outcome);
+  });
+
+  it("self-serve password change invalidates a login that verified the old password", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const racer = await createRacer(setup, "changeracer");
+    const outcome = await raceLoginAgainstBoundary(
+      setup,
+      racer.id,
+      racer.username,
+      () => changeOwnPassword(setup.app, {
+        userId: racer.id,
+        currentPassword: RACER_PASSWORD,
+        newPassword: "post-change-secret",
+      }),
+    );
+    await expectNoUsableSession(setup, racer.id, outcome);
+  });
+
+  it("deactivation invalidates a login that verified the password", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const racer = await createRacer(setup, "deactivateracer");
+    const owner = await findUserByUsername(setup.testDb.db, "owner");
+    const outcome = await raceLoginAgainstBoundary(
+      setup,
+      racer.id,
+      racer.username,
+      () => deactivateUser(setup.app, { username: racer.username }, {
+        source: "cli",
+        actorUserId: owner!.id,
+      }),
+    );
+    await expectNoUsableSession(setup, racer.id, outcome);
+  });
+
+  it("still revokes the sessions that already existed when the boundary commits", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const cookie = await login(setup.server, "anton", "chatter-secret");
+    expect((await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { cookie },
+    })).statusCode).toBe(200);
+
+    await setUserPassword(setup.app, {
+      username: "anton",
+      password: "rotated-secret",
+    }, { source: "cli" });
+
+    expect((await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { cookie },
+    })).statusCode).toBe(401);
+    const revoked = await setup.testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from auth_sessions where revoked_reason = 'password_reset'",
+    );
+    expect(revoked.rows[0]?.count).toBe("1");
+  });
+
+  it("rejects a superseded session even if the revocation sweep never saw it", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const anton = await findUserByUsername(setup.testDb.db, "anton");
+    const session = await loginWithPassword(setup.app, {
+      username: "anton",
+      password: "chatter-secret",
+    });
+    expect((await authenticateSessionToken(setup.app, session.sessionToken))?.user.username)
+      .toBe("anton");
+
+    await setUserPassword(setup.app, {
+      username: "anton",
+      password: "swept-past-secret",
+    }, { source: "cli" });
+    // Model the row the sweep missed: un-revoke it and keep the stale epoch
+    // stamp, which is exactly the state a session inserted after the sweep
+    // would have had before UV-001 was closed.
+    await setup.testDb.pool.query(
+      "update auth_sessions set revoked_at = null, revoked_reason = null where user_id = $1",
+      [anton!.id],
+    );
+
+    expect(await authenticateSessionToken(setup.app, session.sessionToken)).toBeNull();
+    expect((await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+    })).statusCode).toBe(401);
+  });
+
+  it("leaves the ordinary post-reset login working", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    await setUserPassword(setup.app, {
+      username: "anton",
+      password: "brand-new-secret",
+    }, { source: "cli" });
+
+    const session = await loginWithPassword(setup.app, {
+      username: "anton",
+      password: "brand-new-secret",
+    });
+    const principal = await authenticateSessionToken(setup.app, session.sessionToken);
+    expect(principal?.user.username).toBe("anton");
+    const me = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+    });
+    expect(me.statusCode).toBe(200);
+    expect(me.json<{ authMethod: string }>().authMethod).toBe("session");
+
+    // The superseded password stays dead on the ordinary path too.
+    await expect(loginWithPassword(setup.app, {
+      username: "anton",
+      password: "chatter-secret",
+    })).rejects.toThrow("Invalid username or password");
   });
 });
 

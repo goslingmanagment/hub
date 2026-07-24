@@ -202,6 +202,11 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash"),
   mustChangePassword: boolean("must_change_password").default(false).notNull(),
   deviceTokenEpoch: bigint("device_token_epoch", { mode: "number" }).default(0).notNull(),
+  // UV-001: the session plane's authority generation. Every password-authority
+  // boundary that revokes sessions (admin reset, self-serve change,
+  // deactivation) advances it under the user-row lock, so a login that
+  // verified the superseded password can neither mint nor keep a session.
+  sessionEpoch: bigint("session_epoch", { mode: "number" }).default(0).notNull(),
   // Deactivation tombstone (decision #126, mirrors the Stage 13 pages
   // standard): NULL = active. Set freezes every auth path; never hard-delete.
   disabledAt: timestamp("disabled_at", { withTimezone: true }),
@@ -1795,6 +1800,10 @@ export const authSessions = pgTable(
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     tokenDigest: text("token_digest").notNull().unique(),
+    // UV-001: users.session_epoch as it stood when this session was minted.
+    // authenticateSessionToken compares the two; a stale stamp is dead even if
+    // the revocation sweep of the boundary that advanced the epoch missed it.
+    sessionEpoch: bigint("session_epoch", { mode: "number" }).default(0).notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

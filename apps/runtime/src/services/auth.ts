@@ -5,6 +5,7 @@ import argon2 from "argon2";
 import {
   assignUserToPage,
   advanceDeviceTokenEpoch,
+  advanceSessionEpoch,
   createApiKey,
   createAuthSession,
   createPendingDeviceToken,
@@ -171,7 +172,10 @@ function assertUserNotDeactivated(user: { username: string; disabledAt: Date | n
   }
 }
 
-async function getAuthenticatedUserById(app: AppContext, userId: number) {
+/** The principal plus the user row it was resolved from — session
+ * authentication needs the row's `sessionEpoch` (UV-001), which is deliberately
+ * kept out of the `AuthenticatedUser` shape clients see. */
+async function getAuthenticatedUserRecordById(app: AppContext, userId: number) {
   const user = await findUserById(app.db, userId);
   // Deactivation is fail-closed at the principal root (decision #126): every
   // authenticate* path resolves through here, so a disabled row can never
@@ -182,12 +186,20 @@ async function getAuthenticatedUserById(app: AppContext, userId: number) {
 
   const assignedPages = await listEffectivePageAssignments(app, user.id);
   return {
-    id: user.id,
-    username: user.username,
-    role: user.role,
-    mustChangePassword: user.mustChangePassword,
-    assignedPages: mapAssignedPages(assignedPages),
-  } satisfies AuthenticatedUser;
+    row: user,
+    authenticated: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      mustChangePassword: user.mustChangePassword,
+      assignedPages: mapAssignedPages(assignedPages),
+    } satisfies AuthenticatedUser,
+  };
+}
+
+async function getAuthenticatedUserById(app: AppContext, userId: number) {
+  const record = await getAuthenticatedUserRecordById(app, userId);
+  return record?.authenticated ?? null;
 }
 
 async function getAuthenticatedUserByUsername(app: AppContext, username: string) {
@@ -428,6 +440,10 @@ export async function setUserPassword(
     // the same user row lock.  Session revocation alone cannot stop that
     // already-resolved principal from minting a post-reset token.
     await advanceDeviceTokenEpoch(dbTx, user.id);
+    // UV-001: the same argument one plane over.  Session revocation below only
+    // sweeps rows that already exist; the epoch bump is what invalidates a
+    // login that verified the old password and is waiting on this very lock.
+    await advanceSessionEpoch(dbTx, user.id);
     await updateUserPasswordHash(
       dbTx,
       user.id,
@@ -482,6 +498,9 @@ export async function deactivateUser(
 
   return withAuditTransaction(app, async (dbTx) => {
     await lockUserForDeviceTokenMutation(dbTx, user.id);
+    // UV-001: deactivation revokes sessions, so it is a session-authority
+    // boundary too — an in-flight login must not mint one past the tombstone.
+    await advanceSessionEpoch(dbTx, user.id);
     await updateUserDisabledAt(dbTx, user.id, new Date());
     const revokedKeys = await revokeApiKeysForUser(dbTx, user.id, "user_deactivated");
     const revokedTokens = await revokeDeviceTokensForUser(dbTx, user.id, "user_deactivated");
@@ -574,6 +593,9 @@ export async function changeOwnPassword(
     // See setUserPassword: linearize legacy token issuance with the password
     // boundary, not merely with session lookup at request entry.
     await advanceDeviceTokenEpoch(dbTx, user.id);
+    // UV-001: same boundary treatment as the admin reset — kill in-flight
+    // logins that verified the password this call is replacing.
+    await advanceSessionEpoch(dbTx, user.id);
     await updateUserPasswordHash(dbTx, user.id, passwordHash);
     await updateUserMustChangePassword(dbTx, user.id, false);
     const revokedSessions = await revokeAuthSessionsForUser(dbTx, user.id, "password_changed");
@@ -1020,8 +1042,6 @@ export async function loginWithPassword(
     throw new UnauthorizedError("Invalid username or password");
   }
 
-  clearLoginBackoff(app, input.username);
-
   const authenticatedUser = await getAuthenticatedUserById(app, user.id);
   if (!authenticatedUser) {
     throw new UnauthorizedError("Authentication failed");
@@ -1031,11 +1051,33 @@ export async function loginWithPassword(
   // failure must not leave a usable-but-undisclosed session row behind a 500.
   const sessionToken = randomToken(32);
   const expiresAt = new Date(Date.now() + app.config.sessionTtlDays * 24 * 60 * 60 * 1000);
-  await withAuditTransaction(app, async (dbTx) => {
+  // UV-001: the password above was verified against a snapshot read outside
+  // any transaction, and argon2id verification is slow enough for a reset to
+  // commit inside that window.  Take the same user-row lock every
+  // password-authority boundary takes, and revalidate the snapshot before the
+  // session row exists.  The two orders are now both safe: this login either
+  // holds the lock first (and the boundary's sweep then revokes the session it
+  // just created) or takes it second (and sees the superseded authority here).
+  const minted = await withAuditTransaction(app, async (dbTx) => {
+    const lockedUser = await lockUserForDeviceTokenMutation(dbTx, user.id);
+    if (
+      !lockedUser
+      || lockedUser.disabledAt
+      || !roleCanUseSession(lockedUser.role)
+      || !lockedUser.passwordHash
+      || lockedUser.passwordHash !== user.passwordHash
+      || lockedUser.sessionEpoch !== user.sessionEpoch
+    ) {
+      // Fail closed, writing nothing: the authority this login verified is
+      // gone, so no session may exist on its behalf.
+      return false;
+    }
+
     await createAuthSession(dbTx, {
       userId: user.id,
       tokenDigest: sha256Hex(sessionToken),
       expiresAt,
+      sessionEpoch: lockedUser.sessionEpoch,
     });
 
     await recordAudit({ db: dbTx }, {
@@ -1045,7 +1087,22 @@ export async function loginWithPassword(
       eventType: "auth.login",
       metadata: { username: user.username },
     });
+    return true;
   });
+
+  if (!minted) {
+    // Indistinguishable from a wrong password on the wire: same 401, same
+    // message, same failed-login audit.  The per-account backoff counter is
+    // deliberately left untouched — this was not a credential guess, and it
+    // stays uncleared because no login actually succeeded.
+    await recordFailedLoginAuditBestEffort(app, {
+      username: user.username,
+      targetUserId: user.id,
+    });
+    throw new UnauthorizedError("Invalid username or password");
+  }
+
+  clearLoginBackoff(app, input.username);
 
   return {
     sessionToken,
@@ -1061,11 +1118,19 @@ export async function authenticateSessionToken(app: AppContext, sessionToken: st
     return null;
   }
 
-  const user = await getAuthenticatedUserById(app, session.userId);
-  if (!user || !roleCanUseSession(user.role)) {
+  const record = await getAuthenticatedUserRecordById(app, session.userId);
+  if (!record || !roleCanUseSession(record.authenticated.role)) {
     return null;
   }
 
+  // UV-001: the authority generation this session was minted under must still
+  // be current.  Revocation is the primary mechanism; this comparison is what
+  // makes the boundary hold even for a session row the sweep never saw.
+  if (record.row.sessionEpoch !== session.sessionEpoch) {
+    return null;
+  }
+
+  const user = record.authenticated;
   await touchAuthSession(app.db, session.id);
 
   return {

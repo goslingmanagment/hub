@@ -25,6 +25,9 @@ export interface CreateAuthSessionInput {
   userId: number;
   tokenDigest: string;
   expiresAt: Date;
+  /** UV-001: users.session_epoch read under the user-row lock in the same
+   * transaction that inserts this row. Never a value the caller invented. */
+  sessionEpoch: number;
 }
 
 export interface CreateApiKeyInput {
@@ -307,14 +310,28 @@ export async function createPendingDeviceToken(
   return created!;
 }
 
-/** User-row lock shared by activation, revocation, password reset, and
- * deactivation.  It closes the update-then-insert race where revoke-all could
- * otherwise miss a token activated in the same transaction window. */
+/** User-row lock shared by activation, revocation, password reset,
+ * deactivation, and (UV-001) session creation at login.  It closes the
+ * update-then-insert race where revoke-all could otherwise miss a token
+ * activated — or a session created — in the same transaction window. */
 export async function lockUserForDeviceTokenMutation(db: Database, userId: number) {
   const [locked] = await db.select().from(users)
     .where(eq(users.id, userId))
     .for("update");
   return locked ?? null;
+}
+
+/** UV-001: advance the session-plane authority generation. Called by every
+ * boundary that revokes sessions, under the same user-row lock, so an
+ * in-flight login sees either the pre- or post-boundary generation, never a
+ * torn view. */
+export async function advanceSessionEpoch(db: Database, userId: number) {
+  const [updated] = await db.update(users).set({
+    sessionEpoch: sql`${users.sessionEpoch} + 1`,
+  }).where(eq(users.id, userId)).returning({
+    sessionEpoch: users.sessionEpoch,
+  });
+  return updated ?? null;
 }
 
 export async function advanceDeviceTokenEpoch(db: Database, userId: number) {

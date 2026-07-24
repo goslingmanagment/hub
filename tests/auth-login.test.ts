@@ -21,6 +21,7 @@ const repoMocks = vi.hoisted(() => ({
   listApiKeys: vi.fn(),
   listUserPageAssignments: vi.fn(),
   listUsers: vi.fn(),
+  lockUserForDeviceTokenMutation: vi.fn(),
   revokeApiKeysByIds: vi.fn(),
   revokeApiKeysForUser: vi.fn(),
   revokeAuthSession: vi.fn(),
@@ -223,6 +224,9 @@ describe("per-account login backoff (audit B7)", () => {
     argon2Mocks.verify.mockResolvedValue(true);
     repoMocks.createAuthSession.mockResolvedValue({ id: 1 });
     repoMocks.findUserById.mockResolvedValue(user);
+    // UV-001: session creation revalidates the verified authority under the
+    // user-row lock; the fake returns the same unchanged row.
+    repoMocks.lockUserForDeviceTokenMutation.mockResolvedValue(user);
     const success = await loginWithPassword(app, { username: "dima", password: "right" });
     expect(success.authMethod).toBe("session");
 
