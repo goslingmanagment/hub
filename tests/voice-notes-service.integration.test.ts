@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -361,15 +361,25 @@ describe("voice-notes service: admission gates", () => {
     appContext.config.serviceEgressProxyUrl = null;
     appContext.config.serviceEgressProxyUsername = null;
     appContext.config.serviceEgressProxyPassword = null;
+    const warn = vi.fn();
+    appContext.logger = { warn } as never;
     const absentBody = absent.body();
-    await expect(
-      createVoiceNote(appContext, absent.principal, absent.page.label, absentBody),
-    ).rejects.toMatchObject({ code: "voice_provider_unavailable", statusCode: 503 });
     const providerErr = await createVoiceNote(appContext, absent.principal, absent.page.label, absentBody)
       .catch((e) => e);
-    expect(String(providerErr.message)).toMatch(/ELEVENLABS_API_KEY/);
-    expect(String(providerErr.message)).toMatch(/SERVICE_EGRESS_PROXY/);
-    expect(String(providerErr.message)).toMatch(/restart/i);
+    expect(providerErr).toMatchObject({
+      code: "voice_provider_unavailable",
+      statusCode: 503,
+      message: "Voice notes are temporarily unavailable. Please try again later.",
+    });
+    expect(String(providerErr.message)).not.toMatch(/ELEVENLABS_API_KEY|SERVICE_EGRESS_PROXY|restart/i);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        component: "voice_notes",
+        event: "voice_provider_unavailable",
+        serviceEgressProxyConfigured: false,
+      }),
+      expect.stringMatching(/ELEVENLABS_API_KEY.*SERVICE_EGRESS_PROXY.*restart/i),
+    );
     expect(await getVoiceNoteByClientRequestId(
       testDb.db,
       absent.principal.user.id,

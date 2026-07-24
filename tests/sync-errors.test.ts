@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  normalizeErrorSummary,
-  normalizeSyncError,
+  boundSyncErrorSummary,
+  buildNormalizedSyncError,
   SyncPayloadPersistenceError,
 } from "../apps/runtime/src/services/sync/errors.ts";
 
 describe("sync error normalization", () => {
   it("truncates generic sync errors to a bounded summary", () => {
     const longMessage = "x".repeat(1500);
-    const normalized = normalizeSyncError(new Error(longMessage), {
+    const normalized = buildNormalizedSyncError(new Error(longMessage), {
       endpoint: "followers",
       action: "running follower sync",
     });
@@ -31,7 +31,7 @@ describe("sync error normalization", () => {
     drizzleError.name = "DrizzleQueryError";
     (drizzleError as Error & { cause: { code: string } }).cause = { code: "54000" };
 
-    const normalized = normalizeSyncError(
+    const normalized = buildNormalizedSyncError(
       new SyncPayloadPersistenceError({
         endpoint: "followers",
         action: "inserting followers raw payload",
@@ -59,7 +59,7 @@ describe("sync error normalization", () => {
   });
 
   it("bounds arbitrary run summaries before persistence", () => {
-    const summary = normalizeErrorSummary("y".repeat(1500));
+    const summary = boundSyncErrorSummary("y".repeat(1500));
 
     expect(summary).not.toBeNull();
     expect(summary!.length).toBeLessThanOrEqual(1024);

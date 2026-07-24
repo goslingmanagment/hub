@@ -4,7 +4,7 @@ import {
   settleNotificationDeliveryOutboxAttempt,
   suppressLeasedNotificationDelivery,
 } from "@agency_hub_core/db";
-import { formatObservedError, redactSensitiveText } from "@agency_hub_core/shared";
+import { sanitizeError } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -127,7 +127,11 @@ export async function runNotificationDeliveryOutbox(
     } catch (error) {
       delivery = {
         status: "failed",
-        error: redactSensitiveText(formatObservedError(error)).slice(0, 512),
+        error: sanitizeError(error, {
+          format: "chain",
+          maxChars: 512,
+          truncation: "clip",
+        }).message,
       };
     }
 

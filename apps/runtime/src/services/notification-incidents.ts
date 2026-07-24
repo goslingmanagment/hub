@@ -11,12 +11,17 @@ import {
   type NotificationIncidentKind,
   type SyncStream,
 } from "@agency_hub_core/db";
-import { redactSensitiveText } from "@agency_hub_core/shared";
+import { sanitizeError, type SanitizeErrorOptions } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 
 const STREAM_FAILURE_THRESHOLD = 3;
+const INCIDENT_ERROR_OPTIONS = {
+  maxChars: 240,
+  truncation: "ellipsis",
+  trim: true,
+} satisfies SanitizeErrorOptions;
 // W3.3 (D3-N1): total incident_opened attempts allowed per incident before
 // the re-send loop gives up. Pacing comes free from the monitor cadence.
 const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
@@ -54,15 +59,6 @@ export function incidentKey(
   // suffix fixes the silently-colliding shape without changing an existing
   // latch identity. Stream keeps its historical position before the suffix.
   return input.subKey ? `${pageKey}:${input.subKey}` : pageKey;
-}
-
-function summarizeError(errorSummary: string | null | undefined) {
-  if (!errorSummary) {
-    return "Unknown error";
-  }
-
-  const sanitized = redactSensitiveText(errorSummary).trim();
-  return sanitized.length <= 240 ? sanitized : `${sanitized.slice(0, 237)}...`;
 }
 
 function openTitleForIncident(kind: NotificationIncidentKind) {
@@ -121,7 +117,10 @@ function openMessageForIncident(
     openTitleForIncident(input.kind),
     ...(input.pageLabel ? [`Page: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`] : []),
     ...(input.stream ? [`Stream: ${input.stream}`] : []),
-    `Error: ${summarizeError(input.errorSummary)}`,
+    `Error: ${sanitizeError(
+      input.errorSummary || "Unknown error",
+      INCIDENT_ERROR_OPTIONS,
+    ).message}`,
   ].join("\n");
 }
 
@@ -237,7 +236,10 @@ async function openIncidentAndNotify(
       platformAccountId: input.platformAccountId,
       stream: input.stream ?? null,
       errorCode: input.errorCode ?? null,
-      errorSummary: summarizeError(input.errorSummary),
+      errorSummary: sanitizeError(
+        input.errorSummary || "Unknown error",
+        INCIDENT_ERROR_OPTIONS,
+      ).message,
       metadata: {
         pageLabel: input.pageLabel,
         platform: input.platform,

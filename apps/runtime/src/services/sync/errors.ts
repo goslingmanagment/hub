@@ -1,4 +1,4 @@
-import { redactSensitiveText } from "@agency_hub_core/shared";
+import { sanitizeError } from "@agency_hub_core/shared";
 
 const MAX_SYNC_ERROR_SUMMARY_CHARS = 1024;
 
@@ -65,96 +65,41 @@ export class FanslyPurchaseHistoryContractError extends Error {
   }
 }
 
-function clampSummary(summary: string) {
-  if (summary.length <= MAX_SYNC_ERROR_SUMMARY_CHARS) {
-    return {
-      summary,
-      truncated: false,
-    };
-  }
-
-  return {
-    summary: `${summary.slice(0, MAX_SYNC_ERROR_SUMMARY_CHARS - 3)}...`,
-    truncated: true,
-  };
-}
-
-function normalizeString(value: unknown) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function extractErrorType(error: unknown) {
-  if (error instanceof Error && normalizeString(error.name)) {
-    return normalizeString(error.name)!;
-  }
-
-  return "Error";
-}
-
-function extractErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return redactSensitiveText(error.message);
-  }
-
-  return redactSensitiveText(String(error));
-}
-
-function extractErrorCode(error: unknown) {
-  if (!error || typeof error !== "object") {
-    return null;
-  }
-
-  const directCode = normalizeString((error as { code?: unknown }).code);
-  if (directCode) {
-    return directCode;
-  }
-
-  if ("cause" in error) {
-    return extractErrorCode((error as { cause?: unknown }).cause);
-  }
-
-  return null;
-}
-
-function isQueryStyleError(type: string, message: string) {
-  return type === "DrizzleQueryError" ||
-    message.includes("Failed query:") ||
-    message.includes("params:");
-}
-
-export function normalizeErrorSummary(summary: string | null | undefined) {
+export function boundSyncErrorSummary(summary: string | null | undefined) {
   if (!summary) {
     return null;
   }
 
-  return clampSummary(summary).summary;
+  return sanitizeError(summary, {
+    maxChars: MAX_SYNC_ERROR_SUMMARY_CHARS,
+    truncation: "ellipsis",
+  }).message;
 }
 
-export function normalizeSyncError(
+export function buildNormalizedSyncError(
   error: unknown,
   input: NormalizeSyncErrorInput,
 ): NormalizedSyncError {
   const endpoint = error instanceof SyncPayloadPersistenceError ? error.endpoint : input.endpoint;
   const action = error instanceof SyncPayloadPersistenceError ? error.action : input.action;
   const source = error instanceof SyncPayloadPersistenceError ? error.cause : error;
-  const type = extractErrorType(source);
-  const rawMessage = extractErrorMessage(source);
-  const code = extractErrorCode(source);
-  const queryStyle = isQueryStyleError(type, rawMessage);
-  const baseSummary = queryStyle
-    ? `${type} while ${action}${code ? ` (${code})` : ""}`
-    : (rawMessage || `${type} while ${action}`);
-  const clamped = clampSummary(baseSummary);
+  const sanitized = sanitizeError(source, {
+    maxChars: MAX_SYNC_ERROR_SUMMARY_CHARS,
+    truncation: "ellipsis",
+    queryStyleMessage: ({ name, code }) =>
+      `${name} while ${action}${code ? ` (${code})` : ""}`,
+    fallbackMessage: ({ name }) => `${name} while ${action}`,
+  });
 
   return {
-    summary: clamped.summary,
+    summary: sanitized.message,
     error: {
-      type,
-      summary: clamped.summary,
+      type: sanitized.name,
+      summary: sanitized.message,
       endpoint,
-      code,
-      truncated: clamped.truncated || queryStyle || baseSummary !== rawMessage,
-      originalMessageLength: rawMessage.length,
+      code: sanitized.code,
+      truncated: sanitized.truncated,
+      originalMessageLength: sanitized.originalMessageLength,
     },
   };
 }

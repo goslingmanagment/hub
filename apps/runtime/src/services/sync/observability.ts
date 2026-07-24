@@ -18,7 +18,7 @@ import { redactSensitiveText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
-  normalizeErrorSummary,
+  boundSyncErrorSummary,
   type NormalizedSyncError,
   type PersistedSyncError,
 } from "./errors.ts";
@@ -548,7 +548,7 @@ export class SyncRunTelemetry {
       ? null
       : failure;
     const errorSummary = typeof failure === "string"
-      ? normalizeErrorSummary(failure)
+      ? boundSyncErrorSummary(failure)
       : (failure?.summary ?? null);
     const requestSummary = this.requestSummaryCollector.buildSummaryRecord(
       this.metadata,

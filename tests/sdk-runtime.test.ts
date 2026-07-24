@@ -87,6 +87,7 @@ describe("kernel SDK runtime", () => {
       [403, "auth"],
       [404, "not_found"],
       [409, "conflict"],
+      [418, "http"],
       [429, "rate_limit"],
       [500, "server"],
     ];

@@ -1,6 +1,6 @@
 import { AI_FEATURE_STREAM_BODY_LIMIT_BYTES, routeSchemas } from "@agency_hub_core/contracts";
 import {
-  formatObservedError,
+  sanitizeError,
   normalizeProviderStreamFailure,
   type AiProviderFailureClassification,
 } from "@agency_hub_core/shared";
@@ -428,7 +428,7 @@ export async function pipeAiGatewaySse(
         request.log.warn({
           requestId: stream.requestId,
           errorName: error instanceof Error ? error.name : "UnknownError",
-          observedError: formatObservedError(error),
+          observedError: sanitizeError(error, { format: "chain" }).message,
           code: failureFrame.code,
           failurePhase: terminalFailure.failurePhase,
           providerHttpStatus: terminalFailure.providerHttpStatus,

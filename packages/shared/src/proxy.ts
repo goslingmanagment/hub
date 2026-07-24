@@ -5,6 +5,21 @@ import type { ProxyConfig } from "./types.ts";
 const SUPPORTED_PROXY_PROTOCOLS = new Set(["http:", "https:", "socks5:"]);
 const URL_CANDIDATE_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
 const TELEGRAM_BOT_TOKEN_PATH_PATTERN = /^\/(?:file\/)?bot[^/]+(?=\/|$)/i;
+const SECRET_TOKEN_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bsk-ant-[A-Za-z0-9_-]{8,}/g, "[REDACTED]"],
+  [/\bsk-or-[A-Za-z0-9_-]{8,}/g, "[REDACTED]"],
+  [/\bsk_[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
+  [/\bsk-[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
+  [/\bofapi_[A-Za-z0-9_-]{8,}/gi, "[REDACTED]"],
+  [/\bagency_hub_core_[A-Za-z0-9_-]{6,}/gi, "[REDACTED]"],
+  [/\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/g, "[REDACTED]"],
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]"],
+];
+// Keep the label and separator for operator context, but never its value.
+// The optional prefix covers env/config spellings such as ELEVENLABS_API_KEY
+// and SERVICE_EGRESS_PROXY_PASSWORD without matching ordinary prose.
+const LABELLED_SECRET_PATTERN =
+  /(["']?(?:[a-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|bot[_-]?token|token|secret|password|authorization)["']?\s*[:=]\s*["']?)(?:Bearer\s+)?([A-Za-z0-9._~+/=-]{6,})/gi;
 
 type SupportedProxyProtocol = "http:" | "https:" | "socks5:";
 
@@ -400,7 +415,7 @@ function formatMaskedCredentialUrl(url: URL) {
 }
 
 export function redactSensitiveText(value: string) {
-  return value.replace(URL_CANDIDATE_PATTERN, (candidate) => {
+  let redacted = value.replace(URL_CANDIDATE_PATTERN, (candidate) => {
     const { core, suffix } = splitTrailingPunctuation(candidate);
 
     try {
@@ -428,4 +443,13 @@ export function redactSensitiveText(value: string) {
       return candidate;
     }
   });
+
+  redacted = redacted.replace(
+    LABELLED_SECRET_PATTERN,
+    (_match, label: string) => `${label}[REDACTED]`,
+  );
+  for (const [pattern, replacement] of SECRET_TOKEN_PATTERNS) {
+    redacted = redacted.replace(pattern, replacement);
+  }
+  return redacted;
 }

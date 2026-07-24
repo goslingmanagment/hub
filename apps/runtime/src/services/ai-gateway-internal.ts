@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { AiGatewayPromptBlock, AiGatewayUsage } from "@agency_hub_core/contracts";
 import {
-  formatObservedError,
+  sanitizeError,
   normalizeProviderStreamFailure,
   type AiProviderFailureClassification,
   type AiUsageFeature,
@@ -178,7 +178,7 @@ export async function runGatewayCompletion(
     app.logger.warn(
       {
         feature: input.feature,
-        observedError: formatObservedError(error),
+        observedError: sanitizeError(error, { format: "chain" }).message,
         code: terminalFailure.code,
         failurePhase: terminalFailure.failurePhase,
         providerHttpStatus: terminalFailure.providerHttpStatus,

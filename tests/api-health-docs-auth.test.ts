@@ -171,6 +171,62 @@ describe("health and docs route auth", () => {
     }
   });
 
+  it("routes duck-typed HTTP-shaped throws through the generic 500 boundary", async () => {
+    routeMocks.getSystemHealth.mockRejectedValue({
+      statusCode: 418,
+      error: "operator_prose",
+      message: "arbitrary object text must not cross the boundary",
+    });
+    const server = await buildApiServer(createRouteTestContext());
+
+    try {
+      const response = await server.inject({
+        method: "GET",
+        url: "/api/v1/health",
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual({
+        error: "internal_error",
+        message: "Internal Server Error",
+        statusCode: 500,
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps Zod errors useful and bounded without echoing request values", async () => {
+    const requestSecret = `sk-ant-${"s".repeat(800)}`;
+    const server = await buildApiServer(createRouteTestContext());
+
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: {
+          username: requestSecret,
+          password: [requestSecret],
+        },
+      });
+      const body = response.json() as {
+        error: string;
+        message: string;
+        statusCode: number;
+      };
+
+      expect(response.statusCode).toBe(400);
+      expect(body.error).toBe("Bad Request");
+      expect(body.statusCode).toBe(400);
+      expect(body.message.length).toBeLessThanOrEqual(512);
+      expect(body.message).toContain("body/username");
+      expect(body.message).toContain("body/password");
+      expect(body.message).not.toContain(requestSecret);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("requires dashboard auth or a configured monitoring token for detailed sync health", async () => {
     routeMocks.getPublicSyncHealth.mockResolvedValue({
       statusCode: 200,
