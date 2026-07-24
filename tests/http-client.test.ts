@@ -11,6 +11,7 @@ import {
   buildSyncPageExecuteGroupId,
   isDisallowedProxyHostname,
 } from "../packages/shared/src/proxy.ts";
+import { sanitizeError } from "../packages/shared/src/error-sanitizer.ts";
 import { listenOnLoopback } from "./helpers/network.ts";
 
 const sharedHttpClientRequire = createRequire(new URL("../packages/shared/src/http-client.ts", import.meta.url));
@@ -275,7 +276,6 @@ describe("shared http client helpers", () => {
   });
 
   it("formats nested undici causes with socket metadata", async () => {
-    const { formatObservedError } = await loadHttpClientModule();
     const socketError = Object.assign(new Error("other side closed"), {
       name: "SocketError",
       code: "UND_ERR_SOCKET",
@@ -286,17 +286,18 @@ describe("shared http client helpers", () => {
     });
     const error = new TypeError("fetch failed", { cause: socketError });
 
-    expect(formatObservedError(error)).toContain("TypeError: fetch failed");
-    expect(formatObservedError(error)).toContain("cause(1): SocketError: other side closed");
-    expect(formatObservedError(error)).toContain("code=UND_ERR_SOCKET");
-    expect(formatObservedError(error)).toContain("socket={remoteAddress=203.0.113.10, remotePort=443}");
+    const observed = sanitizeError(error, { format: "chain" }).message;
+    expect(observed).toContain("TypeError: fetch failed");
+    expect(observed).toContain("cause(1): SocketError: other side closed");
+    expect(observed).toContain("code=UND_ERR_SOCKET");
+    expect(observed).toContain("socket={remoteAddress=203.0.113.10, remotePort=443}");
   });
 
   it("redacts inline proxy credentials from formatted errors", async () => {
-    const { formatObservedError } = await loadHttpClientModule();
     const error = new Error("Proxy connect failed for socks5://user:pass@127.0.0.1:1080");
-    expect(formatObservedError(error)).toContain("socks5://127.0.0.1:1080 (auth)");
-    expect(formatObservedError(error)).not.toContain("user:pass");
+    const observed = sanitizeError(error, { format: "chain" }).message;
+    expect(observed).toContain("socks5://127.0.0.1:1080 (auth)");
+    expect(observed).not.toContain("user:pass");
   });
 
   it("detects timeout errors through the nested cause chain", async () => {

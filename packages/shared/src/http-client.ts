@@ -1,5 +1,3 @@
-import { inspect } from "node:util";
-
 import { Agent, ProxyAgent, buildConnector, request } from "undici";
 import { SocksClient } from "socks";
 
@@ -11,10 +9,8 @@ import { SocksClient } from "socks";
 export { request as undiciRequest };
 
 import type { ProxyConfig } from "./types.ts";
-import {
-  normalizeProxyConfigWithMetadata,
-  redactSensitiveText,
-} from "./proxy.ts";
+import { iterateErrorChain } from "./error-sanitizer.ts";
+import { normalizeProxyConfigWithMetadata } from "./proxy.ts";
 
 const DISPATCHER_CONNECTIONS = 1;
 const DISPATCHER_KEEP_ALIVE_TIMEOUT_MS = 10_000;
@@ -547,12 +543,6 @@ export function createStickyConnectFailureFetch(fetchImpl: typeof fetch): typeof
   };
 }
 
-export function formatObservedError(error: unknown) {
-  return redactSensitiveText(Array.from(iterateErrorChain(error))
-    .map((cause, index) => `${index === 0 ? "" : `cause(${index}): `}${formatErrorCause(cause)}`)
-    .join(" | "));
-}
-
 export function parseRetryAfterDelayMs(retryAfterHeader: string | null, now = Date.now()) {
   if (!retryAfterHeader) {
     return null;
@@ -580,82 +570,4 @@ export function exponentialRetryDelayMs(attemptNumber: number) {
 
 export function resolveRetryDelayMs(retryAfterHeader: string | null, attemptNumber: number, now = Date.now()) {
   return parseRetryAfterDelayMs(retryAfterHeader, now) ?? exponentialRetryDelayMs(attemptNumber);
-}
-
-function formatErrorCause(error: unknown) {
-  if (error instanceof Error) {
-    const metadata = extractErrorMetadata(error);
-    const summary = redactSensitiveText(`${error.name}: ${error.message || "(no message)"}`);
-    return metadata.length > 0 ? `${summary} (${metadata.join(", ")})` : summary;
-  }
-
-  if (typeof error === "string") {
-    return redactSensitiveText(error);
-  }
-
-  return redactSensitiveText(inspect(error, { depth: 2, breakLength: Infinity }));
-}
-
-function extractErrorMetadata(error: Error) {
-  const metadata: string[] = [];
-  const fields = error as Error & Record<string, unknown>;
-
-  pushErrorField(metadata, "code", fields.code);
-  pushErrorField(metadata, "errno", fields.errno);
-  pushErrorField(metadata, "syscall", fields.syscall);
-  pushErrorField(metadata, "address", fields.address);
-  pushErrorField(metadata, "port", fields.port);
-
-  const socketDetails = formatSocketDetails(fields.socket);
-  if (socketDetails) {
-    metadata.push(`socket={${socketDetails}}`);
-  }
-
-  return metadata;
-}
-
-function pushErrorField(metadata: string[], label: string, value: unknown) {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    metadata.push(`${label}=${value}`);
-  }
-}
-
-function formatSocketDetails(value: unknown) {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const socket = value as Record<string, unknown>;
-  const fields: string[] = [];
-
-  pushErrorField(fields, "localAddress", socket.localAddress);
-  pushErrorField(fields, "localPort", socket.localPort);
-  pushErrorField(fields, "remoteAddress", socket.remoteAddress);
-  pushErrorField(fields, "remotePort", socket.remotePort);
-  pushErrorField(fields, "remoteFamily", socket.remoteFamily);
-  pushErrorField(fields, "timeout", socket.timeout);
-  pushErrorField(fields, "bytesWritten", socket.bytesWritten);
-  pushErrorField(fields, "bytesRead", socket.bytesRead);
-
-  return fields.length > 0 ? fields.join(", ") : null;
-}
-
-function* iterateErrorChain(error: unknown) {
-  let current = error;
-  const visited = new Set<object>();
-
-  while (current !== null && current !== undefined) {
-    yield current;
-
-    if (typeof current !== "object") {
-      return;
-    }
-
-    if (visited.has(current)) {
-      return;
-    }
-    visited.add(current);
-
-    current = "cause" in current ? (current as { cause?: unknown }).cause : undefined;
-  }
 }

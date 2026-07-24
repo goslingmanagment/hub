@@ -4,9 +4,9 @@ import { getTelegramSettings, type TelegramSettingsRow } from "@agency_hub_core/
 import {
   classifyTransportFailure,
   decryptJsonWithKeyVersion,
-  formatObservedError,
   redactSensitiveText,
   resolveRetryDelayMs,
+  sanitizeError,
 } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
@@ -56,7 +56,11 @@ function describeTelegramFailure(error: unknown) {
   if (failureKind === "timeout") {
     return "Telegram API request timed out through the service proxy.";
   }
-  return formatObservedError(error).slice(0, 512);
+  return sanitizeError(error, {
+    format: "chain",
+    maxChars: 512,
+    truncation: "clip",
+  }).message;
 }
 
 function shouldRetryTelegramResponse(status: number) {

@@ -46,6 +46,7 @@ import {
   type AuthPolicyVerdict,
   type RoutePolicyTableRow,
 } from "./auth-policy.ts";
+import { formatRequestValidationMessage } from "./error-boundary.ts";
 import { createRequestAuth } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
@@ -426,7 +427,11 @@ export async function buildApiServer(appContext: AppContext) {
     if (hasZodFastifySchemaValidationErrors(error)) {
       reply.code(400).send({
         error: "Bad Request",
-        message: error.message,
+        message: formatRequestValidationMessage(error, [
+          request.body,
+          request.query,
+          request.params,
+        ]),
         statusCode: 400,
       });
       return;
@@ -456,24 +461,6 @@ export async function buildApiServer(appContext: AppContext) {
     if (error instanceof AppError) {
       reply.code(error.statusCode).send({
         error: error.code,
-        message: error.message,
-        statusCode: error.statusCode,
-      });
-      return;
-    }
-
-    if (
-      error &&
-      typeof error === "object" &&
-      "statusCode" in error &&
-      typeof error.statusCode === "number" &&
-      "error" in error &&
-      typeof error.error === "string" &&
-      "message" in error &&
-      typeof error.message === "string"
-    ) {
-      reply.code(error.statusCode).send({
-        error: error.error,
         message: error.message,
         statusCode: error.statusCode,
       });

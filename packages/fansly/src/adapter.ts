@@ -10,7 +10,7 @@ import {
   createProxyRequestDispatcher,
   createRequestDispatcher,
   executeObservedRequest,
-  formatObservedError,
+  sanitizeError,
   redactSensitiveText,
   resolveRetryDelayMs,
   type FanslySessionBundle,
@@ -610,7 +610,7 @@ export class FanslyAdapter {
             kind: "retry",
             failureKind,
             retryDelayMs: retryDelayMs(executionContext.attemptNumber),
-            errorMessage: formatObservedError(error),
+            errorMessage: sanitizeError(error, { format: "chain" }).message,
             error,
           };
         }
@@ -618,7 +618,7 @@ export class FanslyAdapter {
         return {
           kind: "failed",
           failureKind,
-          errorMessage: formatObservedError(error),
+          errorMessage: sanitizeError(error, { format: "chain" }).message,
           error,
         };
       },

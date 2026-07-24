@@ -19,8 +19,8 @@
 
 import {
   classifyTransportFailure,
-  formatObservedError,
   redactSensitiveText,
+  sanitizeError,
 } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
@@ -379,7 +379,7 @@ export function createElevenLabsVoiceProvider(
       } catch (error) {
         // Network failure, caller abort, or the 60s timeout: no HTTP status, and
         // billing is indeterminate → NOT refused.
-        const observed = sanitizeDetail(formatObservedError(error), [
+        const observed = sanitizeDetail(sanitizeError(error, { format: "chain" }).message, [
           apiKey,
           input.text,
         ]);

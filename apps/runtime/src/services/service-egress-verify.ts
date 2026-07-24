@@ -1,8 +1,8 @@
 import { getTelegramSettings } from "@agency_hub_core/db";
 import {
   formatMaskedProxyUrl,
-  formatObservedError,
   redactSensitiveText,
+  sanitizeError,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -169,7 +169,7 @@ async function verifyTelegram(
 }
 
 function sanitizeVerificationError(app: AppContext, error: unknown) {
-  let detail = redactSensitiveText(formatObservedError(error));
+  let detail = redactSensitiveText(sanitizeError(error, { format: "chain" }).message);
   const knownSecrets = [
     app.config.elevenLabsApiKey,
     app.config.telegramBotToken,
