@@ -64,7 +64,7 @@
   "packages/shared/src/http-request.ts": 4,
   "packages/shared/src/logger.ts": 1,
   "packages/shared/src/proxy.ts": 6,
-  "packages/shared/src/time.ts": 26,
+  "packages/shared/src/time.ts": 23,
   "tests/adapter-fansly-global-delay.test.ts": 1,
   "tests/ai-gateway.integration.test.ts": 5,
   "tests/ai-restricted-class.integration.test.ts": 3,

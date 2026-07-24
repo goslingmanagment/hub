@@ -3884,20 +3884,37 @@ describe("api integration", () => {
     await rebuildRevenueRollups(testDb.db, fixture.lilyPage.id);
     await recalculateFanPageSpend(testDb.db, fixture.lilyPage.id);
 
-    const report = await getPageRevenueReport(createTestAppContext(testDb), fixture.lilyPage.label, {
+    // `from`/`to` are inclusive business dates (P-34), so December is
+    // 2025-12-01..2025-12-31: the 2026-01-01T00:00Z tip stays outside it in
+    // UTC, and the 2025-11-30T21:30Z one stays on November 30.
+    const lilyPageLabel = fixture.lilyPage.label;
+    const report = await getPageRevenueReport(createTestAppContext(testDb), lilyPageLabel, {
       period: "custom",
       custom: {
         from: "2025-12-01",
-        to: "2026-01-01",
+        to: "2025-12-31",
       },
     });
     const modelReport = await getModelRevenueReport(createTestAppContext(testDb), "lily-model", {
       period: "custom",
       custom: {
         from: "2025-12-01",
-        to: "2026-01-01",
+        to: "2025-12-31",
       },
     });
+    // Naming 2026-01-01 as `to` covers that whole day, so the January tip lands
+    // inside the window instead of falling off its exclusive edge.
+    const reportThroughNewYear = await getPageRevenueReport(
+      createTestAppContext(testDb),
+      lilyPageLabel,
+      {
+        period: "custom",
+        custom: {
+          from: "2025-12-01",
+          to: "2026-01-01",
+        },
+      },
+    );
     const rollupRows = await testDb.pool.query(`
       select business_date::text as business_date,
              creator_net_amount_mills as net_amount_mills
@@ -3914,6 +3931,10 @@ describe("api integration", () => {
     expect(report.totalNetMills).toBe(350376);
     expect(modelReport.netEarningsMills).toBe(350376);
     expect(modelReport.totalNetMills).toBe(350376);
+    expect(reportThroughNewYear.from).toBe("2025-12-01T00:00:00.000Z");
+    expect(reportThroughNewYear.to).toBe("2026-01-02T00:00:00.000Z");
+    expect(reportThroughNewYear.revenueMills).toBe(369575);
+    expect(reportThroughNewYear.netEarningsMills).toBe(369575);
     expect(rollupRows.rows).toEqual([
       {
         business_date: "2025-11-30",
@@ -3940,7 +3961,7 @@ describe("api integration", () => {
     const ownerCookie = sessionCookieFrom(ownerLogin);
     const spenderList = await server.inject({
       method: "GET",
-      url: "/api/v2/spenders?scope=page&pageLabel=lily1&period=custom&from=2025-12-01&to=2026-01-01&limit=10&offset=0",
+      url: "/api/v2/spenders?scope=page&pageLabel=lily1&period=custom&from=2025-12-01&to=2025-12-31&limit=10&offset=0",
       headers: {
         cookie: ownerCookie,
       },
@@ -3982,11 +4003,13 @@ describe("api integration", () => {
     });
 
     expect(spenderSeries.statusCode).toBe(200);
+    // The series was asked for 2025-11-30..2025-12-02 and covers all three
+    // days: the day named by `to` is part of the window (P-34).
     expect(spenderSeries.json()).toMatchObject({
       period: {
         timeZone: "UTC",
         fromBusinessDate: "2025-11-30",
-        toBusinessDateInclusive: "2025-12-01",
+        toBusinessDateInclusive: "2025-12-02",
       },
       items: [
         {
@@ -4000,6 +4023,14 @@ describe("api integration", () => {
         {
           fromBusinessDate: "2025-12-01",
           toBusinessDateInclusive: "2025-12-01",
+          metrics: {
+            creatorNetAmountMills: 0,
+            grossAmountMills: 0,
+          },
+        },
+        {
+          fromBusinessDate: "2025-12-02",
+          toBusinessDateInclusive: "2025-12-02",
           metrics: {
             creatorNetAmountMills: 0,
             grossAmountMills: 0,
@@ -5654,12 +5685,13 @@ describe("api integration", () => {
     });
 
     expect(response.statusCode).toBe(200);
+    // from=2026-03-04&to=2026-03-08 is five inclusive business days (P-34).
     expect(response.json()).toMatchObject({
       granularity: "day",
       period: {
         timeZone: "UTC",
         fromBusinessDate: "2026-03-04",
-        toBusinessDateInclusive: "2026-03-07",
+        toBusinessDateInclusive: "2026-03-08",
       },
     });
     expect(response.json().items).toEqual([
@@ -5714,6 +5746,22 @@ describe("api integration", () => {
       {
         fromBusinessDate: "2026-03-07",
         toBusinessDateInclusive: "2026-03-07",
+        metrics: {
+          grossAmountMills: 0,
+          creatorNetAmountMills: 0,
+          postedGrossAmountMills: 0,
+          pendingGrossAmountMills: 0,
+          unknownGrossAmountMills: 0,
+          postedCreatorNetAmountMills: 0,
+          pendingCreatorNetAmountMills: 0,
+          unknownCreatorNetAmountMills: 0,
+          transactionCount: 0,
+          lastTransactionAt: null,
+        },
+      },
+      {
+        fromBusinessDate: "2026-03-08",
+        toBusinessDateInclusive: "2026-03-08",
         metrics: {
           grossAmountMills: 0,
           creatorNetAmountMills: 0,
@@ -8271,6 +8319,10 @@ describe("api integration", () => {
       headers: { cookie },
     });
 
+    // Both windows are inclusive of the day named by `to` (P-34), so the
+    // follower query spans 2026-03-01..2026-03-02 and the subscriber query
+    // spans 2026-03-01..2026-03-07. The 21:30Z activity is still attributed to
+    // 2026-03-01 in UTC — not to the Moscow-flipped 2026-03-02.
     expect(followersDaily.statusCode).toBe(200);
     expect(followersDaily.json().items).toEqual([
       expect.objectContaining({
@@ -8287,9 +8339,18 @@ describe("api integration", () => {
         activeSubscribers: 1,
       }),
       expect.objectContaining({
+        businessDate: "2026-03-02",
+        newSubscribers: 0,
+      }),
+      expect.objectContaining({
         businessDate: "2026-03-06",
         newSubscribers: 0,
         activeSubscribers: 0,
+      }),
+      // The day named by `to` is part of the series now.
+      expect.objectContaining({
+        businessDate: "2026-03-07",
+        newSubscribers: 0,
       }),
     ]));
     expect(

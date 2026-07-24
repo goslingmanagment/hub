@@ -93,7 +93,7 @@ describe("money helpers", () => {
     });
   });
 
-  it("treats custom upper bounds as exclusive on UTC day ranges", () => {
+  it("treats custom upper bounds as inclusive on UTC day ranges", () => {
     const now = new Date("2026-01-15T12:00:00.000Z");
     const bounds = resolveRevenuePeriodBoundsForPlatform("fansly", "custom", now, {
       from: "2025-12-01",
@@ -109,14 +109,14 @@ describe("money helpers", () => {
     });
 
     expect(bounds.from?.toISOString()).toBe("2025-12-01T00:00:00.000Z");
-    expect(bounds.to?.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+    expect(bounds.to?.toISOString()).toBe("2026-01-02T00:00:00.000Z");
     expect(businessRange).toEqual({
       from: "2025-12-01",
-      toExclusive: "2026-01-01",
+      toExclusive: "2026-01-02",
     });
     expect(spenderRange).toMatchObject({
       fromBusinessDate: "2025-11-30",
-      toBusinessDateInclusive: "2025-12-01",
+      toBusinessDateInclusive: "2025-12-02",
     });
   });
 

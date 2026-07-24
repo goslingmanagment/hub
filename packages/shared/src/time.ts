@@ -248,31 +248,27 @@ function nextBusinessDateParts(value: string) {
   };
 }
 
+// `from` and `to` are INCLUSIVE business dates, for a range of any width: the
+// window covers every calendar day from `from` through `to` in the period's
+// business timezone. It is materialised as the half-open instant pair
+// [start of `from`, start of the day after `to`), so widening a picker by one
+// day always widens the window by exactly one day. Until P-34 the upper bound
+// was inclusive only for same-day ranges and exclusive for wider ones, which
+// made `from=X&to=X+1` resolve to the same 24h window as `from=X&to=X`.
 function resolveCustomPeriodBounds(
   custom: { from: string; to: string },
   timeZone: string,
 ): PeriodBounds {
-  const { year: fromYear, month: fromMonth, day: fromDay } = parseBusinessDate(custom.from);
-  const { year: toYear, month: toMonth, day: toDay } = parseBusinessDate(custom.to);
+  const fromParts = parseBusinessDate(custom.from);
+  parseBusinessDate(custom.to); // validated before the ordering check
   if (custom.from > custom.to) {
     throw new Error(`Custom period requires from <= to, received ${custom.from} > ${custom.to}`);
   }
 
-  const from = zonedDateTimeToUtc(
-    { year: fromYear, month: fromMonth, day: fromDay },
-    timeZone,
-  );
-  const exclusiveToParts = custom.from === custom.to
-    ? nextBusinessDateParts(custom.to)
-    : { year: toYear, month: toMonth, day: toDay };
-  // Custom ranges use an exclusive upper bound: [from, to). Same-day ranges
-  // advance the upper bound to cover that single calendar day.
-  const to = zonedDateTimeToUtc(
-    exclusiveToParts,
-    timeZone,
-  );
-
-  return { from, to };
+  return {
+    from: zonedDateTimeToUtc(fromParts, timeZone),
+    to: zonedDateTimeToUtc(nextBusinessDateParts(custom.to), timeZone),
+  };
 }
 
 function resolvePeriodBoundsWithOffsets(
