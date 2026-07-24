@@ -16,6 +16,7 @@ export * from "./repositories/fan-profiles.ts";
 export * from "./repositories/fan-metadata.ts";
 export * from "./repositories/ai-usage.ts";
 export * from "./repositories/notifications.ts";
+export * from "./repositories/notification-outbox.ts";
 export * from "./repositories/observations.ts";
 export * from "./repositories/ops-metrics.ts";
 export * from "./repositories/access-grants.ts";

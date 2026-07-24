@@ -2962,8 +2962,17 @@ const notificationIncidentKindEnum = z.enum([
   "ops_sampler_silent",
   "ofapi_chargebacks_reconcile_failed",
   "ofapi_link_stats_reconcile_failed",
+  "ai_provider_billing",
+  "ai_provider_failed",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
+const notificationDeliveryOutboxStateEnum = z.enum([
+  "pending",
+  "leased",
+  "delivered",
+  "suppressed",
+  "exhausted",
+]);
 const deliveryKindEnum = z.enum([
   "test",
   "daily_report_scheduled",
@@ -2982,6 +2991,7 @@ export const notificationsSettingsResponseSchema = z.object({
   enabled: z.boolean(),
   dailyReportEnabled: z.boolean(),
   syncFailureAlertsEnabled: z.boolean(),
+  aiCriticalAlertsEnabled: z.boolean(),
   reportHourUtc: z.number().int().min(0).max(23),
   connectionStatus: notificationConnectionStatusEnum,
   lastMessageAt: isoTimestamp.nullable(),
@@ -2992,6 +3002,7 @@ export const notificationsSettingsUpdateBodySchema = z.object({
   enabled: z.boolean().optional(),
   dailyReportEnabled: z.boolean().optional(),
   syncFailureAlertsEnabled: z.boolean().optional(),
+  aiCriticalAlertsEnabled: z.boolean().optional(),
   reportHourUtc: z.number().int().min(0).max(23).optional(),
   botToken: telegramBotTokenSchema.nullable().optional(),
   chatId: telegramChatIdSchema.nullable().optional(),
@@ -3034,6 +3045,10 @@ export const notificationsIncidentItemSchema = z.object({
   errorCode: z.string().nullable(),
   errorSummary: z.string().nullable(),
   notificationCount: z.number().int(),
+  outboxState: notificationDeliveryOutboxStateEnum.nullable(),
+  outboxAttemptCount: z.number().int().nonnegative().nullable(),
+  outboxLastError: z.string().nullable(),
+  outboxSuppressionReason: z.string().nullable(),
 });
 
 export const notificationsIncidentsQuerySchema = z.object({

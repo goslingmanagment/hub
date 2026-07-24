@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { openNotificationIncidentWithRecoveryGuard } from "@agency_hub_core/db";
+import {
+  getTelegramSettings,
+  openNotificationIncident,
+  openNotificationIncidentWithRecoveryGuard,
+  updateTelegramSettings,
+} from "@agency_hub_core/db";
 
 import {
   computeGoldenSignals,
@@ -146,12 +151,50 @@ describe("golden signals (Stage 25)", () => {
     const { samples } = await computeGoldenSignals(appStub());
     const pending = samples.find((s) => s.metric === "capture_pending_age" && s.quantile === "p95");
     const queued = samples.find((s) => s.metric === "command_queued_age" && s.quantile === "p95");
+    const notificationOutbox = samples.find(
+      (s) => s.metric === "notification_outbox_age" && s.quantile === "p95",
+    );
     const acceptance = samples.find((s) => s.metric === "acceptance_events_1h" && s.quantile === "p95");
     expect(pending).toBeDefined();
     expect(pending!.valueMs).toBe(0);
     expect(queued).toBeDefined();
     expect(queued!.valueMs).toBe(0);
+    expect(notificationOutbox).toBeDefined();
+    expect(notificationOutbox!.valueMs).toBe(0);
     expect(acceptance).toBeDefined();
+  });
+
+  it("emits the age of the oldest undelivered notification outbox row", async () => {
+    await getTelegramSettings(harness.db);
+    await updateTelegramSettings(harness.db, { aiCriticalAlertsEnabled: true });
+    const opened = await openNotificationIncident(harness.db, {
+      incidentKey: "ai_provider_failed:global:queue-age-fixture",
+      kind: "ai_provider_failed",
+      platformAccountId: null,
+      now: new Date(),
+      outbox: {
+        channel: "telegram",
+        messageText: "fixture only",
+        pagingPolicy: "ai_critical",
+      },
+    });
+    await harness.pool.query(
+      "update notification_delivery_outbox set created_at = now() - interval '10 minutes' where notification_incident_id = $1",
+      [opened.incident.id],
+    );
+
+    const { samples } = await computeGoldenSignals(appStub());
+    const age = samples.find(
+      (sample) => sample.metric === "notification_outbox_age" && sample.quantile === "p95",
+    );
+    expect(age?.valueMs).toBeGreaterThan(590_000);
+
+    // Keep the suite's shared database clean: terminal rows are intentionally
+    // excluded from the queue-age gauge.
+    await harness.pool.query(
+      "update notification_delivery_outbox set state = 'delivered' where notification_incident_id = $1",
+      [opened.incident.id],
+    );
   });
 
   it("an aged UNPROCESSED webhook row breaches capture_pending_age (a wedge is not quiet)", async () => {

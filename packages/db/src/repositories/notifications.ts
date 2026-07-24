@@ -2,11 +2,17 @@ import { and, count, desc, eq, lte, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
+  notificationDeliveryOutbox,
   notificationIncidentRecoveries,
   notificationIncidents,
   pages,
   telegramDeliveryAttempts,
 } from "../schema.ts";
+import {
+  enqueueNotificationDeliveryOutbox,
+  type NotificationDeliveryOutboxRequest,
+  type NotificationDeliveryOutboxState,
+} from "./notification-outbox.ts";
 
 export type NotificationIncidentKind =
   | "auth_blocked"
@@ -25,7 +31,9 @@ export type NotificationIncidentKind =
   | "scheduler_silent"
   | "ops_sampler_silent"
   | "ofapi_chargebacks_reconcile_failed"
-  | "ofapi_link_stats_reconcile_failed";
+  | "ofapi_link_stats_reconcile_failed"
+  | "ai_provider_billing"
+  | "ai_provider_failed";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";
@@ -149,6 +157,10 @@ export interface NotificationIncidentWithPage {
   errorCode: string | null;
   errorSummary: string | null;
   notificationCount: number;
+  outboxState: NotificationDeliveryOutboxState | null;
+  outboxAttemptCount: number | null;
+  outboxLastError: string | null;
+  outboxSuppressionReason: string | null;
 }
 
 export async function listNotificationIncidentsWithPages(
@@ -198,6 +210,38 @@ export async function listNotificationIncidentsWithPages(
       errorCode: notificationIncidents.errorCode,
       errorSummary: notificationIncidents.errorSummary,
       notificationCount: sql<number>`(select count(*)::int from ${telegramDeliveryAttempts} where ${telegramDeliveryAttempts.notificationIncidentId} = ${notificationIncidents.id})`,
+      outboxState: sql<NotificationDeliveryOutboxState | null>`(
+        select ${notificationDeliveryOutbox.state}
+        from ${notificationDeliveryOutbox}
+        where ${notificationDeliveryOutbox.notificationIncidentId} = ${notificationIncidents.id}
+        order by ${notificationDeliveryOutbox.createdAt} desc,
+                 ${notificationDeliveryOutbox.id} desc
+        limit 1
+      )`,
+      outboxAttemptCount: sql<number | null>`(
+        select ${notificationDeliveryOutbox.attemptCount}
+        from ${notificationDeliveryOutbox}
+        where ${notificationDeliveryOutbox.notificationIncidentId} = ${notificationIncidents.id}
+        order by ${notificationDeliveryOutbox.createdAt} desc,
+                 ${notificationDeliveryOutbox.id} desc
+        limit 1
+      )`,
+      outboxLastError: sql<string | null>`(
+        select ${notificationDeliveryOutbox.lastError}
+        from ${notificationDeliveryOutbox}
+        where ${notificationDeliveryOutbox.notificationIncidentId} = ${notificationIncidents.id}
+        order by ${notificationDeliveryOutbox.createdAt} desc,
+                 ${notificationDeliveryOutbox.id} desc
+        limit 1
+      )`,
+      outboxSuppressionReason: sql<string | null>`(
+        select ${notificationDeliveryOutbox.suppressionReason}
+        from ${notificationDeliveryOutbox}
+        where ${notificationDeliveryOutbox.notificationIncidentId} = ${notificationIncidents.id}
+        order by ${notificationDeliveryOutbox.createdAt} desc,
+                 ${notificationDeliveryOutbox.id} desc
+        limit 1
+      )`,
     })
     .from(notificationIncidents)
     .leftJoin(pages, eq(notificationIncidents.platformAccountId, pages.id))
@@ -222,6 +266,7 @@ async function openNotificationIncidentInternal(
     errorCode?: string | null;
     errorSummary?: string | null;
     metadata?: Record<string, unknown>;
+    outbox?: NotificationDeliveryOutboxRequest;
     now?: Date;
   },
   guard?: {
@@ -291,6 +336,15 @@ async function openNotificationIncidentInternal(
           if (!inserted) {
             throw new Error(`Notification incident "${input.incidentKey}" could not be inserted`);
           }
+          if (input.outbox) {
+            await enqueueNotificationDeliveryOutbox(tx as unknown as Database, {
+              notificationIncidentId: inserted.id,
+              transition: "opened",
+              transitionAt: eventTime,
+              request: input.outbox,
+              now,
+            });
+          }
 
           return {
             incident: inserted,
@@ -314,6 +368,15 @@ async function openNotificationIncidentInternal(
 
           if (!reopened) {
             throw new Error(`Notification incident "${input.incidentKey}" could not be reopened`);
+          }
+          if (input.outbox) {
+            await enqueueNotificationDeliveryOutbox(tx as unknown as Database, {
+              notificationIncidentId: reopened.id,
+              transition: "reopened",
+              transitionAt: eventTime,
+              request: input.outbox,
+              now,
+            });
           }
 
           return {
@@ -365,6 +428,7 @@ export async function openNotificationIncident(
     errorCode?: string | null;
     errorSummary?: string | null;
     metadata?: Record<string, unknown>;
+    outbox?: NotificationDeliveryOutboxRequest;
     now?: Date;
   },
 ): Promise<{
@@ -392,6 +456,7 @@ export async function openNotificationIncidentWithRecoveryGuard(
     errorCode?: string | null;
     errorSummary?: string | null;
     metadata?: Record<string, unknown>;
+    outbox?: NotificationDeliveryOutboxRequest;
     occurredAt: Date;
     now?: Date;
   },
@@ -440,6 +505,7 @@ export async function resolveNotificationIncident(
     incidentKey: string;
     metadata?: Record<string, unknown>;
     maxLastSeenAt?: Date;
+    outbox?: NotificationDeliveryOutboxRequest;
     now?: Date;
   },
 ): Promise<NotificationIncidentRow | null> {
@@ -452,16 +518,31 @@ export async function resolveNotificationIncident(
     clauses.push(lte(notificationIncidents.lastSeenAt, input.maxLastSeenAt));
   }
 
-  const [resolved] = await db.update(notificationIncidents)
-    .set({
-      status: "resolved",
-      resolvedAt: now,
-      lastSeenAt: now,
-      metadata: input.metadata ?? {},
-      updatedAt: now,
-    })
-    .where(and(...clauses))
-    .returning();
+  const resolveWith = async (connection: Database) => {
+    const [resolved] = await connection.update(notificationIncidents)
+      .set({
+        status: "resolved",
+        resolvedAt: now,
+        lastSeenAt: now,
+        metadata: input.metadata ?? {},
+        updatedAt: now,
+      })
+      .where(and(...clauses))
+      .returning();
 
-  return resolved ?? null;
+    if (resolved && input.outbox) {
+      await enqueueNotificationDeliveryOutbox(connection, {
+        notificationIncidentId: resolved.id,
+        transition: "resolved",
+        transitionAt: now,
+        request: input.outbox,
+        now,
+      });
+    }
+    return resolved ?? null;
+  };
+
+  return input.outbox
+    ? db.transaction((tx) => resolveWith(tx as unknown as Database))
+    : resolveWith(db);
 }

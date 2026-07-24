@@ -179,6 +179,8 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "ops_sampler_silent",
   "ofapi_chargebacks_reconcile_failed",
   "ofapi_link_stats_reconcile_failed",
+  "ai_provider_billing",
+  "ai_provider_failed",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -338,6 +340,7 @@ export const telegramSettings = pgTable("telegram_settings", {
   enabled: boolean("enabled").default(true).notNull(),
   dailyReportEnabled: boolean("daily_report_enabled").default(true).notNull(),
   syncFailureAlertsEnabled: boolean("sync_failure_alerts_enabled").default(true).notNull(),
+  aiCriticalAlertsEnabled: boolean("ai_critical_alerts_enabled").default(false).notNull(),
   reportHourUtc: integer("report_hour_utc").default(9).notNull(),
   encryptedBotToken: text("encrypted_bot_token"),
   chatId: text("chat_id"),
@@ -363,6 +366,74 @@ export const telegramDeliveryAttempts = pgTable(
   (table) => ({
     kindCreatedIdx: index("telegram_delivery_attempts_kind_created_idx").on(
       table.kind,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const notificationDeliveryOutbox = pgTable(
+  "notification_delivery_outbox",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    notificationIncidentId: bigint("notification_incident_id", { mode: "number" })
+      .references(() => notificationIncidents.id, { onDelete: "restrict" })
+      .notNull(),
+    transition: text("transition").$type<"opened" | "reopened" | "resolved">().notNull(),
+    transitionAt: timestamp("transition_at", { withTimezone: true }).notNull(),
+    channel: text("channel").$type<"telegram">().notNull(),
+    pagingPolicy: text("paging_policy").$type<"sync_failure" | "ai_critical">().notNull(),
+    idempotencyKey: text("idempotency_key").notNull().unique(),
+    messageText: text("message_text").notNull(),
+    state: text("state").$type<
+      "pending" | "leased" | "delivered" | "suppressed" | "exhausted"
+    >().default("pending").notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    maxAttempts: integer("max_attempts").default(5).notNull(),
+    availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseToken: text("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    suppressionReason: text("suppression_reason"),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    exhaustedAt: timestamp("exhausted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    transitionCheck: check("notification_delivery_outbox_transition_check", sql`
+      ${table.transition} in ('opened', 'reopened', 'resolved')
+    `),
+    channelCheck: check("notification_delivery_outbox_channel_check", sql`
+      ${table.channel} in ('telegram')
+    `),
+    pagingPolicyCheck: check("notification_delivery_outbox_paging_policy_check", sql`
+      ${table.pagingPolicy} in ('sync_failure', 'ai_critical')
+    `),
+    stateCheck: check("notification_delivery_outbox_state_check", sql`
+      ${table.state} in ('pending', 'leased', 'delivered', 'suppressed', 'exhausted')
+    `),
+    attemptCountCheck: check(
+      "notification_delivery_outbox_attempt_count_check",
+      sql`${table.attemptCount} >= 0`,
+    ),
+    maxAttemptsCheck: check(
+      "notification_delivery_outbox_max_attempts_check",
+      sql`${table.maxAttempts} > 0`,
+    ),
+    transitionChannelUniq: unique("notification_delivery_outbox_transition_channel_uniq").on(
+      table.notificationIncidentId,
+      table.transition,
+      table.transitionAt,
+      table.channel,
+    ),
+    readyIdx: index("notification_delivery_outbox_ready_idx")
+      .on(table.availableAt, table.createdAt)
+      .where(sql`${table.state} = 'pending'`),
+    expiredLeaseIdx: index("notification_delivery_outbox_expired_lease_idx")
+      .on(table.leaseExpiresAt)
+      .where(sql`${table.state} = 'leased'`),
+    incidentIdx: index("notification_delivery_outbox_incident_idx").on(
+      table.notificationIncidentId,
       table.createdAt,
     ),
   }),
@@ -1861,6 +1932,11 @@ export const aiUsageEvents = pgTable(
     gatewayOutcome: text("gateway_outcome").$type<
       "completed" | "failed" | "cancelled" | "quota_denied"
     >(),
+    errorCode: text("error_code"),
+    failurePhase: text("failure_phase").$type<
+      "connect" | "provider_response" | "stream" | "terminal"
+    >(),
+    providerHttpStatus: integer("provider_http_status"),
     conversationId: text("conversation_id"),
     durationMs: integer("duration_ms"),
     isCacheHit: boolean("is_cache_hit").default(false).notNull(),
@@ -1881,6 +1957,9 @@ export const aiUsageEvents = pgTable(
     providerResponseIdx: index("ai_usage_events_provider_response_idx")
       .on(table.provider, table.providerResponseId)
       .where(sql`${table.providerResponseId} is not null`),
+    failureReasonWindowIdx: index("ai_usage_events_failure_reason_window_idx")
+      .on(table.provider, table.errorCode, table.completedAt.desc())
+      .where(sql`${table.gatewayOutcome} = 'failed'`),
     completedIdx: index("ai_usage_events_completed_idx").on(table.completedAt),
     inputNonnegative: check("ai_usage_events_input_tokens_nonnegative", sql`${table.inputTokens} >= 0`),
     outputNonnegative: check("ai_usage_events_output_tokens_nonnegative", sql`${table.outputTokens} >= 0`),

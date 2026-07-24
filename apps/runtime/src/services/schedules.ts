@@ -16,6 +16,10 @@ import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./proj
 import { ensureProjectionDebtQueue, ensureProjectionDebtSchedule } from "./projection-debt-sweep.ts";
 import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voice-notes-sweep.ts";
 import {
+  ensureNotificationDeliveryOutboxQueue,
+  ensureNotificationDeliveryOutboxSchedule,
+} from "./notification-delivery-outbox.ts";
+import {
   RAW_PAYLOAD_CLEANUP_QUEUE,
   ensurePlannerSchedule,
   ensureSyncQueues,
@@ -51,6 +55,7 @@ export async function registerAllSchedules(
   await ensureProjectionDebtQueue(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
+  await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureTieringQueue(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
@@ -71,6 +76,7 @@ export async function registerAllSchedules(
     ensureProjectionDebtSchedule(boss),
     ensureVoiceNotesSweepSchedule(boss),
     ensureOpsMetricsSchedule(boss),
+    ensureNotificationDeliveryOutboxSchedule(boss),
     ensureTieringSchedule(boss),
   ]);
 }
