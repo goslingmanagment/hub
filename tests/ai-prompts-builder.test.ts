@@ -75,9 +75,9 @@ const TEMPLATES: Record<PromptFeature, string> = {
 };
 const PING_SEGMENT_INSTRUCTIONS = {
   'segment-a':
-    'Segment A — Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity, use time-based hooks ("haven\'t talked in a while, was thinking about you").',
+    'Segment A. Was active, went silent: This fan has chatted before but has gone quiet. Reference specific past conversation topics, show you remember them, create curiosity, use time-based hooks ("haven\'t talked in a while, was thinking about you").',
   'segment-b':
-    'Segment B — Never really chatted: This fan has little or no chat history. Use a warm first impression, low-pressure opener, spark curiosity based on the model\'s personality. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history — use neutral openers that work regardless.',
+    'Segment B. Never really chatted: This fan has little or no chat history. Use a warm first impression, low-pressure opener, spark curiosity based on the model\'s personality. Do NOT claim "we\'ve never talked" or make absolute statements about conversation history; use neutral openers that work regardless.',
   active: 'This fan is still active. This segment should not be used for ping generation.',
 } as const;
 
@@ -118,24 +118,24 @@ function buildSplitReplyInstructions(
 }
 
 const TONE_INSTRUCTIONS: Record<Exclude<ReplyTone, 'none'>, string> = {
-  casual: `**IMPORTANT — Tone override: CASUAL.**
-Make this reply clearly casual — light, friendly, low-key. Prioritize relaxed banter, easy check-ins, and everyday phrasing.
+  casual: `**IMPORTANT. Tone override: CASUAL.**
+Make this reply clearly casual: light, friendly, low-key. Prioritize relaxed banter, easy check-ins, and everyday phrasing.
 Steer toward warmth and comfort rather than flirting, selling, or escalating.`,
-  flirty: `**IMPORTANT — Tone override: FLIRTY.**
+  flirty: `**IMPORTANT. Tone override: FLIRTY.**
 Make this reply clearly flirty. Lean into attraction, warmth, charm, and playful tension. Make the fan feel desired and pulled closer.
 Be suggestive but do not jump to explicit content unless the conversation is already there.
-Tease a little — hint and dangle instead of giving everything away. The power is in what you don't say yet.`,
-  upsell: `**IMPORTANT — Tone override: SOFT UPSELL.**
+Tease a little, hint and dangle instead of giving everything away. The power is in what you don't say yet.`,
+  upsell: `**IMPORTANT. Tone override: SOFT UPSELL.**
 Weave a natural, low-pressure monetization nudge into this reply. Mention content, perks, or a next paid step when it fits.
-Keep it organic — sharing, not pitching. Do not sound transactional or scripted.`,
-  spicy: `**IMPORTANT — Tone override: HORNY.**
+Keep it organic: sharing, not pitching. Do not sound transactional or scripted.`,
+  spicy: `**IMPORTANT. Tone override: HORNY.**
 Make this reply noticeably hot and sexually charged. Be bold, direct, and physically arousing.
 Do not settle for cute, merely flirty, or complimentary. Lead with desire, temptation, and body-focused language.
-Match the fan's energy and push it upward. Keep escalation believable — don't snap from neutral to extreme with no runway.`,
+Match the fan's energy and push it upward. Keep escalation believable, don't snap from neutral to extreme with no runway.`,
 };
 
 const TONE_FOOTER =
-  'The personality still controls voice, cadence, emoji habits, slang, and message length — only the intent and energy of this reply should shift.';
+  'The personality still controls voice, cadence, emoji habits, slang, and message length; only the intent and energy of this reply should shift.';
 
 function buildToneInstructions(
   feature: PromptFeature,
@@ -179,7 +179,7 @@ function buildFanProfileSectionOracle(
     return '';
   }
   const date = fanProfile!.generatedAt.toISOString().slice(0, 10);
-  return `## Fan Dossier\n\nStored dossier about this fan, generated on ${date} from earlier conversation history. Facts and personality age well, but the situational parts — stage and trajectory, open loops, and strategy — describe where things stood ON ${date} and may now be obsolete: treat them as history and context, not as current instructions. If anything here conflicts with the live transcript above, the transcript is authoritative.\n\n<fan_dossier>\n${escapeForPrompt(trimmed)}\n</fan_dossier>`;
+  return `## Fan Dossier\n\nStored dossier about this fan, generated on ${date} from earlier conversation history. Facts and personality age well, but the situational parts (stage and trajectory, open loops, and strategy) describe where things stood ON ${date} and may now be obsolete: treat them as history and context, not as current instructions. If anything here conflicts with the live transcript above, the transcript is authoritative.\n\n<fan_dossier>\n${escapeForPrompt(trimmed)}\n</fan_dossier>`;
 }
 
 function buildFanSilenceSection(

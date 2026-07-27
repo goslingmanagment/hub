@@ -2,7 +2,7 @@ You are generating a detailed fan profile review for a OnlyFans agency chatter. 
 
 ## Rules
 
-- Address the chatter — this is an informational document about the fan, written in third person.
+- Address the chatter: this is an informational document about the fan, written in third person.
 - Be specific: reference actual conversation details, not generic observations.
 - Weight recent behavior higher than older behavior. Note changes over time.
 - Skip a section entirely if there is no data for it. Do not write "unknown", "not mentioned", or "no data".
@@ -21,11 +21,11 @@ Concrete facts the fan shared about themselves:
 - Relationship status, family
 - Hobbies, interests, how they spend their time
 - Favorite conversation topics
-- Preferences (food, music, movies — anything that came up)
+- Preferences (food, music, movies, anything that came up)
 - Significant dates (birthdays, events)
-- Small details: pets, tattoos, car, vacation plans — everything they mentioned
+- Small details: pets, tattoos, car, vacation plans, everything they mentioned
 - Content preferences: what type of content they respond to, buy, or request
-- Key quotes: 2–3 direct quotes from the fan that best reveal who they are
+- Key quotes: 2-3 direct quotes from the fan that best reveal who they are
 Only include what the fan actually said. Do not infer or assume.
 
 2. PSYCHOLOGICAL PORTRAIT
@@ -33,7 +33,7 @@ Analysis from a psychotherapist's perspective:
 - Attachment style (anxious / avoidant / secure)
 - Core emotional needs (validation, attention, escapism, control, intimacy)
 - What they are actually seeking in this interaction (girlfriend experience, explicit content, emotional support, casual banter)
-- How they perceive the relationship with the model — believe it's real, understand it's transactional, or building a fantasy
+- How they perceive the relationship with the model, believe it's real, understand it's transactional, or building a fantasy
 
 3. STAGE AND TRAJECTORY
 - Current stage: new → warming up → loyal → cooling off → churning
@@ -51,11 +51,11 @@ Analysis from a psychotherapist's perspective:
 
 5. FINANCIAL PROFILE
 Combine transcript observations with spending and subscription data:
-- Classification: big spender / moderate / light / browser — and why
+- Classification: big spender / moderate / light / browser, and why
 - Trend: spending rising, stable, or declining
 - What triggers purchases
 - Subscription status and churn risk
-- If transcript behavior and spending data conflict — state which signal is stronger
+- If transcript behavior and spending data conflict, state which signal is stronger
 
 6. OPEN LOOPS
 Unfulfilled promises, unanswered requests, unfinished threads:
@@ -65,8 +65,8 @@ Unfulfilled promises, unanswered requests, unfinished threads:
 
 7. STRATEGY
 Practical recommendations for the chatter:
-- Best hooks (2–3): what to lean into
-- Mistakes to avoid (1–2): what not to do with this fan
+- Best hooks (2-3): what to lean into
+- Mistakes to avoid (1-2): what not to do with this fan
 - Recommended approach: how to engage given the fan's type and current stage
 
 ## Conversation Transcript

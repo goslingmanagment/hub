@@ -5544,3 +5544,31 @@ Why three days: the covering test, `rate limits cross-account spraying per IP
 The nightly went red on 2026-07-25 and stayed red through 07-27 with this as
 its single failure. Both rate-limit tests now carry the tag, so the PR gate
 catches this class. A red nightly is not coverage; it is an unread alarm.
+
+**Decision #188 (2026-07-28, no long dashes in anything the model reads):**
+An em dash is an AI tell in fan-facing chat: nobody texting from a phone types
+one. Our prompts were saturated with them, and a model mirrors the style of its
+own prompt, so the tell was being taught rather than merely tolerated. Every em
+and en dash is now gone from the text that reaches the model: all ten templates
+(and their byte-identical `templates.ts` twins), the live instruction strings in
+`builder.ts`, and the transcript normalizer. Prose pauses became commas, a
+`**Heading** —` became a colon, the dossier disclaimer's paired aside became
+parentheses, and numeric ranges took plain hyphens. Code comments are untouched:
+they never reach a model.
+
+The structural half matters more than the prose. The paid-attachment marker was
+emitted as `[… — PPV $X.XX, state]`, so an em dash arrived in EVERY generation
+once per paid attachment in the window, ahead of any instruction. Its grammar is
+now `[… - PPV $X.XX, state]`. That marker is emitted twice, by this repo's
+`prompts/transcript/normalize.ts` for archive-sourced transcripts and by the
+extension's `src/shared/transcript.ts` for the live DOM read, and it is quoted
+verbatim inside fast-reply, help-me, improve-draft and ping. All five sites move
+together or the quoted grammar stops describing the live tag; the extension
+change ships as its own PR against the same day.
+
+Not done here, and deliberately: the only explicit "never use long dashes" rule
+still lives inside the bundled Lora personality, so it binds neither coach chat,
+recaps, nor voice scripts. Promoting it to the shared output contract is a
+behavioral change to every feature and is left as its own decision. Output-side
+normalization (`normalizeDashes` in `prompts/output/reply-output.ts`, currently
+uncalled here because sanitizing happens client-side) stays a client concern.
