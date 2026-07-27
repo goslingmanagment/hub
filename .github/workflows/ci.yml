@@ -5,11 +5,19 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+# Superseded PR heads stop burning runners; main always runs to completion so
+# every main commit keeps a finished gate record.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  quality:
-    name: Quality Gate
+  static:
+    name: Static checks
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -52,8 +60,67 @@ jobs:
       - name: Chromium Headless Shell runtime smoke
         run: docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs
 
+      # NOTE: this step still starts Postgres containers — tests/voice-profiles
+      # and tests/voice-notes-sweep are DB-backed despite not being named
+      # *.integration.test.ts, so they are not in the --exclude list.
       - name: Reliable unit tests
         run: pnpm test:unit
 
-      - name: Sync-critical DB/schema/network tests
-        run: pnpm test:prerequisites
+  # The sync-critical suite is ~120 database acquisitions over ~104 files and is
+  # the whole reason a PR used to wait ~18 minutes. Splitting it across runners
+  # is the cheap win: separate machines, so each shard keeps
+  # --no-file-parallelism and its own containers — no shared cluster, no new
+  # isolation hazards. Sharding is by resolved FILE, so it is applied to the
+  # :db half directly; `test:prerequisites` is a compound `A && B` and trailing
+  # args would land only on B.
+  integration:
+    name: Integration ${{ matrix.shard }}/3
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/3)
+        run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/3
+
+      # One file, ~36s — it resolves to a single spec so it cannot be sharded.
+      - name: Sync-critical API tests
+        if: matrix.shard == 1
+        run: pnpm test:sync-critical:api
+
+  # Branch protection requires a check named exactly "Quality Gate". A matrix
+  # job publishes "Integration 1/3", "Integration 2/3", … which would satisfy
+  # nothing, so this aggregator keeps the required name and fails unless every
+  # dependency succeeded. `if: always()` is required — without it a skipped
+  # aggregator reports success to the ruleset.
+  quality:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [static, integration]
+    if: always()
+    timeout-minutes: 5
+
+    steps:
+      - name: Every gate job succeeded
+        run: |
+          echo "static=${{ needs.static.result }} integration=${{ needs.integration.result }}"
+          [ "${{ needs.static.result }}" = "success" ] || exit 1
+          [ "${{ needs.integration.result }}" = "success" ] || exit 1
