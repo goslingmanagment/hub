@@ -10,8 +10,7 @@ import {
   insertDeliveryAttempt,
   listDeliveryAttempts,
   listNotificationIncidentsWithPages,
-  recordNotificationIncidentRecovery,
-  resolveNotificationIncident,
+  recoverAndResolveNotificationIncident,
   setConfigOverridesAtomic,
   updateTelegramSettings,
 } from "@agency_hub_core/db";
@@ -1441,15 +1440,10 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     const incidentKey = (rows[0] as { incident_key: string }).incident_key;
     const resolvedAt = new Date();
-    await recordNotificationIncidentRecovery(appContext.db, {
+    const resolved = await recoverAndResolveNotificationIncident(appContext.db, {
       incidentKey,
       recoveredAt: resolvedAt,
-      now: resolvedAt,
-    });
-    const resolved = await resolveNotificationIncident(appContext.db, {
-      incidentKey,
-      maxLastSeenAt: resolvedAt,
-      now: resolvedAt,
+      processedAt: resolvedAt,
     });
 
     if (resolved) {

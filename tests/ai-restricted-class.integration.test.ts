@@ -5,6 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createModel,
   createOnlyFansPage,
+  getNotificationIncidentByKey,
+  openNotificationIncident,
   storeProxyConfig,
 } from "@agency_hub_core/db";
 
@@ -34,7 +36,14 @@ let apiServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let chatterKey = "";
 let pageId = 0;
 
-function fakeProvider(deltas: string[], overrides?: { failAfterFirst?: boolean }): AiGatewayProvider {
+function fakeProvider(deltas: string[], overrides?: {
+  failAfterFirst?: boolean;
+  /** Provider ended the stream without ever reporting usage. */
+  omitUsage?: boolean;
+  /** Clean iterator end with no terminal message_delta — Anthropic yields a
+   * synthetic `done` carrying a null stopReason for exactly this. */
+  stopReason?: string | null;
+}): AiGatewayProvider {
   return {
     provider: "anthropic",
     async *stream() {
@@ -46,20 +55,25 @@ function fakeProvider(deltas: string[], overrides?: { failAfterFirst?: boolean }
         }
         first = false;
       }
+      if (!overrides?.omitUsage) {
+        yield {
+          type: "usage",
+          providerResponseId: "msg_fake",
+          cacheHit: false,
+          usage: {
+            inputTokens: 100,
+            outputTokens: 20,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 0,
+            costMicroUsd: 600,
+            costApproximate: false,
+          },
+        };
+      }
       yield {
-        type: "usage",
-        providerResponseId: "msg_fake",
-        cacheHit: false,
-        usage: {
-          inputTokens: 100,
-          outputTokens: 20,
-          cacheWriteTokens: 0,
-          cacheReadTokens: 0,
-          costMicroUsd: 600,
-          costApproximate: false,
-        },
+        type: "done",
+        stopReason: overrides?.stopReason === undefined ? "end_turn" : overrides.stopReason,
       };
-      yield { type: "done", stopReason: "end_turn" };
     },
   };
 }
@@ -371,5 +385,99 @@ describe("restricted capture class (Stage 29)", () => {
       completion: "partial internal output",
       outcome: "failed",
     }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // The internal lane used to fold frames by hand and default to "completed",
+  // so each of these settled as a zero-cost SUCCESS: it resolved the global
+  // provider latch and handed the workboard defaults that were then cached.
+  // It now shares AiGatewayTerminalStreamConsumer with the SSE pump.
+  const unusableTerminals = [
+    {
+      name: "a stream that never reported usage",
+      overrides: { omitUsage: true } as const,
+      errorCode: "provider_usage_missing",
+    },
+    {
+      name: "a stream that ended without a usable stop reason",
+      overrides: { stopReason: null } as const,
+      errorCode: "provider_stream_incomplete",
+    },
+  ];
+
+  for (const terminal of unusableTerminals) {
+    it(`rejects and records ${terminal.name}`, async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+      appContext.config.anthropicApiKey = "test-key";
+      const classifier = createGatewayClosingClassifier(appContext, {
+        model: "claude-haiku-4-5",
+        providerOverride: fakeProvider(["[{\"id\":\"m1\"}]"], terminal.overrides),
+      });
+
+      await expect(classifier.classifyBatch([
+        { id: "m1", context: [{ role: "fan", text: "hello" }] },
+      ])).rejects.toThrow(/unusable terminal/);
+
+      const { rows } = await testDb.pool.query<{
+        gateway_outcome: string | null;
+        error_code: string | null;
+      }>("select gateway_outcome, error_code from ai_usage_events");
+      expect(rows).toEqual([{
+        gateway_outcome: "failed",
+        error_code: terminal.errorCode,
+      }]);
+    }, INTEGRATION_TEST_TIMEOUT_MS);
+  }
+
+  it("rejects a stream whose output is empty", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext.config.anthropicApiKey = "test-key";
+    const classifier = createGatewayClosingClassifier(appContext, {
+      model: "claude-haiku-4-5",
+      providerOverride: fakeProvider(["   "]),
+    });
+
+    await expect(classifier.classifyBatch([
+      { id: "m1", context: [{ role: "fan", text: "hello" }] },
+    ])).rejects.toThrow(/unusable terminal/);
+
+    const { rows } = await testDb.pool.query<{ error_code: string | null }>(
+      "select error_code from ai_usage_events",
+    );
+    expect(rows).toEqual([{ error_code: "provider_output_empty" }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("does not let an unusable terminal clear the global provider latch", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext.config.anthropicApiKey = "test-key";
+    const incidentKey = "ai_provider_billing:global";
+    await openNotificationIncident(testDb.db, {
+      incidentKey,
+      kind: "ai_provider_billing",
+      platformAccountId: null,
+      errorCode: "provider_billing",
+      errorSummary: "Anthropic billing rejected AI generation",
+      now: new Date("2026-07-24T12:00:00.000Z"),
+    });
+
+    const classifier = createGatewayClosingClassifier(appContext, {
+      model: "claude-haiku-4-5",
+      providerOverride: fakeProvider(["[{\"id\":\"m1\"}]"], { omitUsage: true }),
+    });
+    await expect(classifier.classifyBatch([
+      { id: "m1", context: [{ role: "fan", text: "hello" }] },
+    ])).rejects.toThrow(/unusable terminal/);
+
+    // A zero-token non-answer is not proof that billing recovered.
+    const incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
+    expect(incident).toMatchObject({ status: "open" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

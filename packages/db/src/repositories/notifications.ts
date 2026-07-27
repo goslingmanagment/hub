@@ -354,7 +354,27 @@ async function openNotificationIncidentInternal(
 
         if (locked.status === "resolved") {
           const lockedId = Number(locked.id);
-          if (isAfter(locked.resolvedAt, now)) {
+          // Ordering is decided by EVENT time, never by the processing clock:
+          // a failure that occurred before the stored terminal is stale even
+          // when it reaches us later (concurrent generations settle out of
+          // order, so `completedAt` routinely arrives non-monotonically).
+          //
+          // STRICT `>` here, unlike the `lastSeenAt` branch below: a failure
+          // sharing a millisecond with a resolve is new information, and a
+          // silently dropped reopen is a page nobody gets.
+          //
+          // Scope, precisely: this rule only ever decides a tie for the
+          // NO-TOMBSTONE resolve primitive (`resolveNotificationIncident`).
+          // Every production producer opens through the recovery guard above,
+          // and that guard suppresses at `recovery.recoveredAt >= occurredAt`
+          // — so on a real recovery the tombstone wins the tie before this
+          // line is reached, and `recoverAndResolveNotificationIncident`
+          // likewise resolves on `last_seen_at <= recoveredAt`. Production
+          // ties therefore go to the RECOVERY. That asymmetry is inherited
+          // (the guard predates this change) and is left alone deliberately:
+          // both directions self-heal on the next terminal, and tightening
+          // the guard would reopen the delayed-retry race it was added for.
+          if (isAfter(locked.resolvedAt, eventTime)) {
             return {
               incident: await readNotificationIncidentForReturn(tx as unknown as Database, lockedId),
               transition: "existing" as const,
@@ -386,7 +406,16 @@ async function openNotificationIncidentInternal(
         }
 
         const lockedId = Number(locked.id);
-        if (isAfter(locked.lastSeenAt, now)) {
+        // Same event-time rule as the resolved branch. Returning early also
+        // keeps `errorCode`/`errorSummary`/`metadata` owned by the NEWEST
+        // event: a delayed failure must not overwrite the current cause, and
+        // must not drag `last_seen_at` backwards past a later failure (which
+        // would let `maxLastSeenAt` resolve a still-broken incident).
+        //
+        // `>=` here, unlike the resolved branch: both sides are failures of
+        // the same latch, so a same-millisecond repeat carries no new state
+        // and first-writer-wins just spares the cause fields pointless churn.
+        if (isAtOrAfter(locked.lastSeenAt, eventTime)) {
           return {
             incident: await readNotificationIncidentForReturn(tx as unknown as Database, lockedId),
             transition: "existing" as const,
@@ -469,6 +498,34 @@ export async function openNotificationIncidentWithRecoveryGuard(
   });
 }
 
+/** The recovery tombstone upsert alone. The caller owns the transaction and
+ * the advisory lock, so it can commit atomically with the resolve. */
+async function upsertNotificationIncidentRecovery(
+  db: Database,
+  input: {
+    incidentKey: string;
+    recoveredAt: Date;
+    metadata?: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  await db.insert(notificationIncidentRecoveries)
+    .values({
+      incidentKey: input.incidentKey,
+      recoveredAt: input.recoveredAt,
+      metadata: input.metadata ?? {},
+      updatedAt: input.now,
+    })
+    .onConflictDoUpdate({
+      target: notificationIncidentRecoveries.incidentKey,
+      set: {
+        recoveredAt: sql`greatest(${notificationIncidentRecoveries.recoveredAt}, excluded.recovered_at)`,
+        metadata: input.metadata ?? {},
+        updatedAt: input.now,
+      },
+    });
+}
+
 export async function recordNotificationIncidentRecovery(
   db: Database,
   input: {
@@ -481,24 +538,81 @@ export async function recordNotificationIncidentRecovery(
   const now = input.now ?? new Date();
   await db.transaction(async (tx) => {
     await lockNotificationIncidentKey(tx as unknown as Database, input.incidentKey);
-    await tx.insert(notificationIncidentRecoveries)
-      .values({
-        incidentKey: input.incidentKey,
-        recoveredAt: input.recoveredAt,
-        metadata: input.metadata ?? {},
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: notificationIncidentRecoveries.incidentKey,
-        set: {
-          recoveredAt: sql`greatest(${notificationIncidentRecoveries.recoveredAt}, excluded.recovered_at)`,
-          metadata: input.metadata ?? {},
-          updatedAt: now,
-        },
-      });
+    await upsertNotificationIncidentRecovery(tx as unknown as Database, {
+      incidentKey: input.incidentKey,
+      recoveredAt: input.recoveredAt,
+      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      now,
+    });
   });
 }
 
+/**
+ * Tombstone + conditional resolve + resolved-outbox row in ONE transaction
+ * under the same advisory lock the opener takes. Splitting them (the previous
+ * shape) left a crash seam: a committed tombstone with no resolve pins the
+ * incident open forever while silently suppressing every older failure.
+ *
+ * Event time (`recoveredAt`) decides ordering and is what lands in the row;
+ * `processedAt` is audit-only (`updated_at`).
+ */
+export async function recoverAndResolveNotificationIncident(
+  db: Database,
+  input: {
+    incidentKey: string;
+    recoveredAt: Date;
+    metadata?: Record<string, unknown>;
+    outbox?: NotificationDeliveryOutboxRequest;
+    processedAt?: Date;
+  },
+): Promise<NotificationIncidentRow | null> {
+  const processedAt = input.processedAt ?? new Date();
+
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockNotificationIncidentKey(txDb, input.incidentKey);
+    await upsertNotificationIncidentRecovery(txDb, {
+      incidentKey: input.incidentKey,
+      recoveredAt: input.recoveredAt,
+      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      now: processedAt,
+    });
+
+    const [resolved] = await tx.update(notificationIncidents)
+      .set({
+        status: "resolved",
+        resolvedAt: input.recoveredAt,
+        lastSeenAt: input.recoveredAt,
+        metadata: input.metadata ?? {},
+        updatedAt: processedAt,
+      })
+      .where(and(
+        eq(notificationIncidents.incidentKey, input.incidentKey),
+        eq(notificationIncidents.status, "open"),
+        lte(notificationIncidents.lastSeenAt, input.recoveredAt),
+      ))
+      .returning();
+
+    if (resolved && input.outbox) {
+      await enqueueNotificationDeliveryOutbox(txDb, {
+        notificationIncidentId: resolved.id,
+        transition: "resolved",
+        transitionAt: input.recoveredAt,
+        request: input.outbox,
+        now: processedAt,
+      });
+    }
+
+    return resolved ?? null;
+  });
+}
+
+/**
+ * Resolve WITHOUT writing a recovery tombstone. Production recovery paths use
+ * `recoverAndResolveNotificationIncident` instead — it commits the tombstone,
+ * the resolve and the outbox row together under the incident-key lock. Reach
+ * for this one only when there is deliberately no recovery event to record.
+ */
 export async function resolveNotificationIncident(
   db: Database,
   input: {

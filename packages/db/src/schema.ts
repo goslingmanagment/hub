@@ -432,9 +432,12 @@ export const notificationDeliveryOutbox = pgTable(
     expiredLeaseIdx: index("notification_delivery_outbox_expired_lease_idx")
       .on(table.leaseExpiresAt)
       .where(sql`${table.state} = 'leased'`),
+    // DESC matches migration 0114 and the newest-row-first correlated
+    // subqueries in the incidents repository; declaring it ascending here made
+    // every future schema diff want to drop and recreate the index.
     incidentIdx: index("notification_delivery_outbox_incident_idx").on(
       table.notificationIncidentId,
-      table.createdAt,
+      table.createdAt.desc(),
     ),
   }),
 );

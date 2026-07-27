@@ -5,8 +5,7 @@ import {
   hasRecentTerminalProxyFailure,
   insertDeliveryAttempt,
   openNotificationIncidentWithRecoveryGuard,
-  recordNotificationIncidentRecovery,
-  resolveNotificationIncident,
+  recoverAndResolveNotificationIncident,
   type NotificationIncidentRow,
   type NotificationIncidentKind,
   type SyncStream,
@@ -411,16 +410,10 @@ async function resolveIncidentAndNotify(
     stream: input.stream ?? null,
   };
   try {
-    await recordNotificationIncidentRecovery(app.db, {
+    const resolved = await recoverAndResolveNotificationIncident(app.db, {
       incidentKey: incidentKey(input),
       recoveredAt,
-      metadata,
-      now: recoveredAt,
-    });
-    const resolved = await resolveNotificationIncident(app.db, {
-      incidentKey: incidentKey(input),
-      maxLastSeenAt: recoveredAt,
-      now: recoveredAt,
+      processedAt: recoveredAt,
       metadata,
       ...(input.deliveryMode === "critical_outbox"
         ? {
