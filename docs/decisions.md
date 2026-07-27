@@ -189,6 +189,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 185 | Error-handling canon | docs/error-handling.md is the single canonical error-handling reference for core, the extension and desktop; any change to classification, codes, retries, incidents or redaction must update the canon in the same change |
 | 186 | Critical-paging preconditions | Four fixes gate `aiCriticalAlertsEnabled`: the internal AI lane fails closed on unusable terminals via the shared consumer, incident state is ordered by event time with an atomic recovery+resolve, outbox delivery is FIFO per incident/channel, and the lease/sweep clocks outlive one physical Telegram send |
 | 187 | Plugins throw AppError | `@fastify/rate-limit` threw a duck-typed literal that only reached clients via the passthrough #184 removed, so rate-limited logins answered HTTP 500 for three days; any plugin signalling by throw must throw an `AppError`, and both rate-limit tests join the `[sync-critical]` PR slice |
+| 188 | CI gate splits into shards | The single Quality Gate job becomes Static checks + a 3-way sharded Integration matrix + a same-named aggregator (branch protection matches the literal name); no test or harness file changes — measured 688s serial -> 234s per shard |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5544,3 +5545,55 @@ Why three days: the covering test, `rate limits cross-account spraying per IP
 The nightly went red on 2026-07-25 and stayed red through 07-27 with this as
 its single failure. Both rate-limit tests now carry the tag, so the PR gate
 catches this class. A red nightly is not coverage; it is an unread alarm.
+
+**Decision #188 (2026-07-28, the PR gate is sharded):** The sync-critical
+suite is ~120 database acquisitions over 104 files and is why a pull request
+waited. `ci.yml` becomes three jobs: `Static checks` (typecheck, lint, contract
+regeneration, production build, Docker image, Chromium smoke, unit tests), an
+`Integration N/3` matrix over `test:sync-critical:db --shard`, and a
+`Quality Gate` aggregator.
+
+Sharding is applied to the `:db` half directly because `test:prerequisites` is
+a compound `A && B` and trailing arguments would otherwise land only on `B`;
+the single-file `:api` selection cannot be sharded and rides shard 1.
+
+**No test and no harness file changes.** Each shard is a separate runner, so
+files stay serial within a shard and every acquisition keeps its own throwaway
+container — byte-identical behaviour to the single-job layout, just spread
+across machines. Measured: 688s fully serial, 234s per shard; the first CI run
+of the new layout finished the whole gate in ~6 min against a 17.75 min median.
+
+The aggregator is not ceremony. The branch-protection ruleset requires a check
+named literally `Quality Gate`; a matrix publishes `Integration 1/3` and
+friends, which would satisfy nothing while still reporting green. It carries
+`if: always()` because a skipped required job reports success.
+
+Also adopted, independent of the split: per-job `timeout-minutes` (there were
+none, so the default was six hours and a stuck run was indistinguishable from a
+slow one), cancellation of superseded pull-request runs, and
+`workflow_dispatch`. These supersede the older, unmerged CI proposal that
+would instead have moved integration coverage off pull requests entirely —
+rejected because it silently weakened an unchanged required-check name.
+
+**Tried and deliberately dropped: running the test cluster on tmpfs with
+`fsync=off`.** It is worth a further 40% (234s -> 140s per shard), but it
+surfaced a latent teardown race: stopping a container while a pool still holds
+a connection raises FATAL 57P01, and a node-postgres Pool with no `error`
+listener turns that into an unhandled event that fails a run in which every
+test passed (CI run 30306753356: "Test Files 35 passed" followed by an
+unhandled error). A process-level guard reduced but did not eliminate it —
+still roughly one failure in five runs. The speedup is real and should be
+revisited only after the race is fixed at its source: pools created by
+`createPool` have no `error` handler, which is the same hazard the pg-boss
+listener in `buildApiServer` was added for (audit B8), and it applies to the
+production API and worker as much as to tests.
+
+Recorded for the next person: the 38-minute run that triggered this work was
+the worst of 32 samples; the median gate was 17.75 minutes. Measure the
+distribution before optimising against a single sample.
+
+Not addressed, deliberately: `pnpm test:unit` starts Postgres containers today
+because `tests/voice-profiles.test.ts` and `tests/voice-notes-sweep.test.ts`
+are database-backed without the `.integration.test.ts` name, so the `--exclude`
+list misses them. They are correct as tests and merely misfiled; renaming them
+would reshuffle shard assignment and is left to its own change.

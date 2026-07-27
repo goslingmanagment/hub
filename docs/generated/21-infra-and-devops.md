@@ -101,14 +101,24 @@ processes when one exits or the script receives a signal.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs for pull requests and pushes to `main`. Its
-quality job installs pinned pnpm/Node 22 dependencies, then runs:
+`.github/workflows/ci.yml` runs for pull requests, pushes to `main`, and manual
+dispatch. Superseded pull-request runs are cancelled; `main` runs always finish.
+Three jobs install pinned pnpm/Node 22 dependencies and split the work:
 
-1. the typecheck ratchet and ESLint;
-2. contract generation followed by a clean-diff assertion for OpenAPI, contract
-   hash, SDK, and authorization policy artifacts;
-3. the production build and production Docker image build;
-4. unit tests and the sync-critical prerequisite suite.
+1. `Static checks` — the typecheck ratchet and ESLint; contract generation
+   followed by a clean-diff assertion for OpenAPI, contract hash, SDK, and
+   authorization policy artifacts; the production build and production Docker
+   image build; the Chromium runtime smoke; unit tests.
+2. `Integration N/3` — a three-way matrix over the sync-critical prerequisite
+   suite, sharded by resolved file (`test:sync-critical:db --shard`), with the
+   single-file API selection attached to shard 1. Each shard is its own runner,
+   so files stay serial within a shard and every test keeps its own throwaway
+   Postgres container.
+3. `Quality Gate` — the aggregator. Branch protection requires this exact check
+   name, and it fails unless both jobs above succeeded.
+
+Coverage is unchanged from the single-job layout: every step still runs on every
+pull request, only spread across runners.
 
 `.github/workflows/nightly.yml` runs daily at 02:20 UTC and on manual dispatch.
 Its 90-minute job runs the full Vitest suite, including Testcontainers-backed
