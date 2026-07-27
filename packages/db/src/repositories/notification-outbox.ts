@@ -29,7 +29,15 @@ export interface NotificationDeliveryOutboxRequest {
 }
 
 const DEFAULT_MAX_ATTEMPTS = 5;
-const DEFAULT_LEASE_MS = 60_000;
+/**
+ * Must outlast the slowest PHYSICAL send a worker can make, or a second runner
+ * reclaims a row that is still in flight and Telegram — which has no
+ * idempotency primitive — gets the message twice. The Telegram sender can burn
+ * `TELEGRAM_SEND_RETRY_WINDOW_MS` (~150s: three 10s requests plus two capped
+ * retry delays); `tests/notification-outbox-lease.test.ts` pins this constant
+ * above it, since packages/db cannot import the runtime's sender.
+ */
+export const NOTIFICATION_OUTBOX_LEASE_MS = 300_000;
 
 function notificationDeliveryIdempotencyKey(input: {
   notificationIncidentId: number;
@@ -141,6 +149,19 @@ export async function getNotificationDeliveryOutboxByIncident(
 /**
  * Claims one due row. An expired lease is reclaimable without consuming an
  * attempt: the crash may have happened before the sender was called.
+ *
+ * Per-incident FIFO is enforced by the `not exists` fence, not by `order by`
+ * alone: the due-filter runs BEFORE the ordering, so a backed-off `opened` row
+ * is simply invisible while a freshly enqueued `resolved` row is due. Without
+ * the fence one transient Telegram failure on the open alert is enough to page
+ * "✅ resolved" first and deliver the stale "🚨 opened" a minute later.
+ *
+ * Ordering is by `transition_at` — the incident transition time that already
+ * identifies the row in the idempotency key — not by insertion time. Terminal
+ * states (`delivered`, `suppressed`, `exhausted`) never block a successor.
+ * Known consequence, deliberately left to a separate owner decision: when an
+ * `opened` row ends `exhausted` or `suppressed`, its `resolved` successor is
+ * released and pages on its own.
  */
 export async function leaseNotificationDeliveryOutbox(
   db: Database,
@@ -150,7 +171,7 @@ export async function leaseNotificationDeliveryOutbox(
   },
 ): Promise<NotificationDeliveryOutboxRow | null> {
   const now = input?.now ?? new Date();
-  const leaseExpiresAt = new Date(now.getTime() + Math.max(1, input?.leaseMs ?? DEFAULT_LEASE_MS));
+  const leaseExpiresAt = new Date(now.getTime() + Math.max(1, input?.leaseMs ?? NOTIFICATION_OUTBOX_LEASE_MS));
   const leaseToken = randomUUID();
 
   return db.transaction(async (tx) => {
@@ -158,13 +179,25 @@ export async function leaseNotificationDeliveryOutbox(
       select ${notificationDeliveryOutbox.id} as id
       from ${notificationDeliveryOutbox}
       where (
-        ${notificationDeliveryOutbox.state} = 'pending'
-        and ${notificationDeliveryOutbox.availableAt} <= ${now}
-      ) or (
-        ${notificationDeliveryOutbox.state} = 'leased'
-        and ${notificationDeliveryOutbox.leaseExpiresAt} <= ${now}
+        (
+          ${notificationDeliveryOutbox.state} = 'pending'
+          and ${notificationDeliveryOutbox.availableAt} <= ${now}
+        ) or (
+          ${notificationDeliveryOutbox.state} = 'leased'
+          and ${notificationDeliveryOutbox.leaseExpiresAt} <= ${now}
+        )
       )
-      order by ${notificationDeliveryOutbox.createdAt} asc,
+      and not exists (
+        select 1
+        from ${notificationDeliveryOutbox} predecessor
+        where predecessor.notification_incident_id
+                = ${notificationDeliveryOutbox.notificationIncidentId}
+          and predecessor.channel = ${notificationDeliveryOutbox.channel}
+          and predecessor.state in ('pending', 'leased')
+          and (predecessor.transition_at, predecessor.id)
+                < (${notificationDeliveryOutbox.transitionAt}, ${notificationDeliveryOutbox.id})
+      )
+      order by ${notificationDeliveryOutbox.transitionAt} asc,
                ${notificationDeliveryOutbox.id} asc
       for update skip locked
       limit 1

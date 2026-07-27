@@ -17,7 +17,7 @@ const DISPATCHER_KEEP_ALIVE_TIMEOUT_MS = 10_000;
 const DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS = 60_000;
 const DISPATCHER_KEEP_ALIVE_TIMEOUT_THRESHOLD_MS = 250;
 const HTTP_RETRY_BASE_DELAY_MS = 5_000;
-const MAX_RETRY_DELAY_MS = 60_000;
+export const MAX_RETRY_DELAY_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 const ANTHROPIC_LOW_CREDIT_MESSAGE =
   "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";

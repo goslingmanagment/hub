@@ -8,6 +8,7 @@ import {
   listDeliveryAttempts,
   listNotificationIncidentsWithPages,
   openNotificationIncident,
+  recoverAndResolveNotificationIncident,
   updateTelegramSettings,
 } from "@agency_hub_core/db";
 
@@ -263,5 +264,180 @@ describe("durable notification delivery outbox", () => {
     const attempts = await listDeliveryAttempts(testDb.db);
     expect(attempts).toHaveLength(2);
     expect(attempts.every((attempt) => attempt.status === "failed")).toBe(true);
+  });
+
+  it("holds a resolution behind an opening alert that is still retrying", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await enableCriticalPaging(testDb.db);
+    const app = createTestAppContext(testDb);
+    const openedAt = new Date("2026-07-24T12:00:00.000Z");
+    const incidentKey = "ai_provider_billing:global";
+    const opened = await openNotificationIncident(testDb.db, {
+      incidentKey,
+      kind: "ai_provider_billing",
+      platformAccountId: null,
+      now: openedAt,
+      outbox: criticalOutbox("🚨 opened"),
+    });
+
+    // One transient Telegram failure pushes the opening row into backoff.
+    const failing = vi.fn(async () => ({
+      status: "failed" as const,
+      error: "Telegram unavailable",
+    }));
+    await runNotificationDeliveryOutbox(app, {
+      now: openedAt,
+      maxRows: 5,
+      retryDelayMs: 60_000,
+      sender: failing,
+    });
+    expect(failing).toHaveBeenCalledTimes(1);
+
+    // A success one second later resolves the incident and enqueues its
+    // resolution, which is immediately due while the opening row is not.
+    const recoveredAt = new Date(openedAt.getTime() + 1_000);
+    await recoverAndResolveNotificationIncident(testDb.db, {
+      incidentKey,
+      recoveredAt,
+      processedAt: recoveredAt,
+      outbox: criticalOutbox("✅ resolved"),
+    });
+
+    const blocked = vi.fn(async (_delivery: { text: string }) => ({
+      status: "sent" as const,
+      chatId: "1",
+      messageId: 1,
+    }));
+    const blockedSweep = await runNotificationDeliveryOutbox(app, {
+      now: recoveredAt,
+      maxRows: 5,
+      sender: blocked,
+    });
+
+    // Without the FIFO fence this sweep would page "✅ resolved" for an alert
+    // the operator never received, then deliver the stale "🚨 opened" later.
+    expect(blockedSweep.leased).toBe(0);
+    expect(blocked).not.toHaveBeenCalled();
+
+    // Once the opening alert lands, the resolution is released — in order.
+    const sent = vi.fn(async (_delivery: { text: string }) => ({
+      status: "sent" as const,
+      chatId: "1",
+      messageId: 2,
+    }));
+    const drained = await runNotificationDeliveryOutbox(app, {
+      now: new Date(openedAt.getTime() + 61_000),
+      maxRows: 5,
+      sender: sent,
+    });
+
+    expect(drained.delivered).toBe(2);
+    expect(sent.mock.calls.map(([delivery]) => delivery.text)).toEqual([
+      "🚨 opened",
+      "✅ resolved",
+    ]);
+    const rows = await getNotificationDeliveryOutboxByIncident(testDb.db, opened.incident.id);
+    expect(rows.map((row) => row.state)).toEqual(["delivered", "delivered"]);
+  });
+
+  it("releases a resolution once the opening alert is terminally exhausted", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await enableCriticalPaging(testDb.db);
+    const app = createTestAppContext(testDb);
+    const openedAt = new Date("2026-07-24T12:00:00.000Z");
+    const incidentKey = "ai_provider_billing:global";
+    await openNotificationIncident(testDb.db, {
+      incidentKey,
+      kind: "ai_provider_billing",
+      platformAccountId: null,
+      now: openedAt,
+      outbox: criticalOutbox("🚨 opened", 1),
+    });
+
+    const failing = vi.fn(async () => ({
+      status: "failed" as const,
+      error: "Telegram unavailable",
+    }));
+    await runNotificationDeliveryOutbox(app, { now: openedAt, maxRows: 5, sender: failing });
+
+    const recoveredAt = new Date(openedAt.getTime() + 1_000);
+    await recoverAndResolveNotificationIncident(testDb.db, {
+      incidentKey,
+      recoveredAt,
+      processedAt: recoveredAt,
+      outbox: criticalOutbox("✅ resolved"),
+    });
+
+    const sent = vi.fn(async (_delivery: { text: string }) => ({
+      status: "sent" as const,
+      chatId: "1",
+      messageId: 3,
+    }));
+    const sweep = await runNotificationDeliveryOutbox(app, {
+      now: recoveredAt,
+      maxRows: 5,
+      sender: sent,
+    });
+
+    // Terminal states never block: the orphan resolution DOES page on its own.
+    // Recorded behavior, deliberately left to a separate owner decision.
+    expect(sweep.delivered).toBe(1);
+    expect(sent.mock.calls.map(([delivery]) => delivery.text)).toEqual(["✅ resolved"]);
+  });
+
+  it("takes a fresh lease clock per row instead of one batch timestamp", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await enableCriticalPaging(testDb.db);
+    const app = createTestAppContext(testDb);
+    const startedAt = new Date("2026-07-24T12:00:00.000Z");
+    for (const suffix of ["alpha", "beta"]) {
+      await openNotificationIncident(testDb.db, {
+        incidentKey: `ai_provider_failed:global:${suffix}`,
+        kind: "ai_provider_failed",
+        platformAccountId: null,
+        now: startedAt,
+        outbox: criticalOutbox(`🚨 ${suffix}`),
+      });
+    }
+
+    // A sender that "takes" two minutes per row; the clock advances with it.
+    let elapsedMs = 0;
+    const leaseExpiries: Array<Date | null> = [];
+    const slow = vi.fn(async (delivery: { text: string }) => {
+      const { rows } = await testDb!.pool.query<{ lease_expires_at: Date | null }>(
+        `select lease_expires_at from notification_delivery_outbox
+         where message_text = $1`,
+        [delivery.text],
+      );
+      leaseExpiries.push(rows[0]?.lease_expires_at ?? null);
+      elapsedMs += 120_000;
+      return { status: "sent" as const, chatId: "1", messageId: 1 };
+    });
+
+    await runNotificationDeliveryOutbox(app, {
+      clock: () => new Date(startedAt.getTime() + elapsedMs),
+      maxRows: 5,
+      sender: slow,
+    });
+
+    expect(leaseExpiries).toHaveLength(2);
+    const [first, second] = leaseExpiries;
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    // One batch timestamp would have given both rows the SAME expiry, and the
+    // second row's lease would already be 120s stale when it was granted.
+    expect(second!.getTime() - first!.getTime()).toBe(120_000);
   });
 });

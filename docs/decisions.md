@@ -187,6 +187,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 183 | AI failure telemetry (1B) | Stage 1B normalizes failures at the shared AI transport boundary into six wire classes with one static message each, records error_code/failure_phase/HTTP status per failed terminal, and opens guarded incident latches |
 | 184 | Server error hygiene | The four boundary sanitizer paths collapse into one shared core owning cause chains, secret masking and clamp policy; only AppError may cross the boundary; the SDK adds an `http` fallback category; wire taxonomy unchanged |
 | 185 | Error-handling canon | docs/error-handling.md is the single canonical error-handling reference for core, the extension and desktop; any change to classification, codes, retries, incidents or redaction must update the canon in the same change |
+| 186 | Critical-paging preconditions | Four fixes gate `aiCriticalAlertsEnabled`: the internal AI lane fails closed on unusable terminals via the shared consumer, incident state is ordered by event time with an atomic recovery+resolve, outbox delivery is FIFO per incident/channel, and the lease/sweep clocks outlive one physical Telegram send |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5436,3 +5437,84 @@ the canon in the same family change. Clients reference this decision and the
 canon rather than maintaining normative copies. The existing evolution rule
 stands: adding a code to the open error frame is contract-free and must degrade
 safely in every client; adding or reshaping a frame type is lockstep-gated.
+
+**Decision #186 (2026-07-27, preconditions for enabling critical AI paging):**
+A review of the Stage 1A/1B/3 range found four defects that only matter once
+`aiCriticalAlertsEnabled` is flipped on. They are fixed together and the flag
+stays `false` until all four ship.
+
+1. **The internal AI lane fails closed.** It hand-folded provider frames and
+   defaulted to `completed`, so a stream with no usage frame, no usable `done`
+   (null `stopReason`), or empty output settled as a zero-cost SUCCESS. That
+   both resolved the global `ai_provider_billing` latch on a non-answer and let
+   the workboard cache all-`needs_reply` defaults under a content hash, where
+   they were never recomputed. The lane now shares
+   `AiGatewayTerminalStreamConsumer` with the SSE pump and the CLI smoke path,
+   and throws AFTER the ledger row, restricted capture and incident reconcile
+   have settled, so an unusable terminal is a recorded failure. The classifier
+   caller already stops and leaves the remainder uncached on a throw.
+   Scope, precisely: this closes the terminal-integrity doors (no usage, no
+   usable `done`, empty output). It does NOT close cache poisoning in general.
+   A truncated `stop_reason: max_tokens` response is an explicitly USABLE
+   terminal for the shared consumer, so partial or malformed classifier JSON
+   still becomes fabricated `needs_reply=true` defaults and is still cached
+   under its content hash. That door is older and orthogonal — it belongs to
+   classifier-side coverage validation, not to terminal integrity — and is
+   left OPEN as separate work.
+   Known gap in the same area: a `provider_usage_missing` terminal records
+   zero cost with `costApproximate: false`, even though content had already
+   streamed and provider spend definitely occurred, so it under-counts the
+   global per-feature budget. The external gateway already has the conservative
+   `estimateCostOnMissingUsage` fallback for exactly this; the internal lane
+   does not. Bounded in practice by the classifier's own per-page daily call
+   reservation, so it is recorded rather than fixed here.
+2. **Incident state is ordered by event time.** Both staleness guards compared
+   the stored timestamps against the PROCESSING clock, so a delayed failure
+   could drag `last_seen_at` below a newer failure and let the `maxLastSeenAt`
+   guard resolve a still-broken incident. Comparison is now against the event's
+   own time. A repeat failure at `last_seen_at` is first-writer-wins. A failure
+   at `resolved_at` reopens — but that rule only ever decides a tie for the
+   no-tombstone resolve primitive: every production producer opens through the
+   recovery guard, which suppresses at `recoveredAt >= occurredAt`, and the
+   recovery path resolves at `last_seen_at <= recoveredAt`, so a genuine
+   failure/recovery tie goes to the RECOVERY. That asymmetry is inherited, not
+   introduced here, and is kept deliberately: both directions self-heal on the
+   next terminal, and tightening the guard would reopen the delayed-retry race
+   it was added for. The recovery
+   tombstone, the conditional resolve and the resolved-outbox row now commit in
+   one transaction under the incident-key advisory lock; splitting them left a
+   crash seam that pinned an incident open while suppressing older failures.
+3. **Outbox delivery is FIFO per incident and channel.** The due-filter runs
+   before the ordering, so a backed-off `opened` row was invisible while a
+   fresh `resolved` row was delivered first — one transient Telegram failure
+   was enough to page a resolution for an alert that arrived a minute later.
+   A `not exists` fence blocks a row while any earlier-`transition_at` row of
+   the same incident and channel is still `pending` or `leased`. Terminal
+   states never block, so an `opened` row that ends `exhausted` or `suppressed`
+   releases its `resolved` successor, which pages alone — including when paging
+   was off at open time. Suppressing that orphan resolution needs a dependency
+   edge between rows and is deliberately left OPEN as a separate decision.
+4. **Lease and sweep clocks outlive one send.** The 60-second lease was shorter
+   than the ~150-second Telegram retry window, and one timestamp served a whole
+   25-row batch, so later rows were granted already-expired leases and retry
+   backoff was measured from sweep start. The lease is 300 seconds (pinned in
+   test above the derived `TELEGRAM_SEND_RETRY_WINDOW_MS`), every lease and
+   settlement takes a fresh timestamp, and the sweep stops on a 300-second
+   wall-clock budget. The queue is reconciled on boot with a 600-second expiry,
+   a 30-second heartbeat and `retryLimit: 0`, verified against configuration
+   drift — `createQueue` cannot change an existing queue, and pg-boss kills an
+   active job at `expireInSeconds` regardless of heartbeats, so the expiry (not
+   the heartbeat) is the ceiling the budget plus one send must fit under.
+
+Deliberately NOT included. The malformed-JSON/oversize-body HTTP 500 raised in
+the same review is not a regression: Fastify's `FST_ERR_CTP_*` errors carry no
+`.error` property, so the duck-typed passthrough removed by #184 never matched
+them, and the behavior is identical before and after that change. It is also
+the documented boundary contract, so returning 400/413/415 there is a change to
+#184 and needs its own decision. Stale-reservation recovery still skips
+incident evaluation (its rows do count toward the page streak, so the next real
+terminal opens the incident) and belongs in a bounded worker rather than the
+request path. Direct internal-lane connect failures are still classified
+`provider_proxy_unreachable`; the honest fix needs a new wire code in both
+clients and is not worth it for one ledger field on a lane whose only caller
+passes no `pageId`.

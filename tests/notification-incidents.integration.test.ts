@@ -562,6 +562,16 @@ describe("notification incidents integration", () => {
               lastSeenAt: now,
             }],
           })),
+          // The retried attempt sees `lastSeenAt === now`, i.e. the same event
+          // it is replaying, so the repository reads the row back instead of
+          // rewriting it.
+          select: vi.fn(() => ({
+            from: vi.fn(() => ({
+              where: vi.fn(() => ({
+                limit: vi.fn(async () => [incident]),
+              })),
+            })),
+          })),
           update: vi.fn(() => ({
             set: vi.fn(() => ({
               where: vi.fn(() => ({
@@ -1103,5 +1113,114 @@ describe("notification incidents integration", () => {
       expect.objectContaining({ kind: "proxy_failed", status: "open" }),
     ]));
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  // Producers stamp their event time before persisting, so two concurrent
+  // terminals routinely reach the repository in the reverse order. Ordering
+  // must follow the EVENT, never the arrival.
+  it("keeps incident state owned by the newest event when a failure arrives late", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = (await createModel(testDb.db, {
+      slug: "out-of-order-failure-model",
+      name: "Out Of Order Failure Model",
+    }))!;
+    const page = (await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "out-of-order-failure-page",
+    }))!;
+    const app = createTestAppContext(testDb);
+    const incidentKey = `auth_blocked:${page.id}`;
+
+    const earlyFailureAt = new Date("2026-03-15T12:00:00.000Z");
+    const recoveredAt = new Date("2026-03-15T12:00:01.500Z");
+    const lateFailureAt = new Date("2026-03-15T12:00:02.000Z");
+    const laterRecoveryAt = new Date("2026-03-15T12:00:03.000Z");
+
+    // The NEWEST failure lands first.
+    await notifyAuthFailedIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      errorCode: "auth_blocked",
+      errorSummary: "newest failure",
+      occurredAt: lateFailureAt,
+    });
+
+    // A delayed OLDER failure is processed afterwards. It must not move
+    // last_seen_at backwards, and must not rewrite the current cause.
+    await notifyAuthFailedIncident(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      errorCode: "auth_blocked",
+      errorSummary: "stale delayed failure",
+      occurredAt: earlyFailureAt,
+    });
+
+    let incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
+    expect(incident).toMatchObject({ status: "open", errorSummary: "newest failure" });
+    expect(incident?.lastSeenAt.toISOString()).toBe(lateFailureAt.toISOString());
+
+    // A recovery that predates the newest failure must NOT resolve it. With a
+    // regressed last_seen_at the maxLastSeenAt guard would have let it through.
+    await handleSuccessfulPageVerificationRecovery(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      recoveredAt,
+    });
+
+    incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
+    expect(incident).toMatchObject({ status: "open", errorSummary: "newest failure" });
+
+    // A recovery that genuinely postdates it still resolves.
+    await handleSuccessfulPageVerificationRecovery(app, {
+      platformAccountId: page.id,
+      pageLabel: page.label,
+      platform: "fansly",
+      recoveredAt: laterRecoveryAt,
+    });
+
+    incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
+    expect(incident).toMatchObject({ status: "resolved" });
+    expect(incident?.resolvedAt?.toISOString()).toBe(laterRecoveryAt.toISOString());
+  });
+
+  it("treats an equal-timestamp repeat as a duplicate", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const model = (await createModel(testDb.db, {
+      slug: "tie-timestamp-model",
+      name: "Tie Timestamp Model",
+    }))!;
+    const page = (await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "tie-timestamp-page",
+    }))!;
+    const app = createTestAppContext(testDb);
+    const occurredAt = new Date("2026-03-15T12:00:00.000Z");
+
+    for (const errorSummary of ["first writer", "same-millisecond repeat"]) {
+      await notifyAuthFailedIncident(app, {
+        platformAccountId: page.id,
+        pageLabel: page.label,
+        platform: "fansly",
+        errorCode: "auth_blocked",
+        errorSummary,
+        occurredAt,
+      });
+    }
+
+    // First-writer-wins: two events sharing a millisecond have no trustworthy
+    // secondary order, so the stored cause is not churned.
+    const incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
+    expect(incident).toMatchObject({ status: "open", errorSummary: "first writer" });
   });
 });

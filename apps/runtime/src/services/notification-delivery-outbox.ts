@@ -5,14 +5,42 @@ import {
   suppressLeasedNotificationDelivery,
 } from "@agency_hub_core/db";
 import { sanitizeError } from "@agency_hub_core/shared";
-import type { PgBoss } from "pg-boss";
+import type { PgBoss, Queue } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
-import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import {
+  ensureQueueCreated,
+  type QueueCreationClient,
+  type SyncQueueLifecycleClient,
+} from "./sync-queue.ts";
 import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 
 export const NOTIFICATION_DELIVERY_OUTBOX_QUEUE = "notifications.delivery-outbox.sweep";
 const DEFAULT_BATCH_LIMIT = 25;
+/**
+ * Wall-clock ceiling for one sweep. The batch limit alone does not bound
+ * runtime — 25 rows each burning a full Telegram retry window is over an hour
+ * — and pg-boss kills an active job at `expireInSeconds` regardless of
+ * heartbeats (`failJobsByTimeout` and `failJobsByHeartbeat` are independent
+ * checks). Stopping on our own clock lets the row in flight settle instead of
+ * being cut mid-send; the minutely schedule picks up the remainder.
+ */
+const SWEEP_BUDGET_MS = 300_000;
+
+/**
+ * `expireInSeconds` is the hard ceiling and must exceed
+ * SWEEP_BUDGET_MS plus one full Telegram retry window. `heartbeatSeconds` does
+ * NOT extend it — what it buys is releasing the `exclusive` slot ~30s after a
+ * worker dies instead of blocking the next sweep for the whole expiry.
+ * Delivery retries belong to the durable outbox row, never to pg-boss, hence
+ * `retryLimit: 0`.
+ */
+const notificationDeliveryOutboxQueueOptions = {
+  policy: "exclusive",
+  expireInSeconds: 600,
+  heartbeatSeconds: 30,
+  retryLimit: 0,
+} satisfies Omit<Queue, "name">;
 
 export interface NotificationOutboxDelivery {
   text: string;
@@ -24,12 +52,47 @@ export type NotificationOutboxSender = (
 ) => Promise<TelegramSendResult>;
 
 export async function ensureNotificationDeliveryOutboxQueue(
-  boss: QueueCreationClient,
+  boss: SyncQueueLifecycleClient,
   createdQueues?: Set<string>,
 ): Promise<void> {
-  await ensureQueueCreated(boss, NOTIFICATION_DELIVERY_OUTBOX_QUEUE, {
-    policy: "exclusive",
-  }, createdQueues);
+  await ensureQueueCreated(
+    boss,
+    NOTIFICATION_DELIVERY_OUTBOX_QUEUE,
+    notificationDeliveryOutboxQueueOptions,
+    createdQueues,
+  );
+
+  // createQueue is INSERT ... ON CONFLICT DO NOTHING, so an already-created
+  // queue keeps whatever it was born with — this one was born with only
+  // `policy`, i.e. pg-boss's 15-minute default expiry. Same reconcile-then-
+  // verify shape as the sync page-execute queue; `policy` is deliberately not
+  // in the update because pg-boss cannot change it.
+  await boss.updateQueue(NOTIFICATION_DELIVERY_OUTBOX_QUEUE, {
+    expireInSeconds: notificationDeliveryOutboxQueueOptions.expireInSeconds,
+    heartbeatSeconds: notificationDeliveryOutboxQueueOptions.heartbeatSeconds,
+    retryLimit: notificationDeliveryOutboxQueueOptions.retryLimit,
+  });
+
+  const queue = await boss.getQueue(NOTIFICATION_DELIVERY_OUTBOX_QUEUE);
+  if (!queue) {
+    throw new Error(
+      `Queue ${NOTIFICATION_DELIVERY_OUTBOX_QUEUE} was not readable after reconciliation`,
+    );
+  }
+  if (
+    queue.policy !== notificationDeliveryOutboxQueueOptions.policy ||
+    queue.expireInSeconds !== notificationDeliveryOutboxQueueOptions.expireInSeconds ||
+    queue.heartbeatSeconds !== notificationDeliveryOutboxQueueOptions.heartbeatSeconds ||
+    queue.retryLimit !== notificationDeliveryOutboxQueueOptions.retryLimit
+  ) {
+    throw new Error(
+      `Queue ${NOTIFICATION_DELIVERY_OUTBOX_QUEUE} configuration drift: expected ` +
+      `policy=${notificationDeliveryOutboxQueueOptions.policy}, ` +
+      `expireInSeconds=${notificationDeliveryOutboxQueueOptions.expireInSeconds}, ` +
+      `heartbeatSeconds=${notificationDeliveryOutboxQueueOptions.heartbeatSeconds}, ` +
+      `retryLimit=${notificationDeliveryOutboxQueueOptions.retryLimit}`,
+    );
+  }
 }
 
 export async function ensureNotificationDeliveryOutboxSchedule(
@@ -55,13 +118,20 @@ export async function runNotificationDeliveryOutbox(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input?: {
     now?: Date;
+    /** Test seam for time MOVING during a sweep; `now` pins it instead. */
+    clock?: () => Date;
     maxRows?: number;
     leaseMs?: number;
     retryDelayMs?: number;
     sender?: NotificationOutboxSender;
   },
 ) {
-  const now = input?.now ?? new Date();
+  // One timestamp per batch was wrong twice over: later rows were handed
+  // leases that had already expired at grant time (so another runner could
+  // reclaim a row mid-send), and retry backoff was measured from sweep start,
+  // so a delay could already be in the past by the time the row settled.
+  const clock = input?.clock ?? (input?.now ? () => input.now! : () => new Date());
+  const sweepStartedAt = Date.now();
   const maxRows = Math.max(1, Math.floor(input?.maxRows ?? DEFAULT_BATCH_LIMIT));
   const sender = input?.sender ?? ((delivery: NotificationOutboxDelivery) =>
     sendTelegramMessage(app, {
@@ -77,8 +147,17 @@ export async function runNotificationDeliveryOutbox(
   };
 
   for (let index = 0; index < maxRows; index += 1) {
+    if (Date.now() - sweepStartedAt >= SWEEP_BUDGET_MS) {
+      // Never a silent truncation: the remainder is still due and the next
+      // minutely tick takes it.
+      app.logger.warn({
+        ...result,
+        budgetMs: SWEEP_BUDGET_MS,
+      }, "Notification outbox sweep stopped on its wall-clock budget");
+      break;
+    }
     const row = await leaseNotificationDeliveryOutbox(app.db, {
-      now,
+      now: clock(),
       ...(input?.leaseMs !== undefined ? { leaseMs: input.leaseMs } : {}),
     });
     if (!row) {
@@ -112,7 +191,7 @@ export async function runNotificationDeliveryOutbox(
         outboxId: row.id,
         leaseToken: row.leaseToken,
         reason: suppressionReason,
-        now,
+        now: clock(),
       });
       result.suppressed += 1;
       continue;
@@ -149,7 +228,7 @@ export async function runNotificationDeliveryOutbox(
             status: "skipped",
             error: delivery.reason,
           },
-      now,
+      now: clock(),
       ...(input?.retryDelayMs !== undefined ? { retryDelayMs: input.retryDelayMs } : {}),
     });
 

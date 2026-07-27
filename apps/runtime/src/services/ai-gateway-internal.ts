@@ -21,7 +21,7 @@ import {
   createAnthropicAiGatewayProvider,
   createDirectAnthropicClientResolver,
 } from "./ai-gateway-anthropic-provider.ts";
-import { parseAiGatewayFeatureLimits } from "./ai-gateway.ts";
+import { AiGatewayTerminalStreamConsumer, parseAiGatewayFeatureLimits } from "./ai-gateway.ts";
 import { reconcileAiProviderTerminalIncident } from "./ai-gateway-incidents.ts";
 import { QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 
@@ -132,14 +132,16 @@ export async function runGatewayCompletion(
   };
 
   const startedAt = Date.now();
-  let text = "";
-  let usage: AiGatewayUsage | null = null;
-  let providerResponseId: string | null = null;
-  let cacheHit = false;
-  let stopReason: string | null = null;
-  let outcome: "completed" | "failed" = "completed";
+  // The SAME terminal-integrity folder the SSE pump and the CLI smoke path
+  // use. This lane used to hand-roll frame folding and defaulted to
+  // "completed", so a stream with no usage, no usable `done`, or empty output
+  // settled as a SUCCESS: it billed zero, resolved the global provider
+  // billing latch, and handed the workboard an empty completion that
+  // `parseVerdicts` turned into all-needs_reply defaults — which then got
+  // WRITTEN INTO `wb_closing_cache` under a content hash and never
+  // recomputed. Terminal integrity now lives in exactly one place.
+  const terminal = new AiGatewayTerminalStreamConsumer();
   let terminalFailure: AiProviderFailureClassification | null = null;
-  let framedErrorCode: string | null = null;
   const abort = new AbortController();
   try {
     for await (const frame of provider.stream({
@@ -156,24 +158,16 @@ export async function runGatewayCompletion(
       quota: { accepted: true, remainingRequestsToday: null, remainingMicroUsdToday: null },
       signal: abort.signal,
     })) {
-      if (frame.type === "content_delta") {
-        text += frame.text;
-      } else if (frame.type === "usage") {
-        usage = frame.usage;
-        providerResponseId = frame.providerResponseId;
-        cacheHit = frame.cacheHit;
-      } else if (frame.type === "done") {
-        stopReason = frame.stopReason ?? null;
-      } else if (frame.type === "error") {
-        outcome = "failed";
-        framedErrorCode = frame.code;
-      }
+      // No SSE on this lane, so the frames the consumer wants emitted are
+      // dropped; only the folded terminal state matters here.
+      terminal.note(frame);
     }
+    terminal.finish();
   } catch (error) {
-    outcome = "failed";
+    terminal.outcome = "failed";
     terminalFailure = normalizeProviderStreamFailure(error, {
       provider: provider.provider,
-      ...(text.length > 0 ? { failurePhase: "stream" as const } : {}),
+      ...(terminal.streamedContent ? { failurePhase: "stream" as const } : {}),
     });
     app.logger.warn(
       {
@@ -188,16 +182,21 @@ export async function runGatewayCompletion(
     throw error;
   } finally {
     const completedAt = new Date();
+    const outcome: "completed" | "failed" = terminal.outcome === "completed"
+      ? "completed"
+      : "failed";
     const errorCode = outcome === "failed"
-      ? terminalFailure?.code ?? framedErrorCode ?? "provider_stream_failed"
+      ? terminalFailure?.code
+        ?? terminal.failureDetail?.errorCode
+        ?? "provider_stream_failed"
       : null;
     const failurePhase = outcome === "failed"
-      ? terminalFailure?.failurePhase ?? "stream"
+      ? terminalFailure?.failurePhase ?? terminal.failureDetail?.failurePhase ?? "stream"
       : null;
     const providerHttpStatus = outcome === "failed"
-      ? terminalFailure?.providerHttpStatus ?? null
+      ? terminalFailure?.providerHttpStatus ?? terminal.failureDetail?.providerHttpStatus ?? null
       : null;
-    const settledUsage = usage ?? {
+    const settledUsage = terminal.usage ?? {
       inputTokens: 0,
       outputTokens: 0,
       cacheWriteTokens: 0,
@@ -209,7 +208,7 @@ export async function runGatewayCompletion(
       userId: null,
       event: {
         clientEventId,
-        providerResponseId,
+        providerResponseId: terminal.providerResponseId,
         inputTokens: settledUsage.inputTokens,
         outputTokens: settledUsage.outputTokens,
         cacheWriteTokens: settledUsage.cacheWriteTokens,
@@ -221,7 +220,7 @@ export async function runGatewayCompletion(
         failurePhase,
         providerHttpStatus,
         durationMs: Date.now() - startedAt,
-        isCacheHit: cacheHit,
+        isCacheHit: terminal.cacheHit,
         completedAt,
       },
     });
@@ -241,14 +240,14 @@ export async function runGatewayCompletion(
         { role: "system", blocks: input.systemBlocks },
         { role: "user", blocks: input.userBlocks },
       ],
-      completion: text,
+      completion: terminal.completionText,
       params: {
         maxTokens: input.maxTokens ?? null,
         temperature: input.temperature ?? null,
         reasoningEffort: "off",
         isRegeneration: false,
         outcome,
-        stopReason,
+        stopReason: terminal.stopReason,
       },
     });
     if (usageEventId !== null) {
@@ -264,5 +263,16 @@ export async function runGatewayCompletion(
     }
   }
 
-  return { text, usage, generationRef };
+  // Fail closed AFTER the ledger row, the restricted capture and the incident
+  // reconcile have settled — an unusable terminal is a recorded failure, not a
+  // silent one. Only reachable when the stream ended without throwing; a
+  // provider exception already propagated from the catch above.
+  if (terminal.outcome !== "completed") {
+    throw new ServiceUnavailableError(
+      "AI gateway internal completion produced an unusable terminal "
+      + `(${terminal.failureDetail?.errorCode ?? "provider_stream_failed"})`,
+    );
+  }
+
+  return { text: terminal.completionText, usage: terminal.usage, generationRef };
 }

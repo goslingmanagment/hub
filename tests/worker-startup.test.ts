@@ -331,6 +331,17 @@ describe("worker startup", () => {
       fetch: vi.fn(),
       send: vi.fn(),
       touch: vi.fn(),
+      // The notification outbox reconciles its own queue options on boot
+      // (createQueue cannot change an existing queue's expiry), so the
+      // boss stub must answer the read-back with the expected shape.
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
     };
 
     dbMocks.closeOrphanedSyncRuns.mockImplementation(async () => {
@@ -430,6 +441,17 @@ describe("worker startup", () => {
       fetch: vi.fn(),
       send: vi.fn(),
       touch: vi.fn(),
+      // The notification outbox reconciles its own queue options on boot
+      // (createQueue cannot change an existing queue's expiry), so the
+      // boss stub must answer the read-back with the expected shape.
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
     };
     messageArchiveMocks.runMessageArchiveProjection.mockResolvedValue({ eventsSeen: 0 });
     coverageProjectionMocks.runOfapiMessageCoverageProjection.mockRejectedValue(
@@ -473,6 +495,17 @@ describe("worker startup", () => {
       fetch: vi.fn(),
       send: vi.fn(),
       touch: vi.fn(),
+      // The notification outbox reconciles its own queue options on boot
+      // (createQueue cannot change an existing queue's expiry), so the
+      // boss stub must answer the read-back with the expected shape.
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
     };
 
     const runtime = await startWorkerServices(app as never, boss as never);
@@ -518,6 +551,17 @@ describe("worker startup", () => {
       fetch: vi.fn(),
       send: vi.fn(),
       touch: vi.fn(),
+      // The notification outbox reconciles its own queue options on boot
+      // (createQueue cannot change an existing queue's expiry), so the
+      // boss stub must answer the read-back with the expected shape.
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
     };
 
     dbMocks.getTelegramSettings.mockResolvedValue({
@@ -567,6 +611,17 @@ describe("worker startup", () => {
       fetch: vi.fn(),
       send: vi.fn(),
       touch: vi.fn(),
+      // The notification outbox reconciles its own queue options on boot
+      // (createQueue cannot change an existing queue's expiry), so the
+      // boss stub must answer the read-back with the expected shape.
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
     };
 
     dbMocks.getTelegramSettings.mockResolvedValue({
@@ -620,6 +675,17 @@ describe("worker startup", () => {
       fetch: vi.fn(),
       send: vi.fn(),
       touch: vi.fn(),
+      // The notification outbox reconciles its own queue options on boot
+      // (createQueue cannot change an existing queue's expiry), so the
+      // boss stub must answer the read-back with the expected shape.
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
     };
 
     dbMocks.getTelegramSettings.mockResolvedValue({
@@ -665,6 +731,17 @@ describe("worker startup", () => {
       fetch: vi.fn(),
       send: vi.fn(),
       touch: vi.fn(),
+      // The notification outbox reconciles its own queue options on boot
+      // (createQueue cannot change an existing queue's expiry), so the
+      // boss stub must answer the read-back with the expected shape.
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
     };
 
     dbMocks.getTelegramSettings.mockResolvedValue({

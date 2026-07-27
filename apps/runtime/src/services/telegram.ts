@@ -4,6 +4,7 @@ import { getTelegramSettings, type TelegramSettingsRow } from "@agency_hub_core/
 import {
   classifyTransportFailure,
   decryptJsonWithKeyVersion,
+  MAX_RETRY_DELAY_MS,
   redactSensitiveText,
   resolveRetryDelayMs,
   sanitizeError,
@@ -37,6 +38,20 @@ export interface ResolvedTelegramCredentials {
 const TELEGRAM_SEND_TIMEOUT_MS = 10_000;
 const TELEGRAM_SEND_MAX_RETRIES = 2;
 const TELEGRAM_DISCOVER_TIMEOUT_MS = 10_000;
+
+/**
+ * How long ONE `sendTelegramMessage` call can physically occupy a worker:
+ * every attempt plus every capped retry sleep. Callers that hold a lease over
+ * the send (the notification outbox) must outlast this window, so it is
+ * derived rather than written down twice — bump a timeout or a retry count and
+ * this number follows.
+ *
+ * It bounds the RETRY window, not wall-clock: an event-loop stall, a hung
+ * dispatcher teardown, or DB latency around the call are outside it.
+ */
+export const TELEGRAM_SEND_RETRY_WINDOW_MS =
+  (TELEGRAM_SEND_MAX_RETRIES + 1) * TELEGRAM_SEND_TIMEOUT_MS
+  + TELEGRAM_SEND_MAX_RETRIES * MAX_RETRY_DELAY_MS;
 
 export interface TelegramRequestOptions {
   dispatcher: Dispatcher;

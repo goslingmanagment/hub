@@ -186,6 +186,26 @@ Incident summaries are static derivations of provider name, wire code,
 failure phase, and optional provider status, then sanitized and clamped. They
 never incorporate the provider body or caught exception message.
 
+Incident state is ordered by EVENT time (the terminal's `completed_at`, the
+recovery's `recoveredAt`), never by the clock at which the producer happened to
+reach the repository — concurrent generations settle out of order routinely. A
+transition whose event time is at or before the stored `resolved_at` /
+`last_seen_at` is a no-op: it neither moves the timestamps backwards nor
+rewrites `error_code`, `error_summary`, or metadata, so an older failure can no
+longer drag `last_seen_at` below a newer one and let the `maxLastSeenAt` guard
+resolve a still-broken incident. A repeat failure at the stored `last_seen_at`
+is first-writer-wins: same latch, no new state, so the cause fields are not
+churned. A failure at the stored `resolved_at` reopens — but only on the
+no-tombstone resolve primitive. Every production producer opens through the
+recovery guard, which suppresses at `recoveredAt >= occurredAt`, and the
+recovery path resolves at `last_seen_at <= recoveredAt`, so a genuine
+failure/recovery tie goes to the RECOVERY. That is inherited behavior, kept
+deliberately: both directions self-heal on the next terminal, and tightening
+the guard would reopen the delayed-retry race it exists for. The recovery tombstone, the
+conditional resolve, and the resolved-outbox row commit in ONE transaction
+under the incident-key advisory lock: a committed tombstone without its resolve
+would pin the incident open while silently suppressing every older failure.
+
 ### Durable critical-notification outbox
 
 Incident transitions and their notification rows are committed atomically.
@@ -196,7 +216,7 @@ stable idempotency key is
 | State | Meaning and allowed next state |
 |---|---|
 | `pending` | Due for delivery. A worker atomically leases it, or policy suppression makes it `suppressed`. |
-| `leased` | Owned for 60 seconds. Success makes it `delivered`; a disabled policy makes it `suppressed`; a failed/skipped attempt returns it to `pending` or reaches `exhausted`. An expired lease is reclaimable without consuming an attempt. |
+| `leased` | Owned for 300 seconds — longer than the slowest physical Telegram send (`TELEGRAM_SEND_RETRY_WINDOW_MS`, ~150s), so a second runner cannot reclaim a row that is still in flight. Success makes it `delivered`; a disabled policy makes it `suppressed`; a failed/skipped attempt returns it to `pending` or reaches `exhausted`. An expired lease is reclaimable without consuming an attempt. |
 | `delivered` | Telegram delivery was accepted and the row settled; terminal. |
 | `suppressed` | Master notifications or `aiCriticalAlertsEnabled` was off at enqueue or worker recheck; terminal. Later flag changes do not resurrect the row. |
 | `exhausted` | The maximum delivery attempts were consumed; terminal and explicitly timestamped. |
@@ -204,9 +224,24 @@ stable idempotency key is
 The default attempt cap is 5. Failed/skipped delivery attempts are journaled.
 The default-cap retry delays are 1, 2, 4, and 8 minutes; a higher configured cap
 uses the same exponential sequence capped at 15 minutes. The minutely worker
-leases up to 25 due rows by default. Telegram offers no provider-side
-idempotency key, so a process death after Telegram accepts a message but before
-local settlement can still duplicate a notification.
+leases up to 25 due rows by default and stops on a 300,000 ms wall-clock budget,
+whichever comes first; every lease and every settlement takes a fresh timestamp,
+so a slow row cannot hand its successors an already-expired lease or a backoff
+that has already elapsed. The sweep queue is `exclusive` with a 600-second
+expiry, a 30-second heartbeat and `retryLimit: 0` — delivery retries belong to
+the outbox row, and the expiry (not the heartbeat) is the hard ceiling that the
+sweep budget plus one send window must fit under. Telegram offers no
+provider-side idempotency key, so a process death after Telegram accepts a
+message but before local settlement can still duplicate a notification.
+
+Delivery is FIFO per `(incident, channel)`: a row is only leasable when no
+earlier-`transition_at` row of the same incident and channel is still `pending`
+or `leased`. Without that fence the due-filter hides a backed-off `opened` row
+while a freshly enqueued `resolved` row is delivered first. Terminal states
+never block a successor, so an `opened` row that ends `exhausted` or
+`suppressed` releases its `resolved` successor, which then pages on its own —
+including the case where paging was off when the incident opened. Suppressing
+such an orphan resolution is a deliberate open question, not current behavior.
 
 `aiCriticalAlertsEnabled` is a separate audited config flag, default `false`;
 the master Telegram notification flag must also be enabled. Paging-off does
