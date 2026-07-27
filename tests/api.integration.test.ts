@@ -1749,7 +1749,7 @@ describe("api integration", () => {
     expect(afterLogout.statusCode).toBe(401);
   });
 
-  it("rate limits repeated login attempts", async (context) => {
+  it("rate limits repeated login attempts [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -1828,7 +1828,7 @@ describe("api integration", () => {
     expect(otherAccount.statusCode).toBe(200);
   });
 
-  it("rate limits cross-account spraying per IP (audit B7)", async (context) => {
+  it("rate limits cross-account spraying per IP (audit B7) [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
