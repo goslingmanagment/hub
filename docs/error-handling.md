@@ -145,6 +145,18 @@ HTTP 500 `internal_error`. Voice attempt outcome strings such as
 `voice_failed_definite`, `voice_failed_after_dispatch`, and
 `voice_indeterminate` are persisted state, not HTTP `AppError` codes.
 
+That rule binds PLUGINS too, and the reverse direction is the one that bit:
+`@fastify/rate-limit` does not build a reply, it THROWS whatever its
+`errorResponseBuilder` returns. Returning a duck-typed literal there meant the
+429 survived only because of the passthrough this section removed, so between
+2026-07-24 and 2026-07-27 every rate-limited login answered HTTP 500
+`internal_error` — the limiter still blocked the request, but clients were told
+"internal error" instead of "rate limited" and retried on the wrong semantics.
+Any plugin that signals by throwing must throw an `AppError`
+(`TooManyRequestsError` here). Both rate-limit tests now carry the
+`[sync-critical]` tag so the PR gate, not only the nightly, catches a
+regression of this shape.
+
 ## 4. Ledger, incidents, and notification delivery
 
 ### `ai_usage_events` failure fields

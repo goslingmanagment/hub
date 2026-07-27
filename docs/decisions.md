@@ -188,6 +188,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 184 | Server error hygiene | The four boundary sanitizer paths collapse into one shared core owning cause chains, secret masking and clamp policy; only AppError may cross the boundary; the SDK adds an `http` fallback category; wire taxonomy unchanged |
 | 185 | Error-handling canon | docs/error-handling.md is the single canonical error-handling reference for core, the extension and desktop; any change to classification, codes, retries, incidents or redaction must update the canon in the same change |
 | 186 | Critical-paging preconditions | Four fixes gate `aiCriticalAlertsEnabled`: the internal AI lane fails closed on unusable terminals via the shared consumer, incident state is ordered by event time with an atomic recovery+resolve, outbox delivery is FIFO per incident/channel, and the lease/sweep clocks outlive one physical Telegram send |
+| 187 | Plugins throw AppError | `@fastify/rate-limit` threw a duck-typed literal that only reached clients via the passthrough #184 removed, so rate-limited logins answered HTTP 500 for three days; any plugin signalling by throw must throw an `AppError`, and both rate-limit tests join the `[sync-critical]` PR slice |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5518,3 +5519,28 @@ request path. Direct internal-lane connect failures are still classified
 `provider_proxy_unreachable`; the honest fix needs a new wire code in both
 clients and is not worth it for one ledger field on a lane whose only caller
 passes no `pageId`.
+
+**Decision #187 (2026-07-27, a plugin that throws must throw an `AppError`):**
+#184 removed the boundary's duck-typed `{statusCode, error, message}`
+passthrough deliberately. What went unnoticed is that `@fastify/rate-limit`
+does not build its own reply — it executes `throw errorResponseBuilder(...)` —
+and this repo's builder returned exactly such a literal. From 2026-07-24 until
+2026-07-27 every rate-limited login therefore answered HTTP 500
+`internal_error` instead of 429 `rate_limit_exceeded`.
+
+The limiter itself never broke: it runs at `onRequest`, so the request was
+still refused and brute-force protection held. What broke was the contract —
+clients map 429 and 500 to different retry dispositions, and an operator
+watching for a spray sees a spike of 500s.
+
+The fix returns `TooManyRequestsError`, which already carried exactly the
+pre-regression wire shape (`rate_limit_exceeded` / 429). No allowlist and no
+duck-typing is reintroduced: the boundary rule stands, and the plugin is
+brought into compliance with it instead. The general rule is now canon — any
+plugin that signals by throwing must throw an `AppError`.
+
+Why three days: the covering test, `rate limits cross-account spraying per IP
+(audit B7)`, was not tagged `[sync-critical]`, so it ran only in the nightly.
+The nightly went red on 2026-07-25 and stayed red through 07-27 with this as
+its single failure. Both rate-limit tests now carry the tag, so the PR gate
+catches this class. A red nightly is not coverage; it is an unread alarm.

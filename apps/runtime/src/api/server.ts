@@ -37,6 +37,7 @@ import {
   ForbiddenError,
   NotFoundError,
   SnapshotRestartRequiredError,
+  TooManyRequestsError,
   UnauthorizedError,
 } from "../services/errors.ts";
 import {
@@ -197,11 +198,16 @@ export async function buildApiServer(appContext: AppContext) {
   await server.register(cookie);
   await server.register(rateLimit, {
     global: false,
-    errorResponseBuilder: () => ({
-      error: "rate_limit_exceeded",
-      message: "Too many login attempts",
-      statusCode: 429,
-    }),
+    // The plugin THROWS whatever this returns (@fastify/rate-limit index.js:
+    // `throw params.errorResponseBuilder(req, respCtx)`), so the value has to
+    // survive the error boundary. It used to be a plain `{error, message,
+    // statusCode}` literal, which only reached the client because the boundary
+    // had a duck-typed passthrough; #184 removed that passthrough on purpose
+    // and this became a 500 — brute-force replies said "internal error"
+    // instead of "rate limited", so clients retried on the wrong semantics.
+    // An AppError is the boundary's own contract: same wire shape as before,
+    // no duck-typing reintroduced.
+    errorResponseBuilder: () => new TooManyRequestsError("Too many login attempts"),
   });
   await server.register(swagger, {
     openapi: {
