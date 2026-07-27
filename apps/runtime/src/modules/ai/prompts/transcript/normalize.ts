@@ -64,7 +64,7 @@ function ppvSuffix(message: OfapiChatMessage): string {
   if (price <= 0) {
     return '';
   }
-  return ` — PPV $${usd(price)}, ${ppvStateOf(message)}`;
+  return ` - PPV $${usd(price)}, ${ppvStateOf(message)}`;
 }
 
 /** Inner media label without brackets/PPV, or null when the message carries no media. */

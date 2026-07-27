@@ -5597,3 +5597,45 @@ because `tests/voice-profiles.test.ts` and `tests/voice-notes-sweep.test.ts`
 are database-backed without the `.integration.test.ts` name, so the `--exclude`
 list misses them. They are correct as tests and merely misfiled; renaming them
 would reshuffle shard assignment and is left to its own change.
+
+**Decision #189 (2026-07-28, no long dashes in anything the model reads):**
+An em dash is an AI tell in fan-facing chat: nobody texting from a phone types
+one. Our prompts were saturated with them, and a model mirrors the style of its
+own prompt, so the tell was being taught rather than merely tolerated. Every em
+and en dash is now gone from the text that reaches the model: all ten templates
+(and their byte-identical `templates.ts` twins), the live instruction strings in
+`builder.ts`, and the transcript normalizer. Prose pauses became commas, a
+`**Heading** —` became a colon, the dossier disclaimer's paired aside became
+parentheses, and numeric ranges took plain hyphens. Code comments are untouched:
+they never reach a model.
+
+The structural half matters more than the prose. The paid-attachment marker was
+emitted as `[… — PPV $X.XX, state]`, so an em dash arrived in EVERY generation
+once per paid attachment in the window, ahead of any instruction. Its grammar is
+now `[… - PPV $X.XX, state]`. That marker is emitted twice, by this repo's
+`prompts/transcript/normalize.ts` for archive-sourced transcripts and by the
+extension's `src/shared/transcript.ts` for the live DOM read, and it is quoted
+verbatim inside fast-reply, help-me, improve-draft and ping. All five sites move
+together or the quoted grammar stops describing the live tag; the extension
+change ships as its own PR against the same day.
+
+Cleaning the sources is only half of it, because the coach ANSWERS the chatter
+reads are model output, not template text. The one explicit "never use long
+dashes" rule lived inside the bundled Lora personality, which binds the reply
+features and nothing else, so coach chat, recaps, chat review and voice scripts
+were never told. The rule is now a WRITING RULES block on both safety preambles
+(`REPLY_SAFETY_PREAMBLE` and `ANALYSIS_SAFETY_PREAMBLE`), which is the only text
+every feature shares, and it names the case the personality rule missed: example
+messages, suggested wording and proposed drafts count as output too. It rides
+the uncached system block, so it costs nothing in cache invalidation.
+
+Two consequences, both accepted. Russian recaps and reviews lose a dash that is
+correct Russian typography; the owner's ruling is that consistency beats it,
+since the same text gets pasted and skimmed next to fan-facing copy. And the
+coach's 300k ceiling now has ~430 fewer characters for context: the reducer
+handles that by design, but the packed budget FIXTURE had to move with the
+preamble, so it derives its padding from `ANALYSIS_SAFETY_PREAMBLE.length`
+instead of a fixed 50k that would silently shed the recap it asserts is kept.
+
+Output-side normalization (`normalizeDashes` in `prompts/output/reply-output.ts`,
+uncalled here because sanitizing happens client-side) stays a client concern.

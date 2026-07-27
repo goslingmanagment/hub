@@ -10,12 +10,12 @@ only, no prose padding. Hard limit: keep the whole recap under 350 words.
 
 ## Sections
 
-1. WHO — name/persona facts the fan revealed; how they address the model.
-2. SPEND PATTERN — recent purchases, tips, price points accepted/refused.
-3. TRIGGERS — what makes them engage, buy, or go cold.
-4. BOUNDARIES — stated limits, sore topics, things that annoyed them.
-5. ACTIVE THREADS — open loops, promises, scheduled events, running jokes.
-6. NEXT MOVE — the single most promising next action for the chatter.
+1. WHO: name/persona facts the fan revealed; how they address the model.
+2. SPEND PATTERN: recent purchases, tips, price points accepted/refused.
+3. TRIGGERS: what makes them engage, buy, or go cold.
+4. BOUNDARIES: stated limits, sore topics, things that annoyed them.
+5. ACTIVE THREADS: open loops, promises, scheduled events, running jokes.
+6. NEXT MOVE: the single most promising next action for the chatter.
 
 ## Conversation Transcript
 
