@@ -5619,9 +5619,23 @@ verbatim inside fast-reply, help-me, improve-draft and ping. All five sites move
 together or the quoted grammar stops describing the live tag; the extension
 change ships as its own PR against the same day.
 
-Not done here, and deliberately: the only explicit "never use long dashes" rule
-still lives inside the bundled Lora personality, so it binds neither coach chat,
-recaps, nor voice scripts. Promoting it to the shared output contract is a
-behavioral change to every feature and is left as its own decision. Output-side
-normalization (`normalizeDashes` in `prompts/output/reply-output.ts`, currently
+Cleaning the sources is only half of it, because the coach ANSWERS the chatter
+reads are model output, not template text. The one explicit "never use long
+dashes" rule lived inside the bundled Lora personality, which binds the reply
+features and nothing else, so coach chat, recaps, chat review and voice scripts
+were never told. The rule is now a WRITING RULES block on both safety preambles
+(`REPLY_SAFETY_PREAMBLE` and `ANALYSIS_SAFETY_PREAMBLE`), which is the only text
+every feature shares, and it names the case the personality rule missed: example
+messages, suggested wording and proposed drafts count as output too. It rides
+the uncached system block, so it costs nothing in cache invalidation.
+
+Two consequences, both accepted. Russian recaps and reviews lose a dash that is
+correct Russian typography; the owner's ruling is that consistency beats it,
+since the same text gets pasted and skimmed next to fan-facing copy. And the
+coach's 300k ceiling now has ~430 fewer characters for context: the reducer
+handles that by design, but the packed budget FIXTURE had to move with the
+preamble, so it derives its padding from `ANALYSIS_SAFETY_PREAMBLE.length`
+instead of a fixed 50k that would silently shed the recap it asserts is kept.
+
+Output-side normalization (`normalizeDashes` in `prompts/output/reply-output.ts`,
 uncalled here because sanitizing happens client-side) stays a client concern.

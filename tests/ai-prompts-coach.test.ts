@@ -6,6 +6,7 @@ import {
   coachHistorySection,
   COACH_CHAT_TEMPLATE,
   COACH_PROMPT_MAX_CHARS,
+  ANALYSIS_SAFETY_PREAMBLE,
   FAN_SUMMARY_SHORT_TEMPLATE,
   projectCoachAnswer,
   type PromptBuildInput,
@@ -188,7 +189,14 @@ describe("coach-chat prompt", () => {
     const amp = "&";
     const built = buildPrompt({
       ...baseInput,
-      personality: { ...baseInput.personality, content: amp.repeat(50_000) },
+      // The window is packed against the exact 300k ceiling, so the padding has
+      // to move with the system preamble: bytes added there (Decision #189's
+      // writing rules) come straight out of the budget under test, and a fixed
+      // 50k would silently start shedding the recap this case asserts is KEPT.
+      personality: {
+        ...baseInput.personality,
+        content: amp.repeat(50_000 - ANALYSIS_SAFETY_PREAMBLE.length),
+      },
       transcript: "TRANSCRIPT_HEAD\n" + amp.repeat(2_000) + "\nTRANSCRIPT_TAIL",
       fanSpendingData: amp.repeat(20_000),
       fanSubscriptionData: amp.repeat(20_000),
