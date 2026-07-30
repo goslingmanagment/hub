@@ -26,7 +26,7 @@ import {
 import type { Personality } from '../apps/runtime/src/modules/ai/index.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const EXTENSION_ROOT = join(HERE, '..', '..', 'chatgoose');
+const EXTENSION_ROOT = join(HERE, '..', '..', 'fansly-ext');
 
 const TEMPLATES: ReadonlyArray<{ file: string; content: string }> = [
   { file: 'fast-reply.md', content: FAST_REPLY_TEMPLATE },

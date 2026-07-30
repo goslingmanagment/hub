@@ -3,10 +3,12 @@
 The central backend of an OnlyFans/Fansly agency: source of truth for platform
 data (messages, fans, transactions, subscriptions), the money ledgers, the AI
 gateway that serves every client's generation, and the owner console. Clients —
-the ChatGoose desktop app (OnlyFans, `~/code/chatgoose_desktop_fable`), the
-ChatGoose Firefox extension (Fansly, `~/code/chatgoose`), and the dashboard in
+the ChatGoose desktop app (OnlyFans, `~/code/goose/of-desktop`), the
+ChatGoose Firefox extension (Fansly, `~/code/goose/fansly-ext`), and the dashboard in
 this repo — are "userspace": they hold no vendor keys, assemble no prompts, and
 compute no money; everything privileged happens here, behind the generated SDK.
+(Renamed 2026-07-30: `core` → `goose/hub`, `chatgoose` → `goose/fansly-ext`,
+`chatgoose_desktop_fable` → `goose/of-desktop`; GitHub repo names unchanged.)
 Production: one VPS (Docker: api + worker + scheduler + Postgres 16), deployed
 by `scripts/deploy-production.sh` (owner-gated).
 
@@ -81,7 +83,7 @@ quick-ref table up top), Git tags, and production itself.**
   then `pnpm contracts:generate` (regenerates the SDK surface + OpenAPI).
   Client repos consume a VENDORED compiled SDK — re-vendor with
   `node scripts/vendor-sdk.mjs <client>/vendor/kernel-sdk` (or
-  `../chatgoose_desktop_fable/packages/kernel-sdk`) only when they need the
+  `../of-desktop/packages/kernel-sdk`) only when they need the
   new operations; the drift gates in each client pin the contract hash.
 
 ## Conventions

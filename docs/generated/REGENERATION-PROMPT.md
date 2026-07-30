@@ -14,7 +14,7 @@ ecosystem. This pass covers ONE project; the other two get their own
 passes. Your output is the reviewer's map of this territory — make it
 complete, precise, and factual.
 
-The project: /Users/dmitriy/code/core — the backend hub of an
+The project: /Users/dmitriy/code/goose/hub — the backend hub of an
 OnlyFans/Fansly agency stack. It ingests platform data (OFAPI webhooks,
 sync jobs), stores it, and serves a dashboard plus client applications
 (a desktop chat workspace and a browser extension, documented in their
