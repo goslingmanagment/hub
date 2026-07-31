@@ -343,6 +343,14 @@ export type StreamChunkResult = {
   continuationRetryAt?: Date | null;
   continuationRequestSource?: SyncRequestSource | null;
   stats?: Record<string, unknown>;
+  /** Set when a ramp gate short-circuited the chunk before any egress. Such a
+   *  chunk terminates WITHOUT recording a successful sync anywhere. ONLY
+   *  fanslyNewStreamSkip sets this — do not extend it to the other
+   *  "satisfied but did nothing" skips (onlyfans_top_spenders_disabled,
+   *  legacy_ofapi_dm_messages_retired, sweep_not_due, ...): their streams sit
+   *  in BLOCK_TASKS / SYNC_DOMAIN_POLICY, where withholding succeeded_at WOULD
+   *  degrade chatter-visible block health. That is a separate decision. */
+  gatedSkip?: string | null;
 };
 
 class DmMessagesChunkRequestObserver implements HttpRequestObserver {
@@ -3688,6 +3696,7 @@ function fanslyNewStreamSkip(reason: string): StreamChunkResult {
     satisfied: true,
     yieldReason: null,
     stats: { skipped: reason },
+    gatedSkip: reason,
   };
 }
 

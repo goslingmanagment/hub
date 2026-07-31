@@ -6689,18 +6689,25 @@ describe("api integration", () => {
         syncRetry: null,
       });
 
-      const expectedStreams = [
-        "light",
-        "followers",
-        "transactions",
-        "subscribers",
-        "followers_reconcile",
-        "dm_conversations",
-        "dm_messages",
-        "fan_earnings",
-        "purchase_history",
-        "top_spenders",
-      ] as const;
+      // Both ramp flags are off in this runtime (tests/helpers/runtime.ts), so
+      // fan_earnings and purchase_history reach the gate and issue no requests
+      // at all. The OLD expectation here was that ALL TEN streams finish
+      // "success", and that expectation WAS the bug: a gated stream reporting a
+      // successful sync is exactly what let lora-1's feed sit dead for 13 days
+      // (2026-07-17 to 2026-07-31) with every instrument reading healthy.
+      const expectedRunStatusByStream = new Map<string, string>([
+        ["light", "success"],
+        ["followers", "success"],
+        ["transactions", "success"],
+        ["subscribers", "success"],
+        ["followers_reconcile", "success"],
+        ["dm_conversations", "success"],
+        ["dm_messages", "success"],
+        ["top_spenders", "success"],
+        ["fan_earnings", "skipped"],
+        ["purchase_history", "skipped"],
+      ]);
+      const expectedStreams = [...expectedRunStatusByStream.keys()];
 
       await waitForCondition(async () => {
         const rows = await activeTestDb.pool.query<{
@@ -6716,8 +6723,7 @@ describe("api integration", () => {
         `);
 
         return rows.rows.length === expectedStreams.length
-          && rows.rows.every((row) => row.status === "success")
-          && expectedStreams.every((stream) => rows.rows.some((row) => row.stream === stream));
+          && rows.rows.every((row) => expectedRunStatusByStream.get(row.stream) === row.status);
       }, 15_000);
 
       const syncRunRows = await activeTestDb.pool.query<{
@@ -6735,7 +6741,8 @@ describe("api integration", () => {
       `);
 
       expect(syncRunRows.rows.map((row) => row.stream).sort()).toEqual([...expectedStreams].sort());
-      expect(syncRunRows.rows.every((row) => row.status === "success")).toBe(true);
+      expect(new Map(syncRunRows.rows.map((row) => [row.stream, row.status])))
+        .toEqual(expectedRunStatusByStream);
       expect(syncRunRows.rows.every((row) => row.trigger === "onboarding")).toBe(true);
     } finally {
       abortController.abort();
