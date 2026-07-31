@@ -7,10 +7,14 @@
  * adversarial review rounds each found real defects caused purely by those
  * restatements drifting apart (plane enum said 19 while four other sites still
  * pinned 13; six claim classes in the architecture against four in the contract
- * appendix). The vocabulary is therefore declared ONCE, here, and everything
- * else — Zod enums, counts, required-plane sets, per-operation matrices, the CI
- * pins — is DERIVED. A drift becomes a compile error instead of a silent lie in
- * a response body.
+ * appendix). The vocabulary is therefore declared ONCE, here, and the enums,
+ * counts and required-plane sets are DERIVED. A drift becomes a compile error
+ * instead of a silent lie in a response body.
+ *
+ * SCOPE: this module owns the claim/plane vocabulary only. Per-operation
+ * membership (which operation may speak to which fields) lands together with the
+ * operations themselves and must be declared HERE when it does — hand-listing it
+ * at each route is exactly the drift this file exists to prevent.
  *
  * Design reference: `investigations/agent-read-api-design-2026-07-31.md` §5.
  */
@@ -31,58 +35,112 @@
  */
 export type AgentPlaneRole = "required" | "evidentiary";
 
-export type AgentClaimClassDefinition = {
-  /** Stores that must be `read` for a negative conclusion to be permitted. */
+/**
+ * Required planes are declared PER FIELD, not per class.
+ *
+ * A class-level `required` set is unsound whenever the class groups fields with
+ * different authoritative stores: with `crm.required = ["fan_notes"]`, a reader
+ * could satisfy the check by reading notes and then claim "this fan has no
+ * profile body" without ever touching `fan_profiles`. The question
+ * "what must I have read to assert this is absent?" belongs to the field.
+ */
+export type AgentClaimFieldDefinition = {
+  /** Authoritative store(s). ALL must be `read` before absence may be asserted. */
   readonly required: readonly string[];
+};
+
+export type AgentClaimClassDefinition = {
   /** Stores reported for provenance; never gate a conclusion. */
   readonly evidentiary: readonly string[];
-  /** Wire fields whose absence this class can speak about. */
-  readonly fields: readonly string[];
+  /** Wire field -> the store(s) that authoritatively answer for it. */
+  readonly fields: Readonly<Record<string, AgentClaimFieldDefinition>>;
 };
 
 /**
  * The six claim classes. A request may declare `claim.fields`; each field maps
- * to exactly one class (pinned by test), and the conclusion is evaluated
- * against that class's `required` planes only.
+ * to exactly one class (pinned by test), and the conclusion is evaluated against
+ * the union of the REQUIRED planes of the named fields.
+ *
+ * Field names are the wire names from the contract appendix §17 — not invented
+ * ones. A name that does not exist on the wire makes every real claim resolve to
+ * `claim_field_unobservable`, which silently reduces `absenceProvable` to a
+ * constant `false`.
  */
 export const AGENT_CLAIM_CLASSES = {
   messages: {
-    required: ["message_archive", "dm_message_archive"],
     evidentiary: ["page_dm_messages", "page_dm_threads", "observations", "sync_raw_payloads"],
-    fields: [
-      "textPlain", "textHtml", "priceMills", "isOpened", "isNew", "isTip",
-      "tipAmountMills", "tipTextPlain", "inReplyToRef", "replyMetadata",
-      "mediaMetadata", "deletedAt", "conversationRef", "messageCount",
-      "coverageStatus", "purchaseState",
-    ],
+    fields: {
+      textPlain: { required: ["message_archive", "dm_message_archive"] },
+      textHtml: { required: ["message_archive", "dm_message_archive"] },
+      priceMills: { required: ["message_archive", "dm_message_archive"] },
+      isOpened: { required: ["message_archive", "dm_message_archive"] },
+      isNew: { required: ["message_archive", "dm_message_archive"] },
+      isTip: { required: ["message_archive", "dm_message_archive"] },
+      tipAmountMills: { required: ["message_archive", "dm_message_archive"] },
+      tipTextPlain: { required: ["message_archive", "dm_message_archive"] },
+      inReplyToRef: { required: ["message_archive", "dm_message_archive"] },
+      replyMetadata: { required: ["message_archive", "dm_message_archive"] },
+      mediaMetadata: { required: ["message_archive", "dm_message_archive"] },
+      deletedAt: { required: ["message_archive", "dm_message_archive"] },
+      conversationRef: { required: ["message_archive", "dm_message_archive"] },
+      messageCount: { required: ["message_archive", "dm_message_archive"] },
+      coverageStatus: { required: ["message_archive", "dm_message_archive"] },
+      purchaseState: { required: ["message_archive", "dm_message_archive"] },
+    },
   },
   money: {
-    required: ["transactions"],
-    evidentiary: ["fan_spend_daily", "fan_spend_lifetime"],
-    fields: [
-      "grossMills", "netMills", "feeMills", "amountMills", "currency",
-      "transactionState", "lifetimeSpendMills", "fanEarning",
-    ],
+    evidentiary: ["fan_spend_daily"],
+    fields: {
+      grossMills: { required: ["transactions"] },
+      netMills: { required: ["transactions"] },
+      feeMills: { required: ["transactions"] },
+      amountMills: { required: ["transactions"] },
+      currency: { required: ["transactions"] },
+      transactionState: { required: ["transactions"] },
+      fanEarning: { required: ["transactions"] },
+      // Lifetime totals have their own rollup; reading `transactions` for a
+      // window says nothing about a lifetime figure.
+      lifetimeSpendMills: { required: ["fan_spend_lifetime"] },
+    },
   },
   identity: {
-    required: ["fans", "page_fans"],
-    evidentiary: ["fan_username_aliases", "page_fan_aliases"],
-    fields: ["platformUserId", "username", "displayName", "pageAlias", "membershipState"],
+    evidentiary: [],
+    fields: {
+      platformUserId: { required: ["fans"] },
+      username: { required: ["fans"] },
+      displayName: { required: ["fans"] },
+      membershipState: { required: ["page_fans"] },
+      // Aliases live in their own stores; `fans` alone cannot answer for them.
+      pageAlias: { required: ["page_fans", "page_fan_aliases", "fan_username_aliases"] },
+    },
   },
   subscription: {
-    required: ["page_subscriptions"],
     evidentiary: [],
-    fields: ["subscriptionState", "subscriptionPriceMills", "subscriptionExpiresAt"],
+    fields: {
+      subscriptionState: { required: ["page_subscriptions"] },
+      subscriptionPriceMills: { required: ["page_subscriptions"] },
+      subscriptionExpiresAt: { required: ["page_subscriptions"] },
+    },
   },
   audience: {
-    required: ["page_follows"],
     evidentiary: ["daily_followers"],
-    fields: ["followed", "presenceAt"],
+    fields: {
+      followed: { required: ["page_follows"] },
+      presenceAt: { required: ["page_fans"] },
+    },
   },
   crm: {
-    required: ["fan_notes"],
-    evidentiary: ["fan_summaries", "fan_profiles", "fan_flags"],
-    fields: ["noteText", "summaryText"],
+    evidentiary: [],
+    fields: {
+      // Each CRM field has a DIFFERENT authoritative store. This is the case
+      // that proved class-level `required` unsound: with `required:
+      // ["fan_notes"]`, a reader could satisfy the check by reading notes and
+      // then assert "no profile body" without ever opening `fan_profiles`.
+      noteText: { required: ["fan_notes"] },
+      summaryText: { required: ["fan_summaries"] },
+      profileBody: { required: ["fan_profiles"] },
+      fanFlag: { required: ["fan_flags"] },
+    },
   },
 } as const satisfies Record<string, AgentClaimClassDefinition>;
 
@@ -91,25 +149,45 @@ export type AgentClaimClass = keyof typeof AGENT_CLAIM_CLASSES;
 export const AGENT_CLAIM_CLASS_NAMES = Object.keys(AGENT_CLAIM_CLASSES) as readonly AgentClaimClass[];
 
 /**
- * Literal unions derived from the declaration. These are what make the header's
- * promise real: a typo in a plane or field name is a COMPILE error, and the Zod
- * enums built from these stay narrow instead of degrading to `string`.
+ * Literal unions derived from the declaration. These make the header's promise
+ * real: a typo in a plane or field name is a COMPILE error, and Zod enums built
+ * from these stay narrow instead of degrading to `string`.
  */
+export type AgentClaimField = {
+  [C in AgentClaimClass]: keyof (typeof AGENT_CLAIM_CLASSES)[C]["fields"];
+}[AgentClaimClass];
+
+type RequiredPlaneOf<C extends AgentClaimClass> = {
+  [F in keyof (typeof AGENT_CLAIM_CLASSES)[C]["fields"]]:
+  (typeof AGENT_CLAIM_CLASSES)[C]["fields"][F] extends { required: readonly (infer P)[] } ? P : never;
+}[keyof (typeof AGENT_CLAIM_CLASSES)[C]["fields"]];
+
 export type AgentPlaneName =
-  (typeof AGENT_CLAIM_CLASSES)[AgentClaimClass]["required" | "evidentiary"][number];
-export type AgentClaimField = (typeof AGENT_CLAIM_CLASSES)[AgentClaimClass]["fields"][number];
+  | (typeof AGENT_CLAIM_CLASSES)[AgentClaimClass]["evidentiary"][number]
+  | { [C in AgentClaimClass]: RequiredPlaneOf<C> }[AgentClaimClass];
+
+function classFieldEntries(claimClass: AgentClaimClass): readonly (readonly [string, AgentClaimFieldDefinition])[] {
+  return Object.entries(AGENT_CLAIM_CLASSES[claimClass].fields as Record<string, AgentClaimFieldDefinition>);
+}
 
 /** Every plane name, deduped, in declaration order. Derived — never hand-listed. */
 export const AGENT_PLANE_NAMES: readonly AgentPlaneName[] = (() => {
   const seen = new Set<string>();
   const ordered: AgentPlaneName[] = [];
+  const push = (plane: string) => {
+    if (!seen.has(plane)) {
+      seen.add(plane);
+      ordered.push(plane as AgentPlaneName);
+    }
+  };
   for (const name of AGENT_CLAIM_CLASS_NAMES) {
-    const def = AGENT_CLAIM_CLASSES[name];
-    for (const plane of [...def.required, ...def.evidentiary]) {
-      if (!seen.has(plane)) {
-        seen.add(plane);
-        ordered.push(plane);
+    for (const [, def] of classFieldEntries(name)) {
+      for (const plane of def.required) {
+        push(plane);
       }
+    }
+    for (const plane of AGENT_CLAIM_CLASSES[name].evidentiary) {
+      push(plane);
     }
   }
   return ordered;
@@ -123,10 +201,10 @@ export const AGENT_CLAIM_FIELDS: readonly AgentClaimField[] = (() => {
   const seen = new Set<string>();
   const ordered: AgentClaimField[] = [];
   for (const name of AGENT_CLAIM_CLASS_NAMES) {
-    for (const field of AGENT_CLAIM_CLASSES[name].fields) {
+    for (const [field] of classFieldEntries(name)) {
       if (!seen.has(field)) {
         seen.add(field);
-        ordered.push(field);
+        ordered.push(field as AgentClaimField);
       }
     }
   }
@@ -137,9 +215,10 @@ export const AGENT_CLAIM_FIELDS: readonly AgentClaimField[] = (() => {
 export const AGENT_CLAIM_FIELD_CLASS: ReadonlyMap<AgentClaimField, AgentClaimClass> = (() => {
   const map = new Map<AgentClaimField, AgentClaimClass>();
   for (const name of AGENT_CLAIM_CLASS_NAMES) {
-    for (const field of AGENT_CLAIM_CLASSES[name].fields) {
-      if (!map.has(field)) {
-        map.set(field, name);
+    for (const [field] of classFieldEntries(name)) {
+      const key = field as AgentClaimField;
+      if (!map.has(key)) {
+        map.set(key, name);
       }
     }
   }
@@ -147,19 +226,31 @@ export const AGENT_CLAIM_FIELD_CLASS: ReadonlyMap<AgentClaimField, AgentClaimCla
 })();
 
 /**
- * Widened view of a class definition.
+ * Widened view of a class: its evidentiary planes, and the union of the required
+ * planes of all its fields.
  *
  * `as const` narrows each array to a literal tuple, which makes `.includes(x)`
- * on a plain `string` a type error (and makes `.length === 0` look like a
- * provably-false comparison). Callers want set membership, not the literals, so
- * the widening happens once here rather than as casts scattered at every use.
+ * on a plain `string` a type error. Callers want set membership, so the widening
+ * happens once here rather than as casts scattered at every use.
  */
 export function agentClassPlanes(claimClass: AgentClaimClass): {
   readonly required: readonly string[];
   readonly evidentiary: readonly string[];
   readonly fields: readonly string[];
 } {
-  return AGENT_CLAIM_CLASSES[claimClass];
+  const required = new Set<string>();
+  const fields: string[] = [];
+  for (const [field, def] of classFieldEntries(claimClass)) {
+    fields.push(field);
+    for (const plane of def.required) {
+      required.add(plane);
+    }
+  }
+  return {
+    required: [...required],
+    evidentiary: AGENT_CLAIM_CLASSES[claimClass].evidentiary,
+    fields,
+  };
 }
 
 /** plane -> role within a given class. Used to build `capture.planes[]`. */
@@ -186,8 +277,10 @@ export function agentClaimFieldClass(field: string): AgentClaimClass | undefined
 
 /**
  * The planes that must be `read` before a negative conclusion is permitted for
- * this set of claim fields. A field with no class makes the answer fail closed:
- * callers treat `null` as "cannot conclude" (`claim_field_unobservable`).
+ * these claim fields — the union of each named field's authoritative stores.
+ *
+ * Returns `null` (fail closed) when any field is unknown, or when the claim is
+ * empty: callers treat `null` as "cannot conclude".
  */
 export function requiredPlanesForClaimFields(fields: readonly string[]): readonly string[] | null {
   // An empty claim is epistemically identical to no claim at all: "every
@@ -204,7 +297,12 @@ export function requiredPlanesForClaimFields(fields: readonly string[]): readonl
     if (!claimClass) {
       return null;
     }
-    for (const plane of AGENT_CLAIM_CLASSES[claimClass].required) {
+    const classFields = AGENT_CLAIM_CLASSES[claimClass].fields as Record<string, AgentClaimFieldDefinition>;
+    const def = classFields[field];
+    if (!def) {
+      return null;
+    }
+    for (const plane of def.required) {
       planes.add(plane);
     }
   }

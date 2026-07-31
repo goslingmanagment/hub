@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGENT_CLAIM_CLASS_NAMES,
-  AGENT_CLAIM_CLASSES,
   AGENT_CLAIM_FIELD_CLASS,
   AGENT_CLAIM_FIELDS,
   AGENT_PLANE_COUNT,
@@ -22,7 +21,7 @@ describe("agent read registry", () => {
   it("every claim field belongs to exactly one class", () => {
     const owners = new Map<string, string[]>();
     for (const className of AGENT_CLAIM_CLASS_NAMES) {
-      for (const field of AGENT_CLAIM_CLASSES[className].fields) {
+      for (const field of agentClassPlanes(className).fields) {
         owners.set(field, [...(owners.get(field) ?? []), className]);
       }
     }
@@ -84,6 +83,23 @@ describe("agent read registry", () => {
     // An empty claim fails closed too — "all required planes read" is vacuously
     // true over an empty set, which would authorise a conclusion nothing was read for.
     expect(requiredPlanesForClaimFields([])).toBeNull();
+  });
+
+  it("each field requires ITS OWN authoritative store, not the class's", () => {
+    // Codex review P1. With a class-level required set (`crm: ["fan_notes"]`),
+    // a reader could satisfy the check by reading NOTES and then assert "this
+    // fan has no profile body" without ever opening `fan_profiles`. Required
+    // planes are therefore a property of the field.
+    expect(requiredPlanesForClaimFields(["profileBody"])).toEqual(["fan_profiles"]);
+    expect(requiredPlanesForClaimFields(["noteText"])).toEqual(["fan_notes"]);
+    expect(requiredPlanesForClaimFields(["summaryText"])).toEqual(["fan_summaries"]);
+    expect(requiredPlanesForClaimFields(["fanFlag"])).toEqual(["fan_flags"]);
+    // A lifetime figure is not answered by a windowed transactions read.
+    expect(requiredPlanesForClaimFields(["lifetimeSpendMills"])).toEqual(["fan_spend_lifetime"]);
+    expect(requiredPlanesForClaimFields(["grossMills"])).toEqual(["transactions"]);
+    // Union across fields of different classes.
+    expect(requiredPlanesForClaimFields(["profileBody", "grossMills"]))
+      .toEqual(["fan_profiles", "transactions"]);
   });
 
   it("the capture journal is never a required plane", () => {
