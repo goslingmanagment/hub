@@ -79,9 +79,11 @@ describe("agent read registry", () => {
   it("an unknown claim field fails closed rather than resolving to an empty set", () => {
     // Fail-closed matters: an empty required set reads as "nothing had to be
     // read", which would permit a negative conclusion about an unobservable field.
-    expect(requiredPlanesForClaimFields(["messageText"])).toEqual(["message_archive", "dm_message_archive"]);
-    expect(requiredPlanesForClaimFields(["messageText", "definitelyNotAField"])).toBeNull();
-    expect(requiredPlanesForClaimFields([])).toEqual([]);
+    expect(requiredPlanesForClaimFields(["textPlain"])).toEqual(["message_archive", "dm_message_archive"]);
+    expect(requiredPlanesForClaimFields(["textPlain", "definitelyNotAField"])).toBeNull();
+    // An empty claim fails closed too — "all required planes read" is vacuously
+    // true over an empty set, which would authorise a conclusion nothing was read for.
+    expect(requiredPlanesForClaimFields([])).toBeNull();
   });
 
   it("the capture journal is never a required plane", () => {
