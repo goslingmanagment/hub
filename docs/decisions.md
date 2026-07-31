@@ -191,7 +191,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 187 | Plugins throw AppError | `@fastify/rate-limit` threw a duck-typed literal that only reached clients via the passthrough #184 removed, so rate-limited logins answered HTTP 500 for three days; any plugin signalling by throw must throw an `AppError`, and both rate-limit tests join the `[sync-critical]` PR slice |
 | 188 | CI gate splits into shards | The single Quality Gate job becomes Static checks + a 3-way sharded Integration matrix + a same-named aggregator (branch protection matches the literal name); no test or harness file changes — measured 688s serial -> 234s per shard |
 | 190 | Voice launch hardening | Voice uses stateless quota refusal and heartbeated queued ownership; audio authorization moves into SQL, cost reconciliation accepts only non-negative PostgreSQL integers, and voice admission/dispatch join the existing material-time erasure fence |
-| 192 | Ramp-gate wake-up | Editing a Fansly ramp-gate config key queues `fan_earnings`/`purchase_history` (source `recovery`) for every active Fansly page the SAME gate helper now reports as `ramped`; the wake-up runs after the override is written and audited, and a failure is logged and swallowed instead of failing the config write |
+| 192 | Ramp-gate wake-up | An admin config write that OPENS a Fansly ramp gate queues `fan_earnings`/`purchase_history` (source `recovery`) for the affected pages, dispatched on the planner's next minutely tick; the gate is read before and after the write so only non-ramped -> ramped transitions queue anything (a needless walk is ~1400 Fansly calls), and a wake-up failure is logged and swallowed instead of failing the config write |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5669,45 +5669,79 @@ tombstones using the source generation's `created_at`. Pre-erasure fan material
 cannot be inserted or sent after an erasure, while genuinely newer material
 keeps Decision #175's supported behavior.
 
-**Decision #192 (2026-07-31, lifting a ramp gate wakes the affected streams
-immediately):** On 2026-07-17 at 20:06 `fanslyNewStreamPageAllowlist` was
-narrowed from the empty "every page" value to `lilly-1,lilly-2`. That silently
-stopped `fan_earnings` for the lora pages, and their spenders projection stood
-still for thirteen days. The allowlist was restored on 2026-07-31 — and even
-then nothing would have moved, because opening a ramp gate only changed which
-pages the executor STOPS skipping. Each stream still had to wait for its own
-slot, and `fan_earnings` ticks once a day. The owner-facing "sync all page
-streams" action is no help: it deliberately excludes the bulk streams.
+**Decision #192 (2026-07-31, an admin config write that OPENS a ramp gate queues
+the affected streams):** On 2026-07-17 at 20:06 `fanslyNewStreamPageAllowlist`
+was narrowed from the empty "every page" value to `lilly-1,lilly-2`. That
+silently stopped `fan_earnings` for the lora pages, and their spenders
+projection stood still for thirteen days. The allowlist was restored on
+2026-07-31 — and even then nothing would have moved, because opening a ramp gate
+only changed which pages the executor STOPS skipping. Each stream still had to
+wait for its own slot, and `fan_earnings` ticks once a day. The owner-facing
+"sync all page streams" action is no help: it deliberately excludes the bulk
+streams.
 
 So the admin config write now queues the work itself. Both live config
 endpoints — `PATCH /api/v1/admin/config` and `DELETE /api/v1/admin/config/:key`
 — check the changed keys against the three ramp-gate keys
 (`fanslyNewStreamPageAllowlist`, `fanslyFanEarningsSyncEnabled`,
-`fanslyPurchaseHistorySyncEnabled`) and, on a hit, re-read the effective config
-and request `fan_earnings` / `purchase_history` for every active Fansly page the
-gate NOW reports as `ramped`, with request source `recovery`. The DELETE path
-matters on its own: the string validator refuses an empty override value, so
-restoring the fully open "every page" allowlist is only possible by clearing the
-override, which is exactly the shape of the incident being fixed.
+`fanslyPurchaseHistorySyncEnabled`) and, on a hit, request `fan_earnings` /
+`purchase_history` with request source `recovery`. The DELETE path matters on
+its own: the string validator refuses an empty override value, so restoring the
+fully open "every page" allowlist is only possible by clearing the override,
+which is exactly the shape of the incident being fixed.
 
-Three deliberate narrowings. The ramped check calls
-`resolveFanslyNewStreamState`, the same helper the executor's skip ladder and
-the `top-spenders` `source` reporter use, so "ramped" here can never come to
-mean something different from what the executor would actually do. Only the two
-gated streams are queued and only on Fansly pages, so this is a wake-up and not
-a "sync everything" button. And pages are enumerated through the existing
-`listFanslyPages` repository listing (`platform = 'fansly'` and
-`status = 'active'`), so a tombstoned page is never woken; no new query was
-invented for this.
+**It is a transition detector, not a sweep.** The gate is read twice — once
+before the write, once after — and only a (page, stream) pair that moved from
+non-ramped to ramped is queued. This is the load-bearing constraint, not a
+refinement. A gated `fan_earnings` walk costs TWO Fansly calls per fan, and a
+completed walk resets its cursor to 0, so the next run is a full walk rather than
+an incremental one; on a page the size of lora-1 (697 spenders) one unwanted
+wake-up is on the order of 1400 unscheduled requests. This repo's standing rule
+is that Fansly egress must never exceed what the chatter's own session already
+produces, because a model ban is the failure mode. A "queue whatever is open
+right now" version would therefore have generated that traffic for actions that
+open nothing: narrowing the allowlist (the very action that caused this
+incident), turning a stream flag OFF, re-writing a key with its existing value
+(the override writer does not compare old and new), and each step of the
+registry's own documented "enable one page at a time" rollout.
+
+Three further narrowings. The ramped verdict is computed with
+`resolveFanslyNewStreamState`, which is the REPORTER form of the gate — the same
+checks in the same order as the executor, sharing its allowlist primitive
+`fanslyNewStreamAllowed`, and the same function the `top-spenders` `source`
+block reports to the extension. The executor itself does not call it: it inlines
+the platform and flag checks and calls the shared allowlist primitive directly,
+so the allowlist rule is genuinely shared while the state ladder is a deliberate
+second implementation. Only the two gated streams are queued and only on Fansly
+pages. And pages are enumerated through the existing `listFanslyPages`
+repository listing (`platform = 'fansly'` and `status = 'active'`), so a
+tombstoned page is never woken; no new query was invented. `dependencyOptions`
+is not threaded through, because it only relaxes the OnlyFans OFAPI DM
+dependency graph and this path is Fansly-only.
+
+**The timing claim is "within a minute", not "immediately".** The handler writes
+durable intent (`request_seq > applied_seq`); dispatch happens when the sync
+planner's `* * * * *` schedule next ticks and `listRunnablePageSync` picks the
+page up. Sending a pg-boss wake-up straight from the handler was considered and
+rejected: it would add a second dispatch path out of an HTTP route in order to
+save under a minute, against the twenty-four hours this already removes.
 
 The wake-up runs AFTER `setConfigOverridesAtomic` and `recordAudit`, and it is
 wrapped so that a failure is logged and swallowed. By that point the override is
 already written and audited; turning a successful, durable config change into an
 HTTP error because a convenience follow-up failed would be strictly worse than
-waiting for the next slot, which is the pre-existing behavior anyway.
+waiting for the next slot, which is the pre-existing behavior anyway. The
+pre-write snapshot is wrapped the same way and degrades to "no wake-up".
 
-What was NOT built, as an explicit owner decision on the same day: no watchdog
-alerting the owner about a long-gated stream, and no warning when an allowlist
-is narrowed. The recurrence defense is this wake-up plus the honest reporting of
-a gated skip; the two rejected guards are recorded here so the omission reads as
-a decision rather than an oversight.
+Two rejected alternatives and the gap they leave. Having the PLANNER notice the
+transition — persist the last gate verdict per (page, stream) and reconcile on
+each tick — was rejected as too much machinery for this incident, but it is the
+strictly more complete design, because it would cover every write path rather
+than only the HTTP one. The resulting known gap is therefore explicit: a gate
+opened through the environment plus a restart, or through any override write
+that does not go through these two endpoints, wakes nothing and still waits up
+to one slot. Separately, and as an explicit owner decision the same day, no
+watchdog alerts the owner about a long-gated stream and no warning fires when an
+allowlist is narrowed. The recurrence defense is this wake-up plus the honest
+reporting of a gated skip; the rejected guards are recorded here so the
+omissions read as decisions rather than oversights.

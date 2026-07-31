@@ -2,17 +2,25 @@
 // slot, and fan_earnings ticks once a day. On 2026-07-17 the allowlist was
 // narrowed to "lilly-1,lilly-2"; when it was restored on 2026-07-31 the frozen
 // lora pages would have waited up to another 24 h before fetching anything.
-// The config PATCH/DELETE now queues the streams the gate NOW reports as
-// ramped, with source `recovery`, and the wake-up is a convenience that can
-// never fail the config write it follows.
+// The config PATCH/DELETE now queues the gated streams with source `recovery`.
+//
+// Two invariants carry most of these cases. It is a TRANSITION detector: only a
+// (page, stream) pair that went non-ramped -> ramped is queued, because a gated
+// fan_earnings walk costs two Fansly calls per fan and restarts from cursor 0, so
+// waking a page whose gate did not just open would spend ~1400 unscheduled
+// requests against a platform whose failure mode is a model ban. And it is
+// fail-soft: the override is written and audited before the wake-up runs, so a
+// wake-up failure must never turn a successful config write into an error.
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
   ensurePageSyncStates,
+  getConfigOverrides,
+  listConfigAudit,
   listRunnablePageSync,
 } from "@agency_hub_core/db";
 
@@ -266,28 +274,95 @@ describe("config ramp-gate wake-up", () => {
     expect(await listRunnablePageSync(testDb.db)).toEqual([]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("wakes the streams when the narrowing allowlist override is DELETEd", async (context) => {
+  it("narrowing the allowlist wakes nothing, including the pages that stay ramped", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    // Env baseline is the fully open allowlist; the override is what narrows it,
-    // so clearing the override is the "restore every page" path.
+    // Both Fansly pages start ramped under the open baseline.
+    const { cookie, gated, other } = await startServer({
+      fanslyFanEarningsSyncEnabled: true,
+      fanslyPurchaseHistorySyncEnabled: true,
+      fanslyNewStreamPageAllowlist: "",
+    });
+
+    // Narrowing to a list that STILL contains gate-other. Nothing opened for
+    // anybody: gate-fansly lost the gate, gate-other was already through it. A
+    // wake-up here would put ~1400 unscheduled Fansly calls on gate-other for a
+    // config edit that closed a gate, which is the opposite of the fix.
+    const narrowed = await patchConfig(cookie, "fanslyNewStreamPageAllowlist", "gate-other");
+    expect(narrowed.statusCode, narrowed.body).toBe(200);
+
+    for (const page of [gated, other]) {
+      const states = await syncStates(page.id);
+      for (const [stream, row] of states) {
+        expect(row.request_seq, `page ${page.id} stream ${stream} must be untouched`).toBe(
+          row.applied_seq,
+        );
+      }
+    }
+    expect(await listRunnablePageSync(testDb.db)).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("re-writing the same allowlist value wakes nothing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { cookie, gated } = await startServer({
+      fanslyFanEarningsSyncEnabled: true,
+      fanslyPurchaseHistorySyncEnabled: true,
+      fanslyNewStreamPageAllowlist: "gate-fansly",
+    });
+
+    // The override writer does not compare old and new, so this PATCH "changes"
+    // the key while the gate state stays exactly where it was.
+    const rewritten = await patchConfig(cookie, "fanslyNewStreamPageAllowlist", "gate-fansly");
+    expect(rewritten.statusCode, rewritten.body).toBe(200);
+
+    const after = await syncStates(gated.id);
+    for (const [stream, row] of after) {
+      expect(row.request_seq, `stream ${stream} must be untouched`).toBe(row.applied_seq);
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("turning a stream flag OFF wakes nothing, including the other gated stream", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
     const { cookie, gated } = await startServer({
       fanslyFanEarningsSyncEnabled: true,
       fanslyPurchaseHistorySyncEnabled: true,
       fanslyNewStreamPageAllowlist: "",
     });
 
-    const narrowed = await patchConfig(cookie, "fanslyNewStreamPageAllowlist", "some-other-page");
-    expect(narrowed.statusCode, narrowed.body).toBe(200);
-    // Narrowing wakes nothing: no page the gate now calls ramped exists.
-    const narrowedStates = await syncStates(gated.id);
-    for (const [stream, row] of narrowedStates) {
-      expect(row.request_seq, `stream ${stream} must be untouched by a narrowing`).toBe(
-        row.applied_seq,
-      );
+    const disabled = await patchConfig(cookie, "fanslyPurchaseHistorySyncEnabled", false);
+    expect(disabled.statusCode, disabled.body).toBe(200);
+
+    const after = await syncStates(gated.id);
+    for (const [stream, row] of after) {
+      expect(row.request_seq, `stream ${stream} must be untouched`).toBe(row.applied_seq);
     }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("wakes only the page that REGAINS the gate when the narrowing override is DELETEd", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Env baseline is the fully open allowlist; the override is what narrows it,
+    // so clearing the override is the "restore every page" path. It is also the
+    // only path back to "every page": the string validator refuses an empty
+    // override value, so PATCH cannot write it.
+    const { cookie, gated, other } = await startServer({
+      fanslyFanEarningsSyncEnabled: true,
+      fanslyPurchaseHistorySyncEnabled: true,
+      fanslyNewStreamPageAllowlist: "",
+    });
+
+    const narrowed = await patchConfig(cookie, "fanslyNewStreamPageAllowlist", "gate-other");
+    expect(narrowed.statusCode, narrowed.body).toBe(200);
 
     const cleared = await server!.inject({
       method: "DELETE",
@@ -296,11 +371,67 @@ describe("config ramp-gate wake-up", () => {
     });
     expect(cleared.statusCode, cleared.body).toBe(200);
 
+    // gate-fansly went not_allowlisted -> ramped: woken.
     const after = await syncStates(gated.id);
     for (const stream of ["fan_earnings", "purchase_history"] as const) {
       const row = after.get(stream)!;
       expect(row.request_seq).toBeGreaterThan(row.applied_seq);
       expect(row.request_source).toBe("recovery");
+    }
+    // gate-other was ramped throughout: no transition, no traffic.
+    const untouched = await syncStates(other.id);
+    for (const [stream, row] of untouched) {
+      expect(row.request_seq, `gate-other stream ${stream} must be untouched`).toBe(
+        row.applied_seq,
+      );
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("a failing wake-up still returns 200 and leaves the override durable", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { cookie } = await startServer({
+      fanslyFanEarningsSyncEnabled: true,
+      fanslyPurchaseHistorySyncEnabled: true,
+      fanslyNewStreamPageAllowlist: "some-other-page",
+    });
+    const warn = vi.spyOn(appContext.logger, "warn");
+
+    // Make every write to page_sync_states raise, so the wake-up fails for a real
+    // database reason on a patch that DOES open the gate. The config write itself
+    // touches config_overrides / config_audit only, so it is unaffected.
+    await testDb.pool.query(`
+      create function test_block_page_sync_writes() returns trigger
+        language plpgsql as $$
+      begin
+        raise exception 'induced page_sync_states write failure';
+      end;
+      $$;
+      create trigger test_block_page_sync_writes
+        before insert or update on page_sync_states
+        for each row execute function test_block_page_sync_writes();
+    `);
+
+    try {
+      const patched = await patchConfig(cookie, "fanslyNewStreamPageAllowlist", "gate-fansly");
+      expect(patched.statusCode, patched.body).toBe(200);
+
+      // The override is written and readable — the failure did not roll it back.
+      const overrides = await getConfigOverrides(testDb.db);
+      expect(overrides.get("fanslyNewStreamPageAllowlist")?.value).toBe("gate-fansly");
+      // ...and it was audited, not silently applied.
+      const audit = await listConfigAudit(testDb.db, { key: "fanslyNewStreamPageAllowlist" });
+      expect(audit[0]!.newValue).toBe("gate-fansly");
+      // Swallowed, but never silent.
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      await testDb.pool.query(`
+        drop trigger if exists test_block_page_sync_writes on page_sync_states;
+        drop function if exists test_block_page_sync_writes();
+      `);
     }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
