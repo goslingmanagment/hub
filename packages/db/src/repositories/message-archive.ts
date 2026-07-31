@@ -1389,6 +1389,12 @@ export interface TopFanEarningsRow {
   netMills: number | null;
   currency: string;
   observedAt: Date;
+  /** First time hydration failed to find this account on the platform
+   * (`fans.deleted_detected_at`); null = the fan is alive. Cleared server side
+   * as soon as any sync sees a name again (see the fans upsert). Deleted fans
+   * are NOT filtered out of the ranking: they still spent the money, and
+   * dropping them would stop the board's totals from adding up. */
+  deletedAt: Date | null;
 }
 
 /** Top spenders for one page + window, spend-descending. Columns qualified
@@ -1405,7 +1411,8 @@ export async function listTopFanEarnings(
       s.gross_mills as "grossMills",
       s.net_mills as "netMills",
       s.currency as "currency",
-      s.observed_at as "observedAt"
+      s.observed_at as "observedAt",
+      f.deleted_detected_at as "deletedAt"
     from fan_earnings_stats s
     join fans f on f.id = s.fan_id
     where s.account_id = ${input.accountId}
@@ -1422,6 +1429,7 @@ export async function listTopFanEarnings(
     netMills: row.netMills === null ? null : Number(row.netMills),
     currency: String(row.currency),
     observedAt: new Date(String(row.observedAt)),
+    deletedAt: row.deletedAt == null ? null : new Date(String(row.deletedAt)),
   }));
 }
 

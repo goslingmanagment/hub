@@ -185,6 +185,56 @@ describe("pageTopSpenders source.streamState (W8.1)", () => {
     expect(body.source.streamState).toBe("unsupported_platform");
   });
 
+  // 209 of lora-1's 697 projection rows have neither username nor displayName
+  // and ALL of them carry deleted_detected_at: the accounts are gone from the
+  // platform. Without this field the board printed a bare numeric id and kept
+  // asking Fansly for names it can never get. The row must still appear — a
+  // deleted fan spent real money and dropping it would break the totals.
+  it("marks a deleted fan with deletedAt and keeps a live fan null", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { cookie, fansly } = await startServer({
+      fanslyFanEarningsSyncEnabled: true,
+      fanslyNewStreamPageAllowlist: "",
+    });
+    const deletedDetectedAt = new Date("2026-07-14T09:30:00.000Z");
+    const [gone, alive] = await upsertFans(appContext.db, [
+      {
+        platform: "fansly" as const,
+        platformUserId: "gone-fan",
+        username: null,
+        displayName: null,
+        deletedDetectedAt,
+      },
+      {
+        platform: "fansly" as const,
+        platformUserId: "alive-fan",
+        username: "alive",
+        displayName: "Alive",
+      },
+    ]);
+    await testDb.pool.query(
+      `insert into fan_earnings_stats (
+         account_id, fan_id, "window", gross_mills, net_mills,
+         currency, observed_at, source_event_id
+       )
+       values ($1, $2, 'lifetime', 9000, 7000, 'USD', $4::timestamptz, 1),
+              ($1, $3, 'lifetime', 4000, 3000, 'USD', $4::timestamptz, 2)`,
+      [fansly.id, gone!.id, alive!.id, "2026-07-20T00:00:00.000Z"],
+    );
+
+    const body = await fetchTopSpenders(cookie, "tss-fansly");
+    const entries = body.entries as Array<{
+      platformUserId: string;
+      deletedAt: string | null;
+    }>;
+    expect(entries.map((entry) => entry.platformUserId)).toEqual(["gone-fan", "alive-fan"]);
+    expect(entries[0]!.deletedAt).toBe(deletedDetectedAt.toISOString());
+    expect(entries[1]!.deletedAt).toBeNull();
+  });
+
   it("returns the bounded top 1000 while keeping the full fanCount", async (context) => {
     if (!testDb) {
       context.skip();

@@ -43773,6 +43773,16 @@
                           },
                           "observedAt": {
                             "type": "string"
+                          },
+                          "deletedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
