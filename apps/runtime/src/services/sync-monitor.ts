@@ -19,7 +19,12 @@ import {
   parseFollowersReconcileCursorState,
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
-import { buildOverallSyncUx, buildPageSyncUx, buildStreamSyncUx } from "./sync-ux.ts";
+import {
+  buildOverallSyncUx,
+  buildPageSyncUx,
+  buildStreamSyncUx,
+  isBulkEnrichmentSyncStream,
+} from "./sync-ux.ts";
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 
 const DEFAULT_WINDOW_HOURS = 24;
@@ -435,6 +440,20 @@ function lastCompletionFor(row: SyncMonitorStreamRow): SyncMonitorLastCompletion
   };
 }
 
+/** `stats.gatedSkip` of the last completed run, when that run was a ramp-gate
+ *  skip. Read from stats rather than error_summary because it must be a
+ *  structured marker, not free text: the OTHER writer of the `skipped` outcome
+ *  is recordSkipped on a lost lease, which is not a gate and whose summary is
+ *  human prose. Stats and lastCompletion come from the same run row, so they
+ *  cannot disagree. */
+function gatedSkipReasonFor(row: SyncMonitorStreamRow): string | null {
+  if (row.lastCompletedStatus !== "skipped") {
+    return null;
+  }
+  const reason = row.lastCompletedStats?.gatedSkip;
+  return typeof reason === "string" && reason.length > 0 ? reason : null;
+}
+
 function activeRunFor(row: SyncMonitorStreamRow): SyncMonitorActiveRun | null {
   if (
     row.runningRunId === null ||
@@ -744,6 +763,7 @@ function streamItemFor(
     ...item,
     lastErrorCode: row.lastErrorCode,
     blockerKind: row.blockerKind,
+    lastCompletionGatedSkipReason: gatedSkipReasonFor(row),
   };
 
   return {
@@ -931,7 +951,16 @@ export async function getSyncMonitorSnapshot(
   const pages = Array.from(pageMap.values())
     .map((page) => ({
       ...page,
-      syncUx: buildPageSyncUx(page.streams.map((stream) => stream.syncUx)),
+      // Decision #166, the same filter sync-summary applies: the bulk
+      // enrichment streams keep their own honest entry in `page.streams`, but
+      // they do not get a vote in the page verdict — and, through it, the fleet
+      // verdict. Both ramp flags default to false, so without this every Fansly
+      // page would read "Off" from its first daily run onwards.
+      syncUx: buildPageSyncUx(
+        page.streams
+          .filter((stream) => !isBulkEnrichmentSyncStream(stream.stream))
+          .map((stream) => stream.syncUx),
+      ),
     }))
     .sort(comparePages);
   const visiblePageIds = pages.map((page) => page.pageId);
