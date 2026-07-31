@@ -191,6 +191,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 187 | Plugins throw AppError | `@fastify/rate-limit` threw a duck-typed literal that only reached clients via the passthrough #184 removed, so rate-limited logins answered HTTP 500 for three days; any plugin signalling by throw must throw an `AppError`, and both rate-limit tests join the `[sync-critical]` PR slice |
 | 188 | CI gate splits into shards | The single Quality Gate job becomes Static checks + a 3-way sharded Integration matrix + a same-named aggregator (branch protection matches the literal name); no test or harness file changes — measured 688s serial -> 234s per shard |
 | 190 | Voice launch hardening | Voice uses stateless quota refusal and heartbeated queued ownership; audio authorization moves into SQL, cost reconciliation accepts only non-negative PostgreSQL integers, and voice admission/dispatch join the existing material-time erasure fence |
+| 191 | Deleted fans in top-spenders | `pageTopSpenders` carries `entries[].deletedAt` (`fans.deleted_detected_at`, ISO, null = alive) so the board can tell a deleted account from an unloaded name and stop re-asking Fansly for ids it can never resolve; deleted fans stay IN the ranking because their spend is in the totals, and the field is `.optional()` because the kernel deploys independently of the extension |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5691,8 +5692,8 @@ and labelled", not "absent".
 
 The field rides `entries[]` rather than the existing `pageDeletedFans` route.
 That route caps at `limit <= 200` while `lora-1` already has 209 deleted fans,
-so the alternative does not fit inside its own limit today; it would also cost
-two extra round-trips per board build to reconstruct a join the projection
+so reading it would already need paging today: every board build would pay at
+least two extra round-trips to reconstruct, client side, a join the projection
 query already has for free.
 
 `deletedAt` is `.optional()` on purpose. The kernel deploys independently of the
