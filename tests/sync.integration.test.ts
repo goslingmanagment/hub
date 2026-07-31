@@ -1117,7 +1117,6 @@ describe("sync integration", () => {
         startedAt: syncRuns.startedAt,
       }).from(syncRuns).orderBy(syncRuns.startedAt);
       expect(runRows).toHaveLength(10);
-      expect(runRows.every((row) => row.status === "succeeded")).toBe(true);
       expect(runRows.map((row) => row.stream)).toEqual([
         "light",
         "transactions",
@@ -1130,6 +1129,24 @@ describe("sync integration", () => {
         "fan_earnings",
         "purchase_history",
       ]);
+      // The OLD pin here was `runRows.every(row => row.status === "succeeded")`,
+      // and that pin WAS the bug. Both ramp flags are off in this runtime
+      // (tests/helpers/runtime.ts), so fan_earnings and purchase_history never
+      // issue a single request — yet they were recorded as successful syncs,
+      // which is precisely the reporting that hid lora-1's 13-day outage
+      // (2026-07-17 to 2026-07-31). A gated skip is now `skipped`.
+      expect(new Map(runRows.map((row) => [row.stream, row.status]))).toEqual(new Map([
+        ["light", "succeeded"],
+        ["transactions", "succeeded"],
+        ["top_spenders", "succeeded"],
+        ["subscribers", "succeeded"],
+        ["followers", "succeeded"],
+        ["followers_reconcile", "succeeded"],
+        ["dm_conversations", "succeeded"],
+        ["dm_messages", "succeeded"],
+        ["fan_earnings", "skipped"],
+        ["purchase_history", "skipped"],
+      ]));
     } finally {
       abortController.abort();
       await executorPromise;
