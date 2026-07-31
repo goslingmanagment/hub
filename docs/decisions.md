@@ -5667,3 +5667,37 @@ existing page erasure advisory-lock protocol and re-check material-time
 tombstones using the source generation's `created_at`. Pre-erasure fan material
 cannot be inserted or sent after an erasure, while genuinely newer material
 keeps Decision #175's supported behavior.
+
+**Decision #191 (2026-07-31, `top-spenders` carries the deleted-fan marker in
+`entries[]`):** The spenders board had no way to tell "this account was deleted
+on the platform" from "the name has not loaded yet". On `lora-1`, 209 of the
+697 projection rows have neither `username` nor `displayName`, and every one of
+them carries `fans.deleted_detected_at`. The board rendered them as a bare
+numeric id with a "find chat" affordance that can never succeed, and the
+extension's name sweep re-asked Fansly for those ids on every build — Fansly
+does not return deleted accounts at all, and a negative answer is not cached,
+so the requests bought nothing but egress against the chatter's own session.
+
+`pageTopSpenders` therefore returns `entries[].deletedAt` — the ISO time of the
+FIRST detection (`fans.deleted_detected_at`), `null` when the fan is alive. The
+column is read straight through `listTopFanEarnings`; the server clears it as
+soon as any sync sees a name again, so a revived account needs no extra
+handling here.
+
+Deleted fans are deliberately NOT filtered out of the ranking. They spent real
+money, the projection totals are built from those rows, and hiding them would
+make the board's sums stop matching `fanCount`. The honest shape is "present
+and labelled", not "absent".
+
+The field rides `entries[]` rather than the existing `pageDeletedFans` route.
+That route caps at `limit <= 200` while `lora-1` already has 209 deleted fans,
+so the alternative does not fit inside its own limit today; it would also cost
+two extra round-trips per board build to reconstruct a join the projection
+query already has for free.
+
+`deletedAt` is `.optional()` on purpose. The kernel deploys independently of the
+extension, and the vendored SDK validates responses with the same zod schema: a
+required field would be fine here but would forbid the reverse direction, where
+a newer extension talks to an older kernel that does not emit it. Optional keeps
+both directions valid, and the extension normalizes the absent case to `null` at
+its own boundary.
