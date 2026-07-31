@@ -4850,6 +4850,45 @@ describe("api integration", () => {
     expect(response.json().items[0].fan.fanId).toBeUndefined();
   });
 
+  it("[sync-critical] refuses cross-page spender scope for an owner DEVICE TOKEN", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    // Regression pin. The guard used to read `authMethod === "api_key"`, so a
+    // device token slipped past it — and device tokens authenticate any
+    // session-capable role, owner included. `pageScopeFor` then hands an owner
+    // principal `undefined` (unrestricted), which made an owner-role device
+    // token an unbounded cross-page reader on every v2 spender route.
+    // The old test WAS the bug: it only ever exercised api_key.
+    const ownerDevice = await issueDeviceTokenForUsername(createTestAppContext(testDb), {
+      username: "dima",
+      label: "dima-audit-laptop",
+    }, { source: "test" });
+
+    for (const url of [
+      "/api/v2/spenders?scope=agency&platform=fansly&period=30d&limit=10&offset=0",
+      "/api/v2/spenders?scope=model&modelSlug=lana-model&platform=fansly&period=30d&limit=10&offset=0",
+    ]) {
+      const denied = await server.inject({
+        method: "GET",
+        url,
+        headers: { authorization: `Bearer ${ownerDevice.token}` },
+      });
+      expect({ url, statusCode: denied.statusCode }).toEqual({ url, statusCode: 403 });
+    }
+
+    // Page scope stays available to the same principal — the restriction is
+    // about cross-page aggregates, not about device tokens as such.
+    const allowed = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&period=30d&limit=10&offset=0",
+      headers: { authorization: `Bearer ${ownerDevice.token}` },
+    });
+    expect(allowed.statusCode).toBe(200);
+  });
+
   it("lists v2 spenders with page-scope lifetime totals and visible-platform lifetime totals", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();

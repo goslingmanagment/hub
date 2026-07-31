@@ -321,8 +321,18 @@ async function resolveSpenderScope(
 ) {
   const scopedPageIds = visiblePageIdsForPrincipal(principal);
 
-  if (principal.authMethod === "api_key" && input.scope !== "page") {
-    throw new ForbiddenError("API key spender routes require page scope");
+  // Bearer principals never get cross-page aggregates. This used to test
+  // `authMethod === "api_key"`, which let a DEVICE TOKEN through: device tokens
+  // authenticate any session-capable role including owner (`auth.ts:1467-1496`),
+  // and `pageScopeFor` hands an owner principal `undefined` — unrestricted scope
+  // (`api/request-auth.ts:35-37`). An owner-role device token was therefore an
+  // unbounded cross-page reader on every v2 spender route.
+  //
+  // The intent was always "cookie sessions only", so test for that directly
+  // instead of enumerating bearer kinds: any future bearer kind inherits the
+  // restriction by construction rather than needing this line remembered.
+  if (principal.authMethod !== "session" && input.scope !== "page") {
+    throw new ForbiddenError("Bearer spender routes require page scope");
   }
 
   if (input.scope === "page") {
