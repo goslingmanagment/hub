@@ -10,7 +10,7 @@ import {
   setFanFlags,
 } from "@agency_hub_core/db";
 
-import { pageScopeFor } from "../../api/request-auth.ts";
+import { pageScopeFor, platformRollupScopeFor } from "../../api/request-auth.ts";
 import {
   canAccessPage,
   requireDashboardUser,
@@ -196,7 +196,10 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       appContext,
       request.params.pageLabel,
       request.params.platformUserId,
-      pageScopeFor(principal),
+      // Bearer principals get the platform lifetime total for THIS page only —
+      // `pageScopeFor` returns `undefined` for an owner, which made an
+      // owner-role device token read cross-page money off a page-scoped route.
+      platformRollupScopeFor(principal, [page.id]),
     );
   });
 

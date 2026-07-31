@@ -4850,6 +4850,112 @@ describe("api integration", () => {
     expect(response.json().items[0].fan.fanId).toBeUndefined();
   });
 
+  it("[sync-critical] refuses cross-page spender scope for an owner DEVICE TOKEN", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    // Regression pin. The guard used to read `authMethod === "api_key"`, so a
+    // device token slipped past it — and device tokens authenticate any
+    // session-capable role, owner included. `pageScopeFor` then hands an owner
+    // principal `undefined` (unrestricted), which made an owner-role device
+    // token an unbounded cross-page reader on every v2 spender route.
+    // The old test WAS the bug: it only ever exercised api_key.
+    const ownerDevice = await issueDeviceTokenForUsername(createTestAppContext(testDb), {
+      username: "dima",
+      label: "dima-audit-laptop",
+    }, { source: "test" });
+
+    for (const url of [
+      "/api/v2/spenders?scope=agency&platform=fansly&period=30d&limit=10&offset=0",
+      "/api/v2/spenders?scope=model&modelSlug=lana-model&platform=fansly&period=30d&limit=10&offset=0",
+    ]) {
+      const denied = await server.inject({
+        method: "GET",
+        url,
+        headers: { authorization: `Bearer ${ownerDevice.token}` },
+      });
+      expect({ url, statusCode: denied.statusCode }).toEqual({ url, statusCode: 403 });
+    }
+
+    // Page scope stays available to the same principal — the restriction is
+    // about cross-page aggregates, not about device tokens as such.
+    const allowed = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&period=30d&limit=10&offset=0",
+      headers: { authorization: `Bearer ${ownerDevice.token}` },
+    });
+    expect(allowed.statusCode).toBe(200);
+
+    // ...and the BODY must be page-scoped too. Refusing the agency/model shapes
+    // is not sufficient: the page branch used to widen the lifetime "platform"
+    // rollup to every page an owner can see, so a page-scoped request still
+    // answered with cross-page money. Asserting only the status code is exactly
+    // how that would have shipped.
+    //
+    // The sibling test above pins the SESSION view of this same fan on this
+    // same page: scope 7000, platform 10000 — the fan spent 3000 more on
+    // another page. A bearer must see the platform rollup clamped to 7000.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
+    const bearerView = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&platform=fansly&period=30d&limit=10&offset=0",
+      headers: { authorization: `Bearer ${ownerDevice.token}` },
+    });
+    vi.useRealTimers();
+    expect(bearerView.statusCode).toBe(200);
+    expect(bearerView.json().items[0]).toMatchObject({
+      fan: { platformUserId: "fan-001" },
+      metrics: {
+        lifetime: {
+          scopeGrossAmountMills: 7000,
+          // Clamped to the requested page. Was 10000 before the fix — the
+          // other page's money leaking through a page-scoped request.
+          platformGrossAmountMills: 7000,
+          platformCreatorNetAmountMills: 7000,
+        },
+      },
+    });
+  });
+
+  it("[sync-critical] page fan detail gives a bearer the platform total for that page only", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    // Same leak class as the spender rollup, different route. `pageFanDetail`
+    // is `{kind:"any", scope:"page"}` — reachable by a bearer — and handed
+    // `pageScopeFor(principal)` straight to the platform-total query, which
+    // treats `undefined` as "no page filter". An owner-role device token asking
+    // about ONE page therefore read the fan's spend across every page.
+    const ownerDevice = await issueDeviceTokenForUsername(createTestAppContext(testDb), {
+      username: "dima",
+      label: "dima-fan-detail-laptop",
+    }, { source: "test" });
+
+    const bearerView = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001",
+      headers: { authorization: `Bearer ${ownerDevice.token}` },
+    });
+    expect(bearerView.statusCode).toBe(200);
+    // 7000 on this page; the same fan has 3000 more on another page of the
+    // platform (seedPhase2Fixture). Before the fix this answered 10000.
+    expect(bearerView.json().platformTotalSpendMills).toBe(7000);
+
+    // A cookie session keeps the full platform view.
+    const sessionView = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001",
+      headers: { cookie: await loginOwnerCookie(server) },
+    });
+    expect(sessionView.statusCode).toBe(200);
+    expect(sessionView.json().platformTotalSpendMills).toBe(10000);
+  });
+
   it("lists v2 spenders with page-scope lifetime totals and visible-platform lifetime totals", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
