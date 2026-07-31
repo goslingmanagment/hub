@@ -68,6 +68,7 @@ export async function insertVoiceNoteJob(
       profileOutputFormat: row.profileOutputFormat,
       profileVersion: row.profileVersion,
       createdAt: row.createdAt,
+      updatedAt: row.createdAt,
     })
     .onConflictDoNothing({
       target: [voiceNotes.userId, voiceNotes.clientRequestId],
@@ -75,45 +76,6 @@ export async function insertVoiceNoteJob(
     .returning({ id: voiceNotes.id });
 
   return { inserted: inserted.length > 0 };
-}
-
-/**
- * Inserts a `quota_denied` row for a refused reservation. `insertVoiceNoteJob`
- * only produces `queued`, so this mirrors its columns (same values, same
- * conflict target) with the denied terminal state. Idempotent on
- * (user_id, client_request_id): returns whether THIS call won the insert.
- */
-export async function insertQuotaDeniedVoiceNote(
-  db: Database,
-  row: InsertVoiceNoteJobInput,
-): Promise<boolean> {
-  const inserted = await db
-    .insert(voiceNotes)
-    .values({
-      userId: row.userId,
-      platformAccountId: row.platformAccountId,
-      conversationRef: row.conversationRef,
-      sourceGenerationRef: row.sourceGenerationRef,
-      clientRequestId: row.clientRequestId,
-      requestHash: row.requestHash,
-      scriptChars: row.scriptChars,
-      originalScriptSha256: row.originalScriptSha256,
-      finalScriptSha256: row.finalScriptSha256,
-      scriptEdited: row.scriptEdited,
-      profileVoiceId: row.profileVoiceId,
-      profileModel: row.profileModel,
-      profileSettings: row.profileSettings,
-      profileOutputFormat: row.profileOutputFormat,
-      profileVersion: row.profileVersion,
-      createdAt: row.createdAt,
-      state: "quota_denied",
-    })
-    .onConflictDoNothing({
-      target: [voiceNotes.userId, voiceNotes.clientRequestId],
-    })
-    .returning({ id: voiceNotes.id });
-
-  return inserted.length > 0;
 }
 
 export async function getVoiceNoteByClientRequestId(
@@ -137,6 +99,37 @@ export async function getVoiceNoteById(
   const row = await db.query.voiceNotes.findFirst({
     where: eq(voiceNotes.id, id),
   });
+  return row ?? null;
+}
+
+export interface VoiceNoteAudioRow {
+  state: VoiceNoteState;
+  audioBytes: Buffer | null;
+  audioSha256: string | null;
+}
+
+/**
+ * Audio retrieval is authorized in SQL, before PostgreSQL returns the TOASTed
+ * BYTEA. A guessed global id owned by another page/user therefore produces no
+ * audio row and never materializes the foreign artifact in the application.
+ */
+export async function getScopedVoiceNoteAudio(
+  db: Database,
+  input: { id: number; platformAccountId: number; userId: number },
+): Promise<VoiceNoteAudioRow | null> {
+  const [row] = await db
+    .select({
+      state: voiceNotes.state,
+      audioBytes: voiceNotes.audioBytes,
+      audioSha256: voiceNotes.audioSha256,
+    })
+    .from(voiceNotes)
+    .where(and(
+      eq(voiceNotes.id, input.id),
+      eq(voiceNotes.platformAccountId, input.platformAccountId),
+      eq(voiceNotes.userId, input.userId),
+    ))
+    .limit(1);
   return row ?? null;
 }
 
@@ -229,6 +222,23 @@ export async function casVoiceNoteDispatch(
   return updated.length > 0;
 }
 
+/**
+ * Refreshes ownership of a process-local queued waiter. The state predicate
+ * makes a late heartbeat harmless after dispatch, erasure, or sweep.
+ */
+export async function touchQueuedVoiceNote(
+  db: Database,
+  id: number,
+  now = new Date(),
+): Promise<boolean> {
+  const touched = await db
+    .update(voiceNotes)
+    .set({ updatedAt: now })
+    .where(and(eq(voiceNotes.id, id), eq(voiceNotes.state, "queued")))
+    .returning({ id: voiceNotes.id });
+  return touched.length > 0;
+}
+
 export interface SettleVoiceNoteTerminalInput {
   id: number;
   attemptToken: string;
@@ -299,7 +309,7 @@ export interface VoiceNoteBudgetReleaseRow {
 
 /**
  * Recovery sweep. Moves lease-expired `dispatched` rows (lease_until < now) and
- * abandoned `queued` rows (created before the caller-supplied cutoff) to
+ * abandoned `queued` rows (not heartbeated since the caller-supplied cutoff) to
  * `indeterminate`, returning a count for each. Omitting `queuedCutoff` sweeps
  * only expired leases — no queued row is abandoned without an explicit cutoff.
  *
@@ -307,8 +317,9 @@ export interface VoiceNoteBudgetReleaseRow {
  * - An abandoned `queued` row crashed BEFORE dispatch → certainly unbilled. Its
  *   stamp (`state=indeterminate`, `billed=false` — both the verdict AND the
  *   released marker) and its reservation refund are done TOGETHER in one
- *   per-row transaction, fenced on `state='queued'`, so a crash can never leave
- *   a stamped-but-unrefunded row (the stamp fences it out of every later pass).
+ *   per-row transaction, fenced on `state='queued'` AND the stale heartbeat
+ *   cutoff, so a heartbeat racing candidate selection wins and a crash can
+ *   never leave a stamped-but-unrefunded row.
  *   The refunded rows are returned in `abandonedQueuedRows` for count/telemetry.
  * - A lease-expired `dispatched` row may or may not have been billed at the
  *   provider → `billed` is left NULL (billing unknown; the reservation stays,
@@ -348,7 +359,7 @@ export async function sweepVoiceNotes(
       .from(voiceNotes)
       .where(and(
         eq(voiceNotes.state, "queued"),
-        lt(voiceNotes.createdAt, queuedCutoff),
+        lt(voiceNotes.updatedAt, queuedCutoff),
       ));
 
     for (const candidate of candidates) {
@@ -359,6 +370,7 @@ export async function sweepVoiceNotes(
           .where(and(
             eq(voiceNotes.id, candidate.id),
             eq(voiceNotes.state, "queued"),
+            lt(voiceNotes.updatedAt, queuedCutoff),
           ))
           .returning({ id: voiceNotes.id });
         if (stamped.length === 0) {

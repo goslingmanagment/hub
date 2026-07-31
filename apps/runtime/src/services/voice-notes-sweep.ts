@@ -31,9 +31,8 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const VOICE_NOTES_SWEEP_QUEUE = "voice.notes.sweep";
 
-// A `queued` row older than this never dispatched: admission is synchronous, so
-// a row still `queued` minutes later means the service crashed between the row
-// INSERT and the dispatch CAS. 5 min is comfortably beyond that window.
+// A queued waiter heartbeats updated_at every minute. Five minutes without a
+// heartbeat means its API process crashed or abandoned the pre-dispatch path.
 const QUEUED_ABANDON_MS = 5 * 60 * 1000;
 // Audio is retained for 7 days, then the bytes are purged (row → artifact_expired).
 const AUDIO_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -58,7 +57,7 @@ export async function ensureVoiceNotesSweepSchedule(boss: QueueCreationClient) {
 }
 
 /**
- * Minutely sweep: reclaim abandoned `queued` rows (older than 5 min) and
+ * Minutely sweep: reclaim `queued` rows without a heartbeat for 5 min and
  * lease-expired `dispatched` rows to `indeterminate`. The abandoned-queued rows
  * are certainly unbilled, so `sweepVoiceNotes` stamps and refunds each one
  * atomically; `abandonedQueued` therefore equals the number of reservations

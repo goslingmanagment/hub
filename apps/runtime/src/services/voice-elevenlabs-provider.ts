@@ -40,6 +40,14 @@ const SNIPPET_MAX_BYTES = 1024;
  * indeterminate. Imported by the voice-notes service — never redeclared.
  */
 export const VOICE_AUDIO_MAX_BYTES = 2_097_152;
+/** voice_notes.billed_chars is PostgreSQL INTEGER. */
+export const VOICE_CHARACTER_COST_MAX = 2_147_483_647;
+
+export function isValidVoiceCharacterCost(value: number): boolean {
+  return Number.isSafeInteger(value)
+    && value >= 0
+    && value <= VOICE_CHARACTER_COST_MAX;
+}
 
 export type VoiceTtsFailureKind =
   | "connect"
@@ -92,6 +100,13 @@ function parseNumberHeader(raw: string | null): number | null {
   }
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
+}
+
+function parseCharacterCostHeader(raw: string | null): number | null {
+  const value = parseNumberHeader(raw);
+  return value !== null && isValidVoiceCharacterCost(value)
+    ? value
+    : null;
 }
 
 /** Read at most `maxBytes` from a response body. The reader is cancelled as
@@ -346,7 +361,7 @@ export function createElevenLabsVoiceProvider(
           return {
             ok: true,
             audio,
-            characterCost: parseNumberHeader(response.headers.get("character-cost")),
+            characterCost: parseCharacterCostHeader(response.headers.get("character-cost")),
             requestId: response.headers.get("request-id"),
             traceId: response.headers.get("x-trace-id"),
             region: response.headers.get("x-region"),

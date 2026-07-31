@@ -190,6 +190,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 186 | Critical-paging preconditions | Four fixes gate `aiCriticalAlertsEnabled`: the internal AI lane fails closed on unusable terminals via the shared consumer, incident state is ordered by event time with an atomic recovery+resolve, outbox delivery is FIFO per incident/channel, and the lease/sweep clocks outlive one physical Telegram send |
 | 187 | Plugins throw AppError | `@fastify/rate-limit` threw a duck-typed literal that only reached clients via the passthrough #184 removed, so rate-limited logins answered HTTP 500 for three days; any plugin signalling by throw must throw an `AppError`, and both rate-limit tests join the `[sync-critical]` PR slice |
 | 188 | CI gate splits into shards | The single Quality Gate job becomes Static checks + a 3-way sharded Integration matrix + a same-named aggregator (branch protection matches the literal name); no test or harness file changes — measured 688s serial -> 234s per shard |
+| 190 | Voice launch hardening | Voice uses stateless quota refusal and heartbeated queued ownership; audio authorization moves into SQL, cost reconciliation accepts only non-negative PostgreSQL integers, and voice admission/dispatch join the existing material-time erasure fence |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5639,3 +5640,30 @@ instead of a fixed 50k that would silently shed the recap it asserts is kept.
 
 Output-side normalization (`normalizeDashes` in `prompts/output/reply-output.ts`,
 uncalled here because sanitizing happens client-side) stays a client concern.
+
+**Decision #190 (2026-07-31, voice launch hardening joins queued ownership
+and erasure fencing):** Saturated synthesis keeps the existing FIFO contract:
+the admitted row remains `queued` without a dispatch lease until a configured
+process-local permit opens. While it waits, the owning API process refreshes
+`updated_at` every minute. The minutely sweep now treats five minutes without
+that heartbeat, rather than row age, as abandonment. A live waiter therefore
+cannot be reclaimed and refunded underneath a later paid dispatch, while a
+crashed process still converges through the existing unbilled sweep.
+
+Quota refusal is stateless. It still returns `voice_quota_denied` and consumes
+no budget, but fresh client UUIDs no longer create permanent terminal rows.
+When a concurrent same-UUID winner may have consumed the final budget, the
+loser rolls back and re-reads the idempotency key before choosing replay,
+mismatch, or 429.
+
+Audio retrieval applies `(id, platform_account_id, user_id)` in SQL before
+selecting the bounded BYTEA. ElevenLabs `character-cost` reconciles a
+reservation only when it is a non-negative PostgreSQL integer at both the HTTP
+adapter and service boundary; an invalid value is unknown and leaves the
+estimate charged.
+
+Finally, Fansly voice admission and the single-dispatch CAS both join the
+existing page erasure advisory-lock protocol and re-check material-time
+tombstones using the source generation's `created_at`. Pre-erasure fan material
+cannot be inserted or sent after an erasure, while genuinely newer material
+keeps Decision #175's supported behavior.

@@ -73,6 +73,9 @@ export async function acquireErasureFenceExclusiveLocks(
 
 export interface DmArchiveFenceCheckInput {
   pageId: number;
+  /** Fan-scope tombstones include the platform in their immutable scope ref.
+   * Existing DM callers are OnlyFans by default; Fansly writers must opt in. */
+  platform?: "onlyfans" | "fansly";
   /** The incoming row's fan-side identifiers (fan ref, conversation ref,
    * sender ref) — matched against fan-scope erasures by immutable ref. */
   refs: readonly (string | null | undefined)[];
@@ -93,7 +96,7 @@ export async function isDmArchiveScopeFenced(
   input: DmArchiveFenceCheckInput,
 ): Promise<boolean> {
   const refs = [...new Set(input.refs.filter((ref): ref is string => !!ref))];
-  const fanScopeRefs = refs.map((ref) => `fan:onlyfans:${ref}`);
+  const fanScopeRefs = refs.map((ref) => `fan:${input.platform ?? "onlyfans"}:${ref}`);
   const fanArm = fanScopeRefs.length > 0
     ? sql`(e.scope_type = 'fan' and e.scope_ref in (${sql.join(fanScopeRefs.map((ref) => sql`${ref}`), sql`, `)}))`
     : sql`false`;

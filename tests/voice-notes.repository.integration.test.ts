@@ -7,6 +7,7 @@ import {
   clearVoiceProfile,
   createFanslyPage,
   createModel,
+  getScopedVoiceNoteAudio,
   getVoiceNoteByClientRequestId,
   getVoiceNoteById,
   getVoiceNoteStatusByClientRequestId,
@@ -196,6 +197,58 @@ describe("voice notes repository integration", () => {
       // The 2 MiB bytea column is NOT part of the projection.
       expect(Object.keys(projected ?? {})).not.toContain("audioBytes");
     }
+  });
+
+  it("loads audio only when id, page, and user all match in the repository query", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { db } = testDb;
+    const page = await createVoicePage(testDb, "voice-audio-scope");
+    const otherPage = await createVoicePage(testDb, "voice-audio-other");
+    const clientRequestId = randomUUID();
+    await insertVoiceNoteJob(db, baseJob({ platformAccountId: page.id, clientRequestId }));
+    const note = await getVoiceNoteByClientRequestId(db, USER_ID, clientRequestId);
+    const attemptToken = randomUUID();
+    await casVoiceNoteDispatch(db, {
+      id: note!.id,
+      attemptToken,
+      leaseUntil: new Date(Date.now() + 60_000),
+    });
+    await settleVoiceNoteTerminal(db, {
+      id: note!.id,
+      attemptToken,
+      state: "completed",
+      billed: true,
+      billedChars: 120,
+      providerRequestId: "req-scoped",
+      providerTraceId: null,
+      providerRegion: null,
+      audioBytes: Buffer.from("scoped-audio"),
+      audioSha256: "d".repeat(64),
+      audioBytesLen: 12,
+      durationMs: 10,
+    });
+
+    const owned = await getScopedVoiceNoteAudio(db, {
+      id: note!.id,
+      platformAccountId: page.id,
+      userId: USER_ID,
+    });
+    expect(owned?.state).toBe("completed");
+    expect(owned?.audioBytes).toEqual(Buffer.from("scoped-audio"));
+
+    await expect(getScopedVoiceNoteAudio(db, {
+      id: note!.id,
+      platformAccountId: otherPage.id,
+      userId: USER_ID,
+    })).resolves.toBeNull();
+    await expect(getScopedVoiceNoteAudio(db, {
+      id: note!.id,
+      platformAccountId: page.id,
+      userId: USER_ID + 1,
+    })).resolves.toBeNull();
   });
 
   it("grants dispatch exactly once under concurrent CAS calls", async (context) => {

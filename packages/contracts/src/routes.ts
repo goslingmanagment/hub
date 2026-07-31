@@ -5394,10 +5394,11 @@ export const routeSchemas = {
       + "idempotency_mismatch (same id, different request) / voice_no_profile; 429 "
       + "voice_quota_denied; 503 voice_provider_unavailable (live flag on but "
       + "ELEVENLABS_API_KEY or the complete SERVICE_EGRESS_PROXY_* tuple is "
-      + "unconfigured — set both and restart). A quota-denied "
-      + "clientRequestId STAYS denied: every replay of it re-throws the same 429 "
-      + "(never a 202 view), so a retry after quota exhaustion needs a FRESH "
-      + "clientRequestId.",
+      + "unconfigured, or an active erasure temporarily owns the page writer "
+      + "fence). Quota refusal writes no render "
+      + "row and consumes no character budget. The same clientRequestId remains "
+      + "a 429 while the budget is exhausted, but may be admitted after capacity "
+      + "is restored; a concurrent already-admitted winner is replayed.",
     params: pageParamsSchema,
     body: voiceNoteCreateBodySchema,
     response: {
