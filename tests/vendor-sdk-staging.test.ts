@@ -12,6 +12,10 @@ describe("vendored SDK surfaces the ai-stop-reason predicate", () => {
     const script = await readFile("scripts/vendor-sdk.mjs", "utf8");
     // The staging array the compiler bundles from packages/shared.
     expect(script).toContain('"spender-retention.ts", "ai-stop-reason.ts"');
+    // Every module the contracts barrel re-exports must be staged, or the
+    // vendor compile dies with TS2307 and no client can re-vendor. This is the
+    // second time the fixed staging list silently diverged from the barrel.
+    expect(script).toContain('"agent-read-registry.ts"');
     // The generated shared barrel that re-exports the staged modules.
     expect(script).toContain('export * from "./ai-stop-reason";');
   });
