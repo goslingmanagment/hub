@@ -1,6 +1,22 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
+import type { SyncStream } from "@agency_hub_core/db";
 
 type SyncUxState = SyncUxSummary["state"];
+
+/** Stage 16 bulk enrichment streams (decision #166). They stay VISIBLE with
+ *  their own honest per-stream state on the detailed monitor, but they must
+ *  never dominate a page or fleet rollup: both ramp flags default to false, so
+ *  letting a gated bulk stream vote would make every Fansly page — and the
+ *  whole fleet — read "Off" forever on a default configuration. Shared by every
+ *  rollup site so the filters cannot drift apart. */
+export const BULK_ENRICHMENT_SYNC_STREAMS: readonly SyncStream[] = [
+  "fan_earnings",
+  "purchase_history",
+];
+
+export function isBulkEnrichmentSyncStream(stream: string) {
+  return (BULK_ENRICHMENT_SYNC_STREAMS as readonly string[]).includes(stream);
+}
 
 type SyncMonitorStatus =
   | "idle"
@@ -38,6 +54,14 @@ export interface SyncUxStreamLike {
     status: "success" | "partial" | "failed" | "skipped";
     finishedAt: string;
   } | null;
+  /** The ramp-gate reason recorded by the last completed run (`stats.gatedSkip`),
+   *  when that run was a gate skip. This is what "gated off" is keyed on, NOT
+   *  the `skipped` outcome: `skipped` is also written by recordSkipped whenever
+   *  a worker loses its lease, which happens to perfectly healthy streams. Such
+   *  a run can even carry a LATER finished_at than the replacement run that
+   *  succeeded, so keying the state on the outcome alone would report a working
+   *  stream as gated off until its next run lands — hours, on a daily cadence. */
+  lastCompletionGatedSkipReason?: string | null;
   succeededAt: string | null;
   failedAt: string | null;
   lastErrorCode?: string | null;
@@ -245,11 +269,15 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
     });
   }
 
-  if (stream.lastCompletion?.status === "skipped") {
-    // A skipped run did no work. Falling through to "healthy" printed
+  if (stream.lastCompletion?.status === "skipped" && stream.lastCompletionGatedSkipReason) {
+    // A ramp-gated run did no work. Falling through to "healthy" printed
     // "Up to date" over a stream whose feed was gated off for 13 days: the
     // stale succeeded_at kept hasSuccessfulSync true (see the const above),
     // and nothing else on this row disagreed.
+    //
+    // The gate reason, not the `skipped` outcome, is the condition. A run
+    // skipped because its worker lost the lease is not gated off and must keep
+    // falling through to the state the rest of the row describes.
     return buildSummary("off", {
       label: "Not updating",
       headline: "Not updating",

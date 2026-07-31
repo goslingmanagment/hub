@@ -1552,7 +1552,13 @@ describe("sync executor", () => {
     expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
       "skipped",
       "not_allowlisted",
-      expect.objectContaining({ skipped: "not_allowlisted" }),
+      // `gatedSkip` in the run stats is the structured marker the UX keys
+      // "gated off" on. The `skipped` OUTCOME cannot serve as that marker:
+      // recordSkipped writes it for every lost lease, on healthy streams too.
+      expect.objectContaining({
+        skipped: "not_allowlisted",
+        gatedSkip: "not_allowlisted",
+      }),
     );
     expect(notificationMocks.resolveSyncChunkRecoveryIncidents).not.toHaveBeenCalled();
   });

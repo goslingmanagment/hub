@@ -22,6 +22,7 @@ import { filterOnlyFansTopSpendersStreams } from "./sync/onlyfans-top-spenders.t
 import {
   buildPageSyncUx,
   buildStreamSyncUx,
+  isBulkEnrichmentSyncStream,
   type SyncUxStreamLike,
 } from "./sync-ux.ts";
 
@@ -184,8 +185,10 @@ function buildPageSummarySyncUx(
 
   let applicableStreams: SyncStream[] = getSyncStreamsForPlatform(page.platform)
     // Stage 16 bulk enrichment streams remain visible on the detailed sync
-    // monitor, but never make an otherwise-current page look broken/off.
-    .filter((stream) => stream !== "fan_earnings" && stream !== "purchase_history");
+    // monitor, but never make an otherwise-current page look broken/off. The
+    // membership list moved to sync-ux.ts so this filter and the monitor's page
+    // rollup, which needs the identical rule, cannot drift apart.
+    .filter((stream) => !isBulkEnrichmentSyncStream(stream));
   applicableStreams = filterOnlyFansAudienceStreams(
     page.platform,
     applicableStreams,

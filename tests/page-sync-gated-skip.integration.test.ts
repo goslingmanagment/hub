@@ -5,12 +5,16 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
+  finishSyncRun,
   getPageSyncState,
   requestPageSync,
   skipPageSync,
+  startSyncRun,
 } from "@agency_hub_core/db";
 
+import { getSyncMonitorSnapshot } from "../apps/runtime/src/services/sync-monitor.ts";
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
 
 /** A ramp-gated chunk (platform / flag / allowlist) short-circuits before any
  *  egress. It used to terminate through completePageSync, which stamped
@@ -147,6 +151,133 @@ describe("page sync gated skip", () => {
 
       const after = await getPageSyncState(testDb.db, page.id, "fan_earnings");
       expect(after).toEqual(before);
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("tells a gate skip apart from a lost lease, and keeps bulk out of the rollup", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    async function recordRun(input: {
+      pageId: number;
+      stream: "light" | "fan_earnings";
+      status: "success" | "skipped";
+      stats: Record<string, unknown>;
+      errorSummary?: string;
+      startedAt: string;
+      finishedAt: string;
+    }) {
+      const run = await startSyncRun(testDb!.db, {
+        platformAccountId: input.pageId,
+        stream: input.stream,
+        trigger: "scheduled",
+      });
+      if (!run) {
+        throw new Error(`Expected to start a ${input.stream} sync run`);
+      }
+      await finishSyncRun(testDb!.db, run.id, {
+        status: input.status,
+        stats: input.stats,
+        errorSummary: input.errorSummary ?? null,
+      });
+      await testDb!.pool.query(
+        "update sync_runs set started_at = $1, finished_at = $2 where id = $3",
+        [new Date(input.startedAt), new Date(input.finishedAt), run.id],
+      );
+      return run.id;
+    }
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "gated-skip-monitor-model",
+        name: "Gated Skip Monitor Model",
+      });
+      if (!model) {
+        throw new Error("Expected to create a model");
+      }
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "gated-skip-monitor",
+      });
+      if (!page) {
+        throw new Error("Expected to create a page");
+      }
+      await ensurePageSyncStates(testDb.db, { pageId: page.id });
+      // Settle every row: this test is about what the monitor says AFTER a
+      // chunk ran, and a still-queued row short-circuits to "catching up" long
+      // before the branch under test. skipPageSync leaves exactly this shape.
+      await testDb.pool.query(
+        `
+          update page_sync_states
+          set applied_seq = request_seq, status = 'idle'
+          where page_id = $1
+        `,
+        [page.id],
+      );
+
+      // A healthy light stream: it succeeded, and then a stale worker unwound
+      // and wrote its lost-lease `skipped` with a LATER finished_at. That is the
+      // ordering completed_runs picks, and it is why the UX must not read the
+      // outcome alone.
+      await recordRun({
+        pageId: page.id,
+        stream: "light",
+        status: "success",
+        stats: {},
+        startedAt: "2026-07-30T10:00:00.000Z",
+        finishedAt: "2026-07-30T10:01:00.000Z",
+      });
+      await recordRun({
+        pageId: page.id,
+        stream: "light",
+        status: "skipped",
+        stats: {},
+        errorSummary: "Page sync lease lost",
+        startedAt: "2026-07-30T09:59:00.000Z",
+        finishedAt: "2026-07-30T10:02:00.000Z",
+      });
+      await testDb.pool.query(
+        "update page_sync_states set succeeded_at = $1 where page_id = $2 and stream = 'light'",
+        [new Date("2026-07-30T10:01:00.000Z"), page.id],
+      );
+
+      // A genuinely ramp-gated bulk stream, carrying the structured marker.
+      await recordRun({
+        pageId: page.id,
+        stream: "fan_earnings",
+        status: "skipped",
+        stats: { skipped: "not_allowlisted", gatedSkip: "not_allowlisted" },
+        errorSummary: "not_allowlisted",
+        startedAt: "2026-07-30T10:00:00.000Z",
+        finishedAt: "2026-07-30T10:00:05.000Z",
+      });
+
+      const snapshot = await getSyncMonitorSnapshot(createTestAppContext(testDb), {
+        pageLabel: "gated-skip-monitor",
+      });
+      const monitored = snapshot.pages.find((item) => item.pageLabel === "gated-skip-monitor");
+      if (!monitored) {
+        throw new Error("Expected the page in the monitor snapshot");
+      }
+      const streamState = (stream: string) =>
+        monitored.streams.find((item) => item.stream === stream)?.syncUx.state;
+
+      // Defect 1: a lost lease is not a gate. Reading the `skipped` outcome
+      // alone reported this healthy stream as "gated off" until its next run.
+      expect(streamState("light")).not.toBe("off");
+
+      // The gated bulk stream still tells the truth about itself.
+      expect(streamState("fan_earnings")).toBe("off");
+
+      // Defect 2: and it does not get to decide the page, nor the fleet line
+      // above it (decision #166 — both ramp flags are false by default, so
+      // otherwise EVERY Fansly page would read "Off" forever).
+      expect(monitored.syncUx.state).not.toBe("off");
+      expect(snapshot.overall.syncUx.state).not.toBe("off");
     } finally {
       await testDb.stop();
     }

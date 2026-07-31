@@ -5,6 +5,9 @@ import {
   buildOverallSyncUx,
   buildPageSyncUx,
   buildStreamSyncUx,
+  BULK_ENRICHMENT_SYNC_STREAMS,
+  isBulkEnrichmentSyncStream,
+  type SyncUxStreamLike,
 } from "../apps/runtime/src/services/sync-ux.ts";
 
 describe("sync UX summaries", () => {
@@ -268,12 +271,10 @@ describe("sync UX summaries", () => {
     expect(summary.detail).toContain("Rate limits slowed this sync");
   });
 
-  it("does not print Up to date over a stream whose last run was skipped", () => {
-    // The stale succeeded_at below is exactly the lora-1 shape: the allowlist
-    // dropped the page on 2026-07-17, every later run was a gated skip, and the
-    // monitor still said "Up to date" for 13 days because nothing looked at the
-    // completion status once succeededAt was non-null.
-    const summary = buildStreamSyncUx({
+  function skippedStream(
+    overrides: Partial<SyncUxStreamLike> = {},
+  ): SyncUxStreamLike {
+    return {
       stream: "fan_earnings",
       status: "idle",
       stalled: false,
@@ -300,11 +301,84 @@ describe("sync UX summaries", () => {
       failedAt: null,
       lastErrorSummary: null,
       consecutiveFailures: 0,
-    });
+      ...overrides,
+    };
+  }
+
+  it("does not print Up to date over a stream whose last run was a gate skip", () => {
+    // Exactly the lora-1 shape: the allowlist dropped the page on 2026-07-17,
+    // every later run was a gated skip, and the monitor still said "Up to date"
+    // for 13 days because nothing looked past the non-null succeededAt.
+    const summary = buildStreamSyncUx(skippedStream({
+      lastCompletionGatedSkipReason: "not_allowlisted",
+    }));
 
     expect(summary.state).toBe("off");
     expect(summary.headline).not.toBe("Up to date");
     expect(summary.headline).toBe("Not updating");
     expect(summary.detail).toContain("gated off");
+  });
+
+  it("does not call a lost lease gated off just because the run says skipped", () => {
+    // `skipped` is ALSO what recordSkipped writes whenever a worker loses its
+    // lease, which happens to perfectly healthy streams — and that row can carry
+    // a LATER finished_at than the replacement run that succeeded, so
+    // completed_runs picks it. Keying the state on the outcome alone reported a
+    // working stream as gated off, with a detail naming a gate that does not
+    // exist, until its next run landed. No recorded gate reason => not gated.
+    const summary = buildStreamSyncUx(skippedStream({
+      stream: "dm_messages",
+      lastErrorSummary: "Page sync lease lost",
+    }));
+
+    expect(summary.state).not.toBe("off");
+    expect(summary.headline).not.toBe("Not updating");
+    expect(summary.detail ?? "").not.toContain("gated off");
+    expect(summary.state).toBe("healthy");
+  });
+
+  it("keeps a gated bulk stream from dominating the page and fleet rollup", () => {
+    // fan_earnings/purchase_history sit in MONITORED_SYNC_STREAMS and `off`
+    // outranks every state below `attention`, so an honest per-stream `off`
+    // would otherwise turn every Fansly page — and the fleet line above it —
+    // into "Off" on a default configuration, where both ramp flags are false.
+    // Decision #166 already forbids that; the monitor rollup lacked the filter.
+    const pageStreams = [
+      {
+        stream: "light",
+        syncUx: buildStreamSyncUx(skippedStream({
+          stream: "light",
+          lastCompletion: { status: "success", finishedAt: "2026-07-30T11:30:00.000Z" },
+          succeededAt: "2026-07-30T11:30:00.000Z",
+        })),
+      },
+      {
+        stream: "fan_earnings",
+        syncUx: buildStreamSyncUx(skippedStream({
+          lastCompletionGatedSkipReason: "not_allowlisted",
+        })),
+      },
+    ];
+    expect(pageStreams[0]?.syncUx.state).toBe("healthy");
+    expect(pageStreams[1]?.syncUx.state).toBe("off");
+
+    // Unfiltered, one gated bulk stream decides the whole page — this pins the
+    // consequence callers must avoid.
+    expect(buildPageSyncUx(pageStreams.map((item) => item.syncUx)).state).toBe("off");
+
+    // The rule the monitor now applies, spelled out with the shared predicate.
+    const rollupInput = pageStreams
+      .filter((item) => !isBulkEnrichmentSyncStream(item.stream))
+      .map((item) => item.syncUx);
+    expect(buildPageSyncUx(rollupInput).state).toBe("healthy");
+    expect(buildOverallSyncUx([buildPageSyncUx(rollupInput)]).state).toBe("healthy");
+  });
+
+  it("names the bulk enrichment streams that must not dominate a rollup", () => {
+    expect([...BULK_ENRICHMENT_SYNC_STREAMS]).toEqual(["fan_earnings", "purchase_history"]);
+    expect(isBulkEnrichmentSyncStream("fan_earnings")).toBe(true);
+    expect(isBulkEnrichmentSyncStream("purchase_history")).toBe(true);
+    expect(isBulkEnrichmentSyncStream("dm_messages")).toBe(false);
+    expect(isBulkEnrichmentSyncStream("light")).toBe(false);
   });
 });

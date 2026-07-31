@@ -552,6 +552,12 @@ export async function executeNextSyncPageChunk(
             elapsedMs: budget.elapsedMs,
           },
           ...result.stats,
+          // Written AFTER the spread so a handler cannot clobber it, and under
+          // its own key rather than reusing `stats.skipped`: this is the marker
+          // a UX state is keyed on. The `skipped` OUTCOME is NOT that marker —
+          // recordSkipped (lost lease) has been writing that outcome for every
+          // stream since long before ramp gates existed.
+          gatedSkip: result.gatedSkip,
         });
       } else {
         const recoveredAt = new Date();

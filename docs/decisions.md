@@ -191,7 +191,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 187 | Plugins throw AppError | `@fastify/rate-limit` threw a duck-typed literal that only reached clients via the passthrough #184 removed, so rate-limited logins answered HTTP 500 for three days; any plugin signalling by throw must throw an `AppError`, and both rate-limit tests join the `[sync-critical]` PR slice |
 | 188 | CI gate splits into shards | The single Quality Gate job becomes Static checks + a 3-way sharded Integration matrix + a same-named aggregator (branch protection matches the literal name); no test or harness file changes — measured 688s serial -> 234s per shard |
 | 190 | Voice launch hardening | Voice uses stateless quota refusal and heartbeated queued ownership; audio authorization moves into SQL, cost reconciliation accepts only non-negative PostgreSQL integers, and voice admission/dispatch join the existing material-time erasure fence |
-| 191 | A gated skip is not a successful sync | A ramp-gated chunk terminates through `skipPageSync` (no `succeeded_at`, no `progressed_at`, no touch of `consecutive_failures` / `last_error_*`), records `sync_runs.outcome = skipped`, resolves no incidents, and prints "Not updating" instead of "Up to date"; `gatedSkip` stays scoped to `fanslyNewStreamSkip`, and `fan_earnings` deliberately stays out of `BLOCK_TASKS` (#133/#166 hold) |
+| 191 | A gated skip is not a successful sync | A ramp-gated chunk terminates through `skipPageSync` (no `succeeded_at`, no `progressed_at`, no touch of `consecutive_failures` / `last_error_*`), records `sync_runs.outcome = skipped` and resolves no incidents; the "Not updating" UX state is keyed on the recorded gate REASON, never on the `skipped` outcome (whose pre-existing producer is the lost-lease path on healthy streams), and bulk gated streams are excluded from the monitor's page/fleet rollup exactly as #166 already requires of sync-summary |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5694,12 +5694,35 @@ invent one. The run is written as `sync_runs.outcome = skipped`, which the
 existing telemetry already maps to health `degraded`, and incident resolution is
 not called: closing `stream_failed_threshold` off the back of a skip would clear
 an alert while the failure streak it was raised for is still sitting on the row.
-`buildStreamSyncUx` gains a `skipped` branch that returns the existing `off`
-state as "Not updating" instead of falling through to "Up to date"; today the
-only other writer of that outcome is `recordSkipped` (the `lock_skipped`
-anomaly), where "not updating" is equally true. The `top-spenders` route reports
-`source.lastSyncedAt` straight off the same `succeeded_at`, so the extension's
-board inherits the honest timestamp for free.
+The `top-spenders` route reports `source.lastSyncedAt` straight off the same
+`succeeded_at`, so the extension's board inherits the honest timestamp for free.
+
+`buildStreamSyncUx` gains a branch that returns the existing `off` state as
+"Not updating" instead of falling through to "Up to date". It is keyed on the
+GATE REASON (`stats.gatedSkip` of the last completed run), never on the
+`skipped` outcome by itself, and that distinction is the whole point rather than
+a detail. The `skipped` outcome has one pre-existing producer: `recordSkipped`,
+called from `buildLeaseLostResult` at eight sites in the executor whenever a
+worker loses its lease. That happens to perfectly healthy streams of every kind,
+and `completed_runs` picks the freshest finished run of ANY non-running outcome
+by `finished_at`, so the stale worker's `skipped` row can land AFTER the
+replacement run that actually succeeded. Keying the state on the outcome alone
+would therefore have reported a working `dm_messages` stream as "gated off"
+until its next run finished — hours on a bulk cadence, and with a detail string
+naming a gate that does not exist. The marker is written into the run's stats
+under its own key, after the handler stats spread so nothing can clobber it,
+because a state must not be inferred from free-text `error_summary`.
+
+The bulk streams still must not dominate. `fan_earnings` and `purchase_history`
+are in `MONITORED_SYNC_STREAMS`, and `off` outranks `syncing` / `retrying` /
+`catching_up` / `setup` in the page rollup, so an honest per-stream `off` would
+have turned every Fansly page — and the fleet line above it — permanently "Off"
+on a default configuration, where both ramp flags are false. `sync-summary`
+already forbids exactly this (decision #166); the monitor's page rollup simply
+lacked the filter. It now applies the same one, and the membership list moved
+into `sync-ux.ts` so the two sites cannot drift apart. The bulk streams keep
+their own honest entry in the per-stream list, which is where the truth about a
+gated feed belongs.
 
 The trigger is deliberately narrow. `gatedSkip` is set only by
 `fanslyNewStreamSkip` and must not be extended to the other "satisfied but did
