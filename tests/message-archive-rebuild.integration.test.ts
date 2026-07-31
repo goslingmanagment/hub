@@ -251,6 +251,19 @@ describe("message-archive shadow rebuild (W10)", () => {
     expect(switched.retiredRows).toBe(4);
     expect(switched.watermarksReset).toBe(2);
 
+    // The archive generation moved in the SAME transaction as the rename. Agent
+    // read cursors carry the generation they were minted under; without this
+    // bump a cursor from before the swap would resume against a different
+    // physical table, skip rows, and still report "the snapshot is exhausted".
+    expect(switched.archiveGeneration).toBeGreaterThan(0);
+    const generation = await testDb.pool.query<{ generation: string; reason: string | null }>(
+      "select generation::text as generation, reason from archive_generation where id = 1",
+    );
+    expect(generation.rows[0]).toMatchObject({
+      generation: String(switched.archiveGeneration),
+      reason: "message_archive rebuild swap",
+    });
+
     // The shadow name is consumed; the retired table is KEPT in full.
     const relations = await testDb.pool.query<{ shadow: string | null; retired: string | null }>(
       `select to_regclass('public.message_archive_shadow')::text as shadow,

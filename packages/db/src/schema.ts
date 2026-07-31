@@ -3283,6 +3283,12 @@ export const messageArchive = pgTable(
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     sourceEventId: bigint("source_event_id", { mode: "number" }),
     backfillSource: text("backfill_source"),
+    // Drift fix (Agent Read Plane 0a): present in the database since
+    // migrations/0059. True while the row is a tombstone-first stub (a
+    // message.deleted applied before its content event): the content is a
+    // placeholder until the content event hydrates it, and content writers only
+    // overwrite rows still flagged here.
+    contentPending: boolean("content_pending").default(false).notNull(),
     archivedAt: timestamp("archived_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3300,6 +3306,15 @@ export const messageArchive = pgTable(
     accountOccurredIdx: index("message_archive_account_occurred_idx").on(
       table.accountId,
       table.occurredAt,
+    ),
+    // Drift fix (Agent Read Plane 0a): this index has existed in the database
+    // since migrations/0059 and was simply missing from the model. The plane's
+    // search operation serves from exactly this expression, and a model that
+    // does not know the index exists invites a duplicate one in a later
+    // migration. No new migration — the database is already correct.
+    textSearchIdx: index("message_archive_text_search_idx").using(
+      "gin",
+      sql`to_tsvector('simple', ${table.textPlain})`,
     ),
   }),
 );
@@ -3652,5 +3667,134 @@ export const voiceCharBudget = pgTable(
       name: "voice_char_budget_pkey",
       columns: [table.scope, table.utcDay],
     }),
+  }),
+);
+
+// ── Agent Read Plane (slice 0a) ─────────────────────────────────────────────
+// A third class of machine principal, deliberately NOT a row in api_keys: the
+// existing admin key routes must never be able to issue, list or revoke one.
+// Nothing reads these tables yet — slice 0a ships the schema, the vocabulary
+// and the flags, all of which rest at off/false.
+
+export const agentKeys = pgTable(
+  "agent_keys",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    name: text("name").notNull().unique(),
+    keyPrefix: text("key_prefix").notNull(),
+    keyDigest: text("key_digest").notNull().unique(),
+    /** Closed matrix; values come from AGENT_CAPABILITIES (@agency_hub_core/contracts).
+     *  A DB CHECK repeats the list as defense in depth and a test pins the two together. */
+    capabilities: text("capabilities").array().default([]).notNull(),
+    /** Explicit page grant. NO wildcard: pages created after issuance are not granted. */
+    pageIds: bigint("page_ids", { mode: "number" }).array().default([]).notNull(),
+    dailyRequestBudget: integer("daily_request_budget").default(5000).notNull(),
+    dailyRowBudget: integer("daily_row_budget").default(500000).notNull(),
+    /** Mandatory, sliding (+90d on use) and capped at 365d from createdAt — the
+     *  device-token precedent. Enforcement lives in the authenticator (slice 0b). */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdBy: bigint("created_by", { mode: "number" }).references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (table) => ({
+    expiryIdx: index("agent_keys_expiry_idx").on(table.expiresAt),
+    capabilitiesCheck: check("agent_keys_capabilities_check", sql`
+      ${table.capabilities} <@ ARRAY[
+        'read:messages',
+        'read:money',
+        'read:observations_envelope',
+        'read:datasets',
+        'request:hydration'
+      ]::text[]
+    `),
+    expiresAtCheck: check("agent_keys_expires_at_check", sql`
+      ${table.expiresAt} > ${table.createdAt}
+    `),
+    requestBudgetCheck: check("agent_keys_daily_request_budget_check", sql`
+      ${table.dailyRequestBudget} >= 0
+    `),
+    rowBudgetCheck: check("agent_keys_daily_row_budget_check", sql`
+      ${table.dailyRowBudget} >= 0
+    `),
+  }),
+);
+
+// Per-key, per-UTC-day budget counter. Every write is a single
+// insert .. on conflict do update .. returning: the first request of a day has
+// no row to update, and two concurrent requests must SUM rather than race.
+export const agentKeyUsageDaily = pgTable(
+  "agent_key_usage_daily",
+  {
+    agentKeyId: bigint("agent_key_id", { mode: "number" })
+      .references(() => agentKeys.id, { onDelete: "restrict" })
+      .notNull(),
+    businessDate: date("business_date").notNull(),
+    requests: integer("requests").default(0).notNull(),
+    rowsReturned: bigint("rows_returned", { mode: "bigint" }).default(0n).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "agent_key_usage_daily_pkey",
+      columns: [table.agentKeyId, table.businessDate],
+    }),
+    requestsCheck: check("agent_key_usage_daily_requests_check", sql`${table.requests} >= 0`),
+    rowsCheck: check("agent_key_usage_daily_rows_returned_check", sql`${table.rowsReturned} >= 0`),
+  }),
+);
+
+// Append-only record of what the plane served. `requestSummary` carries BOUNDED
+// STRUCTURED FACTS ONLY (docs/error-handling.md sink allowlist): a search string
+// enters as {qSha256, qLength}, a hydration reason likewise — never verbatim.
+export const agentReadAudit = pgTable(
+  "agent_read_audit",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** Agent-key operations carry a key and no human. */
+    agentKeyId: bigint("agent_key_id", { mode: "number" })
+      .references(() => agentKeys.id, { onDelete: "restrict" }),
+    /** Owner-session operations (#9b, #13) carry a human and no key. */
+    sessionUserId: bigint("session_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
+    operation: text("operation").notNull(),
+    pageIds: bigint("page_ids", { mode: "number" }).array().default([]).notNull(),
+    /** True when the response carried verbatim fan/model text. */
+    verbatimText: boolean("verbatim_text").default(false).notNull(),
+    requestSummary: jsonb("request_summary")
+      .$type<Record<string, string | number | boolean | null>>()
+      .default({})
+      .notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // The #9b owner-session daily cap counts rows through exactly this index.
+    sessionOperationIdx: index("agent_read_audit_session_operation_idx").on(
+      table.sessionUserId,
+      table.operation,
+      table.occurredAt,
+    ),
+    principalCheck: check("agent_read_audit_principal_check", sql`
+      ${table.agentKeyId} is not null or ${table.sessionUserId} is not null
+    `),
+  }),
+);
+
+// Singleton counter bumped by the message_archive rebuild swap. A cursor minted
+// before a swap must be refused after it: the table can be renamed under a
+// reader (#134), and a resumed read would otherwise skip rows while reporting
+// "the snapshot is exhausted" — a false "I read everything".
+export const archiveGeneration = pgTable(
+  "archive_generation",
+  {
+    id: integer("id").primaryKey(),
+    generation: bigint("generation", { mode: "bigint" }).default(0n).notNull(),
+    bumpedAt: timestamp("bumped_at", { withTimezone: true }).defaultNow().notNull(),
+    reason: text("reason"),
+  },
+  (table) => ({
+    singletonCheck: check("archive_generation_singleton_check", sql`${table.id} = 1`),
   }),
 );

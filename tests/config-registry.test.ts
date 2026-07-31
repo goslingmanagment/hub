@@ -102,6 +102,15 @@ describe("config registry", () => {
     "voiceNotesGlobalDailyCharBudget",
     "voiceNotesScriptMaxChars",
     "voiceNotesMaxConcurrentSyntheses",
+    // Agent Read Plane (slice 0a): read per request / per cycle so the owner's
+    // ramp needs no restart. Every one of them rests at off/false.
+    "agentReadPlaneMode",
+    "agentObservationsEnabled",
+    "agentSearchBackend",
+    "agentHydrationMode",
+    "agentExportPolicyValue",
+    "fanslyReplayMode",
+    "retentionTieringEnabled",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",
@@ -133,7 +142,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the twenty-three live keys, the twenty-four boot keys, and nothing else", () => {
+  it("wires exactly the thirty live keys, the twenty-four boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

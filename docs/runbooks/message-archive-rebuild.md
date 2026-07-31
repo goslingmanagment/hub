@@ -86,7 +86,8 @@ that are NOT `healedHtml` deserve a look before switching; `extra` rows
    `message_archive`; moves the canonical index/constraint/sequence names to
    the live table; force-resets the `message_archive` projection watermark to
    the shadow's replay high-seq (delete + reinsert — the guarded upsert would
-   keep a higher stale watermark and silently skip events).
+   keep a higher stale watermark and silently skip events); and bumps
+   `archive_generation` (see below) in the same transaction.
 5. Resume the worker:
 
        docker compose start worker
@@ -103,6 +104,23 @@ that are NOT `healedHtml` deserve a look before switching; `extra` rows
   values only if the new table wrote nothing yet — otherwise rebuild forward
   (a fresh shadow build is cheaper than reasoning about a half-written
   watermark).
+- **MANDATORY after ANY manual rename** (the reverse rename above, or any
+  other hand-run swap that changes which physical table answers as
+  `message_archive`): bump the archive generation in the same psql
+  transaction as the rename —
+
+      update archive_generation
+         set generation = generation + 1,
+             bumped_at = now(),
+             reason = 'manual rollback rename'
+       where id = 1;
+
+  Agent read cursors carry the generation they were minted under and are
+  refused (`agent_cursor_invalid`, 400) once it moves. Skipping this bump lets
+  a reader resume a cursor against a DIFFERENT physical table: it silently
+  skips rows and still reports `snapshotExhausted: true` — a false "I read
+  everything". The `archive:rebuild-switch` path does this for you; only
+  hand-run renames need the statement.
 
 ## Interactions
 

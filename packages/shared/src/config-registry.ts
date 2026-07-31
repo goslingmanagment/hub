@@ -23,7 +23,8 @@ export type ConfigSubsystem =
   | "OFAPI"
   | "Telegram"
   | "ChatMuse"
-  | "Workboard";
+  | "Workboard"
+  | "Agent";
 
 export type ConfigKind =
   | "boolean" // on/off gate
@@ -243,6 +244,18 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   { key: "wbClosingLlmModel", envName: "WB_CLOSING_LLM_MODEL", configField: "wbClosingLlmModel", kind: "string", subsystem: "Workboard", label: "Workboard closing LLM model", default: "claude-haiku-4-5", editability: EDITABLE, runtimeApply: "none", comparable: true, costWarning: "A larger model multiplies per-call token cost." },
   { key: "wbClosingLlmDailyCapMin", envName: "WB_CLOSING_LLM_DAILY_CAP_MIN", configField: "wbClosingLlmDailyCapMin", kind: "number", subsystem: "Workboard", label: "Closing LLM daily cap (min)", default: "50", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1 },
   { key: "wbClosingLlmDailyCapMax", envName: "WB_CLOSING_LLM_DAILY_CAP_MAX", configField: "wbClosingLlmDailyCapMax", kind: "number", subsystem: "Workboard", label: "Closing LLM daily cap (max)", default: "400", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Raising the max raises the daily Anthropic spend ceiling." },
+
+  // ── Agent Read Plane ──────────────────────────────────────────────────────
+  // Slice 0a ships the schema, the vocabularies and these switches; no route
+  // reads them yet. All live-wired, all inert by default: the deploy changes
+  // nothing, and the owner ramps one switch per verification window (#70).
+  { key: "agentReadPlaneMode", envName: "AGENT_READ_PLANE_MODE", configField: "agentReadPlaneMode", kind: "string", subsystem: "Agent", label: "Agent read plane mode", default: "off", editability: EDITABLE, runtimeApply: "live", comparable: true, enumValues: ["off", "read_only", "full"], note: "off = every agent route answers 503 agent_plane_disabled; read_only = routes serve but conclusion.absenceProvable is pinned false with the read_only_mode blocker (the ramp window); full = normal. Read per request (live)." },
+  { key: "agentObservationsEnabled", envName: "AGENT_OBSERVATIONS_ENABLED", configField: "agentObservationsEnabled", kind: "boolean", subsystem: "Agent", label: "Agent observation reads", default: "false", editability: EDITABLE, runtimeApply: "live", comparable: true, note: "Own gate for the observation envelope/payload operations on top of the plane mode: these expose raw captured vendor material. Read per request (live)." },
+  { key: "agentSearchBackend", envName: "AGENT_SEARCH_BACKEND", configField: "agentSearchBackend", kind: "string", subsystem: "Agent", label: "Agent search backend", default: "fts", editability: EDITABLE, runtimeApply: "live", comparable: true, enumValues: ["off", "fts", "fts_trgm"], note: "off = message search answers 503; fts = Postgres FTS over the GIN expression that already exists on message_archive; fts_trgm additionally needs the pg_trgm extension, which is a MANUAL owner DBA step outside the migration chain — absent at runtime the plane falls back to fts and says so in a caveat. Read per request (live)." },
+  { key: "agentHydrationMode", envName: "AGENT_HYDRATION_MODE", configField: "agentHydrationMode", kind: "string", subsystem: "Agent", label: "Agent hydration mode", default: "off", editability: EDITABLE, runtimeApply: "live", comparable: true, enumValues: ["off", "request_only", "dispatch"], costWarning: "dispatch executes approved hydrations against the platforms and spends real vendor budget.", note: "off = hydration operations answer 503; request_only = requests can be filed and decided but nothing executes; dispatch = the executor drains approvals. Read per request (live)." },
+  { key: "agentExportPolicyValue", envName: "AGENT_EXPORT_POLICY_VALUE", configField: "agentExportPolicyValue", kind: "string", subsystem: "Agent", label: "Export policy value", default: "no_raw_transcript_export_endpoint_yet", editability: EDITABLE, runtimeApply: "live", comparable: true, enumValues: ["no_raw_transcript_export_endpoint_yet", "agent_read_plane_v1"], note: "The value served in exportPolicy. Widening the wire literal to this enum is a CODE deploy (clients validate successful responses against a vendored schema); only the VALUE flip is config, and only after every client has re-vendored the SDK. Flipping ahead of the fleet breaks clients in production." },
+  { key: "fanslyReplayMode", envName: "FANSLY_REPLAY_MODE", configField: "fanslyReplayMode", kind: "string", subsystem: "Fansly", label: "Fansly observation replay mode", default: "off", editability: EDITABLE, runtimeApply: "live", comparable: true, enumValues: ["off", "shadow", "on"], note: "Local replay of parse_version-0 Fansly observations into facts; costs zero vendor credits. shadow = canonicalize into a count report and write nothing; on = write. The runner refuses outright when a partition in the replay window is detached." },
+  { key: "retentionTieringEnabled", envName: "RETENTION_TIERING_ENABLED", configField: "retentionTieringEnabled", kind: "boolean", subsystem: "Core", label: "Scheduled retention tiering", default: "false", editability: EDITABLE, runtimeApply: "live", comparable: true, destructive: true, note: "Gates ONLY the scheduled 04:40 UTC tiering callback (the owner CLI tiering:run stays ungated — it is an explicit act). Default off: a detached month makes the agent read plane mint false capture floors and breaks an observation replay with the documented 23514 failure, so the window between a deploy and the owner's decision never opens. Read per cycle (live)." },
 ] as const;
 
 const DESCRIPTOR_BY_KEY = new Map(CONFIG_DESCRIPTORS.map((d) => [d.key, d]));

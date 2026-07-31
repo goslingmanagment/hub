@@ -77,8 +77,9 @@ quick-ref table up top), Git tags, and production itself.**
   gets the platform word swapped at assembly (`applyPlatformWording`) in
   STATIC sources only — runtime data (transcripts, bios) is never rewritten.
   Any prompt edit updates `prompt-manifest.json` or the drift pin fails.
-- **Migrations are forward-only**, numbered (next after 0077), applied by the
-  deploy script; never edit an applied migration.
+- **Migrations are forward-only**, numbered (next after 0115), applied by the
+  deploy script; never edit an applied migration. Take the next number by
+  listing `packages/db/migrations` at PR time, not from this line.
 - **Contracts drive everything:** edit `packages/contracts/src/routes.ts`,
   then `pnpm contracts:generate` (regenerates the SDK surface + OpenAPI).
   Client repos consume a VENDORED compiled SDK — re-vendor with

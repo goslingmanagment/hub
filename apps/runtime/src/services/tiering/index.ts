@@ -7,6 +7,7 @@ import path from "node:path";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { loadEffectiveConfig } from "../effective-config.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 
 // Kernel Stage 28: retention tiering. Aged monthly partitions of the two
@@ -581,11 +582,35 @@ export async function ensureTieringSchedule(boss: Pick<PgBoss, "schedule">) {
   await boss.schedule(TIERING_QUEUE, "40 4 * * *");
 }
 
+/**
+ * The SCHEDULED tiering run, gated on `retentionTieringEnabled` (default false).
+ *
+ * The gate lives here and not inside `runTieringCycle` on purpose: the owner CLI
+ * (`tiering:run`) is an explicit act and stays UNGATED, while the 04:40 UTC
+ * schedule must not detach a partition behind the owner's back. Detaching a month
+ * makes the agent read plane mint false capture floors and breaks an observation
+ * replay with the documented 23514 failure, so the deploy ships the schedule inert
+ * and the owner opens it deliberately.
+ *
+ * The flag is read from the EFFECTIVE config on every cycle: the boot-time
+ * `app.config` never sees a dashboard flip, so a boot-time read would make the
+ * switch a lie until the next restart. `ensureTieringSchedule` stays
+ * unconditional — the queue and its schedule exist either way, the callback simply
+ * no-ops.
+ */
 export function startTieringWorker(
   app: AppContext,
   boss: Pick<PgBoss, "work">,
 ) {
   return boss.work(TIERING_QUEUE, async () => {
+    const effective = await loadEffectiveConfig(app.db, app.config);
+    if (effective.retentionTieringEnabled !== true) {
+      app.logger.debug(
+        { queue: TIERING_QUEUE },
+        "Retention tiering disabled by config; scheduled cycle skipped",
+      );
+      return;
+    }
     const cycle = await runTieringCycle(app);
     if (cycle.tierable > 0) {
       app.logger.info(

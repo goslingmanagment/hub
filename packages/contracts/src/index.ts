@@ -7,6 +7,10 @@ export * from "./contract-hash.ts";
 // the enum, the counts and the per-operation matrices becomes a compile error
 // rather than an inconsistent response body (see the file header).
 export * from "./agent-read-registry.ts";
+// Slice 0a vocabularies: the closed capability matrix a key grant is drawn from,
+// and the dataset registry that is the ONLY bridge from a dataset name to code.
+export * from "./agent-read-capabilities.ts";
+export * from "./agent-read-datasets.ts";
 // Client-side stop-reason predicate (coach-chat spec §8): surfaced through the
 // contracts barrel — the same path that carries shared TYPES to the SDK — so
 // out-of-workspace consumers (the extension) can import it from @kernel/sdk and
