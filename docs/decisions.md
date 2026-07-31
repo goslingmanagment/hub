@@ -5696,14 +5696,20 @@ non-ramped to ramped is queued. This is the load-bearing constraint, not a
 refinement. A gated `fan_earnings` walk costs TWO Fansly calls per fan, and a
 completed walk resets its cursor to 0, so the next run is a full walk rather than
 an incremental one; on a page the size of lora-1 (697 spenders) one unwanted
-wake-up is on the order of 1400 unscheduled requests. This repo's standing rule
-is that Fansly egress must never exceed what the chatter's own session already
-produces, because a model ban is the failure mode. A "queue whatever is open
-right now" version would therefore have generated that traffic for actions that
-open nothing: narrowing the allowlist (the very action that caused this
-incident), turning a stream flag OFF, re-writing a key with its existing value
-(the override writer does not compare old and new), and each step of the
-registry's own documented "enable one page at a time" rollout.
+wake-up is on the order of 1400 unscheduled requests. The kernel is allowed to
+pull Fansly on a cadence — that is DP 1-B, and it is exactly why the cadence is
+the budget. The traffic leaves through the page's own proxy identity (Stage 26:
+every platform-bound request resolves its egress key per page, and a Fansly page
+must never reach the platform on a direct IP because a model ban is the failure
+mode), so a burst that the pull schedule never accounted for is spent against
+that identity. Note the attribution: "never exceed what the chatter's own
+browser session already does" is the EXTENSION's law, since it rides that
+session; the kernel's own constraint is per-page proxied egress at a designed
+cadence. A "queue whatever is open right now" version would have spent that
+burst on actions that open nothing: narrowing the allowlist (the very action
+that caused this incident), turning a stream flag OFF, re-writing a key with its
+existing value (the override writer does not compare old and new), and each step
+of the registry's own documented "enable one page at a time" rollout.
 
 Three further narrowings. The ramped verdict is computed with
 `resolveFanslyNewStreamState`, which is the REPORTER form of the gate — the same
@@ -5733,15 +5739,33 @@ HTTP error because a convenience follow-up failed would be strictly worse than
 waiting for the next slot, which is the pre-existing behavior anyway. The
 pre-write snapshot is wrapped the same way and degrades to "no wake-up".
 
-Two rejected alternatives and the gap they leave. Having the PLANNER notice the
-transition — persist the last gate verdict per (page, stream) and reconcile on
-each tick — was rejected as too much machinery for this incident, but it is the
-strictly more complete design, because it would cover every write path rather
-than only the HTTP one. The resulting known gap is therefore explicit: a gate
-opened through the environment plus a restart, or through any override write
-that does not go through these two endpoints, wakes nothing and still waits up
-to one slot. Separately, and as an explicit owner decision the same day, no
-watchdog alerts the owner about a long-gated stream and no warning fires when an
-allowlist is narrowed. The recurrence defense is this wake-up plus the honest
-reporting of a gated skip; the rejected guards are recorded here so the
-omissions read as decisions rather than oversights.
+Transition-awareness has one operational consequence worth writing down,
+because it is not obvious: a swallowed wake-up failure CANNOT be retried by
+saving the same value again. That second write is correctly a no-op — the gate
+did not move — so the page keeps waiting for its normal slot. To force a
+wake-up after a logged failure, toggle the stream's flag off and back on: the
+off write moves the gate to `flag_off` and the on write is then a real
+non-ramped -> ramped transition.
+
+Rejected alternatives and the gaps they leave, all in one place. Having the
+PLANNER notice the transition — persist the last gate verdict per (page,
+stream) and reconcile on each tick — was rejected as too much machinery for this
+incident, but it is the strictly more complete design, because it would cover
+every write path rather than only the HTTP one. Two gaps follow from that.
+First, a gate opened through the environment plus a restart, or through any
+override write that does not go through these two endpoints, wakes nothing and
+still waits up to one slot. Second, a known concurrency limitation, found in
+review on 2026-07-31 and ruled backlog rather than fix: the before-snapshot is
+not serialized with the config write, so two concurrent owner PATCHes on the
+same gate key without `expectedVersion` can interleave such that neither handler
+observes the transition, and the stream again waits for its normal slot. Closing
+it would mean taking the snapshot under the same lock as
+`setConfigOverridesAtomic`, widening the config repository's transaction
+boundary for a case whose worst outcome is a fallback to the behavior that
+existed before this decision.
+
+Separately, and as an explicit owner decision the same day, no watchdog alerts
+the owner about a long-gated stream and no warning fires when an allowlist is
+narrowed. The recurrence defense is this wake-up plus the honest reporting of a
+gated skip; the rejected guards are recorded here so the omissions read as
+decisions rather than oversights.

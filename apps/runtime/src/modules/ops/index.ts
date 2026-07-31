@@ -257,8 +257,11 @@ async function requestGatedStreamWakeup(
       const key = gateStateKey(page.id, gated.stream);
       if (after.states.get(key) !== "ramped") continue;
       // Already open before the write: nothing was lifted, so nothing to catch up on.
-      // A page that did not exist in the `before` snapshot is absent here and is
-      // treated as newly opened, which is the safe direction.
+      // A page created between the two snapshots is missing from `before` and so
+      // counts as newly opened and gets queued. That is the traffic-spending
+      // direction, not the safe one; it is accepted because the window is the few
+      // milliseconds inside one request, and a page that young has just been seeded
+      // with its own recovery request anyway.
       if (before.states.get(key) === "ramped") continue;
       streams.push(gated.stream);
     }
