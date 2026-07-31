@@ -5626,6 +5626,12 @@ export const routeSchemas = {
           netMills: z.number().int().nullable(),
           currency: z.string(),
           observedAt: z.string(),
+          /** First time hydration failed to find this account on the platform
+           * (fans.deleted_detected_at); null = the fan is alive. Cleared server
+           * side as soon as any sync sees a name again (fans.ts:116-136).
+           * Optional so a client vendored against an older kernel still
+           * validates the response. */
+          deletedAt: z.string().nullable().optional(),
         })),
       }),
       401: errorResponseSchema,

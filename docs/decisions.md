@@ -192,6 +192,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 188 | CI gate splits into shards | The single Quality Gate job becomes Static checks + a 3-way sharded Integration matrix + a same-named aggregator (branch protection matches the literal name); no test or harness file changes — measured 688s serial -> 234s per shard |
 | 190 | Voice launch hardening | Voice uses stateless quota refusal and heartbeated queued ownership; audio authorization moves into SQL, cost reconciliation accepts only non-negative PostgreSQL integers, and voice admission/dispatch join the existing material-time erasure fence |
 | 191 | A gated skip is not a successful sync | A ramp-gated chunk terminates through `skipPageSync` (no `succeeded_at`, no `progressed_at`, no touch of `consecutive_failures` / `last_error_*`), records `sync_runs.outcome = skipped` and resolves no incidents; the "Not updating" UX state is keyed on the recorded gate REASON, never on the `skipped` outcome (whose pre-existing producer is the lost-lease path on healthy streams), and bulk gated streams are excluded from the monitor's page/fleet rollup exactly as #166 already requires of sync-summary |
+| 193 | Deleted fans in top-spenders | `pageTopSpenders` carries `entries[].deletedAt` (`fans.deleted_detected_at`, ISO, null = alive) so the board can tell a deleted account from an unloaded name and stop re-asking Fansly for ids it can never resolve; deleted fans stay IN the ranking because their spend is in the totals, and the field is `.optional()` because the kernel deploys independently of the extension |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5777,3 +5778,36 @@ allowlist edit narrows the set of pages. Both were rejected in favour of waking
 the affected streams the moment the gate opens (its own change), so that the
 recovery path is short enough not to need an alarm. This paragraph exists so
 that the absence of a watchdog reads as a decision rather than an oversight.
+**Decision #193 (2026-07-31, `top-spenders` carries the deleted-fan marker in
+`entries[]`):** The spenders board had no way to tell "this account was deleted
+on the platform" from "the name has not loaded yet". On `lora-1`, 209 of the
+697 projection rows have neither `username` nor `displayName`, and every one of
+them carries `fans.deleted_detected_at`. The board rendered them as a bare
+numeric id with a "find chat" affordance that can never succeed, and the
+extension's name sweep re-asked Fansly for those ids on every build — Fansly
+does not return deleted accounts at all, and a negative answer is not cached,
+so the requests bought nothing but egress against the chatter's own session.
+
+`pageTopSpenders` therefore returns `entries[].deletedAt` — the ISO time of the
+FIRST detection (`fans.deleted_detected_at`), `null` when the fan is alive. The
+column is read straight through `listTopFanEarnings`; the server clears it as
+soon as any sync sees a name again, so a revived account needs no extra
+handling here.
+
+Deleted fans are deliberately NOT filtered out of the ranking. They spent real
+money, the projection totals are built from those rows, and hiding them would
+make the board's sums stop matching `fanCount`. The honest shape is "present
+and labelled", not "absent".
+
+The field rides `entries[]` rather than the existing `pageDeletedFans` route.
+That route caps at `limit <= 200` while `lora-1` already has 209 deleted fans,
+so reading it would already need paging today: every board build would pay at
+least two extra round-trips to reconstruct, client side, a join the projection
+query already has for free.
+
+`deletedAt` is `.optional()` on purpose. The kernel deploys independently of the
+extension, and the vendored SDK validates responses with the same zod schema: a
+required field would be fine here but would forbid the reverse direction, where
+a newer extension talks to an older kernel that does not emit it. Optional keeps
+both directions valid, and the extension normalizes the absent case to `null` at
+its own boundary.

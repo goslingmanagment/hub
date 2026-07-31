@@ -164,6 +164,7 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
         netMills: entry.netMills,
         currency: entry.currency,
         observedAt: entry.observedAt.toISOString(),
+        deletedAt: entry.deletedAt === null ? null : entry.deletedAt.toISOString(),
       })),
     };
   });
