@@ -143,9 +143,11 @@ export function parseSubscribersCursorState(
   }
 
   const generation = asNumber(state.generation);
-  const mode = state.mode === "active" || state.mode === "expired"
-    ? state.mode
-    : null;
+  const mode = state.mode === undefined
+    ? "active"
+    : state.mode === "active" || state.mode === "expired"
+      ? state.mode
+      : null;
   const historyBackfilledAt = typeof state.historyBackfilledAt === "string"
     ? state.historyBackfilledAt
     : null;
