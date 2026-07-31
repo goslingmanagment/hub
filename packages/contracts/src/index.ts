@@ -3,6 +3,10 @@ export * from "./authorization-policy.ts";
 export * from "./domain-event-cursor.ts";
 export * from "./sdk-runtime.ts";
 export * from "./contract-hash.ts";
+// Agent Read Plane vocabulary. Declared once and derived, so a drift between
+// the enum, the counts and the per-operation matrices becomes a compile error
+// rather than an inconsistent response body (see the file header).
+export * from "./agent-read-registry.ts";
 // Client-side stop-reason predicate (coach-chat spec §8): surfaced through the
 // contracts barrel — the same path that carries shared TYPES to the SDK — so
 // out-of-workspace consumers (the extension) can import it from @kernel/sdk and
