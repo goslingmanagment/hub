@@ -5742,6 +5742,35 @@ the ramp flags are off in the test runtime, so those pins locked in the exact
 reporting that hid the outage. Both now expect `skipped` for `fan_earnings` and
 `purchase_history`.
 
+KNOWN LIMITATION, recorded rather than fixed (owner's ruling, 2026-07-31). The
+gate guard is ONE-SIDED: the marker proves a gate, but its absence proves
+nothing. If a genuinely gated stream then loses a lease, `recordSkipped` writes
+an unmarked `skipped` run with a later `finished_at`, `gatedSkipReasonFor`
+returns null, and the stale-but-non-null `succeeded_at` lets the stream read
+"Up to date" again on the detailed monitor until the next gated run lands — up
+to 24h for `fan_earnings` and 4h for `purchase_history` at their cadences. It is
+accepted because the primary guarantee is untouched by the race: `succeeded_at`
+is still never stamped, so `top-spenders`' `source.lastSyncedAt` and both
+extension surfaces stay honest throughout, and only the monitor degrades. It
+also needs an external stall to trigger at all, since a gated chunk does no
+egress and lives milliseconds. Closing it means deriving gate state from the
+latest MARKED run within the stream's cadence rather than from the latest run
+outright — which changes what the monitor accepts as evidence, and is therefore
+its own decision rather than a tweak. Recorded here so whoever picks it up does
+not have to rediscover the shape of it.
+
+One trap for the next maintainer, in the same area. `sync-summary`'s
+`toStreamSyncUx` never populates the gate reason and synthesises `lastCompletion`
+as always-`success` from `succeeded_at`, so the "Not updating" branch is
+unreachable on the dashboard/connections path. That is harmless TODAY only
+because `gatedSkip` is confined to the two bulk streams, which `sync-summary`
+filters out of its stream list anyway. The confinement is enforced by a comment
+on `StreamChunkResult.gatedSkip` and by this entry — by no mechanical check. So
+if someone later sets `gatedSkip` on a non-bulk stream, the dashboard will go on
+printing "Up to date" over a gated feed and no test in the suite will fail.
+Extending `gatedSkip` therefore means teaching `sync-summary` about the gate in
+the same change.
+
 Considered and deliberately declined by the owner on 2026-07-31: a watchdog that
 pages the owner when a stream has been gated for N days, and a warning when an
 allowlist edit narrows the set of pages. Both were rejected in favour of waking
