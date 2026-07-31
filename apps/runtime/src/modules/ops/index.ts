@@ -9,10 +9,15 @@ import {
   getTelegramSettings,
   insertDeliveryAttempt,
   listDeliveryAttempts,
+  listFanslyPages,
   listNotificationIncidentsWithPages,
   recoverAndResolveNotificationIncident,
+  // The row-level writer, distinct from the same-named sync-control service below
+  // (which resolves a page by label and enqueues a pg-boss wakeup for a whole scope).
+  requestPageSync as requestPageSyncRows,
   setConfigOverridesAtomic,
   updateTelegramSettings,
+  type SyncStream,
 } from "@agency_hub_core/db";
 import {
   collectCostWarnings,
@@ -28,7 +33,7 @@ import { sql } from "drizzle-orm";
 
 import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
 import { buildConfigView } from "../../services/app-config-service.ts";
-import { LIVE_CONFIG_KEYS } from "../../services/effective-config.ts";
+import { LIVE_CONFIG_KEYS, loadEffectiveConfig } from "../../services/effective-config.ts";
 import { commitStagedConfigChange } from "../../services/staged-config.ts";
 import {
   closeTelegramRequestOptions,
@@ -102,11 +107,13 @@ import {
   triggerSyncBlock,
 } from "../../services/sync-blocks.ts";
 import { requestAllPagesSync, requestPageSync } from "../../services/sync-control.ts";
+import { resolveFanslyNewStreamState } from "../../services/sync/fansly-stream-gate.ts";
 import {
   getSyncMonitorRecentRequests,
   getSyncMonitorSnapshot,
 } from "../../services/sync-monitor.ts";
 import { getGoldenSignalsReport } from "../../services/golden-signals.ts";
+import type { AppContext } from "../../bootstrap.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Ops module (target §6.1): sync health, credits, incidents, config,
@@ -169,6 +176,73 @@ type IncidentSummaryRow = {
   severity: string;
   count: number | string;
 };
+
+/** The three config keys that make up the Stage 16 Fansly ramp gate. Editing any
+ *  of them can OPEN the gate for a page, which is what the wake-up below reacts to. */
+const GATE_CONFIG_KEYS = new Set([
+  "fanslyNewStreamPageAllowlist",
+  "fanslyFanEarningsSyncEnabled",
+  "fanslyPurchaseHistorySyncEnabled",
+]);
+
+/** Opening a ramp gate used to change nothing until the stream's next slot, and
+ *  fan_earnings runs once a day — so restoring an allowlist entry left the page
+ *  frozen for up to 24 more hours (manual "sync all" deliberately skips bulk
+ *  streams). Queue the now-allowed streams immediately instead. Narrow by design:
+ *  only pages the gate NOW reports as ramped, only the two gated streams, and only
+ *  on Fansly pages. Source `recovery` marks it as catch-up work, not a slot tick. */
+async function requestGatedStreamWakeup(appContext: AppContext): Promise<void> {
+  const effective = await loadEffectiveConfig(appContext.db, appContext.config);
+  // listFanslyPages is the repository's active-page listing (platform = 'fansly'
+  // and status = 'active'); a tombstoned page must never be woken.
+  const pages = await listFanslyPages(appContext.db);
+  for (const page of pages) {
+    const streams: SyncStream[] = [];
+    // Same helper the executor's skip ladder uses, so "ramped" here can never mean
+    // something different from what the executor would actually do.
+    const earnings = resolveFanslyNewStreamState({
+      platform: page.platform,
+      pageLabel: page.label,
+      streamEnabled: effective.fanslyFanEarningsSyncEnabled === true,
+      allowlistCsv: effective.fanslyNewStreamPageAllowlist,
+    });
+    if (earnings === "ramped") streams.push("fan_earnings");
+    const purchases = resolveFanslyNewStreamState({
+      platform: page.platform,
+      pageLabel: page.label,
+      streamEnabled: effective.fanslyPurchaseHistorySyncEnabled === true,
+      allowlistCsv: effective.fanslyNewStreamPageAllowlist,
+    });
+    if (purchases === "ramped") streams.push("purchase_history");
+    if (streams.length === 0) continue;
+    await requestPageSyncRows(appContext.db, {
+      pageId: page.id,
+      streams,
+      source: "recovery",
+    });
+  }
+}
+
+/** Fire-and-log wrapper for the config handlers. The override is already applied
+ *  AND audited by the time this runs, so a failure here must never turn a
+ *  successful PATCH/DELETE into an error: the wake-up is a convenience that saves
+ *  a day of waiting, not part of the write. */
+async function wakeGatedStreamsAfterConfigChange(
+  appContext: AppContext,
+  changedKeys: readonly string[],
+): Promise<void> {
+  if (!changedKeys.some((key) => GATE_CONFIG_KEYS.has(key))) {
+    return;
+  }
+  try {
+    await requestGatedStreamWakeup(appContext);
+  } catch (error) {
+    appContext.logger.warn(
+      { err: error, changedKeys },
+      "ramp-gate stream wake-up failed after a config change; the config change itself stands",
+    );
+  }
+}
 
 export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext, boss } = ctx;
@@ -1172,6 +1246,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           note: auditNote ?? null,
         },
       });
+      // Lifting a ramp gate (allowlist widened, stream flag flipped on) must not wait
+      // for the stream's next slot — fan_earnings ticks once a day. Never throws.
+      await wakeGatedStreamsAfterConfigChange(appContext, results.map((result) => result.key));
       // The live PATCH only ever sends upserts (never a clear), so every result carries a
       // non-null value/version — narrow the atomic writer's (now nullable) shape back.
       return {
@@ -1217,6 +1294,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       eventType: "admin.config_clear",
       metadata: { key, note: request.query.note ?? null },
     });
+    // Clearing the allowlist override is exactly the "restore every page" case, so the
+    // DELETE path wakes the streams too. Never throws.
+    await wakeGatedStreamsAfterConfigChange(appContext, [key]);
     return { ok: true as const, key };
   });
 
