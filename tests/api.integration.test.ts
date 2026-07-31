@@ -4851,7 +4851,7 @@ describe("api integration", () => {
   });
 
   it("[sync-critical] refuses cross-page spender scope for an owner DEVICE TOKEN", async (context) => {
-    if (!testDb || !server) {
+    if (!testDb || !server || !fixture) {
       context.skip();
       return;
     }
@@ -4887,6 +4887,37 @@ describe("api integration", () => {
       headers: { authorization: `Bearer ${ownerDevice.token}` },
     });
     expect(allowed.statusCode).toBe(200);
+
+    // ...and the BODY must be page-scoped too. Refusing the agency/model shapes
+    // is not sufficient: the page branch used to widen the lifetime "platform"
+    // rollup to every page an owner can see, so a page-scoped request still
+    // answered with cross-page money. Asserting only the status code is exactly
+    // how that would have shipped.
+    //
+    // The sibling test above pins the SESSION view of this same fan on this
+    // same page: scope 7000, platform 10000 — the fan spent 3000 more on
+    // another page. A bearer must see the platform rollup clamped to 7000.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
+    const bearerView = await server.inject({
+      method: "GET",
+      url: "/api/v2/spenders?scope=page&pageLabel=lana&platform=fansly&period=30d&limit=10&offset=0",
+      headers: { authorization: `Bearer ${ownerDevice.token}` },
+    });
+    vi.useRealTimers();
+    expect(bearerView.statusCode).toBe(200);
+    expect(bearerView.json().items[0]).toMatchObject({
+      fan: { platformUserId: "fan-001" },
+      metrics: {
+        lifetime: {
+          scopeGrossAmountMills: 7000,
+          // Clamped to the requested page. Was 10000 before the fix — the
+          // other page's money leaking through a page-scoped request.
+          platformGrossAmountMills: 7000,
+          platformCreatorNetAmountMills: 7000,
+        },
+      },
+    });
   });
 
   it("lists v2 spenders with page-scope lifetime totals and visible-platform lifetime totals", async (context) => {
