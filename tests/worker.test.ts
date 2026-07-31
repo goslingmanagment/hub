@@ -23,6 +23,9 @@ const queueMocks = vi.hoisted(() => ({
 const captureTransportMocks = vi.hoisted(() => ({
   recoverExpiredOfapiInteractiveResponses: vi.fn(),
 }));
+const fanslySchedulingMocks = vi.hoisted(() => ({
+  reconcileFanslyBulkStreamScheduling: vi.fn(),
+}));
 
 vi.mock("@agency_hub_core/db", async () => {
   const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
@@ -51,6 +54,10 @@ vi.mock("../apps/runtime/src/services/ofapi-capture-transport.ts", async () => {
       captureTransportMocks.recoverExpiredOfapiInteractiveResponses,
   };
 });
+vi.mock("../apps/runtime/src/services/sync/fansly-stream-scheduling.ts", () => ({
+  reconcileFanslyBulkStreamScheduling:
+    fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling,
+}));
 
 import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
 
@@ -66,6 +73,7 @@ describe("sync planner", () => {
     dbMocks.listRunnableOfapiCapturePages.mockReset();
     dbMocks.findPageById.mockReset();
     captureTransportMocks.recoverExpiredOfapiInteractiveResponses.mockReset();
+    fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling.mockReset();
     queueMocks.sendSyncPageWakeup.mockReset();
     dbMocks.closeInactiveSyncRuns.mockResolvedValue({
       totalCount: 0,
@@ -86,6 +94,11 @@ describe("sync planner", () => {
       raced: 0,
       unavailable: 0,
       errors: 0,
+    });
+    fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling.mockResolvedValue({
+      paused: 0,
+      resumed: 0,
+      recoveryGenerations: 0,
     });
   });
 
@@ -127,6 +140,14 @@ describe("sync planner", () => {
     dbMocks.ensurePageSyncStates.mockImplementation(async () => {
       order.push("ensurePageSyncStates");
     });
+    fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling.mockImplementation(async () => {
+      order.push("reconcileFanslyBulkStreamScheduling");
+      return {
+        paused: 0,
+        resumed: 0,
+        recoveryGenerations: 0,
+      };
+    });
     dbMocks.scheduleDuePageSync.mockImplementation(async () => {
       order.push("scheduleDuePageSync");
     });
@@ -150,6 +171,7 @@ describe("sync planner", () => {
     expect(order).toEqual([
       "cleanup",
       "ensurePageSyncStates",
+      "reconcileFanslyBulkStreamScheduling",
       "scheduleDuePageSync",
     ]);
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenNthCalledWith(1, boss, {

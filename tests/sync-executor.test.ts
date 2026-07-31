@@ -238,6 +238,83 @@ describe("sync executor", () => {
     });
   });
 
+  it("settles a gated no-op as skipped without claiming data success", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "fan_earnings" as const,
+      progress: {
+        pendingTargets: 17,
+        previousCounter: 4,
+      },
+      progressedAt: new Date("2026-03-13T12:00:00.000Z"),
+      succeededAt: new Date("2026-03-13T11:00:00.000Z"),
+    });
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: true,
+      yieldReason: null,
+      gatedSkip: "not_allowlisted",
+      stats: { skipped: "not_allowlisted" },
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(result).toMatchObject({ kind: "skipped", stream: "fan_earnings" });
+    expect(dbMocks.skipPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "fan_earnings",
+      progress: { skipped: "not_allowlisted" },
+    }));
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
+      "skipped",
+      "not_allowlisted",
+      expect.objectContaining({
+        skipped: "not_allowlisted",
+        gatedSkip: "not_allowlisted",
+      }),
+    );
+    expect(notificationMocks.resolveSyncChunkRecoveryIncidents).not.toHaveBeenCalled();
+  });
+
+  it("replaces stale progress with the current chunk snapshot after real work", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "purchase_history" as const,
+      progress: {
+        skipped: "not_allowlisted",
+        pendingTargets: 17,
+      },
+    });
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: true,
+      yieldReason: null,
+      stats: {
+        targetsFetched: 2,
+        walkCompleted: true,
+      },
+    });
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    expect(result).toMatchObject({ kind: "success", stream: "purchase_history" });
+    expect(dbMocks.completePageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      progress: {
+        targetsFetched: 2,
+        walkCompleted: true,
+      },
+    }));
+    expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledTimes(1);
+  });
+
   it("atomically completes the parent before enqueueing one fixed-key continuation", async () => {
     const { app, client } = createQueueHandoffApp();
     const boss = {

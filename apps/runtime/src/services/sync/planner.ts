@@ -20,6 +20,7 @@ import { pageSyncDependencyInput } from "./dependencies.ts";
 import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
 import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
 import { pauseDisabledOnlyFansTopSpendersForAllPages } from "./onlyfans-top-spenders.ts";
+import { reconcileFanslyBulkStreamScheduling } from "./fansly-stream-scheduling.ts";
 
 const INACTIVE_SYNC_RUN_THRESHOLD_MS = 90 * 1000;
 const INACTIVE_SYNC_RUN_ERROR_SUMMARY = "Sync run auto-closed after inactivity";
@@ -46,6 +47,13 @@ export async function runSyncPlannerCycle(
 
   const dependencyInput = pageSyncDependencyInput(app);
   await ensurePageSyncStates(app.db, { now, ...dependencyInput });
+  const fanslyBulkGate = await reconcileFanslyBulkStreamScheduling(app, now);
+  if (fanslyBulkGate.paused > 0 || fanslyBulkGate.resumed > 0) {
+    app.logger.info({
+      ...fanslyBulkGate,
+      reconciledAt: now,
+    }, "Reconciled Fansly bulk-stream rollout gates");
+  }
   const retiredOnlyFansDmRows = await retireLegacyOnlyFansDmMessages(app.db, now);
   if (retiredOnlyFansDmRows > 0) {
     app.logger.warn({

@@ -15,6 +15,7 @@ import {
   listPageDmConversationsByPlatformConversationIds,
   listFanslyPurchaseHistoryCaptures,
   listFanslyDmRawPayloadsAfterId,
+  listFanslyMessagePurchaseTargetsAfterId,
   markPageDmConversationsInvisibleByGeneration,
   maxPageDmThreadGeneration,
   maxPageFollowGeneration,
@@ -29,6 +30,7 @@ import {
   selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
   updatePageSyncTimestampCache,
+  upsertArchivedPageSubscriptions,
   upsertPageTopSpenders,
   listPageFanNativeIds,
   upsertCheckpoint,
@@ -132,14 +134,16 @@ import {
 } from "./ofapi-fan-identities.ts";
 import { fanslyNewStreamAllowed } from "./fansly-stream-gate.ts";
 import {
+  assertFanslyPurchaseHistoryTargetKindsConsistent,
   classifyFanslyPurchaseHistoryCapture,
   classifyFanslyPurchaseHistoryCaptures,
   extractFanslyPurchaseHistoryTargets,
+  extractFanslyPurchaseHistoryTargetsFromTransactions,
   FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
   fanslyPurchaseHistoryTargetKey,
   parseFanslyPurchaseHistoryCursorState,
   type FanslyPurchaseHistoryCaptureClassification,
-  type FanslyPurchaseHistoryCursorState,
+  type FanslyPurchaseHistoryCursorStateV3,
 } from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
@@ -168,6 +172,8 @@ export type ExecutorRequestContext = {
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
+const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
+const PURCHASE_HISTORY_MAX_TRANSACTION_SCAN_BATCHES_PER_CHUNK = 4;
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function purchaseHistoryCaptureBlockError(
@@ -1643,7 +1649,11 @@ export async function fanslySubscribersChunk(
   await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));
 
   const existingState = parseSubscribersCursorState(checkpoint?.state, input.streamState.requestSeq);
-  const previousGeneration = asNumber(asRecord(checkpoint?.state)?.generation) ?? 0;
+  const previousCheckpointState = asRecord(checkpoint?.state);
+  const previousGeneration = asNumber(previousCheckpointState?.generation) ?? 0;
+  const previousHistoryBackfilledAt = typeof previousCheckpointState?.historyBackfilledAt === "string"
+    ? previousCheckpointState.historyBackfilledAt
+    : null;
   let state: SubscribersCursorState;
   if (existingState) {
     state = existingState;
@@ -1655,6 +1665,8 @@ export async function fanslySubscribersChunk(
     state = {
       revision: input.streamState.requestSeq,
       generation: Math.max(previousGeneration, storedGeneration) + 1,
+      mode: "active",
+      historyBackfilledAt: previousHistoryBackfilledAt,
       offset: 0,
       observedCount: 0,
       pageCount: 0,
@@ -1669,11 +1681,14 @@ export async function fanslySubscribersChunk(
 
   let processedThisChunk = 0;
 
-  while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
+  // A non-empty subscribers page is followed by one batched account lookup.
+  // Reserve both calls so a chunk never starts a page it cannot hydrate.
+  while (input.budget.hasRequestCapacity(2) && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
+    const status = state.mode === "active" ? "3,4" : "5";
     const page = await app.adapter.getSubscribersPage(
       requestContext,
-      { limit: 100, offset: state.offset, status: "3,4" },
+      { limit: 100, offset: state.offset, status },
     );
     state = {
       ...state,
@@ -1685,7 +1700,7 @@ export async function fanslySubscribersChunk(
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
       endpoint: "subscribers",
-      requestParams: { offset: state.offset, limit: 100, status: "3,4" },
+      requestParams: { offset: state.offset, limit: 100, status },
       responsePayload: page.raw,
       mapperVersion: FANSLY_MAPPER_VERSION,
       payloadKind: "mapping_critical",
@@ -1695,7 +1710,7 @@ export async function fanslySubscribersChunk(
       platform: "fansly",
     });
 
-    if (state.offset === 0 && page.items.length === 0) {
+    if (state.mode === "active" && state.offset === 0 && page.items.length === 0) {
       const currentSubscribers = await getCurrentSubscribers(app.db, input.pageContext.page.id);
       if (currentSubscribers.rows.length > 0) {
         await input.telemetry.addAnomaly({
@@ -1716,7 +1731,7 @@ export async function fanslySubscribersChunk(
       telemetry: input.telemetry,
       capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
     });
-    const nextState = page.done
+    const nextPageState = page.done
       ? state
       : {
         ...state,
@@ -1733,10 +1748,24 @@ export async function fanslySubscribersChunk(
           providerReportedTotal: state.providerReportedTotal,
           observedCount: finalObservedCount,
           pageCount: state.pageCount,
+          mode: state.mode,
         },
       });
       throw new Error("Subscriber sync returned a partial result; refusing destructive finalization");
     }
+
+    const shouldBackfillHistory =
+      state.mode === "active" &&
+      page.done &&
+      state.historyBackfilledAt === null;
+    const historyState: SubscribersCursorState = {
+      ...state,
+      mode: "expired",
+      offset: 0,
+      observedCount: 0,
+      pageCount: 0,
+      providerReportedTotal: null,
+    };
 
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
       const fanMap = await upsertHydratedFansForPage(dbTx, {
@@ -1779,24 +1808,61 @@ export async function fanslySubscribersChunk(
           endsAt,
           lastSeenGeneration: state.generation,
         });
-        fanPageInputs.push({
-          fanId,
-          platformAccountId: input.pageContext.page.id,
-          isSubscriber: true,
-          subscriberSince: sourceCreatedAt,
-          subscriptionExpiresAt: endsAt,
-          autoRenew,
-        });
+        if (state.mode === "active") {
+          fanPageInputs.push({
+            fanId,
+            platformAccountId: input.pageContext.page.id,
+            isSubscriber: true,
+            subscriberSince: sourceCreatedAt,
+            subscriptionExpiresAt: endsAt,
+            autoRenew,
+          });
+        }
       }
 
-      if (page.done) {
+      if (state.mode === "active") {
         await upsertPageSubscriptions(dbTx, subscriptionInputs);
         await upsertFanPages(dbTx, fanPageInputs);
+      } else {
+        await upsertArchivedPageSubscriptions(dbTx, subscriptionInputs);
+      }
+
+      if (state.mode === "active" && page.done) {
         await deactivatePageSubscriptionsByGeneration(dbTx, {
           platformAccountId: input.pageContext.page.id,
           generation: state.generation,
         });
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
+        await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
+        if (shouldBackfillHistory) {
+          return {
+            kind: "progress" as const,
+            nextState: historyState,
+            checkpoint: await upsertCheckpointProgress(dbTx, {
+              platformAccountId: input.pageContext.page.id,
+              stream: "subscribers",
+              state: historyState,
+            }),
+            processedThisPage: subscriptionInputs.length,
+          };
+        }
+        return {
+          kind: "complete" as const,
+          checkpoint: await upsertCheckpoint(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "subscribers",
+            state: {
+              ...state,
+              observedCount: finalObservedCount,
+            },
+            lastSuccessfulRunId: input.syncRunId,
+          }),
+          processedThisPage: subscriptionInputs.length,
+        };
+      }
+
+      if (state.mode === "expired" && page.done) {
+        const historyBackfilledAt = new Date().toISOString();
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
         return {
           kind: "complete" as const,
@@ -1806,7 +1872,7 @@ export async function fanslySubscribersChunk(
             state: {
               ...state,
               observedCount: finalObservedCount,
-              snapshotRestartCount: 0,
+              historyBackfilledAt,
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -1814,14 +1880,13 @@ export async function fanslySubscribersChunk(
         };
       }
 
-      await upsertPageSubscriptions(dbTx, subscriptionInputs);
-      await upsertFanPages(dbTx, fanPageInputs);
       return {
         kind: "progress" as const,
+        nextState: nextPageState,
         checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "subscribers",
-          state: nextState,
+          state: nextPageState,
         }),
         processedThisPage: subscriptionInputs.length,
       };
@@ -1835,6 +1900,7 @@ export async function fanslySubscribersChunk(
         yieldReason: null,
         stats: {
           generation: state.generation,
+          mode: state.mode,
           pageCount: state.pageCount,
           processedThisChunk,
           providerReportedTotal: state.providerReportedTotal,
@@ -1842,15 +1908,16 @@ export async function fanslySubscribersChunk(
       } satisfies StreamChunkResult;
     }
 
-    state = nextState;
+    state = pageWrite.nextState;
     await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(pageWrite.checkpoint));
 
-    if (input.budget.shouldYield()) {
+    if (!input.budget.hasRequestCapacity(2) || !input.budget.hasWallClockCapacity()) {
       return {
         satisfied: false,
-        yieldReason: input.budget.resolveYieldReason(),
+        yieldReason: input.budget.resolveYieldReason(2),
         stats: {
           generation: state.generation,
+          mode: state.mode,
           offset: state.offset,
           pageCount: state.pageCount,
           processedThisChunk,
@@ -1861,9 +1928,10 @@ export async function fanslySubscribersChunk(
 
   return {
     satisfied: false,
-    yieldReason: input.budget.resolveYieldReason(),
+    yieldReason: input.budget.resolveYieldReason(2),
     stats: {
       generation: state.generation,
+      mode: state.mode,
       offset: state.offset,
       pageCount: state.pageCount,
       processedThisChunk,
@@ -3913,13 +3981,16 @@ export async function executePurchaseHistoryChunk(
 
   // Fansly requires a concrete accountMediaId/accountMediaBundleId. accountIds
   // is only an optional buyer filter, so the old per-fan walk could never be
-  // valid. Captured /message pages are the durable source of PPV media ids;
-  // their raw-row keyset is the incremental cursor and target-specific
-  // purchase_history captures are the durable dedupe set.
+  // valid. Captured message-purchase transactions are the primary durable
+  // discovery source; captured /message pages remain a complementary source
+  // for PPV media observed before the matching transaction projection. Both
+  // use local keysets, while target-specific purchase_history captures are the
+  // durable dedupe set.
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "purchase_history");
-  let state: FanslyPurchaseHistoryCursorState =
+  let state: FanslyPurchaseHistoryCursorStateV3 =
     parseFanslyPurchaseHistoryCursorState(checkpoint?.state) ?? {
-      version: 2,
+      version: 3,
+      transactionCursorId: 0,
       rawPayloadCursorId: 0,
       pendingTargets: [],
     };
@@ -3963,6 +4034,10 @@ export async function executePurchaseHistoryChunk(
     throw purchaseHistoryCaptureBlockError(blockedCapture);
   }
 
+  let transactionRowsScanned = 0;
+  let transactionScanBatches = 0;
+  let transactionTargetsDiscovered = 0;
+  let transactionSourceExhausted = false;
   let scannedRawPages = 0;
   let scanBatches = 0;
   let targetsFetched = 0;
@@ -3972,80 +4047,164 @@ export async function executePurchaseHistoryChunk(
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
     if (state.pendingTargets.length === 0) {
-      if (scanBatches >= PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK) {
-        return {
-          satisfied: false,
-          yieldReason: null,
-          stats: {
-            rawPayloadCursorId: state.rawPayloadCursorId,
-            scannedRawPages,
-            scanBatches,
-            targetsFetched,
-            targetsSkipped,
-            orderRowsCaptured,
-          },
-        };
+      if (!transactionSourceExhausted) {
+        if (
+          transactionScanBatches >=
+            PURCHASE_HISTORY_MAX_TRANSACTION_SCAN_BATCHES_PER_CHUNK
+        ) {
+          return {
+            satisfied: false,
+            yieldReason: null,
+            stats: {
+              transactionCursorId: state.transactionCursorId,
+              transactionRowsScanned,
+              transactionScanBatches,
+              transactionTargetsDiscovered,
+              rawPayloadCursorId: state.rawPayloadCursorId,
+              scannedRawPages,
+              scanBatches,
+              targetsFetched,
+              targetsSkipped,
+              orderRowsCaptured,
+            },
+          };
+        }
+
+        const transactionRows = await listFanslyMessagePurchaseTargetsAfterId(app.db, {
+          pageId: input.pageContext.page.id,
+          afterId: state.transactionCursorId,
+          limit: PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE,
+        });
+        transactionScanBatches += 1;
+        transactionRowsScanned += transactionRows.length;
+        if (transactionRows.length === 0) {
+          transactionSourceExhausted = true;
+        } else {
+          const transactionTargets = extractFanslyPurchaseHistoryTargetsFromTransactions(
+            transactionRows,
+          );
+          assertFanslyPurchaseHistoryTargetKindsConsistent(
+            transactionTargets,
+            capturedTargetKeys,
+          );
+          const discovered = transactionTargets.filter((target) =>
+            !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
+            !capturedContentIds.has(target.contentId)
+          );
+          transactionTargetsDiscovered += discovered.length;
+          state = {
+            ...state,
+            version: 3,
+            transactionCursorId: transactionRows.at(-1)!.id,
+            pendingTargets: discovered,
+          };
+          // Persist discovery BEFORE egress: a crash can only replay the safe
+          // target GET, never advance the transaction cursor past lost work.
+          const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "purchase_history",
+            state,
+          });
+          await input.telemetry.recordCheckpointAdvanced(
+            "purchase_history",
+            summarizeCheckpoint(progressCheckpoint),
+          );
+          transactionSourceExhausted =
+            transactionRows.length < PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE;
+        }
+
+        if (state.pendingTargets.length === 0 && !transactionSourceExhausted) {
+          continue;
+        }
       }
 
-      const rawPages = await listFanslyDmRawPayloadsAfterId(app.db, {
-        pageId: input.pageContext.page.id,
-        afterId: state.rawPayloadCursorId,
-        limit: PURCHASE_HISTORY_RAW_BATCH_SIZE,
-      });
-      scanBatches += 1;
-      scannedRawPages += rawPages.length;
-      if (rawPages.length === 0) {
-        await upsertCheckpoint(app.db, {
+      if (state.pendingTargets.length === 0) {
+        if (scanBatches >= PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK) {
+          return {
+            satisfied: false,
+            yieldReason: null,
+            stats: {
+              transactionCursorId: state.transactionCursorId,
+              transactionRowsScanned,
+              transactionScanBatches,
+              transactionTargetsDiscovered,
+              rawPayloadCursorId: state.rawPayloadCursorId,
+              scannedRawPages,
+              scanBatches,
+              targetsFetched,
+              targetsSkipped,
+              orderRowsCaptured,
+            },
+          };
+        }
+
+        const rawPages = await listFanslyDmRawPayloadsAfterId(app.db, {
+          pageId: input.pageContext.page.id,
+          afterId: state.rawPayloadCursorId,
+          limit: PURCHASE_HISTORY_RAW_BATCH_SIZE,
+        });
+        scanBatches += 1;
+        scannedRawPages += rawPages.length;
+        if (rawPages.length === 0) {
+          await upsertCheckpoint(app.db, {
+            platformAccountId: input.pageContext.page.id,
+            stream: "purchase_history",
+            cursorTimestamp: new Date(),
+            state: {
+              ...state,
+              pendingTargets: [],
+              completedAt: new Date().toISOString(),
+            },
+            lastSuccessfulRunId: input.syncRunId,
+          });
+          return {
+            satisfied: true,
+            yieldReason: null,
+            stats: {
+              transactionCursorId: state.transactionCursorId,
+              transactionRowsScanned,
+              transactionScanBatches,
+              transactionTargetsDiscovered,
+              rawPayloadCursorId: state.rawPayloadCursorId,
+              pendingTargets: 0,
+              scannedRawPages,
+              scanBatches,
+              targetsFetched,
+              targetsSkipped,
+              orderRowsCaptured,
+              walkCompleted: true,
+            },
+          };
+        }
+
+        const rawTargets = extractFanslyPurchaseHistoryTargets(
+          rawPages.map((row) => row.responsePayload),
+        );
+        const discovered = rawTargets.filter((target) =>
+          !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
+          !capturedContentIds.has(target.contentId)
+        );
+        state = {
+          ...state,
+          version: 3,
+          rawPayloadCursorId: rawPages.at(-1)!.id,
+          pendingTargets: discovered,
+        };
+        // Advance discovery and persist the whole pending batch BEFORE egress.
+        // A worker crash can therefore only replay a safe GET, never lose a
+        // discovered media target.
+        const progressCheckpoint = await upsertCheckpointProgress(app.db, {
           platformAccountId: input.pageContext.page.id,
           stream: "purchase_history",
-          cursorTimestamp: new Date(),
-          state: {
-            ...state,
-            pendingTargets: [],
-            completedAt: new Date().toISOString(),
-          },
-          lastSuccessfulRunId: input.syncRunId,
+          state,
         });
-        return {
-          satisfied: true,
-          yieldReason: null,
-          stats: {
-            rawPayloadCursorId: state.rawPayloadCursorId,
-            scannedRawPages,
-            scanBatches,
-            targetsFetched,
-            targetsSkipped,
-            orderRowsCaptured,
-            walkCompleted: true,
-          },
-        };
-      }
-
-      const discovered = extractFanslyPurchaseHistoryTargets(
-        rawPages.map((row) => row.responsePayload),
-      ).filter((target) =>
-        !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
-        !capturedContentIds.has(target.contentId)
-      );
-      state = {
-        version: 2,
-        rawPayloadCursorId: rawPages.at(-1)!.id,
-        pendingTargets: discovered,
-      };
-      // Advance discovery and persist the whole pending batch BEFORE egress.
-      // A worker crash can therefore only replay a safe GET, never lose a
-      // discovered media target.
-      const progressCheckpoint = await upsertCheckpointProgress(app.db, {
-        platformAccountId: input.pageContext.page.id,
-        stream: "purchase_history",
-        state,
-      });
-      await input.telemetry.recordCheckpointAdvanced(
-        "purchase_history",
-        summarizeCheckpoint(progressCheckpoint),
-      );
-      if (state.pendingTargets.length === 0) {
-        continue;
+        await input.telemetry.recordCheckpointAdvanced(
+          "purchase_history",
+          summarizeCheckpoint(progressCheckpoint),
+        );
+        if (state.pendingTargets.length === 0) {
+          continue;
+        }
       }
     }
 
@@ -4168,6 +4327,10 @@ export async function executePurchaseHistoryChunk(
     satisfied: false,
     yieldReason: input.budget.resolveYieldReason(),
     stats: {
+      transactionCursorId: state.transactionCursorId,
+      transactionRowsScanned,
+      transactionScanBatches,
+      transactionTargetsDiscovered,
       rawPayloadCursorId: state.rawPayloadCursorId,
       pendingTargets: state.pendingTargets.length,
       scannedRawPages,

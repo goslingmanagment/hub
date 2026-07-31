@@ -1,6 +1,8 @@
 type SubscribersCursorState = {
   revision: number;
   generation: number;
+  mode: "active" | "expired";
+  historyBackfilledAt: string | null;
   offset: number;
   observedCount: number;
   pageCount: number;
@@ -141,12 +143,21 @@ export function parseSubscribersCursorState(
   }
 
   const generation = asNumber(state.generation);
+  const mode = state.mode === undefined
+    ? "active"
+    : state.mode === "active" || state.mode === "expired"
+      ? state.mode
+      : null;
+  const historyBackfilledAt = typeof state.historyBackfilledAt === "string"
+    ? state.historyBackfilledAt
+    : null;
   const offset = asNumber(state.offset);
   const observedCount = asNumber(state.observedCount) ?? offset;
   const pageCount = asNumber(state.pageCount);
   const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
   if (
     generation === null ||
+    mode === null ||
     offset === null ||
     observedCount === null ||
     pageCount === null ||
@@ -158,6 +169,8 @@ export function parseSubscribersCursorState(
   return {
     revision: expectedRevision,
     generation,
+    mode,
+    historyBackfilledAt,
     offset,
     observedCount,
     pageCount,

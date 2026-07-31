@@ -2,6 +2,7 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import {
   createFanNote,
   findPlatformFan,
+  getCheckpoint,
   getFanEarningsSnapshotMeta,
   getPageSyncState,
   listFanPageContexts,
@@ -131,11 +132,12 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       throw new ForbiddenError("Page access denied");
     }
     const { window, limit } = request.query;
-    const [meta, entries, effective, syncState] = await Promise.all([
+    const [meta, entries, effective, syncState, syncCheckpoint] = await Promise.all([
       getFanEarningsSnapshotMeta(appContext.db, { accountId: page.id, window }),
       listTopFanEarnings(appContext.db, { accountId: page.id, window, limit }),
       loadEffectiveConfig(appContext.db, appContext.config),
       getPageSyncState(appContext.db, page.id, "fan_earnings"),
+      getCheckpoint(appContext.db, page.id, "fan_earnings"),
     ]);
     // W8.1 (A12/A20, decision #133): `builtAt:null / entries:[]` used to be
     // indistinguishable from "no spenders" — the source block says WHY the
@@ -153,7 +155,9 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       fanCount: meta.fanCount,
       source: {
         streamState,
-        lastSyncedAt: syncState?.succeededAt?.toISOString() ?? null,
+        // Gate no-ops settle a durable request but do not refresh the data.
+        // Cursor success only advances after a real fan-earnings capture.
+        lastSyncedAt: syncCheckpoint?.cursorLastSucceededAt?.toISOString() ?? null,
         consecutiveFailures: syncState?.consecutiveFailures ?? null,
       },
       entries: entries.map((entry) => ({

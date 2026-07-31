@@ -194,6 +194,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 191 | A gated skip is not a successful sync | A ramp-gated chunk terminates through `skipPageSync` (no `succeeded_at`, no `progressed_at`, no touch of `consecutive_failures` / `last_error_*`), records `sync_runs.outcome = skipped` and resolves no incidents; the "Not updating" UX state is keyed on the recorded gate REASON, never on the `skipped` outcome (whose pre-existing producer is the lost-lease path on healthy streams), and bulk gated streams are excluded from the monitor's page/fleet rollup exactly as #166 already requires of sync-summary |
 | 192 | Ramp-gate wake-up | An admin config write that OPENS a Fansly ramp gate queues `fan_earnings`/`purchase_history` (source `recovery`) for the affected pages, dispatched on the planner's next minutely tick; the gate is read before and after the write so only non-ramped -> ramped transitions queue anything (a needless walk is ~1400 Fansly calls), and a wake-up failure is logged and swallowed instead of failing the config write |
 | 193 | Deleted fans in top-spenders | `pageTopSpenders` carries `entries[].deletedAt` (`fans.deleted_detected_at`, ISO, null = alive) so the board can tell a deleted account from an unloaded name and stop re-asking Fansly for ids it can never resolve; deleted fans stay IN the ranking because their spend is in the totals, and the field is `.optional()` because the kernel deploys independently of the extension |
+| 194 | Fansly transaction-data correctness | Subscribers add one archive-only expired-history bootstrap; live bulk-stream gates become durable pause/resume state and skipped runs stop claiming data success; PPV target discovery adds a transaction keyset while retaining the existing media-scoped capture contract |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5913,3 +5914,50 @@ required field would be fine here but would forbid the reverse direction, where
 a newer extension talks to an older kernel that does not emit it. Optional keeps
 both directions valid, and the extension normalizes the absent case to `null` at
 its own boundary.
+**Decision #194 (2026-07-31, Fansly transaction-data correctness uses
+authoritative snapshots, honest gates and two target sources):** A live
+cross-check against `lora-1` established three separate contracts rather than
+one generic backfill problem.
+
+1. The active subscriber snapshot was correct, but `/subscribers?status=3,4`
+   cannot recover the expired archive exposed by Fansly. Every hourly run still
+   finalizes that active generation first. A page with no completed history
+   marker then performs one checkpointed `status=5` pass, captures the raw
+   responses, hydrates the fans and inserts historical subscriptions with
+   `is_current=false`. Its conflict update is archive-only: an expired response
+   may update an already inactive row but can never turn an active row off.
+   That refresh also preserves the inactive row's original `last_seen_at`,
+   because the rollup uses it as the factual retirement boundary.
+   Future expiry is retained by the ordinary active-generation retirement, so
+   the historical pass is not repeated every hour. This adds one bounded
+   subscriber-page plus account-lookup walk per page, not permanent polling.
+
+2. `fan_earnings` and `purchase_history` rollout skips are not data success.
+   The minutely planner materializes the live flag and allowlist into durable
+   `feature_gate` pauses. Reopening a gate creates at most one recovery
+   generation through the existing page-sync state and fixed page wakeup; it
+   never dispatches directly from config handling. A raced in-flight skip
+   consumes its leased generation but preserves `succeeded_at`,
+   `progressed_at`, retry/failure metadata and recovery incidents. Chunk
+   progress is a replacement snapshot, not a merge with stale keys.
+   Ownership is equally narrow: a later operator pause replaces the gate
+   marker, while a page-wide auth pause leaves already parked gate/operator
+   rows untouched, so neither recovery path can release the other's hold.
+   Reader-facing fan-earnings freshness comes from the successful cursor,
+   which advances only after real capture, rather than from task settlement.
+
+3. Decision #165 remains media-scoped, but captured DM pages are no longer the
+   only discovery source. Fansly message-purchase transaction types
+   `2010/2110` map their non-empty correlation id to `accountMediaId`, while
+   `2016/2116` map it to `accountMediaBundleId`. A v3 checkpoint adds a
+   transaction-id keyset ahead of the existing DM-raw keyset; v2 checkpoints
+   migrate on read. Discovered content still travels through the same bounded
+   `/media/orderhistory` request, raw capture, fail-closed shape classifier and
+   content-level dedupe. A transaction kind that conflicts with the captured
+   namespace for the same content id fails closed even when the observations
+   land in different keyset batches. It does not synthesize PPV events directly
+   from money rows and it does not create a fan-by-media crawler. This closes
+   target discovery gaps while preserving the established rule that repeat
+   sales of an already captured target rely on inline orders.
+
+No schema migration, queue, table or new provider endpoint is introduced.

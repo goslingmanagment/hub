@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, sql , ne } from "drizzle-orm";
+import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
 
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type Platform } from "@agency_hub_core/shared";
 
@@ -481,6 +481,55 @@ export async function listFanslyDmRawPayloadsAfterId(
   return result.rows.map((row) => ({
     id: Number(row.id),
     responsePayload: row.responsePayload,
+  }));
+}
+
+export interface FanslyMessagePurchaseTargetCursorRow {
+  id: number;
+  rawType: string;
+  correlationId: string;
+}
+
+/**
+ * Durable local discovery source for Fansly media purchase-history targets.
+ * Fansly transaction correlation ids identify the purchased media for the
+ * four media transaction types; the runtime maps each raw type to the
+ * accountMediaId/accountMediaBundleId request parameter.
+ *
+ * Deliberately do not filter by transaction state or is_active: an unlock is
+ * a historical fact even while its payout is pending or after a later
+ * financial adjustment. The raw-type allowlist prevents unrelated Fansly
+ * correlation-id namespaces (for example subscriptions) from entering the
+ * media walk.
+ */
+export async function listFanslyMessagePurchaseTargetsAfterId(
+  db: Database,
+  input: {
+    pageId: number;
+    afterId: number;
+    limit?: number;
+  },
+): Promise<FanslyMessagePurchaseTargetCursorRow[]> {
+  const result = await db.execute<{
+    id: string;
+    rawType: string;
+    correlationId: string;
+  }>(sql`
+    select t.id::text as id,
+           t.raw_type as "rawType",
+           btrim(t.correlation_id) as "correlationId"
+    from ${transactions} t
+    where t.platform_account_id = ${input.pageId}
+      and t.id > ${input.afterId}
+      and t.raw_type in ('2010', '2016', '2110', '2116')
+      and nullif(btrim(t.correlation_id), '') is not null
+    order by t.id asc
+    limit ${input.limit ?? 500}
+  `);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    rawType: row.rawType,
+    correlationId: row.correlationId,
   }));
 }
 

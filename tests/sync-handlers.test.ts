@@ -35,6 +35,7 @@ const dbMocks = vi.hoisted(() => ({
   selectNextPageDmMessageDeepBackfillCandidate: vi.fn(),
   selectNextPageDmMessageSyncCandidate: vi.fn(),
   updatePageSyncTimestampCache: vi.fn(),
+  upsertArchivedPageSubscriptions: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
   upsertPageDmConversation: vi.fn(),
@@ -237,6 +238,7 @@ describe("sync executor handlers", () => {
     dbMocks.upsertFanPageExternalPresences.mockResolvedValue(undefined);
     dbMocks.upsertFans.mockResolvedValue([]);
     dbMocks.upsertPageFollows.mockResolvedValue(undefined);
+    dbMocks.upsertArchivedPageSubscriptions.mockResolvedValue(undefined);
     dbMocks.upsertPageSubscriptions.mockResolvedValue(undefined);
     dbMocks.refreshFanPageFollowerState.mockResolvedValue(undefined);
     dbMocks.refreshFanPageSubscriberState.mockResolvedValue(undefined);
@@ -937,6 +939,7 @@ describe("sync executor handlers", () => {
         providerReportedTotal: 2,
         observedCount: 1,
         pageCount: 1,
+        mode: "active",
       },
     }));
     expect(db.transaction).not.toHaveBeenCalled();
@@ -1852,40 +1855,47 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     const db = {
       transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
     };
+    const getSubscribersPage = vi.fn(async () => ({
+      total: 1,
+      items: [{
+        id: "sub-1",
+        subscriberId: "fan-1",
+        historyId: null,
+        subscriptionTierId: null,
+        subscriptionTierName: null,
+        subscriptionTierColor: null,
+        planId: null,
+        status: 3,
+        price: 5000,
+        renewPrice: 5000,
+        autoRenew: 1,
+        billingCycle: 30,
+        duration: 30,
+        renewDate: null,
+        createdAt: new Date("2026-03-10T00:00:00.000Z").toISOString(),
+        updatedAt: null,
+        endsAt: new Date("2026-04-09T00:00:00.000Z").toISOString(),
+      }],
+      done: true,
+      raw: {},
+    }));
     const app = {
       db,
       config: {
         syncSharedRateLimitEnabled: false,
       },
       adapter: {
-        getSubscribersPage: vi.fn(async () => ({
-          total: 1,
-          items: [{
-            id: "sub-1",
-            subscriberId: "fan-1",
-            historyId: null,
-            subscriptionTierId: null,
-            subscriptionTierName: null,
-            subscriptionTierColor: null,
-            planId: null,
-            status: 3,
-            price: 5000,
-            renewPrice: 5000,
-            autoRenew: 1,
-            billingCycle: 30,
-            duration: 30,
-            renewDate: null,
-            createdAt: new Date("2026-03-10T00:00:00.000Z").toISOString(),
-            updatedAt: null,
-            endsAt: new Date("2026-04-09T00:00:00.000Z").toISOString(),
-          }],
-          done: true,
-          raw: {},
-        })),
+        getSubscribersPage,
       },
     } as never;
 
-    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        revision: 5,
+        generation: 0,
+        historyBackfilledAt: "2026-07-01T00:00:00.000Z",
+      },
+    });
     fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
       accounts: [{
         id: "fan-1",
@@ -1917,7 +1927,12 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
 
     expect(result.satisfied).toBe(true);
     expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(getSubscribersPage).toHaveBeenCalledWith(
+      expect.any(Object),
+      { limit: 100, offset: 0, status: "3,4" },
+    );
     expect(dbMocks.upsertPageSubscriptions).toHaveBeenCalledWith(tx, expect.any(Array));
+    expect(dbMocks.upsertArchivedPageSubscriptions).not.toHaveBeenCalled();
     expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, expect.any(Array));
     expect(dbMocks.deactivatePageSubscriptionsByGeneration).toHaveBeenCalledWith(tx, {
       platformAccountId: 14,
@@ -1928,6 +1943,121 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
       platformAccountId: 14,
       stream: "subscribers",
+    }));
+  });
+
+  it("finalizes active subscribers before a one-time archive-only expired backfill", async () => {
+    const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
+    const activeSubscription = {
+      id: "sub-active",
+      subscriberId: "fan-active",
+      historyId: null,
+      subscriptionTierId: null,
+      subscriptionTierName: null,
+      subscriptionTierColor: null,
+      planId: null,
+      status: 3,
+      price: 5000,
+      renewPrice: 5000,
+      autoRenew: 1,
+      billingCycle: 30,
+      duration: 30,
+      renewDate: null,
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: null,
+      endsAt: "2026-04-09T00:00:00.000Z",
+    };
+    const expiredSubscription = {
+      ...activeSubscription,
+      id: "sub-expired",
+      subscriberId: "fan-expired",
+      status: 5,
+      autoRenew: 0,
+      endsAt: "2026-02-01T00:00:00.000Z",
+    };
+    const getSubscribersPage = vi.fn(async (
+      _context: unknown,
+      params: { status: string },
+    ) => ({
+      total: 1,
+      items: [params.status === "3,4" ? activeSubscription : expiredSubscription],
+      done: true,
+      raw: {},
+    }));
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getSubscribersPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    dbMocks.upsertFans
+      .mockResolvedValueOnce([{ id: 91, platformUserId: "fan-active" }])
+      .mockResolvedValueOnce([{ id: 92, platformUserId: "fan-expired" }]);
+
+    const result = await fanslySubscribersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 14,
+          label: "fansly-page",
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 6,
+      },
+      syncRunId: 103,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: {
+        generation: 1,
+        mode: "expired",
+        processedThisChunk: 2,
+      },
+    });
+    expect(getSubscribersPage.mock.calls.map(([, params]) => params.status)).toEqual([
+      "3,4",
+      "5",
+    ]);
+    expect(db.transaction).toHaveBeenCalledTimes(2);
+    expect(dbMocks.upsertPageSubscriptions).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertArchivedPageSubscriptions).toHaveBeenCalledTimes(1);
+    expect(
+      dbMocks.deactivatePageSubscriptionsByGeneration.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      dbMocks.upsertArchivedPageSubscriptions.mock.invocationCallOrder[0]!,
+    );
+    const fanPageInputs = dbMocks.upsertFanPages.mock.calls.flatMap((call) => call[1]);
+    expect(fanPageInputs).toContainEqual(expect.objectContaining({
+      fanId: 91,
+      isSubscriber: true,
+    }));
+    expect(fanPageInputs).not.toContainEqual(expect.objectContaining({
+      fanId: 92,
+      isSubscriber: true,
+    }));
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+      platformAccountId: 14,
+      stream: "subscribers",
+      state: expect.objectContaining({
+        mode: "expired",
+        observedCount: 1,
+        historyBackfilledAt: expect.any(String),
+      }),
     }));
   });
 
