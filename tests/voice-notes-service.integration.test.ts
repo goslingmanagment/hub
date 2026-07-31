@@ -5,8 +5,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   createFanslyPage,
   createModel,
+  DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
   getVoiceNoteByClientRequestId,
   getVoiceNoteById,
+  insertErasureLog,
   insertAiGenerationContent,
   purgeExpiredVoiceNoteAudio,
   releaseStaleIndeterminateVoiceBudgets,
@@ -349,6 +351,38 @@ describe("voice-notes service: admission + idempotent replay", () => {
     await waitFor(async () => (await getVoiceNoteById(testDb!.db, a.voiceNoteId))?.state === "completed");
     expect(state.calls).toBe(1);
   });
+
+  it("replays the same-id winner when it consumed the last available budget", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { provider, state } = fakeProvider(async () => {
+      await gate;
+      return okAudio(null);
+    });
+    const p = await provision({
+      provider,
+      pageBudget: SCRIPT_CHARS,
+      globalBudget: SCRIPT_CHARS,
+      maxConcurrentSyntheses: 2,
+    });
+    const body = p.body();
+
+    const [left, right] = await Promise.all([
+      createVoiceNote(appContext, p.principal, p.page.label, body),
+      createVoiceNote(appContext, p.principal, p.page.label, body),
+    ]);
+    expect(left.voiceNoteId).toBe(right.voiceNoteId);
+    expect(["queued", "dispatched"]).toContain(left.state);
+    expect(["queued", "dispatched"]).toContain(right.state);
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
+    expect(await spentForScope("global")).toBe(SCRIPT_CHARS);
+    expect(state.calls).toBe(1);
+
+    release();
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, left.voiceNoteId))?.state === "completed");
+  });
 });
 
 describe("voice-notes service: admission gates", () => {
@@ -508,6 +542,81 @@ describe("voice-notes service: admission gates", () => {
     expect(view.state).toBe("dispatched");
   });
 
+  it("rejects pre-erasure Fansly source material before row, budget, or provider side effects", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(12));
+    const p = await provision({ provider });
+    const body = p.body();
+    await insertErasureLog(testDb.db, {
+      scopeType: "fan",
+      scopeRef: `fan:fansly:${CONVERSATION_REF}`,
+      initiatedBy: p.principal.user.id,
+      dryRun: false,
+      plan: { resolvedPageIds: [p.page.id] },
+    });
+
+    await expect(
+      createVoiceNote(appContext, p.principal, p.page.label, body),
+    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
+    expect(
+      await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId),
+    ).toBeNull();
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(0);
+    expect(await spentForScope("global")).toBe(0);
+    expect(state.calls).toBe(0);
+  });
+
+  it("returns retryable availability without side effects while erasure owns the page fence", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(12));
+    const p = await provision({ provider });
+    const body = p.body();
+    const erasureClient = await testDb.pool.connect();
+    try {
+      await erasureClient.query("begin");
+      await erasureClient.query(
+        "select pg_advisory_xact_lock($1, $2)",
+        [DM_ARCHIVE_ERASURE_FENCE_LOCK_NS, p.page.id],
+      );
+
+      await expect(
+        createVoiceNote(appContext, p.principal, p.page.label, body),
+      ).rejects.toMatchObject({ code: "voice_provider_unavailable", statusCode: 503 });
+      expect(
+        await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId),
+      ).toBeNull();
+      expect(await spentForScope(`page:${p.page.id}`)).toBe(0);
+      expect(state.calls).toBe(0);
+    } finally {
+      await erasureClient.query("rollback").catch(() => {});
+      erasureClient.release();
+    }
+  });
+
+  it("preserves material-time semantics for Fansly voice after an older erasure", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(12));
+    const p = await provision({ provider });
+    const log = await insertErasureLog(testDb.db, {
+      scopeType: "fan",
+      scopeRef: `fan:fansly:${CONVERSATION_REF}`,
+      initiatedBy: p.principal.user.id,
+      dryRun: false,
+      plan: { resolvedPageIds: [p.page.id] },
+    });
+    // The current source generation is newer than this historical erasure.
+    await testDb.pool.query(
+      "update erasure_log set started_at = $1 where id = $2",
+      [new Date("2020-01-01T00:00:00.000Z"), log.id],
+    );
+
+    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    expect(view.state).toBe("dispatched");
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "completed");
+    expect(state.calls).toBe(1);
+  });
+
   it("rejects a control character in conversationRef before hashing (voice_source_invalid, field-only message)", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider, state } = fakeProvider(() => okAudio(12));
@@ -537,7 +646,7 @@ describe("voice-notes service: admission gates", () => {
     expect(state.calls).toBe(0);
   });
 
-  it("records a quota_denied row and leaves the budget uncharged when reservation is refused", async (ctx) => {
+  it("returns stateless quota denial without durable row cardinality or budget charge", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider, state } = fakeProvider(() => okAudio(12));
     const p = await provision({ provider, pageBudget: 1 }); // script (20) > budget
@@ -547,23 +656,41 @@ describe("voice-notes service: admission gates", () => {
       createVoiceNote(appContext, p.principal, p.page.label, body),
     ).rejects.toMatchObject({ code: "voice_quota_denied", statusCode: 429 });
 
-    // Ledger fact: a persisted quota_denied row.
-    const denied = await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId);
-    expect(denied?.state).toBe("quota_denied");
-    expect(denied?.billed).toBeFalsy();
+    // A denied UUID is not durable state.
+    expect(
+      await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId),
+    ).toBeNull();
     // Budget released: the atomic reserve rolled back, nothing consumed.
     expect(await spentForScope(`page:${p.page.id}`)).toBe(0);
     expect(await spentForScope("global")).toBe(0);
     // Never dispatched.
     expect(state.calls).toBe(0);
 
-    // A replay of the denied request re-throws the SAME 429 (never a pollable
-    // 202 view): quota_denied burns the clientRequestId — a retry needs a fresh
-    // one. Same outcome, same status on every call with this id.
+    // The same request remains a 429 while the same budget condition holds.
     await expect(
       createVoiceNote(appContext, p.principal, p.page.label, body),
     ).rejects.toMatchObject({ code: "voice_quota_denied", statusCode: 429 });
+    // Fresh UUIDs cannot grow voice_notes either.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await expect(
+        createVoiceNote(appContext, p.principal, p.page.label, p.body()),
+      ).rejects.toMatchObject({ code: "voice_quota_denied", statusCode: 429 });
+    }
+    const rows = await testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from voice_notes where user_id = $1",
+      [p.principal.user.id],
+    );
+    expect(Number(rows.rows[0]?.count ?? -1)).toBe(0);
     expect(state.calls).toBe(0);
+
+    // Quota failure released the pre-admission permit. Once the budget is
+    // repaired, the same stateless request can be admitted and dispatched.
+    appContext.config.voiceNotesDailyCharBudget = 100_000;
+    const admitted = await createVoiceNote(appContext, p.principal, p.page.label, body);
+    expect(admitted.state).toBe("dispatched");
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, admitted.voiceNoteId))?.state === "completed");
+    expect(state.calls).toBe(1);
   });
 
   it("savepoint rollback: a CUMULATIVE global breach denies the second render AND undoes its page increment", async (ctx) => {
@@ -594,15 +721,15 @@ describe("voice-notes service: admission gates", () => {
 
     // Second render: 20 ≤ 100k page and 20 ≤ 30 global (early guard passes), but
     // 20 + 20 = 40 > 30 global → BudgetRefused AFTER the page upsert → the nested
-    // SAVEPOINT rolls back (page increment undone) while the outer tx still writes
-    // the durable quota_denied fact.
+    // SAVEPOINT rolls back (page increment undone) and no denial row is written.
     const secondBody = p.body();
     await expect(
       createVoiceNote(appContext, p.principal, p.page.label, secondBody),
     ).rejects.toMatchObject({ code: "voice_quota_denied", statusCode: 429 });
 
-    const denied = await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, secondBody.clientRequestId);
-    expect(denied?.state).toBe("quota_denied");
+    expect(
+      await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, secondBody.clientRequestId),
+    ).toBeNull();
 
     // The crux: BOTH counters are unchanged beyond the first reservation. If the
     // savepoint rollback misbehaved, the page counter would sit at 40 — the
@@ -619,7 +746,7 @@ describe("voice-notes service: admission gates", () => {
 });
 
 describe("voice-notes service: detached dispatch settle paths", () => {
-  it("holds queued work before the dispatch CAS when the live process cap is full", async (ctx) => {
+  it("queues FIFO before dispatch while existing replays still bypass capacity", async (ctx) => {
     if (!testDb) return ctx.skip();
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
@@ -641,20 +768,33 @@ describe("voice-notes service: detached dispatch settle paths", () => {
     };
     const p = await provision({ provider, maxConcurrentSyntheses: 1 });
 
-    const first = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    const firstBody = p.body();
+    const first = await createVoiceNote(appContext, p.principal, p.page.label, firstBody);
     expect(first.state).toBe("dispatched");
     await waitFor(() => calls === 1);
 
-    const second = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    // Existing admitted work remains replayable even though the gate is full.
+    const replay = await createVoiceNote(appContext, p.principal, p.page.label, firstBody);
+    expect(replay.voiceNoteId).toBe(first.voiceNoteId);
+    expect(replay.state).toBe("dispatched");
+
+    const secondBody = p.body();
+    const second = await createVoiceNote(
+      appContext,
+      p.principal,
+      p.page.label,
+      secondBody,
+    );
     expect(second.state).toBe("queued");
-    await delay(50);
     expect(calls).toBe(1);
     expect((await getVoiceNoteById(testDb.db, second.voiceNoteId))?.attemptToken).toBeNull();
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS * 2);
 
     releaseFirst();
     await waitFor(async () =>
       (await getVoiceNoteById(testDb!.db, first.voiceNoteId))?.state === "completed"
-      && (await getVoiceNoteById(testDb!.db, second.voiceNoteId))?.state === "completed");
+      &&
+      (await getVoiceNoteById(testDb!.db, second.voiceNoteId))?.state === "completed");
     expect(calls).toBe(2);
     expect(maxActive).toBe(1);
   });
@@ -719,6 +859,28 @@ describe("voice-notes service: detached dispatch settle paths", () => {
     const got = await getVoiceNoteAudio(appContext, p.principal, p.page.label, view.voiceNoteId);
     expect(got.bytes.equals(audio)).toBe(true);
     expect(got.sha256).toBe(sha256Hex(audio));
+  });
+
+  it("keeps the estimate charged for invalid provider character costs", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    for (const [index, characterCost] of [-1, 1.5, 2_147_483_648].entries()) {
+      if (index > 0) {
+        await resetIntegrationDatabase(testDb.pool);
+        appContext = createTestAppContext(testDb);
+      }
+      const { provider } = fakeProvider(() => okAudio(characterCost));
+      const p = await provision({ provider });
+
+      const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+      await waitFor(async () =>
+        (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "completed");
+
+      const row = await getVoiceNoteById(testDb.db, view.voiceNoteId);
+      expect(row?.billed).toBe(true);
+      expect(row?.billedChars).toBeNull();
+      expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
+      expect(await spentForScope("global")).toBe(SCRIPT_CHARS);
+    }
   });
 
   it("completed + NO character cost → billed=true, estimate kept (cost amount unknown)", async (ctx) => {

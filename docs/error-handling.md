@@ -50,7 +50,7 @@ change as any behavior recorded here; do not maintain client-side copies.
 | Desktop AI generation | No automatic generation retry. EOF without `done` fails closed. | Manual action after the mapped card; a provider-rate deadline is display only. |
 | Anthropic adapter | The SDK's HTTP-level retry behavior remains intact. For a page-proxy connect failure, `createStickyConnectFailureFetch` permits one physical proxy dial per resolved generation client; later SDK attempts receive the cached connect failure immediately. | The provider SDK owns eligible response-level attempts; neither client owns them. |
 | OpenRouter adapter | One local fetch; there is no adapter retry loop. | A later generation is a new explicit action. |
-| Voice synthesis | One paid provider dispatch. A timeout, transport failure, or ambiguous status remains dispatched and is swept to the existing indeterminate outcome; it is never redispatched automatically. Idempotent replay reads the same request result. | A deliberate new take is a new paid attempt. |
+| Voice synthesis | One paid provider dispatch. A timeout, transport failure, or ambiguous status remains dispatched and is swept to the existing indeterminate outcome; it is never redispatched automatically. Idempotent replay reads the same request result. A queued waiter heartbeats durable ownership until a process-local synthesis slot opens. | A deliberate new take is a new paid attempt. |
 | OFAPI state-changing commands | One execution attempt per command row; an indeterminate mutation is never automatically sent again. Typing, unsend, and mark-read reject retry lineage. | Only an explicitly requested, policy-permitted same-kind retry creates a new command row and lineage; it is never a second attempt on the old row. |
 | Sync/capture reads | Existing lane-specific pacing, durable retry state, and reconciliation remain authoritative; queue redelivery is not a substitute for that state machine. | The owning sync/capture lane, never an AI code or chatter card. |
 | Critical-notification delivery | The durable outbox automatically retries delivery failures to a bounded attempt cap. This retries the notification only, never the failed business action. | Outbox lease/attempt policy; suppression and exhaustion are terminal. |
@@ -126,7 +126,7 @@ status, code, and intentional message.
 | AI gate | `gate_hi_greeting_limit` | 400 | Conversation exceeds the hi-greeting maximum. |
 | AI gate | `gate_ping_active` | 400 | Ping generation is blocked while the conversation segment is active. |
 | Voice | `voice_disabled` | 403 | Voice-note lane is disabled. |
-| Voice | `voice_provider_unavailable` | 503 | Live voice flag is on but provider boot dependencies are unavailable; chatter text is static. |
+| Voice | `voice_provider_unavailable` | 503 | Live voice flag is on but provider boot dependencies are unavailable, or an active erasure temporarily owns the page writer fence; no provider spend is admitted. |
 | Voice | `voice_not_allowlisted` | 403 | Page is not allowlisted for voice notes. |
 | Voice | `voice_no_profile` | 409 | Page has no configured voice profile. |
 | Voice | `voice_script_invalid` | 400 | Submitted script fails voice validation. |

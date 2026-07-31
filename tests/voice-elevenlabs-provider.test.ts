@@ -122,6 +122,25 @@ describe("ElevenLabs voice provider", () => {
     }
   });
 
+  it.each(["-1", "1.5", "Infinity", "2147483648", "9007199254740992"])(
+    "treats invalid character-cost %s as unknown",
+    async (characterCost) => {
+      const fetchImpl = vi.fn(
+        async () => new Response(validMp3Bytes(), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg", "character-cost": characterCost },
+        }),
+      );
+      const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+        .synthesize(synthInput());
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.characterCost).toBeNull();
+      }
+    },
+  );
+
   it("accepts a legitimate ID3-prefixed MP3 artifact", async () => {
     const fetchImpl = vi.fn(
       async () => new Response(validId3Mp3Bytes(), {

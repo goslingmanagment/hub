@@ -11,6 +11,7 @@ import {
   releaseStaleIndeterminateVoiceBudgets,
   reserveVoiceCharBudget,
   settleVoiceNoteTerminal,
+  touchQueuedVoiceNote,
 } from "@agency_hub_core/db";
 
 import {
@@ -174,6 +175,73 @@ describe("voice notes sweep + nightly retention", () => {
     expect(await spentChars(pool, "global", nextDayStr)).toBe(0);
     expect(await spentChars(pool, pageScope, todayStr)).toBe(0);
     expect(await spentChars(pool, "global", todayStr)).toBe(0);
+  });
+
+  it("preserves a queued row whose owner refreshed its heartbeat", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { db, pool } = testDb;
+    const page = await createVoicePage(testDb, "sweep-heartbeat");
+    const reservedAt = new Date("2026-07-16T12:00:00.000Z");
+    const now = new Date("2026-07-18T12:00:00.000Z");
+    await reserveVoiceCharBudget(db, {
+      pageId: page.id,
+      chars: SCRIPT_CHARS,
+      pageBudget: 1_000_000,
+      globalBudget: 1_000_000,
+      now: reservedAt,
+    });
+    const id = await insertQueued(testDb, page.id, reservedAt);
+
+    expect(await touchQueuedVoiceNote(db, id, now)).toBe(true);
+    const result = await runVoiceNotesSweep({ db }, now);
+
+    expect(result.abandonedQueued).toBe(0);
+    expect((await getVoiceNoteById(db, id))?.state).toBe("queued");
+    expect(await spentChars(pool, `page:${page.id}`, "2026-07-16")).toBe(SCRIPT_CHARS);
+  });
+
+  it("rechecks the heartbeat cutoff when a touch commits after candidate selection", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { db, pool } = testDb;
+    const page = await createVoicePage(testDb, "sweep-heartbeat-race");
+    const reservedAt = new Date("2026-07-16T12:00:00.000Z");
+    const now = new Date("2026-07-18T12:00:00.000Z");
+    await reserveVoiceCharBudget(db, {
+      pageId: page.id,
+      chars: SCRIPT_CHARS,
+      pageBudget: 1_000_000,
+      globalBudget: 1_000_000,
+      now: reservedAt,
+    });
+    const id = await insertQueued(testDb, page.id, reservedAt);
+
+    // Hold a heartbeat update uncommitted. The sweep sees the old committed
+    // timestamp in its candidate SELECT, then blocks on its per-row UPDATE.
+    const heartbeatClient = await pool.connect();
+    try {
+      await heartbeatClient.query("begin");
+      await heartbeatClient.query(
+        "update voice_notes set updated_at = $1 where id = $2 and state = 'queued'",
+        [now, id],
+      );
+      const sweepPromise = runVoiceNotesSweep({ db }, now);
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      await heartbeatClient.query("commit");
+
+      const result = await sweepPromise;
+      expect(result.abandonedQueued).toBe(0);
+      expect((await getVoiceNoteById(db, id))?.state).toBe("queued");
+      expect(await spentChars(pool, `page:${page.id}`, "2026-07-16")).toBe(SCRIPT_CHARS);
+    } finally {
+      await heartbeatClient.query("rollback").catch(() => {});
+      heartbeatClient.release();
+    }
   });
 
   it("keeps a lease-expired dispatched reservation reserved (billing unknown)", async (context) => {

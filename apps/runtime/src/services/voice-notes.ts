@@ -19,16 +19,18 @@ import { randomUUID } from "node:crypto";
 import {
   casVoiceNoteDispatch,
   getAiGenerationContentByRef,
+  getScopedVoiceNoteAudio,
   getVoiceNoteByClientRequestId,
-  getVoiceNoteById,
   getVoiceNoteStatusById,
   getVoiceNoteStatusByClientRequestId,
   getVoiceProfile,
-  insertQuotaDeniedVoiceNote,
   insertVoiceNoteJob,
+  isDmArchiveScopeFenced,
   reserveVoiceCharBudget,
   settleVoiceCharBudget,
   settleVoiceNoteTerminal,
+  touchQueuedVoiceNote,
+  tryAcquireDmArchiveWriterFenceLock,
   type VoiceNoteRow,
   type VoiceNoteState,
   type VoiceNoteStatusRow,
@@ -46,7 +48,10 @@ import { resolveEgress, type AppEgressContext } from "./egress/resolver.ts";
 import { hasServiceEgressProxy } from "./egress/service-proxy.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { AppError, NotFoundError } from "./errors.ts";
-import { VOICE_AUDIO_MAX_BYTES } from "./voice-elevenlabs-provider.ts";
+import {
+  isValidVoiceCharacterCost,
+  VOICE_AUDIO_MAX_BYTES,
+} from "./voice-elevenlabs-provider.ts";
 import {
   canonicalizeVoiceScript,
   computeVoiceRequestHash,
@@ -63,6 +68,8 @@ type VoiceNotesApp = Pick<AppContext, "db" | "config" | "logger" | "voiceTtsProv
 
 /** Single-dispatch lease: matches the sweep's reclaim window. */
 const DISPATCH_LEASE_MS = 120_000;
+/** Queued waiters refresh updated_at well inside the five-minute crash cutoff. */
+const QUEUED_HEARTBEAT_MS = 60_000;
 
 // Fallbacks that mirror the config-registry defaults. In production the boot
 // AppConfig always carries these (zod defaults), so they only guard test
@@ -80,8 +87,8 @@ const VOICE_LOG_ERROR_OPTIONS = {
 type ReleaseVoiceSynthesisPermit = () => void;
 
 /** Process-local concurrency gate. Production runs one API process; queued
- * rows wait here before their dispatch CAS, so no lease can expire merely
- * because another synthesis holds the configured slot. */
+ * rows wait here before their dispatch CAS and heartbeat durable ownership so
+ * the crash sweeper cannot reclaim a live waiter. */
 class VoiceSynthesisGate {
   private active = 0;
   private limit = DEFAULT_MAX_CONCURRENT_SYNTHESES;
@@ -141,6 +148,7 @@ const voiceSynthesisGate = new VoiceSynthesisGate();
 // leaving it stranded. Caught in createVoiceNote to replay the winner. Mirrors
 // the BudgetRefused idiom the repo's reserveVoiceCharBudget already uses.
 class VoiceAdmissionLostRace extends Error {}
+class VoiceBudgetRefused extends Error {}
 
 export interface CreateVoiceNoteBody {
   clientRequestId: string;
@@ -173,8 +181,9 @@ export class VoiceDisabledError extends AppError {
   }
 }
 
-/** Operator trap: the live flag is on but the key/proxy boot dependencies were
- * incomplete, so the provider was never built. Distinct from voice_disabled. */
+/** Retryable availability response: key/proxy boot dependencies are incomplete
+ * or an active erasure temporarily owns the page writer fence. Distinct from
+ * voice_disabled; neither path admits provider spend. */
 export class VoiceProviderUnavailableError extends AppError {
   constructor() {
     super(
@@ -355,6 +364,7 @@ export async function createVoiceNote(
   }
   const originalScriptSha256 = sha256Hex(canonicalizeVoiceScript(source.generation.completion));
   const finalScriptSha256 = sha256Hex(canonicalScript);
+  const sourceMaterialAt = source.generation.createdAt;
 
   const now = new Date();
   const pageBudget = effective.voiceNotesDailyCharBudget ?? DEFAULT_PAGE_BUDGET;
@@ -390,17 +400,30 @@ export async function createVoiceNote(
   // open: (a) a crash between the reserve and the insert can no longer strand a
   // reservation with no row to carry it (a rollback releases it), and (b) the
   // reserve holds its budget-row lock THROUGH the insert, so a same-budget
-  // competitor cannot slip a quota_denied row in between and falsely deny a
-  // request that actually had budget. A refused reservation rolls back only its
-  // own savepoint (nothing consumed) and records the durable quota_denied fact
-  // in the same tx; losing the unique race throws a sentinel to roll the whole
-  // reservation back (the rollback IS the release), caught below to replay the
-  // concurrent winner.
-  let admission:
-    | { kind: "inserted" }
-    | { kind: "quota_denied"; wonDenied: boolean };
+  // competitor cannot change the decision mid-admission. A refused reservation
+  // writes no durable row: fresh UUIDs after exhaustion must not create
+  // unbounded permanent storage. Losing the unique race throws a sentinel to
+  // roll the whole reservation back (the rollback IS the release).
   try {
-    admission = await app.db.transaction(async (tx) => {
+    await app.db.transaction(async (tx) => {
+      // Voice stores fan-derived script/audio outside the DM tables, but joins
+      // the same page advisory-lock + material-time tombstone protocol.
+      if (!(await tryAcquireDmArchiveWriterFenceLock(tx, page.id))) {
+        throw new VoiceProviderUnavailableError();
+      }
+      if (
+        await isDmArchiveScopeFenced(tx, {
+          pageId: page.id,
+          platform: "fansly",
+          refs: [body.conversationRef],
+          materialAt: sourceMaterialAt,
+        })
+      ) {
+        throw new VoiceSourceInvalidError(
+          "The source voice-script generation is covered by an erasure",
+        );
+      }
+
       const reserved = await reserveVoiceCharBudget(tx, {
         pageId: page.id,
         chars: scriptChars,
@@ -409,8 +432,10 @@ export async function createVoiceNote(
         now,
       });
       if (!reserved) {
-        const wonDenied = await insertQuotaDeniedVoiceNote(tx, snapshot);
-        return { kind: "quota_denied", wonDenied } as const;
+        // A same-clientRequestId winner may have consumed the final budget
+        // while this transaction waited on the counter row. Roll back first,
+        // then re-read the idempotency key outside the transaction.
+        throw new VoiceBudgetRefused();
       }
       const insertResult = await insertVoiceNoteJob(tx, snapshot);
       if (!insertResult.inserted) {
@@ -418,21 +443,26 @@ export async function createVoiceNote(
         // Abort the tx so the reservation rolls back, then replay its row below.
         throw new VoiceAdmissionLostRace();
       }
-      return { kind: "inserted" } as const;
     });
   } catch (error) {
     if (error instanceof VoiceAdmissionLostRace) {
       return await replayConcurrentWinner(app, principal, body.clientRequestId, requestHash);
     }
-    throw error;
-  }
-
-  if (admission.kind === "quota_denied") {
-    if (admission.wonDenied) {
+    if (error instanceof VoiceBudgetRefused) {
+      const winner = await getVoiceNoteStatusByClientRequestId(
+        app.db,
+        principal.user.id,
+        body.clientRequestId,
+      );
+      if (winner) {
+        if (winner.requestHash !== requestHash) {
+          throw new VoiceIdempotencyMismatchError();
+        }
+        return replayTerminalOrView(winner);
+      }
       throw new VoiceQuotaDeniedError();
     }
-    // A concurrent request already claimed this clientRequestId — replay it.
-    return await replayConcurrentWinner(app, principal, body.clientRequestId, requestHash);
+    throw error;
   }
 
   const row = await getVoiceNoteByClientRequestId(app.db, principal.user.id, body.clientRequestId);
@@ -441,10 +471,9 @@ export async function createVoiceNote(
     throw new Error("voice note row missing immediately after a winning insert");
   }
 
-  // (5) Concurrency permit BEFORE the single-dispatch CAS. An immediately
-  // available slot preserves the usual dispatched response. Otherwise the row
-  // remains safely queued (no lease yet) until a slot opens; a process crash is
-  // recovered by the existing abandoned-queued sweep without vendor spend.
+  // (5) Concurrency permit BEFORE the single-dispatch CAS. A queued waiter
+  // heartbeats updated_at until a slot opens, so only a crashed process becomes
+  // eligible for the five-minute unbilled sweep.
   const permit = voiceSynthesisGate.tryAcquire();
   if (!permit) {
     void dispatchVoiceNoteAfterPermit(app, {
@@ -453,6 +482,7 @@ export async function createVoiceNote(
       reservedChars: scriptChars,
       canonicalScript,
       now,
+      sourceMaterialAt,
     });
     return toStatusView(row);
   }
@@ -465,12 +495,13 @@ export async function createVoiceNote(
     reservedChars: scriptChars,
     canonicalScript,
     now,
+    sourceMaterialAt,
   }, permit);
   if (won) {
     return toStatusView({ ...row, state: "dispatched" });
   }
-  // CAS lost (a sweep raced us): re-read just the status projection — this path
-  // never returns audio, so the full row's bytes would only be discarded.
+  // CAS lost (an erasure or sweep raced us): re-read just the status
+  // projection. This path never dispatches and never returns audio.
   const latest = await getVoiceNoteStatusById(app.db, row.id);
   return toStatusView(latest ?? row);
 }
@@ -483,16 +514,35 @@ async function grantVoiceNoteDispatch(
     reservedChars: number;
     canonicalScript: string;
     now: Date;
+    sourceMaterialAt: Date;
   },
   releasePermit: ReleaseVoiceSynthesisPermit,
 ): Promise<boolean> {
   const attemptToken = randomUUID();
   let won: boolean;
   try {
-    won = await casVoiceNoteDispatch(app.db, {
-      id: input.row.id,
-      attemptToken,
-      leaseUntil: new Date(Date.now() + DISPATCH_LEASE_MS),
+    won = await app.db.transaction(async (tx) => {
+      // Re-enter the erasure writer protocol immediately before the one paid
+      // dispatch CAS. An erasure beginning after admission can delete/fence the
+      // row, but can never be followed by a provider call for the old material.
+      if (!(await tryAcquireDmArchiveWriterFenceLock(tx, input.row.platformAccountId))) {
+        return false;
+      }
+      if (
+        await isDmArchiveScopeFenced(tx, {
+          pageId: input.row.platformAccountId,
+          platform: "fansly",
+          refs: [input.row.conversationRef],
+          materialAt: input.sourceMaterialAt,
+        })
+      ) {
+        return false;
+      }
+      return await casVoiceNoteDispatch(tx, {
+        id: input.row.id,
+        attemptToken,
+        leaseUntil: new Date(Date.now() + DISPATCH_LEASE_MS),
+      });
     });
   } catch (error) {
     releasePermit();
@@ -552,15 +602,48 @@ async function dispatchVoiceNoteAfterPermit(
     reservedChars: number;
     canonicalScript: string;
     now: Date;
+    sourceMaterialAt: Date;
   },
 ): Promise<void> {
-  let permit = await voiceSynthesisGate.acquire();
+  let heartbeatInFlight = false;
+  const heartbeat = setInterval(() => {
+    if (heartbeatInFlight) {
+      return;
+    }
+    heartbeatInFlight = true;
+    void touchQueuedVoiceNote(app.db, input.row.id)
+      .then((touched) => {
+        if (!touched) {
+          clearInterval(heartbeat);
+        }
+      })
+      .catch((error) => {
+        const observed = sanitizeError(error, VOICE_LOG_ERROR_OPTIONS);
+        app.logger.warn(
+          {
+            voiceNoteId: input.row.id,
+            error: {
+              name: observed.name,
+              code: observed.code,
+              message: observed.message,
+            },
+          },
+          "queued voice note heartbeat failed",
+        );
+      })
+      .finally(() => {
+        heartbeatInFlight = false;
+      });
+  }, QUEUED_HEARTBEAT_MS);
+  heartbeat.unref();
+
+  let permit: ReleaseVoiceSynthesisPermit | undefined;
   try {
+    permit = await voiceSynthesisGate.acquire();
     while (true) {
       // A queued row can wait materially longer than the admitting request.
       // Re-read all live dispatch gates after each permit arrival and before
-      // granting the one paid dispatch. A config read fault fails closed through
-      // this function's catch; the row stays queued for the unbilled sweep.
+      // granting the one paid dispatch.
       const effective = await loadEffectiveConfig(app.db, app.config);
       voiceSynthesisGate.setLimit(
         effective.voiceNotesMaxConcurrentSyntheses ?? DEFAULT_MAX_CONCURRENT_SYNTHESES,
@@ -570,6 +653,7 @@ async function dispatchVoiceNoteAfterPermit(
         || !isPageAllowlisted(effective.voiceNotesPageAllowlist, input.pageLabel)
       ) {
         permit();
+        permit = undefined;
         return;
       }
       // The limit may have been lowered while this row waited. Its permit was
@@ -579,13 +663,18 @@ async function dispatchVoiceNoteAfterPermit(
         break;
       }
       permit();
+      permit = undefined;
       permit = await voiceSynthesisGate.acquire();
     }
-    await grantVoiceNoteDispatch(app, input, permit);
+
+    const grantedPermit = permit;
+    permit = undefined;
+    await grantVoiceNoteDispatch(app, input, grantedPermit);
   } catch (error) {
-    permit();
-    // A CAS/read fault happened before provider dispatch. The permit has already
-    // been released; leave the row queued for the existing recovery sweep.
+    permit?.();
+    // A config/CAS/read fault happened before provider dispatch. Leave the row
+    // queued; with no live heartbeat after this function exits, the existing
+    // crash sweep refunds it after the abandonment window.
     const observed = sanitizeError(error, VOICE_LOG_ERROR_OPTIONS);
     app.logger.error(
       {
@@ -598,6 +687,8 @@ async function dispatchVoiceNoteAfterPermit(
       },
       "queued voice note could not claim a dispatch slot",
     );
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -631,7 +722,14 @@ export async function getVoiceNoteAudio(
 ): Promise<{ bytes: Buffer; sha256: string }> {
   const page = await resolveAccessiblePage(app, principal, pageLabel);
   await assertRetrievalEnabled(app);
-  const row = await getScopedVoiceNote(app, principal, page.id, id);
+  const row = await getScopedVoiceNoteAudio(app.db, {
+    id,
+    platformAccountId: page.id,
+    userId: principal.user.id,
+  });
+  if (!row) {
+    throw new NotFoundError("Voice note not found");
+  }
 
   if (row.state === "artifact_expired") {
     throw new VoiceArtifactExpiredError();
@@ -673,21 +771,6 @@ async function assertRetrievalEnabled(app: VoiceNotesApp): Promise<void> {
   }
 }
 
-// The full-row scoped read: ONLY getVoiceNoteAudio uses it (the bytes are the
-// payload). Status callers take getScopedVoiceNoteStatus below.
-async function getScopedVoiceNote(
-  app: VoiceNotesApp,
-  principal: AuthPrincipal,
-  pageId: number,
-  id: number,
-): Promise<VoiceNoteRow> {
-  const row = await getVoiceNoteById(app.db, id);
-  if (!row || row.platformAccountId !== pageId || row.userId !== principal.user.id) {
-    throw new NotFoundError("Voice note not found");
-  }
-  return row;
-}
-
 // Projected scoped read for status: same (id, page, user) guard, no audio bytes.
 async function getScopedVoiceNoteStatus(
   app: VoiceNotesApp,
@@ -723,11 +806,9 @@ async function replayConcurrentWinner(
 }
 
 /**
- * Replay projection with ONE deliberate exception: a `quota_denied` row
- * re-throws its 429 rather than returning a 202 view. A denied reservation is a
- * hard refusal; surfacing it as a pollable 202 would trap a correct idempotent
- * client on a row that never advances. Same clientRequestId ⇒ same 429 on every
- * call — a fresh attempt needs a fresh clientRequestId.
+ * Legacy `quota_denied` rows created before Decision #190 still replay their
+ * original 429 rather than becoming pollable terminal views. New quota
+ * refusals are stateless and never enter this branch.
  */
 function replayTerminalOrView(row: VoiceNoteViewFields): VoiceNoteStatusView {
   if (row.state === "quota_denied") {
@@ -850,8 +931,12 @@ export async function dispatchVoiceNote(
       // A completed take IS billed — the vendor synthesized it. A missing cost
       // header only means we cannot reconcile the estimate to actuals, NOT that
       // the synthesis was free, so the billing verdict is `true` regardless.
+      // Treat an invalid provider-seam value as unknown even if a future/mock
+      // provider bypasses the HTTP adapter's header validation. Unknown keeps
+      // the original reservation charged; it must never create a refund.
       const billedChars = result.characterCost != null
-        ? Math.max(0, Math.round(result.characterCost))
+        && isValidVoiceCharacterCost(result.characterCost)
+        ? result.characterCost
         : null;
       // Fence the settle AND the reconcile in ONE transaction: if the fence is
       // lost (a sweep already moved the row off 'dispatched'), the UPDATE
