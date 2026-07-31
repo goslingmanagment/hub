@@ -20,6 +20,9 @@ const dbMocks = vi.hoisted(() => ({
   heartbeatPageSyncLease: vi.fn(),
   listRunnablePageSync: vi.fn(),
   listRunnableOfapiCapturePages: vi.fn(),
+  // Required, not optional: the module factory spreads dbMocks over the REAL
+  // module, so an unmocked skipPageSync would run for real and hit db.execute.
+  skipPageSync: vi.fn(),
   startSyncRun: vi.fn(),
   yieldPageSync: vi.fn(),
 }));
@@ -206,6 +209,7 @@ describe("sync executor", () => {
     dbMocks.acquirePageSyncLease.mockResolvedValue(null);
     dbMocks.blockPageSync.mockResolvedValue({ updated: true, blocked: true });
     dbMocks.completePageSync.mockResolvedValue(true);
+    dbMocks.skipPageSync.mockResolvedValue(true);
     dbMocks.retryPageSync.mockResolvedValue({ updated: true, retried: true });
     dbMocks.findPageById.mockResolvedValue({
       page: {
@@ -1515,5 +1519,66 @@ describe("sync executor", () => {
       { db: expect.objectContaining({ executeSql: expect.any(Function) }) },
     );
     expect(boss.fail).not.toHaveBeenCalled();
+  });
+
+  it("terminates a ramp-gated chunk without claiming a successful sync", async () => {
+    // The gated skip used to call completePageSync, so page_sync_states got a
+    // fresh succeeded_at and consecutive_failures = 0 for a stream that issued
+    // zero requests. That is how lora-1 stood still for 13 days looking healthy.
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: true,
+      yieldReason: null,
+      gatedSkip: "not_allowlisted",
+      stats: { skipped: "not_allowlisted" },
+    });
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.skipPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "followers",
+      leaseToken: "lease-1",
+    }));
+    expect(dbMocks.completePageSync).not.toHaveBeenCalled();
+    // skipPageSync deliberately takes no progressedAt: a chunk with no egress
+    // made no progress.
+    expect(dbMocks.skipPageSync.mock.calls[0]?.[1]).not.toHaveProperty("progressedAt");
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
+      "skipped",
+      "not_allowlisted",
+      expect.objectContaining({ skipped: "not_allowlisted" }),
+    );
+    expect(notificationMocks.resolveSyncChunkRecoveryIncidents).not.toHaveBeenCalled();
+  });
+
+  it("still records an ordinary satisfied chunk as a successful sync", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: true,
+      yieldReason: null,
+      stats: { processedThisChunk: 3 },
+    });
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.completePageSync).toHaveBeenCalledTimes(1);
+    expect(dbMocks.skipPageSync).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
+      "success",
+      null,
+      expect.objectContaining({ processedThisChunk: 3 }),
+    );
+    expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledTimes(1);
   });
 });

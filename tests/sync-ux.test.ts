@@ -267,4 +267,44 @@ describe("sync UX summaries", () => {
     expect(summary.state).toBe("retrying");
     expect(summary.detail).toContain("Rate limits slowed this sync");
   });
+
+  it("does not print Up to date over a stream whose last run was skipped", () => {
+    // The stale succeeded_at below is exactly the lora-1 shape: the allowlist
+    // dropped the page on 2026-07-17, every later run was a gated skip, and the
+    // monitor still said "Up to date" for 13 days because nothing looked at the
+    // completion status once succeededAt was non-null.
+    const summary = buildStreamSyncUx({
+      stream: "fan_earnings",
+      status: "idle",
+      stalled: false,
+      pending: false,
+      retryAt: null,
+      progress: null,
+      recentErrors: {
+        total429s: 0,
+        total5xxs: 0,
+        failedRuns: 0,
+        failedAttempts: 0,
+        retryAttempts: 0,
+      },
+      rateHealth: {
+        state: "healthy",
+        nextAvailableAt: null,
+      },
+      activeRun: null,
+      lastCompletion: {
+        status: "skipped",
+        finishedAt: "2026-07-30T11:30:00.000Z",
+      },
+      succeededAt: "2026-07-17T14:25:00.000Z",
+      failedAt: null,
+      lastErrorSummary: null,
+      consecutiveFailures: 0,
+    });
+
+    expect(summary.state).toBe("off");
+    expect(summary.headline).not.toBe("Up to date");
+    expect(summary.headline).toBe("Not updating");
+    expect(summary.detail).toContain("gated off");
+  });
 });

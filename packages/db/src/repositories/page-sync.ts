@@ -1749,6 +1749,78 @@ export async function completePageSync(
   return applied;
 }
 
+/** A gated stream chunk that did no work: the ramp gate (platform / flag /
+ *  allowlist) short-circuited before any egress. It terminates the lease and
+ *  advances applied_seq exactly like a real completion — the scheduler decides
+ *  "due" from applied_seq/last_scheduled_slot, never from succeeded_at — but it
+ *  must claim NOTHING. A page dropped from the allowlist used to report
+ *  succeeded_at = now() forever while its projection stood still, which is how
+ *  lora-1 went 13 days unnoticed (2026-07-17 to 2026-07-31).
+ *  consecutive_failures and last_error_* are left untouched: a skip is neither
+ *  success nor failure, so it must neither clear a real failure streak nor
+ *  invent one. progressed_at is left untouched for the same reason — a chunk
+ *  that issued zero requests made no progress. */
+export async function skipPageSync(
+  db: Database,
+  input: {
+    pageId: number;
+    stream: SyncStream;
+    requestSeq: number;
+    leaseToken: string;
+    phase?: string | null;
+    workClass?: SyncWorkClass | null;
+    progress?: Record<string, unknown>;
+    now?: Date;
+    dependencyOptions?: PageSyncDependencyOptions;
+  },
+) {
+  const now = input.now ?? new Date();
+  const result = await db.execute(sql`
+    update ${pageSyncStates}
+    set status = case
+                   when request_seq > ${input.requestSeq} then 'pending'::page_sync_status
+                   else 'idle'::page_sync_status
+                 end,
+        applied_seq = greatest(applied_seq, ${input.requestSeq}),
+        leased_seq = null,
+        finished_at = ${now},
+        retry_kind = null,
+        retry_at = null,
+        blocker_kind = null,
+        blocker_code = null,
+        blocker_message = null,
+        blocked_at = null,
+        phase = ${input.phase ?? null},
+        work_class = ${input.workClass ?? null},
+        progress = ${input.progress ?? {}},
+        lease_owner = null,
+        lease_token = null,
+        lease_heartbeat_at = null,
+        lease_expires_at = null,
+        updated_at = ${now}
+    where page_id = ${input.pageId}
+      and stream = ${input.stream}
+      and lease_token = ${input.leaseToken}
+      and leased_seq = ${input.requestSeq}
+      and status = 'running'
+      and lease_expires_at > clock_timestamp()
+  `);
+
+  const applied = (result.rowCount ?? 0) > 0;
+  if (applied) {
+    // Spread rather than `dependencyOptions: input.dependencyOptions`: under
+    // exactOptionalPropertyTypes an explicit `undefined` is not the same as an
+    // absent optional, and new code owes the strictness ratchet a clean file.
+    await refreshPageSyncDependencies(db, {
+      pageId: input.pageId,
+      now,
+      ...(input.dependencyOptions === undefined ? {} : { dependencyOptions: input.dependencyOptions }),
+    });
+  }
+
+  return applied;
+}
+
 export async function yieldPageSync(
   db: Database,
   input: {

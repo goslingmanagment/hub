@@ -15,6 +15,7 @@ import {
   retryPageSync,
   resolvePageSyncPriority,
   runWithPageSyncExecutionContext,
+  skipPageSync,
   startSyncRun,
   type PageSyncLease,
   type SyncRequestSource,
@@ -397,9 +398,13 @@ function resolveCurrentWorkClass(taskLease: PageSyncLease, stats: Record<string,
 function hasMeaningfulProgress(
   result: {
     satisfied: boolean;
+    gatedSkip?: string | null;
     stats?: Record<string, unknown>;
   },
 ) {
+  // A ramp-gated chunk issued zero requests. Treating it as progress moved
+  // progressed_at on every cycle and made a frozen stream look alive.
+  if (result.gatedSkip) return false;
   return result.satisfied || Boolean(result.stats && Object.keys(result.stats).length > 0);
 }
 export async function executeNextSyncPageChunk(
@@ -509,36 +514,66 @@ export async function executeNextSyncPageChunk(
     const progressAt = hasMeaningfulProgress(result) ? new Date() : taskLease.progressedAt;
 
     if (result.satisfied) {
-      const applied = await completePageSync(app.db, {
-        pageId: platformAccountId,
-        stream: taskLease.stream,
-        requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
-        leaseToken: taskLease.leaseToken ?? "",
-        progressedAt: progressAt,
-        phase,
-        workClass,
-        progress,
-        ...dependencyInput,
-      });
+      const applied = result.gatedSkip
+        ? await skipPageSync(app.db, {
+          pageId: platformAccountId,
+          stream: taskLease.stream,
+          requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
+          leaseToken: taskLease.leaseToken ?? "",
+          phase,
+          workClass,
+          progress,
+          ...dependencyInput,
+        })
+        : await completePageSync(app.db, {
+          pageId: platformAccountId,
+          stream: taskLease.stream,
+          requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
+          leaseToken: taskLease.leaseToken ?? "",
+          progressedAt: progressAt,
+          phase,
+          workClass,
+          progress,
+          ...dependencyInput,
+        });
       if (!applied) {
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
       }
 
-      const recoveredAt = new Date();
-      await telemetry.finish("success", null, {
-        chunkBudget: {
-          requestCount: budget.totalRequests,
-          elapsedMs: budget.elapsedMs,
-        },
-        ...result.stats,
-      });
-      await resolveSyncChunkRecoveryIncidents(app, {
-        platformAccountId,
-        pageLabel: pageContext.page.label,
-        platform: pageContext.platform,
-        recoveredAt,
-        stream: taskLease.stream,
-      });
+      if (result.gatedSkip) {
+        // The run outcome must not read as a success either: sync_runs feeds
+        // buildStreamSyncUx and the CLI snapshot. And a gated skip must NOT
+        // resolve incidents — resolveSyncChunkRecoveryIncidents closes
+        // stream_failed_threshold, which would clear an alert while the
+        // failure streak it was raised for is still on the row untouched.
+        await telemetry.finish("skipped", result.gatedSkip, {
+          chunkBudget: {
+            requestCount: budget.totalRequests,
+            elapsedMs: budget.elapsedMs,
+          },
+          ...result.stats,
+        });
+      } else {
+        const recoveredAt = new Date();
+        await telemetry.finish("success", null, {
+          chunkBudget: {
+            requestCount: budget.totalRequests,
+            elapsedMs: budget.elapsedMs,
+          },
+          ...result.stats,
+        });
+        await resolveSyncChunkRecoveryIncidents(app, {
+          platformAccountId,
+          pageLabel: pageContext.page.label,
+          platform: pageContext.platform,
+          recoveredAt,
+          stream: taskLease.stream,
+        });
+      }
+
+      // Shared tail on purpose: this "success" is the CHUNK SCHEDULER's
+      // outcome, not the sync's. A gated skip has nothing to retry, so telling
+      // the scheduler otherwise would only spin the executor.
       const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
       return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "success", continuationPriority);
     }

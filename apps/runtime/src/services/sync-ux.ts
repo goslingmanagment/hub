@@ -245,6 +245,20 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
     });
   }
 
+  if (stream.lastCompletion?.status === "skipped") {
+    // A skipped run did no work. Falling through to "healthy" printed
+    // "Up to date" over a stream whose feed was gated off for 13 days: the
+    // stale succeeded_at kept hasSuccessfulSync true (see the const above),
+    // and nothing else on this row disagreed.
+    return buildSummary("off", {
+      label: "Not updating",
+      headline: "Not updating",
+      detail: "This sync is gated off and is not fetching new data.",
+      progressLabel,
+      updatedAt,
+    });
+  }
+
   return buildSummary("healthy", {
     label: "Up to date",
     headline: "Up to date",
