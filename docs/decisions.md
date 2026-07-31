@@ -192,6 +192,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 188 | CI gate splits into shards | The single Quality Gate job becomes Static checks + a 3-way sharded Integration matrix + a same-named aggregator (branch protection matches the literal name); no test or harness file changes — measured 688s serial -> 234s per shard |
 | 190 | Voice launch hardening | Voice uses stateless quota refusal and heartbeated queued ownership; audio authorization moves into SQL, cost reconciliation accepts only non-negative PostgreSQL integers, and voice admission/dispatch join the existing material-time erasure fence |
 | 191 | A gated skip is not a successful sync | A ramp-gated chunk terminates through `skipPageSync` (no `succeeded_at`, no `progressed_at`, no touch of `consecutive_failures` / `last_error_*`), records `sync_runs.outcome = skipped` and resolves no incidents; the "Not updating" UX state is keyed on the recorded gate REASON, never on the `skipped` outcome (whose pre-existing producer is the lost-lease path on healthy streams), and bulk gated streams are excluded from the monitor's page/fleet rollup exactly as #166 already requires of sync-summary |
+| 192 | Ramp-gate wake-up | An admin config write that OPENS a Fansly ramp gate queues `fan_earnings`/`purchase_history` (source `recovery`) for the affected pages, dispatched on the planner's next minutely tick; the gate is read before and after the write so only non-ramped -> ramped transitions queue anything (a needless walk is ~1400 Fansly calls), and a wake-up failure is logged and swallowed instead of failing the config write |
 | 193 | Deleted fans in top-spenders | `pageTopSpenders` carries `entries[].deletedAt` (`fans.deleted_detected_at`, ISO, null = alive) so the board can tell a deleted account from an unloaded name and stop re-asking Fansly for ids it can never resolve; deleted fans stay IN the ranking because their spend is in the totals, and the field is `.optional()` because the kernel deploys independently of the extension |
 
 ## Consensus Decisions
@@ -5778,6 +5779,107 @@ allowlist edit narrows the set of pages. Both were rejected in favour of waking
 the affected streams the moment the gate opens (its own change), so that the
 recovery path is short enough not to need an alarm. This paragraph exists so
 that the absence of a watchdog reads as a decision rather than an oversight.
+**Decision #192 (2026-07-31, an admin config write that OPENS a ramp gate queues
+the affected streams):** On 2026-07-17 at 20:06 `fanslyNewStreamPageAllowlist`
+was narrowed from the empty "every page" value to `lilly-1,lilly-2`. That
+silently stopped `fan_earnings` for the lora pages, and their spenders
+projection stood still for thirteen days. The allowlist was restored on
+2026-07-31 — and even then nothing would have moved, because opening a ramp gate
+only changed which pages the executor STOPS skipping. Each stream still had to
+wait for its own slot, and `fan_earnings` ticks once a day. The owner-facing
+"sync all page streams" action is no help: it deliberately excludes the bulk
+streams.
+
+So the admin config write now queues the work itself. Both live config
+endpoints — `PATCH /api/v1/admin/config` and `DELETE /api/v1/admin/config/:key`
+— check the changed keys against the three ramp-gate keys
+(`fanslyNewStreamPageAllowlist`, `fanslyFanEarningsSyncEnabled`,
+`fanslyPurchaseHistorySyncEnabled`) and, on a hit, request `fan_earnings` /
+`purchase_history` with request source `recovery`. The DELETE path matters on
+its own: the string validator refuses an empty override value, so restoring the
+fully open "every page" allowlist is only possible by clearing the override,
+which is exactly the shape of the incident being fixed.
+
+**It is a transition detector, not a sweep.** The gate is read twice — once
+before the write, once after — and only a (page, stream) pair that moved from
+non-ramped to ramped is queued. This is the load-bearing constraint, not a
+refinement. A gated `fan_earnings` walk costs TWO Fansly calls per fan, and a
+completed walk resets its cursor to 0, so the next run is a full walk rather than
+an incremental one; on a page the size of lora-1 (697 spenders) one unwanted
+wake-up is on the order of 1400 unscheduled requests. The kernel is allowed to
+pull Fansly on a cadence — that is DP 1-B, and it is exactly why the cadence is
+the budget. The traffic leaves through the page's own proxy identity (Stage 26:
+every platform-bound request resolves its egress key per page, and a Fansly page
+must never reach the platform on a direct IP because a model ban is the failure
+mode), so a burst that the pull schedule never accounted for is spent against
+that identity. Note the attribution: "never exceed what the chatter's own
+browser session already does" is the EXTENSION's law, since it rides that
+session; the kernel's own constraint is per-page proxied egress at a designed
+cadence. A "queue whatever is open right now" version would have spent that
+burst on actions that open nothing: narrowing the allowlist (the very action
+that caused this incident), turning a stream flag OFF, re-writing a key with its
+existing value (the override writer does not compare old and new), and each step
+of the registry's own documented "enable one page at a time" rollout.
+
+Three further narrowings. The ramped verdict is computed with
+`resolveFanslyNewStreamState`, which is the REPORTER form of the gate — the same
+checks in the same order as the executor, sharing its allowlist primitive
+`fanslyNewStreamAllowed`, and the same function the `top-spenders` `source`
+block reports to the extension. The executor itself does not call it: it inlines
+the platform and flag checks and calls the shared allowlist primitive directly,
+so the allowlist rule is genuinely shared while the state ladder is a deliberate
+second implementation. Only the two gated streams are queued and only on Fansly
+pages. And pages are enumerated through the existing `listFanslyPages`
+repository listing (`platform = 'fansly'` and `status = 'active'`), so a
+tombstoned page is never woken; no new query was invented. `dependencyOptions`
+is not threaded through, because it only relaxes the OnlyFans OFAPI DM
+dependency graph and this path is Fansly-only.
+
+**The timing claim is "within a minute", not "immediately".** The handler writes
+durable intent (`request_seq > applied_seq`); dispatch happens when the sync
+planner's `* * * * *` schedule next ticks and `listRunnablePageSync` picks the
+page up. Sending a pg-boss wake-up straight from the handler was considered and
+rejected: it would add a second dispatch path out of an HTTP route in order to
+save under a minute, against the twenty-four hours this already removes.
+
+The wake-up runs AFTER `setConfigOverridesAtomic` and `recordAudit`, and it is
+wrapped so that a failure is logged and swallowed. By that point the override is
+already written and audited; turning a successful, durable config change into an
+HTTP error because a convenience follow-up failed would be strictly worse than
+waiting for the next slot, which is the pre-existing behavior anyway. The
+pre-write snapshot is wrapped the same way and degrades to "no wake-up".
+
+Transition-awareness has one operational consequence worth writing down,
+because it is not obvious: a swallowed wake-up failure CANNOT be retried by
+saving the same value again. That second write is correctly a no-op — the gate
+did not move — so the page keeps waiting for its normal slot. To force a
+wake-up after a logged failure, toggle the stream's flag off and back on: the
+off write moves the gate to `flag_off` and the on write is then a real
+non-ramped -> ramped transition.
+
+Rejected alternatives and the gaps they leave, all in one place. Having the
+PLANNER notice the transition — persist the last gate verdict per (page,
+stream) and reconcile on each tick — was rejected as too much machinery for this
+incident, but it is the strictly more complete design, because it would cover
+every write path rather than only the HTTP one. Two gaps follow from that.
+First, a gate opened through the environment plus a restart, or through any
+override write that does not go through these two endpoints, wakes nothing and
+still waits up to one slot. Second, a known concurrency limitation, found in
+review on 2026-07-31 and ruled backlog rather than fix: the before-snapshot is
+not serialized with the config write, so two concurrent owner PATCHes on the
+same gate key without `expectedVersion` can interleave such that neither handler
+observes the transition, and the stream again waits for its normal slot. Closing
+it would mean taking the snapshot under the same lock as
+`setConfigOverridesAtomic`, widening the config repository's transaction
+boundary for a case whose worst outcome is a fallback to the behavior that
+existed before this decision.
+
+Separately, and as an explicit owner decision the same day, no watchdog alerts
+the owner about a long-gated stream and no warning fires when an allowlist is
+narrowed. The recurrence defense is this wake-up plus the honest reporting of a
+gated skip; the rejected guards are recorded here so the omissions read as
+decisions rather than oversights.
+
 **Decision #193 (2026-07-31, `top-spenders` carries the deleted-fan marker in
 `entries[]`):** The spenders board had no way to tell "this account was deleted
 on the platform" from "the name has not loaded yet". On `lora-1`, 209 of the

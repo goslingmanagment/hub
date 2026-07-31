@@ -225,6 +225,13 @@ describe("class-aware pacing properties (Stage 26)", () => {
 
     // Six concurrent bulk pacers: a saturated backfill. Each is two-phase —
     // it claims the vendor row only when its class slot arrives.
+    // `backlogStart` is captured BEFORE the pacers so the depth assertion below
+    // measures how far the backlog pushed the class row, not how much of that
+    // horizon is left after this test's own setup. Measured from `now` it was
+    // machine-speed-dependent: on a loaded CI runner the 60 ms wait and the row
+    // reads consumed enough of the ~1200 ms budget to fail (observed 193 ms and
+    // even -60 ms remaining), while the same shard passed locally.
+    const backlogStart = Date.now();
     const bulkRuns = Array.from({ length: 6 }, () => pacer.pace("bulk"));
     await new Promise((resolve) => setTimeout(resolve, 60));
 
@@ -232,7 +239,7 @@ describe("class-aware pacing properties (Stage 26)", () => {
     const classNext = (await readRow("class:bulk")).getTime();
     const vendorNext = (await readRow("vendor_global")).getTime();
     // The queue is parked on class:bulk (≈ 6 slots deep)…
-    expect(classNext - now).toBeGreaterThan(capMs * 3);
+    expect(classNext - backlogStart).toBeGreaterThan(capMs * 3);
     // …while the vendor row holds only imminent sends.
     expect(vendorNext - now).toBeLessThanOrEqual(capMs * 2);
 
