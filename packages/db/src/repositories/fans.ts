@@ -780,9 +780,10 @@ export async function maxPageSubscriptionGeneration(db: Database, platformAccoun
   return parseGenerationHighWater(result.rows[0]?.generation, "page_subscriptions");
 }
 
-export async function upsertPageSubscriptions(
+async function writePageSubscriptions(
   db: Database,
   inputs: UpsertPageSubscriptionInput[],
+  isCurrent: boolean,
 ) {
   if (inputs.length === 0) {
     return;
@@ -794,73 +795,108 @@ export async function upsertPageSubscriptions(
     (_current, next) => next,
   );
   const lastSeenAt = new Date();
-
-  await db
-    .insert(pageSubscriptions)
-    .values(deduped.map((input) => ({
-      platformSubscriptionId: input.platformSubscriptionId,
-      platformAccountId: input.platformAccountId,
-      fanId: input.fanId,
-      platformHistoryId: input.platformHistoryId ?? null,
-      subscriptionTierId: input.subscriptionTierId ?? null,
-      subscriptionTierName: input.subscriptionTierName ?? null,
-      subscriptionTierColor: input.subscriptionTierColor ?? null,
-      planId: input.planId ?? null,
-      rawStatus: input.rawStatus,
-      canonicalStatus: input.canonicalStatus,
-      priceMills: input.priceMills,
-      renewPriceMills: input.renewPriceMills,
-      autoRenew: input.autoRenew ?? null,
-      autoRenewOffDetectedAt: input.autoRenewOffDetectedAt ?? (
-        input.autoRenew === false ? lastSeenAt : null
-      ),
-      billingCycleDays: input.billingCycleDays ?? null,
-      durationDays: input.durationDays ?? null,
-      renewDate: input.renewDate ?? null,
-      sourceCreatedAt: input.sourceCreatedAt ?? null,
-      sourceUpdatedAt: input.sourceUpdatedAt ?? null,
-      endsAt: input.endsAt ?? null,
-      isCurrent: true,
-      lastSeenGeneration: input.lastSeenGeneration ?? null,
-      lastSeenAt,
-    })))
-    .onConflictDoUpdate({
-      target: [pageSubscriptions.platformAccountId, pageSubscriptions.platformSubscriptionId],
-      set: {
-        platformAccountId: sql`excluded.platform_account_id`,
-        fanId: sql`excluded.fan_id`,
-        platformHistoryId: sql`excluded.platform_history_id`,
-        subscriptionTierId: sql`excluded.subscription_tier_id`,
-        subscriptionTierName: sql`excluded.subscription_tier_name`,
-        subscriptionTierColor: sql`excluded.subscription_tier_color`,
-        planId: sql`excluded.plan_id`,
-        rawStatus: sql`excluded.raw_status`,
-        canonicalStatus: sql`excluded.canonical_status`,
-        priceMills: sql`excluded.price_mills`,
-        renewPriceMills: sql`excluded.renew_price_mills`,
-        autoRenew: sql`excluded.auto_renew`,
-        autoRenewOffDetectedAt: sql`
+  const rows = deduped.map((input) => ({
+    platformSubscriptionId: input.platformSubscriptionId,
+    platformAccountId: input.platformAccountId,
+    fanId: input.fanId,
+    platformHistoryId: input.platformHistoryId ?? null,
+    subscriptionTierId: input.subscriptionTierId ?? null,
+    subscriptionTierName: input.subscriptionTierName ?? null,
+    subscriptionTierColor: input.subscriptionTierColor ?? null,
+    planId: input.planId ?? null,
+    rawStatus: input.rawStatus,
+    canonicalStatus: input.canonicalStatus,
+    priceMills: input.priceMills,
+    renewPriceMills: input.renewPriceMills,
+    autoRenew: input.autoRenew ?? null,
+    autoRenewOffDetectedAt: input.autoRenewOffDetectedAt ?? (
+      input.autoRenew === false ? lastSeenAt : null
+    ),
+    billingCycleDays: input.billingCycleDays ?? null,
+    durationDays: input.durationDays ?? null,
+    renewDate: input.renewDate ?? null,
+    sourceCreatedAt: input.sourceCreatedAt ?? null,
+    sourceUpdatedAt: input.sourceUpdatedAt ?? null,
+    endsAt: input.endsAt ?? null,
+    isCurrent,
+    lastSeenGeneration: input.lastSeenGeneration ?? null,
+    lastSeenAt,
+  }));
+  const updateSet = {
+    platformAccountId: sql`excluded.platform_account_id`,
+    fanId: sql`excluded.fan_id`,
+    platformHistoryId: sql`excluded.platform_history_id`,
+    subscriptionTierId: sql`excluded.subscription_tier_id`,
+    subscriptionTierName: sql`excluded.subscription_tier_name`,
+    subscriptionTierColor: sql`excluded.subscription_tier_color`,
+    planId: sql`excluded.plan_id`,
+    rawStatus: sql`excluded.raw_status`,
+    canonicalStatus: sql`excluded.canonical_status`,
+    priceMills: sql`excluded.price_mills`,
+    renewPriceMills: sql`excluded.renew_price_mills`,
+    autoRenew: sql`excluded.auto_renew`,
+    autoRenewOffDetectedAt: sql`
+      case
+        when excluded.auto_renew is false then
           case
-            when excluded.auto_renew is false then
-              case
-                when ${pageSubscriptions.autoRenew} is distinct from false then excluded.auto_renew_off_detected_at
-                else coalesce(${pageSubscriptions.autoRenewOffDetectedAt}, excluded.auto_renew_off_detected_at)
-              end
-            when excluded.auto_renew is true then null
-            else ${pageSubscriptions.autoRenewOffDetectedAt}
+            when ${pageSubscriptions.autoRenew} is distinct from false then excluded.auto_renew_off_detected_at
+            else coalesce(${pageSubscriptions.autoRenewOffDetectedAt}, excluded.auto_renew_off_detected_at)
           end
-        `,
-        billingCycleDays: sql`excluded.billing_cycle_days`,
-        durationDays: sql`excluded.duration_days`,
-        renewDate: sql`excluded.renew_date`,
-        sourceCreatedAt: sql`excluded.source_created_at`,
-        sourceUpdatedAt: sql`excluded.source_updated_at`,
-        endsAt: sql`excluded.ends_at`,
-        isCurrent: true,
-        lastSeenGeneration: sql`excluded.last_seen_generation`,
-        lastSeenAt,
-      },
-    });
+        when excluded.auto_renew is true then null
+        else ${pageSubscriptions.autoRenewOffDetectedAt}
+      end
+    `,
+    billingCycleDays: sql`excluded.billing_cycle_days`,
+    durationDays: sql`excluded.duration_days`,
+    renewDate: sql`excluded.renew_date`,
+    sourceCreatedAt: sql`excluded.source_created_at`,
+    sourceUpdatedAt: sql`excluded.source_updated_at`,
+    endsAt: sql`excluded.ends_at`,
+    isCurrent: sql`excluded.is_current`,
+    lastSeenGeneration: sql`excluded.last_seen_generation`,
+    lastSeenAt,
+  };
+
+  if (isCurrent) {
+    await db
+      .insert(pageSubscriptions)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: [pageSubscriptions.platformAccountId, pageSubscriptions.platformSubscriptionId],
+        set: updateSet,
+      });
+  } else {
+    await db
+      .insert(pageSubscriptions)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: [pageSubscriptions.platformAccountId, pageSubscriptions.platformSubscriptionId],
+        set: {
+          ...updateSet,
+          // last_seen_at is the historical retirement stamp once a row is
+          // inactive. A later archive refresh may improve metadata, but must
+          // not move that factual boundary to the backfill date.
+          lastSeenAt: pageSubscriptions.lastSeenAt,
+        },
+        // History backfill is archive-only: a stale status=5 row must never
+        // turn a concurrently active subscription off.
+        setWhere: eq(pageSubscriptions.isCurrent, false),
+      });
+  }
+}
+
+export async function upsertPageSubscriptions(
+  db: Database,
+  inputs: UpsertPageSubscriptionInput[],
+) {
+  return writePageSubscriptions(db, inputs, true);
+}
+
+export async function upsertArchivedPageSubscriptions(
+  db: Database,
+  inputs: UpsertPageSubscriptionInput[],
+) {
+  return writePageSubscriptions(db, inputs, false);
 }
 
 export async function deactivatePageFollowsByGeneration(

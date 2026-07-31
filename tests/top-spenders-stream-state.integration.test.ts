@@ -145,12 +145,18 @@ describe("pageTopSpenders source.streamState (W8.1)", () => {
       fanslyFanEarningsSyncEnabled: true,
       fanslyNewStreamPageAllowlist: "",
     });
-    // Give the fan_earnings stream a real success + failure history.
+    // Give the fan_earnings cursor a real data success plus state failures.
     const succeededAt = new Date("2026-07-10T06:00:00Z");
     await testDb.pool.query(
       `update page_sync_states
-         set succeeded_at = $2, consecutive_failures = 3
+         set consecutive_failures = 3
        where page_id = $1 and stream = 'fan_earnings'`,
+      [fansly.id],
+    );
+    await testDb.pool.query(
+      `insert into page_sync_cursors (
+         page_id, stream, state, updated_at, last_succeeded_at
+       ) values ($1, 'fan_earnings', '{}'::jsonb, $2, $2)`,
       [fansly.id, succeededAt],
     );
 

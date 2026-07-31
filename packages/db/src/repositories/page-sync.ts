@@ -47,6 +47,22 @@ export type SyncRequestSource =
   | "reset";
 export type SyncWorkClass = "live" | "history" | "maintenance";
 
+export const FANSLY_BULK_SYNC_STREAMS = [
+  "fan_earnings",
+  "purchase_history",
+] as const;
+
+export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
+export type FanslyBulkStreamGateState = "ramped" | "flag_off" | "not_allowlisted";
+export type FanslyBulkStreamGateAction = "paused" | "resumed" | "unchanged";
+
+export interface FanslyBulkStreamGateReconcileResult {
+  action: FanslyBulkStreamGateAction;
+  createdRecoveryGeneration: boolean;
+}
+
+export const FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND = "feature_gate";
+
 export interface SyncStreamPolicy {
   stream: SyncStream;
   domain: SyncDomain;
@@ -892,6 +908,197 @@ export async function getPageSyncState(
   });
 
   return rows[0] ?? null;
+}
+
+/**
+ * Reconciles one durable Fansly bulk-stream state with its live rollout gate.
+ *
+ * The feature-gate blocker is ownership metadata: only rows carrying this
+ * marker (plus the narrow legacy skipped-success shape) may be auto-resumed.
+ * A row lock makes gate flips and the recovery-generation request atomic.
+ */
+export async function reconcileFanslyBulkStreamGate(
+  db: Database,
+  input: {
+    pageId: number;
+    stream: FanslyBulkSyncStream;
+    gateState: FanslyBulkStreamGateState;
+    now?: Date;
+  },
+): Promise<FanslyBulkStreamGateReconcileResult> {
+  const now = input.now ?? new Date();
+
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const [current] = await listPageSyncStatesInternal(database, {
+      pageId: input.pageId,
+      streams: [input.stream],
+    }, { lock: true });
+
+    if (!current) {
+      return {
+        action: "unchanged",
+        createdRecoveryGeneration: false,
+      };
+    }
+
+    if (input.gateState !== "ramped") {
+      if (current.status === "running") {
+        return {
+          action: "unchanged",
+          createdRecoveryGeneration: false,
+        };
+      }
+
+      const featureGateOwned =
+        current.blockerKind === FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND;
+      const unblockedSchedulable =
+        current.blockerKind === null &&
+        (
+          current.status === "idle" ||
+          current.status === "pending" ||
+          current.status === "retrying"
+        );
+      const dependencyBlocked =
+        current.status === "blocked" && current.blockerKind === "dependency";
+
+      // Paused/auth/manual/other blocked rows are owned by their respective
+      // operators and must not be relabelled as feature-gated.
+      if (!featureGateOwned && !unblockedSchedulable && !dependencyBlocked) {
+        return {
+          action: "unchanged",
+          createdRecoveryGeneration: false,
+        };
+      }
+
+      const blockerMessage = input.gateState === "flag_off"
+        ? `${input.stream} is disabled by the Fansly bulk-stream feature flag`
+        : `${input.stream} is outside the Fansly bulk-stream rollout allowlist`;
+      const alreadyReconciled =
+        current.status === "paused" &&
+        featureGateOwned &&
+        current.blockerCode === input.gateState &&
+        current.blockerMessage === blockerMessage &&
+        current.blockedAt !== null;
+
+      if (alreadyReconciled) {
+        return {
+          action: "unchanged",
+          createdRecoveryGeneration: false,
+        };
+      }
+
+      await database.execute(sql`
+        update ${pageSyncStates}
+        set status = 'paused'::page_sync_status,
+            blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND},
+            blocker_code = ${input.gateState},
+            blocker_message = ${blockerMessage},
+            blocked_at = case
+                           when blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND}
+                             then coalesce(blocked_at, ${now})
+                           else ${now}
+                         end,
+            leased_seq = null,
+            lease_owner = null,
+            lease_token = null,
+            lease_heartbeat_at = null,
+            lease_expires_at = null,
+            updated_at = ${now}
+        where page_id = ${input.pageId}
+          and stream = ${input.stream}
+      `);
+
+      return {
+        action: "paused",
+        createdRecoveryGeneration: false,
+      };
+    }
+
+    if (current.status === "running") {
+      return {
+        action: "unchanged",
+        createdRecoveryGeneration: false,
+      };
+    }
+
+    const featureGateOwned =
+      current.blockerKind === FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND;
+    const legacySkipReason = current.progress.skipped;
+    const legacySkippedSuccess =
+      current.status === "idle" &&
+      current.blockerKind === null &&
+      (legacySkipReason === "flag_off" || legacySkipReason === "not_allowlisted");
+
+    if (!featureGateOwned && !legacySkippedSuccess) {
+      return {
+        action: "unchanged",
+        createdRecoveryGeneration: false,
+      };
+    }
+
+    if (current.requestSeq < current.appliedSeq) {
+      throw new Error(
+        `Invalid generation state for ${input.stream} on page ${input.pageId}: ` +
+          `request_seq ${current.requestSeq} is behind applied_seq ${current.appliedSeq}`,
+      );
+    }
+
+    const createdRecoveryGeneration = current.requestSeq === current.appliedSeq;
+    const nextRequestSeq = createdRecoveryGeneration
+      ? current.requestSeq + 1
+      : current.requestSeq;
+    const retryBackoffActive =
+      current.retryAt !== null && current.retryAt.getTime() > now.getTime();
+    const nextStatus: PageSyncStatus = retryBackoffActive ? "retrying" : "pending";
+
+    if (createdRecoveryGeneration) {
+      const currentSlot = computeCurrentPageSyncSlot(
+        now,
+        current.cadenceSeconds,
+        current.slotOffsetSeconds,
+      );
+      await database.execute(sql`
+        update ${pageSyncStates}
+        set status = ${nextStatus}::page_sync_status,
+            request_seq = ${nextRequestSeq},
+            request_source = 'recovery'::sync_request_source,
+            dispatch_source = 'recovery'::sync_request_source,
+            request_payload = '{}'::jsonb,
+            requested_at = ${now},
+            enqueued_at = null,
+            last_scheduled_slot = ${currentSlot},
+            blocker_kind = null,
+            blocker_code = null,
+            blocker_message = null,
+            blocked_at = null,
+            progress = coalesce(progress, '{}'::jsonb) - 'skipped',
+            updated_at = ${now}
+        where page_id = ${input.pageId}
+          and stream = ${input.stream}
+      `);
+    } else {
+      await database.execute(sql`
+        update ${pageSyncStates}
+        set status = ${nextStatus}::page_sync_status,
+            requested_at = ${now},
+            enqueued_at = null,
+            blocker_kind = null,
+            blocker_code = null,
+            blocker_message = null,
+            blocked_at = null,
+            progress = coalesce(progress, '{}'::jsonb) - 'skipped',
+            updated_at = ${now}
+        where page_id = ${input.pageId}
+          and stream = ${input.stream}
+      `);
+    }
+
+    return {
+      action: "resumed",
+      createdRecoveryGeneration,
+    };
+  });
 }
 
 async function repairLegacyLightTrustedPageSyncStates(
@@ -2117,6 +2324,26 @@ export async function pausePageSync(
       await database.execute(sql`
         update ${pageSyncStates}
         set status = 'paused',
+            blocker_kind = case
+                             when blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND}
+                               then null
+                             else blocker_kind
+                           end,
+            blocker_code = case
+                             when blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND}
+                               then null
+                             else blocker_code
+                           end,
+            blocker_message = case
+                                when blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND}
+                                  then null
+                                else blocker_message
+                              end,
+            blocked_at = case
+                           when blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND}
+                             then null
+                           else blocked_at
+                         end,
             leased_seq = null,
             lease_owner = null,
             lease_token = null,
@@ -2131,12 +2358,10 @@ export async function pausePageSync(
 }
 
 /**
- * Kernel Stage 26: typed auth death parks the WHOLE page — every stream goes
- * to FSM `paused` with blocker_kind='auth' stamped, so quota stops burning on
- * a dead session and the planner skips the page within one cycle. The stamp
- * is what makes the pause reversible precisely: clearPageSyncAuthBlock (the
- * successful re-verify path) matches blocker_kind='auth' and restores
- * idle/pending without touching deliberately-paused streams (feature gates).
+ * Kernel Stage 26: typed auth death parks every runnable stream on the page
+ * with blocker_kind='auth', so quota stops burning on a dead session. Streams
+ * already parked by an operator or feature gate keep that ownership marker.
+ * clearPageSyncAuthBlock can therefore restore only the rows auth paused.
  */
 export async function pausePageSyncForAuth(
   db: Database,
@@ -2173,6 +2398,11 @@ export async function pausePageSyncForAuth(
             updated_at = ${now}
         where page_id = ${input.pageId}
           and stream = ${stream}
+          -- An already-paused stream is owned by a feature gate or an
+          -- operator. It is already safely parked; auth must not replace the
+          -- marker that tells the matching resume path who may release it.
+          -- Auth-owned rows may refresh their own diagnostic timestamp.
+          and (status <> 'paused' or blocker_kind = 'auth')
       `);
     }
   });

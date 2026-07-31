@@ -1,3 +1,5 @@
+import { FanslyPurchaseHistoryContractError } from "./errors.ts";
+
 type JsonRecord = Record<string, unknown>;
 
 export type FanslyPurchaseHistoryTarget = {
@@ -5,10 +7,30 @@ export type FanslyPurchaseHistoryTarget = {
   contentId: string;
 };
 
-export type FanslyPurchaseHistoryCursorState = {
+export type FanslyPurchaseHistoryCursorStateV2 = {
   version: 2;
   rawPayloadCursorId: number;
   pendingTargets: FanslyPurchaseHistoryTarget[];
+};
+
+export type FanslyPurchaseHistoryCursorStateV3 = {
+  version: 3;
+  transactionCursorId: number;
+  rawPayloadCursorId: number;
+  pendingTargets: FanslyPurchaseHistoryTarget[];
+};
+
+/**
+ * The union keeps the executor source-compatible while it adopts v3. Parsed
+ * state is always normalized to v3; v2 exists only as an on-read migration.
+ */
+export type FanslyPurchaseHistoryCursorState =
+  | FanslyPurchaseHistoryCursorStateV2
+  | FanslyPurchaseHistoryCursorStateV3;
+
+export type FanslyMessagePurchaseTargetSource = {
+  rawType: string | number;
+  correlationId: string | null;
 };
 
 export const FANSLY_PURCHASE_HISTORY_RESULT_LIMIT = 100;
@@ -78,6 +100,129 @@ function hasPpvPermission(item: JsonRecord) {
 
 export function fanslyPurchaseHistoryTargetKey(target: FanslyPurchaseHistoryTarget) {
   return `${target.kind}:${target.contentId}`;
+}
+
+function purchaseHistoryTargetFromTargetKey(
+  targetKey: string,
+): FanslyPurchaseHistoryTarget | null {
+  if (targetKey.startsWith("single:") && targetKey.length > "single:".length) {
+    return {
+      kind: "single",
+      contentId: targetKey.slice("single:".length),
+    };
+  }
+  if (targetKey.startsWith("bundle:") && targetKey.length > "bundle:".length) {
+    return {
+      kind: "bundle",
+      contentId: targetKey.slice("bundle:".length),
+    };
+  }
+  return null;
+}
+
+/**
+ * Extends the transaction-batch contract check across checkpoint/capture and
+ * source boundaries. A content id is global, so observing it in both request
+ * namespaces is ambiguous regardless of which chunk found each occurrence.
+ */
+export function assertFanslyPurchaseHistoryTargetKindsConsistent(
+  targets: readonly FanslyPurchaseHistoryTarget[],
+  knownTargetKeys: Iterable<string> = [],
+) {
+  const knownKinds = new Map<
+    string,
+    Set<FanslyPurchaseHistoryTarget["kind"]>
+  >();
+  for (const targetKey of knownTargetKeys) {
+    const target = purchaseHistoryTargetFromTargetKey(targetKey);
+    if (!target) {
+      continue;
+    }
+    const kinds = knownKinds.get(target.contentId) ?? new Set();
+    kinds.add(target.kind);
+    knownKinds.set(target.contentId, kinds);
+  }
+
+  const observedKinds = new Map<string, FanslyPurchaseHistoryTarget["kind"]>();
+  const record = (target: FanslyPurchaseHistoryTarget) => {
+    const existingKind = observedKinds.get(target.contentId);
+    if (existingKind && existingKind !== target.kind) {
+      throw new FanslyPurchaseHistoryContractError({
+        code: "purchase_history_target_kind_conflict",
+        message:
+          `Fansly content ${target.contentId} appeared as both ${existingKind} and ${target.kind}; refusing to guess the order-history parameter`,
+      });
+    }
+    const capturedKinds = knownKinds.get(target.contentId);
+    if (
+      capturedKinds &&
+      capturedKinds.size === 1 &&
+      !capturedKinds.has(target.kind)
+    ) {
+      const [capturedKind] = capturedKinds;
+      throw new FanslyPurchaseHistoryContractError({
+        code: "purchase_history_target_kind_conflict",
+        message:
+          `Fansly content ${target.contentId} appeared as both ${capturedKind} and ${target.kind}; refusing to guess the order-history parameter`,
+      });
+    }
+    observedKinds.set(target.contentId, target.kind);
+  };
+
+  for (const target of targets) {
+    record(target);
+  }
+}
+
+function purchaseHistoryTargetKindFromRawType(
+  rawType: string | number,
+): FanslyPurchaseHistoryTarget["kind"] | null {
+  switch (String(rawType)) {
+    case "2010":
+    case "2110":
+      return "single";
+    case "2016":
+    case "2116":
+      return "bundle";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Converts already-captured Fansly money facts into media-scoped discovery
+ * targets. Duplicate sales of the same content collapse to one GET. The same
+ * content id appearing in both media namespaces is contract drift: choosing a
+ * request parameter would be a guess, so fail closed before provider egress.
+ */
+export function extractFanslyPurchaseHistoryTargetsFromTransactions(
+  rows: readonly FanslyMessagePurchaseTargetSource[],
+): FanslyPurchaseHistoryTarget[] {
+  const targets = new Map<string, FanslyPurchaseHistoryTarget>();
+
+  for (const row of rows) {
+    const kind = purchaseHistoryTargetKindFromRawType(row.rawType);
+    const contentId = typeof row.correlationId === "string"
+      ? row.correlationId.trim()
+      : "";
+    if (!kind || !contentId) {
+      continue;
+    }
+
+    const existing = targets.get(contentId);
+    if (existing && existing.kind !== kind) {
+      throw new FanslyPurchaseHistoryContractError({
+        code: "purchase_history_target_kind_conflict",
+        message:
+          `Fansly content ${contentId} appeared as both ${existing.kind} and ${kind}; refusing to guess the order-history parameter`,
+      });
+    }
+    if (!existing) {
+      targets.set(contentId, { kind, contentId });
+    }
+  }
+
+  return [...targets.values()];
 }
 
 function purchaseHistoryContentIdFromTargetKey(targetKey: string) {
@@ -209,13 +354,20 @@ export function extractFanslyPurchaseHistoryTargets(
 
 export function parseFanslyPurchaseHistoryCursorState(
   value: unknown,
-): FanslyPurchaseHistoryCursorState | null {
+): FanslyPurchaseHistoryCursorStateV3 | null {
   const state = asRecord(value);
-  if (asNumber(state?.version) !== 2) {
+  const version = asNumber(state?.version);
+  if (version !== 2 && version !== 3) {
     return null;
   }
   const rawPayloadCursorId = asNumber(state?.rawPayloadCursorId);
   if (rawPayloadCursorId === null || rawPayloadCursorId < 0) {
+    return null;
+  }
+  const transactionCursorId = version === 2
+    ? 0
+    : asNumber(state?.transactionCursorId);
+  if (transactionCursorId === null || transactionCursorId < 0) {
     return null;
   }
 
@@ -236,7 +388,8 @@ export function parseFanslyPurchaseHistoryCursorState(
   }
 
   return {
-    version: 2,
+    version: 3,
+    transactionCursorId,
     rawPayloadCursorId,
     pendingTargets,
   };

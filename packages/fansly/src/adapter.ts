@@ -211,6 +211,7 @@ export class FanslyAdapter {
       status?: string;
     },
   ) {
+    const status = params.status ?? "3,4";
     const response = await this.request<FanslySubscribersPage>(context, "/subscribers", {
       operation: "subscribers",
       endpointTemplate: "/subscribers",
@@ -219,7 +220,7 @@ export class FanslyAdapter {
         limit: params.limit != null ? String(params.limit) : undefined,
         after: params.after ? String(params.after.getTime()) : undefined,
         before: params.before ? String(params.before.getTime()) : undefined,
-        status: params.status ?? "3,4",
+        status,
       },
       category: "subscribers",
       requestShape: {
@@ -227,28 +228,45 @@ export class FanslyAdapter {
         limit: params.limit ?? 100,
         after: params.after ? params.after.toISOString() : null,
         before: params.before ? params.before.toISOString() : null,
-        status: params.status ?? "3,4",
+        status,
       },
       pagination: {
         offset: params.offset ?? 0,
         limit: params.limit ?? 100,
       },
       summarizeResponse: (parsed) => ({
-        // The page is filtered to active statuses, so report the active total to
-        // keep telemetry consistent with the returned `total` below.
-        total: parsed.stats.totalActive,
+        total: status === "5"
+          ? parsed.stats.totalExpired
+          : status === "3,4"
+            ? parsed.stats.totalActive
+            : parsed.stats.total,
         totalActive: parsed.stats.totalActive,
+        totalExpired: parsed.stats.totalExpired,
         returnedItems: parsed.subscriptions.length,
-        done: parsed.subscriptions.length < (params.limit ?? 100),
+        done: parsed.subscriptions.length < (params.limit ?? 100) ||
+          (params.offset ?? 0) + parsed.subscriptions.length >= (
+            status === "5"
+              ? parsed.stats.totalExpired
+              : status === "3,4"
+                ? parsed.stats.totalActive
+                : parsed.stats.total
+          ),
       }),
     });
 
     const limit = params.limit ?? 100;
+    const offset = params.offset ?? 0;
+    const total = status === "5"
+      ? response.parsed.stats.totalExpired
+      : status === "3,4"
+        ? response.parsed.stats.totalActive
+        : response.parsed.stats.total;
     return {
-      total: response.parsed.stats.totalActive,
+      total,
       items: response.parsed.subscriptions,
-      offset: params.offset ?? 0,
-      done: response.parsed.subscriptions.length < limit,
+      offset,
+      done: response.parsed.subscriptions.length < limit ||
+        offset + response.parsed.subscriptions.length >= total,
       raw: response.raw,
     };
   }

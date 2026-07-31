@@ -13,6 +13,7 @@ import {
   insertRawPayload,
   startSyncRun,
   upsertCheckpointProgress,
+  upsertTransaction,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
@@ -159,6 +160,130 @@ async function buildChunkInput(page: { id: number }, telemetry: ReturnType<typeo
 }
 
 describe("Stage 16 media-scoped purchase-history walk", () => {
+  it("discovers uncaptured media targets from message-purchase transactions", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const baseTransaction = {
+      platformAccountId: page.id,
+      source: "fansly:rest" as const,
+      transactionState: "posted" as const,
+      rawStatus: "1",
+      grossAmountMills: 10_000n,
+      sourceDestinationAmountMills: 10_000n,
+      creatorNetAmountMills: 8_000n,
+      occurredAt: new Date("2026-07-30T12:00:00.000Z"),
+    };
+    await upsertTransaction(appContext.db, {
+      ...baseTransaction,
+      transactionId: "tx-media",
+      correlationId: "media-from-tx",
+      rawType: "2110",
+      canonicalType: "message_purchase",
+    });
+    await upsertTransaction(appContext.db, {
+      ...baseTransaction,
+      transactionId: "tx-bundle",
+      correlationId: "bundle-from-tx",
+      rawType: "2116",
+      canonicalType: "message_purchase",
+    });
+    await upsertTransaction(appContext.db, {
+      ...baseTransaction,
+      transactionId: "tx-tip",
+      correlationId: "not-media",
+      rawType: "7001",
+      canonicalType: "tip",
+    });
+
+    const requested: Array<Record<string, unknown>> = [];
+    appContext = {
+      ...appContext,
+      adapter: {
+        async getMediaOrderHistoryPage(_requestContext: unknown, params: Record<string, unknown>) {
+          requested.push(params);
+          return { items: [], raw: { accountMediaOrderHistory: [] } };
+        },
+      } as never,
+    };
+
+    const result = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    );
+
+    expect(requested).toEqual([
+      { accountMediaId: "media-from-tx", limit: 100 },
+      { accountMediaBundleId: "bundle-from-tx", limit: 100 },
+    ]);
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: {
+        transactionRowsScanned: 2,
+        transactionTargetsDiscovered: 2,
+        targetsFetched: 2,
+        walkCompleted: true,
+      },
+    });
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
+    expect(checkpoint?.state).toMatchObject({
+      version: 3,
+      transactionCursorId: expect.any(Number),
+      pendingTargets: [],
+    });
+
+    requested.length = 0;
+    const second = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    );
+    expect(second.satisfied).toBe(true);
+    expect(requested).toEqual([]);
+  });
+
+  it("fails before egress when a transaction conflicts with a captured target kind", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await capturePurchaseHistoryTarget(page.id, {
+      requestParams: { accountMediaId: "ambiguous-content" },
+      responsePayload: { accountMediaOrderHistory: [] },
+    });
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      transactionId: "tx-conflicting-bundle",
+      source: "fansly:rest",
+      transactionState: "posted",
+      rawStatus: "1",
+      rawType: "2116",
+      canonicalType: "message_purchase",
+      correlationId: "ambiguous-content",
+      grossAmountMills: 10_000n,
+      sourceDestinationAmountMills: 10_000n,
+      creatorNetAmountMills: 8_000n,
+      occurredAt: new Date("2026-07-30T12:00:00.000Z"),
+    });
+    const request = vi.fn();
+    appContext = {
+      ...appContext,
+      adapter: {
+        getMediaOrderHistoryPage: request,
+      } as never,
+    };
+
+    await expect(executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    )).rejects.toMatchObject({
+      code: "purchase_history_target_kind_conflict",
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("discovers PPV media from captured DMs and never sends accountIds", async (context) => {
     if (!testDb) {
       context.skip();
@@ -408,7 +533,7 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     ).rejects.toThrow("invalid params");
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
     expect(checkpoint?.state).toMatchObject({
-      version: 2,
+      version: 3,
       pendingTargets: expect.arrayContaining([
         { kind: "bundle", contentId: "bundle-1" },
       ]),

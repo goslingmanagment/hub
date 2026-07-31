@@ -67,7 +67,7 @@ const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
 
 export interface SyncPageChunkResult {
-  kind: "idle" | "success" | "yielded" | "failed" | "blocked";
+  kind: "idle" | "success" | "skipped" | "yielded" | "failed" | "blocked";
   platformAccountId: number;
   stream: SyncStream | null;
   runId: number | null;
@@ -336,9 +336,9 @@ function classifyTaskFailure(
   };
 }
 
-function sanitizeProgressPayload(taskLease: PageSyncLease, stats: Record<string, unknown> | undefined) {
+function sanitizeProgressPayload(stats: Record<string, unknown> | undefined) {
   if (!stats || Object.keys(stats).length === 0) {
-    return taskLease.progress;
+    return {};
   }
 
   const next = Object.fromEntries(
@@ -358,10 +358,7 @@ function sanitizeProgressPayload(taskLease: PageSyncLease, stats: Record<string,
       .slice(0, 12),
   );
 
-  return {
-    ...taskLease.progress,
-    ...next,
-  };
+  return next;
 }
 
 function resolveCurrentPhase(stats: Record<string, unknown> | undefined) {
@@ -508,13 +505,14 @@ export async function executeNextSyncPageChunk(
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
     }
 
-    const progress = sanitizeProgressPayload(taskLease, result.stats);
+    const progress = sanitizeProgressPayload(result.stats);
     const phase = resolveCurrentPhase(result.stats);
     const workClass = resolveCurrentWorkClass(taskLease, result.stats);
     const progressAt = hasMeaningfulProgress(result) ? new Date() : taskLease.progressedAt;
 
     if (result.satisfied) {
-      const applied = result.gatedSkip
+      const skipped = Boolean(result.gatedSkip);
+      const applied = skipped
         ? await skipPageSync(app.db, {
           pageId: platformAccountId,
           stream: taskLease.stream,
@@ -540,7 +538,7 @@ export async function executeNextSyncPageChunk(
         return buildLeaseLostResult(telemetry, platformAccountId, run.id);
       }
 
-      if (result.gatedSkip) {
+      if (skipped) {
         // The run outcome must not read as a success either: sync_runs feeds
         // buildStreamSyncUx and the CLI snapshot. And a gated skip must NOT
         // resolve incidents — resolveSyncChunkRecoveryIncidents closes
@@ -581,7 +579,13 @@ export async function executeNextSyncPageChunk(
       // outcome, not the sync's. A gated skip has nothing to retry, so telling
       // the scheduler otherwise would only spin the executor.
       const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
-      return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "success", continuationPriority);
+      return buildContinuationResult(
+        platformAccountId,
+        taskLease.stream,
+        run.id,
+        skipped ? "skipped" : "success",
+        continuationPriority,
+      );
     }
 
     // Request priority is an admission boost, not a lease on the queue. A
