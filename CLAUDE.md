@@ -16,7 +16,7 @@ by `scripts/deploy-production.sh` (owner-gated).
 historical record lives in `docs/migration-history/` (per-stage specs, roadmap,
 execution log) — living docs are `docs/` + `docs/generated/`. `apps/dashboard`
 is the live, maintained admin console (#117 reversed the #112 rebuild); the
-standalone workboard app lives in its own repo, `~/code/workboard` (#119). Do
+standalone workboard app lives in its own repo, `~/code/goose/workboard` (#119). Do
 not maintain a hand-written "current state" narrative in this file — statuses
 date instantly; current truth lives in `docs/decisions.md` (append-only,
 quick-ref table up top), Git tags, and production itself.**
