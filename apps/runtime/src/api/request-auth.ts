@@ -36,6 +36,23 @@ export function pageScopeFor(principal: AuthPrincipal) {
   return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
 }
 
+/**
+ * Page filter for CROSS-PAGE rollups served on a page-scoped route.
+ *
+ * `pageScopeFor` answers "which pages may this principal see at all", and for an
+ * owner that is `undefined` — no filter at all. That is right for a dashboard
+ * session and wrong for a bearer: an owner-role device token asking about ONE
+ * page still got platform-wide money in the response body, because the rollup
+ * query was handed `undefined`. The scope check guards the request shape; this
+ * guards the response body.
+ *
+ * Cookie sessions keep the full visible-platform view; every bearer is clamped
+ * to the pages the request actually named.
+ */
+export function platformRollupScopeFor(principal: AuthPrincipal, requestedPageIds: number[]) {
+  return principal.authMethod === "session" ? pageScopeFor(principal) : requestedPageIds;
+}
+
 /** Audit attribution for admin mutations issued through the API. */
 export const auditCtx = (principal: AuthPrincipal) => ({
   source: "api" as const,

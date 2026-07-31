@@ -54,6 +54,7 @@ import {
   type SpenderRetentionStatus,
 } from "@agency_hub_core/shared";
 
+import { platformRollupScopeFor } from "../api/request-auth.ts";
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
@@ -115,22 +116,7 @@ function visiblePageIdsForPrincipal(principal: AuthPrincipal) {
   return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
 }
 
-/**
- * Bearer principals see lifetime "platform" aggregates for the requested page
- * only.
- *
- * Blocking `scope=agency`/`scope=model` is not sufficient on its own: the
- * page-scoped branch still widens `visiblePlatformPageIds` to every page the
- * principal can see, and for an owner `visiblePageIdsForPrincipal` returns
- * `undefined` — i.e. every page on the platform. Those ids feed the
- * `metrics.lifetime.platform*` rollups and the per-page breakdown on the detail
- * route, so a page-scoped request from an owner device token still answered with
- * cross-page money. The scope check guarded the request shape; this guards the
- * response body.
- */
-function platformScopeIdsForPrincipal(principal: AuthPrincipal, requestedPageIds: number[]) {
-  return principal.authMethod === "session" ? undefined : requestedPageIds;
-}
+
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -365,7 +351,7 @@ async function resolveSpenderScope(
       platform: page.platform,
       // A bearer principal gets platform rollups over the requested page only;
       // a cookie session keeps the full visible-platform view.
-      pageIds: platformScopeIdsForPrincipal(principal, [page.id]) ?? scopedPageIds,
+      pageIds: platformRollupScopeFor(principal, [page.id]),
     });
 
     return {

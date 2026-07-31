@@ -4920,6 +4920,42 @@ describe("api integration", () => {
     });
   });
 
+  it("[sync-critical] page fan detail gives a bearer the platform total for that page only", async (context) => {
+    if (!testDb || !server || !fixture) {
+      context.skip();
+      return;
+    }
+
+    // Same leak class as the spender rollup, different route. `pageFanDetail`
+    // is `{kind:"any", scope:"page"}` — reachable by a bearer — and handed
+    // `pageScopeFor(principal)` straight to the platform-total query, which
+    // treats `undefined` as "no page filter". An owner-role device token asking
+    // about ONE page therefore read the fan's spend across every page.
+    const ownerDevice = await issueDeviceTokenForUsername(createTestAppContext(testDb), {
+      username: "dima",
+      label: "dima-fan-detail-laptop",
+    }, { source: "test" });
+
+    const bearerView = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001",
+      headers: { authorization: `Bearer ${ownerDevice.token}` },
+    });
+    expect(bearerView.statusCode).toBe(200);
+    // 7000 on this page; the same fan has 3000 more on another page of the
+    // platform (seedPhase2Fixture). Before the fix this answered 10000.
+    expect(bearerView.json().platformTotalSpendMills).toBe(7000);
+
+    // A cookie session keeps the full platform view.
+    const sessionView = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/fans/fan-001",
+      headers: { cookie: await loginOwnerCookie(server) },
+    });
+    expect(sessionView.statusCode).toBe(200);
+    expect(sessionView.json().platformTotalSpendMills).toBe(10000);
+  });
+
   it("lists v2 spenders with page-scope lifetime totals and visible-platform lifetime totals", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
