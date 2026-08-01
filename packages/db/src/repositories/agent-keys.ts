@@ -375,12 +375,19 @@ export interface AgentKeyRowReservation {
  * A NEGATIVE `rows` is a REFUND: a handler reserves the page size it asked for and
  * gives back what it did not use. A refund is bounded below by zero and is never
  * clamped by the ceiling, so returning unused allowance always works.
+ *
+ * `businessDate` PINS the day this call accounts against, and a settling caller
+ * MUST pass back the date its reservation returned. Deriving it from a fresh clock
+ * on both sides means a request that reserved at 23:59:59 and finished at 00:00:01
+ * refunds against the NEW day: the reservation is stranded on the old counter and
+ * the refund subtracts rows a fresh request has already reserved, letting the new
+ * day exceed its budget.
  */
 export async function reserveAgentKeyRows(
   db: Database,
-  input: { agentKeyId: number; rows: number; now?: Date },
+  input: { agentKeyId: number; rows: number; now?: Date; businessDate?: string },
 ): Promise<AgentKeyRowReservation> {
-  const businessDate = agentKeyBusinessDate(input.now ?? new Date());
+  const businessDate = input.businessDate ?? agentKeyBusinessDate(input.now ?? new Date());
   const requested = Math.trunc(input.rows);
 
   return db.transaction(async (tx) => {

@@ -90,7 +90,7 @@ describe("agent read plane: the blockers", () => {
       plane: "message_archive",
       floorAt,
       windowFrom: "2026-01-08T00:00:00.000Z",
-      hydrationAdmissible: true,
+      hydration: { admissible: true, reason: null },
     });
     expect(gaps).toHaveLength(1);
     expect(gaps[0]).toMatchObject({
@@ -113,7 +113,7 @@ describe("agent read plane: the blockers", () => {
       plane: "message_archive",
       floorAt: "2026-01-01T00:00:00.000Z",
       windowFrom: "2026-01-08T00:00:00.000Z",
-      hydrationAdmissible: true,
+      hydration: { admissible: true, reason: null },
     })).toEqual([]);
   });
 
@@ -129,11 +129,26 @@ describe("agent read plane: the blockers", () => {
       plane: "message_archive",
       floorAt: "2026-02-21T00:00:00.000Z",
       windowFrom: "2026-01-08T00:00:00.000Z",
-      hydrationAdmissible: false,
+      hydration: { admissible: false, reason: "hydration_mode_off" },
     });
     expect(gaps[0]?.remedy).toMatchObject({
       admissible: false,
       reason: "hydration_mode_off",
+    });
+  });
+
+  it("an inadmissible remedy keeps the CALLER's reason", () => {
+    // The mode is OPEN and the key simply may not file a request. Collapsing that
+    // into `hydration_mode_off` told the operator to open a mode already open.
+    const gaps = gapBeforeCaptureFloor({
+      plane: "message_archive",
+      floorAt: "2026-02-21T00:00:00.000Z",
+      windowFrom: "2026-01-08T00:00:00.000Z",
+      hydration: { admissible: false, reason: "capability_not_granted" },
+    });
+    expect(gaps[0]?.remedy).toMatchObject({
+      admissible: false,
+      reason: "capability_not_granted",
     });
   });
 

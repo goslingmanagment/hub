@@ -230,7 +230,7 @@ export async function handleAgentObservations(
           plane: "observations",
           floorAt: isoOrNull(floorAt),
           windowFrom: from,
-          hydrationAdmissible: hydrationRemedy(scope).admissible,
+          hydration: hydrationRemedy(scope),
         }),
         // ONLY the observations partitions: a detached `domain_events` month is a
         // hole in a different plane and used to announce a gap here.

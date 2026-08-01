@@ -251,6 +251,17 @@ export interface AgentRequestScope {
    * have, every request, forever. A zero allowance is now a 429 before any work.
    */
   limitWithinRowBudget(requested: number): Promise<{ limit: number; cappedByBudget: boolean }>;
+  /**
+   * Reserves an EXACT row count for a response that cannot be clamped after the
+   * fact — the bundled operations (#1, #3), whose size is a property of the fan
+   * rather than of a page size the caller chose.
+   *
+   * A PARTIAL grant is refunded and refused with 429. `limitWithinRowBudget` can
+   * shrink a page to what the ceiling still holds; a bundle cannot be half-served,
+   * and serving it whole against a partial grant is exactly how a key with one row
+   * left received hundreds of CRM rows while its counter rose by one.
+   */
+  reserveExactRows(rows: number): Promise<void>;
   /** Settles the row budget (refunding what the reservation did not use) and
    *  releases the concurrency slot. Always called. */
   finish(rowsReturned: number): Promise<void>;
@@ -358,6 +369,10 @@ export async function beginAgentRequest(
     if (usage.rowsReturned >= usage.dailyRowBudget) {
       throw new AgentBudgetExhaustedError("agent key daily row budget exhausted");
     }
+    // ONE day for the whole request. Every later reservation and the settlement
+    // quote this date instead of asking the clock again, so a request that spans
+    // midnight cannot reserve on one counter and refund on another.
+    const businessDate = usage.businessDate;
 
     const pageIds = agentScopeFor(principal, requestedPageIds);
     // Even the scaffolding runs under a timeout: `listAgentGrantPages` and the
@@ -396,6 +411,7 @@ export async function beginAgentRequest(
         const reservation = await reserveAgentKeyRows(db, {
           agentKeyId: principal.agentKeyId,
           rows: Math.max(0, requested),
+          businessDate,
         });
         if (reservation.granted <= 0) {
           throw new AgentBudgetExhaustedError("agent key daily row budget exhausted");
@@ -406,6 +422,30 @@ export async function beginAgentRequest(
           cappedByBudget: reservation.granted < requested,
         };
       },
+      async reserveExactRows(rows: number) {
+        const wanted = Math.max(0, Math.trunc(rows));
+        if (wanted === 0) {
+          return;
+        }
+        const reservation = await reserveAgentKeyRows(db, {
+          agentKeyId: principal.agentKeyId,
+          rows: wanted,
+          businessDate,
+        });
+        if (reservation.granted < wanted) {
+          // Hand back what was granted before refusing: a request that serves
+          // nothing must cost nothing.
+          if (reservation.granted > 0) {
+            await reserveAgentKeyRows(db, {
+              agentKeyId: principal.agentKeyId,
+              rows: -reservation.granted,
+              businessDate,
+            });
+          }
+          throw new AgentBudgetExhaustedError("agent key daily row budget exhausted");
+        }
+        reserved += reservation.granted;
+      },
       async finish(rowsReturned: number) {
         if (settled) {
           return;
@@ -413,14 +453,16 @@ export async function beginAgentRequest(
         settled = true;
         try {
           // The delta, not the total: a reservation that served fewer rows than it
-          // held REFUNDS the difference, and an operation that reserved nothing
-          // (the bundled ones) settles its whole cost here — clamped at the
-          // ceiling by the same statement, so the counter cannot overshoot.
+          // held REFUNDS the difference. The BUSINESS DATE is the reservation's,
+          // never a fresh one — a request that reserved before midnight and
+          // finished after it used to refund against the new day, stranding its own
+          // reservation and handing the new day rows it had not been granted.
           const delta = rowsReturned - reserved;
           if (delta !== 0) {
             await reserveAgentKeyRows(db, {
               agentKeyId: principal.agentKeyId,
               rows: delta,
+              businessDate,
             });
           }
         } finally {

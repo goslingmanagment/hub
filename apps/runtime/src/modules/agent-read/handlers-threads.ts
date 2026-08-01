@@ -818,7 +818,7 @@ export async function handleAgentThreadMessages(
         plane: "message_archive",
         floorAt: isoOrNull(archiveFloor),
         windowFrom: from,
-        hydrationAdmissible: hydrationRemedy(scope).admissible,
+        hydration: hydrationRemedy(scope),
       }),
       scopeFieldStates: computeScopeFieldStates({
         fields: claimFields ?? [],
@@ -1364,7 +1364,7 @@ export async function handleAgentCoverage(
         plane: "message_archive",
         floorAt,
         windowFrom: from,
-        hydrationAdmissible: hydration.admissible,
+        hydration,
       });
       const perScope = buildAgentEvidence({
         planeMode: scope.planeMode,

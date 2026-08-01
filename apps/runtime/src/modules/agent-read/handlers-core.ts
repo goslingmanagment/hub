@@ -145,6 +145,11 @@ export async function handleAgentCapabilities(
       new Date().getUTCDate() + 1,
     ));
 
+    // The grant IS the payload here, so its size is the cost: reserved before the
+    // response is built, and a partial grant refuses rather than serving pages the
+    // budget could not pay for.
+    await scope.reserveExactRows(scope.pages.length);
+
     const granted = new Set(principal.capabilities);
     const datasets: AgentCapabilitiesResponse["datasets"] = [
       ...AGENT_DATASET_NAMES.map((dataset) => ({
@@ -561,6 +566,22 @@ export async function handleAgentPerson(
       captureFloor: { at: null, kind: "unknown" },
     });
 
+    // `delivery.returned` counts PEOPLE (one, or none); the row budget counts the
+    // rows the bundle actually carries, which for a busy fan is hundreds. A bundle
+    // cannot be clamped to an allowance the way a page can — its size is a property
+    // of the fan — so the EXACT cost is reserved before a byte of it is served: a
+    // partial grant is a 429, never a full card charged as three rows.
+    const bundleRows = (extras?.data.memberships.length ?? 0)
+      + (extras?.data.aliases.length ?? 0)
+      + (extras?.data.flags.length ?? 0)
+      + (money?.data.byType.length ?? 0)
+      + (subscriptions?.rows.length ?? 0)
+      + (crm?.data.notes.length ?? 0)
+      + (crm?.data.summaries.length ?? 0)
+      + (threads?.rows.length ?? 0);
+    const rowsServed = (identity.row === null ? 0 : 1) + bundleRows;
+    await scope.reserveExactRows(rowsServed);
+
     const response: AgentPersonResponse = {
       identity: identity.row === null ? null : {
         platform: identity.row.platform as Platform,
@@ -716,17 +737,7 @@ export async function handleAgentPerson(
       });
     }
 
-    // `delivery.returned` counts PEOPLE (one, or none); the row budget counts the
-    // rows the bundle actually carried, which for a busy fan is hundreds.
-    const bundleRows = (extras?.data.memberships.length ?? 0)
-      + (extras?.data.aliases.length ?? 0)
-      + (extras?.data.flags.length ?? 0)
-      + (money?.data.byType.length ?? 0)
-      + (subscriptions?.rows.length ?? 0)
-      + (crm?.data.notes.length ?? 0)
-      + (crm?.data.summaries.length ?? 0)
-      + (threads?.rows.length ?? 0);
-    await scope.finish((identity.row === null ? 0 : 1) + bundleRows);
+    await scope.finish(rowsServed);
     return response;
   } catch (error) {
     await scope.finish(0);

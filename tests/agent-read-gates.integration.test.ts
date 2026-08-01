@@ -776,7 +776,10 @@ describe("[sync-critical] agent read plane: review round 2", () => {
       capabilities: ["read:messages", "read:money", "read:datasets"],
       pageIds: [pageId],
       dailyRequestBudget: 100,
-      dailyRowBudget: 3,
+      // Room for exactly ONE card (identity + membership + money row + thread) and
+      // not two: the second request has allowance left but not enough for a whole
+      // bundle, which is the case that used to be served anyway.
+      dailyRowBudget: 5,
       expiresAt: new Date(Date.now() + DAY_MS),
       createdBy: owner?.id ?? null,
     });
@@ -787,6 +790,14 @@ describe("[sync-critical] agent read plane: review round 2", () => {
     const second = await get(`/api/v1/agent/people/fansly/${MAYA}`, token);
     expect(second.statusCode).toBe(429);
     expect(second.json().error).toBe("agent_budget_exhausted");
+    // A bundle is never HALF served: the refused card left the counter where the
+    // served one put it.
+    const { rows } = await testDb!.pool.query<{ rows_returned: string }>(
+      `select u.rows_returned::text as rows_returned
+       from agent_key_usage_daily u join agent_keys k on k.id = u.agent_key_id
+       where k.name = 'rows'`,
+    );
+    expect(Number(rows[0]!.rows_returned)).toBe(4);
   });
 
   it("P2c matchedInScope is inexact on any resumed or truncated read", async () => {

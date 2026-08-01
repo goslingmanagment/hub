@@ -778,6 +778,85 @@ describe("[sync-critical] agent read plane: review round 3", () => {
     expect(rows.every((row) => Number(row.rows_returned) <= 2)).toBe(true);
   });
 
+  it("P1-7b a bundle is charged in full or refused, never served on a partial grant", async () => {
+    // #3 cannot be clamped the way a page can: its size is a property of the fan,
+    // not of a limit the caller chose. A key with three rows left used to receive
+    // the whole card — identity, memberships, aliases, money, notes, threads —
+    // while its counter rose by three.
+    const owner = await createUser(testDb!.db, {
+      username: "owner-bundle",
+      role: "owner",
+      passwordHash: null,
+    });
+    const token = `${AGENT_KEY_TOKEN_PREFIX}round3-bundle-budget`;
+    await insertAgentKey(testDb!.db, {
+      name: "bundle",
+      keyPrefix: token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+      keyDigest: sha256Hex(token),
+      capabilities: ["read:messages", "read:money", "read:datasets"],
+      pageIds: [pageId],
+      dailyRequestBudget: 100,
+      dailyRowBudget: 3,
+      expiresAt: new Date(Date.now() + 30 * DAY_MS),
+      createdBy: owner?.id ?? null,
+    });
+
+    const refused = await server!.inject({
+      method: "GET",
+      url: `/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json().error).toBe("agent_budget_exhausted");
+    // A request that served nothing costs nothing: the partial grant is handed
+    // back rather than left on the counter.
+    const spentByBundleKey = await testDb!.pool.query<{ rows_returned: string }>(
+      `select u.rows_returned::text as rows_returned
+       from agent_key_usage_daily u join agent_keys k on k.id = u.agent_key_id
+       where k.name = 'bundle'`,
+    );
+    expect(spentByBundleKey.rows[0]?.rows_returned ?? "0").toBe("0");
+
+    // With allowance to spare, the counter equals what the card ACTUALLY carried.
+    const served = (await agentGet(`/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}`)).json();
+    const carried = 1
+      + served.identity.aliases.length
+      + served.identity.flags.length
+      + served.memberships.length
+      + served.money.byType.length
+      + served.subscriptions.length
+      + served.crm.notes.length
+      + served.crm.summaries.length
+      + served.threads.length;
+    const spent = await testDb!.pool.query<{ rows_returned: string }>(
+      `select u.rows_returned::text as rows_returned
+       from agent_key_usage_daily u join agent_keys k on k.id = u.agent_key_id
+       where k.name = 'operations'`,
+    );
+    expect(Number(spent.rows[0]!.rows_returned)).toBe(carried);
+  });
+
+  it("P2g an inadmissible remedy names the REAL reason", async () => {
+    // Hydration is OPEN and this key simply may not file a request. Telling the
+    // operator to open a mode that is already open sends them to fix the wrong
+    // thing, which is worse than naming no remedy at all.
+    await setConfigOverride(testDb!.db, {
+      key: "agentHydrationMode",
+      value: "request_only",
+      userId: null,
+      groupId: randomUUID(),
+    });
+    const response = await agentGet(
+      `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages?${JANUARY}`,
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json().capture.gaps[0].remedy).toMatchObject({
+      kind: "hydration_request",
+      admissible: false,
+      reason: "capability_not_granted",
+    });
+  });
+
   it("P2a page 2 of a traversal keeps page 1's page SIZE", async () => {
     const first = (await agentGet(
       `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages?${MARCH}&limit=1`,

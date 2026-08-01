@@ -251,7 +251,18 @@ export function gapBeforeCaptureFloor(input: {
   plane: string;
   floorAt: string | null;
   windowFrom: string | null;
-  hydrationAdmissible: boolean;
+  /**
+   * The remedy AS THE CALLER COMPUTED IT, reason included.
+   *
+   * A boolean was not enough: every false value was mapped to
+   * `hydration_mode_off`, so a key that merely lacks `request:hydration` was told
+   * to open a mode that is already open. A named remedy that does not apply is
+   * worse than no remedy, because it sends the operator to fix the wrong thing.
+   */
+  hydration: {
+    readonly admissible: boolean;
+    readonly reason: "hydration_mode_off" | "capability_not_granted" | null;
+  };
 }): AgentGap[] {
   if (input.windowFrom === null || input.floorAt === null) {
     return [];
@@ -267,8 +278,8 @@ export function gapBeforeCaptureFloor(input: {
     remedy: {
       kind: "hydration_request",
       costClass: "vendor_paid_low",
-      admissible: input.hydrationAdmissible,
-      reason: input.hydrationAdmissible ? null : "hydration_mode_off",
+      admissible: input.hydration.admissible,
+      reason: input.hydration.admissible ? null : input.hydration.reason ?? "hydration_mode_off",
     },
   }];
 }
