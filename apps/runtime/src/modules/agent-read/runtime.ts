@@ -67,6 +67,7 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
   capturesMediaMetadata: AgentFieldStateName;
   capturesMessagePrice: AgentFieldStateName;
   capturesPurchaseState: AgentFieldStateName;
+  capturesRefunds: AgentFieldStateName;
   depthCap: { default: number; lifetimeSpender: number } | null;
   dmMessagesCadenceSeconds: number | null;
 }>> = {
@@ -80,6 +81,10 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
     capturesMessagePrice: "not_captured",
     // `message.ppv_unlocked` canonicalizes and projects into nothing.
     capturesPurchaseState: "captured_unparsed",
+    // FEAT-004: no Fansly refund/chargeback lane exists — a refunded
+    // transaction keeps its `posted` row forever, so "no refunds in the
+    // store" can never support "no refunds happened".
+    capturesRefunds: "not_captured",
     depthCap: { default: 200, lifetimeSpender: 1000 },
     dmMessagesCadenceSeconds: 86_400,
   },
@@ -88,6 +93,9 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
     capturesMediaMetadata: "present",
     capturesMessagePrice: "present",
     capturesPurchaseState: "present",
+    // OF chargebacks ARE captured (`ofapi-chargebacks-sync`, migration 0107)
+    // but live in their own table that no agent-readable projection carries.
+    capturesRefunds: "captured_unparsed",
     depthCap: null,
     // The lane is retired: migration 0097 force-pauses it.
     dmMessagesCadenceSeconds: null,
@@ -127,6 +135,14 @@ function fieldStateFor(field: string, platform: Platform): AgentFieldState {
     return capabilities.capturesPurchaseState === "captured_unparsed"
       ? { state: "captured_unparsed", remedy: { kind: "local_replay", costClass: "free", admissible: true, reason: "projection_missing" } }
       : { state: "present", remedy: { kind: "none", reason: "no_remedy_exists" } };
+  }
+  if (field === "refundState") {
+    // Neither remedy is a replay: on Fansly nothing was ever captured to
+    // replay (FEAT-004), and on OF the capture sits in a store this plane
+    // cannot read until someone builds the projection.
+    return capabilities.capturesRefunds === "not_captured"
+      ? { state: "not_captured", remedy: { kind: "none", reason: "capture_lane_unimplemented" } }
+      : { state: "captured_unparsed", remedy: { kind: "none", reason: "projection_missing" } };
   }
   // A field whose class has no authoritative store cannot be observed at all.
   return agentClaimFieldClass(field) === undefined

@@ -270,7 +270,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
 export {
   buildAgentEvidence,
   concludeEnvelope,
-  evidenceIsUnrestricted,
   gapBeforeCaptureFloor,
   type AgentEvidence,
   type AgentEvidenceInput,

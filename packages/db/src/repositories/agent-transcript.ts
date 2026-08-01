@@ -7,7 +7,7 @@ import {
   renderInstant,
   type KeysetBoundary,
 } from "./agent-keyset.ts";
-import { witnessesFor, type PlaneReadWitness } from "./agent-read-witness.ts";
+import { witnessFor, witnessesFor, type PlaneReadWitness } from "./agent-read-witness.ts";
 
 /**
  * The platform-neutral transcript UNION for agent operation #6.
@@ -393,10 +393,15 @@ export async function listAgentTranscript(
     // All three message stores are scanned by the union, on both platforms: on
     // Fansly the OF-only arm simply matches nothing. `read` is therefore literally
     // true for each of them, and the caller adds the thread plane it also joined.
-    witnesses: witnessesFor(
-      ["message_archive", "dm_message_archive", "page_dm_messages", "page_dm_threads"],
-      input.archiveFloor,
-    ),
+    //
+    // BL-A11: only `message_archive`'s floor was established (the caller's
+    // dedicated unbounded query runs over that store); stamping the same date
+    // on the other three arms fabricated floors nobody computed. They report
+    // `unknown` until someone pays for their own floor queries.
+    witnesses: [
+      witnessFor("message_archive", input.archiveFloor),
+      ...witnessesFor(["dm_message_archive", "page_dm_messages", "page_dm_threads"]),
+    ],
   };
 }
 

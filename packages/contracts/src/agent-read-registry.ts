@@ -97,6 +97,15 @@ export const AGENT_CLAIM_CLASSES = {
       amountMills: { required: ["transactions"] },
       currency: { required: ["transactions"] },
       transactionState: { required: ["transactions"] },
+      // Refund/chargeback outcome of a transaction. Declared as its own field
+      // because `transactionState` alone reads as observable while neither
+      // platform's capture can actually answer "was this refunded": Fansly has
+      // no refund/chargeback lane at all (FEAT-004; rows stay `posted`
+      // forever), and the OF chargeback capture is not projected into any
+      // agent-readable store. The per-platform truth lives in
+      // AGENT_PLATFORM_CAPABILITIES, and claiming this field is what routes a
+      // "no refunds happened" conclusion through that table.
+      refundState: { required: ["transactions"] },
       fanEarning: { required: ["transactions"] },
       // Lifetime totals have their own rollup; reading `transactions` for a
       // window says nothing about a lifetime figure.

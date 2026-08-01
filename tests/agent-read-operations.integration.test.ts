@@ -431,7 +431,9 @@ describe("[sync-critical] agent read plane operations", () => {
     const body = response.json();
     expect(body.items).toHaveLength(1);
     expect(body.items[0].conversationRef).toBe(CONVERSATION_REF);
-    expect(body.items[0].windowCovered).toBe(false);
+    // `windowCovered` used to sit on the item: "no known blockers" dressed up as
+    // a coverage verdict. The verdict IS `blockers`, so the field is gone.
+    expect("windowCovered" in body.items[0]).toBe(false);
     expect(body.items[0].blockers).toContain("window_before_capture_floor");
     expect(body.items[0].planes.length).toBeGreaterThan(0);
     expect(body.journalFloor.observationsFirstReceivedAt).toBeNull();
