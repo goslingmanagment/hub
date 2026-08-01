@@ -32,6 +32,14 @@ export interface AgentDatasetSqlMapping {
   readonly windowColumn: string;
   /** Tiebreak columns appended to every ORDER BY so the keyset is total. */
   readonly stableKeyColumns: readonly string[];
+  /**
+   * The capture planes this dataset's SQL actually reads.
+   *
+   * Declared per dataset rather than assumed: the first revision minted a
+   * `page_fans` witness for EVERY dataset, so a `sync_streams` query claimed to
+   * have read the audience table it never touches.
+   */
+  readonly readPlanes: readonly string[];
 }
 
 const FAN_MEMBERSHIPS = `
@@ -270,6 +278,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["page_fans", "fans"],
   },
   dm_threads: {
     source: DM_THREADS,
@@ -284,6 +293,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["page_dm_threads", "fans"],
   },
   subscriptions: {
     source: SUBSCRIPTIONS,
@@ -299,6 +309,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["page_subscriptions", "fans"],
   },
   transactions: {
     source: TRANSACTIONS,
@@ -317,6 +328,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["transactions", "fans"],
   },
   fan_spend_daily: {
     source: FAN_SPEND_DAILY,
@@ -331,6 +343,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["fan_spend_daily", "fans"],
   },
   follows: {
     source: FOLLOWS,
@@ -343,6 +356,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["page_follows", "fans"],
   },
   followers_daily: {
     source: FOLLOWERS_DAILY,
@@ -353,6 +367,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["daily_followers"],
   },
   fan_aliases: {
     source: FAN_ALIASES,
@@ -366,6 +381,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["page_fan_aliases", "fan_username_aliases", "fans", "page_fans"],
   },
   fan_notes: {
     source: FAN_NOTES,
@@ -379,6 +395,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    readPlanes: ["fan_notes", "fans"],
   },
   sync_streams: {
     source: SYNC_STREAMS,
@@ -392,6 +409,9 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
+    // Sync state is not a claim plane: no claim class answers for it, so this
+    // dataset honestly reads NOTHING the registry knows about.
+    readPlanes: [],
   },
 };
 

@@ -12,11 +12,13 @@ import {
   type AgentScopeNarrowing,
 } from "@agency_hub_core/contracts";
 import {
+  AgentStatementTimeoutError,
   bumpAgentKeyUsage,
   countAgentVisiblePages,
   insertAgentReadAudit,
   listAgentGrantPages,
   readArchiveGeneration,
+  withAgentStatementTimeout,
   type AgentGrantPage,
   type Database,
 } from "@agency_hub_core/db";
@@ -28,6 +30,7 @@ import type { AgentAuthPrincipal } from "../../services/auth.ts";
 import { agentScopeFor } from "../../api/request-auth.ts";
 import { AGENT_CONCURRENCY_LIMIT, acquireAgentSlot, assertWithinAgentBudget, releaseAgentSlot } from "./budget.ts";
 import type { AgentCursorSigning } from "./cursors.ts";
+import { ServiceUnavailableError } from "../../services/errors.ts";
 import { AgentCapabilityMissingError, AgentPlaneDisabledError } from "./errors.ts";
 import type { AgentPlaneMode } from "./epistemics.ts";
 
@@ -60,7 +63,6 @@ export const AGENT_TIMEOUT_MS = {
  */
 export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
   conversationIdSemantics: "equals_fan_id" | "separate_thread_id";
-  hasCoverageProofs: boolean;
   capturesMediaMetadata: AgentFieldStateName;
   capturesMessagePrice: AgentFieldStateName;
   capturesPurchaseState: AgentFieldStateName;
@@ -69,7 +71,6 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
 }>> = {
   fansly: {
     conversationIdSemantics: "separate_thread_id",
-    hasCoverageProofs: false,
     // The raw message carries `attachments` and the page carries `accountMedia`,
     // and the whole page is journaled before parsing: the fact IS captured, it is
     // simply not parsed. Reporting "structurally absent" would stop an
@@ -83,7 +84,6 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
   },
   onlyfans: {
     conversationIdSemantics: "equals_fan_id",
-    hasCoverageProofs: true,
     capturesMediaMetadata: "present",
     capturesMessagePrice: "present",
     capturesPurchaseState: "present",
@@ -207,29 +207,6 @@ export function operationPlanesFor(
   return [...planes];
 }
 
-/**
- * Whether a proof lane exists for this claim at all.
- *
- * Only message claims on OnlyFans have one (`ofapi_message_coverage` is OF-only
- * by schema). For money the answer is a flat no, and saying so by name is the
- * difference between an honest "we cannot prove this" and a misleading list of
- * unread message planes.
- */
-export function hasProofLaneForClaim(
-  claimFields: readonly string[] | null,
-  platforms: readonly Platform[],
-): boolean {
-  if (claimFields === null || claimFields.length === 0) {
-    return false;
-  }
-  const classes = new Set(claimFields.map((field) => agentClaimFieldClass(field)));
-  if (classes.size !== 1 || !classes.has("messages")) {
-    return false;
-  }
-  return platforms.length > 0 && platforms.every((platform) =>
-    AGENT_PLATFORM_CAPABILITIES[platform].hasCoverageProofs);
-}
-
 /** Every claim field of a class, for building `scopeFieldStates` per section. */
 export function claimFieldsOfClass(claimClass: keyof typeof AGENT_CLAIM_CLASSES): string[] {
   return Object.keys(AGENT_CLAIM_CLASSES[claimClass].fields);
@@ -260,8 +237,62 @@ export interface AgentRequestScope {
   signing: AgentCursorSigning;
   scopeNarrowing: AgentScopeNarrowing;
   has(capability: AgentCapability): boolean;
+  /**
+   * Clamps a requested page size to what the daily ROW budget still allows.
+   *
+   * The first revision checked the budget before the work and added the returned
+   * rows afterwards, comparing nothing in between: a key with one row of
+   * allowance left was served a full 200-row page, and `cappedBy: "budget"` was
+   * unreachable. Now the allowance bounds the page and says so.
+   */
+  limitWithinRowBudget(requested: number): { limit: number; cappedByBudget: boolean };
   /** Settles the row budget and releases the concurrency slot. Always called. */
   finish(rowsReturned: number): Promise<void>;
+}
+
+/**
+ * Runs one repository read under a statement timeout and converts a timeout into
+ * the named retryable 503.
+ *
+ * Single-source operations use this. A timeout used to escape as a generic 500
+ * everywhere except #8, which told a caller "we are broken" instead of "ask again,
+ * more narrowly".
+ */
+export async function withAgentTimeout<T>(
+  db: Database,
+  timeoutMs: number,
+  body: (tx: Database) => Promise<T>,
+  source = "agent_read",
+): Promise<T> {
+  try {
+    return await withAgentStatementTimeout(db, timeoutMs, body, source);
+  } catch (error) {
+    if (error instanceof AgentStatementTimeoutError) {
+      throw new ServiceUnavailableError("agent read timed out; narrow the window and retry");
+    }
+    throw error;
+  }
+}
+
+/**
+ * The multi-source variant: a timeout DEGRADES into a named `sourceErrors` row
+ * rather than failing the whole answer, because the other sources still have
+ * something honest to say.
+ */
+export async function tryAgentTimeout<T>(
+  db: Database,
+  timeoutMs: number,
+  body: (tx: Database) => Promise<T>,
+  source = "agent_read",
+): Promise<{ ok: true; value: T } | { ok: false }> {
+  try {
+    return { ok: true, value: await withAgentStatementTimeout(db, timeoutMs, body, source) };
+  } catch (error) {
+    if (error instanceof AgentStatementTimeoutError) {
+      return { ok: false };
+    }
+    throw error;
+  }
 }
 
 function cursorSigning(appContext: AppContext): AgentCursorSigning {
@@ -312,13 +343,22 @@ export async function beginAgentRequest(
   try {
     const usage = await bumpAgentKeyUsage(db, { agentKeyId: principal.agentKeyId, requests: 1 });
     assertWithinAgentBudget(usage);
+    const rowAllowance = Math.max(0, usage.dailyRowBudget - usage.rowsReturned);
 
     const pageIds = agentScopeFor(principal, requestedPageIds);
-    const [pages, totalPages, archiveGeneration] = await Promise.all([
-      listAgentGrantPages(db, pageIds),
-      countAgentVisiblePages(db),
-      readArchiveGeneration(db),
-    ]);
+    // Even the scaffolding runs under a timeout: `listAgentGrantPages` and the
+    // journal floor are ordinary queries and a stall in one of them used to hang
+    // outside every ceiling the operation had declared.
+    const [pages, totalPages, archiveGeneration] = await withAgentTimeout(
+      db,
+      AGENT_TIMEOUT_MS.short,
+      (tx) => Promise.all([
+        listAgentGrantPages(tx, pageIds),
+        countAgentVisiblePages(tx),
+        readArchiveGeneration(tx),
+      ]),
+      "agent_scope",
+    );
 
     return {
       principal,
@@ -338,6 +378,10 @@ export async function beginAgentRequest(
         totalPagesForQuery: totalPages,
       },
       has: (capability) => granted.has(capability),
+      limitWithinRowBudget(requested: number) {
+        const limit = Math.max(1, Math.min(requested, rowAllowance));
+        return { limit, cappedByBudget: limit < requested };
+      },
       async finish(rowsReturned: number) {
         if (settled) {
           return;
@@ -371,7 +415,7 @@ export function buildDelivery(input: {
   cappedBy: "limit" | "snapshot" | "budget" | null;
   nextCursor: string | null;
   snapshotExhausted: boolean;
-  caveats: Array<"mutable_sort_key">;
+  caveats: Array<"mutable_sort_key" | "no_frozen_snapshot">;
 }): AgentDelivery {
   return {
     returned: input.returned,
@@ -408,19 +452,62 @@ export function buildPredicates(
   entries: ReadonlyArray<{
     name: string;
     requested: boolean;
-    applied?: boolean;
+    /**
+     * REQUIRED, and never defaulted from `requested`. The default was the bug
+     * generator: three operations accepted a person filter, dropped it before the
+     * WHERE clause, and reported `applied: true` because it had been asked for —
+     * so the response claimed to be about one fan while returning every fan.
+     */
+    applied: boolean;
     reason?: AgentPredicate["reason"];
   }>,
 ): AgentPredicate[] {
-  return entries.map((entry) => {
-    const applied = entry.applied ?? entry.requested;
-    return {
-      name: entry.name,
-      requested: entry.requested,
-      applied,
-      reason: entry.reason ?? (applied ? "applied" : "not_requested"),
-    };
-  });
+  return entries.map((entry) => ({
+    name: entry.name,
+    requested: entry.requested,
+    applied: entry.applied,
+    reason: entry.reason ?? (entry.applied ? "applied" : "not_requested"),
+  }));
+}
+
+/**
+ * The hydration remedy a thread summary advertises.
+ *
+ * `admissible` reflects whether hydration COULD run: the mode must be on and the
+ * key must hold the capability to file a request. The first revision advertised
+ * every remedy as admissible regardless, which pointed agents at an action the
+ * server would refuse.
+ */
+export function hydrationRemedy(scope: {
+  config: AppConfig;
+  has(capability: AgentCapability): boolean;
+}): {
+  kind: "hydration_request";
+  costClass: "vendor_paid_low";
+  admissible: boolean;
+  reason: "hydration_mode_off" | "capability_not_granted" | null;
+} {
+  const modeOn = (scope.config.agentHydrationMode ?? "off") !== "off";
+  const granted = scope.has("request:hydration");
+  return {
+    kind: "hydration_request",
+    costClass: "vendor_paid_low",
+    admissible: modeOn && granted,
+    reason: !modeOn ? "hydration_mode_off" : !granted ? "capability_not_granted" : null,
+  };
+}
+
+/** Fansly keeps 200 messages per thread, or 1000 for a lifetime spender; OnlyFans
+ *  has no such cap. Read from the capability table, never from a platform literal. */
+export function retentionLimitFor(
+  platform: Platform,
+  lifetimeSpendMills: bigint | null,
+): number | null {
+  const depthCap = AGENT_PLATFORM_CAPABILITIES[platform].depthCap;
+  if (depthCap === null) {
+    return null;
+  }
+  return (lifetimeSpendMills ?? 0n) > 0n ? depthCap.lifetimeSpender : depthCap.default;
 }
 
 /** ISO-8601 with the explicit offset the plane's timestamp primitive requires. */

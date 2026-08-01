@@ -21,11 +21,11 @@ import {
   getAgentKeyById,
   getAgentKeyUsage,
   listAgentFanThreads,
-  loadAgentPersonBundle,
+  loadAgentPersonCrm,
+  loadAgentPersonIdentityExtras,
+  loadAgentPersonMoney,
+  loadAgentPersonSubscriptions,
   resolveAgentFanCandidates,
-  storeDerivedWitness,
-  withAgentStatementTimeout,
-  type PlaneReadWitness,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
 
@@ -41,11 +41,13 @@ import {
   AGENT_TIMEOUT_MS,
   beginAgentRequest,
   computeScopeFieldStates,
-  hasProofLaneForClaim,
+  hydrationRemedy,
   iso,
   isoOrNull,
   operationPlanesFor,
+  retentionLimitFor,
   singletonDelivery,
+  withAgentTimeout,
 } from "./runtime.ts";
 
 // #1 REPORTS the gauge; it never mutates it (the slot was taken by
@@ -65,7 +67,23 @@ import { agentConcurrencyInUse } from "./budget.ts";
 
 const EMPTY_GAPS = [] as const;
 
-type MoneyByType = AgentPersonResponse["money"]["byType"][number];
+type MoneyByType = NonNullable<AgentPersonResponse["money"]>["byType"][number];
+
+/** Claim fields whose class is money; withheld wholesale without `read:money`. */
+const MONEY_CLAIM_FIELDS = [
+  "grossMills",
+  "netMills",
+  "feeMills",
+  "amountMills",
+  "currency",
+  "transactionState",
+  "lifetimeSpendMills",
+  "subscriptionPriceMills",
+] as const;
+
+/** Operator-written free text about a person: same disclosure class as verbatim
+ *  transcript material, so it rides `read:messages`. */
+const CRM_CLAIM_FIELDS = ["noteText", "summaryText", "profileBody", "fanFlag"] as const;
 
 // ---------------------------------------------------------------------------
 // #1 agentCapabilities
@@ -100,21 +118,14 @@ export async function handleAgentCapabilities(
       delivery: { snapshotExhausted: true, nextCursor: null },
       cursorConsumed: false,
       cursorCapable: false,
+      frozenSnapshot: true,
       requestWindow: null,
       gaps: EMPTY_GAPS,
-      gapDetection: "head_only",
       scopeFieldStates: {},
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: { at: null, kind: "no_lane", laneCadenceSeconds: null, breakerOpen: false },
-      basis: "none",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: false,
     });
 
     const resetsAt = new Date(Date.UTC(
@@ -209,7 +220,6 @@ export async function handleAgentCapabilities(
         return {
           platform,
           conversationIdSemantics: capabilities.conversationIdSemantics,
-          hasCoverageProofs: capabilities.hasCoverageProofs,
           capturesMediaMetadata: capabilities.capturesMediaMetadata,
           capturesMessagePrice: capabilities.capturesMessagePrice,
           capturesPurchaseState: capabilities.capturesPurchaseState,
@@ -282,7 +292,6 @@ export function normalizeResolveInput(raw: string, hint: string): string[] {
   }
   return forms;
 }
-
 export async function handleAgentResolve(
   appContext: AppContext,
   principal: AgentAuthPrincipal,
@@ -291,66 +300,76 @@ export async function handleAgentResolve(
   const scope = await beginAgentRequest(appContext, principal, { operation: "agentResolve" });
   try {
     const claimFields = body.claim?.fields ?? null;
+    // Thread inventory is MESSAGE material: a conversation ref plus a stored
+    // count tells a caller who talked to whom and how much. The first revision
+    // served it to any valid key because `includeThreads` defaults to true.
+    const mayReadThreads = scope.has("read:messages");
+    const includeThreads = body.includeThreads && mayReadThreads;
+
     const perInput = body.inputs.map((input) => ({
       input,
       normalized: normalizeResolveInput(input.raw, input.hint),
     }));
     const allValues = [...new Set(perInput.flatMap((entry) => entry.normalized))];
 
-    const matches = await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+    const resolved = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       resolveAgentFanCandidates(tx, {
         pageIds: scope.pageIds,
         platform: body.platform ?? null,
         values: allValues,
-        // 20 candidates per input, capped by the input count; the response caps
-        // each input's own list at 20 as the contract declares.
+        includeAliases: body.includeAliases,
         limit: Math.min(20 * body.inputs.length, 1000),
-      }));
+      }), "agent_resolve");
 
-    const fanIds = [...new Set(matches.map((match) => match.fanId))];
-    const threads = body.includeThreads
-      ? await listAgentFanThreads(scope.db, { pageIds: scope.pageIds, fanIds })
-      : [];
+    const fanIds = [...new Set(resolved.matches.map((match) => match.fanId))];
+    const threads = includeThreads
+      ? await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        listAgentFanThreads(tx, { pageIds: scope.pageIds, fanIds }), "agent_resolve_threads")
+      : { rows: [], witnesses: [] };
 
     const platforms = [...new Set(scope.pages.map((page) => page.platform))] as Platform[];
     const scopeFieldStates = computeScopeFieldStates({
       fields: claimFields ?? ["platformUserId", "username", "displayName"],
       platforms,
+      ungrantedFields: mayReadThreads ? [] : ["conversationRef", "messageCount", "coverageStatus"],
     });
 
-    const witnesses: PlaneReadWitness[] = IDENTITY_PLANES.map((plane) =>
-      storeDerivedWitness({ plane, ceilingAt: null, ceilingKind: "no_lane" }));
-    const operationPlanes = operationPlanesFor(IDENTITY_PLANES, claimFields);
+    // Only the stores the repository actually queried; `includeAliases: false`
+    // therefore produces no alias witnesses, because no alias table was read.
+    const witnesses = [...resolved.witnesses, ...threads.witnesses];
+    const operationPlanes = operationPlanesFor(
+      witnesses.map((witness) => witness.plane),
+      claimFields,
+    );
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
       claimFields,
       operationPlanes,
       planeReads: witnesses,
-      planesNotRead: planesNotRead({ operationPlanes, witnesses: witnesses }),
+      planesNotRead: planesNotRead({
+        operationPlanes,
+        witnesses,
+        overrides: mayReadThreads
+          ? {}
+          : { page_dm_threads: { state: "not_read", reason: "capability_not_granted" } },
+      }),
       delivery: { snapshotExhausted: true, nextCursor: null },
       cursorConsumed: false,
       cursorCapable: false,
+      frozenSnapshot: true,
       requestWindow: null,
       gaps: EMPTY_GAPS,
-      gapDetection: "head_only",
       scopeFieldStates,
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: { at: null, kind: "no_lane", laneCadenceSeconds: null, breakerOpen: false },
-      basis: "store_derived",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: hasProofLaneForClaim(claimFields, platforms),
     });
 
     const items = perInput.map((entry) => {
       const wanted = new Set(entry.normalized.map((value) => value.toLowerCase()));
-      const candidates = matches
+      const candidates = resolved.matches
         .filter((match) =>
           wanted.has(match.matchedValue.toLowerCase())
           || wanted.has(match.platformUserId.toLowerCase()))
@@ -367,7 +386,7 @@ export async function handleAgentResolve(
             : match.matchKind === "alias" ? "alias_historical" as const : "normalized" as const,
           createdAtExternal: isoOrNull(match.createdAtExternal),
           deletedDetectedAt: isoOrNull(match.deletedDetectedAt),
-          pages: threads
+          pages: threads.rows
             .filter((thread) => thread.fanId === match.fanId)
             .map((thread) => ({
               pageLabel: thread.pageLabel,
@@ -377,7 +396,17 @@ export async function handleAgentResolve(
               messageCoverageStatusRaw: thread.coverageStatusRaw as
                 "pending_backfill" | "partial_window" | "complete",
             })),
-          fieldStates: {},
+          // Without `read:messages` the thread section is EMPTY and the field
+          // states say why — an empty array alone would read as "this fan has no
+          // conversations", which is the failure the plane exists to prevent.
+          fieldStates: mayReadThreads
+            ? {}
+            : {
+              conversationRef: {
+                state: "unknown" as const,
+                remedy: { kind: "none" as const, reason: "capability_not_granted" as const },
+              },
+            },
           provenance: {
             ingestPaths: ["unknown" as const],
             convergence: "no_material_lane" as const,
@@ -392,7 +421,7 @@ export async function handleAgentResolve(
       };
     });
 
-    const response = {
+    const response: AgentResolveResponse = {
       items,
       delivery: singletonDelivery(items.length),
       capture: evidence.capture,
@@ -425,105 +454,112 @@ export async function handleAgentPerson(
     const pageIds = narrowed.map((page) => page.id);
     const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
 
+    // Two gates, and each one decides whether a QUERY RUNS, not merely whether
+    // its result is hidden. Money is money; notes and summaries are operator-written
+    // free text about a person, which is the same disclosure class as a transcript.
+    const mayReadMoney = scope.has("read:money");
+    const mayReadMessages = scope.has("read:messages");
+
     const identity = pageIds.length === 0
-      ? null
-      : await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
+      ? { row: null, witnesses: [] }
+      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
         findAgentPersonIdentity(tx, {
           pageIds,
           platform: params.platform,
           platformUserId: params.platformUserId,
-        }));
+        }), "agent_person_identity");
 
-    const bundle = identity === null
-      ? null
-      : await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
-        loadAgentPersonBundle(tx, { pageIds, fanId: identity.fanId }));
+    const fanId = identity.row?.fanId ?? null;
+    const [extras, money, subscriptions, crm, threads] = fanId === null
+      ? [null, null, null, null, null]
+      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, async (tx) => Promise.all([
+        loadAgentPersonIdentityExtras(tx, { pageIds, fanId }),
+        mayReadMoney ? loadAgentPersonMoney(tx, { pageIds, fanId }) : null,
+        mayReadMoney ? loadAgentPersonSubscriptions(tx, { pageIds, fanId }) : null,
+        mayReadMessages ? loadAgentPersonCrm(tx, { pageIds, fanId }) : null,
+        mayReadMessages ? listAgentFanThreads(tx, { pageIds, fanIds: [fanId] }) : null,
+      ]), "agent_person_bundle");
 
-    const hasMoney = scope.has("read:money");
-    const readPlanes = [
-      ...IDENTITY_PLANES,
-      ...(hasMoney ? MONEY_PLANES : []),
-      "page_subscriptions",
-      ...CRM_PLANES,
+    const witnesses = [
+      ...identity.witnesses,
+      ...(extras?.witnesses ?? []),
+      ...(money?.witnesses ?? []),
+      ...(subscriptions?.witnesses ?? []),
+      ...(crm?.witnesses ?? []),
+      ...(threads?.witnesses ?? []),
     ];
-    const witnesses: PlaneReadWitness[] = readPlanes.map((plane) =>
-      storeDerivedWitness({ plane, ceilingAt: null, ceilingKind: "no_lane" }));
     const operationPlanes = operationPlanesFor(
-      [...IDENTITY_PLANES, ...MONEY_PLANES, "page_subscriptions", ...CRM_PLANES],
+      [...IDENTITY_PLANES, ...MONEY_PLANES, "page_subscriptions", ...CRM_PLANES, "page_dm_threads"],
       claimFields,
     );
 
-    // Degradation, not refusal (§17.0.5): a key without `read:money` gets an
-    // empty money section, the money plane reported as `not_read` with its real
-    // reason, and `unknown` field states — never a silent zero.
-    const moneyFields = ["grossMills", "netMills", "feeMills", "amountMills", "currency", "transactionState", "lifetimeSpendMills"];
+    const ungrantedFields = [
+      ...(mayReadMoney ? [] : MONEY_CLAIM_FIELDS),
+      ...(mayReadMessages ? [] : CRM_CLAIM_FIELDS),
+    ];
     const scopeFieldStates = computeScopeFieldStates({
       fields: claimFields ?? ["platformUserId", "username", "displayName", "membershipState"],
       platforms,
-      ungrantedFields: hasMoney ? [] : moneyFields,
+      ungrantedFields,
     });
+
+    const overrides: Record<string, { state: "not_read"; reason: "capability_not_granted" }> = {};
+    if (!mayReadMoney) {
+      for (const plane of [...MONEY_PLANES, "page_subscriptions"]) {
+        overrides[plane] = { state: "not_read", reason: "capability_not_granted" };
+      }
+    }
+    if (!mayReadMessages) {
+      for (const plane of [...CRM_PLANES, "page_dm_threads"]) {
+        overrides[plane] = { state: "not_read", reason: "capability_not_granted" };
+      }
+    }
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
       claimFields,
       operationPlanes,
       planeReads: witnesses,
-      planesNotRead: planesNotRead({
-        operationPlanes,
-        witnesses,
-        overrides: hasMoney
-          ? {}
-          : Object.fromEntries(MONEY_PLANES.map((plane) => [
-            plane,
-            { state: "not_read" as const, reason: "capability_not_granted" as const },
-          ])),
-      }),
+      planesNotRead: planesNotRead({ operationPlanes, witnesses, overrides }),
       delivery: { snapshotExhausted: true, nextCursor: null },
       cursorConsumed: false,
       cursorCapable: false,
+      frozenSnapshot: true,
       requestWindow: null,
       gaps: EMPTY_GAPS,
-      gapDetection: "head_only",
       scopeFieldStates,
       sourceErrors: [],
-      // Mandatory even when `identity` is null — that is what makes 200-empty an
+      // Mandatory even when `identity` is null: this is what makes 200-empty an
       // honest answer instead of an existence oracle.
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: { at: null, kind: "no_lane", laneCadenceSeconds: null, breakerOpen: false },
-      basis: "store_derived",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: hasProofLaneForClaim(claimFields, platforms),
     });
 
     const response: AgentPersonResponse = {
-      identity: identity === null ? null : {
-        platform: identity.platform as Platform,
-        platformUserId: identity.platformUserId,
-        username: identity.username,
-        displayName: identity.displayName,
-        aliases: (bundle?.aliases ?? []).map((alias) => ({
+      identity: identity.row === null ? null : {
+        platform: identity.row.platform as Platform,
+        platformUserId: identity.row.platformUserId,
+        username: identity.row.username,
+        displayName: identity.row.displayName,
+        aliases: (extras?.data.aliases ?? []).map((alias) => ({
           kind: alias.kind === "username" ? "username" as const : "alias" as const,
           value: alias.value,
           firstSeenAt: isoOrNull(alias.firstSeenAt),
           lastSeenAt: isoOrNull(alias.lastSeenAt),
         })),
-        createdAtExternal: isoOrNull(identity.createdAtExternal),
-        firstSeenAt: isoOrNull(identity.firstSeenAt),
-        lastSeenAt: isoOrNull(identity.lastSeenAt),
-        deletedDetectedAt: isoOrNull(identity.deletedDetectedAt),
-        flags: (bundle?.flags ?? []).map((flag) => ({
+        createdAtExternal: isoOrNull(identity.row.createdAtExternal),
+        firstSeenAt: isoOrNull(identity.row.firstSeenAt),
+        lastSeenAt: isoOrNull(identity.row.lastSeenAt),
+        deletedDetectedAt: isoOrNull(identity.row.deletedDetectedAt),
+        flags: (extras?.data.flags ?? []).map((flag) => ({
           pageLabel: flag.pageLabel,
           flag: flag.flag,
           value: true,
           updatedAt: iso(flag.updatedAt),
         })),
       },
-      memberships: (bundle?.memberships ?? []).map((membership) => ({
+      memberships: (extras?.data.memberships ?? []).map((membership) => ({
         pageLabel: membership.pageLabel,
         platform: membership.platform as Platform,
         membershipState: membership.isSubscriber || membership.isFollower
@@ -536,46 +572,78 @@ export async function handleAgentPerson(
         subscriptionExpiresAt: isoOrNull(membership.subscriptionExpiresAt),
         autoRenew: membership.autoRenew,
         autoRenewOffDetectedAt: isoOrNull(membership.autoRenewOffDetectedAt),
-        lifetimeSpendMills: hasMoney ? toSafeNumber(membership.lifetimeSpendMills) : null,
-        lastTransactionAt: isoOrNull(membership.lastTransactionAt),
+        lifetimeSpendMills: mayReadMoney ? toSafeNumber(membership.lifetimeSpendMills) : null,
+        // WITHHELD without `read:money`: the timestamp of a payment discloses that
+        // a payment happened, which is the fact the capability guards.
+        lastTransactionAt: mayReadMoney ? isoOrNull(membership.lastTransactionAt) : null,
         pageAlias: membership.pageAlias,
       })),
-      threads: [],
-      money: {
-        lifetime: {
-          grossMills: hasMoney ? toSafeNumberOr(bundle?.moneyLifetime.grossMills, 0) : 0,
-          netMills: hasMoney ? toSafeNumberOr(bundle?.moneyLifetime.netMills, 0) : 0,
-          transactionCount: hasMoney ? bundle?.moneyLifetime.transactionCount ?? 0 : 0,
-          firstTransactionAt: hasMoney ? isoOrNull(bundle?.moneyLifetime.firstTransactionAt) : null,
-          lastTransactionAt: hasMoney ? isoOrNull(bundle?.moneyLifetime.lastTransactionAt) : null,
+      // null, not []: an empty array would say "this fan has no threads".
+      threads: threads === null ? null : threads.rows.map((thread) => ({
+        pageLabel: thread.pageLabel,
+        platform: thread.platform as Platform,
+        conversationRef: thread.conversationRef,
+        fanPlatformUserId: identity.row?.platformUserId ?? null,
+        fanUsername: identity.row?.username ?? null,
+        fanDisplayName: identity.row?.displayName ?? null,
+        isVisible: true,
+        unreadCount: null,
+        lastMessageAt: null,
+        lastFanMessageAt: null,
+        lastModelMessageAt: null,
+        storedMessageCount: thread.storedMessageCount,
+        oldestStoredMessageRef: null,
+        newestStoredMessageRef: null,
+        messageCoverageStatusRaw: thread.coverageStatusRaw as "complete",
+        lastMessageSyncAt: null,
+        breakerOpen: false,
+        quarantineUntil: null,
+        captureFloor: { at: null, kind: "unknown" as const },
+        transcriptWillReturnRows: thread.storedMessageCount > 0,
+        hydrationRemedy: hydrationRemedy(scope),
+        retentionLimit: retentionLimitFor(thread.platform as Platform, null),
+        fieldStates: {},
+        provenance: {
+          ingestPaths: ["unknown" as const],
+          convergence: "no_material_lane" as const,
+          observationRef: null,
         },
-        byType: hasMoney
-          ? (bundle?.moneyByType ?? []).map((row) => ({
-            transactionType: row.transactionType as MoneyByType["transactionType"],
-            transactionState: row.transactionState as MoneyByType["transactionState"],
-            grossMills: toSafeNumberOr(row.grossMills, 0),
-            netMills: toSafeNumberOr(row.netMills, 0),
-            transactionCount: row.transactionCount,
-          }))
-          : [],
+      })),
+      // null, not a zeroed section: a silent 0 is indistinguishable from
+      // "never paid", and that is the one thing money must never say by accident.
+      money: money === null ? null : {
+        lifetime: {
+          grossMills: toSafeNumberOr(money.data.lifetime.grossMills, 0),
+          netMills: toSafeNumberOr(money.data.lifetime.netMills, 0),
+          transactionCount: money.data.lifetime.transactionCount,
+          firstTransactionAt: isoOrNull(money.data.lifetime.firstTransactionAt),
+          lastTransactionAt: isoOrNull(money.data.lifetime.lastTransactionAt),
+        },
+        byType: money.data.byType.map((row) => ({
+          transactionType: row.transactionType as MoneyByType["transactionType"],
+          transactionState: row.transactionState as MoneyByType["transactionState"],
+          grossMills: toSafeNumberOr(row.grossMills, 0),
+          netMills: toSafeNumberOr(row.netMills, 0),
+          transactionCount: row.transactionCount,
+        })),
       },
-      subscriptions: (bundle?.subscriptions ?? []).map((subscription) => ({
+      subscriptions: subscriptions === null ? null : subscriptions.rows.map((subscription) => ({
         pageLabel: subscription.pageLabel,
         subscriptionRef: subscription.subscriptionRef,
         subscriptionState: subscription.canonicalStatus === "active"
           ? "active" as const
           : subscription.canonicalStatus === "expired" ? "expired" as const : "unknown" as const,
         subscriptionTierName: subscription.tierName,
-        subscriptionPriceMills: hasMoney ? toSafeNumber(subscription.priceMills) : null,
-        renewPriceMills: hasMoney ? toSafeNumber(subscription.renewPriceMills) : null,
+        subscriptionPriceMills: toSafeNumber(subscription.priceMills),
+        renewPriceMills: toSafeNumber(subscription.renewPriceMills),
         autoRenew: subscription.autoRenew,
         billingCycleDays: subscription.billingCycleDays,
         startedAt: isoOrNull(subscription.startedAt),
         subscriptionExpiresAt: isoOrNull(subscription.endsAt),
         isCurrent: subscription.isCurrent,
       })),
-      crm: {
-        notes: (bundle?.notes ?? []).map((note) => ({
+      crm: crm === null ? null : {
+        notes: crm.data.notes.map((note) => ({
           pageLabel: note.pageLabel,
           noteRef: note.noteRef,
           origin: note.origin,
@@ -583,7 +651,7 @@ export async function handleAgentPerson(
           createdAt: isoOrNull(note.createdAt),
           updatedAt: isoOrNull(note.updatedAt),
         })),
-        summaries: (bundle?.summaries ?? []).map((summary) => ({
+        summaries: crm.data.summaries.map((summary) => ({
           pageLabel: summary.pageLabel,
           summaryRef: summary.summaryRef,
           summaryText: summary.summaryText,
@@ -596,11 +664,11 @@ export async function handleAgentPerson(
         convergence: "no_material_lane",
         observationRef: null,
       },
-      delivery: singletonDelivery(identity === null ? 0 : 1),
+      delivery: singletonDelivery(identity.row === null ? 0 : 1),
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(identity === null ? 0 : 1);
+    await scope.finish(identity.row === null ? 0 : 1);
     return response;
   } catch (error) {
     await scope.finish(0);

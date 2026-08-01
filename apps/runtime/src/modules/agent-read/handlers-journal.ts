@@ -18,20 +18,18 @@ import {
   listAgentObservations,
   queryAgentDataset,
   readAgentJournalFloor,
-  storeDerivedWitness,
-  withAgentStatementTimeout,
+  readAgentObservationsHighWater,
   type AgentDatasetFilter,
-  type PlaneReadWitness,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import { BadRequestError } from "../../services/errors.ts";
 import { buildAgentEvidence } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
-import { AgentPlaneDisabledError, staticNotFound } from "./errors.ts";
-import { BadRequestError } from "../../services/errors.ts";
+import { AgentPlaneDisabledError, staticNotFound, toSafeNumber } from "./errors.ts";
 import {
   AGENT_OBSERVATION_PAYLOAD_SESSION_CAP,
   agentObservationPayloadAllowed,
@@ -44,11 +42,11 @@ import {
   buildDelivery,
   buildPredicates,
   computeScopeFieldStates,
-  hasProofLaneForClaim,
   iso,
   isoOrNull,
   operationPlanesFor,
   singletonDelivery,
+  withAgentTimeout,
   writeAgentAudit,
 } from "./runtime.ts";
 
@@ -60,6 +58,11 @@ import {
  * middleware decides before the handler: "envelope to the agent, body to the
  * owner" is not expressible on one route in this codebase, so it is two.
  */
+
+/** The UTC day every budget and the #9b session cap are measured in. */
+function startOfUtcDay(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
 
 // ---------------------------------------------------------------------------
 // #9a agentObservations
@@ -82,19 +85,23 @@ export async function handleAgentObservations(
     cursor?: string | undefined;
   },
 ): Promise<AgentObservationsResponse> {
+  // The sub-flag is checked BEFORE the request budget is spent: a request that
+  // never ran should not cost the caller its daily allowance.
+  const preConfig = await loadEffectiveConfig(appContext.db, appContext.config);
+  if (!(preConfig.agentObservationsEnabled ?? false)) {
+    throw new AgentPlaneDisabledError("agent observation reads are disabled");
+  }
+
   const scope = await beginAgentRequest(appContext, principal, {
     operation: "agentObservations",
     requiredCapabilities: ["read:observations_envelope"],
   });
   try {
-    if (!(scope.config.agentObservationsEnabled ?? false)) {
-      throw new AgentPlaneDisabledError("agent observation reads are disabled");
-    }
-
     const cursorConsumed = query.cursor !== undefined;
     const cursor = cursorConsumed
       ? decodeAgentCursor(query.cursor as string, {
         operation: "agentObservations",
+        resource: "global",
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
         archiveGeneration: scope.archiveGeneration,
@@ -113,46 +120,58 @@ export async function handleAgentObservations(
       sortDir: (stored?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir,
     };
 
-    const rows = await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    // The frozen bound is minted once and then CARRIED by the cursor, so every
+    // page of one traversal sees the same population.
+    const storedHighWater = Number(stored?.highWater ?? 0);
+    const highWater = storedHighWater > 0
+      ? storedHighWater
+      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        readAgentObservationsHighWater(tx, scope.pageIds, {
+          from: new Date(from),
+          to: new Date(to),
+        }), "agent_observations_high_water");
+
+    const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       listAgentObservations(tx, {
         pageIds: scope.pageIds,
         from: new Date(from),
         to: new Date(to),
         ...effective,
-        limit: query.limit,
+        limit,
+        maxObservationId: highWater,
         after: cursor === null
           ? undefined
           : {
-            receivedAt: String(cursor.keyset.receivedAt ?? ""),
-            observationRef: Number(cursor.keyset.observationRef ?? 0),
+            sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
+            key: String(cursor.keyset.key ?? ""),
           },
-      }));
+      }), "agent_observations");
 
-    const journalFloor = await readAgentJournalFloor(scope.db);
-    const platforms = [...new Set(scope.pages.map((page) => page.platform))] as Platform[];
+    const journalFloor = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+      readAgentJournalFloor(tx), "agent_journal_floor");
 
     // A window entirely before the journal begins is EMPTY BY CONSTRUCTION, not
     // by absence of fact. Saying so is the difference this operation exists for.
     const journalStartsAfterWindow = journalFloor.observationsFirstReceivedAt !== null
       && Date.parse(to) <= journalFloor.observationsFirstReceivedAt.getTime();
 
-    const witnesses: PlaneReadWitness[] = journalStartsAfterWindow
-      ? []
-      : [storeDerivedWitness({ plane: "observations", ceilingAt: null, ceilingKind: "no_lane" })];
+    const witnesses = journalStartsAfterWindow ? [] : result.witnesses;
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, null);
 
-    const hasMore = rows.length === query.limit;
-    const last = rows.at(-1);
+    const hasMore = result.rows.length === limit;
+    const last = result.rows.at(-1);
     const nextCursor = hasMore && last !== undefined
       ? encodeAgentCursor({
         operation: "agentObservations",
+        resource: "global",
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
-        params: { from, to, ...effective, limit: query.limit },
+        params: { from, to, ...effective, limit: query.limit, highWater },
         archiveGeneration: scope.archiveGeneration,
-        sourceHighWaters: { observations: String(last.observationRef) },
+        sourceHighWaters: { observations: String(highWater) },
         seqHighWater: {},
-        keyset: { receivedAt: iso(last.receivedAt), observationRef: last.observationRef },
+        keyset: { sortValue: last.sortValue, key: last.keysetKey },
       }, scope.signing)
       : null;
 
@@ -171,6 +190,8 @@ export async function handleAgentObservations(
       delivery: { snapshotExhausted: nextCursor === null, nextCursor },
       cursorConsumed,
       cursorCapable: true,
+      // `observations.id` is monotonic, so the bound above is real.
+      frozenSnapshot: true,
       requestWindow: { from, to },
       gaps: journalFloor.detachedPartitions.length === 0 ? [] : [{
         kind: "partition_detached" as const,
@@ -179,28 +200,23 @@ export async function handleAgentObservations(
         plane: "observations" as const,
         remedy: { kind: "none" as const, reason: "partition_detached" as const },
       }],
-      gapDetection: "head_only",
       scopeFieldStates: {},
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
-      observedRowFloor: isoOrNull(rows.at(0)?.receivedAt ?? null),
-      captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: { at: null, kind: "no_lane", laneCadenceSeconds: null, breakerOpen: false },
-      basis: "store_derived",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: hasProofLaneForClaim(null, platforms),
+      observedRowFloor: isoOrNull(result.rows.at(0)?.receivedAt ?? null),
+      captureFloor: {
+        at: isoOrNull(journalFloor.observationsFirstReceivedAt),
+        kind: journalFloor.observationsFirstReceivedAt === null ? "unknown" : "oldest_stored_row",
+      },
     });
 
-    const response = {
+    const response: AgentObservationsResponse = {
       window: { from, to },
-      items: rows.map((row) => ({
+      items: result.rows.map((row) => ({
         observationRef: row.observationRef,
         receivedAt: iso(row.receivedAt),
         observedAt: isoOrNull(row.observedAt),
-        source: row.source as "pull",
+        source: row.source as AgentObservationsResponse["items"][number]["source"],
         producer: row.producer,
         platform: row.platform as Platform | null,
         pageLabel: row.pageLabel,
@@ -209,16 +225,18 @@ export async function handleAgentObservations(
         payloadBytes: row.payloadBytes,
         payloadSha256: row.payloadSha256,
         parseVersion: row.parseVersion,
-        canonicalized: row.domainEventCount > 0,
-        domainEventCount: row.domainEventCount,
+        // From the column the canonicalizer stamps. A per-row COUNT over the
+        // partitioned event table used to live here and could not prune
+        // partitions, so a 200-row page cost 200 partition scans.
+        canonicalized: row.parseVersion > 0,
         // Whether 9b would serve this kind at all. NOT a promise of access: 9b
         // still requires an owner session.
         payloadAvailable: agentObservationPayloadAllowed(row.kind),
       })),
       delivery: buildDelivery({
-        returned: rows.length,
-        matched: { value: rows.length, exact: nextCursor === null },
-        cappedBy: nextCursor === null ? null : "limit",
+        returned: result.rows.length,
+        matched: { value: result.rows.length, exact: nextCursor === null },
+        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
         snapshotExhausted: nextCursor === null,
         caveats: evidence.deliveryCaveats,
@@ -226,7 +244,7 @@ export async function handleAgentObservations(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(rows.length);
+    await scope.finish(result.rows.length);
     return response;
   } catch (error) {
     await scope.finish(0);
@@ -254,32 +272,34 @@ export async function handleAgentObservationPayload(
     throw new AgentPlaneDisabledError("agent observation reads are disabled");
   }
 
-  const row = await findAgentObservationPayload(db, params.observationRef);
+  const row = await withAgentTimeout(db, AGENT_TIMEOUT_MS.short, (tx) =>
+    findAgentObservationPayload(tx, params.observationRef), "agent_observation_payload");
   if (!row) {
     throw staticNotFound();
   }
 
   // The cap is enforced by COUNTING the audit trail, which is also what makes it
-  // auditable. TOCTOU is accepted and documented: one owner, worst case two extra
-  // reads, and the alternative is a lock on a journal table.
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  // auditable. The window is the UTC DAY, matching every other budget on the
+  // plane: it was declared per-day and measured over a rolling 24 hours. TOCTOU is
+  // accepted and documented — one owner, worst case two extra reads.
   const used = await countAgentReadAuditForSession(db, {
     sessionUserId: principal.user.id,
     operation: "agentObservationPayload",
-    since,
+    since: startOfUtcDay(new Date()),
   });
   const remaining = Math.max(0, AGENT_OBSERVATION_PAYLOAD_SESSION_CAP - used);
 
   const allowed = agentObservationPayloadAllowed(row.kind);
+  const scrubbed = allowed && remaining > 0 ? scrubObservationPayload(row.payload) : null;
   const withheldReason = !allowed
     ? "kind_not_allowlisted" as const
     : remaining === 0
       ? "session_payload_budget_exhausted" as const
-      : null;
-
-  const scrubbed = withheldReason === null
-    ? scrubObservationPayload(row.payload)
-    : { payload: {}, signedUrlsRemoved: 0, secretsRedacted: 0, pathsRemoved: [] as string[] };
+      // The scrub refuses a payload it cannot walk as an object; that refusal is a
+      // WITHHOLDING with a reason, not a silent empty body.
+      : scrubbed === null || scrubbed.payload === null
+        ? "restricted_class" as const
+        : null;
 
   // EVERY call writes a row, including a withheld one: an owner asking about a
   // forbidden kind is itself the fact the trail exists to record.
@@ -306,21 +326,14 @@ export async function handleAgentObservationPayload(
     delivery: { snapshotExhausted: true, nextCursor: null },
     cursorConsumed: false,
     cursorCapable: false,
+    frozenSnapshot: true,
     requestWindow: null,
     gaps: [],
-    gapDetection: "head_only",
     scopeFieldStates: {},
     sourceErrors: [],
     scopeNarrowing: { keyGrantExcludedPages: 0, totalPagesForQuery: 0 },
     observedRowFloor: null,
     captureFloor: { at: null, kind: "unknown" },
-    captureCeiling: { at: null, kind: "no_lane", laneCadenceSeconds: null, breakerOpen: false },
-    basis: "none",
-    proof: null,
-    parseDebt: 0,
-    rejected: 0,
-    servingHighWaterSatisfied: true,
-    hasProofLaneForClaim: false,
   });
 
   return {
@@ -330,12 +343,12 @@ export async function handleAgentObservationPayload(
     receivedAt: iso(row.receivedAt),
     payloadSha256: row.payloadSha256,
     // The ROW exists and the body does not: absence never encodes a decision.
-    payload: withheldReason === null ? scrubbed.payload : null,
+    payload: withheldReason === null ? scrubbed?.payload ?? null : null,
     withheldReason,
     scrubbed: {
-      signedUrlsRemoved: scrubbed.signedUrlsRemoved,
-      secretsRedacted: scrubbed.secretsRedacted,
-      pathsRemoved: scrubbed.pathsRemoved,
+      signedUrlsRemoved: scrubbed?.signedUrlsRemoved ?? 0,
+      secretsRedacted: scrubbed?.secretsRedacted ?? 0,
+      pathsRemoved: scrubbed?.pathsRemoved ?? [],
     },
     auditRef,
     sessionPayloadReadsRemaining: Math.max(0, remaining - (withheldReason === null ? 1 : 0)),
@@ -376,6 +389,10 @@ export async function handleAgentDatasetQuery(
     const cursor = cursorConsumed
       ? decodeAgentCursor(body.cursor as string, {
         operation: "agentDatasetQuery",
+        // Bound to the DATASET and PAGE as well as the operation: a cursor minted
+        // for `transactions` on one page must not resume against `fan_notes` on
+        // another, presenting a different population as a continuation.
+        resource: `dataset:${page.id}:${params.dataset}`,
         keyId: principal.agentKeyId,
         pageIds: [page.id],
         archiveGeneration: scope.archiveGeneration,
@@ -402,44 +419,50 @@ export async function handleAgentDatasetQuery(
       }
       return { column, op: filter.op, value: filter.value };
     });
-    const sort = rawSort.map((entry) => {
-      const column = Object.hasOwn(mapping.fields, entry.field)
-        ? mapping.fields[entry.field]
-        : undefined;
-      if (column === undefined || !agentDatasetFieldSortable(params.dataset, entry.field)) {
-        throw new BadRequestError(`field is not sortable on the ${params.dataset} dataset`);
-      }
-      return { column, dir: entry.dir };
-    });
 
-    const rows = await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
+    // The registry's DEFAULT sort is honoured when the caller supplies none: the
+    // first revision ignored it and silently ordered by the window column.
+    const requestedSort = rawSort[0] ?? {
+      field: definition.defaultSort.field,
+      dir: definition.defaultSort.dir,
+    };
+    const sortColumn = Object.hasOwn(mapping.fields, requestedSort.field)
+      ? mapping.fields[requestedSort.field]
+      : undefined;
+    if (
+      sortColumn === undefined
+      || !agentDatasetFieldSortable(params.dataset, requestedSort.field)
+    ) {
+      throw new BadRequestError(`field is not sortable on the ${params.dataset} dataset`);
+    }
+    const sortKind = (definition.fields as Record<string, string>)[requestedSort.field] ?? "string";
+
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(body.limit);
+    const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
       queryAgentDataset(tx, {
         dataset: params.dataset,
         pageId: page.id,
         from: new Date(from),
         to: new Date(to),
         filters,
-        sort,
-        limit: body.limit,
+        sort: { column: sortColumn, kind: sortKind, dir: requestedSort.dir },
+        limit,
         after: cursor === null
           ? undefined
           : {
             sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
             key: String(cursor.keyset.key ?? ""),
           },
-      }));
+      }), "agent_dataset");
 
-    const witnesses: PlaneReadWitness[] = [
-      storeDerivedWitness({ plane: "page_fans", ceilingAt: null, ceilingKind: "no_lane" }),
-    ];
-    const operationPlanes = operationPlanesFor(["page_fans"], claimFields);
+    const operationPlanes = operationPlanesFor(mapping.readPlanes, claimFields);
 
-    const hasMore = rows.length === body.limit;
-    const last = rows.at(-1);
-    const primarySortColumn = sort[0]?.column ?? mapping.windowColumn;
+    const hasMore = result.rows.length === limit;
+    const last = result.rows.at(-1);
     const nextCursor = hasMore && last !== undefined
       ? encodeAgentCursor({
         operation: "agentDatasetQuery",
+        resource: `dataset:${page.id}:${params.dataset}`,
         keyId: principal.agentKeyId,
         pageIds: [page.id],
         params: {
@@ -447,20 +470,14 @@ export async function handleAgentDatasetQuery(
           from,
           to,
           filters: rawFilters,
-          sort: rawSort,
+          sort: [requestedSort],
           claimFields,
           limit: body.limit,
         },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: { [params.dataset]: last.key },
         seqHighWater: {},
-        keyset: {
-          sortValue: primarySortColumn === mapping.windowColumn
-            ? isoOrNull(last.occurredAt)
-            : String(last.fields[Object.entries(mapping.fields)
-              .find(([, column]) => column === primarySortColumn)?.[0] ?? ""] ?? ""),
-          key: last.key,
-        },
+        keyset: { sortValue: last.sortValue, key: last.key },
       }, scope.signing)
       : null;
 
@@ -468,51 +485,39 @@ export async function handleAgentDatasetQuery(
       planeMode: scope.planeMode,
       claimFields,
       operationPlanes,
-      planeReads: witnesses,
-      planesNotRead: planesNotRead({ operationPlanes, witnesses }),
+      planeReads: result.witnesses,
+      planesNotRead: planesNotRead({ operationPlanes, witnesses: result.witnesses }),
       delivery: { snapshotExhausted: nextCursor === null, nextCursor },
       cursorConsumed,
       cursorCapable: true,
+      // A dataset is a join over live tables with no cheap monotonic bound, so the
+      // response SAYS the population can move rather than implying a frozen one.
+      frozenSnapshot: false,
       requestWindow: { from, to },
       gaps: [],
-      gapDetection: "head_only",
       scopeFieldStates: computeScopeFieldStates({
         fields: claimFields ?? [],
         platforms: [page.platform as Platform],
       }),
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
-      observedRowFloor: isoOrNull(rows.at(0)?.occurredAt ?? null),
+      observedRowFloor: isoOrNull(result.rows.at(0)?.occurredAt ?? null),
       captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: { at: null, kind: "no_lane", laneCadenceSeconds: null, breakerOpen: false },
-      basis: "store_derived",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: hasProofLaneForClaim(claimFields, [page.platform as Platform]),
     });
 
-    const response = {
+    const response: AgentDatasetQueryResponse = {
       datasetRef: params.dataset,
       pageLabel: page.pageLabel,
       platform: page.platform as Platform,
       window: { from, to },
-      items: rows.map((row) => ({
+      items: result.rows.map((row) => ({
         datasetRef: params.dataset,
         key: row.key,
         occurredAt: isoOrNull(row.occurredAt),
         fanPlatformUserId: row.fanPlatformUserId,
         fields: Object.fromEntries(Object.entries(row.fields).map(([field, value]) => [
           field,
-          value instanceof Date
-            ? value.toISOString()
-            : typeof value === "bigint"
-              ? Number(value)
-              : typeof value === "string" || typeof value === "number"
-                  || typeof value === "boolean" || value === null
-                ? value
-                : String(value),
+          serializeDatasetValue(value),
         ])),
         fieldStates: {},
         provenance: {
@@ -522,13 +527,17 @@ export async function handleAgentDatasetQuery(
         },
       })),
       predicates: buildPredicates([
-        { name: "window", requested: true },
-        { name: "datasetFilter", requested: rawFilters.length > 0 },
+        { name: "window", requested: true, applied: true },
+        {
+          name: "datasetFilter",
+          requested: rawFilters.length > 0,
+          applied: filters.length > 0,
+        },
       ]),
       delivery: buildDelivery({
-        returned: rows.length,
-        matched: { value: rows.length, exact: nextCursor === null },
-        cappedBy: nextCursor === null ? null : "limit",
+        returned: result.rows.length,
+        matched: { value: result.rows.length, exact: nextCursor === null },
+        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
         snapshotExhausted: nextCursor === null,
         caveats: evidence.deliveryCaveats,
@@ -536,10 +545,36 @@ export async function handleAgentDatasetQuery(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(rows.length);
+    await scope.finish(result.rows.length);
     return response;
   } catch (error) {
     await scope.finish(0);
     throw error;
   }
+}
+
+/**
+ * A dataset value on its way to the closed scalar union.
+ *
+ * Money columns are BIGINT and arrive as JavaScript BigInt, so they go through the
+ * OVERFLOW GUARD rather than a bare `Number()`: a money path that silently stops
+ * counting above 2^53 is the one conversion that must never be implicit.
+ */
+function serializeDatasetValue(value: unknown): string | number | boolean | null | string[] {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "bigint") {
+    return toSafeNumber(value);
+  }
+  if (
+    typeof value === "string" || typeof value === "number"
+    || typeof value === "boolean" || value === null
+  ) {
+    return value;
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+    return value;
+  }
+  return String(value);
 }

@@ -35,6 +35,17 @@ const cursorPayloadSchema = z.object({
   version: z.literal(1),
   /** Which operation minted it: a threads cursor is not a transcript cursor. */
   operation: z.string().min(1).max(64),
+  /**
+   * The RESOURCE the traversal is walking, when the operation addresses one by
+   * path: `conversation:<pageId>:<ref>` for a transcript, `dataset:<name>` for a
+   * dataset query.
+   *
+   * Without it the operation name alone let a cursor minted for one conversation
+   * resume against another, and a dataset cursor replay against a different
+   * dataset whose keyset happens to parse — the response then presents a
+   * different population as a continuation of the first page.
+   */
+  resource: z.string().min(1).max(200),
   /** The agent key that minted it. A foreign cursor is refused. */
   keyId: z.number().int().positive(),
   /** Already resolved and intersected with the grant at mint time. */
@@ -129,6 +140,8 @@ export function encodeAgentCursor(
 
 export interface AgentCursorExpectation {
   operation: string;
+  /** `"global"` for the operations that address no path resource. */
+  resource: string;
   keyId: number;
   pageIds: readonly number[];
   archiveGeneration: number;
@@ -178,6 +191,9 @@ export function decodeAgentCursor(
 
   const payload = result.data.payload;
   if (payload.operation !== expectation.operation) {
+    throw new AgentCursorInvalidError();
+  }
+  if (payload.resource !== expectation.resource) {
     throw new AgentCursorInvalidError();
   }
   if (payload.keyId !== expectation.keyId) {

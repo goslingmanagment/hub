@@ -29,6 +29,7 @@ const params = { from: "2026-01-08T00:00:00.000Z", to: "2026-01-20T00:00:00.000Z
 
 const payload = {
   operation: "agentThreads",
+  resource: "global",
   keyId: 42,
   pageIds: [4, 5],
   params,
@@ -40,6 +41,7 @@ const payload = {
 
 const expectation = {
   operation: "agentThreads",
+  resource: "global",
   keyId: 42,
   pageIds: [4, 5],
   archiveGeneration: 3,
@@ -107,6 +109,28 @@ describe("agent read plane: cursors", () => {
     const token = encodeAgentCursor(payload, signing);
     expectRefused(() =>
       decodeAgentCursor(token, { ...expectation, operation: "agentCoverage" }, signing));
+  });
+
+  it("refuses a cursor minted for a DIFFERENT resource", () => {
+    // A transcript cursor for one conversation used to resume against another,
+    // and a dataset cursor against a different dataset, because only the
+    // operation name was bound. The path resource is part of the identity now.
+    const transcript = encodeAgentCursor({
+      ...payload,
+      operation: "agentThreadMessages",
+      resource: "conversation:4:aaa",
+    }, signing);
+    const expectTranscript = {
+      ...expectation,
+      operation: "agentThreadMessages",
+      resource: "conversation:4:aaa",
+    };
+    expect(decodeAgentCursor(transcript, expectTranscript, signing).keyId).toBe(42);
+    expectRefused(() => decodeAgentCursor(
+      transcript,
+      { ...expectTranscript, resource: "conversation:4:bbb" },
+      signing,
+    ));
   });
 
   it("refuses a cursor minted under a different archive generation", () => {

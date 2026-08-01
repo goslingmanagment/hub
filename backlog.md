@@ -261,3 +261,34 @@ HTTP-операций и команд CLI при этом **не меняетс�
 
 Приоритет между четырьмя владельцем не задан. Оценка автора: FEAT-002 самый
 дешёвый (данные уже захвачены), FEAT-004 самый ценный (деньги и асимметрия с OF).
+
+## BL-A — Agent Read Plane slice A, review round 1 (deferred, each one bounded)
+
+- **BL-A1 outbound `sender_hint`.** The transcript union projects
+  `message_archive.fan_native_id` as the sender hint on every row, so an OUTBOUND
+  message labels the fan as its sender. Needs a per-arm sender expression.
+- **BL-A2 cross-store tombstone timestamps.** Tombstone dominance marks a row
+  deleted from another store but has no timestamp there, so `deletedAt` falls back
+  to the epoch and reads as 1970. Carry the dominating store's timestamp.
+- **BL-A3 transcript count probe clamp.** `countAgentTranscript` reuses the union,
+  whose internal ceiling is 1500, so `matchedInScope` cannot report the 5001 probe
+  boundary on a very large thread.
+- **BL-A4 dataset SECONDARY sort.** Only the first sort entry is honoured; the
+  contract accepts two. The second needs its own rendered key in the keyset.
+- **BL-A5 dataset filter type coercion.** `eq`/`neq`/`in` compare `::text`, so
+  `1` and `"1"` match and a timestamp compares lexically. Coerce per registry kind.
+- **BL-A6 resolver `distinct on` and page-scoped aliases.** Alias rows are keyed by
+  (fan, kind, value); a fan aliased identically on two granted pages still collapses
+  to one candidate row.
+- **BL-A7 subscription `ended` timestamp.** The timeline stamps a
+  `subscription.ended` event at creation time, not at `ends_at`, so an ended
+  subscription lands on the wrong day.
+- **BL-A8 5001-probe off-by-one.** The probe returns `probeMax + 1` as the reported
+  value; the contract describes 5001 as "at least 5001", which is the same number
+  by luck rather than by construction.
+- **BL-A9 emitted cursor length.** A cursor carrying a large normalized query can
+  exceed the 2048-character decode ceiling, which would refuse a cursor this
+  server itself minted. Needs either a shorter encoding or a params cap.
+- **BL-A10 `domain_events_smoke_checkpoint`.** Now excluded from the detached
+  partition check by an anchored name pattern; the underlying helper table should
+  move out of the `domain_events_` namespace so the pattern is not load-bearing.

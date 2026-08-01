@@ -175,7 +175,8 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
 export {
   buildAgentEvidence,
   concludeEnvelope,
-  evidenceProvesAbsence,
+  evidenceIsUnrestricted,
+  gapBeforeCaptureFloor,
   type AgentEvidence,
   type AgentEvidenceInput,
   type AgentPlaneMode,
@@ -209,8 +210,9 @@ export {
   AGENT_PLATFORM_CAPABILITIES,
   AGENT_TIMEOUT_MS,
   computeScopeFieldStates,
-  hasProofLaneForClaim,
+  hydrationRemedy,
   operationPlanesFor,
+  retentionLimitFor,
 } from "./runtime.ts";
 export { staticNotFound, toSafeNumber, toSafeNumberOr } from "./errors.ts";
 export { normalizeResolveInput } from "./handlers-core.ts";

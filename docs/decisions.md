@@ -197,10 +197,10 @@ appends a row here in the same change (family law: updated-in-change).
 | 193 | Deleted fans in top-spenders | `pageTopSpenders` carries `entries[].deletedAt` (`fans.deleted_detected_at`, ISO, null = alive) so the board can tell a deleted account from an unloaded name and stop re-asking Fansly for ids it can never resolve; deleted fans stay IN the ranking because their spend is in the totals, and the field is `.optional()` because the kernel deploys independently of the extension |
 | 194 | Fansly transaction-data correctness | Subscribers add one archive-only expired-history bootstrap; live bulk-stream gates become durable pause/resume state and skipped runs stop claiming data success; PPV target discovery adds a transaction keyset while retaining the existing media-scoped capture contract |
 | 195 | Agent principal isolation | An agent key authenticates into its OWN `AuthPrincipal` variant with NO human user (`kind: "agent"`, capabilities + explicit `page_ids`), extending #116's credential taxonomy with a third kind; route kind `agentKey` admits only agent principals, every other kind (including `any`, now an allowlist of the pre-agent methods) refuses them, and a page an agent may not read answers 404 exactly as a page that does not exist |
-| 196 | Agent Read Plane | A machine principal reads this hub through 10 operations under `/api/v1/agent/*`, and every 200 carries three independent axes (`delivery`, `capture`, `fieldStates`) plus one `conclusion.absenceProvable`; PARTIALLY supersedes #52 strictly narrowly (transcript reads only through operations with mandatory capture/conclusion, only for an `agentKey` principal, never as an unannotated dump). #57, #140, #142 are NOT superseded; DP 7 / DP 8 / DP 9-A are reaffirmed |
-| 197 | Fansly coverage is store-derived | `ofapi_message_coverage` is OnlyFans-only by schema, so no Fansly answer can carry `basis: "cryptographic_proof"` and `absenceProvable` is structurally unreachable there; a store-derived capture floor is pinned to `null`, because `complete` is written on merely intersecting an already-stored message and the oldest returned row is not a floor |
+| 196 | Agent Read Plane | A machine principal reads this hub through 10 operations under `/api/v1/agent/*`, and every 200 carries three independent axes (`delivery`, `capture`, `fieldStates`) plus `conclusion.blockers`; PARTIALLY supersedes #52 strictly narrowly (transcript reads only through operations with mandatory capture/conclusion, only for an `agentKey` principal, never as an unannotated dump). #57, #140, #142 are NOT superseded; DP 7 / DP 8 / DP 9-A are reaffirmed |
+| 197 | Capture floor, not absence proof | The `absenceProvable` field and its certification machinery (coverage proofs, capture ceiling, gap-detection mode) are REMOVED before shipping: unreachable on every real route and the slowest reads in the slice. What ships is `captureFloor` (`oldest_stored_row`, from its own unbounded query) plus the `before_capture_floor` gap and blocker — "we hold nothing before DATE" is checkable, "nothing happened before DATE" is not expressible |
 | 198 | Agent search is Postgres FTS | Message search runs `websearch_to_tsquery('simple')` over the GIN that has existed unused since migration 0059; `escapeLikePattern` is NOT applied on that path (it corrupts tsquery input), no FTS index is built for the other two message stores, and they are declared `not_indexed` so a miss reads as non-coverage rather than as absence |
-| 199 | One writer for absenceProvable | `concludeEnvelope` in `modules/agent-read/epistemics.ts` is the ONLY runtime site that writes the field (pinned by a textual test); plane reads are branded witnesses a handler cannot mint; ramp mode `read_only` pins it false with `read_only_mode`, and ANY response that consumed a cursor takes the `mutable_sort_key_traversal` blocker because a caveat cannot cure a cross-page skip |
+| 199 | One writer for the blockers | `concludeEnvelope` in `modules/agent-read/epistemics.ts` is the ONLY runtime site that names a blocker (pinned textually); plane reads are branded witnesses a handler cannot mint (barrel export pinned); ramp mode and cursor traversal enter through the signature — a consumed cursor takes `mutable_sort_key_traversal`, and an unfrozen population takes the `no_frozen_snapshot` caveat instead of an unearned `snapshotExhausted` |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6040,10 +6040,11 @@ a capture floor would let `hasMedia=true` returning zero rows "prove" that no
 media existed. `fieldStates` says, per field and BEFORE any row is fetched,
 whether that field was ever observable in this scope at all.
 
-On top of them sits exactly one field an agent may read as "this did not happen",
-and it is false unless every condition holds at once (see #199). An empty
-collection therefore always arrives with a populated `capture` and a non-empty
-`blockers` list. Never a bare `[]`.
+On top of them sits `conclusion.blockers`: every reason this answer is narrower
+than the question that was asked (see #197 for what was deliberately NOT built,
+and #199 for who is allowed to write one). An empty collection therefore always
+arrives with a populated `capture` and a non-empty `blockers` list. Never a bare
+`[]`.
 
 This PARTIALLY supersedes #52, strictly narrowly: transcript material leaves the
 kernel only through operations that carry mandatory `capture` and `conclusion`,
@@ -6061,21 +6062,33 @@ cannot see is public through operation #1, so `scopeNarrowing` discloses nothing
 new and prevents "this fan never paid" being said about a payment on an invisible
 page.
 
-**Decision #197 (2026-08-01, Fansly coverage is store-derived):**
-`ofapi_message_coverage` is OnlyFans-only by schema, and there is no Fansly
-equivalent. A Fansly response therefore can never carry
-`basis: "cryptographic_proof"`, and `absenceProvable` is structurally unreachable
-on that platform. That is the honest answer, not a degradation, and a test pins
-both halves.
+**Decision #197 (2026-08-01, the plane reports a capture FLOOR, not a proof):**
+the first build of slice A carried an `absenceProvable` boolean an agent could
+read as "this did not happen", certified by OnlyFans coverage proofs, a capture
+ceiling and a gap-detection mode. It is REMOVED before shipping, by owner ruling.
 
-Two temptations are closed with it. The store-derived capture floor is pinned to
-`null` with `kind: "unknown"`: both platforms write `message_coverage_status =
-complete` on merely INTERSECTING an already-stored message, and of 27 198 Fansly
-threads marked complete, 10 531 hold five messages or fewer and four hold none.
-And `observedRowFloor` — the oldest row a query returned — is reported as a
-diagnostic and is explicitly forbidden as a floor: "the oldest thing I found" is
-not "the oldest thing that exists", and conflating them is how an empty January
-became a fact.
+The reason is not doctrinal, it is arithmetic. Nothing in this system performs a
+verified gap sweep, so the detection mode was hardcoded to the value that forces
+the answer false; no route computed a real lane ceiling; and the coverage-proof
+reads that fed the rest were the slowest queries in the slice. The field was
+therefore structurally `false` on every real request, at the cost of the most
+expensive reads on the plane. A boolean that is always false teaches an agent
+nothing and is worse than absent, because its presence implies it could be true.
+
+What survives is the part that answers the question that started this work.
+`capture.captureFloor` reports when THIS STORE's record of a scope begins
+(`kind: "oldest_stored_row"` — a lower bound on what we hold, established by its
+own unbounded query rather than from whichever rows a window returned), and a
+window starting earlier produces a `before_capture_floor` gap with a named remedy
+plus the `window_before_capture_floor` blocker. "We hold nothing from before 21
+February" is a checkable fact about this deployment. "Nothing happened before 21
+February" was never sayable and is now not even expressible.
+
+Removed with it: `agentCaptureBasisEnum`, `agentProofSchema`,
+`agentCaptureCeilingSchema`, `capture.gapDetection`, the `ofapi_message_coverage`
+reads, the lane-ceiling merge, and thirteen proof-shaped blocker values. Kept:
+`captureFloor`, `gaps[]`, the caveat list, and `capture.planes[]` with honest
+read / not_read / not_indexed / not_applicable states.
 
 **Decision #198 (2026-08-01, agent search is Postgres FTS):** message search runs
 `to_tsvector('simple', text_plain) @@ websearch_to_tsquery('simple', $q)` against
@@ -6087,7 +6100,7 @@ actively corrupts input (`snake_case` becomes `snake\_case`).
 No FTS index is built for `dm_message_archive` or `page_dm_messages`, and that is
 a decision rather than an omission: both are declared `not_indexed` in the
 response, which makes a miss visible as NON-COVERAGE instead of as absence, and
-consequently `absenceProvable` on search is permanently false. Two further
+leaves the `plane_not_indexed` blocker on every search answer. Two further
 caveats are always present because they are always true: the corpus is Russian
 and the `simple` configuration does not stem (so "заплатил" will not find
 "заплатили"), and media-only messages have empty text while in a customs audit
@@ -6099,24 +6112,32 @@ does not exist; the extension is a manual owner step and the code detects it at
 runtime, falling back from `fts_trgm` to `fts` with a named caveat rather than
 breaking.
 
-**Decision #199 (2026-08-01, one writer for `absenceProvable`):** the field is
-written in exactly one runtime file, `modules/agent-read/epistemics.ts`, and a
-textual test asserts that the literal appears nowhere else. A handler that
-computed it for itself would eventually compute it slightly differently, and a
-slightly wrong `true` is worse than no field at all.
+**Decision #199 (2026-08-01, one writer for the blockers):** every reason an
+answer is narrower than its question is assembled in exactly one runtime file,
+`modules/agent-read/epistemics.ts`, and a textual test asserts that no other
+runtime file so much as NAMES a blocker value. A second writer would eventually
+disagree with the first, and a missing blocker reads as "nothing limited this",
+which is the failure the whole envelope exists to prevent.
 
 Two mechanisms keep that single writer honest. Plane reads are BRANDED witnesses
-minted only inside `packages/db` (the barrel exports the type, not the
-constructor), so `state: "read"` is a fact a repository returned rather than a
-claim a handler made. And every new condition enters through the function's
-SIGNATURE rather than through a bypass: ramp mode arrives as `planeMode`
-(`read_only` pins the conclusion false with the `read_only_mode` blocker for its
-verification window), and cursor traversal arrives as `cursorConsumed`.
+minted only inside `packages/db` — the barrel exports the type and not the
+constructor, and a pin test fails the build if that changes — so `state: "read"`
+is a fact a repository returned rather than a claim a handler made. The first
+review round found four handlers minting reads for stores they never queried
+(#3 for money and CRM, #4 regardless of the requested lanes, #5 for three message
+stores while its SQL touched only the thread table, #10 for `page_fans` on every
+dataset); the brand is the structural answer, not a review checklist.
+
+And every new condition enters through the function's SIGNATURE rather than a
+bypass: ramp mode arrives as `planeMode` (`read_only` adds `read_only_mode` for
+its verification window), and cursor traversal arrives as `cursorConsumed`.
 
 That second one is an arbitration, not a detail. `occurred_at` and
 `last_message_at` are updated in place by the sync writers, so a keyset traversal
 can skip a row that moved between pages. Within ONE request the read is
-MVCC-consistent and a `mutable_sort_key` caveat is enough; ACROSS pages it is
-not, so any response that consumed a cursor takes the
-`mutable_sort_key_traversal` blocker. A caveat cannot cure a cross-page skip:
-absence is provable only within one snapshot-consistent read.
+MVCC-consistent and a `mutable_sort_key` caveat is enough; ACROSS pages it is not,
+so any response that consumed a cursor takes the `mutable_sort_key_traversal`
+blocker. Its sibling `no_frozen_snapshot` is the same honesty applied to the
+population: operations with a monotonic bound to freeze (threads, observations)
+apply it in SQL and may report `snapshotExhausted`; the ones without say so out
+loud rather than implying a stability nobody earned.

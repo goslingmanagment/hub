@@ -3,13 +3,11 @@ export * from "./schema.ts";
 export * from "./schema-guard.ts";
 export * from "./repositories/agent-keys.ts";
 export * from "./repositories/agent-read-audit.ts";
-// Agent Read Plane witnesses: the TYPE only. `mintPlaneReadWitness` deliberately
-// stays unexported from the barrel so a runtime handler cannot mint a "read"
-// verdict it did not earn (see the module header).
-export type {
-  PlaneReadProof,
-  PlaneReadWitness,
-} from "./repositories/agent-read-witness.ts";
+// Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay
+// unexported from the barrel so a runtime handler cannot claim it read a store it
+// never queried — the first review round found four handlers doing exactly that.
+// `tests/agent-read-witness-barrel.test.ts` pins this export list.
+export type { PlaneReadWitness } from "./repositories/agent-read-witness.ts";
 export * from "./repositories/agent-dataset-map.ts";
 export * from "./repositories/agent-read.ts";
 export * from "./repositories/agent-transcript.ts";

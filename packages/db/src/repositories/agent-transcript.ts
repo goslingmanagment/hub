@@ -1,6 +1,13 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import {
+  keysetOrderBy,
+  keysetPredicate,
+  renderInstant,
+  type KeysetBoundary,
+} from "./agent-keyset.ts";
+import { witnessesFor, type PlaneReadWitness } from "./agent-read-witness.ts";
 
 /**
  * The platform-neutral transcript UNION for agent operation #6.
@@ -50,6 +57,10 @@ export interface AgentTranscriptFilters {
 
 export interface AgentTranscriptInput {
   readonly pageId: number;
+  /** This thread's capture floor, established by its own unbounded query. Passed
+   *  in so the witness carries it: a floor is evidence about the store, and the
+   *  witness is the only thing allowed to report one. */
+  readonly archiveFloor?: Date | null | undefined;
   readonly platform: string;
   readonly conversationRef: string;
   readonly from: Date;
@@ -57,8 +68,8 @@ export interface AgentTranscriptInput {
   readonly sortDir: "asc" | "desc";
   readonly limit: number;
   readonly filters: AgentTranscriptFilters;
-  /** Keyset resume position, exclusive. */
-  readonly after?: { readonly occurredAt: string | null; readonly messageRef: string } | undefined;
+  /** Keyset resume position, exclusive. Rendered by SQL, never by JavaScript. */
+  readonly after?: KeysetBoundary | undefined;
 }
 
 export interface AgentTranscriptRow {
@@ -89,6 +100,9 @@ export interface AgentTranscriptRow {
   deletedAt: Date | null;
   fanPlatformUserId: string | null;
   sourcePlane: string;
+  /** The rendered sort value of this row, straight from SQL. */
+  sortValue: string | null;
+  keysetKey: string;
 }
 
 function boolPredicate(column: SQL, expected: boolean | undefined): SQL {
@@ -104,31 +118,13 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
   const includeDeleted = filters.includeDeleted ?? true;
   const descending = input.sortDir === "desc";
 
-  // The keyset arm. `occurredAt` may be NULL (a stub whose content event has not
-  // arrived), so the comparison is written with an explicit NULL policy rather
-  // than relying on the default: NULLS LAST ascending, NULLS FIRST descending
-  // would silently drop the resume boundary.
-  const after = input.after;
-  const keyset = after === undefined
-    ? sql`true`
-    : after.occurredAt === null
-      ? (descending
-        ? sql`(u.event_time is null and u.message_ref < ${after.messageRef})`
-        : sql`(u.event_time is not null or u.message_ref > ${after.messageRef})`)
-      : (descending
-        ? sql`(u.event_time < ${after.occurredAt}::timestamptz
-               or (u.event_time = ${after.occurredAt}::timestamptz and u.message_ref < ${after.messageRef})
-               or u.event_time is null)`
-        : sql`(u.event_time > ${after.occurredAt}::timestamptz
-               or (u.event_time = ${after.occurredAt}::timestamptz and u.message_ref > ${after.messageRef}))`);
-
-  const order = descending
-    ? sql`order by u.event_time desc nulls last,
-                  (case when u.message_ref ~ '^[0-9]{1,18}$' then u.message_ref::bigint end) desc nulls last,
-                  u.message_ref desc`
-    : sql`order by u.event_time asc nulls last,
-                  (case when u.message_ref ~ '^[0-9]{1,18}$' then u.message_ref::bigint end) asc nulls last,
-                  u.message_ref asc`;
+  // Ordering and resumption share ONE rendered key (see agent-keyset.ts). The
+  // previous revision ordered by a bigint cast of numeric-looking refs while the
+  // keyset compared them lexically, so "10" sorted before "2" in one and after it
+  // in the other, and rows fell through the crack between pages. The numeric cast
+  // is gone: the tiebreak only ever separates messages sharing one timestamp, and
+  // a correct traversal is worth more than numeric-looking ref order.
+  const direction = descending ? "desc" as const : "asc" as const;
 
   const directionPredicate = filters.direction === undefined
     ? sql`true`
@@ -293,7 +289,12 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
       from best b
       left join hot_upgrade h on h.message_ref = b.message_ref
     ),
-    u as (select * from unioned)
+    u as (
+      select unioned.*,
+             ${renderInstant(sql`unioned.event_time`)} as k_sort,
+             unioned.message_ref as k_key
+      from unioned
+    )
     select u.message_ref,
            u.native_message_ref,
            u.event_time,
@@ -321,17 +322,19 @@ function buildUnionQuery(input: AgentTranscriptInput): SQL {
            u.deleted_at,
            u.fan_platform_user_id,
            u.source_plane,
-           u.is_tombstoned
+           u.is_tombstoned,
+           u.k_sort,
+           u.k_key
     from u
     where (u.event_time is null or (u.event_time >= ${input.from} and u.event_time < ${input.to}))
-      and ${keyset}
+      and ${keysetPredicate(direction, input.after)}
       and (${includeDeleted} or not u.is_tombstoned)
       and ${directionPredicate}
       and (${filters.senderRole ?? null}::text is null or u.sender_role = ${filters.senderRole ?? null})
       and ${boolPredicate(sql`jsonb_array_length(coalesce(u.media_metadata, '[]'::jsonb)) > 0`, filters.hasMedia)}
       and ${boolPredicate(sql`u.price_mills is not null`, filters.hasPrice)}
       and ${boolPredicate(sql`u.is_tip`, filters.isTip)}
-    ${order}
+    ${keysetOrderBy(direction)}
     limit ${limit}
   `;
 }
@@ -375,15 +378,26 @@ function toRow(raw: Record<string, unknown>): AgentTranscriptRow {
       ? null
       : String(raw.fan_platform_user_id),
     sourcePlane: String(raw.source_plane),
+    sortValue: raw.k_sort == null ? null : String(raw.k_sort),
+    keysetKey: String(raw.k_key),
   };
 }
 
 export async function listAgentTranscript(
   db: Database,
   input: AgentTranscriptInput,
-): Promise<AgentTranscriptRow[]> {
+): Promise<{ rows: AgentTranscriptRow[]; witnesses: PlaneReadWitness[] }> {
   const result = await db.execute<Record<string, unknown>>(buildUnionQuery(input));
-  return result.rows.map(toRow);
+  return {
+    rows: result.rows.map(toRow),
+    // All three message stores are scanned by the union, on both platforms: on
+    // Fansly the OF-only arm simply matches nothing. `read` is therefore literally
+    // true for each of them, and the caller adds the thread plane it also joined.
+    witnesses: witnessesFor(
+      ["message_archive", "dm_message_archive", "page_dm_messages", "page_dm_threads"],
+      input.archiveFloor,
+    ),
+  };
 }
 
 /**

@@ -9,18 +9,30 @@
  *
  * THE LAW THIS FILE ENCODES (design spec §5, appendix §17):
  *
- * Every 200 carries three INDEPENDENT axes plus a conclusion:
+ * Every 200 carries three INDEPENDENT axes plus a list of limitations:
  *   - `delivery` — a property of the RESPONSE (how much came back, what capped it);
  *   - `capture`  — a property of the WORLD, computed from {key scope, source,
  *                  requested window} and NOTHING else (invariant 7: the same
  *                  request with and without result filters must serialize a
  *                  byte-identical `capture`);
  *   - `fieldStates`/`provenance` — per record, and `capture.scopeFieldStates`
- *                  BEFORE any row is fetched, so an empty result cannot prove a
- *                  field was absent;
- *   - `conclusion.absenceProvable` — the ONE field an agent may read as "this did
- *                  not happen", and it is false unless every listed condition
- *                  holds. `absenceProvable === (blockers.length === 0)`.
+ *                  BEFORE any row is fetched, so an empty result never reads as
+ *                  a statement about a field;
+ *   - `conclusion.blockers` — every reason this answer is narrower than the
+ *                  question. An empty collection ALWAYS arrives with a populated
+ *                  `capture` and a non-empty `blockers`; a bare `[]` is the bug
+ *                  this whole envelope exists to make impossible.
+ *
+ * WHAT IS DELIBERATELY ABSENT (owner ruling 2026-08-01): there is no
+ * `absenceProvable` field, no cryptographic-proof plane basis, no capture ceiling
+ * and no gap-detection mode. The certification machinery was unreachable on every
+ * real route — nothing served a verified gap sweep, and the proof reads were the
+ * slowest queries in the slice — so it was removed rather than left as a field
+ * that is structurally always `false`. What survives is the part that answers the
+ * original question: `captureFloor` says when this store's record of a thread
+ * BEGINS, and `gaps[before_capture_floor]` says the asked-for window is earlier
+ * than that. "We hold nothing before DATE" is a fact about this system; "nothing
+ * happened before DATE" was never sayable and is no longer implied.
  *
  * Vocabulary is DERIVED, never restated: plane names, claim fields, capabilities
  * and dataset names come from `agent-read-registry.ts`,
@@ -131,21 +143,44 @@ function agentWindowIssues(
 }
 
 /**
- * A cursor pins the whole scope; a request may carry the cursor OR the window,
- * never both, and must carry one of them wherever the window is epistemically
- * load-bearing (§17.0.13: no operation ever substitutes a silent default window
- * — "asked about January, got last quarter, got nothing" is the original bug).
+ * A cursor pins the WHOLE scope.
+ *
+ * The first version of this rule refused only `from`/`to` beside a cursor, which
+ * let a caller ADD `direction`, a dataset filter or a person on page 2: the
+ * server would then serve a differently-shaped population while `delivery`
+ * presented one continuous snapshot. So the rule is total — every scope-affecting
+ * field is refused when a cursor is present, and the field list is passed in by
+ * each operation rather than guessed here.
+ *
+ * The other half: where no cursor is supplied the window is REQUIRED, because no
+ * operation on this plane ever substitutes a silent default. "Asked about
+ * January, got last quarter, got nothing" is the original incident.
+ *
+ * NOTE on the field lists: fields carrying a Zod `.default()` are deliberately
+ * absent from them. `superRefine` sees the PARSED value, where a default has
+ * already been filled in, so listing `sortDir` or `limit` would reject every
+ * cursor request. Those fields are safe regardless — the cursor carries them and
+ * the handler reads the carried value, so a re-sent one is ignored rather than
+ * applied. What the lists cover is exactly the set a caller can ADD.
  */
-function agentWindowCursorIssues(value: {
-  from?: string | undefined;
-  to?: string | undefined;
-  cursor?: string | undefined;
-}): AgentIssue[] {
+function agentCursorScopeIssues(
+  value: Record<string, unknown> & { from?: string | undefined; to?: string | undefined; cursor?: string | undefined },
+  scopeFields: readonly string[],
+  options?: { windowRequired?: boolean },
+): AgentIssue[] {
   const issues: AgentIssue[] = [];
-  if (value.cursor !== undefined && (value.from !== undefined || value.to !== undefined)) {
-    issues.push({ path: ["cursor"], message: "cursor pins the scope; do not resend `from`/`to`" });
+  if (value.cursor !== undefined) {
+    for (const field of scopeFields) {
+      if (value[field] !== undefined) {
+        issues.push({
+          path: ["cursor"],
+          message: `cursor pins the scope; do not resend \`${field}\``,
+        });
+      }
+    }
+    return issues;
   }
-  if (value.cursor === undefined && (value.from === undefined || value.to === undefined)) {
+  if ((options?.windowRequired ?? true) && (value.from === undefined || value.to === undefined)) {
     issues.push({
       path: ["from"],
       message: "`from` and `to` are required unless a cursor is supplied",
@@ -153,6 +188,9 @@ function agentWindowCursorIssues(value: {
   }
   return issues;
 }
+
+/** Scope fields shared by every windowed operation. */
+const WINDOW_SCOPE_FIELDS = ["from", "to", "claimFields", "claimTargets"] as const;
 
 /** A claim is a declaration: both halves or neither. */
 function agentClaimQueryIssues(value: {
@@ -209,8 +247,12 @@ export const agentCountSchema = z.object({
  * between pages. Within ONE request the read is MVCC-consistent and a caveat is
  * enough; a response that CONSUMED a cursor is not, and takes the
  * `mutable_sort_key_traversal` BLOCKER instead (arbitration R-008).
+ *
+ * `no_frozen_snapshot`: this operation has no cheap monotonic bound to freeze, so
+ * `snapshotExhausted` stays false and a row written mid-traversal can join a
+ * later page. Said out loud rather than implied by a `true` nobody earned.
  */
-export const agentDeliveryCaveatEnum = z.enum(["mutable_sort_key"]);
+export const agentDeliveryCaveatEnum = z.enum(["mutable_sort_key", "no_frozen_snapshot"]);
 
 export const agentDeliverySchema = z.object({
   /** The number of RECORDS in this response. Not an HTTP status. */
@@ -243,49 +285,24 @@ export const agentPlaneReasonEnum = z.enum([
   "source_timeout",
 ]);
 
-export const agentCaptureBasisEnum = z.enum(["cryptographic_proof", "store_derived", "none"]);
-
+/**
+ * When this store's record of the scope BEGINS.
+ *
+ * `oldest_stored_row` is a LOWER BOUND on what we hold, and it is stated as such:
+ * "the archive for this thread starts here". It is emphatically NOT a statement
+ * that nothing existed earlier — the plane no longer has any way to say that, by
+ * design. `unknown` is used wherever computing an honest floor would cost a
+ * cross-page scan, and `null` at `at` means the same thing.
+ */
 export const agentCaptureFloorSchema = z.object({
   at: agentIsoTimestamp.nullable(),
-  /**
-   * Exactly two derivations. `first_observed_capture` is deliberately absent: it
-   * resurrects the forbidden "floor = the oldest row that came back", which is
-   * how an empty window became a proof of absence.
-   */
-  kind: z.enum(["proof_oldest_message", "unknown"]),
-}).strict();
-
-export const agentCaptureCeilingSchema = z.object({
-  at: agentIsoTimestamp.nullable(),
-  kind: z.enum(["last_successful_pull", "proof_frozen_head", "no_lane"]),
-  laneCadenceSeconds: z.number().int().positive().nullable(),
-  breakerOpen: z.boolean(),
-}).strict();
-
-export const agentProofSchema = z.object({
-  classification: z.enum(["continuous_history", "verified_unavailable", "explicit_open_debt"]),
-  source: z.enum(["pagination_exhausted", "export_artifact", "harvest_import"]),
-  frozenHeadRef: z.string().min(1),
-  currentHeadRef: z.string().min(1).nullable(),
-  frozenHeadMatchesCurrentHead: z.boolean(),
-  oldestMessageRef: z.string().min(1).nullable(),
-  targetHash: agentSha256Hex,
-  pageChainHash: agentSha256Hex,
-  proofObservationRef: z.number().int().positive().nullable(),
-  sourceAccountSeq: z.number().int().nonnegative().nullable(),
-  revokedAt: agentIsoTimestamp.nullable(),
+  kind: z.enum(["oldest_stored_row", "unknown"]),
 }).strict();
 
 const agentPlaneReadSchema = z.object({
   plane: agentPlaneNameEnum,
   state: z.literal("read"),
-  basis: agentCaptureBasisEnum,
   captureFloor: agentCaptureFloorSchema,
-  captureCeiling: agentCaptureCeilingSchema,
-  proof: agentProofSchema.nullable(),
-  parseDebt: z.number().int().nonnegative(),
-  rejected: z.number().int().nonnegative(),
-  servingHighWaterSatisfied: z.boolean(),
 }).strict();
 
 const agentPlaneUnavailableSchema = z.object({
@@ -441,10 +458,6 @@ export const agentCaptureSchema = z.object({
   /** ALL plane names, exactly once each. The anti-omission law is literal: a
    *  silently missing plane is forbidden, so it is not expressible. */
   planes: z.array(agentPlaneSchema).length(AGENT_PLANE_COUNT),
-  /** `head_only` FORCES `absenceProvable:false`: a lane that stalled for three
-   *  days mid-window leaves no row in any named table, so `gaps` would be empty
-   *  and the emptiness would read as proof. */
-  gapDetection: z.enum(["head_only", "verified"]),
   /** THE MINIMUM OF THE RETURNED ROWS. Not a capture floor; referring to it as
    *  one is forbidden. Diagnostic only. */
   observedRowFloor: agentIsoTimestamp.nullable(),
@@ -484,41 +497,38 @@ function agentPlanesIssues(value: { planes: Array<{ plane: string }> }): AgentIs
 // §17.0.10 — the conclusion
 // ---------------------------------------------------------------------------
 
+/**
+ * Every reason this answer is narrower than the question that was asked.
+ *
+ * The proof-shaped members are gone with the certification machinery they
+ * described (`capture_basis_*`, `proof_*`, `gap_detection_head_only`,
+ * `window_after_capture_ceiling`, `parse_debt_nonzero`, `rejected_nonzero`,
+ * `serving_high_water_unsatisfied`, `no_proof_lane_for_claim`). What remains is
+ * checkable from what the plane actually reads today.
+ */
 export const agentBlockerEnum = z.enum([
   "claim_not_declared",
   "claim_field_unobservable",
   /** The R4 ramp: `agentReadPlaneMode = read_only`. */
   "read_only_mode",
   "delivery_not_exhausted",
-  "capture_basis_none",
-  "capture_basis_store_derived",
+  /** No honest floor could be computed for this scope. */
   "capture_floor_unknown",
+  /** THE one that answers the original question: you asked about a window that
+   *  begins before this store's record of the scope does. */
   "window_before_capture_floor",
-  "capture_ceiling_unknown",
-  "window_after_capture_ceiling",
   "gaps_present",
-  "gap_detection_head_only",
-  "proof_missing",
-  "proof_revoked",
-  "proof_classification_not_continuous",
-  "proof_head_stale",
-  /** There is no proof lane for this claim class at all (money, today). */
-  "no_proof_lane_for_claim",
-  "parse_debt_nonzero",
-  "rejected_nonzero",
-  "serving_high_water_unsatisfied",
   "source_errors_present",
   "key_grant_narrowed_scope",
   "plane_not_read",
   "plane_not_indexed",
   "field_state_insufficient",
   /** R-008: this response consumed a cursor, so its traversal crossed pages of a
-   *  mutable sort key and absence is not provable across that boundary. */
+   *  mutable sort key and rows can have moved between them. */
   "mutable_sort_key_traversal",
 ]);
 
 export const agentConclusionSchema = z.object({
-  absenceProvable: z.boolean(),
   blockers: z.array(agentBlockerEnum),
 }).strict();
 
@@ -550,12 +560,6 @@ function agentEvidenceIssues(
     issues.push({
       path: ["delivery", "cappedBy"],
       message: "a resumable response must say what capped it",
-    });
-  }
-  if (value.conclusion.absenceProvable !== (value.conclusion.blockers.length === 0)) {
-    issues.push({
-      path: ["conclusion", "absenceProvable"],
-      message: "`absenceProvable` iff `blockers` is empty",
     });
   }
   return issues;
@@ -678,7 +682,6 @@ export const agentObservationSourceEnum = z.enum([
 export const agentPlatformCapabilitiesSchema = z.object({
   platform: platformEnum,
   conversationIdSemantics: z.enum(["equals_fan_id", "separate_thread_id"]),
-  hasCoverageProofs: z.boolean(),
   /** The platform's CEILING of capability — the actual state inside a scope is
    *  `capture.scopeFieldStates`. Seven values, not a boolean. */
   capturesMediaMetadata: agentFieldStateEnum,
@@ -898,7 +901,12 @@ export const agentPersonResponseSchema = z.object({
     lastTransactionAt: agentIsoTimestamp.nullable(),
     pageAlias: z.string().nullable(),
   }).strict()),
-  threads: z.array(agentThreadSummarySchema()),
+  /** null = the key holds no `read:messages`, so thread inventory was neither
+   *  read nor summarised. An EMPTY ARRAY would say "this fan has no threads",
+   *  which is exactly the empty-presented-as-complete failure. */
+  threads: z.array(agentThreadSummarySchema()).nullable(),
+  /** null = the key holds no `read:money`. Never a zeroed section: a silent 0 is
+   *  indistinguishable from "never paid" (appendix 17.0.5). */
   money: z.object({
     lifetime: z.object({
       grossMills: mills,
@@ -914,7 +922,8 @@ export const agentPersonResponseSchema = z.object({
       netMills: mills,
       transactionCount: z.number().int().nonnegative(),
     }).strict()),
-  }).strict(),
+  }).strict().nullable(),
+  /** null without `read:money`: a subscription price is money. */
   subscriptions: z.array(z.object({
     pageLabel: z.string(),
     subscriptionRef: z.string(),
@@ -927,10 +936,12 @@ export const agentPersonResponseSchema = z.object({
     startedAt: agentIsoTimestamp.nullable(),
     subscriptionExpiresAt: agentIsoTimestamp.nullable(),
     isCurrent: z.boolean(),
-  }).strict()),
-  /** OPEN 9, CLOSED: notes and summaries ARE included. This is not a new class of
-   *  disclosure — `pageFanDetail` already returns them to any principal with page
-   *  access; withholding them here would only cost a round trip. */
+  }).strict()).nullable(),
+  /**
+   * Operator-written free text about a person. Included (OPEN 9) but NOT to every
+   * valid key: it is the same disclosure class as a transcript, so it rides the
+   * `read:messages` capability. null = not granted, never an empty array.
+   */
   crm: z.object({
     notes: z.array(z.object({
       pageLabel: z.string(),
@@ -946,7 +957,7 @@ export const agentPersonResponseSchema = z.object({
       summaryText: z.string(),
       createdAt: agentIsoTimestamp.nullable(),
     }).strict()).max(200),
-  }).strict(),
+  }).strict().nullable(),
   fieldStates: z.partialRecord(agentClaimFieldEnum, agentFieldStateSchema),
   provenance: agentProvenanceSchema,
   delivery: agentDeliverySchema,
@@ -1002,7 +1013,11 @@ export const agentPersonTimelineQuerySchema = z.object({
   addAgentIssues([
     ...agentWindowIssues(value),
     ...agentClaimQueryIssues(value),
-    ...agentWindowCursorIssues(value),
+    ...agentCursorScopeIssues(value, [
+      ...WINDOW_SCOPE_FIELDS,
+      "lanes",
+      "pageLabel",
+    ]),
   ], ctx));
 
 export const agentTimelineItemSchema = z.object({
@@ -1072,11 +1087,21 @@ export const agentThreadsQuerySchema = z.object({
       ["personPlatform"],
       "personPlatform and personPlatformUserId are an atomic pair",
     ),
-    // #5 is a CURRENT-inventory operation: §17.0.13 gives it no window at all,
-    // so only the "do not resend scope with a cursor" half of the B2 law applies.
-    ...(value.cursor !== undefined && value.pageLabel !== undefined
-      ? [{ path: ["cursor"] as PropertyKey[], message: "cursor pins the scope; do not resend filters" }]
-      : []),
+    // #5 is a CURRENT-inventory operation: it takes no window at all, so only
+    // the "do not resend scope beside a cursor" half applies — but it applies to
+    // EVERY filter, not just one.
+    ...agentCursorScopeIssues(value, [
+      "platform",
+      "pageLabel",
+      "personPlatform",
+      "personPlatformUserId",
+      "coverageStatus",
+      "quarantined",
+      "hasMessagesSince",
+      "minStoredMessages",
+      "claimFields",
+      "claimTargets",
+    ], { windowRequired: false }),
   ], ctx));
 
 /**
@@ -1110,9 +1135,7 @@ function agentThreadSummarySchema() {
     lastMessageSyncAt: agentIsoTimestamp.nullable(),
     breakerOpen: z.boolean(),
     quarantineUntil: agentIsoTimestamp.nullable(),
-    basis: agentCaptureBasisEnum,
     captureFloor: agentCaptureFloorSchema,
-    captureCeiling: agentCaptureCeilingSchema,
     /** Computed with the SAME predicate #6 will apply, so an overview never
      *  promises rows the detail call will not return. */
     transcriptWillReturnRows: z.boolean(),
@@ -1160,7 +1183,14 @@ export const agentThreadMessagesQuerySchema = z.object({
   addAgentIssues([
     ...agentWindowIssues(value),
     ...agentClaimQueryIssues(value),
-    ...agentWindowCursorIssues(value),
+    ...agentCursorScopeIssues(value, [
+      ...WINDOW_SCOPE_FIELDS,
+      "direction",
+      "senderRole",
+      "hasMedia",
+      "hasPrice",
+      "isTip",
+    ]),
   ], ctx));
 
 export const agentMessageMediaSchema = z.object({
@@ -1326,7 +1356,14 @@ export const agentCoverageQuerySchema = z.object({
   addAgentIssues([
     ...agentWindowIssues(value),
     ...agentClaimQueryIssues(value),
-    ...agentWindowCursorIssues(value),
+    ...agentCursorScopeIssues(value, [
+      ...WINDOW_SCOPE_FIELDS,
+      "platform",
+      "pageLabel",
+      "personPlatform",
+      "personPlatformUserId",
+      "conversationRef",
+    ]),
     ...agentPairIssues(
       value.personPlatform,
       value.personPlatformUserId,
@@ -1346,9 +1383,11 @@ export const agentCoverageItemSchema = z.object({
   conversationRef: z.string().nullable(),
   fanPlatformUserId: z.string().nullable(),
   planes: z.array(agentPlaneSchema).length(AGENT_PLANE_COUNT),
-  gapDetection: z.enum(["head_only", "verified"]),
   observedRowFloor: agentIsoTimestamp.nullable(),
   gaps: z.array(agentGapSchema),
+  /** The requested window starts at or after this scope's capture floor and no
+   *  gap was found inside it. A statement about THIS STORE's coverage of the
+   *  window, never about what happened on the platform. */
   windowCovered: z.boolean(),
   fieldStates: z.partialRecord(agentClaimFieldEnum, agentFieldStateSchema),
   blockers: z.array(agentBlockerEnum),
@@ -1388,7 +1427,19 @@ export const agentObservationsQuerySchema = z.object({
   limit: paginationQuerySchema.shape.limit,
   cursor: agentCursorString.optional(),
 }).strict().superRefine((value, ctx) =>
-  addAgentIssues([...agentWindowIssues(value), ...agentWindowCursorIssues(value)], ctx));
+  addAgentIssues([
+    ...agentWindowIssues(value),
+    ...agentCursorScopeIssues(value, [
+      "from",
+      "to",
+      "platform",
+      "pageLabel",
+      "source",
+      "kind",
+      "producer",
+      "parseVersion",
+    ]),
+  ], ctx));
 
 /** `payload` and `idempotencyKey` are ABSENT from this schema, not forbidden by a
  *  refinement: with `.strict()` an "envelope with a body" is inexpressible. */
@@ -1405,8 +1456,10 @@ export const agentObservationEnvelopeSchema = z.object({
   payloadBytes: z.number().int().nonnegative(),
   payloadSha256: agentSha256Hex,
   parseVersion: z.number().int().nonnegative(),
+  /** Derived from `parse_version`, which is the column the canonicalizer stamps.
+   *  A per-row COUNT over the partitioned event table used to live here; it could
+   *  not prune partitions, so a 200-row page cost 200 partition scans. */
   canonicalized: z.boolean(),
-  domainEventCount: z.number().int().nonnegative(),
   /** Whether this kind is allowlisted on 9b. NOT a promise of access: 9b still
    *  requires an owner session. */
   payloadAvailable: z.boolean(),
@@ -1506,7 +1559,10 @@ export const agentDatasetQueryBodySchema = z.object({
   cursor: agentCursorString.optional(),
   claim: agentClaimSchema.optional(),
 }).strict().superRefine((value, ctx) => {
-  const issues = [...agentWindowIssues(value), ...agentWindowCursorIssues(value)];
+  const issues = [
+    ...agentWindowIssues(value),
+    ...agentCursorScopeIssues(value, ["from", "to", "claim"]),
+  ];
   value.filters.forEach((filter, index) => {
     const needsNoValue = filter.op === "is_null" || filter.op === "is_not_null";
     if (needsNoValue && filter.value !== undefined) {
@@ -1770,9 +1826,6 @@ export type AgentFieldStateName = z.infer<typeof agentFieldStateEnum>;
 export type AgentProvenance = z.infer<typeof agentProvenanceSchema>;
 export type AgentPredicate = z.infer<typeof agentPredicateSchema>;
 export type AgentCaptureFloor = z.infer<typeof agentCaptureFloorSchema>;
-export type AgentCaptureCeiling = z.infer<typeof agentCaptureCeilingSchema>;
-export type AgentCaptureBasis = z.infer<typeof agentCaptureBasisEnum>;
-export type AgentProof = z.infer<typeof agentProofSchema>;
 export type AgentScopeNarrowing = z.infer<typeof agentScopeNarrowingSchema>;
 export type AgentClaimQuery = z.infer<typeof agentClaimQuerySchema>;
 export type AgentIngestPath = z.infer<typeof agentIngestPathEnum>;

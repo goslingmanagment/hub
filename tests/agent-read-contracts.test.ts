@@ -13,6 +13,7 @@ import {
   AGENT_POST_READ_OPERATIONS,
   AGENT_PREDICATE_REGISTRY,
   agentBlockerEnum,
+  agentCaptureFloorSchema,
   agentCaptureSchema,
   agentClaimFieldEnum,
   agentDatasetEnum,
@@ -141,7 +142,6 @@ describe("agent read plane: the vocabulary is derived, never restated", () => {
     }));
     const base = {
       planes,
-      gapDetection: "head_only" as const,
       observedRowFloor: null,
       gaps: [],
       sourceErrors: [],
@@ -157,6 +157,33 @@ describe("agent read plane: the vocabulary is derived, never restated", () => {
   it("the R-008 traversal blocker is in the blocker enum", () => {
     expect(agentBlockerEnum.options).toContain("mutable_sort_key_traversal");
     expect(agentBlockerEnum.options).toContain("read_only_mode");
+  });
+
+  it("the absence-proof machinery is GONE from the wire", () => {
+    // Owner ruling 2026-08-01. It was unreachable on every real route and its
+    // supporting reads were the slowest queries in the slice, so it was removed
+    // rather than left as a field that is structurally always false.
+    for (const removed of [
+      "capture_basis_none",
+      "capture_basis_store_derived",
+      "capture_ceiling_unknown",
+      "window_after_capture_ceiling",
+      "gap_detection_head_only",
+      "proof_missing",
+      "proof_revoked",
+      "proof_classification_not_continuous",
+      "proof_head_stale",
+      "no_proof_lane_for_claim",
+      "parse_debt_nonzero",
+      "rejected_nonzero",
+      "serving_high_water_unsatisfied",
+    ]) {
+      expect(agentBlockerEnum.options, removed).not.toContain(removed);
+    }
+    // The part that answers the original question SURVIVES.
+    expect(agentBlockerEnum.options).toContain("window_before_capture_floor");
+    expect(agentBlockerEnum.options).toContain("capture_floor_unknown");
+    expect(agentCaptureFloorSchema.shape.kind.options).toEqual(["oldest_stored_row", "unknown"]);
   });
 
   it("delivery carries the mutable-sort-key caveat vehicle", () => {
@@ -288,6 +315,12 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
       for (const column of Object.values(mapping.fields)) {
         expect(mapping.source, `${dataset}.${column}`).toContain(column);
       }
+      // Every declared read plane is a real registry plane: a dataset that claims
+      // to read a store nobody has heard of would put an unknown name into
+      // `capture.planes`.
+      for (const plane of mapping.readPlanes) {
+        expect(AGENT_PLANE_NAMES, `${dataset} -> ${plane}`).toContain(plane);
+      }
       for (const internal of ["k_page_id", "k_platform", "k_key", "k_occurred_at", "k_fan"]) {
         expect(mapping.source, `${dataset}.${internal}`).toContain(internal);
       }
@@ -320,16 +353,38 @@ describe("agent read plane: the predicate registry is complete", () => {
   });
 });
 
-describe("agent read plane: absenceProvable has exactly one writer", () => {
-  it("the literal appears in exactly one runtime file", () => {
-    // The field is the one thing an agent may read as "this did not happen". A
-    // second writer would eventually disagree with the first, and a slightly
-    // wrong `true` is worse than no field at all.
+describe("agent read plane: the blockers have exactly one writer", () => {
+  it("no runtime file outside epistemics.ts names a blocker value", () => {
+    // `conclusion.blockers` is how an agent learns why an answer is narrower than
+    // its question. A second writer would eventually disagree with the first, and
+    // a missing blocker reads as "nothing limited this" — which is the failure the
+    // whole envelope exists to prevent.
     const root = fileURLToPath(new URL("../apps/runtime/src", import.meta.url));
-    const files = listTypeScriptFiles(root);
-    const hits = files.filter((file) =>
-      readFileSync(file, "utf8").includes("absenceProvable"));
-    expect(hits.map((file) => file.slice(root.length + 1))).toEqual(["modules/agent-read/epistemics.ts"]);
+    const allowed = "modules/agent-read/epistemics.ts";
+    const offenders: string[] = [];
+    for (const file of listTypeScriptFiles(root)) {
+      const relative = file.slice(root.length + 1);
+      if (relative === allowed) {
+        continue;
+      }
+      const source = readFileSync(file, "utf8");
+      for (const blocker of agentBlockerEnum.options) {
+        if (source.includes(`"${blocker}"`)) {
+          offenders.push(`${relative}: ${blocker}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the removed field survives only as the note explaining its removal", () => {
+    const root = fileURLToPath(new URL("../apps/runtime/src", import.meta.url));
+    const hits = listTypeScriptFiles(root)
+      .filter((file) => readFileSync(file, "utf8").includes("absenceProvable"))
+      .map((file) => file.slice(root.length + 1));
+    // Only the epistemics header, which records WHY it is gone. A reader who
+    // greps for the field must land on that explanation, not on a live writer.
+    expect(hits).toEqual(["modules/agent-read/epistemics.ts"]);
   });
 });
 

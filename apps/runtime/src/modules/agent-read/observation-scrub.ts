@@ -90,7 +90,10 @@ const SIGNATURE_QUERY_PARAMS: ReadonlySet<string> = new Set([
 const SECRET_KEY_PATTERN = /(password|secret|token|authorization|cookie|session|api[_-]?key|bearer|credential|signature|checkoutkey)/i;
 
 export interface ObservationScrubResult {
-  payload: Record<string, unknown>;
+  /** null when the body is not a JSON OBJECT this walker can traverse. The caller
+   *  turns that into an explicit `withheldReason`; an empty `{}` with no reason
+   *  would be a silent hole pretending to be an empty payload. */
+  payload: Record<string, unknown> | null;
   signedUrlsRemoved: number;
   secretsRedacted: number;
   pathsRemoved: string[];
@@ -99,21 +102,41 @@ export interface ObservationScrubResult {
 const MAX_SCRUB_DEPTH = 24;
 const MAX_PATHS_REPORTED = 200;
 
+/** URL-decodes a query-parameter NAME, treating a malformed escape as suspicious
+ *  rather than throwing. `decodeURIComponent("%ZZ")` throws, and a scrubber that
+ *  throws on hostile input is not fail-closed, it is fail-crashed. */
+function decodeParamName(raw: string): string {
+  try {
+    return decodeURIComponent(raw).toLowerCase();
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
+/**
+ * Whether a string CONTAINS a signed delivery address.
+ *
+ * Deliberately not anchored to the start of the string. The first revision only
+ * matched a value that WAS a URL, so a signed address embedded in a caption, an
+ * HTML fragment or a JSON-in-a-string blob passed straight through — and the test
+ * suite pinned that miss as if it were the design. Anything carrying a signature
+ * parameter is a signed address wherever it sits.
+ */
 function looksLikeSignedUrl(value: string): boolean {
-  if (!/^https?:\/\//i.test(value)) {
-    return false;
-  }
-  const queryStart = value.indexOf("?");
-  if (queryStart < 0) {
-    return false;
-  }
-  // Parsed by hand rather than with `new URL`: a malformed address must be
-  // treated as suspicious, not thrown on, and `URL` rejects plenty of strings a
-  // vendor happily emits.
-  for (const pair of value.slice(queryStart + 1).split("&")) {
-    const name = pair.split("=", 1)[0]?.toLowerCase() ?? "";
-    if (SIGNATURE_QUERY_PARAMS.has(decodeURIComponent(name))) {
-      return true;
+  const pattern = /https?:\/\/[^\s"'<>]*\?[^\s"'<>]*/gi;
+  for (const match of value.matchAll(pattern)) {
+    const url = match[0];
+    const queryStart = url.indexOf("?");
+    if (queryStart < 0) {
+      continue;
+    }
+    // Parsed by hand rather than with `new URL`: `URL` rejects plenty of strings a
+    // vendor happily emits, and a rejection here must never mean "safe".
+    for (const pair of url.slice(queryStart + 1).split(/[&;]/)) {
+      const name = decodeParamName(pair.split("=", 1)[0] ?? "");
+      if (SIGNATURE_QUERY_PARAMS.has(name)) {
+        return true;
+      }
     }
   }
   return false;
@@ -184,11 +207,14 @@ export function scrubObservationPayload(payload: unknown): ObservationScrubResul
   };
 
   const walked = walk(payload, "", 0);
+  const servable = walked !== null && typeof walked === "object" && !Array.isArray(walked);
+  if (!servable) {
+    // An array or a scalar at the top is not the shape this operation serves, and
+    // pretending it is an empty object would hide the refusal.
+    note("");
+  }
   return {
-    // A payload that is not a JSON object at the top is not servable as one.
-    payload: walked !== null && typeof walked === "object" && !Array.isArray(walked)
-      ? walked as Record<string, unknown>
-      : {},
+    payload: servable ? walked as Record<string, unknown> : null,
     signedUrlsRemoved,
     secretsRedacted,
     pathsRemoved,

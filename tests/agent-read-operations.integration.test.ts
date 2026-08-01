@@ -288,7 +288,7 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(money[0].grossMills).toBe(100_000);
     // The message lane is empty for January, and the conclusion says why.
     expect(body.items.filter((item: { lane: string }) => item.lane === "messages")).toEqual([]);
-    expect(body.conclusion.absenceProvable).toBe(false);
+    expect(body.conclusion.blockers.length).toBeGreaterThan(0);
   });
 
   it("#5 lists the thread with its raw coverage status and retention limit", async () => {
@@ -301,8 +301,9 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(item.messageCoverageStatusRaw).toBe("complete");
     // A lifetime spender gets the deeper Fansly retention limit.
     expect(item.retentionLimit).toBe(1000);
-    expect(item.basis).toBe("store_derived");
-    expect(item.captureFloor.at).toBeNull();
+    // The inventory does not pay for a per-thread floor scan; #6 and #8 establish
+    // the real floor for a named thread.
+    expect(item.captureFloor).toEqual({ at: null, kind: "unknown" });
     expect(response.json().delivery.matchedInScope).toEqual({
       value: 1,
       exact: true,
@@ -326,7 +327,7 @@ describe("[sync-critical] agent read plane operations", () => {
     const withMedia = body.items.find((item: { messageRef: string }) => item.messageRef === "m-2");
     expect(withMedia.mediaMetadata[0]).toMatchObject({ mediaRef: "med-1", width: 1920 });
     expect(withMedia.tipAmountMills).toBe(0);
-    expect(body.delivery.caveats).toEqual(["mutable_sort_key"]);
+    expect(body.delivery.caveats).toContain("mutable_sort_key");
   });
 
   it("#6 excludes tombstones when the caller opts out", async () => {
@@ -367,8 +368,14 @@ describe("[sync-critical] agent read plane operations", () => {
     );
     const body = response.json();
     expect(body.items).toEqual([]);
-    expect(body.conclusion.absenceProvable).toBe(false);
-    expect(body.conclusion.blockers).toContain("capture_basis_store_derived");
+    // The floor is MARCH (the archive begins there), the window is January, and
+    // the answer says exactly that instead of returning a bare [].
+    expect(body.capture.planes.find((plane: { plane: string }) =>
+      plane.plane === "message_archive").captureFloor).toEqual({
+      at: "2026-03-01T10:00:00.000Z",
+      kind: "oldest_stored_row",
+    });
+    expect(body.conclusion.blockers).toContain("window_before_capture_floor");
     expect(body.capture.gaps[0].kind).toBe("before_capture_floor");
     expect(body.capture.gaps[0].remedy.kind).toBe("hydration_request");
   });
@@ -389,7 +396,8 @@ describe("[sync-critical] agent read plane operations", () => {
     // Two caveats are ALWAYS true, so the array is never empty.
     expect(body.caveats).toContain("text_search_misses_media_only_messages");
     expect(body.caveats).toContain("text_search_is_exact_form_only");
-    // Two of its planes have no text index at all, so it can never certify.
+    // Two of its planes have no text index at all, and the answer says so rather
+    // than letting a miss read as an absence.
     expect(body.conclusion.blockers).toContain("plane_not_indexed");
 
     const withSnippet = await agentPost("/api/v1/agent/search/messages", {
@@ -415,7 +423,7 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(body.items).toHaveLength(1);
     expect(body.items[0].conversationRef).toBe(CONVERSATION_REF);
     expect(body.items[0].windowCovered).toBe(false);
-    expect(body.items[0].blockers).toContain("capture_basis_store_derived");
+    expect(body.items[0].blockers).toContain("window_before_capture_floor");
     expect(body.items[0].planes.length).toBeGreaterThan(0);
     expect(body.journalFloor.observationsFirstReceivedAt).toBeNull();
   });
@@ -525,7 +533,7 @@ describe("[sync-critical] agent read plane operations", () => {
     const secondBody = second.json();
     expect(secondBody.items[0].messageRef).not.toBe(body.items[0].messageRef);
     // A consumed cursor drops the caveat and takes the traversal BLOCKER.
-    expect(secondBody.delivery.caveats).toEqual([]);
+    expect(secondBody.delivery.caveats).not.toContain("mutable_sort_key");
     expect(secondBody.conclusion.blockers).toContain("mutable_sort_key_traversal");
   });
 });

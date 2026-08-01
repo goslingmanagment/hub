@@ -11,6 +11,7 @@ import {
   revokeAgentKey,
   setConfigOverride,
 } from "@agency_hub_core/db";
+import { createUserAccount, issueChatterApiKey } from "../apps/runtime/src/services/auth.ts";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -43,6 +44,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
+/** A REAL owner session cookie and a REAL chatter api key, so the "a human is
+ *  refused on an agent route" property is exercised with actual principals. The
+ *  first revision asserted a failed LOGIN and never called an agent route with a
+ *  human at all — it would have passed with the isolation removed. */
+let ownerCookie = "";
+let chatterApiKey = "";
 
 const AGENT_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}slice-a-isolation-token`;
 const OTHER_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}slice-a-other-token`;
@@ -59,13 +66,24 @@ afterAll(async () => {
   await testDb?.stop();
 });
 
+/**
+ * The suite runs TWICE, once per policy mode.
+ *
+ * The declarative middleware defaults to `log` in this repository and only `prod`
+ * runs `enforce`, so the dual-layer law (#143) requires every isolation property
+ * to hold from the IN-HANDLER guards alone. Running only under `enforce` would let
+ * someone delete an in-handler check and never notice.
+ */
+const POLICY_MODES = ["log", "enforce"] as const;
+let policyMode: (typeof POLICY_MODES)[number] = "enforce";
+
 beforeEach(async (context) => {
   if (!testDb) {
     context.skip();
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { authPolicyEnforcement: "enforce" });
+  appContext = createTestAppContext(testDb, { authPolicyEnforcement: policyMode });
 
   const model = await createModel(testDb.db, { slug: "lora", name: "Lora" });
   if (!model) {
@@ -79,11 +97,17 @@ beforeEach(async (context) => {
   grantedPageId = granted.id;
   hiddenPageLabel = hidden.label;
 
-  const owner = await createUser(testDb.db, {
+  const owner = await createUserAccount(appContext, {
     username: "owner",
     role: "owner",
-    passwordHash: null,
-  });
+    password: "owner-secret",
+  }, { source: "cli" });
+  await createUserAccount(appContext, {
+    username: "chatter",
+    role: "chatter",
+  }, { source: "cli" });
+  const issued = await issueChatterApiKey(appContext, { username: "chatter" }, { source: "cli" });
+  chatterApiKey = issued.key;
   await insertAgentKey(testDb.db, {
     name: "slice-a",
     keyPrefix: AGENT_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
@@ -107,6 +131,16 @@ beforeEach(async (context) => {
   await server?.close();
   server = await buildApiServer(appContext);
   await server.ready();
+
+  const login = await server.inject({
+    method: "POST",
+    url: "/api/v1/auth/login",
+    payload: { username: "owner", password: "owner-secret" },
+  });
+  const setCookie = login.headers["set-cookie"];
+  const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+  ownerCookie = String(raw ?? "").split(";")[0] ?? "";
+  expect(ownerCookie).not.toBe("");
 });
 
 afterEach(async () => {
@@ -127,7 +161,12 @@ async function setPlaneMode(mode: "off" | "read_only" | "full") {
   });
 }
 
-describe("[sync-critical] agent read plane isolation", () => {
+describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (mode) => {
+  policyMode = mode;
+  beforeEach(() => {
+    policyMode = mode;
+  });
+
   it("an agent key is admitted on its own routes", async () => {
     const response = await agentGet("/api/v1/agent/capabilities");
     expect(response.statusCode).toBe(200);
@@ -136,7 +175,6 @@ describe("[sync-critical] agent read plane isolation", () => {
     // The DIFFERENCE is what an agent is allowed to know, and it is what lets
     // the person operations answer 200-empty instead of becoming an oracle.
     expect(body.grant.totalPages).toBe(2);
-    expect(body.conclusion.absenceProvable).toBe(false);
     expect(body.conclusion.blockers).toContain("claim_not_declared");
   });
 
@@ -164,18 +202,45 @@ describe("[sync-critical] agent read plane isolation", () => {
     }
   });
 
-  it("an unauthenticated caller and a human are both refused on agent routes", async () => {
+  it("an unauthenticated caller is refused on agent routes", async () => {
     const anonymous = await server!.inject({ method: "GET", url: "/api/v1/agent/capabilities" });
     expect(anonymous.statusCode).toBe(401);
+  });
 
-    const login = await server!.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "owner", password: "nope" },
+  it("a REAL owner session is refused on every agentKey route", async () => {
+    // Isolation is symmetric: the owner cookie opens the whole dashboard and none
+    // of the agent plane. Asserted with a live session, not with a failed login.
+    for (const url of [
+      "/api/v1/agent/capabilities",
+      "/api/v1/agent/threads",
+      "/api/v1/agent/coverage?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z",
+    ]) {
+      const response = await server!.inject({
+        method: "GET",
+        url,
+        headers: { cookie: ownerCookie },
+      });
+      expect([401, 403], url).toContain(response.statusCode);
+    }
+    // ... and the SAME cookie does reach the owner-session half of the plane, so
+    // the refusals above are about the route kind and not a broken session.
+    const payload = await server!.inject({
+      method: "GET",
+      url: "/api/v1/agent/observations/999999/payload?reason=isolation-check",
+      headers: { cookie: ownerCookie },
     });
-    // No owner password is set in this fixture; the point is that a cookie
-    // session never reaches an agentKey route even when it exists.
-    expect(login.statusCode).toBeGreaterThanOrEqual(400);
+    expect([404, 503]).toContain(payload.statusCode);
+  });
+
+  it("a REAL chatter api key is refused on every agentKey route", async () => {
+    for (const url of ["/api/v1/agent/capabilities", "/api/v1/agent/threads"]) {
+      const response = await server!.inject({
+        method: "GET",
+        url,
+        headers: { authorization: `Bearer ${chatterApiKey}` },
+      });
+      expect([401, 403], url).toContain(response.statusCode);
+    }
   });
 
   it("a revoked key is inert immediately", async () => {
@@ -253,7 +318,7 @@ describe("[sync-critical] agent read plane isolation", () => {
     // Mandatory even on the empty answer: this is the field that stops "no trace
     // of this person" from being reported as a fact.
     expect(body.capture.scopeNarrowing.keyGrantExcludedPages).toBe(1);
-    expect(body.conclusion.absenceProvable).toBe(false);
+    expect(body.conclusion.blockers).toContain("key_grant_narrowed_scope");
   });
 
   it("an unknown platform is a boundary 400, not an oracle", async () => {
@@ -274,7 +339,6 @@ describe("[sync-critical] agent read plane isolation", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.contract.planeMode).toBe("read_only");
-    expect(body.conclusion.absenceProvable).toBe(false);
     expect(body.conclusion.blockers).toContain("read_only_mode");
   });
 
@@ -374,7 +438,6 @@ describe("[sync-critical] agent read plane isolation", () => {
     expect(body.items).toEqual([]);
     // The whole point: an empty collection arrives WITH capture and blockers.
     expect(body.capture.planes).not.toHaveLength(0);
-    expect(body.conclusion.absenceProvable).toBe(false);
     expect(body.conclusion.blockers.length).toBeGreaterThan(0);
     expect(body.journalFloor).toHaveProperty("observationsFirstReceivedAt");
   });
@@ -388,13 +451,12 @@ describe("[sync-critical] agent read plane isolation", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.items).toEqual([]);
-    expect(body.conclusion.absenceProvable).toBe(false);
-    // Fansly has no proof lane at all, so the basis can never certify.
+    // Nothing was ever captured for this thread, so the floor is unknown and the
+    // answer says so rather than returning a bare [].
     const archive = body.capture.planes.find(
       (plane: { plane: string }) => plane.plane === "message_archive",
     );
-    expect(archive.basis).toBe("store_derived");
-    expect(archive.captureFloor.at).toBeNull();
-    expect(body.conclusion.blockers).toContain("capture_basis_store_derived");
+    expect(archive.captureFloor).toEqual({ at: null, kind: "unknown" });
+    expect(body.conclusion.blockers).toContain("capture_floor_unknown");
   });
 });

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 
 import type {
   AgentCoverageResponse,
-  AgentGap,
   AgentPersonTimelineResponse,
   AgentPlaneReason,
   AgentSearchCaveat,
@@ -14,21 +13,17 @@ import type {
 import {
   countAgentThreads,
   countAgentTranscript,
-  isStatementTimeout,
+  findAgentFanId,
+  findAgentPersonIdentity,
   listAgentCoverageScopes,
   listAgentThreads,
   listAgentTimeline,
   listAgentTranscript,
-  proofWitness,
-  readAgentCoverageProofs,
   readAgentJournalFloor,
-  readAgentLaneCeilings,
+  readAgentThreadArchiveFloor,
+  readAgentThreadsHighWater,
   searchAgentArchive,
-  storeDerivedWitness,
-  withAgentStatementTimeout,
-  type AgentCoverageProofRow,
   type AgentTranscriptFilters,
-  type PlaneReadWitness,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
 
@@ -36,11 +31,11 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
 import {
   buildAgentEvidence,
-  evidenceProvesAbsence,
-  type PlaneNotReadReason,
+  evidenceIsUnrestricted,
+  gapBeforeCaptureFloor,
 } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
-import { staticNotFound, toSafeNumber } from "./errors.ts";
+import { AgentPlaneDisabledError, staticNotFound, toSafeNumber } from "./errors.ts";
 import { MESSAGE_PLANES, MONEY_PLANES, planesNotRead } from "./planes.ts";
 import {
   AGENT_COUNT_PROBE_MAX,
@@ -50,10 +45,13 @@ import {
   buildDelivery,
   buildPredicates,
   computeScopeFieldStates,
-  hasProofLaneForClaim,
+  hydrationRemedy,
   iso,
   isoOrNull,
   operationPlanesFor,
+  retentionLimitFor,
+  tryAgentTimeout,
+  withAgentTimeout,
   writeAgentAudit,
 } from "./runtime.ts";
 
@@ -61,62 +59,57 @@ import {
  * Operations #4 (timeline), #5 (threads), #6 (transcript), #7 (search) and #8
  * (coverage).
  *
- * The shape they share: a keyset traversal over a mutable sort key. That is why
- * every paged response here carries the `mutable_sort_key` caveat, and why a
- * response that CONSUMED a cursor carries the `mutable_sort_key_traversal`
- * BLOCKER instead — within one request the read is snapshot-consistent, across
- * pages it is not, and no caveat can cure a skipped row.
+ * What they share: a keyset traversal over a MUTABLE sort key. Every paged
+ * response therefore carries the `mutable_sort_key` caveat, and a response that
+ * CONSUMED a cursor carries the `mutable_sort_key_traversal` blocker instead —
+ * within one request the read is snapshot-consistent, across pages it is not.
  *
  * #7 pages not at all, on purpose ("bound it, do not paginate"): it returns at
- * most 100 locators with an inexact `matchedInScope`, and its two structurally
- * unindexed planes make a provable absence permanently unreachable there.
+ * most 100 locators with an inexact `matchedInScope` and no cursor.
  */
 
-const NO_LANE_CEILING = {
-  at: null,
-  kind: "no_lane" as const,
-  laneCadenceSeconds: null,
-  breakerOpen: false,
-};
+/** Money lanes on #4, and the capability that opens them. */
+const MONEY_LANES: ReadonlySet<string> = new Set(["money", "subscriptions"]);
+const MESSAGE_LANES: ReadonlySet<string> = new Set(["messages"]);
+const ALL_LANES = ["messages", "money", "subscriptions", "follows", "presence"] as const;
 
-/** The lane ceiling for a set of pages: the OLDEST successful pull wins, because
- *  a scope is only as fresh as its stalest member. */
-function mergeLaneCeiling(
-  ceilings: ReadonlyArray<{ succeededAt: Date | null; cadenceSeconds: number; status: string }>,
-) {
-  if (ceilings.length === 0) {
-    return NO_LANE_CEILING;
-  }
-  let at: Date | null = null;
-  let cadence: number | null = null;
-  let breakerOpen = false;
-  for (const ceiling of ceilings) {
-    if (ceiling.succeededAt === null) {
-      at = null;
-      breakerOpen = true;
-      break;
+const MONEY_CLAIM_FIELDS = [
+  "grossMills",
+  "netMills",
+  "feeMills",
+  "amountMills",
+  "currency",
+  "transactionState",
+  "lifetimeSpendMills",
+  "subscriptionPriceMills",
+] as const;
+
+/**
+ * Which lanes this key may actually be served.
+ *
+ * `lanes` defaults to ALL of them, so the money lane used to reach any valid key:
+ * amounts, type, state and currency, with no `read:money` anywhere in sight. Lanes
+ * a key may not have are dropped, and `lanesServed` reports the difference rather
+ * than pretending the request was honoured whole.
+ */
+function permittedLanes(
+  requested: readonly string[],
+  capabilities: { money: boolean; messages: boolean },
+): string[] {
+  return requested.filter((lane) => {
+    if (MONEY_LANES.has(lane)) {
+      return capabilities.money;
     }
-    if (at === null || ceiling.succeededAt.getTime() < at.getTime()) {
-      at = ceiling.succeededAt;
+    if (MESSAGE_LANES.has(lane)) {
+      return capabilities.messages;
     }
-    cadence = cadence === null
-      ? ceiling.cadenceSeconds
-      : Math.max(cadence, ceiling.cadenceSeconds);
-    if (ceiling.status === "blocked" || ceiling.status === "paused") {
-      breakerOpen = true;
-    }
-  }
-  return {
-    at: at?.toISOString() ?? null,
-    kind: at === null ? ("no_lane" as const) : ("last_successful_pull" as const),
-    laneCadenceSeconds: cadence !== null && cadence > 0 ? cadence : null,
-    breakerOpen,
-  };
+    return true;
+  });
 }
 
-/** The OF-only archive is a REQUIRED plane for message claims, so on a Fansly
- *  scope it is `not_read` with its real reason — which is precisely why no Fansly
- *  answer can ever prove an absence. */
+/** The OF-only archive is a REQUIRED plane for message claims; on a Fansly scope
+ *  it is `not_read` with its real reason. Decided from the capability table, never
+ *  from a platform literal. */
 function messagePlaneOverrides(
   platforms: readonly Platform[],
 ): Record<string, { state: "not_read" | "not_indexed"; reason: AgentPlaneReason }> {
@@ -124,42 +117,17 @@ function messagePlaneOverrides(
     observations: { state: "not_read", reason: "not_queried_by_this_operation" },
     sync_raw_payloads: { state: "not_read", reason: "not_queried_by_this_operation" },
   };
-  // The OF-only archive is decided by the capability table, not by naming a
-  // platform: `hasCoverageProofs` is the same fact ("this platform has an OFAPI
-  // lane") that makes `dm_message_archive` exist at all.
-  if (platforms.length > 0 && platforms.every((platform) =>
-    !AGENT_PLATFORM_CAPABILITIES[platform].hasCoverageProofs)) {
+  const anyOnlyFansLane = platforms.some((platform) =>
+    AGENT_PLATFORM_CAPABILITIES[platform].conversationIdSemantics === "equals_fan_id");
+  if (platforms.length > 0 && !anyOnlyFansLane) {
     overrides.dm_message_archive = { state: "not_read", reason: "onlyfans_only" };
   }
   return overrides;
 }
 
-function gapBeforeFloor(plane: string, floorAt: string | null, windowFrom: string): AgentGap[] {
-  if (floorAt !== null && Date.parse(windowFrom) >= Date.parse(floorAt)) {
-    return [];
-  }
-  // The window (or part of it) predates anything this system can attest to. The
-  // remedy is a targeted hydration, and naming it is what turns "nothing found"
-  // into "nothing was ever captured, and here is how to change that".
-  return [{
-    kind: "before_capture_floor",
-    from: null,
-    to: floorAt,
-    plane: plane as AgentGap["plane"],
-    remedy: {
-      kind: "hydration_request",
-      costClass: "vendor_paid_low",
-      admissible: true,
-      reason: null,
-    },
-  }];
-}
-
 // ---------------------------------------------------------------------------
 // #4 agentPersonTimeline
 // ---------------------------------------------------------------------------
-
-const TIMELINE_LANES = ["messages", "money", "subscriptions", "follows", "presence"] as const;
 
 export async function handleAgentPersonTimeline(
   appContext: AppContext,
@@ -184,21 +152,28 @@ export async function handleAgentPersonTimeline(
     const cursor = cursorConsumed
       ? decodeAgentCursor(query.cursor as string, {
         operation: "agentPersonTimeline",
+        resource: `person:${params.platform}:${params.platformUserId}`,
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
         archiveGeneration: scope.archiveGeneration,
       }, scope.signing)
       : null;
 
-    const params0 = cursor?.params as Record<string, unknown> | undefined;
-    const from = String(params0?.from ?? query.from ?? "");
-    const to = String(params0?.to ?? query.to ?? "");
-    const lanes = ((params0?.lanes as string[] | undefined) ?? query.lanes
-      ?? [...TIMELINE_LANES]) as Array<(typeof TIMELINE_LANES)[number]>;
-    const pageLabel = (params0?.pageLabel as string | undefined) ?? query.pageLabel;
-    const sortDir = (params0?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir;
-    const claimFields = (params0?.claimFields as string[] | undefined) ?? query.claimFields ?? null;
-    const normalizedParams = { from, to, lanes, pageLabel, sortDir, claimFields, limit: query.limit };
+    const stored = cursor?.params as Record<string, unknown> | undefined;
+    const from = String(stored?.from ?? query.from ?? "");
+    const to = String(stored?.to ?? query.to ?? "");
+    const lanesRequested = ((stored?.lanes as string[] | undefined) ?? query.lanes
+      ?? [...ALL_LANES]) as Array<(typeof ALL_LANES)[number]>;
+    const pageLabel = (stored?.pageLabel as string | undefined) ?? query.pageLabel;
+    const sortDir = (stored?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir;
+    const claimFields = (stored?.claimFields as string[] | undefined) ?? query.claimFields ?? null;
+
+    const mayReadMoney = scope.has("read:money");
+    const mayReadMessages = scope.has("read:messages");
+    const lanesServed = permittedLanes(lanesRequested, {
+      money: mayReadMoney,
+      messages: mayReadMessages,
+    }) as Array<(typeof ALL_LANES)[number]>;
 
     const narrowed = pageLabel === undefined
       ? scope.pages
@@ -207,73 +182,65 @@ export async function handleAgentPersonTimeline(
     const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
 
     const identity = pageIds.length === 0
-      ? null
-      : await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.long, async (tx) => {
-        const { findAgentPersonIdentity } = await import("@agency_hub_core/db");
-        return findAgentPersonIdentity(tx, {
+      ? { row: null, witnesses: [] }
+      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
+        findAgentPersonIdentity(tx, {
           pageIds,
           platform: params.platform,
           platformUserId: params.platformUserId,
-        });
-      });
+        }), "agent_timeline_identity");
 
-    const after = cursor === null
-      ? undefined
-      : {
-        occurredAt: String(cursor.keyset.occurredAt ?? ""),
-        stableRef: String(cursor.keyset.stableRef ?? ""),
-      };
-
-    const rows = identity === null
-      ? []
-      : await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    const timeline = identity.row === null || lanesServed.length === 0
+      ? { rows: [], witnesses: [] }
+      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
         listAgentTimeline(tx, {
           pageIds,
-          fanId: identity.fanId,
+          fanId: identity.row!.fanId,
           from: new Date(from),
           to: new Date(to),
-          lanes,
+          lanes: lanesServed,
           sortDir,
-          limit: query.limit,
-          after,
-        }));
+          limit,
+          after: cursor === null
+            ? undefined
+            : {
+              sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
+              key: String(cursor.keyset.key ?? ""),
+            },
+        }), "agent_timeline");
 
-    const laneCeilings = await readAgentLaneCeilings(scope.db, pageIds, "dm_messages");
-    const ceiling = mergeLaneCeiling(laneCeilings);
-
-    const readPlanes = [
-      "message_archive",
-      "dm_message_archive",
-      "page_dm_messages",
-      ...(scope.has("read:money") ? ["transactions"] : []),
-      "page_subscriptions",
-      "page_follows",
-      "page_fans",
-    ];
-    const witnesses: PlaneReadWitness[] = readPlanes.map((plane) => storeDerivedWitness({
-      plane,
-      ceilingAt: ceiling.at,
-      ceilingKind: ceiling.kind,
-      laneCadenceSeconds: ceiling.laneCadenceSeconds,
-      breakerOpen: ceiling.breakerOpen,
-    }));
+    const witnesses = [...identity.witnesses, ...timeline.witnesses];
     const operationPlanes = operationPlanesFor(
-      [...readPlanes, ...MESSAGE_PLANES, ...MONEY_PLANES],
+      [...MESSAGE_PLANES, ...MONEY_PLANES, "page_subscriptions", "page_follows", "page_fans", "fans"],
       claimFields,
     );
 
-    const hasMore = rows.length === query.limit;
-    const last = rows.at(-1);
+    const overrides = messagePlaneOverrides(platforms);
+    if (!mayReadMoney) {
+      for (const plane of [...MONEY_PLANES, "page_subscriptions"]) {
+        overrides[plane] = { state: "not_read", reason: "capability_not_granted" };
+      }
+    }
+    if (!mayReadMessages) {
+      for (const plane of ["message_archive", "dm_message_archive", "page_dm_messages"]) {
+        overrides[plane] = { state: "not_read", reason: "capability_not_granted" };
+      }
+    }
+
+    const hasMore = timeline.rows.length === limit;
+    const last = timeline.rows.at(-1);
     const nextCursor = hasMore && last !== undefined
       ? encodeAgentCursor({
         operation: "agentPersonTimeline",
+        resource: `person:${params.platform}:${params.platformUserId}`,
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
-        params: normalizedParams,
+        params: { from, to, lanes: lanesRequested, pageLabel, sortDir, claimFields, limit: query.limit },
         archiveGeneration: scope.archiveGeneration,
-        sourceHighWaters: { timeline: iso(last.occurredAt) },
+        sourceHighWaters: {},
         seqHighWater: {},
-        keyset: { occurredAt: iso(last.occurredAt), stableRef: last.stableRef },
+        keyset: { sortValue: last.sortValue, key: last.stableRef },
       }, scope.signing)
       : null;
 
@@ -282,41 +249,33 @@ export async function handleAgentPersonTimeline(
       claimFields,
       operationPlanes,
       planeReads: witnesses,
-      planesNotRead: planesNotRead({
-        operationPlanes,
-        witnesses,
-        overrides: messagePlaneOverrides(platforms),
-      }),
+      planesNotRead: planesNotRead({ operationPlanes, witnesses, overrides }),
       delivery: { snapshotExhausted: nextCursor === null, nextCursor },
       cursorConsumed,
       cursorCapable: true,
+      // A five-lane union over live tables has no single monotonic bound to freeze.
+      frozenSnapshot: false,
       requestWindow: { from, to },
-      gaps: gapBeforeFloor("message_archive", null, from),
-      gapDetection: "head_only",
+      gaps: [],
       scopeFieldStates: computeScopeFieldStates({
         fields: claimFields ?? [],
         platforms,
-        ungrantedFields: scope.has("read:money") ? [] : ["grossMills", "netMills", "amountMills"],
+        ungrantedFields: mayReadMoney ? [] : [...MONEY_CLAIM_FIELDS],
       }),
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
-      observedRowFloor: isoOrNull(rows.at(0)?.occurredAt ?? null),
+      observedRowFloor: isoOrNull(timeline.rows.at(0)?.occurredAt ?? null),
       captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: ceiling,
-      basis: "store_derived",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: hasProofLaneForClaim(claimFields, platforms),
     });
 
-    const response = {
+    const response: AgentPersonTimelineResponse = {
       window: { from, to },
-      lanesRequested: lanes,
-      lanesServed: lanes,
-      items: rows.map((row) => ({
-        lane: row.lane as (typeof TIMELINE_LANES)[number],
+      lanesRequested,
+      // The difference from `lanesRequested` is the honest report of a capability
+      // gate: a dropped lane is visible, not silently empty.
+      lanesServed,
+      items: timeline.rows.map((row) => ({
+        lane: row.lane as (typeof ALL_LANES)[number],
         kind: row.kind as "message.received",
         occurredAt: iso(row.occurredAt),
         stableRef: row.stableRef,
@@ -344,14 +303,29 @@ export async function handleAgentPersonTimeline(
         },
       })),
       predicates: buildPredicates([
-        { name: "window", requested: true },
-        { name: "lanes", requested: query.lanes !== undefined },
-        { name: "pageLabel", requested: pageLabel !== undefined },
+        { name: "window", requested: true, applied: true },
+        {
+          name: "lanes",
+          requested: query.lanes !== undefined,
+          // Applied whenever the served set is narrower than everything, whether
+          // the narrowing came from the caller or from the capability gate.
+          applied: lanesServed.length < ALL_LANES.length,
+          reason: lanesServed.length < lanesRequested.length
+            ? "capability_not_granted"
+            : query.lanes === undefined
+              ? "not_requested"
+              : "applied",
+        },
+        {
+          name: "pageLabel",
+          requested: pageLabel !== undefined,
+          applied: pageLabel !== undefined,
+        },
       ]),
       delivery: buildDelivery({
-        returned: rows.length,
-        matched: { value: rows.length, exact: nextCursor === null },
-        cappedBy: nextCursor === null ? null : "limit",
+        returned: timeline.rows.length,
+        matched: { value: timeline.rows.length, exact: nextCursor === null },
+        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
         snapshotExhausted: nextCursor === null,
         caveats: evidence.deliveryCaveats,
@@ -359,7 +333,7 @@ export async function handleAgentPersonTimeline(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(rows.length);
+    await scope.finish(timeline.rows.length);
     return response;
   } catch (error) {
     await scope.finish(0);
@@ -399,6 +373,7 @@ export async function handleAgentThreads(
     const cursor = cursorConsumed
       ? decodeAgentCursor(query.cursor as string, {
         operation: "agentThreads",
+        resource: "global",
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
         archiveGeneration: scope.archiveGeneration,
@@ -408,6 +383,9 @@ export async function handleAgentThreads(
     const effective = {
       platform: (stored?.platform as Platform | undefined) ?? query.platform,
       pageLabel: (stored?.pageLabel as string | undefined) ?? query.pageLabel,
+      personPlatform: (stored?.personPlatform as Platform | undefined) ?? query.personPlatform,
+      personPlatformUserId: (stored?.personPlatformUserId as string | undefined)
+        ?? query.personPlatformUserId,
       coverageStatus: (stored?.coverageStatus as string | undefined) ?? query.coverageStatus,
       quarantined: (stored?.quarantined as boolean | undefined) ?? query.quarantined,
       hasMessagesSince: (stored?.hasMessagesSince as string | undefined) ?? query.hasMessagesSince,
@@ -423,9 +401,33 @@ export async function handleAgentThreads(
     const pageIds = narrowed.map((page) => page.id);
     const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
 
+    // The person filter is RESOLVED and APPLIED. It used to reach this function
+    // and stop here: the response reported the predicate as applied and returned
+    // every fan's threads.
+    const personRequested = effective.personPlatformUserId !== undefined
+      && effective.personPlatform !== undefined;
+    const fanId = personRequested
+      ? await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        findAgentFanId(tx, {
+          platform: effective.personPlatform as Platform,
+          platformUserId: effective.personPlatformUserId as string,
+        }), "agent_threads_person")
+      : null;
+    // A named person nobody knows narrows the result to NOTHING; it must never
+    // widen it back to everybody.
+    const personFilter = personRequested ? { fanId: fanId ?? -1 } : {};
+
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    const storedHighWater = Number(stored?.highWater ?? 0);
+    const highWater = storedHighWater > 0
+      ? storedHighWater
+      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        readAgentThreadsHighWater(tx, pageIds), "agent_threads_high_water");
+
     const dbQuery = {
       pageIds,
       platform: effective.platform,
+      ...personFilter,
       coverageStatus: effective.coverageStatus,
       quarantined: effective.quarantined,
       hasMessagesSince: effective.hasMessagesSince === undefined
@@ -434,56 +436,44 @@ export async function handleAgentThreads(
       minStoredMessages: effective.minStoredMessages,
       orderBy: effective.orderBy,
       sortDir: effective.sortDir,
-      limit: query.limit,
+      limit,
+      maxThreadId: highWater,
       after: cursor === null
         ? undefined
         : {
           sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
-          threadId: Number(cursor.keyset.threadId ?? 0),
+          key: String(cursor.keyset.key ?? ""),
         },
     };
 
-    const [rows, matched] = await withAgentStatementTimeout(
+    const [result, matched] = await withAgentTimeout(
       scope.db,
       AGENT_TIMEOUT_MS.short,
       async (tx) => Promise.all([
         listAgentThreads(tx, dbQuery),
         countAgentThreads(tx, dbQuery, AGENT_COUNT_PROBE_MAX),
       ]),
+      "agent_threads",
     );
 
-    const laneCeilings = await readAgentLaneCeilings(scope.db, pageIds, "dm_messages");
-    const ceiling = mergeLaneCeiling(laneCeilings);
+    const operationPlanes = operationPlanesFor(
+      result.witnesses.map((witness) => witness.plane),
+      effective.claimFields,
+    );
 
-    const readPlanes = ["message_archive", "dm_message_archive", "page_dm_messages", "page_dm_threads"];
-    const witnesses: PlaneReadWitness[] = readPlanes.map((plane) => storeDerivedWitness({
-      plane,
-      ceilingAt: ceiling.at,
-      ceilingKind: ceiling.kind,
-      laneCadenceSeconds: ceiling.laneCadenceSeconds,
-      breakerOpen: ceiling.breakerOpen,
-    }));
-    const operationPlanes = operationPlanesFor([...readPlanes, ...MESSAGE_PLANES], effective.claimFields);
-
-    const hasMore = rows.length === query.limit;
-    const last = rows.at(-1);
-    const sortValue = last === undefined
-      ? null
-      : effective.orderBy === "storedMessageCount"
-        ? String(last.storedMessageCount)
-        : effective.orderBy === "pageLabel"
-          ? last.pageLabel
-          : isoOrNull(last.lastMessageAt);
+    const hasMore = result.rows.length === limit;
+    const last = result.rows.at(-1);
     const nextCursor = hasMore && last !== undefined
       ? encodeAgentCursor({
         operation: "agentThreads",
+        resource: "global",
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
-        params: { ...effective, limit: query.limit },
+        params: { ...effective, limit: query.limit, highWater },
         archiveGeneration: scope.archiveGeneration,
-        sourceHighWaters: { page_dm_threads: String(last.threadId) },
+        sourceHighWaters: { page_dm_threads: String(highWater) },
         seqHighWater: {},
-        keyset: { sortValue, threadId: last.threadId },
+        keyset: { sortValue: last.sortValue, key: last.keysetKey },
       }, scope.signing)
       : null;
 
@@ -491,18 +481,19 @@ export async function handleAgentThreads(
       planeMode: scope.planeMode,
       claimFields: effective.claimFields,
       operationPlanes,
-      planeReads: witnesses,
+      planeReads: result.witnesses,
       planesNotRead: planesNotRead({
         operationPlanes,
-        witnesses,
+        witnesses: result.witnesses,
         overrides: messagePlaneOverrides(platforms),
       }),
       delivery: { snapshotExhausted: nextCursor === null, nextCursor },
       cursorConsumed,
       cursorCapable: true,
+      // `page_dm_threads.id` is monotonic and the bound above is applied in SQL.
+      frozenSnapshot: true,
       requestWindow: null,
       gaps: [],
-      gapDetection: "head_only",
       scopeFieldStates: computeScopeFieldStates({
         fields: effective.claimFields ?? [],
         platforms,
@@ -511,79 +502,80 @@ export async function handleAgentThreads(
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: ceiling,
-      basis: "store_derived",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: hasProofLaneForClaim(effective.claimFields, platforms),
     });
 
-    const response = {
-      items: rows.map((row) => {
-        const capabilities = AGENT_PLATFORM_CAPABILITIES[row.platform as Platform];
-        const retentionLimit = capabilities.depthCap === null
-          ? null
-          : (row.lifetimeSpendMills ?? 0n) > 0n
-            ? capabilities.depthCap.lifetimeSpender
-            : capabilities.depthCap.default;
-        return {
-          pageLabel: row.pageLabel,
-          platform: row.platform as Platform,
-          conversationRef: row.conversationRef,
-          fanPlatformUserId: row.fanPlatformUserId,
-          fanUsername: row.fanUsername,
-          fanDisplayName: row.fanDisplayName,
-          isVisible: row.isVisible,
-          unreadCount: row.unreadCount,
-          lastMessageAt: isoOrNull(row.lastMessageAt),
-          lastFanMessageAt: isoOrNull(row.lastFanMessageAt),
-          lastModelMessageAt: isoOrNull(row.lastModelMessageAt),
-          storedMessageCount: row.storedMessageCount,
-          oldestStoredMessageRef: row.oldestStoredMessageRef,
-          newestStoredMessageRef: row.newestStoredMessageRef,
-          messageCoverageStatusRaw: row.coverageStatusRaw as "complete",
-          lastMessageSyncAt: isoOrNull(row.lastMessageSyncAt),
-          breakerOpen: row.quarantineUntil !== null && row.quarantineUntil.getTime() > Date.now(),
-          quarantineUntil: isoOrNull(row.quarantineUntil),
-          basis: "store_derived" as const,
-          captureFloor: { at: null, kind: "unknown" as const },
-          captureCeiling: ceiling,
-          // The overview lesson: predict what the detail call will return, using
-          // the SAME predicate, so a caller never chases a thread that answers
-          // nothing.
-          transcriptWillReturnRows: row.storedMessageCount > 0,
-          hydrationRemedy: {
-            kind: "hydration_request" as const,
-            costClass: "vendor_paid_low" as const,
-            admissible: (scope.config.agentHydrationMode ?? "off") !== "off",
-            reason: (scope.config.agentHydrationMode ?? "off") === "off"
-              ? ("hydration_mode_off" as const)
-              : null,
-          },
-          retentionLimit,
-          fieldStates: {},
-          provenance: {
-            ingestPaths: ["unknown" as const],
-            convergence: "no_material_lane" as const,
-            observationRef: null,
-          },
-        };
-      }),
+    const response: AgentThreadsResponse = {
+      items: result.rows.map((row) => ({
+        pageLabel: row.pageLabel,
+        platform: row.platform as Platform,
+        conversationRef: row.conversationRef,
+        fanPlatformUserId: row.fanPlatformUserId,
+        fanUsername: row.fanUsername,
+        fanDisplayName: row.fanDisplayName,
+        isVisible: row.isVisible,
+        unreadCount: row.unreadCount,
+        lastMessageAt: isoOrNull(row.lastMessageAt),
+        lastFanMessageAt: isoOrNull(row.lastFanMessageAt),
+        lastModelMessageAt: isoOrNull(row.lastModelMessageAt),
+        storedMessageCount: row.storedMessageCount,
+        oldestStoredMessageRef: row.oldestStoredMessageRef,
+        newestStoredMessageRef: row.newestStoredMessageRef,
+        messageCoverageStatusRaw: row.coverageStatusRaw as "complete",
+        lastMessageSyncAt: isoOrNull(row.lastMessageSyncAt),
+        breakerOpen: row.quarantineUntil !== null && row.quarantineUntil.getTime() > Date.now(),
+        quarantineUntil: isoOrNull(row.quarantineUntil),
+        // Per-thread floors would be one extra scan per row; the inventory says
+        // `unknown` and #6/#8 establish the real floor for a named thread.
+        captureFloor: { at: null, kind: "unknown" as const },
+        // The overview lesson: predict what the detail call will return, using the
+        // SAME predicate, so a caller never chases a thread that answers nothing.
+        transcriptWillReturnRows: row.storedMessageCount > 0,
+        hydrationRemedy: hydrationRemedy(scope),
+        retentionLimit: retentionLimitFor(row.platform as Platform, row.lifetimeSpendMills),
+        fieldStates: {},
+        provenance: {
+          ingestPaths: ["unknown" as const],
+          convergence: "no_material_lane" as const,
+          observationRef: null,
+        },
+      })),
       predicates: buildPredicates([
-        { name: "platform", requested: effective.platform !== undefined },
-        { name: "pageLabel", requested: effective.pageLabel !== undefined },
-        { name: "person", requested: query.personPlatformUserId !== undefined },
-        { name: "coverageStatus", requested: effective.coverageStatus !== undefined },
-        { name: "quarantined", requested: effective.quarantined !== undefined },
-        { name: "hasMessagesSince", requested: effective.hasMessagesSince !== undefined },
-        { name: "minStoredMessages", requested: effective.minStoredMessages !== undefined },
+        {
+          name: "platform",
+          requested: effective.platform !== undefined,
+          applied: effective.platform !== undefined,
+        },
+        {
+          name: "pageLabel",
+          requested: effective.pageLabel !== undefined,
+          applied: effective.pageLabel !== undefined,
+        },
+        { name: "person", requested: personRequested, applied: personRequested },
+        {
+          name: "coverageStatus",
+          requested: effective.coverageStatus !== undefined,
+          applied: effective.coverageStatus !== undefined,
+        },
+        {
+          name: "quarantined",
+          requested: effective.quarantined !== undefined,
+          applied: effective.quarantined !== undefined,
+        },
+        {
+          name: "hasMessagesSince",
+          requested: effective.hasMessagesSince !== undefined,
+          applied: effective.hasMessagesSince !== undefined,
+        },
+        {
+          name: "minStoredMessages",
+          requested: effective.minStoredMessages !== undefined,
+          applied: effective.minStoredMessages !== undefined,
+        },
       ]),
       delivery: buildDelivery({
-        returned: rows.length,
+        returned: result.rows.length,
         matched,
-        cappedBy: nextCursor === null ? null : "limit",
+        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
         snapshotExhausted: nextCursor === null,
         caveats: evidence.deliveryCaveats,
@@ -591,7 +583,7 @@ export async function handleAgentThreads(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(rows.length);
+    await scope.finish(result.rows.length);
     return response;
   } catch (error) {
     await scope.finish(0);
@@ -627,8 +619,8 @@ export async function handleAgentThreadMessages(
     requiredCapabilities: ["read:messages"],
   });
   try {
-    // In-handler guard (#143 dual layer): the declarative middleware may run in
-    // `log` mode, so the page grant is re-checked here, and a miss answers the
+    // In-handler guard (dual-layer law #143): the declarative middleware may run
+    // in `log` mode, so the page grant is re-checked here, and a miss answers the
     // SAME static 404 the middleware would have produced.
     const page = scope.pages.find((candidate) => candidate.pageLabel === params.pageLabel);
     if (!page) {
@@ -639,6 +631,9 @@ export async function handleAgentThreadMessages(
     const cursor = cursorConsumed
       ? decodeAgentCursor(query.cursor as string, {
         operation: "agentThreadMessages",
+        // Bound to the CONVERSATION: a cursor minted for one thread must not
+        // resume against another and present it as a continuation.
+        resource: `conversation:${page.id}:${params.conversationRef}`,
         keyId: principal.agentKeyId,
         pageIds: [page.id],
         archiveGeneration: scope.archiveGeneration,
@@ -658,6 +653,15 @@ export async function handleAgentThreadMessages(
     const sortDir = (stored?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir;
     const claimFields = (stored?.claimFields as string[] | undefined) ?? query.claimFields ?? null;
 
+    // The floor is established by its OWN unbounded query, not from the rows this
+    // window returned: "the oldest thing I found" is not "the oldest thing we hold".
+    const archiveFloor = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
+      readAgentThreadArchiveFloor(tx, {
+        pageId: page.id,
+        conversationRef: params.conversationRef,
+      }), "agent_transcript_floor");
+
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
     const transcriptInput = {
       pageId: page.id,
       platform: page.platform,
@@ -665,72 +669,43 @@ export async function handleAgentThreadMessages(
       from: new Date(from),
       to: new Date(to),
       sortDir,
-      limit: query.limit,
+      limit,
       filters,
+      archiveFloor,
       after: cursor === null
         ? undefined
         : {
-          occurredAt: cursor.keyset.occurredAt === null ? null : String(cursor.keyset.occurredAt),
-          messageRef: String(cursor.keyset.messageRef ?? ""),
+          sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
+          key: String(cursor.keyset.key ?? ""),
         },
     };
 
-    const [rows, matched] = await withAgentStatementTimeout(
+    const [result, matched] = await withAgentTimeout(
       scope.db,
       AGENT_TIMEOUT_MS.long,
       async (tx) => Promise.all([
         listAgentTranscript(tx, transcriptInput),
         countAgentTranscript(tx, transcriptInput, AGENT_COUNT_PROBE_MAX),
       ]),
+      "agent_transcript",
     );
 
-    const [proofs, laneCeilings] = await Promise.all([
-      readAgentCoverageProofs(scope.db, [page.id], [params.conversationRef]),
-      readAgentLaneCeilings(scope.db, [page.id], "dm_messages"),
-    ]);
-    const ceiling = mergeLaneCeiling(laneCeilings);
-    const proofRow: AgentCoverageProofRow | undefined = proofs[0];
-
-    // The ONE path to a cryptographic proof in this system. It exists only for
-    // OnlyFans, which is why a Fansly transcript can never prove an absence.
-    const archiveWitness = proofRow === undefined
-      ? storeDerivedWitness({
-        plane: "message_archive",
-        ceilingAt: ceiling.at,
-        ceilingKind: ceiling.kind,
-        laneCadenceSeconds: ceiling.laneCadenceSeconds,
-        breakerOpen: ceiling.breakerOpen,
-      })
-      : proofWitness(proofRow, "message_archive");
-
-    const pageCapabilities = AGENT_PLATFORM_CAPABILITIES[page.platform as Platform];
-    const witnesses: PlaneReadWitness[] = [
-      archiveWitness,
-      // The OF-only store is read only where it can exist; the capability table
-      // decides, so no handler names a platform.
-      ...(pageCapabilities.hasCoverageProofs
-        ? [storeDerivedWitness({ plane: "dm_message_archive", ceilingAt: ceiling.at })]
-        : []),
-      storeDerivedWitness({ plane: "page_dm_messages", ceilingAt: ceiling.at }),
-      storeDerivedWitness({ plane: "page_dm_threads", ceilingAt: ceiling.at }),
-    ];
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, claimFields);
+    const pageCapabilities = AGENT_PLATFORM_CAPABILITIES[page.platform as Platform];
 
-    const hasMore = rows.length === query.limit;
-    const last = rows.at(-1);
+    const hasMore = result.rows.length === limit;
+    const last = result.rows.at(-1);
     const nextCursor = hasMore && last !== undefined
       ? encodeAgentCursor({
         operation: "agentThreadMessages",
+        resource: `conversation:${page.id}:${params.conversationRef}`,
         keyId: principal.agentKeyId,
         pageIds: [page.id],
         params: { from, to, ...filters, sortDir, claimFields, limit: query.limit },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: { message_archive: last.messageRef },
         seqHighWater: { [String(page.id)]: last.sourceAccountSeq ?? 0 },
-        keyset: {
-          occurredAt: isoOrNull(last.occurredAt),
-          messageRef: last.messageRef,
-        },
+        keyset: { sortValue: last.sortValue, key: last.keysetKey },
       }, scope.signing)
       : null;
 
@@ -738,18 +713,23 @@ export async function handleAgentThreadMessages(
       planeMode: scope.planeMode,
       claimFields,
       operationPlanes,
-      planeReads: witnesses,
+      planeReads: result.witnesses,
       planesNotRead: planesNotRead({
         operationPlanes,
-        witnesses,
+        witnesses: result.witnesses,
         overrides: messagePlaneOverrides([page.platform as Platform]),
       }),
       delivery: { snapshotExhausted: nextCursor === null, nextCursor },
       cursorConsumed,
       cursorCapable: true,
+      frozenSnapshot: false,
       requestWindow: { from, to },
-      gaps: gapBeforeFloor("message_archive", archiveWitness.captureFloor.at, from),
-      gapDetection: "head_only",
+      gaps: gapBeforeCaptureFloor({
+        plane: "message_archive",
+        floorAt: isoOrNull(archiveFloor),
+        windowFrom: from,
+        hydrationAdmissible: hydrationRemedy(scope).admissible,
+      }),
       scopeFieldStates: computeScopeFieldStates({
         fields: claimFields ?? [],
         platforms: [page.platform as Platform],
@@ -757,21 +737,15 @@ export async function handleAgentThreadMessages(
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: isoOrNull(
-        rows.reduce<Date | null>((floor, row) =>
+        result.rows.reduce<Date | null>((floor, row) =>
           row.occurredAt !== null && (floor === null || row.occurredAt < floor)
             ? row.occurredAt
             : floor, null),
       ),
-      captureFloor: archiveWitness.captureFloor,
-      captureCeiling: archiveWitness.captureCeiling.at === null
-        ? ceiling
-        : archiveWitness.captureCeiling,
-      basis: archiveWitness.basis,
-      proof: archiveWitness.proof,
-      parseDebt: archiveWitness.parseDebt,
-      rejected: archiveWitness.rejected,
-      servingHighWaterSatisfied: archiveWitness.servingHighWaterSatisfied,
-      hasProofLaneForClaim: hasProofLaneForClaim(claimFields, [page.platform as Platform]),
+      captureFloor: {
+        at: isoOrNull(archiveFloor),
+        kind: archiveFloor === null ? "unknown" : "oldest_stored_row",
+      },
     });
 
     // Every transcript read leaves an audit row. This is not decorative: the
@@ -784,7 +758,7 @@ export async function handleAgentThreadMessages(
       verbatimText: true,
       requestSummary: {
         limit: query.limit,
-        returned: rows.length,
+        returned: result.rows.length,
         cursorConsumed,
         windowFrom: new Date(from).toISOString(),
         windowTo: new Date(to).toISOString(),
@@ -793,15 +767,15 @@ export async function handleAgentThreadMessages(
       },
     });
 
-    const response = {
+    const response: AgentThreadMessagesResponse = {
       scope: {
         pageLabel: page.pageLabel,
         platform: page.platform as Platform,
         conversationRef: params.conversationRef,
-        fanPlatformUserId: rows.at(0)?.fanPlatformUserId ?? null,
+        fanPlatformUserId: result.rows.at(0)?.fanPlatformUserId ?? null,
       },
       window: { from, to },
-      items: rows.map((row) => ({
+      items: result.rows.map((row) => ({
         pageLabel: page.pageLabel,
         platform: page.platform as Platform,
         conversationRef: params.conversationRef,
@@ -810,7 +784,9 @@ export async function handleAgentThreadMessages(
         fanPlatformUserId: row.fanPlatformUserId,
         senderPlatformUserId: row.senderPlatformUserId,
         senderRole: row.senderRole as "fan",
-        direction: (row.isSentByMe ? "outbound" : row.senderRole === "unknown" ? "unknown" : "inbound") as "inbound",
+        direction: (row.isSentByMe
+          ? "outbound"
+          : row.senderRole === "unknown" ? "unknown" : "inbound") as "inbound",
         isSentByMe: row.isSentByMe,
         occurredAt: isoOrNull(row.occurredAt),
         state: (row.deletedAt !== null
@@ -863,14 +839,20 @@ export async function handleAgentThreadMessages(
         },
       })),
       predicates: buildPredicates([
-        { name: "window", requested: true },
-        { name: "direction", requested: filters.direction !== undefined },
-        { name: "senderRole", requested: filters.senderRole !== undefined },
+        { name: "window", requested: true, applied: true },
+        {
+          name: "direction",
+          requested: filters.direction !== undefined,
+          applied: filters.direction !== undefined,
+        },
+        {
+          name: "senderRole",
+          requested: filters.senderRole !== undefined,
+          applied: filters.senderRole !== undefined,
+        },
         // A predicate over a field the platform never parsed is NOT applied, and
         // says so with `unsupported_for_plane`. Silently "applying" it would let
-        // `hasMedia=true` return nothing and read as "there was no media" —
-        // exactly the inference the whole envelope exists to prevent. The verdict
-        // comes from the capability table, never from a platform literal.
+        // `hasMedia=true` return nothing and read as "there was no media".
         {
           name: "hasMedia",
           requested: filters.hasMedia !== undefined,
@@ -893,13 +875,13 @@ export async function handleAgentThreadMessages(
               ? "applied"
               : "unsupported_for_plane",
         },
-        { name: "isTip", requested: filters.isTip !== undefined },
-        { name: "includeDeleted", requested: true },
+        { name: "isTip", requested: filters.isTip !== undefined, applied: filters.isTip !== undefined },
+        { name: "includeDeleted", requested: true, applied: true },
       ]),
       delivery: buildDelivery({
-        returned: rows.length,
+        returned: result.rows.length,
         matched,
-        cappedBy: nextCursor === null ? null : "limit",
+        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
         snapshotExhausted: nextCursor === null,
         caveats: evidence.deliveryCaveats,
@@ -907,7 +889,7 @@ export async function handleAgentThreadMessages(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(rows.length);
+    await scope.finish(result.rows.length);
     return response;
   } catch (error) {
     await scope.finish(0);
@@ -927,17 +909,13 @@ export async function handleAgentSearchMessages(
   const scope = await beginAgentRequest(appContext, principal, {
     operation: "agentSearchMessages",
     requiredCapabilities: ["read:messages"],
-    extraGate: {
-      enabled: (appContext.config.agentSearchBackend ?? "fts") !== "off",
-      reason: "agent message search is disabled",
-    },
   });
   try {
+    // The EFFECTIVE config, not the boot one: the backend flag is `runtimeApply:
+    // live`, and reading `appContext.config` meant a dashboard flip did nothing
+    // until the process restarted.
     const configured = scope.config.agentSearchBackend ?? "fts";
     if (configured === "off") {
-      // Re-checked against the EFFECTIVE config: `beginAgentRequest` saw the boot
-      // value, and a live flip must take effect on the next request.
-      const { AgentPlaneDisabledError } = await import("./errors.ts");
       throw new AgentPlaneDisabledError("agent message search is disabled");
     }
 
@@ -948,12 +926,17 @@ export async function handleAgentSearchMessages(
     const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
 
     const { detectPgTrgmExtension } = await import("@agency_hub_core/db");
-    const trgmPresent = configured === "fts_trgm" ? await detectPgTrgmExtension(scope.db) : false;
+    const trgmPresent = configured === "fts_trgm"
+      ? await detectPgTrgmExtension(scope.db)
+      : false;
+    // REPORT WHAT RAN. Announcing `fts_trgm` while executing plain FTS told a
+    // caller its query had been fuzzy-matched when it had not.
     const backend = configured === "fts_trgm" && trgmPresent ? "fts_trgm" as const : "fts" as const;
 
     const from = body.from ?? "";
     const to = body.to ?? "";
-    const rows = await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(body.limit);
+    const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       searchAgentArchive(tx, {
         pageIds,
         query: body.q,
@@ -961,12 +944,13 @@ export async function handleAgentSearchMessages(
         to: new Date(to),
         platform: body.platform,
         conversationRefs: body.conversationRefs,
-        fanNativeId: body.person?.platformUserId,
+        // The PAIR, not just the id: native ids are platform-scoped.
+        person: body.person,
         direction: body.direction,
         senderRole: body.senderRole,
         includeSnippet: body.includeSnippet,
-        limit: body.limit,
-      }));
+        limit,
+      }), "agent_search");
 
     // The first two are ALWAYS true and the array can never be empty: a search
     // that silently misses media-only messages and inflected forms would let an
@@ -982,28 +966,25 @@ export async function handleAgentSearchMessages(
     if (scope.scopeNarrowing.keyGrantExcludedPages > 0) {
       caveats.push("scope_narrowed_by_key_grant");
     }
-    if (rows.length >= body.limit) {
+    if (result.rows.length >= limit) {
       caveats.push("result_capped_at_limit");
     }
 
     const claimFields = body.claim?.fields ?? null;
-    const witnesses: PlaneReadWitness[] = [
-      storeDerivedWitness({ plane: "message_archive", ceilingAt: null, ceilingKind: "no_lane" }),
-    ];
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, claimFields);
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
       claimFields,
       operationPlanes,
-      planeReads: witnesses,
+      planeReads: result.witnesses,
       planesNotRead: planesNotRead({
         operationPlanes,
-        witnesses,
+        witnesses: result.witnesses,
         overrides: {
           // The other two message stores have NO text-search index and none is
           // being built. Declaring that makes a miss visible as non-coverage
-          // rather than as absence — and it is why #7 can never prove an absence.
+          // rather than as absence.
           dm_message_archive: { state: "not_indexed", reason: "not_indexed_for_text_search" },
           page_dm_messages: { state: "not_indexed", reason: "not_indexed_for_text_search" },
           observations: { state: "not_read", reason: "not_queried_by_this_operation" },
@@ -1014,21 +995,14 @@ export async function handleAgentSearchMessages(
       delivery: { snapshotExhausted: false, nextCursor: null },
       cursorConsumed: false,
       cursorCapable: false,
+      frozenSnapshot: false,
       requestWindow: { from, to },
       gaps: [],
-      gapDetection: "head_only",
       scopeFieldStates: computeScopeFieldStates({ fields: claimFields ?? [], platforms }),
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: NO_LANE_CEILING,
-      basis: "store_derived",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: false,
     });
 
     if (body.includeSnippet) {
@@ -1044,7 +1018,7 @@ export async function handleAgentSearchMessages(
           qSha256: createHash("sha256").update(body.q, "utf8").digest("hex"),
           qLength: body.q.length,
           limit: body.limit,
-          returned: rows.length,
+          returned: result.rows.length,
           windowFrom: new Date(from).toISOString(),
           windowTo: new Date(to).toISOString(),
           planeMode: scope.planeMode,
@@ -1052,10 +1026,10 @@ export async function handleAgentSearchMessages(
       });
     }
 
-    const response = {
+    const response: AgentSearchMessagesResponse = {
       backend,
       caveats,
-      items: rows.map((row) => ({
+      items: result.rows.map((row) => ({
         pageLabel: row.pageLabel,
         platform: row.platform as Platform,
         conversationRef: row.conversationRef,
@@ -1074,21 +1048,41 @@ export async function handleAgentSearchMessages(
         },
       })),
       predicates: buildPredicates([
-        { name: "textSearch", requested: true },
-        { name: "window", requested: true },
-        { name: "platform", requested: body.platform !== undefined },
-        { name: "pageLabel", requested: body.pageLabels !== undefined },
-        { name: "person", requested: body.person !== undefined },
-        { name: "conversationRef", requested: body.conversationRefs !== undefined },
-        { name: "direction", requested: body.direction !== undefined },
-        { name: "senderRole", requested: body.senderRole !== undefined },
+        { name: "textSearch", requested: true, applied: true },
+        { name: "window", requested: true, applied: true },
+        {
+          name: "platform",
+          requested: body.platform !== undefined,
+          applied: body.platform !== undefined,
+        },
+        {
+          name: "pageLabel",
+          requested: body.pageLabels !== undefined,
+          applied: body.pageLabels !== undefined,
+        },
+        { name: "person", requested: body.person !== undefined, applied: body.person !== undefined },
+        {
+          name: "conversationRef",
+          requested: body.conversationRefs !== undefined,
+          applied: body.conversationRefs !== undefined && body.conversationRefs.length > 0,
+        },
+        {
+          name: "direction",
+          requested: body.direction !== undefined,
+          applied: body.direction !== undefined,
+        },
+        {
+          name: "senderRole",
+          requested: body.senderRole !== undefined,
+          applied: body.senderRole !== undefined,
+        },
       ]),
       delivery: buildDelivery({
-        returned: rows.length,
+        returned: result.rows.length,
         // "Bound it, do not paginate": at the cap the count is a LOWER BOUND, and
         // there is deliberately no cursor to walk past it.
-        matched: { value: rows.length, exact: rows.length < body.limit },
-        cappedBy: rows.length >= body.limit ? "limit" : null,
+        matched: { value: result.rows.length, exact: result.rows.length < limit },
+        cappedBy: result.rows.length >= limit ? (cappedByBudget ? "budget" : "limit") : null,
         nextCursor: null,
         snapshotExhausted: false,
         caveats: evidence.deliveryCaveats,
@@ -1096,7 +1090,7 @@ export async function handleAgentSearchMessages(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(rows.length);
+    await scope.finish(result.rows.length);
     return response;
   } catch (error) {
     await scope.finish(0);
@@ -1130,6 +1124,7 @@ export async function handleAgentCoverage(
     const cursor = cursorConsumed
       ? decodeAgentCursor(query.cursor as string, {
         operation: "agentCoverage",
+        resource: "global",
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
         archiveGeneration: scope.archiveGeneration,
@@ -1140,6 +1135,9 @@ export async function handleAgentCoverage(
     const to = String(stored?.to ?? query.to ?? "");
     const pageLabel = (stored?.pageLabel as string | undefined) ?? query.pageLabel;
     const conversationRef = (stored?.conversationRef as string | undefined) ?? query.conversationRef;
+    const personPlatform = (stored?.personPlatform as Platform | undefined) ?? query.personPlatform;
+    const personPlatformUserId = (stored?.personPlatformUserId as string | undefined)
+      ?? query.personPlatformUserId;
     const claimFields = (stored?.claimFields as string[] | undefined) ?? query.claimFields ?? null;
 
     const narrowed = pageLabel === undefined
@@ -1148,131 +1146,127 @@ export async function handleAgentCoverage(
     const pageIds = narrowed.map((page) => page.id);
     const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
 
+    // Accepted AND applied — this pair used to be dropped between the schema and
+    // the query while the response reported the predicate as applied.
+    const personRequested = personPlatformUserId !== undefined && personPlatform !== undefined;
+    const fanId = personRequested
+      ? await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        findAgentFanId(tx, {
+          platform: personPlatform as Platform,
+          platformUserId: personPlatformUserId as string,
+        }), "agent_coverage_person")
+      : null;
+    const personFilter = personRequested ? { fanId: fanId ?? -1 } : {};
+
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
     const sourceErrors: Array<{
       source: "page_dm_threads";
       code: "statement_timeout";
       excludedFromCounts: true;
     }> = [];
-    let scopes: Awaited<ReturnType<typeof listAgentCoverageScopes>> = [];
-    try {
-      scopes = await withAgentStatementTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
-        listAgentCoverageScopes(tx, {
-          pageIds,
-          platform: query.platform,
-          conversationRef,
-          from: new Date(from),
-          to: new Date(to),
-          limit: query.limit,
-          after: cursor === null
-            ? undefined
-            : {
-              pageLabel: String(cursor.keyset.pageLabel ?? ""),
-              conversationRef: String(cursor.keyset.conversationRef ?? ""),
-            },
-        }));
-    } catch (error) {
-      if (!isStatementTimeout(error)) {
-        throw error;
-      }
-      // Multi-source degradation: ONE failed source becomes a named row excluded
-      // from the counts, and a non-empty `sourceErrors` forces the conclusion
-      // false. A single-source operation would answer 503 instead.
+
+    // Multi-source degradation: ONE failed source becomes a named row excluded
+    // from the counts. A single-source operation answers 503 instead.
+    const scopesResult = await tryAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
+      listAgentCoverageScopes(tx, {
+        pageIds,
+        platform: query.platform,
+        ...personFilter,
+        conversationRef,
+        from: new Date(from),
+        to: new Date(to),
+        limit,
+        after: cursor === null
+          ? undefined
+          : {
+            sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
+            key: String(cursor.keyset.key ?? ""),
+          },
+      }), "agent_coverage");
+    if (!scopesResult.ok) {
       sourceErrors.push({
         source: "page_dm_threads",
         code: "statement_timeout",
         excludedFromCounts: true,
       });
     }
+    const scopes = scopesResult.ok ? scopesResult.value : { rows: [], witnesses: [] };
 
-    const [proofs, laneCeilings, journalFloor] = await Promise.all([
-      readAgentCoverageProofs(scope.db, pageIds, scopes.map((entry) => entry.conversationRef)),
-      readAgentLaneCeilings(scope.db, pageIds, "dm_messages"),
-      readAgentJournalFloor(scope.db),
-    ]);
-    const ceiling = mergeLaneCeiling(laneCeilings);
-    const proofByScope = new Map(proofs.map((proof) => [`${proof.pageId}:${proof.chatId}`, proof]));
+    const journalFloor = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+      readAgentJournalFloor(tx), "agent_journal_floor");
 
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, claimFields);
-    const aggregateWitnesses: PlaneReadWitness[] = [
-      storeDerivedWitness({
-        plane: "message_archive",
-        ceilingAt: ceiling.at,
-        ceilingKind: ceiling.kind,
-        laneCadenceSeconds: ceiling.laneCadenceSeconds,
-        breakerOpen: ceiling.breakerOpen,
-      }),
-      storeDerivedWitness({ plane: "page_dm_threads", ceilingAt: ceiling.at }),
-    ];
-    const notRead: PlaneNotReadReason[] = planesNotRead({
+    const notRead = planesNotRead({
       operationPlanes,
-      witnesses: aggregateWitnesses,
+      witnesses: scopes.witnesses,
       overrides: messagePlaneOverrides(platforms),
     });
 
-    const last = scopes.at(-1);
-    const hasMore = scopes.length === query.limit;
+    const last = scopes.rows.at(-1);
+    const hasMore = scopes.rows.length === limit;
     const nextCursor = hasMore && last !== undefined
       ? encodeAgentCursor({
         operation: "agentCoverage",
+        resource: "global",
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
-        params: { from, to, pageLabel, conversationRef, claimFields, limit: query.limit },
+        params: {
+          from,
+          to,
+          pageLabel,
+          conversationRef,
+          personPlatform,
+          personPlatformUserId,
+          claimFields,
+          limit: query.limit,
+        },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: { page_dm_threads: last.conversationRef },
         seqHighWater: {},
-        keyset: { pageLabel: last.pageLabel, conversationRef: last.conversationRef },
+        keyset: { sortValue: last.sortValue, key: last.keysetKey },
       }, scope.signing)
       : null;
 
+    const hydration = hydrationRemedy(scope);
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
       claimFields,
       operationPlanes,
-      planeReads: aggregateWitnesses,
+      planeReads: scopes.witnesses,
       planesNotRead: notRead,
       delivery: { snapshotExhausted: nextCursor === null, nextCursor },
       cursorConsumed,
       cursorCapable: true,
+      frozenSnapshot: false,
       requestWindow: { from, to },
-      gaps: gapBeforeFloor("message_archive", null, from),
-      gapDetection: "head_only",
+      gaps: [],
       scopeFieldStates: computeScopeFieldStates({ fields: claimFields ?? [], platforms }),
       sourceErrors,
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: null,
       captureFloor: { at: null, kind: "unknown" },
-      captureCeiling: ceiling,
-      basis: "store_derived",
-      proof: null,
-      parseDebt: 0,
-      rejected: 0,
-      servingHighWaterSatisfied: true,
-      hasProofLaneForClaim: hasProofLaneForClaim(claimFields, platforms),
     });
 
-    const items = scopes.map((entry) => {
-      const proof = proofByScope.get(`${entry.pageId}:${entry.conversationRef}`);
-      const witness = proof === undefined
-        ? storeDerivedWitness({
-          plane: "message_archive",
-          ceilingAt: ceiling.at,
-          ceilingKind: ceiling.kind,
-          laneCadenceSeconds: ceiling.laneCadenceSeconds,
-          breakerOpen: ceiling.breakerOpen,
-        })
-        : proofWitness(proof, "message_archive");
+    const items = scopes.rows.map((entry) => {
+      const floorAt = isoOrNull(entry.archiveFloor);
+      const gaps = gapBeforeCaptureFloor({
+        plane: "message_archive",
+        floorAt,
+        windowFrom: from,
+        hydrationAdmissible: hydration.admissible,
+      });
       const perScope = buildAgentEvidence({
         planeMode: scope.planeMode,
         claimFields,
         operationPlanes,
-        planeReads: [witness, storeDerivedWitness({ plane: "page_dm_threads", ceilingAt: ceiling.at })],
+        planeReads: scopes.witnesses,
         planesNotRead: notRead,
         delivery: { snapshotExhausted: true, nextCursor: null },
         cursorConsumed,
         cursorCapable: true,
+        frozenSnapshot: false,
         requestWindow: { from, to },
-        gaps: gapBeforeFloor("message_archive", witness.captureFloor.at, from),
-        gapDetection: "head_only",
+        gaps,
         scopeFieldStates: computeScopeFieldStates({
           fields: claimFields ?? [],
           platforms: [entry.platform as Platform],
@@ -1280,14 +1274,7 @@ export async function handleAgentCoverage(
         sourceErrors,
         scopeNarrowing: scope.scopeNarrowing,
         observedRowFloor: isoOrNull(entry.observedRowFloor),
-        captureFloor: witness.captureFloor,
-        captureCeiling: ceiling,
-        basis: witness.basis,
-        proof: witness.proof,
-        parseDebt: witness.parseDebt,
-        rejected: witness.rejected,
-        servingHighWaterSatisfied: witness.servingHighWaterSatisfied,
-        hasProofLaneForClaim: hasProofLaneForClaim(claimFields, [entry.platform as Platform]),
+        captureFloor: { at: floorAt, kind: floorAt === null ? "unknown" : "oldest_stored_row" },
       });
       return {
         pageLabel: entry.pageLabel,
@@ -1295,16 +1282,16 @@ export async function handleAgentCoverage(
         conversationRef: entry.conversationRef,
         fanPlatformUserId: entry.fanPlatformUserId,
         planes: perScope.capture.planes,
-        gapDetection: "head_only" as const,
         observedRowFloor: isoOrNull(entry.observedRowFloor),
         gaps: perScope.capture.gaps,
-        windowCovered: evidenceProvesAbsence(perScope),
+        // A statement about THIS STORE's coverage of the window, and nothing more.
+        windowCovered: evidenceIsUnrestricted(perScope),
         fieldStates: perScope.capture.scopeFieldStates,
         blockers: perScope.conclusion.blockers,
       };
     });
 
-    const response = {
+    const response: AgentCoverageResponse = {
       window: { from, to },
       items,
       journalFloor: {
@@ -1314,7 +1301,7 @@ export async function handleAgentCoverage(
       delivery: buildDelivery({
         returned: items.length,
         matched: { value: items.length, exact: nextCursor === null },
-        cappedBy: nextCursor === null ? null : "limit",
+        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
         snapshotExhausted: nextCursor === null,
         caveats: evidence.deliveryCaveats,

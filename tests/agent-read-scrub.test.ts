@@ -71,7 +71,7 @@ describe("agent read plane: the signed-URL scrub", () => {
         }],
       }],
     });
-    const media = result.payload.accountMedia as Array<Record<string, unknown>>;
+    const media = result.payload?.accountMedia as Array<Record<string, unknown>>;
     const locations = media[0]?.locations as Array<Record<string, unknown>>;
     expect(locations[0]?.location).toBeNull();
     expect(locations[0]?.locationId).toBe("loc-1");
@@ -84,8 +84,8 @@ describe("agent read plane: the signed-URL scrub", () => {
       a: "https://s3.example.com/x?X-Amz-Signature=aa&X-Amz-Credential=bb",
       b: "https://blob.example.com/x?sv=2020&sig=zz&se=2026",
     });
-    expect(result.payload.a).toBeNull();
-    expect(result.payload.b).toBeNull();
+    expect(result.payload?.a).toBeNull();
+    expect(result.payload?.b).toBeNull();
     expect(result.signedUrlsRemoved).toBe(2);
   });
 
@@ -95,10 +95,10 @@ describe("agent read plane: the signed-URL scrub", () => {
       total: 3,
       ok: true,
     });
-    const messages = result.payload.messages as Array<Record<string, unknown>>;
+    const messages = result.payload?.messages as Array<Record<string, unknown>>;
     expect(messages[0]?.content).toBe("did you get the custom? https://fansly.com/lora");
-    expect(result.payload.total).toBe(3);
-    expect(result.payload.ok).toBe(true);
+    expect(result.payload?.total).toBe(3);
+    expect(result.payload?.ok).toBe(true);
     expect(result.signedUrlsRemoved).toBe(0);
   });
 
@@ -109,10 +109,10 @@ describe("agent read plane: the signed-URL scrub", () => {
       session: { token: "t" },
       username: "rick",
     });
-    expect(result.payload.authorization).toBeNull();
-    expect(result.payload.checkoutKey).toBeNull();
-    expect(result.payload.session).toBeNull();
-    expect(result.payload.username).toBe("rick");
+    expect(result.payload?.authorization).toBeNull();
+    expect(result.payload?.checkoutKey).toBeNull();
+    expect(result.payload?.session).toBeNull();
+    expect(result.payload?.username).toBe("rick");
     expect(result.secretsRedacted).toBe(3);
   });
 
@@ -128,9 +128,37 @@ describe("agent read plane: the signed-URL scrub", () => {
     expect(JSON.stringify(result.payload)).not.toContain("Signature");
   });
 
-  it("a non-object payload becomes an empty object rather than leaking through", () => {
-    expect(scrubObservationPayload("https://cdn.example.com/x?Signature=1").payload).toEqual({});
-    expect(scrubObservationPayload(null).payload).toEqual({});
+  it("removes a signed address EMBEDDED in a longer string", () => {
+    // The previous revision only matched a value that WAS a url, and the test
+    // suite PINNED that miss as if it were the design. A signed address inside a
+    // caption or an HTML fragment is still a signed address; the old pin WAS the
+    // bug, and this assertion replaces it.
+    const result = scrubObservationPayload({
+      caption: 'watch it here: https://cdn.fansly.com/m.mp4?Policy=a&Signature=b thanks!',
+      html: '<img src="https://cdn.fansly.com/t.jpg?Key-Pair-Id=K1&Signature=z">',
+    });
+    expect(result.payload?.caption).toBeNull();
+    expect(result.payload?.html).toBeNull();
+    expect(result.signedUrlsRemoved).toBe(2);
+  });
+
+  it("a malformed percent escape is suspicious, not a crash", () => {
+    // `decodeURIComponent("%ZZ")` throws, and a scrubber that throws on hostile
+    // input is not fail-closed, it is fail-crashed.
+    expect(() => scrubObservationPayload({
+      url: "https://cdn.example.com/x?%ZZ=1&Signature=abc",
+    })).not.toThrow();
+    expect(scrubObservationPayload({
+      url: "https://cdn.example.com/x?%ZZ=1&Signature=abc",
+    }).payload?.url).toBeNull();
+  });
+
+  it("a non-object payload is WITHHELD, never served as an empty object", () => {
+    // `{}` with no reason is a hole pretending to be an empty payload; the caller
+    // turns `null` into an explicit `withheldReason`.
+    expect(scrubObservationPayload("https://cdn.example.com/x?Signature=1").payload).toBeNull();
+    expect(scrubObservationPayload([{ a: 1 }]).payload).toBeNull();
+    expect(scrubObservationPayload(null).payload).toBeNull();
   });
 });
 
