@@ -41,13 +41,23 @@ const STATE_STYLES: Record<string, string> = {
 
 interface DecisionDraft {
   maxCalls: number;
+  maxPages: number;
+  maxCredits: number;
   expiresInHours: number;
   allowMarkRead: boolean;
   reason: string;
 }
 
+/**
+ * All THREE ceilings, always. The OnlyFans capture lane refuses a job missing any
+ * of them and dies on its first lease; one approval buys one attempt, so a form
+ * that sent only `maxCalls` was quietly spending the owner's decision on a job
+ * that could never run.
+ */
 const EMPTY_DRAFT: DecisionDraft = {
   maxCalls: 5,
+  maxPages: 5,
+  maxCredits: 5,
   expiresInHours: 24,
   allowMarkRead: false,
   reason: "",
@@ -90,6 +100,8 @@ export function AgentHydrationPage() {
           ...(decision === "approve"
             ? {
               maxCalls: draft.maxCalls,
+              maxPages: draft.maxPages,
+              maxCredits: draft.maxCredits,
               expiresAt: new Date(
                 Date.now() + draft.expiresInHours * 60 * 60 * 1000,
               ).toISOString(),
@@ -215,7 +227,9 @@ export function AgentHydrationPage() {
                   {formatRelativeTime(request.decision.decidedAt)}
                   {request.decision.approved && (
                     <>
-                      {" "}· maxCalls {request.decision.maxCalls ?? "—"} · mark-read
+                      {" "}· caps {request.decision.maxCalls ?? "—"}/
+                      {request.decision.maxPages ?? "—"}/
+                      {request.decision.maxCredits ?? "—"} · mark-read
                       {" "}
                       {request.decision.allowMarkReadSideEffect ? "allowed" : "refused"}
                     </>
@@ -244,6 +258,34 @@ export function AgentHydrationPage() {
                         onChange={(event) =>
                           setDraft(request.requestRef, {
                             maxCalls: Number(event.target.value) || 1,
+                          })}
+                        className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
+                      />
+                    </label>
+                    <label className="text-xs text-text-muted">
+                      <span className="block font-medium text-text-primary">Max pages</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={draft.maxPages}
+                        onChange={(event) =>
+                          setDraft(request.requestRef, {
+                            maxPages: Number(event.target.value) || 1,
+                          })}
+                        className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
+                      />
+                    </label>
+                    <label className="text-xs text-text-muted">
+                      <span className="block font-medium text-text-primary">Max credits</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100000}
+                        value={draft.maxCredits}
+                        onChange={(event) =>
+                          setDraft(request.requestRef, {
+                            maxCredits: Number(event.target.value) || 1,
                           })}
                         className="mt-1 w-24 rounded-lg border border-border bg-card px-2 py-1 text-sm text-text-primary"
                       />

@@ -101,6 +101,12 @@ export interface TargetedThreadBackfillJob {
 export interface TargetedThreadBackfillSendInput extends TargetedThreadBackfillJob {
   /** Page that owns the thread — the queue's singleton key (see below). */
   platformAccountId: number;
+  /**
+   * Slice C: a job id minted by the CALLER, so the hydration request can record
+   * what it authorized in the same statement that claims its single attempt —
+   * before the job exists. Omit it and pg-boss mints one as before.
+   */
+  jobId?: string;
 }
 
 export type TargetedThreadBackfillOutcome =
@@ -181,6 +187,7 @@ export async function sendTargetedThreadBackfillJob(
         : { hydrationRequestRef: input.hydrationRequestRef }),
     } satisfies TargetedThreadBackfillJob,
     {
+      ...(input.jobId === undefined ? {} : { id: input.jobId }),
       singletonKey: String(input.platformAccountId),
       expireInSeconds: TARGETED_BACKFILL_EXPIRE_SECONDS,
       retryLimit: TARGETED_BACKFILL_RETRY_LIMIT,

@@ -246,7 +246,12 @@ describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (
         expectedVersion: 0,
         coverageFingerprint: "0".repeat(64),
         idempotencyKey: randomUUID(),
+        // A CONTRACT-VALID approval, so the refusal below is about the
+        // principal and not about the body: a 400 here would pass the assertion
+        // while proving nothing about isolation.
         maxCalls: 1,
+        maxPages: 1,
+        maxCredits: 1,
         expiresAt: "2026-12-01T00:00:00Z",
         allowMarkReadSideEffect: false,
       },

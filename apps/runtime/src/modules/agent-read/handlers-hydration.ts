@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import {
+  agentHydrationRequestDecideBodySchema,
+} from "@agency_hub_core/contracts";
 import type {
   AgentHydrationRequest,
   AgentHydrationRequestCreateBody,
@@ -26,6 +29,7 @@ import {
   evaluateHydrationLanes,
 } from "../../services/agent-hydration.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import { BadRequestError } from "../../services/errors.ts";
 import { buildAgentEvidence, type AgentPlaneMode } from "./epistemics.ts";
 import {
   AgentHydrationConflictError,
@@ -461,7 +465,19 @@ export async function applyHydrationDecision(
 ): Promise<HydrationDecisionOutcome> {
   const planeMode = await assertHydrationEnabled(appContext);
   const db = appContext.db;
-  const body = input.body;
+  // The body is validated HERE, not only by the route serializer: the owner CLI
+  // calls this function directly, and a second client that skipped the cross-field
+  // rules (every ceiling named, an expiry present, the #158 answer stated) would
+  // be exactly the client that files an unexecutable approval.
+  const parsed = agentHydrationRequestDecideBodySchema.safeParse(input.body);
+  if (!parsed.success) {
+    throw new BadRequestError(
+      `hydration decision is not valid: ${parsed.error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; ")}`,
+    );
+  }
+  const body = parsed.data;
 
   const { request, witnesses } = await withAgentTimeout(db, AGENT_TIMEOUT_MS.short, (tx) =>
     findAgentHydrationRequestByRef(tx, input.requestRef), "agent_hydration_decide");
@@ -501,6 +517,16 @@ export async function applyHydrationDecision(
     throw new AgentHydrationNotAdmissibleError(
       "this platform's history read marks the thread read; approval requires"
         + " allowMarkReadSideEffect",
+    );
+  }
+  // A ceiling this lane cannot run on is not an approval, it is a job that dies
+  // on its first lease — and the attempt it burns is the owner's only one.
+  if (
+    body.decision === "approve"
+    && (body.maxCredits ?? 0) < lane.minimumCredits
+  ) {
+    throw new AgentHydrationNotAdmissibleError(
+      `this platform's capture lane cannot run below maxCredits ${lane.minimumCredits}`,
     );
   }
 

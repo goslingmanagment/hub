@@ -751,9 +751,12 @@ export function buildProgram() {
       return parsed;
     })
     .requiredOption("--coverage-fingerprint <sha256>", "the fingerprint that was SHOWN to you")
-    .option("--max-calls <n>", "hard cap on vendor calls (approval needs this or --max-pages)", parsePositiveInt)
-    .option("--max-credits <n>", "hard cap on OFAPI credits", parsePositiveInt)
-    .option("--max-pages <n>", "hard cap on vendor pages", parsePositiveInt)
+    // All three are REQUIRED on an approval (the shared decision schema refuses
+    // otherwise): the OnlyFans capture lane cannot schedule a job missing any of
+    // them, and one approval buys exactly one attempt.
+    .option("--max-calls <n>", "hard cap on vendor calls (required to approve)", parsePositiveInt)
+    .option("--max-credits <n>", "hard cap on OFAPI credits (required to approve)", parsePositiveInt)
+    .option("--max-pages <n>", "hard cap on vendor pages (required to approve)", parsePositiveInt)
     .option("--max-items <n>", "hard cap on accepted items", parsePositiveInt)
     .option("--expires-in-hours <n>", "how long the approval stays executable", parsePositiveInt, 24)
     .option(

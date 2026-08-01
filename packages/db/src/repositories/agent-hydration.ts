@@ -540,10 +540,26 @@ export async function listDispatchableAgentHydrationRequests(
  * `approved -> dispatching`, CAS'd. This is the ONE attempt: there is no
  * transition back to `approved` anywhere, so a crashed run is settled `failed`
  * by the sweeper and only a fresh owner decision can produce another attempt.
+ *
+ * The EXECUTION REFERENCE IS WRITTEN BY THIS STATEMENT, not by a follow-up
+ * update. The caller mints the id first and hands it to the job it is about to
+ * create, so a crash between the claim and the enqueue leaves a row that still
+ * POINTS AT the work it authorized. The earlier two-step version could leave
+ * `dispatching` with a null reference: reconciliation skipped such rows, the
+ * sweeper eventually failed them, and the capture job they had already created
+ * went on spending credits outside anybody's view.
  */
 export async function claimAgentHydrationRequestForDispatch(
   db: Database,
-  input: { id: number; expectedVersion: number; deadlineAt: Date; now?: Date },
+  input: {
+    id: number;
+    expectedVersion: number;
+    deadlineAt: Date;
+    executionLane: AgentHydrationLane;
+    /** Minted BEFORE the job exists and used as that job's id. */
+    executionRef: string;
+    now?: Date;
+  },
 ): Promise<{ outcome: AgentHydrationCasOutcome; request: AgentHydrationRequestRecord | null }> {
   const now = input.now ?? new Date();
   const updated = await db.execute<Record<string, unknown>>(sql`
@@ -553,6 +569,8 @@ export async function claimAgentHydrationRequestForDispatch(
       dispatched_at = ${now},
       dispatch_deadline_at = ${input.deadlineAt},
       dispatch_count = dispatch_count + 1,
+      execution_lane = ${input.executionLane},
+      execution_ref = ${input.executionRef},
       updated_at = ${now}
     where id = ${input.id}
       and row_version = ${input.expectedVersion}
@@ -574,13 +592,21 @@ export async function claimAgentHydrationRequestForDispatch(
   return { outcome: "applied", request: await findAgentHydrationRequestById(db, input.id) };
 }
 
-/** Records WHAT executed the approved request, once the job exists. */
+/**
+ * Corrects the execution reference when the created job COALESCED onto an
+ * existing one.
+ *
+ * The claim already recorded the id we minted; an OnlyFans capture job that
+ * lands on an occupied active slot returns the incumbent instead, and the
+ * request must point at the job that will really spend. This is the only reason
+ * the reference ever moves after the claim.
+ */
 export async function recordAgentHydrationExecution(
   db: Database,
   input: {
     id: number;
     executionLane: AgentHydrationLane;
-    executionRef: string | null;
+    executionRef: string;
     now?: Date;
   },
 ): Promise<void> {
@@ -590,7 +616,7 @@ export async function recordAgentHydrationExecution(
       execution_lane = ${input.executionLane},
       execution_ref = ${input.executionRef},
       updated_at = ${now}
-    where id = ${input.id}
+    where id = ${input.id} and state = 'dispatching'
   `);
 }
 

@@ -17,10 +17,16 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX } from "../apps/runtime/src/services/auth.ts";
 import {
+  ofapiJobSettlement,
+  reconcileAgentHydrationDispatches,
   runAgentHydrationCycle,
   settleAgentHydrationFromBackfill,
+  sweepStuckAgentHydration,
 } from "../apps/runtime/src/services/agent-hydration.ts";
-import { TARGETED_THREAD_BACKFILL_QUEUE } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
+import {
+  parseTargetedThreadBackfillJob,
+  TARGETED_THREAD_BACKFILL_QUEUE,
+} from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
@@ -237,17 +243,61 @@ async function approve(
     expectedVersion: request.rowVersion,
     coverageFingerprint: request.coverageFingerprint,
     idempotencyKey: randomUUID(),
+    // EVERY ceiling. An approval carrying only `maxCalls` produced an OnlyFans
+    // capture job its own executor refuses (`target_invalid`) and, since one
+    // approval buys one attempt, silently spent the owner's decision on a job
+    // that could never run.
     maxCalls: 5,
+    maxPages: 4,
+    maxCredits: 3,
     expiresAt: new Date(Date.now() + DAY_MS).toISOString(),
     allowMarkReadSideEffect: false,
     ...overrides,
   });
 }
 
-/** The executor's only outside contact: a queue client. Everything this slice
- *  promises is visible in what lands here. */
+/**
+ * Drives the OnlyFans capture executor one step with NO vendor client
+ * configured.
+ *
+ * This is the difference between "a row exists" and "the job can run": the
+ * executor blocks `target_invalid` when the job's target or caps are
+ * unschedulable, and `transport_unavailable` only AFTER it has successfully
+ * built the request plan. So `transport_unavailable` is the assertion that the
+ * job is real work waiting on a client, not a corpse.
+ */
+async function stepOfapiCaptureExecutor(pageId: number) {
+  const captureApp = createTestAppContext(testDb!, {
+    authPolicyEnforcement: "enforce",
+    ofapiMirrorBackgroundCaptureEnabled: true,
+  });
+  const { executeOfapiCaptureJobChunk } = await import(
+    "../apps/runtime/src/services/ofapi-capture-jobs.ts"
+  );
+  const result = await executeOfapiCaptureJobChunk(captureApp, pageId);
+  const { rows } = await testDb!.pool.query<{ state: string; reason_code: string | null }>(
+    "select state, reason_code from ofapi_capture_jobs where id = $1::uuid",
+    [result.jobId],
+  );
+  return { ...result, jobState: rows[0]?.state ?? null, reasonCode: rows[0]?.reason_code ?? null };
+}
+
+/**
+ * The executor's only outside contact: a queue client. Everything this slice
+ * promises is visible in what lands here.
+ *
+ * It echoes the caller's `id` back, exactly as pg-boss does — the executor mints
+ * that id before the claim and the request already points at it, so a stub that
+ * invented its own would hide whether the two ever agree.
+ */
+type HydrationBoss = Parameters<typeof runAgentHydrationCycle>[1];
+
 function stubBoss() {
-  return { send: vi.fn(async () => "job-1") };
+  const send = vi.fn(async (_queue: string, _data: unknown, options?: { id?: string }) =>
+    options?.id ?? "job-1");
+  // pg-boss `send` is overloaded; the cast narrows the stub to the one shape the
+  // executor uses while keeping `.mock` assertable.
+  return { send } as unknown as HydrationBoss & { send: typeof send };
 }
 
 describe("[sync-critical] agent hydration requests", () => {
@@ -338,26 +388,35 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(cycle.dispatched).toBe(1);
     expect(boss.send).toHaveBeenCalledTimes(1);
 
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     const [queue, payload, options] = boss.send.mock.calls[0] as unknown as [
       string,
       Record<string, unknown>,
       Record<string, unknown>,
     ];
     expect(queue).toBe(TARGETED_THREAD_BACKFILL_QUEUE);
+    // Not just "a payload was sent": the payload has to survive the parser the
+    // worker actually runs it through, or the run refuses it as unusable.
+    const parsed = parseTargetedThreadBackfillJob(payload);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.threadId).toBe(fanslyThreadId);
     expect(payload.threadId).toBe(fanslyThreadId);
-    // The owner's cap BINDS: it is the run's request budget, not a note.
-    expect(payload.maxRequests).toBe(5);
+    // The owner's ceiling BINDS, and it is the SMALLER of the two numbers that
+    // bound vendor requests on this lane (maxCalls 5, maxPages 4).
+    expect(parsed!.maxRequests).toBe(4);
     // The depth cap is lifted for THIS run only — going deeper is what was
     // approved.
     expect(payload.ignoreRetentionLimit).toBe(true);
     expect(payload.hydrationRequestRef).toBe(request.requestRef);
     // The queue singleton is the PAGE: one targeted run per page at a time.
     expect(options.singletonKey).toBe(String(fanslyPageId));
+    // The job id was minted BEFORE the claim and is what the request already
+    // points at — there is no window where a dispatching row has no reference.
+    expect(options.id).toBe(stored.request?.executionRef);
 
-    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request?.state).toBe("dispatching");
-    expect(stored.request?.executionRef).toBe("job-1");
     expect(stored.request?.dispatchCount).toBe(1);
+    expect(stored.request?.executionLane).toBe("vendor_paid_low");
   });
 
   it("#13 reject -> nothing is ever enqueued", async () => {
@@ -384,8 +443,18 @@ describe("[sync-critical] agent hydration requests", () => {
 
   it("a second decision is a 409 CAS conflict, never an overwrite", async () => {
     const { request } = await fileRequest();
+    // The VERSION half of the CAS, on a request still in `requested`: a decision
+    // formed against a version that no longer exists is refused even though the
+    // state would have allowed it. Without this the state check alone would pass
+    // a regression that dropped version checking entirely.
+    const wrongVersion = await approve(request, { expectedVersion: request.rowVersion + 7 });
+    expect(wrongVersion.statusCode).toBe(409);
+    expect(wrongVersion.json().error).toBe("conflict");
+    const untouched = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(untouched.request?.state).toBe("requested");
+
     expect((await approve(request)).statusCode).toBe(200);
-    // Same stale rowVersion, different idempotency key: somebody decided first.
+    // ... and the STATE half: same stale rowVersion, different idempotency key.
     const again = await approve(request);
     expect(again.statusCode).toBe(409);
     expect(again.json().error).toBe("conflict");
@@ -452,13 +521,66 @@ describe("[sync-critical] agent hydration requests", () => {
 
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request?.state).toBe("dispatching");
-    const { rows } = await testDb!.pool.query<{ manifest: Record<string, unknown>; max_calls: number }>(
-      "select manifest, max_calls from ofapi_capture_jobs where id = $1::uuid",
+    const { rows } = await testDb!.pool.query<{
+      manifest: Record<string, unknown>;
+      max_calls: number;
+      max_pages: number;
+      max_credits: number;
+    }>(
+      "select manifest, max_calls, max_pages, max_credits from ofapi_capture_jobs where id = $1::uuid",
       [stored.request?.executionRef],
     );
+    // Every ceiling the owner named reaches the job. All three are load-bearing:
+    // the executor refuses a job missing ANY of them.
     expect(rows[0]!.max_calls).toBe(5);
+    expect(rows[0]!.max_pages).toBe(4);
+    expect(rows[0]!.max_credits).toBe(3);
     expect(rows[0]!.manifest.allowMarkReadSideEffect).toBe(true);
     expect(rows[0]!.manifest.hydrationRequestRef).toBe(request.requestRef);
+
+    // THE ASSERTION THAT MATTERS: the job is SCHEDULABLE. Asserting the row
+    // alone stayed green over a job that its own executor blocks
+    // `target_invalid` on its first lease — and that dead job would have burned
+    // the owner's single attempt.
+    const step = await stepOfapiCaptureExecutor(onlyfansPageId);
+    expect(step.jobId).toBe(stored.request?.executionRef);
+    expect(step.reasonCode).not.toBe("target_invalid");
+    // It got all the way to "no vendor client configured", which is the last
+    // thing before the wire.
+    expect(step.reasonCode).toBe("transport_unavailable");
+  });
+
+  it("#158: an OnlyFans approval below the lane's credit floor is refused", async () => {
+    // `maxCredits: 0` is contract-legal and would block the capture job
+    // `target_invalid` on its first lease. The refusal belongs at decision time,
+    // where the owner can still change the number.
+    const { request } = await fileRequest("lora-of", OF_CONVERSATION_REF);
+    const broke = await approve(request, { allowMarkReadSideEffect: true, maxCredits: 0 });
+    expect(broke.statusCode).toBe(409);
+    expect(broke.json().error).toBe("hydration_not_admissible");
+  });
+
+  it("an approval that omits any ceiling is a 400, not an unschedulable job", async () => {
+    const { request } = await fileRequest();
+    for (const missing of ["maxCalls", "maxPages", "maxCredits"] as const) {
+      const body: Record<string, unknown> = {
+        decision: "approve",
+        expectedVersion: request.rowVersion,
+        coverageFingerprint: request.coverageFingerprint,
+        idempotencyKey: randomUUID(),
+        maxCalls: 5,
+        maxPages: 4,
+        maxCredits: 3,
+        expiresAt: new Date(Date.now() + DAY_MS).toISOString(),
+        allowMarkReadSideEffect: false,
+      };
+      delete body[missing];
+      const response = await ownerPost(
+        `/api/v1/agent/hydration-requests/${request.requestRef}/decision`,
+        body,
+      );
+      expect(response.statusCode, missing).toBe(400);
+    }
   });
 
   it("a crashed run is swept to failed and needs a FRESH decision, never a retry", async () => {
@@ -486,6 +608,68 @@ describe("[sync-critical] agent hydration requests", () => {
     const thirdBoss = stubBoss();
     expect((await runAgentHydrationCycle(appContext, thirdBoss)).dispatched).toBe(0);
     expect(thirdBoss.send).not.toHaveBeenCalled();
+  });
+
+  it("an OnlyFans outcome is derived from EXHAUSTION, never from row counts", async () => {
+    // The whole mapping, stated. Row counts appear nowhere in it: a run
+    // truncated by its own ceiling returns plenty of rows and must NOT read as
+    // `completed`, while an honest run that reached the end of the vendor's
+    // history and found nothing new must.
+    expect(ofapiJobSettlement({ state: "complete", reasonCode: null }))
+      .toEqual({ state: "completed", lastError: "none" });
+    expect(ofapiJobSettlement({ state: "blocked", reasonCode: "gap_open" }))
+      .toEqual({ state: "partially_completed", lastError: "budget_exhausted" });
+    expect(ofapiJobSettlement({ state: "blocked", reasonCode: "target_invalid" }))
+      .toEqual({ state: "failed", lastError: "vendor_unavailable" });
+    expect(ofapiJobSettlement({ state: "cancelled", reasonCode: null }))
+      .toEqual({ state: "failed", lastError: "quarantined" });
+    // Still running: no verdict at all, rather than a guess.
+    expect(ofapiJobSettlement({ state: "leased", reasonCode: null })).toBeNull();
+
+    // ... and the cap-truncated case end to end, because it is the one that used
+    // to be reported to the owner as `completed`.
+    const { request } = await fileRequest("lora-of", OF_CONVERSATION_REF);
+    await approve(request, { allowMarkReadSideEffect: true });
+    await setFlag("agentHydrationMode", "dispatch");
+    await runAgentHydrationCycle(appContext, stubBoss());
+    const dispatched = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    await testDb!.pool.query(
+      `update ofapi_capture_jobs set state = 'blocked', reason_code = 'gap_open',
+         accepted_items = 300, accepted_pages = 3, spent_credits = 3 where id = $1::uuid`,
+      [dispatched.request!.executionRef],
+    );
+    expect(await reconcileAgentHydrationDispatches(appContext)).toBe(1);
+    const settled = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(settled.request?.state).toBe("partially_completed");
+    expect(settled.request?.lastError).toBe("budget_exhausted");
+    expect(settled.request?.spentCredits).toBe(3);
+  });
+
+  it("the sweeper does not kill a request whose capture job is still running", async () => {
+    const { request } = await fileRequest("lora-of", OF_CONVERSATION_REF);
+    await approve(request, { allowMarkReadSideEffect: true });
+    await setFlag("agentHydrationMode", "dispatch");
+    await runAgentHydrationCycle(appContext, stubBoss());
+    await testDb!.pool.query(
+      "update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 hour'",
+    );
+
+    // The job is `ready`: it is going to spend credits. Calling the request dead
+    // now would take that spend out of the owner's view entirely.
+    expect(await sweepStuckAgentHydration(appContext)).toBe(0);
+    const alive = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(alive.request?.state).toBe("dispatching");
+
+    // Once the job is terminal, reconciliation settles it — and only a run that
+    // never produced a job is closed by the deadline.
+    await testDb!.pool.query(
+      `update ofapi_capture_jobs set state = 'cancelled', completed_at = now()
+       where id = $1::uuid`,
+      [alive.request!.executionRef],
+    );
+    expect(await sweepStuckAgentHydration(appContext)).toBe(1);
+    const dead = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(dead.request?.state).toBe("failed");
   });
 
   it("a backfill result settles the request that asked for it", async () => {

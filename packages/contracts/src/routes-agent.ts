@@ -1830,8 +1830,22 @@ export const agentHydrationRequestDecideBodySchema = z.object({
 }).strict().superRefine((value, ctx) => {
   const issues: AgentIssue[] = [];
   if (value.decision === "approve") {
-    if (value.maxCalls === undefined && value.maxPages === undefined) {
-      issues.push({ path: ["maxCalls"], message: "approval requires at least maxCalls or maxPages" });
+    // EVERY ceiling, not "at least one of two".
+    //
+    // The earlier "maxCalls or maxPages" admitted a legal approval the executor
+    // could not schedule: the OnlyFans lane refuses a capture job missing ANY of
+    // maxCalls/maxPages/maxCredits and blocks it `target_invalid` — and since one
+    // approval buys exactly one attempt, that dead job burned the owner's
+    // decision with no way back. The Fansly lane had the mirror hole: an approval
+    // carrying only maxPages sent NO ceiling into the run, which then spent its
+    // own full budget. An approval names what may be spent. All of it.
+    for (const cap of ["maxCalls", "maxPages", "maxCredits"] as const) {
+      if (value[cap] === undefined) {
+        issues.push({
+          path: [cap],
+          message: "approval must name every ceiling: maxCalls, maxPages and maxCredits",
+        });
+      }
     }
     if (value.allowMarkReadSideEffect === undefined) {
       issues.push({
