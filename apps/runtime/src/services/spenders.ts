@@ -56,7 +56,12 @@ import {
 
 import { platformRollupScopeFor } from "../api/request-auth.ts";
 import type { AppContext } from "../bootstrap.ts";
-import { canAccessPage, type AuthPrincipal } from "./auth.ts";
+import {
+  canAccessPage,
+  isAgentPrincipal,
+  requireHumanPrincipal,
+  type AuthPrincipal,
+} from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 
 type ScopeFields = {
@@ -113,6 +118,11 @@ type FanLike = {
 };
 
 function visiblePageIdsForPrincipal(principal: AuthPrincipal) {
+  // Same law as pageScopeFor: `undefined` means "no page filter at all", so an
+  // agent key resolves to its explicit grant, never to the unfiltered owner view.
+  if (isAgentPrincipal(principal)) {
+    return principal.pageIds;
+  }
   return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
 }
 
@@ -322,6 +332,10 @@ async function resolveSpenderScope(
   principal: AuthPrincipal,
   input: ScopeFields,
 ) {
+  // Money reads are a human surface: every scope rule below is written in terms
+  // of cookie-session-vs-bearer, a distinction an agent key does not have. It is
+  // refused here rather than silently sorted into the bearer branch.
+  requireHumanPrincipal(principal);
   const scopedPageIds = visiblePageIdsForPrincipal(principal);
 
   // Bearer principals never get cross-page aggregates. This used to test

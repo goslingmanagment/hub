@@ -4496,14 +4496,18 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 //   owner-session  cookie session with the owner role (admin surface, swagger/openapi)
 //   apiKey         bearer API key or device token (desktop/extension lanes)
 //   device-token   device-token bearer only (current-device self-service)
-//   any            any authenticated principal; finer scoping stays in the service
+//   agentKey       Agent Read Plane machine key only — there is no human behind
+//                  this principal (agent-read slice 0b; no route declares it yet)
+//   any            any authenticated principal that predates the agent plane;
+//                  finer scoping stays in the service. NOT a wildcard: an agent
+//                  key is refused here exactly as it is on every kind but agentKey
 // scope:"page" = the middleware resolves params.pageLabel and requires canAccessPage
 // before any handler runs; page ids derived from query/body stay handler-checked.
 // `roles` is reserved for narrowing beyond the kind (unused today; Stage 22 adds
-// device tokens additively).
+// device tokens additively). `roles` never admits an agent: it names human roles.
 export const routeAuthPolicySchema = z
   .object({
-    kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "device-token", "pending-device-token", "any"]),
+    kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "device-token", "pending-device-token", "agentKey", "any"]),
     roles: z.array(userRoleEnum).nonempty().optional(),
     scope: z.enum(["page", "none"]).optional(),
   })
@@ -4528,9 +4532,14 @@ export function routeSecurityFromAuth(
     case "any-session":
     case "owner-session":
       return [{ cookieAuth: [] }];
+    // An agent key travels in the same Authorization: Bearer header as the other
+    // bearers, so the published document describes it as bearerAuth until the
+    // agent operations land (slice A adds a dedicated `agentKeyAuth` scheme to
+    // the server's securitySchemes and points this kind at it).
     case "apiKey":
     case "device-token":
     case "pending-device-token":
+    case "agentKey":
       return [{ bearerAuth: [] }];
     case "any":
       return [{ cookieAuth: [] }, { bearerAuth: [] }];

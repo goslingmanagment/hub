@@ -29,7 +29,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { canAccessPage, type AuthPrincipal } from "./auth.ts";
+import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 import { estimateAnthropicGatewayRequestCost } from "./ai-gateway-anthropic.ts";
 import { estimateOpenrouterGatewayRequestCost } from "./ai-gateway-openrouter-provider.ts";
@@ -50,7 +50,7 @@ export interface AiGatewayQuotaSnapshot {
 
 export interface AiGatewayProviderInput {
   requestId: string;
-  principal: AuthPrincipal;
+  principal: HumanAuthPrincipal;
   page: {
     id: number;
     label: string;
@@ -255,7 +255,7 @@ export type AiGatewayStreamInput = AiGatewayStreamBody & {
 
 export async function prepareAiGatewayStream(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   input: AiGatewayStreamInput,
   internal?: AiGatewayStreamInternalOptions,
 ): Promise<PreparedAiGatewayStream> {

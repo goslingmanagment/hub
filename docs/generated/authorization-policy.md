@@ -19,7 +19,8 @@ body remain handler-checked and are noted per route in the service layer.
 | `apiKey` | bearer API key or device token |
 | `device-token` | device-token bearer only |
 | `pending-device-token` | short-lived pending device-token bearer, activation route only |
-| `any` | any authenticated principal |
+| `agentKey` | Agent Read Plane key only; no human principal is admitted |
+| `any` | any authenticated principal except an agent key |
 
 ## Routes (178)
 

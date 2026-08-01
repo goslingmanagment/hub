@@ -8,13 +8,17 @@ import {
   computeAuthPolicyVerdict,
   type PageAccessResolution,
 } from "../apps/runtime/src/api/auth-policy.ts";
-import type { AuthPrincipal } from "../apps/runtime/src/services/auth.ts";
+import type {
+  AgentAuthPrincipal,
+  AuthPrincipal,
+  HumanAuthPrincipal,
+} from "../apps/runtime/src/services/auth.ts";
 
 function principalOf(input: {
-  authMethod: AuthPrincipal["authMethod"];
-  role: AuthPrincipal["user"]["role"];
+  authMethod: HumanAuthPrincipal["authMethod"];
+  role: HumanAuthPrincipal["user"]["role"];
   assignedPageIds?: number[];
-}): AuthPrincipal {
+}): HumanAuthPrincipal {
   return {
     authMethod: input.authMethod,
     user: {
@@ -31,10 +35,27 @@ function principalOf(input: {
 const ownerSession = principalOf({ authMethod: "session", role: "owner" });
 const leadSession = principalOf({ authMethod: "session", role: "team_lead" });
 const chatterKey = principalOf({ authMethod: "api_key", role: "chatter" });
-const chatterDevice: AuthPrincipal = {
+const chatterDevice: HumanAuthPrincipal = {
   ...principalOf({ authMethod: "device_token", role: "chatter" }),
   deviceTokenId: 7,
 };
+
+const agentKeyPrincipal: AgentAuthPrincipal = {
+  kind: "agent",
+  authMethod: "agent_key",
+  agentKeyId: 9,
+  keyName: "reader",
+  capabilities: ["read:messages"],
+  pageIds: [11],
+};
+
+/** Every human principal shape the kernel had before the agent plane existed. */
+const humanPrincipals: ReadonlyArray<readonly [string, AuthPrincipal]> = [
+  ["owner session", ownerSession],
+  ["lead session", leadSession],
+  ["chatter api key", chatterKey],
+  ["chatter device token", chatterDevice],
+];
 
 function evaluate(input: {
   auth: RouteAuthPolicy;
@@ -88,7 +109,7 @@ describe("computeAuthPolicyVerdict", () => {
   });
 
   it("denies unauthenticated requests on principal kinds with 401", async () => {
-    for (const kind of ["session", "owner-session", "apiKey", "device-token", "any"] as const) {
+    for (const kind of ["session", "owner-session", "apiKey", "device-token", "agentKey", "any"] as const) {
       await expect(evaluate({ auth: { kind }, principal: null })).resolves.toEqual({
         allow: false,
         statusCode: 401,
@@ -136,6 +157,87 @@ describe("computeAuthPolicyVerdict", () => {
       .resolves.toEqual({ allow: true });
     await expect(evaluate({ auth: { kind: "any" }, principal: chatterKey }))
       .resolves.toEqual({ allow: true });
+  });
+
+  // --- Agent Read Plane isolation (agent-read slice 0b) ---
+
+  it("regression: every pre-agent principal still passes kind any", async () => {
+    // "any" became an allowlist rather than a wildcard; the 26 routes that
+    // declare it must keep serving sessions, api keys and device tokens.
+    for (const [name, principal] of humanPrincipals) {
+      await expect(evaluate({ auth: { kind: "any" }, principal }), name)
+        .resolves.toEqual({ allow: true });
+    }
+  });
+
+  it("admits an agent key on kind agentKey and nothing else", async () => {
+    await expect(evaluate({ auth: { kind: "agentKey" }, principal: agentKeyPrincipal }))
+      .resolves.toEqual({ allow: true });
+
+    const humanOnlyKinds = [
+      "monitoring",
+      "session",
+      "any-session",
+      "owner-session",
+      "apiKey",
+      "device-token",
+      "any",
+    ] as const;
+    for (const kind of humanOnlyKinds) {
+      await expect(evaluate({ auth: { kind }, principal: agentKeyPrincipal }), kind)
+        .resolves.toMatchObject({ allow: false, statusCode: 403 });
+    }
+  });
+
+  it("refuses every human principal on kind agentKey", async () => {
+    for (const [name, principal] of humanPrincipals) {
+      await expect(evaluate({ auth: { kind: "agentKey" }, principal }), name)
+        .resolves.toEqual({ allow: false, statusCode: 403, reason: "agent_key_required" });
+    }
+  });
+
+  it("never satisfies a declared human role with an agent key", async () => {
+    await expect(evaluate({
+      auth: { kind: "agentKey", roles: ["owner"] },
+      principal: agentKeyPrincipal,
+    })).resolves.toEqual({ allow: false, statusCode: 403, reason: "role_not_allowed" });
+  });
+
+  it("answers denied and not-found identically for an agent key (existence oracle)", async () => {
+    const auth: RouteAuthPolicy = { kind: "agentKey", scope: "page" };
+    const denied = await evaluate({
+      auth,
+      principal: agentKeyPrincipal,
+      pageAccess: "denied",
+      pageLabelParam: "lana",
+    });
+    const notFound = await evaluate({
+      auth,
+      principal: agentKeyPrincipal,
+      pageAccess: "not-found",
+      pageLabelParam: "lana",
+    });
+
+    // Byte-identical: an agent key must not learn from the verdict whether a
+    // page it cannot read exists at all (spec §5.6).
+    expect(denied).toEqual({ allow: false, statusCode: 404, reason: "page_not_found" });
+    expect(JSON.stringify(denied)).toBe(JSON.stringify(notFound));
+
+    // A granted page still passes.
+    await expect(evaluate({
+      auth,
+      principal: agentKeyPrincipal,
+      pageAccess: "ok",
+      pageLabelParam: "lana",
+    })).resolves.toEqual({ allow: true });
+  });
+
+  it("keeps the 403/404 distinction for human principals", async () => {
+    const auth: RouteAuthPolicy = { kind: "any", scope: "page" };
+    await expect(evaluate({ auth, principal: chatterKey, pageAccess: "denied", pageLabelParam: "lana" }))
+      .resolves.toEqual({ allow: false, statusCode: 403, reason: "page_access_denied" });
+    await expect(evaluate({ auth, principal: chatterKey, pageAccess: "not-found", pageLabelParam: "gone" }))
+      .resolves.toEqual({ allow: false, statusCode: 404, reason: "page_not_found" });
   });
 
   it("honors the monitoring token before any principal, then falls back to a dashboard session", async () => {

@@ -22,7 +22,8 @@ const KIND_DESCRIPTIONS: Record<RouteAuthPolicy["kind"], string> = {
   "apiKey": "bearer API key or device token",
   "device-token": "device-token bearer only",
   "pending-device-token": "short-lived pending device-token bearer, activation route only",
-  "any": "any authenticated principal",
+  "agentKey": "Agent Read Plane key only; no human principal is admitted",
+  "any": "any authenticated principal except an agent key",
 };
 
 export function renderAuthorizationPolicyMarkdown(rows: readonly AuthorizationPolicyRow[]): string {

@@ -19,7 +19,7 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import type { AuthPrincipal } from "../apps/runtime/src/services/auth.ts";
+import type { HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
 import {
   VOICE_AUDIO_MAX_BYTES,
   type VoiceTtsProvider,
@@ -116,7 +116,7 @@ beforeEach(async (context) => {
 
 interface Provisioned {
   page: { id: number; label: string };
-  principal: AuthPrincipal;
+  principal: HumanAuthPrincipal;
   sourceRef: string;
   body: (overrides?: Partial<CreateVoiceNoteBody>) => CreateVoiceNoteBody;
 }
@@ -184,7 +184,7 @@ async function provision(opts?: {
     },
   });
 
-  const principal: AuthPrincipal = {
+  const principal: HumanAuthPrincipal = {
     authMethod: "device_token",
     user: {
       id: user.id,

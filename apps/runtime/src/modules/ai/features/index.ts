@@ -20,7 +20,7 @@ import {
   type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
-import { canAccessPage, type AuthPrincipal } from "../../../services/auth.ts";
+import { canAccessPage, type HumanAuthPrincipal } from "../../../services/auth.ts";
 import {
   BadRequestError,
   NotFoundError,
@@ -160,7 +160,7 @@ const SHORT_SUMMARY_MESSAGE_COUNT = 300;
 
 export async function prepareAiFeatureStream(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   featureKey: string,
   body: AiFeatureRequestBody,
   options?: { debugPromptEcho?: boolean },

@@ -29,7 +29,7 @@ import { SPENDER_AUTO_LIST_BUCKETS, UTC_TIME_ZONE, millsToNumber, toBusinessDate
 
 import { auditCtx } from "../../api/request-auth.ts";
 import type { AppContext } from "../../bootstrap.ts";
-import { type AuthPrincipal, recordAudit } from "../../services/auth.ts";
+import { recordAudit, type HumanAuthPrincipal } from "../../services/auth.ts";
 import { resolveAccessibleWorkboardPage } from "./page-access.ts";
 import { resolveClosingSettings } from "./ai-settings.ts";
 import { isClosingMessage } from "./closing.ts";
@@ -132,7 +132,7 @@ function mapItem(row: WorkboardV2Row): WorkboardV2Item {
 
 export async function getWorkboardV2Report(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   query: WorkboardV2Query,
 ): Promise<WorkboardV2Response> {
@@ -188,7 +188,7 @@ const LISTS_ITEM_CAP = 500;
  */
 export async function getWorkboardV2Lists(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
 ): Promise<WorkboardV2ListsResponse> {
   const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
@@ -276,7 +276,7 @@ async function computeOldMassBudget(
 
 export async function recordWorkboardContactV2(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   body: WorkboardV2ContactBody,
 ): Promise<{ ok: true; fanId: number }> {
@@ -302,7 +302,7 @@ export async function recordWorkboardContactV2(
 
 export async function snoozeWorkboardV2(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   body: { fanId: number; days: number },
 ): Promise<{ ok: true; fanId: number; snoozedUntil: string | null }> {
@@ -314,7 +314,7 @@ export async function snoozeWorkboardV2(
 
 export async function unsnoozeWorkboardV2(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   fanId: number,
 ): Promise<{ ok: true; fanId: number }> {
@@ -326,7 +326,7 @@ export async function unsnoozeWorkboardV2(
 
 export async function undoWorkboardContactV2(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   fanId: number,
 ): Promise<{ ok: true; fanId: number }> {
@@ -359,7 +359,7 @@ const CLAIM_MAX_TTL_MINUTES = 240;
  */
 export async function claimWorkboardV2Fan(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   body: { fanId: number; ttlMinutes?: number },
 ): Promise<{ ok: true; fanId: number; expiresAt: string }> {
@@ -384,7 +384,7 @@ export async function claimWorkboardV2Fan(
 
 export async function unclaimWorkboardV2Fan(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   fanId: number,
 ): Promise<{ ok: true; fanId: number }> {
@@ -403,7 +403,7 @@ export async function unclaimWorkboardV2Fan(
 
 export async function triggerWorkboardV2Recompute(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
 ): Promise<{ ok: true; evaluated: number }> {
   const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
