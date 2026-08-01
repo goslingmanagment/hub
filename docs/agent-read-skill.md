@@ -27,10 +27,15 @@ the presence of a guarantee.
 
 What you have instead, and what you must read every time, is:
 
-- `capture.captureFloor`: when this system's record of the scope begins. It is a
-  lower bound on what is held, never a statement about what existed.
 - `capture.planes[]`: which stores were actually consulted, and the reason for
-  each that was not.
+  each that was not. **The capture floor lives HERE, one per store**: a plane
+  with `state: "read"` carries `captureFloor`, and that is when THAT store's
+  record of the scope begins. There is no `capture.captureFloor` at the top of
+  the envelope, and asking for one gets you `undefined` at the exact moment you
+  are deciding whether something is absent. A floor is a fact about one store,
+  so the response never claims one for itself.
+- `capture.gaps[]` and `capture.sourceErrors[]`: named holes, and sources that
+  failed during this read.
 - `delivery.caveats[]` and `delivery.snapshotExhausted`: whether the traversal was
   stable and whether it really finished.
 
@@ -57,17 +62,53 @@ you asked for, and from nothing else. The same request with and without result
 filters produces a byte identical `capture`. Inside it:
 
 - `planes[]`: every store that could bear on your question, each marked `read`,
-  `not_read`, `not_indexed` or `not_applicable`, with a reason when it was not
-  read. A plane that was not read cannot support any conclusion.
-- `captureFloor`: when this store's record of the scope BEGINS. Read it as a lower
-  bound: "the archive for this thread starts here". It is NOT a statement that
-  nothing existed earlier. Nothing in this system can say that.
+  `not_read`, `not_indexed` or `not_applicable`. A plane that was `read` carries
+  `captureFloor` and nothing else; a plane that was not carries `reason` and no
+  floor, because a floor on a store nobody opened would be a fabricated floor.
+  A plane that was not read cannot support any conclusion.
+- `planes[].captureFloor`: when THAT store's record of the scope BEGINS, as
+  `{ at, kind }`. Read it as a lower bound: "the archive for this thread starts
+  here". It is NOT a statement that nothing existed earlier; nothing in this
+  system can say that. `kind: "unknown"` (and `at: null`, which means the same
+  thing) means no honest floor could be computed without a scan nobody paid for,
+  so treat the answer as unbounded below.
 - `gaps[]`: named holes. The one you will meet most is
   `before_capture_floor`, which means your window starts earlier than the record
   does.
 - `sourceErrors[]`: a source that failed during this read. Any entry here means
   the answer is provisional.
 - `scopeNarrowing`: your key was granted fewer pages than the question spanned.
+
+The shape, abridged (the real `planes` array carries EVERY plane exactly once,
+which is why it is long; nothing may be silently missing from it):
+
+```json
+{
+  "capture": {
+    "planes": [
+      { "plane": "message_archive", "state": "read",
+        "captureFloor": { "at": "2026-02-21T09:14:03Z", "kind": "oldest_stored_row" } },
+      { "plane": "transactions", "state": "not_read",
+        "reason": "capability_not_granted" },
+      { "plane": "dm_message_archive", "state": "not_indexed",
+        "reason": "not_indexed_for_text_search" }
+    ],
+    "observedRowFloor": "2026-02-21T09:14:03Z",
+    "gaps": [],
+    "sourceErrors": [],
+    "scopeNarrowing": { "keyGrantExcludedPages": 0, "totalPagesForQuery": 3 },
+    "scopeFieldStates": {}
+  },
+  "conclusion": { "blockers": ["claim_not_declared"] }
+}
+```
+
+Two traps in that shape. `observedRowFloor` is the minimum occurred-at of the
+ROWS THIS RESPONSE RETURNED: a diagnostic, not a capture floor, and calling it
+one is exactly the mistake this page exists to prevent. And the per-thread
+inventory (`hub threads`) additionally carries a `captureFloor` on every ITEM:
+that one is the floor for that single conversation, which is usually the number
+you want to quote when you report an absence for one fan.
 
 **`fieldStates`** is about ONE FIELD on ONE RECORD, plus `capture.scopeFieldStates`
 for the scope as a whole, computed before any row is fetched. A field can be
@@ -78,6 +119,13 @@ observed, unobservable on this platform, or not captured. A null that is
 
 Read the blocker, then act on it instead of retrying blindly.
 
+- `claim_not_declared`: you declared no `--claim-field`, so nothing checked
+  whether the fields your conclusion rests on are observable at all. This is the
+  one you will see most, on every call that skips the claim. It does not
+  invalidate the rows you got; it means the answer carries no observability
+  verdict. Re run with a claim before resting a conclusion on it.
+- `gaps_present`: `capture.gaps[]` is not empty. Read them; each names a hole and
+  the remedy, if any, for that hole.
 - `window_before_capture_floor`: you asked about a period earlier than the
   record. Either narrow your claim to the covered period and say so, or ask for
   hydration (below).
@@ -120,12 +168,35 @@ reachable. A kind of `none` with reason `no_remedy_exists` or
 `discarded_at_capture` means it is not recoverable at all, and no amount of asking
 will change that. Say so plainly instead of retrying.
 
-**Filing a request from this CLI is NOT available yet.** The request operations
-and the `request:hydration` capability arrive with the hydration slice; there is
-no `hub` command for them today, and calling the route would 404. Until then, do
-the useful half yourself: report the specific gap you found (page, thread,
-conversation ref, window, and the `remedy` the response carried) and hand it to
-the owner, who can run the backfill directly. That report IS the request.
+**The request operations exist; this CLI has no command for them.** The API
+serves two of them and the `request:hydration` capability is real:
+
+- `POST /api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests`
+  files one. Body: a `target` of kind `thread_backfill_before` with EXACTLY one
+  of `beforeAt` / `beforeMessageRef` (a boundary, not a window: "everything in
+  this thread older than X"), a `reason`, an optional `maxCalls`, and a UUID
+  `idempotencyKey`. It answers **200, not 202**: it records an intent and queues
+  nothing. Only an owner decision can spend a vendor call.
+- `GET /api/v1/agent/hydration-requests/:requestRef` polls the one you filed.
+
+What each refusal means, so you do not retry the wrong thing:
+
+- **503 `agent_plane_disabled`**: `agentHydrationMode` is `off` (or the whole
+  plane is). Not your key, not your request: the deployment has not opened this
+  door yet. Do not retry; report it.
+- **404**: the same static body as a request that never existed. Your key does
+  not hold the page, or did not file that request.
+- **409 `hydration_not_admissible`**: the plane already told you there is no
+  lane for this gap. Check the `remedy` you were given.
+- **403 `agent_capability_missing`**: your key lacks `request:hydration`. Note
+  that this is the one refusal on the plane that names a missing CAPABILITY; a
+  page you were not granted, or a request that is not yours, is always the
+  indistinguishable 404 above.
+
+Since `hub` has no command for it, from this CLI the useful half is still yours
+to do by hand: report the specific gap (page, thread, conversation ref, window,
+and the `remedy` the response carried) and hand it to the owner, who can run the
+backfill directly. That report IS the request.
 
 ## The CLI
 
@@ -169,16 +240,27 @@ created.
 Output is exactly one JSON document on stdout, every time, success or failure:
 
 ```json
-{ "ok": true, "operation": "agentThreads", "exitCode": 0, "blockers": [], "data": { } }
+{ "ok": true, "operation": "agentThreads", "exitCode": 0,
+  "blockers": ["claim_not_declared"], "data": { } }
 ```
 
-Exit codes:
+`blockers` is lifted out of the body on purpose: it is the exit code contract,
+and an agent that reads nothing else must still see it. Note that this example
+is an ordinary successful call, and `exitCode: 0` next to a non empty `blockers`
+is the normal case, not an anomaly.
 
-- `0`: an answer came back with no known narrowing. Read the capture floor
-  anyway: `0` is not a completeness verdict, only the absence of a fired blocker.
-- `3`: an answer came back with a non empty `blockers`, and you passed
-  `--fail-on-partial`. Use this flag in scripts that must not treat a narrowed
-  answer as a full one.
+Exit codes. **`0` means the call succeeded, NOT that the answer is complete**:
+
+- `0`: an answer came back. That is all it says. Without `--fail-on-partial` the
+  CLI exits `0` even when `blockers` is NON EMPTY, and it is normally non empty
+  because `claim_not_declared` fires on every call that declares no claim, so a bare
+  `hub threads` exits 0 carrying a blocker. Completeness is read from the
+  document, never from the exit code: `blockers`, `capture.planes[].captureFloor`,
+  `capture.gaps[]` and `delivery.caveats[]`.
+- `3`: an answer came back with a non empty `blockers` AND you passed
+  `--fail-on-partial`. That flag is what turns a narrowed answer into a non zero
+  exit; without it the same answer is a `0`. Use it in anything automated that
+  must not treat a narrowed answer as a full one.
 - `4`: no answer. Hub error, refusal, timeout, or a flag this CLI could not use.
   The document carries bounded error metadata: operation, status, code and a short
   message. It deliberately does NOT carry the response body, because a body that
@@ -206,7 +288,18 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 
 Two operations are deliberately absent: observation PAYLOADS and hydration
 DECISIONS are owner only. Your key cannot reach them, and a command for them would
-only produce a confident 401.
+only produce a confident 401. Filing and polling a hydration request are not
+absent by design: they exist on the API (above) and simply have no `hub`
+command yet.
+
+Every window is `[from, to)` and BOTH bounds are required: `timeline`,
+`transcript`, `coverage`, `observations`, `dataset` and `search` all refuse with
+a 400 when one is missing, because no operation here substitutes a silent
+default, and "asked about January, got last quarter, got nothing" is the original
+incident. The single exception is `threads`, which takes no window at all. The
+one case where you send neither bound is a `--cursor`, which carries the window
+it was minted with; resending any scope flag next to a cursor is a 400.
+Timestamps are RFC 3339 with an explicit offset (`2026-01-01T00:00:00Z`).
 
 ### Working shapes
 
@@ -226,31 +319,38 @@ Ask the capture question before the data question, when the answer will hinge on
 a date range:
 
 ```
-hub coverage --person-platform fansly --person-user 5791 \
+hub coverage --person-platform fansly --person-user 438766025723355136 \
   --from 2026-01-01T00:00:00Z --to 2026-02-01T00:00:00Z --pretty
 ```
 
 Read a thread, deleted messages included (that is the default, because a deleted
-message is a fact of the investigation):
+message is a fact of the investigation). Both window bounds are required:
 
 ```
 hub transcript --page-label lora-2 --conversation 810272281019305984 \
-  --from 2026-01-01T00:00:00Z --limit 200 --claim-field lifetimeSpendMills
+  --from 2026-01-01T00:00:00Z --to 2026-02-01T00:00:00Z \
+  --limit 200 --claim-field textPlain
 ```
 
 Continue a traversal. Send the cursor and NOTHING else: the cursor carries the
-window and the filters, and resending them is an error:
+window and the filters, and resending them is an error. The value is the opaque
+string from `delivery.nextCursor` of the previous response, copied verbatim:
 
 ```
-hub threads --cursor "<cursor from delivery.nextCursor>"
+hub threads --cursor c2NvcGU6bG9yYS0yOjgxMDI3MjI4MTAxOTMwNTk4NA
 ```
 
-Query a dataset. Filters are `field:op[:value]`; a JSON value is parsed as JSON,
-so `in` takes an array:
+Query a dataset. Field names are the dataset's OWN wire names (`hub
+capabilities` prints them per dataset; the transactions dataset has
+`transactionType` and `grossMills`, not `type` and `amountMills`, and a field
+outside the allowlist is a 400 before any SQL runs). Filters are
+`field:op[:value]`; a JSON value is parsed as JSON, so `in` takes an array:
 
 ```
 hub dataset --page-label lora-2 --dataset transactions \
-  --filter 'type:in:["tip","message"]' --filter amountMills:gte:1000 \
+  --from 2026-01-01T00:00:00Z --to 2026-02-01T00:00:00Z \
+  --filter 'transactionType:in:["tip","message_purchase"]' \
+  --filter grossMills:gte:1000 \
   --sort occurredAt:desc --limit 100
 ```
 
@@ -265,8 +365,11 @@ Search and dataset queries are rate limited more tightly than reads.
 
 1. Run `hub capabilities` first. Knowing your grant prevents most false negatives.
 2. Declare `--claim-field` for whatever your conclusion will rest on.
-3. Read `conclusion.blockers` before you read `data`.
-4. Quote `captureFloor` whenever you report an absence over a date range.
+3. Read `conclusion.blockers` before you read `data`, and never read the exit
+   code instead: `0` means the call worked, not that the answer is whole.
+4. Quote `capture.planes[].captureFloor` for the plane your answer rests on (or
+   the item's own `captureFloor`) whenever you report an absence over a date
+   range. There is no top level `capture.captureFloor` to quote.
 5. Use `--fail-on-partial` in anything automated.
 6. When a plane says `not_read`, say so in your answer rather than reasoning past
    it.
