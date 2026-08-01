@@ -13,13 +13,33 @@ that mistake is not available to you.
 
 **An empty result is not an answer. `conclusion.blockers` is the answer.**
 
-Every response carries `conclusion.blockers`, a list of every reason this answer
-is narrower than the question you asked. When it is empty, you read everything the
-question covered. When it is not empty, you did not, and each entry names why.
+Every response carries `conclusion.blockers`: every reason, KNOWN TO THIS SYSTEM,
+why this answer is narrower than the question you asked. A non empty list means
+you did not read what you asked about, and each entry names why.
 
-Report what you found AND what the blockers said. "No transactions in the window"
-is a claim about the world. "No transactions in the window, and the archive for
-this thread begins 2026-07-05, so January was never checked" is the truth.
+**An empty list is weaker than it looks, and this is the most important sentence
+on this page.** It means no known narrowing condition was detected. It does NOT
+mean the coverage was complete. This system runs no verified gap sweep and holds
+no completeness proof for any store: that machinery was designed, found to be
+unreachable on every real route, and REMOVED rather than left as a field that is
+structurally always false. So "no blockers" is the absence of a known problem, not
+the presence of a guarantee.
+
+What you have instead, and what you must read every time, is:
+
+- `capture.captureFloor`: when this system's record of the scope begins. It is a
+  lower bound on what is held, never a statement about what existed.
+- `capture.planes[]`: which stores were actually consulted, and the reason for
+  each that was not.
+- `delivery.caveats[]` and `delivery.snapshotExhausted`: whether the traversal was
+  stable and whether it really finished.
+
+Report what you found AND what those said. "No transactions in the window" is a
+claim about the world that nothing here can support. "No transactions found in the
+window, and the archive for this thread begins 2026-07-05, so January was never
+covered" is the truth. When the window sits fully inside the covered range and no
+blocker fired, the honest phrasing is still "this system holds no matching
+records", not "there were none".
 
 ## Three axes, read them separately
 
@@ -91,18 +111,21 @@ rows could ever have answered you.
 ## Asking for more data (hydration)
 
 When the record does not reach far enough back, the remedy is hydration: the hub
-goes and fetches more from the platform. You cannot execute that yourself. You
-file a request, the owner approves or denies it, and the hub executes.
+goes and fetches more from the platform. You never execute that yourself; it is an
+owner decision either way.
 
-The response tells you when this is possible: look for a `remedy` of kind
-`local_replay` or a hydration remedy on the relevant plane. A remedy of kind
-`none` with reason `no_remedy_exists` or `discarded_at_capture` means the data is
-not recoverable and no amount of asking will change that. Say so plainly instead
-of retrying.
+The response tells you when it is even possible. Look at the `remedy` on the
+relevant plane: a kind of `local_replay` or a hydration kind means more data is
+reachable. A kind of `none` with reason `no_remedy_exists` or
+`discarded_at_capture` means it is not recoverable at all, and no amount of asking
+will change that. Say so plainly instead of retrying.
 
-Filing a request needs the `request:hydration` capability on your key. If your key
-does not have it, ask the owner for a key that does, or hand the owner the
-specific gap you found (page, thread, window) and let them run it.
+**Filing a request from this CLI is NOT available yet.** The request operations
+and the `request:hydration` capability arrive with the hydration slice; there is
+no `hub` command for them today, and calling the route would 404. Until then, do
+the useful half yourself: report the specific gap you found (page, thread,
+conversation ref, window, and the `remedy` the response carried) and hand it to
+the owner, who can run the backfill directly. That report IS the request.
 
 ## The CLI
 
@@ -110,23 +133,27 @@ specific gap you found (page, thread, window) and let them run it.
 hub <command> [flags]
 ```
 
-### Getting `hub` on your PATH
+### Running it
 
-The CLI is not published; it lives in the hub checkout and runs from source. Any
-one of these works, and all three behave identically from any directory:
+The CLI is not published; it lives in the hub checkout and runs from source. Two
+invocations work on a fresh clone with no extra setup, and both behave the same
+from any working directory:
 
 ```
-# 1. after `pnpm install` in the checkout, pnpm has linked the bin:
-<checkout>/node_modules/.bin/hub <command>
-
-# 2. put that on your PATH once:
-export PATH="<checkout>/node_modules/.bin:$PATH"
-
-# 3. or call the bin directly, no install step at all:
+# call the bin directly, from anywhere:
 node <checkout>/packages/hub-agent-cli/bin/hub.mjs <command>
+
+# or, from inside the checkout:
+pnpm hub <command>
 ```
 
-From inside the checkout, `pnpm hub <command>` is the same thing.
+For a bare `hub` on your PATH, link it once yourself. pnpm does not put a sibling
+workspace package's bin in the root `node_modules/.bin`, so nothing does this for
+you:
+
+```
+ln -s <checkout>/packages/hub-agent-cli/bin/hub.mjs ~/.local/bin/hub
+```
 
 ### Configuration
 
@@ -147,12 +174,16 @@ Output is exactly one JSON document on stdout, every time, success or failure:
 
 Exit codes:
 
-- `0`: an answer came back.
+- `0`: an answer came back with no known narrowing. Read the capture floor
+  anyway: `0` is not a completeness verdict, only the absence of a fired blocker.
 - `3`: an answer came back with a non empty `blockers`, and you passed
   `--fail-on-partial`. Use this flag in scripts that must not treat a narrowed
-  answer as a complete one.
+  answer as a full one.
 - `4`: no answer. Hub error, refusal, timeout, or a flag this CLI could not use.
-  The document carries the error.
+  The document carries bounded error metadata: operation, status, code and a short
+  message. It deliberately does NOT carry the response body, because a body that
+  failed contract validation is exactly the material the schema refused to show
+  you.
 
 Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 `hub` with no command, or `hub <command> --help`, prints the usage document

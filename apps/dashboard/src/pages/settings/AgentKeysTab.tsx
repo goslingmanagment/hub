@@ -39,6 +39,13 @@ export function AgentKeysTab() {
   const [issuedToken, setIssuedToken] = useState<{ token: string; name: string } | null>(null);
   const [revoking, setRevoking] = useState<AgentKeyItem | null>(null);
   const revoke = useRevokeAgentKey();
+  // OWNED BY THE TAB, NOT THE MODAL (review round 2). TanStack runs a per-call
+  // `mutate` callback only while the observer that issued it is mounted, so a
+  // modal that owned this mutation would DISCARD the token handoff if the owner
+  // dismissed it mid-flight: the server commits the key, nobody ever sees the
+  // only copy of its token, and re-issuing under the same name hits a 409. The
+  // tab outlives the modal, so the handoff cannot be dropped.
+  const create = useCreateAgentKey();
 
   if (isLoading && !keys) {
     return <div className="py-12 text-center text-sm text-text-muted">Loading agent keys...</div>;
@@ -154,6 +161,7 @@ export function AgentKeysTab() {
 
       {creating && (
         <CreateAgentKeyModal
+          create={create}
           onClose={() => setCreating(false)}
           onIssued={(token, name) => {
             setCreating(false);
@@ -185,14 +193,15 @@ export function AgentKeysTab() {
 }
 
 function CreateAgentKeyModal({
+  create,
   onClose,
   onIssued,
 }: {
+  create: ReturnType<typeof useCreateAgentKey>;
   onClose: () => void;
   onIssued: (token: string, name: string) => void;
 }) {
   const { data: pages } = useAdminPages();
-  const create = useCreateAgentKey();
   const [name, setName] = useState("");
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [pageLabels, setPageLabels] = useState<string[]>([]);
@@ -226,8 +235,17 @@ function CreateAgentKeyModal({
     && pageLabels.length > 0
     && !create.isPending;
 
+  // Belt to the parent-owned braces: while a key is being minted there is nothing
+  // useful to go back to, and every dismissal path (Cancel, Escape, backdrop)
+  // routes through here.
+  const closeUnlessPending = () => {
+    if (!create.isPending) {
+      onClose();
+    }
+  };
+
   return (
-    <ModalShell title="Issue agent key" onClose={onClose}>
+    <ModalShell title="Issue agent key" onClose={closeUnlessPending}>
       <form className="space-y-4" onSubmit={handleSubmit}>
         <Field label="Name">
           <input
@@ -310,8 +328,9 @@ function CreateAgentKeyModal({
         <div className="flex items-center justify-end gap-2">
           <button
             type="button"
-            onClick={onClose}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover"
+            onClick={closeUnlessPending}
+            disabled={create.isPending}
+            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
           >
             Cancel
           </button>

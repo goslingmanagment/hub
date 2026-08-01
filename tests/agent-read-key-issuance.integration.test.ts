@@ -1,18 +1,21 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   AGENT_KEY_MAX_LIFETIME_DAYS,
   createFanslyPage,
   createModel,
   findAgentKeyByDigest,
+  listAgentKeys,
   setConfigOverride,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { issueAgentKey, revokeAgentKeyById } from "../apps/runtime/src/services/agent-keys.ts";
+import type * as AuthModule from "../apps/runtime/src/services/auth.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
@@ -21,6 +24,37 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
+
+/**
+ * Failure injection for the two atomicity cases, aimed at the AUDIT write and
+ * nothing else.
+ *
+ * The obvious injection (an actor id with no row in `users`) does not work and
+ * quietly tests nothing: `agent_keys.created_by` is a foreign key into `users`
+ * too, so a bogus actor fails on the KEY insert and the audit is never reached.
+ * The first draft of these cases passed for exactly that wrong reason, which is
+ * why they now assert the injected message.
+ *
+ * So the seam is `recordAudit` itself, and only for `agent_key.*` events, so
+ * every other audit in this file (logins, user creation) stays real.
+ */
+const injection = vi.hoisted(() => ({ failAgentKeyAudit: false }));
+
+vi.mock("../apps/runtime/src/services/auth.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof AuthModule>();
+  return {
+    ...actual,
+    recordAudit: async (
+      app: Parameters<typeof actual.recordAudit>[0],
+      input: Parameters<typeof actual.recordAudit>[1],
+    ) => {
+      if (injection.failAgentKeyAudit && String(input.eventType).startsWith("agent_key.")) {
+        throw new Error("injected audit failure: audit_events insert refused");
+      }
+      return actual.recordAudit(app, input);
+    },
+  };
+});
 
 /**
  * Agent key issuance (slice B): the owner-session half of the plane.
@@ -98,6 +132,7 @@ describe("agent read plane: key issuance", () => {
   });
 
   afterEach(async () => {
+    injection.failAgentKeyAudit = false;
     await server?.close();
     server = null;
   });
@@ -318,6 +353,90 @@ describe("agent read plane: key issuance", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(after.statusCode).toBe(401);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("leaves NO key row behind when the audit write fails", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    // Real failure injection, not a stub: `audit_events.actor_user_id` is a
+    // foreign key into `users`, so an actor that does not exist makes the audit
+    // insert throw for real, inside the transaction, exactly where a production
+    // audit failure would.
+    injection.failAgentKeyAudit = true;
+    const failure = await issueAgentKey(
+      appContext,
+      {
+        name: "orphan-candidate",
+        capabilities: ["read:messages"],
+        pageLabels: ["lora-2"],
+        dailyRequestBudget: 5_000,
+        dailyRowBudget: 500_000,
+        expiresInDays: 90,
+      },
+      { source: "test", actorUserId: null },
+    ).then(() => null, (error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    // Falsifiability: this is the SANITISER's wording, reached only from the
+    // unexpected-error branch, so the case cannot pass because issuance died
+    // earlier (a missing page would also leave no row behind).
+    expect(message).toContain("agent key write failed");
+    // Same seam, second property: the driver's own message embeds the statement
+    // WITH its bound parameters, which for this table include the key digest, and
+    // the global boundary logs whatever it is handed
+    // (docs/error-handling.md:339-344).
+    expect(message).not.toContain("injected audit failure");
+    expect(message).not.toMatch(/insert into/i);
+
+    // The point of the whole transaction: an orphaned credential is WORSE than a
+    // failed issuance. A surviving row would be a live key whose only copy of the
+    // token nobody received, unauditable, and blocking its own name with a 409.
+    expect(await listAgentKeys(testDb.db)).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("does not half-revoke when the audit write fails, and the retry still audits", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/v1/agent/keys",
+      headers: { cookie },
+      payload: createBody(),
+    });
+    const { key } = created.json() as { key: { id: number } };
+
+    injection.failAgentKeyAudit = true;
+    await expect(revokeAgentKeyById(
+      appContext,
+      { id: key.id },
+      { source: "test", actorUserId: null },
+    )).rejects.toThrow(/injected audit failure/);
+    injection.failAgentKeyAudit = false;
+
+    // Without the transaction this is where it would end: revoked forever, and
+    // the retry would take the already-revoked branch and skip the audit, so no
+    // record of the revocation would ever exist.
+    const [row] = await listAgentKeys(testDb.db);
+    expect(row?.revokedAt).toBeNull();
+
+    const retry = await server.inject({
+      method: "POST",
+      url: `/api/v1/agent/keys/${key.id}/revoke`,
+      headers: { cookie },
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toMatchObject({ revoked: true });
+
+    const audits = await testDb.pool.query(
+      "select count(*)::int as count from audit_events where event_type = 'agent_key.revoked'",
+    );
+    expect(audits.rows[0]?.count).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("404s a revoke of a key that does not exist", async (context) => {

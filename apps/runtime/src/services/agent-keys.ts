@@ -13,7 +13,7 @@ import type { AgentKeyCreateBody, AgentKeyItem } from "@agency_hub_core/contract
 import { randomToken, sha256Hex } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { AGENT_KEY_TOKEN_PREFIX, recordAudit } from "./auth.ts";
+import { AGENT_KEY_TOKEN_PREFIX, recordAudit, withAuditTransaction } from "./auth.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 
 /**
@@ -83,11 +83,15 @@ async function resolvePageLabels(app: AppContext, rows: readonly AgentKeyRow[]) 
 }
 
 /**
- * Turns the repository's typed refusals into HTTP.
+ * Turns the repository's typed refusals into HTTP, and REPLACES everything else.
  *
- * The driver's own message embeds the statement AND its bound parameters — which
- * for this table include the key digest — which is why the repository strips it
- * and why this function never reaches for `error.message` of anything else.
+ * The two typed errors carry a rule and no statement, so they pass through. An
+ * untyped driver error does NOT: `DrizzleQueryError`'s message embeds the SQL
+ * together with its bound parameters, and for this table those parameters include
+ * the key digest. The global error boundary logs whatever it is handed, so an
+ * unexpected failure here would put a credential digest in the logs, which
+ * `docs/error-handling.md:339-344` forbids outright. The original is dropped
+ * rather than chained: `cause` is serialized by the logger too.
  */
 function rethrowAsHttp(error: unknown): never {
   if (error instanceof AgentKeyLifetimeError) {
@@ -99,7 +103,10 @@ function rethrowAsHttp(error: unknown): never {
     }
     throw new BadRequestError(error.message);
   }
-  throw error;
+  throw new Error(
+    "agent key write failed; driver detail suppressed because it embeds the bound "
+    + `parameters, including the key digest (${error instanceof Error ? error.name : typeof error})`,
+  );
 }
 
 export async function issueAgentKey(
@@ -125,42 +132,51 @@ export async function issueAgentKey(
   const keyPrefix = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody.slice(0, AGENT_KEY_DISPLAY_LENGTH)}`;
   const createdAt = new Date();
 
+  // THE ROW AND ITS AUDIT COMMIT TOGETHER (review round 2). An earlier revision
+  // wrote the key first and audited after, reasoning that a failed audit should
+  // not destroy a minted credential. That reasoning is backwards: the token
+  // reaches the owner only through THIS response, so a failure after the insert
+  // leaves a live key nobody holds, unauditable, and blocking its own name with a
+  // unique-constraint 409 on the retry. An orphaned credential is worse than a
+  // failed issuance, and only one of the two is recoverable.
   let row: AgentKeyRow;
   try {
-    row = await insertAgentKey(app.db, {
-      name: input.name,
-      keyPrefix,
-      keyDigest: sha256Hex(token),
-      capabilities: [...input.capabilities],
-      pageIds,
-      dailyRequestBudget: input.dailyRequestBudget,
-      dailyRowBudget: input.dailyRowBudget,
-      expiresAt: new Date(createdAt.getTime() + input.expiresInDays * DAY_MS),
-      createdBy: audit.actorUserId ?? null,
-      createdAt,
+    row = await withAuditTransaction(app, async (dbTx) => {
+      const created = await insertAgentKey(dbTx, {
+        name: input.name,
+        keyPrefix,
+        keyDigest: sha256Hex(token),
+        capabilities: [...input.capabilities],
+        pageIds,
+        dailyRequestBudget: input.dailyRequestBudget,
+        dailyRowBudget: input.dailyRowBudget,
+        expiresAt: new Date(createdAt.getTime() + input.expiresInDays * DAY_MS),
+        createdBy: audit.actorUserId ?? null,
+        createdAt,
+      });
+
+      // The prefix, not the token: the audit trail is not a second copy of the
+      // secret.
+      await recordAudit({ db: dbTx }, {
+        ...audit,
+        eventType: "agent_key.issued",
+        metadata: {
+          agentKeyId: created.id,
+          name: created.name,
+          keyPrefix,
+          capabilities: created.capabilities,
+          pageLabels: input.pageLabels,
+          dailyRequestBudget: created.dailyRequestBudget,
+          dailyRowBudget: created.dailyRowBudget,
+          expiresAt: created.expiresAt.toISOString(),
+        },
+      });
+
+      return created;
     });
   } catch (error) {
     rethrowAsHttp(error);
   }
-
-  // Audit AFTER the insert rather than inside a transaction with it: the row is
-  // the credential, and a failed audit write must not roll back a key whose token
-  // has already been minted into the response. The prefix, not the token, is what
-  // is recorded — the audit trail is not a second copy of the secret.
-  await recordAudit(app, {
-    ...audit,
-    eventType: "agent_key.issued",
-    metadata: {
-      agentKeyId: row.id,
-      name: row.name,
-      keyPrefix,
-      capabilities: row.capabilities,
-      pageLabels: input.pageLabels,
-      dailyRequestBudget: row.dailyRequestBudget,
-      dailyRowBudget: row.dailyRowBudget,
-      expiresAt: row.expiresAt.toISOString(),
-    },
-  });
 
   return { token, key: agentKeyItem(row, labelById) };
 }
@@ -183,25 +199,33 @@ export async function revokeAgentKeyById(
 
   // Idempotent: a second call finds no un-revoked row, reports `revoked: false`
   // and leaves the ORIGINAL timestamp alone. Only a real transition is audited.
-  const revoked = await revokeAgentKey(app.db, { id: input.id });
-  if (!revoked) {
+  //
+  // Transactional for a reason specific to that idempotency: the audit row is
+  // written only on the TRANSITION, so a failure between the update and the audit
+  // would be unrecoverable rather than merely annoying. The retry would find an
+  // already-revoked row, take the no-transition branch, and skip the audit
+  // forever, leaving a revocation that no record explains.
+  return withAuditTransaction(app, async (dbTx) => {
+    const revoked = await revokeAgentKey(dbTx, { id: input.id });
+    if (!revoked) {
+      return {
+        id: existing.id,
+        revoked: false,
+        revokedAt: existing.revokedAt?.toISOString() ?? null,
+      };
+    }
+
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "agent_key.revoked",
+      metadata: { agentKeyId: existing.id, name: existing.name, keyPrefix: existing.keyPrefix },
+    });
+
+    const after = await getAgentKeyById(dbTx, input.id);
     return {
-      id: existing.id,
-      revoked: false,
-      revokedAt: existing.revokedAt?.toISOString() ?? null,
+      id: input.id,
+      revoked: true,
+      revokedAt: after?.revokedAt?.toISOString() ?? null,
     };
-  }
-
-  await recordAudit(app, {
-    ...audit,
-    eventType: "agent_key.revoked",
-    metadata: { agentKeyId: existing.id, name: existing.name, keyPrefix: existing.keyPrefix },
   });
-
-  const after = await getAgentKeyById(app.db, input.id);
-  return {
-    id: input.id,
-    revoked: true,
-    revokedAt: after?.revokedAt?.toISOString() ?? null,
-  };
 }

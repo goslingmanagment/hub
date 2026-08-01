@@ -6199,6 +6199,29 @@ never creates that file so it cannot fix the mode, and staying quiet about a
 world-readable bearer token is how it stays world-readable (the ssh private-key
 precedent, remedy included in the message).
 
+Round 2 added the atomicity the credential needed from the start. The key row and
+its audit commit in ONE transaction, and so do a revocation and its audit. The
+earlier order (write the key, audit after) was justified by "a failed audit must
+not destroy a minted credential", which is backwards: the token reaches the owner
+only through that one response, so a failure after the insert leaves a LIVE key
+nobody holds, unauditable, and blocking its own name with a unique-constraint 409
+on the retry. An orphaned credential is worse than a failed issuance, and only one
+of the two is recoverable. Revocation has the sharper version of the same problem:
+the audit row is written only on the TRANSITION, so a crash between the update and
+the audit would send the retry down the already-revoked branch and lose the record
+permanently. The dashboard carries the same law: the issuance mutation is owned by
+the tab rather than the modal, because a per-call `mutate` callback runs only
+while its observer is mounted, and a modal dismissed mid-flight would drop the
+sole token handoff for a key the server had already committed.
+
+Two smaller round-2 rules, both instances of a rule this repository already has.
+An unexpected driver error from the key insert is REPLACED, not chained: its
+message embeds the SQL with its bound parameters, which for this table include the
+digest, and the boundary logs what it is handed. And the CLI's error document
+carries bounded metadata only, never `KernelApiError.body`: on a 2xx that failed
+validation that body is the complete unvalidated payload, so printing it would
+hand a model exactly what the schema refused.
+
 Owner-session operations (9b payloads, #13 hydration decisions) are absent from
 this CLI on purpose: an agent key cannot reach them, so a command for them could
 only produce a confident 401.

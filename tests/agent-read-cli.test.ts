@@ -132,6 +132,58 @@ describe("hub CLI: exit codes", () => {
     expect(result.document.error).toMatchObject({ status: 404, code: "not_found" });
   });
 
+  it("prints bounded error METADATA and never the rejected payload", async () => {
+    // `KernelApiError.body` on a 2xx that failed contract validation is the
+    // COMPLETE UNVALIDATED payload; on a non-2xx it is whatever arrived. Printing
+    // it would hand the agent exactly what the schema refused, which is how a
+    // signed CDN URL reaches a model. SDK validation is the boundary of what this
+    // plane shows, and a diagnostic channel around the boundary is not a
+    // diagnostic channel, it is a second unvalidated read path.
+    const leaked = "https://cdn.example/secret.mp4?Policy=LEAKED-SIGNED-URL";
+    const result = await run(["threads"], {
+      response: new KernelApiError(
+        "GET /api/v1/agent/threads response failed contract validation",
+        "contract",
+        200,
+        "response_validation_failed",
+        { items: [{ mediaUrl: leaked }] },
+      ),
+    });
+    expect(result.exitCode).toBe(HUB_EXIT_ERROR);
+    expect(JSON.stringify(result.document)).not.toContain(leaked);
+    expect(JSON.stringify(result.document)).not.toContain("mediaUrl");
+    const error = result.document.error as Record<string, unknown>;
+    expect(error).not.toHaveProperty("body");
+    // Still enough to act on.
+    expect(error).toMatchObject({
+      category: "contract",
+      status: 200,
+      code: "response_validation_failed",
+    });
+  });
+
+  it("bounds the error message so a payload cannot ride out inside it", async () => {
+    const enormous = `x${"LEAK".repeat(5_000)}`;
+    const result = await run(["threads"], {
+      response: new KernelApiError(enormous, "server", 500, "boom", null),
+    });
+    const message = String((result.document.error as { message: string }).message);
+    expect(message.length).toBeLessThan(600);
+    expect(message.endsWith("... (truncated)")).toBe(true);
+  });
+
+  it("refuses a stray positional instead of silently widening the query", async () => {
+    // `hub threads lora-2` used to run over EVERY granted page and exit 0: a
+    // scope typo turning into a broader answer, which is the false-completeness
+    // family this plane exists to prevent, reproduced in the CLI.
+    const calls: Array<{ method: string; input: unknown }> = [];
+    const result = await run(["threads", "lora-2"], { calls });
+    expect(result.exitCode).toBe(HUB_EXIT_ERROR);
+    expect(calls).toEqual([]);
+    expect(String((result.document.error as { message: string }).message))
+      .toContain('unexpected argument "lora-2"');
+  });
+
   it("exits 4 on an unknown command, an unknown flag, and a missing required flag", async () => {
     for (const argv of [
       ["nonsense"],

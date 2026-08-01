@@ -127,6 +127,32 @@ function blockersOf(data: unknown): string[] {
   return Array.isArray(blockers) ? blockers.filter((item) => typeof item === "string") : [];
 }
 
+/** Error text is metadata, so it is bounded. A driver or a hub can put an
+ *  arbitrary amount of prose in a message; the CLI's job is to name the failure,
+ *  not to relay a payload. */
+const HUB_ERROR_MESSAGE_MAX = 500;
+
+function boundedMessage(text: string): string {
+  return text.length <= HUB_ERROR_MESSAGE_MAX
+    ? text
+    : `${text.slice(0, HUB_ERROR_MESSAGE_MAX)}... (truncated)`;
+}
+
+/**
+ * Failure metadata, and DELIBERATELY NOT THE RESPONSE BODY (review round 2).
+ *
+ * `KernelApiError.body` on a 2xx that failed contract validation is the COMPLETE
+ * UNVALIDATED payload, and on a non-2xx it is whatever arrived. Printing it would
+ * hand the agent exactly what the schema refused, including fields the contract
+ * deliberately excludes (signed CDN URLs are the standing example). SDK
+ * validation is the boundary of what this plane will show a model, and a
+ * diagnostic channel that routes around the boundary is not a diagnostic channel,
+ * it is a second, unvalidated read path.
+ *
+ * What survives is enough to act on: which operation, which status, which code,
+ * and a bounded message. The message on a validation failure is the SDK's issue
+ * list, which names paths and expected types and carries no values.
+ */
 function errorDocument(operation: string, error: unknown): Record<string, unknown> {
   if (error instanceof KernelApiError) {
     return {
@@ -137,8 +163,7 @@ function errorDocument(operation: string, error: unknown): Record<string, unknow
         category: error.category,
         status: error.status,
         code: error.code,
-        message: error.message,
-        body: error.body,
+        message: boundedMessage(error.message),
       },
     };
   }
@@ -150,7 +175,7 @@ function errorDocument(operation: string, error: unknown): Record<string, unknow
       category: "cli",
       status: null,
       code: "unexpected",
-      message: error instanceof Error ? error.message : String(error),
+      message: boundedMessage(error instanceof Error ? error.message : String(error)),
     },
   };
 }
@@ -215,6 +240,17 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
       allowPositionals: true,
       strict: true,
     });
+    // EXACTLY the command word. `parseArgs` collects trailing positionals and
+    // says nothing about them, so `hub threads lora-2` used to run a query over
+    // every granted page and exit 0: a scope typo silently WIDENING the answer,
+    // which is the false-completeness family this whole plane exists to prevent.
+    if (parsed.positionals.length > 1) {
+      const stray = parsed.positionals.slice(1).map((value) => `"${value}"`).join(", ");
+      throw new Error(
+        `unexpected argument ${stray}: every input is a named flag, so a bare word `
+        + "would be silently ignored (see --help)",
+      );
+    }
     values = parsed.values as HubOptionValues;
     failOnPartial = parsed.values["fail-on-partial"] === true;
     const override = parsed.values["base-url"];

@@ -354,8 +354,12 @@ export async function recordAudit(app: Pick<AppContext, "db">, input: AuditConte
 
 /** Mutation + audit dual-write commit together (review R1-7). Mirrors the
  * sync-context idiom: a handle without a transaction API (unit-test fakes)
- * runs directly — the real Database always has one. */
-async function withAuditTransaction<T>(
+ * runs directly — the real Database always has one.
+ *
+ * Exported because every credential mutation needs it and re-implementing it per
+ * service is how one of them ends up without it (agent-read review round 2 found
+ * exactly that: an issued key committed before its audit row). */
+export async function withAuditTransaction<T>(
   app: Pick<AppContext, "db">,
   run: (db: AppContext["db"]) => Promise<T>,
 ): Promise<T> {
