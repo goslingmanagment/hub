@@ -129,13 +129,14 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
   });
 
-  it("covers exactly the thirty wired keys", () => {
+  it("covers exactly the thirty-two wired keys", () => {
     // W3.2 added ofapiQueuedCommandTtlMs (read live by the command sweep);
     // Decision #136 added the two fan-dossier keys (read per generation);
     // Decision #140 added the single time-bounded prompt-echo window;
     // the voice-notes lane added the seven ElevenLabs kill switches + budgets;
     // the Agent Read Plane added its five plane switches, the Fansly replay mode
-    // and the retention-tiering gate (read per request / per cycle).
-    expect(LIVE_CONFIG_KEYS.size).toBe(30);
+    // and the retention-tiering gate (read per request / per cycle);
+    // decision #202 added the hydration autopilot mode and its daily budget.
+    expect(LIVE_CONFIG_KEYS.size).toBe(32);
   });
 });

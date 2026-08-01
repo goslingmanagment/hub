@@ -32,10 +32,12 @@ import {
   getConversationSyncHealth,
   getPageDmConversationById,
   getPageDmMessageRetentionLimit,
+  getSyncStreamsForPlatform,
   heartbeatPageSyncLease,
   isConversationSyncHealthExcluded,
   listPageSyncStates,
   PageSyncLeaseLostError,
+  pausePageSyncForAuth,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
   recordProjectionDebt,
   releaseTargetedPageSyncLease,
@@ -52,6 +54,7 @@ import { isFanslyDmMessageSyncExcluded } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { notifyAuthFailedIncident } from "../notification-incidents.ts";
 import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
 import { resolvePageContextById } from "../page-context.ts";
 import { resolveFanslyPlatformAccountId } from "../fansly.ts";
@@ -627,11 +630,44 @@ export async function runTargetedThreadBackfill(
         walkFailure = error;
         result.outcome = error instanceof PageSyncLeaseLostError ? "lease_lost" : "partial";
         if (isFanslyAuthError(error)) {
-          // Fail closed (BL-C1): unlike the executor this run does not park the
-          // page's streams or open the auth incident — it just stops, loudly.
+          // A dead session is dead for the WHOLE page, exactly as in the
+          // executor: park every stream so nothing else burns quota against
+          // it, and open the incident so the owner learns tonight, not at the
+          // next manual check. (Closed the former log-only gap; the hydration
+          // autopilot additionally refuses pages whose dm stream is auth-parked.)
+          const failedAt = new Date();
+          try {
+            await pausePageSyncForAuth(app.db, {
+              pageId: platformAccountId,
+              streams: getSyncStreamsForPlatform("fansly"),
+              blockerCode: "credentials_invalid",
+              blockerMessage: String((error as Error).message ?? "fansly auth failure").slice(0, 500),
+              now: failedAt,
+            });
+          } catch (pauseError) {
+            app.logger.warn(
+              { platformAccountId, err: pauseError },
+              "Targeted backfill could not pause the auth-dead page; streams stay unparked",
+            );
+          }
+          try {
+            await notifyAuthFailedIncident(app, {
+              platformAccountId,
+              pageLabel: pageContext.page.label,
+              platform: "fansly",
+              errorCode: error instanceof FanslyApiError ? String(error.status) : "auth",
+              errorSummary: String((error as Error).message ?? "fansly auth failure").slice(0, 200),
+              occurredAt: failedAt,
+            });
+          } catch (notifyError) {
+            app.logger.warn(
+              { platformAccountId, err: notifyError },
+              "Targeted backfill auth incident notification failed",
+            );
+          }
           app.logger.error(
             { err: error, threadId, platformAccountId, pageLabel: pageContext.page.label },
-            "Targeted thread backfill aborted on a Fansly auth failure; page streams NOT paused (BL-C1)",
+            "Targeted thread backfill aborted on a Fansly auth failure; page streams paused",
           );
         }
       }

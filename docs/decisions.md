@@ -203,6 +203,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 199 | One writer for the blockers | `concludeEnvelope` in `modules/agent-read/epistemics.ts` is the ONLY runtime site that names a blocker (pinned textually); plane reads are branded witnesses a handler cannot mint (barrel export pinned); ramp mode and cursor traversal enter through the signature — a consumed cursor takes `mutable_sort_key_traversal`, and an unfrozen population takes the `no_frozen_snapshot` caveat instead of an unearned `snapshotExhausted` |
 | 200 | Agent keys are issued, never recovered | An agent key is minted by the owner (dashboard or `POST /api/v1/agent/keys`), returns its raw token EXACTLY once and stores only `sha256(token)`; the closed capability matrix and the 365-day lifetime ceiling REFUSE a bad issuance (400) instead of narrowing it silently, the page grant is the labels that were named (no wildcard, later pages are not granted), and delivery to a model is `packages/hub-agent-cli` (`hub`): one command per agentKey operation, one JSON document per call, exit 0/3/4 with `--fail-on-partial`. The `exportPolicy` VALUE flip (spec 11 step C) is BLOCKED: both vendored clients still reject `agent_read_plane_v1` at runtime |
 | 201 | Help/Review prompts: Russian output, receipts required | `help-me` and `chat-review` templates rewritten: chatter-facing analysis pinned to Russian («ты»), fan-facing text pinned to the fan's language; fixed capped block structures (СИТУАЦИЯ/ЧТО УПУЩЕНО/СЛЕДУЮЩИЙ ХОД/РИСК; ВЕРДИКТ/ДЕНЬГИ/ПЕРСОНА/ОШИБКИ/ЧТО РАБОТАЕТ); every claim must quote a message fragment; rating bands anchored with a no-default-to-7-8 rule; both Help suggestions implement ONE recommended move; chat-review gains the shared paid-media glossary. XML wire format unchanged |
+| 202 | Hydration autopilot: delegated, budgeted approval | The owner may delegate to a VERSIONED in-kernel policy (`agentHydrationAutoApproveMode` off/shadow/enforce, default off) the authorization of one bounded Fansly `thread_backfill_before` attempt per request: ≤40 calls, mark-read always refused, inside `agentHydrationAutoDailyCallBudget` reserved calls per UTC day (default 0). Decisions carry `decision_source='auto_policy'` + `decision_policy_version` (0119) — never a fabricated owner id; over-budget/foreign-platform/over-cap requests stay `requested` for the owner. New platform, target kind or side effect requires a fresh numbered decision
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6292,3 +6293,53 @@ to the .md files (templates-sync), and prompt-manifest.json records the new
 hashes with this decision as the documenting note. No contract or schema
 change; the fleet picks this up on the next hub deploy with no extension
 release.
+
+**Decision #202 (2026-08-01, the hydration autopilot: a delegated, budgeted
+approval).** Until now every vendor-paid hydration attempt was authorized by an
+owner click (#13). The owner has now delegated exactly ONE act to an in-kernel
+policy: approving a single bounded Fansly `thread_backfill_before` attempt,
+within a daily reserved-call budget. The delegation is narrow on purpose, and
+each edge of it is enforced in the candidate query itself, not in prose:
+Fansly only (the OF lane's read marks a fan's thread read — #158 — and the
+policy may not consent to a side effect for the owner), `thread_backfill_before`
+only, ≤40 calls per request (one full targeted run), mark-read always `false`,
+the filing key still alive and still granted, no auth-parked page, one live
+approval per page, one auto-approval per conversation per UTC day.
+
+**Provenance is first-class.** Migration 0119 adds `decision_source`
+('owner' | 'auto_policy') and `decision_policy_version`; the journal gains the
+`auto_policy` actor. A policy decision leaves `decided_by_user_id` NULL — a
+fabricated owner id is exactly the confusion the actor model exists to prevent
+— and the audit row is attributed to the requesting agent key with
+`decisionSource`, `policyVersion`, `maxCalls` and `budgetDate` in its summary.
+The wire decision object now carries `decisionSource`/`policyVersion`, so an
+agent polling its request can tell a human judgement from a budgeted rule.
+
+**The budget is a reservation, counted at decision time.** The policy sums the
+`maxCalls` it approved since the UTC day start and refuses to reserve past
+`agentHydrationAutoDailyCallBudget`; an approval that later under-spends or
+fails does NOT return its reservation (v1, deliberate: simpler arithmetic, and
+the error is on the safe side). The adapter's own bounded retries are outside
+this number — it bounds what the owner authorized, not TCP weather. The
+arithmetic is race-free because the ONLY caller is the exclusive hydration
+cycle: one approver exists by construction, so no reservation table is needed
+until that stops being true.
+
+**The stop ladder is explicit.** `enforce -> shadow|off` stops new decisions
+AND parks not-yet-dispatched auto-approvals (the dispatcher re-checks
+`decision_source` against the live mode; parked rows expire by their own short
+TTL); `agentHydrationMode` leaving `dispatch` stops all new dispatch; a started
+Fansly run finishes its single bounded attempt — the same «one approval, one
+attempt» law as everywhere else. `shadow` decides nothing and logs what it
+WOULD approve, sized for the ritual: run shadow for a couple of days, read the
+would-approve volume, set the budget, then enforce.
+
+**Closed in the same change:** the targeted Fansly backfill now parks the whole
+page's streams and opens the auth incident on a 401/403, exactly like the
+executor (the former log-only branch is gone — an auth-dead page must not stay
+harvestable by the next approval); and the owner approval queue stopped
+claiming an exact exhausted snapshot when it hits its SQL limit (`cappedBy:
+"limit"`, inexact count — the honest half of backlog BL-C1 until a cursor
+lands). Widening the delegation — a new platform, a new target kind, any side
+effect — is not a config flip; it is a fresh numbered decision.
+

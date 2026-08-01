@@ -283,6 +283,14 @@ const envSchema = z.object({
   // off = hydration operations answer 503; request_only = requests can be filed and
   // decided but nothing executes; dispatch = the executor drains approvals.
   AGENT_HYDRATION_MODE: z.enum(["off", "request_only", "dispatch"]).default("off"),
+  // Decision #202: the in-kernel auto-approve policy for BOUNDED Fansly
+  // thread-deepening requests. off = policy dormant; shadow = log what WOULD be
+  // approved, decide nothing; enforce = decide, within the daily call budget.
+  AGENT_HYDRATION_AUTO_APPROVE_MODE: z.enum(["off", "shadow", "enforce"]).default("off"),
+  // Vendor calls the policy may RESERVE per UTC day (sum of approved maxCalls;
+  // the adapter's own retries are not counted here). 0 = the policy approves
+  // nothing even in enforce — the inert default.
+  AGENT_HYDRATION_AUTO_DAILY_CALL_BUDGET: z.coerce.number().int().min(0).default(0),
   // The value served in `exportPolicy`. Widening the wire literal to this enum is a
   // CODE deploy (clients validate successful responses against a vendored schema);
   // only the VALUE flip is config, and only after the fleet has re-vendored.
@@ -455,6 +463,10 @@ export interface AppConfig {
   agentSearchBackend?: "off" | "fts" | "fts_trgm";
   /** off = hydration 503; request_only = state only; dispatch = executor runs. */
   agentHydrationMode?: "off" | "request_only" | "dispatch";
+  /** Decision #202 autopilot: off | shadow (log only) | enforce (decides). */
+  agentHydrationAutoApproveMode?: "off" | "shadow" | "enforce";
+  /** Vendor calls the autopilot may reserve per UTC day; 0 = inert. */
+  agentHydrationAutoDailyCallBudget?: number;
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
   /** Fansly local replay of parse_version-0 observations: off | shadow | on. */
@@ -697,6 +709,8 @@ export function loadConfig(
     agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
     agentHydrationMode: parsed.AGENT_HYDRATION_MODE,
+    agentHydrationAutoApproveMode: parsed.AGENT_HYDRATION_AUTO_APPROVE_MODE,
+    agentHydrationAutoDailyCallBudget: parsed.AGENT_HYDRATION_AUTO_DAILY_CALL_BUDGET,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
     fanslyReplayMode: parsed.FANSLY_REPLAY_MODE,
     retentionTieringEnabled: parsed.RETENTION_TIERING_ENABLED,

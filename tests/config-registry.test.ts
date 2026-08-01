@@ -108,6 +108,8 @@ describe("config registry", () => {
     "agentObservationsEnabled",
     "agentSearchBackend",
     "agentHydrationMode",
+    "agentHydrationAutoApproveMode",
+    "agentHydrationAutoDailyCallBudget",
     "agentExportPolicyValue",
     "fanslyReplayMode",
     "retentionTieringEnabled",
@@ -142,7 +144,7 @@ describe("config registry", () => {
     "ofapiDmCorrectionsReconcileEnabled",
   ];
 
-  it("wires exactly the thirty live keys, the twenty-four boot keys, and nothing else", () => {
+  it("wires exactly the thirty-two live keys, the twenty-four boot keys, and nothing else", () => {
     const live = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "live").map((d) => d.key);
     const boot = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "boot").map((d) => d.key);
     const none = CONFIG_DESCRIPTORS.filter((d) => d.runtimeApply === "none").map((d) => d.key);

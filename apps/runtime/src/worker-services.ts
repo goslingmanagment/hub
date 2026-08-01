@@ -249,7 +249,12 @@ export async function startWorkerServices(
   // queue or to an ofapi capture job. It never calls a vendor itself.
   await boss.work(AGENT_HYDRATION_QUEUE, { batchSize: 1 }, async () => {
     const cycle = await runAgentHydrationCycle(app, boss);
-    if (cycle.dispatched > 0 || cycle.swept > 0 || cycle.expired > 0 || cycle.reconciled > 0) {
+    const autoActed = cycle.autoApprove !== null
+      && (cycle.autoApprove.considered > 0 || cycle.autoApprove.approved > 0);
+    if (
+      cycle.dispatched > 0 || cycle.swept > 0 || cycle.expired > 0 || cycle.reconciled > 0
+      || autoActed || cycle.autoHeld > 0
+    ) {
       app.logger.info(cycle, "Agent hydration cycle complete");
     }
   });

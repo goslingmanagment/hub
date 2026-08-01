@@ -52,6 +52,10 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import {
+  runAgentHydrationAutoApprove,
+  type AgentHydrationAutoApproveResult,
+} from "./agent-hydration-autopilot.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import {
@@ -171,6 +175,11 @@ export interface AgentHydrationCycleResult {
   reconciled: number;
   dispatched: number;
   refused: number;
+  /** Decision #202: what the auto-approve policy did this pass (null while off). */
+  autoApprove: AgentHydrationAutoApproveResult | null;
+  /** Auto-approved rows HELD back from dispatch because the policy mode left
+   *  `enforce` after they were approved — the kill-switch's middle rung. */
+  autoHeld: number;
 }
 
 /**
@@ -186,6 +195,7 @@ export async function runAgentHydrationCycle(
 ): Promise<AgentHydrationCycleResult> {
   const config = await loadEffectiveConfig(app.db, app.config);
   const mode = config.agentHydrationMode ?? "off";
+  const autoMode = config.agentHydrationAutoApproveMode ?? "off";
   const result: AgentHydrationCycleResult = {
     mode,
     expired: 0,
@@ -193,6 +203,8 @@ export async function runAgentHydrationCycle(
     reconciled: 0,
     dispatched: 0,
     refused: 0,
+    autoApprove: null,
+    autoHeld: 0,
   };
   if (mode === "off") {
     return result;
@@ -212,10 +224,25 @@ export async function runAgentHydrationCycle(
     return result;
   }
 
+  // Decision #202: the policy decides (or shadow-logs) BEFORE the dispatch scan
+  // of the same pass, so an enforced approval executes within one cycle. It
+  // runs only under `dispatch` — approving into a mode that cannot execute
+  // would arm authorizations for nobody.
+  if (autoMode !== "off") {
+    result.autoApprove = await runAgentHydrationAutoApprove(app, config);
+  }
+
   const candidates = await listDispatchableAgentHydrationRequests(app.db, {
     limit: DISPATCH_BATCH_LIMIT,
   });
   for (const request of candidates) {
+    // Kill-switch middle rung: leaving `enforce` also PARKS not-yet-started
+    // auto-approvals. They stay `approved` until their short TTL expires them,
+    // so re-entering `enforce` within the window resumes exactly where it stopped.
+    if (request.decisionSource === "auto_policy" && autoMode !== "enforce") {
+      result.autoHeld += 1;
+      continue;
+    }
     const dispatched = await dispatchAgentHydrationRequest(app, boss, request);
     if (dispatched) {
       result.dispatched += 1;

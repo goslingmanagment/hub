@@ -59,6 +59,13 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   observationKind: "identifier",
   platform: "identifier",
   planeMode: "identifier",
+  /** Decision #201: an auto-approved hydration names its author, the policy
+   *  version that authorized it, the calls it RESERVED and the UTC budget day
+   *  it drew them from — the four facts needed to audit a delegated spend. */
+  decisionSource: "identifier",
+  policyVersion: "count",
+  maxCalls: "count",
+  budgetDate: "instant",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

@@ -65,6 +65,9 @@ export interface AgentHydrationRequestRecord {
   expiresAt: Date | null;
   decidedAt: Date | null;
   decidedByUserId: number | null;
+  /** Decision #202: who authorized the spend — the owner, or the versioned policy. */
+  decisionSource: "owner" | "auto_policy" | null;
+  decisionPolicyVersion: number | null;
   decisionApproved: boolean | null;
   decisionAllowMarkRead: boolean | null;
   decisionMaxCalls: number | null;
@@ -96,7 +99,7 @@ export type AgentHydrationEventKind =
   | "expired"
   | "failed";
 
-export type AgentHydrationActor = "agent_key" | "owner_session" | "executor" | "sweeper";
+export type AgentHydrationActor = "agent_key" | "owner_session" | "executor" | "sweeper" | "auto_policy";
 
 /** Bounded structured facts only — never a caller's sentence. */
 export type AgentHydrationEventDetail = Record<string, string | number | boolean | null>;
@@ -166,6 +169,8 @@ function mapRequest(row: Record<string, unknown>): AgentHydrationRequestRecord {
     expiresAt: nullableDate(row.expires_at),
     decidedAt: nullableDate(row.decided_at),
     decidedByUserId: nullableNum(row.decided_by_user_id),
+    decisionSource: nullableText(row.decision_source) as "owner" | "auto_policy" | null,
+    decisionPolicyVersion: nullableNum(row.decision_policy_version),
     decisionApproved: row.decision_approved === null || row.decision_approved === undefined
       ? null
       : row.decision_approved === true,
@@ -515,7 +520,12 @@ export interface DecideAgentHydrationRequestInput {
   id: number;
   expectedVersion: number;
   approved: boolean;
-  sessionUserId: number;
+  /** Decision #202: the decision names its author. The owner path carries the
+   *  session user; the policy path carries the policy version — never a
+   *  fabricated owner id. */
+  decidedBy:
+    | { source: "owner"; sessionUserId: number }
+    | { source: "auto_policy"; policyVersion: number };
   allowMarkReadSideEffect: boolean | null;
   maxCalls: number | null;
   maxCredits: number | null;
@@ -585,13 +595,16 @@ export async function decideAgentHydrationRequest(
       };
     }
 
+    const decider = input.decidedBy;
     const updated = await tx.execute<Record<string, unknown>>(sql`
       update agent_hydration_requests set
         state = ${toState},
         row_version = row_version + 1,
         coverage_fingerprint = ${currentCoverage},
         decided_at = ${now},
-        decided_by_user_id = ${input.sessionUserId},
+        decided_by_user_id = ${decider.source === "owner" ? decider.sessionUserId : null},
+        decision_source = ${decider.source},
+        decision_policy_version = ${decider.source === "auto_policy" ? decider.policyVersion : null},
         decision_approved = ${input.approved},
         decision_allow_mark_read = ${input.allowMarkReadSideEffect},
         decision_max_calls = ${input.maxCalls},
@@ -625,9 +638,11 @@ export async function decideAgentHydrationRequest(
       fromState: "requested",
       toState,
       rowVersion: num(row.row_version),
-      actor: "owner_session",
-      sessionUserId: input.sessionUserId,
+      actor: decider.source === "owner" ? "owner_session" : "auto_policy",
+      sessionUserId: decider.source === "owner" ? decider.sessionUserId : null,
       detail: {
+        decisionSource: decider.source,
+        policyVersion: decider.source === "auto_policy" ? decider.policyVersion : null,
         allowMarkReadSideEffect: input.allowMarkReadSideEffect,
         maxCalls: input.maxCalls,
         maxCredits: input.maxCredits,
@@ -641,6 +656,86 @@ export async function decideAgentHydrationRequest(
       request: await findAgentHydrationRequestById(tx, input.id),
     };
   });
+}
+
+/**
+ * Requests the decision-#202 auto-approve policy may even LOOK at.
+ *
+ * Everything the policy refuses to touch is expressed HERE, in one statement,
+ * so "the policy considered it" and "the policy could never see it" stay
+ * distinguishable in review:
+ *   - Fansly only — the OF lane's read marks a fan's thread read, and the
+ *     policy is forbidden from consenting to that side effect for the owner;
+ *   - `thread_backfill_before` only — the one target whose cost is bounded;
+ *   - the filing key must still be alive and still hold the capability and the
+ *     page it filed against — a revoked key's parked wishes die with it;
+ *   - a page with an auth-paused dm stream is skipped (its runs would burn
+ *     budget against a dead session);
+ *   - one live approval per page at a time (approved|dispatching from ANY
+ *     decider blocks the page — this is also the per-page fairness bound);
+ *   - one auto-approval per conversation per UTC day.
+ *
+ * Sequencing: the caller is the single exclusive hydration cycle, so a plain
+ * sum-then-decide over this list is race-free without reservations.
+ */
+export async function listAutoApprovableAgentHydrationRequests(
+  db: Database,
+  input: { limit: number; utcDayStart: Date; now?: Date },
+): Promise<AgentHydrationRequestRecord[]> {
+  const now = input.now ?? new Date();
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select ${REQUEST_COLUMNS} ${REQUEST_FROM}
+    where r.state = 'requested'
+      and r.admissible = true
+      and (r.expires_at is null or r.expires_at > ${now})
+      and r.target_kind = 'thread_backfill_before'
+      and p.platform = 'fansly'
+      and k.revoked_at is null
+      and k.expires_at > ${now}
+      and 'request:hydration' = any(k.capabilities)
+      and r.page_id = any(k.page_ids)
+      and not exists (
+        select 1 from page_sync_states pss
+        where pss.page_id = r.page_id
+          and pss.stream = 'dm_messages'
+          and pss.blocker_kind = 'auth'
+      )
+      and not exists (
+        select 1 from agent_hydration_requests live
+        where live.page_id = r.page_id
+          and live.state in ('approved', 'dispatching')
+      )
+      and not exists (
+        select 1 from agent_hydration_requests today
+        where today.page_id = r.page_id
+          and today.conversation_ref = r.conversation_ref
+          and today.decision_source = 'auto_policy'
+          and today.decided_at >= ${input.utcDayStart}
+      )
+    order by r.created_at asc, r.id asc
+    limit ${input.limit}
+  `);
+  return result.rows.map(mapRequest);
+}
+
+/**
+ * What the policy has RESERVED so far today: the sum of maxCalls it approved
+ * since the UTC day start. Counted at decision time — an approval that later
+ * fails or under-spends does not return its reservation (v1, documented).
+ */
+export async function sumAutoApprovedCallsSince(
+  db: Database,
+  since: Date,
+): Promise<number> {
+  const result = await db.execute<{ reserved: string | null }>(sql`
+    select sum(decision_max_calls)::text as reserved
+    from agent_hydration_requests
+    where decision_source = 'auto_policy'
+      and decision_approved = true
+      and decided_at >= ${since}
+  `);
+  const raw = result.rows[0]?.reserved;
+  return raw == null ? 0 : Number(raw);
 }
 
 /** Approved requests the executor may dispatch: in date, admissible, not expired. */
