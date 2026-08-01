@@ -1082,11 +1082,12 @@ describe("sync integration", () => {
 
       // The manual all-scope request expands via domains (8 streams — bulk
       // streams are deliberately outside domain lists); fan_earnings /
-      // purchase_history settle via the recovery scheduler — poll briefly
-      // until every state row has applied.
+      // purchase_history settle via the recovery scheduler. The posts lane is
+      // seeded too, but remains default-paused and must never produce a run.
+      // Poll briefly until every requested state row has applied.
       let stateRows = await listPageSyncStates(app.db, { pageId: page.id });
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (stateRows.length >= 10 && stateRows.every((row) => row.requestSeq === row.appliedSeq)) {
+        if (stateRows.length >= 11 && stateRows.every((row) => row.requestSeq === row.appliedSeq)) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1103,8 +1104,13 @@ describe("sync integration", () => {
         "dm_messages",
         "fan_earnings",
         "purchase_history",
+        "posts",
       ]);
       expect(stateRows.every((row) => row.requestSeq === row.appliedSeq)).toBe(true);
+      expect(stateRows.find((row) => row.stream === "posts")).toMatchObject({
+        status: "paused",
+        blockerKind: null,
+      });
 
       const subscribers = await getCurrentSubscribers(app.db, page.id);
       const followers = await getFollowersForPage(app.db, page.id);
