@@ -98,7 +98,13 @@ describe("auth-dead pause wiring (Stage 26)", () => {
 
     const states = await pageStreamStates(page.id);
     expect(states.length).toBeGreaterThan(0);
-    for (const state of states) {
+    const posts = states.find((state) => state.stream === "posts");
+    expect(posts).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+      blockerCode: null,
+    });
+    for (const state of states.filter((candidate) => candidate.stream !== "posts")) {
       expect(state.status, state.stream).toBe("paused");
       expect(state.blockerKind, state.stream).toBe("auth");
       expect(state.blockerCode, state.stream).toBe("ofapi_authentication_failed");
@@ -136,7 +142,11 @@ describe("auth-dead pause wiring (Stage 26)", () => {
     });
 
     const states = await pageStreamStates(page.id);
-    for (const state of states) {
+    expect(states.find((state) => state.stream === "posts")).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+    });
+    for (const state of states.filter((candidate) => candidate.stream !== "posts")) {
       expect(state.status, state.stream).toMatch(/^(idle|pending)$/);
       expect(state.blockerKind, state.stream).toBeNull();
     }
@@ -161,7 +171,13 @@ describe("auth-dead pause wiring (Stage 26)", () => {
     });
 
     const paused = await pageStreamStates(page.id);
-    expect(paused.every((state) => state.status === "paused" && state.blockerKind === "auth"))
+    expect(paused.find((state) => state.stream === "posts")).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+    });
+    expect(paused
+      .filter((state) => state.stream !== "posts")
+      .every((state) => state.status === "paused" && state.blockerKind === "auth"))
       .toBe(true);
 
     await handleSuccessfulPageVerificationRecovery(appContext, {
@@ -171,7 +187,11 @@ describe("auth-dead pause wiring (Stage 26)", () => {
     });
 
     const restored = await pageStreamStates(page.id);
-    for (const state of restored) {
+    expect(restored.find((state) => state.stream === "posts")).toMatchObject({
+      status: "paused",
+      blockerKind: null,
+    });
+    for (const state of restored.filter((candidate) => candidate.stream !== "posts")) {
       expect(state.status, state.stream).toMatch(/^(idle|pending)$/);
       expect(state.blockerKind, state.stream).toBeNull();
     }
