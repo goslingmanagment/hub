@@ -1800,6 +1800,129 @@ export async function acquirePageSyncLease(
   return result.rows[0] ? normalizePageSyncLease(result.rows[0]) : null;
 }
 
+export interface TargetedPageSyncLease {
+  pageId: number;
+  stream: SyncStream;
+  requestSeq: number;
+  leasedSeq: number;
+  leaseToken: string;
+}
+
+/**
+ * Slice C′: take the page's REAL sync lease for ONE named stream so an
+ * out-of-band run (today: the targeted thread backfill) fences against the
+ * regular executor instead of racing it. Same row, same lease columns, same
+ * fence token that `assertOwnedPageSyncLease` verifies — acquire or return
+ * null, never run lease-less.
+ *
+ * Differences from `acquirePageSyncLease`, both deliberate:
+ *  - the stream is named by the caller instead of being picked by priority;
+ *  - no `request_seq > applied_seq` precondition — an owner-initiated run must
+ *    work on an idle stream, and it deliberately does NOT consume a pending
+ *    request (`applied_seq` is never advanced here, so a queued scheduled
+ *    request survives the run untouched).
+ * Everything that guards the regular acquire still guards this one: paused,
+ * blocked, retry-backoff, already-leased, and non-active pages all refuse.
+ * `started_at` is left alone — this run is not the stream's scheduled chunk.
+ */
+export async function acquireTargetedPageSyncLease(
+  db: Database,
+  input: {
+    pageId: number;
+    stream: SyncStream;
+    workerId: string;
+    leaseToken: string;
+    leaseTtlMs: number;
+    now?: Date;
+  },
+): Promise<TargetedPageSyncLease | null> {
+  const now = input.now ?? new Date();
+  const result = await db.execute<{
+    pageId: NumericValue;
+    stream: SyncStream;
+    requestSeq: NumericValue;
+    leasedSeq: NumericValue;
+    leaseToken: string;
+  }>(sql`
+    update ${pageSyncStates} st
+    set status = 'running',
+        leased_seq = st.request_seq,
+        lease_owner = ${input.workerId},
+        lease_token = ${input.leaseToken},
+        lease_heartbeat_at = clock_timestamp(),
+        lease_expires_at = clock_timestamp() + (${input.leaseTtlMs} * interval '1 millisecond'),
+        updated_at = ${now}
+    where st.page_id = ${input.pageId}
+      and st.stream = ${input.stream}
+      and st.status <> 'paused'
+      and st.blocker_kind is null
+      and st.leased_seq is null
+      and (st.retry_at is null or st.retry_at <= ${now})
+      and exists (
+        select 1 from ${pages} p
+        where p.id = st.page_id and p.status = 'active'
+      )
+    returning st.page_id as "pageId",
+              st.stream as "stream",
+              st.request_seq as "requestSeq",
+              st.leased_seq as "leasedSeq",
+              st.lease_token as "leaseToken"
+  `);
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    pageId: normalizeNumber(row.pageId, "pageId"),
+    stream: row.stream,
+    requestSeq: normalizeNumber(row.requestSeq, "requestSeq"),
+    leasedSeq: normalizeNumber(row.leasedSeq, "leasedSeq"),
+    leaseToken: row.leaseToken,
+  };
+}
+
+/**
+ * Release a lease taken by `acquireTargetedPageSyncLease`. The next status is
+ * computed from the row itself with the same CASE the expiry reclaimer uses,
+ * so a request that arrived DURING the run (requestPageSync keeps a live lease
+ * running) leaves the stream `pending` rather than silently idle.
+ */
+export async function releaseTargetedPageSyncLease(
+  db: Database,
+  input: {
+    pageId: number;
+    stream: SyncStream;
+    leaseToken: string;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const result = await db.execute(sql`
+    update ${pageSyncStates}
+    set status = case
+                   when blocker_kind is not null then 'blocked'::page_sync_status
+                   when retry_at is not null and retry_at > clock_timestamp() then 'retrying'::page_sync_status
+                   when request_seq > applied_seq then 'pending'::page_sync_status
+                   else 'idle'::page_sync_status
+                 end,
+        leased_seq = null,
+        lease_owner = null,
+        lease_token = null,
+        lease_heartbeat_at = null,
+        lease_expires_at = null,
+        updated_at = ${now}
+    where page_id = ${input.pageId}
+      and stream = ${input.stream}
+      and lease_token = ${input.leaseToken}
+      and leased_seq is not null
+      and status = 'running'
+  `);
+
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function heartbeatPageSyncLease(
   db: Database,
   input: {

@@ -167,6 +167,12 @@ vi.mock("../apps/runtime/src/services/golden-signals.ts", () => ({
   startGoldenSignalWorker: vi.fn(async () => "gs-worker"),
   runGoldenSignalSample: vi.fn(),
 }));
+vi.mock("../apps/runtime/src/services/sync/targeted-thread-backfill.ts", () => ({
+  TARGETED_THREAD_BACKFILL_QUEUE: "sync.thread.backfill",
+  ensureTargetedThreadBackfillQueue: vi.fn(),
+  parseTargetedThreadBackfillJob: vi.fn(() => null),
+  runTargetedThreadBackfill: vi.fn(),
+}));
 vi.mock("../apps/runtime/src/services/workboard-event-recompute.ts", () => ({
   startWorkboardEventRecompute: vi.fn(() => ({ stop: vi.fn(async () => undefined) })),
   runWorkboardFanRecompute: vi.fn(),
