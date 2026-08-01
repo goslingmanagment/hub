@@ -20,6 +20,7 @@ export interface DomainEventInput {
   conversationRef?: string | null;
   messageRef?: string | null;
   transactionRef?: string | null;
+  postRef?: string | null;
   data: unknown;
   schemaVersion: number;
   observationId: number;
@@ -53,6 +54,7 @@ export interface ProjectionCheckpointInput {
 
 const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "message.material_observed",
+  "post.observed",
   "capture.coverage_observed",
   "capture.coverage_revoked",
   // Fansly replay (slice D). These describe facts that are up to a year old
@@ -194,7 +196,7 @@ async function appendDomainEventsBatchInTransaction(
     await db.execute(sql`
       insert into domain_events (
         id, account_id, account_seq, type, occurred_at, fan_identity_ref,
-        conversation_ref, message_ref, transaction_ref, data, schema_version,
+        conversation_ref, message_ref, transaction_ref, post_ref, data, schema_version,
         observation_id, dedup_key
       ) overriding system value values (
         ${eventId},
@@ -206,6 +208,7 @@ async function appendDomainEventsBatchInTransaction(
         ${event.conversationRef ?? null},
         ${event.messageRef ?? null},
         ${event.transactionRef ?? null},
+        ${event.postRef ?? null},
         ${JSON.stringify(event.data)}::jsonb,
         ${event.schemaVersion},
         ${event.observationId},
@@ -682,6 +685,9 @@ export interface DomainEventRow {
   conversationRef: string | null;
   messageRef: string | null;
   transactionRef: string | null;
+  /** Additive creator-post lineage. Optional keeps existing in-memory event
+   * fixtures/source adapters compatible; database reads always populate it. */
+  postRef?: string | null;
   data: unknown;
   schemaVersion: number;
   observationId: number;
@@ -701,6 +707,7 @@ function mapEventRow(row: Record<string, unknown>): DomainEventRow {
     conversationRef: (row.conversation_ref as string | null) ?? null,
     messageRef: (row.message_ref as string | null) ?? null,
     transactionRef: (row.transaction_ref as string | null) ?? null,
+    postRef: (row.post_ref as string | null) ?? null,
     data: row.data,
     schemaVersion: Number(row.schema_version),
     observationId: Number(row.observation_id),
@@ -728,7 +735,8 @@ export async function listEventsSince(
     select de.id::text as id, de.account_id, page.ofapi_account_id as current_account_ref,
            de.account_seq::text as account_seq, de.type,
            de.occurred_at, de.fan_identity_ref, de.conversation_ref, de.message_ref,
-           de.transaction_ref, de.data, de.schema_version, de.observation_id::text as observation_id,
+           de.transaction_ref, de.post_ref, de.data, de.schema_version,
+           de.observation_id::text as observation_id,
            de.dedup_key, de.created_at
     from domain_events de
     left join pages page on page.id = de.account_id

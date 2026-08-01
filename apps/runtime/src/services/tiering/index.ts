@@ -78,6 +78,7 @@ export const TIERED_TABLES: TieredTableSpec[] = [
       conversation_ref: "VARCHAR",
       message_ref: "VARCHAR",
       transaction_ref: "VARCHAR",
+      post_ref: "VARCHAR",
       data: "JSON",
       schema_version: "INTEGER",
       observation_id: "BIGINT",

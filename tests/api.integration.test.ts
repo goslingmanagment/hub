@@ -384,6 +384,18 @@ function createAutoSyncFanslyAdapter(input: {
         },
       };
     },
+    async getPostsPage() {
+      return {
+        items: [],
+        accountId: input.accountId,
+        wallId: null,
+        before: "0",
+        nextBefore: null,
+        done: true,
+        contractAccepted: true,
+        raw: { posts: [] },
+      };
+    },
     async getEarningsAccountsPage(_context: unknown, params: { after?: Date | null; before?: Date | null }) {
       return {
         items: [],

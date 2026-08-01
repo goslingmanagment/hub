@@ -22,7 +22,7 @@ import {
  * to prevent.
  */
 describe("agent read dataset vocabulary", () => {
-  it("names exactly the ten available datasets from the contract appendix", () => {
+  it("names exactly the eleven available datasets", () => {
     expect([...AGENT_DATASET_NAMES]).toEqual([
       "fan_memberships",
       "dm_threads",
@@ -33,6 +33,7 @@ describe("agent read dataset vocabulary", () => {
       "followers_daily",
       "fan_aliases",
       "fan_notes",
+      "posts",
       "sync_streams",
     ]);
   });
@@ -44,7 +45,6 @@ describe("agent read dataset vocabulary", () => {
     expect([...AGENT_PLANNED_DATASET_NAMES]).toEqual([
       "purchase_history",
       "fan_earnings",
-      "posts",
       "vault_media",
       "stories",
       "notifications",
@@ -144,6 +144,7 @@ describe("agent read dataset vocabulary", () => {
     // A planned dataset is visible in the catalog and NOT addressable: the path
     // enum is built from the available names only, so this must stay undefined.
     expect(agentDatasetDefinition("purchase_history")).toBeUndefined();
+    expect(agentDatasetDefinition("posts")).toBe(AGENT_DATASETS.posts);
     expect(agentDatasetDefinition("page_dm_threads")).toBeUndefined();
     expect(agentDatasetDefinition("")).toBeUndefined();
     // Prototype keys are not datasets — the lookup must not inherit them.

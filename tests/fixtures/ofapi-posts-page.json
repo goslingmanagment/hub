@@ -1,0 +1,49 @@
+{
+  "data": {
+    "list": [
+      {
+        "author": { "id": 42, "_view": "a" },
+        "responseType": "post",
+        "id": 103,
+        "postedAt": "2026-08-01T12:03:00.000Z",
+        "postedAtPrecise": "1785585780.000000",
+        "text": "<p>new post</p>",
+        "rawText": "new post"
+      },
+      {
+        "author": { "id": 42, "_view": "a" },
+        "responseType": "post",
+        "id": 102,
+        "postedAt": "2026-08-01T12:02:00.000Z",
+        "postedAtPrecise": "1785585720.000000",
+        "text": "<p>overlap</p>",
+        "rawText": "overlap"
+      },
+      {
+        "author": { "id": 42, "_view": "a" },
+        "responseType": "post",
+        "id": 101,
+        "postedAt": "2026-08-01T12:01:00.000Z",
+        "postedAtPrecise": "1785585660.000000",
+        "text": "<p>anchor</p>",
+        "rawText": "anchor"
+      },
+      {
+        "author": { "id": 42, "_view": "a" },
+        "responseType": "post",
+        "id": 100,
+        "postedAt": "2026-08-01T12:00:00.000Z",
+        "postedAtPrecise": "1785585600.000000",
+        "text": "<p>already covered</p>",
+        "rawText": "already covered"
+      }
+    ],
+    "hasMore": true,
+    "headMarker": "1785585780.000000",
+    "tailMarker": "1785585600.000000"
+  },
+  "_meta": {
+    "_credits": { "used": 1, "balance": 999 },
+    "_cache": { "is_cached": false }
+  }
+}

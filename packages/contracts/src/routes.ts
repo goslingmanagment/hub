@@ -2487,6 +2487,7 @@ const extendedSyncStreamEnum = z.enum([
   "followers_reconcile",
   "fan_earnings",
   "purchase_history",
+  "posts",
 ]);
 
 export const syncMonitorStreamItemSchema = z.object({
@@ -3833,6 +3834,7 @@ export const ofapiCaptureOperatorStatusResponseSchema = z.object({
       "head_repair",
       "account_export",
       "export_import",
+      "post_paginate",
     ]),
     state: ofapiExportQuoteJobStateSchema,
     reasonCode: z.string().nullable(),

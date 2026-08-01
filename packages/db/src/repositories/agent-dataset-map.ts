@@ -40,6 +40,16 @@ export interface AgentDatasetSqlMapping {
    * have read the audience table it never touches.
    */
   readonly readPlanes: readonly string[];
+  /** The one temporal plane whose unbounded per-page minimum establishes this
+   * dataset's capture floor. Inventory datasets omit it and stay `unknown`. */
+  readonly captureFloorPlane?: string;
+  /** Optional row-level lineage exposed by the source under fixed internal
+   * columns. Request text can never select or rename these columns. */
+  readonly provenanceColumns?: {
+    readonly observationRef: string;
+    readonly ingestPath: string;
+    readonly convergence: string;
+  };
 }
 
 const FAN_MEMBERSHIPS = `
@@ -274,6 +284,32 @@ const FAN_NOTES = `
   join fans f on f.id = e.fan_id
 `;
 
+const CREATOR_POSTS = `
+  select cp.account_id          as k_page_id,
+         cp.platform::text      as k_platform,
+         cp.id::text            as k_key,
+         cp.published_at        as k_occurred_at,
+         null::text             as k_fan,
+         cp.source_observation_id as k_observation_ref,
+         -- V1 has one governed post-material lane per platform. This is the
+         -- Agent ingest-path vocabulary, not a claim about the raw producer
+         -- string; add a projection discriminator before adding a second lane.
+         case cp.platform::text
+           when 'fansly' then 'fansly_pull'
+           when 'onlyfans' then 'ofapi_material_capture'
+           else 'unknown'
+         end                    as k_ingest_path,
+         'converging'::text     as k_convergence,
+         cp.platform::text      as f_platform,
+         cp.platform_post_id    as f_post_ref,
+         cp.text_plain          as f_post_text,
+         cp.published_at        as f_published_at,
+         cp.first_observed_at   as f_first_observed_at,
+         cp.last_observed_at    as f_last_observed_at,
+         cp.attachment_count    as f_attachment_count
+  from creator_posts cp
+`;
+
 const SYNC_STREAMS = `
   select ss.page_id       as k_page_id,
          p.platform::text as k_platform,
@@ -424,6 +460,27 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
     readPlanes: ["fan_notes", "fans"],
+  },
+  posts: {
+    source: CREATOR_POSTS,
+    fields: {
+      platform: "f_platform",
+      postRef: "f_post_ref",
+      postText: "f_post_text",
+      publishedAt: "f_published_at",
+      firstObservedAt: "f_first_observed_at",
+      lastObservedAt: "f_last_observed_at",
+      attachmentCount: "f_attachment_count",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["creator_posts"],
+    captureFloorPlane: "creator_posts",
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
   },
   sync_streams: {
     source: SYNC_STREAMS,

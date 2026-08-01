@@ -22,6 +22,12 @@ import {
   SYNC_PULL_CANONICALIZER_VERSION,
 } from "./sync-pull.ts";
 import {
+  canParsePostsObservation,
+  canonicalizePostsObservation,
+  POSTS_CANONICALIZED_KINDS,
+  POSTS_CANONICALIZER_VERSION,
+} from "./posts.ts";
+import {
   canonicalizeCommandResultObservation,
   COMMAND_RESULT_CANONICALIZER_VERSION,
 } from "./command-result.ts";
@@ -57,6 +63,17 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     kinds: [...OFAPI_WEBHOOK_CANONICALIZED_KINDS],
     version: OFAPI_WEBHOOK_CANONICALIZER_VERSION,
     canonicalize: canonicalizeOfapiWebhookObservation,
+  },
+  {
+    // Creator posts are projection material, not client-deliverable news.
+    // Keep this BEFORE the broader pull family so kind=posts receives the
+    // atomic projection checkpoint required by v2 replay gap validation.
+    source: "pull",
+    kinds: [...POSTS_CANONICALIZED_KINDS],
+    version: POSTS_CANONICALIZER_VERSION,
+    canonicalize: canonicalizePostsObservation,
+    canParse: canParsePostsObservation,
+    projectionOnly: true,
   },
   {
     source: "pull",

@@ -29,6 +29,8 @@ import type {
   FanslyMessagesPageResponse,
   FanslyMessagingGroupsPage,
   FanslyMessagingGroupsPageResponse,
+  FanslyPostsPage,
+  FanslyPostsPageResponse,
   FanslyRequestContext,
   FanslySubscribersPage,
   FanslyTransactionsPage,
@@ -111,6 +113,67 @@ export class FanslyAdapter {
         returnedItems: response.length,
       }),
     });
+  }
+
+  /**
+   * Account timeline capture. The reverse-engineered contract names the path
+   * parameter accountId while one third-party client also supplies wallId.
+   * Default to the account-wide path and leave wallId unset; callers can opt
+   * into a proven wall id without changing the pagination/capture contract.
+   */
+  async getPostsPage(
+    context: FanslyRequestContext,
+    accountId: string,
+    params: {
+      before?: string | null;
+      wallId?: string | null;
+      pageIndex?: number;
+    } = {},
+  ): Promise<FanslyPostsPageResponse> {
+    const before = params.before ?? "0";
+    const wallId = params.wallId ?? null;
+    const response = await this.request<FanslyPostsPage>(
+      context,
+      `/timelinenew/${encodeURIComponent(accountId)}`,
+      {
+        operation: "timeline_posts",
+        endpointTemplate: "/timelinenew/:accountId",
+        query: {
+          before,
+          after: "0",
+          wallId: wallId ?? undefined,
+        },
+        category: "posts",
+        requestShape: {
+          accountId,
+          hasWallId: wallId !== null,
+        },
+        pagination: {
+          pageIndex: params.pageIndex ?? 0,
+          cursorPresent: before !== "0",
+        },
+        summarizeResponse: (parsed) => ({
+          returnedItems: Array.isArray(parsed?.posts) ? parsed.posts.length : null,
+        }),
+      },
+    );
+
+    const items = Array.isArray(response.parsed?.posts)
+      ? response.parsed.posts
+      : [];
+    const nextBefore = items.length > 0 && typeof items.at(-1)?.id === "string"
+      ? items.at(-1)!.id
+      : null;
+    return {
+      items,
+      accountId,
+      wallId,
+      before,
+      nextBefore,
+      done: items.length === 0,
+      contractAccepted: Array.isArray(response.parsed?.posts),
+      raw: response.raw,
+    };
   }
 
   async getTransactionsPage(

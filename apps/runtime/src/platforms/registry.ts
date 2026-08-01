@@ -29,6 +29,10 @@ import {
   type ExecutorRequestContext,
   type StreamChunkResult,
 } from "../services/sync/executor-handlers.ts";
+import {
+  fanslyPostsChunk,
+  onlyfansPostsChunk,
+} from "../services/sync/posts.ts";
 
 // Kernel Stage 18: the two platform adapters, assembled in the app layer
 // (pull handlers need AppContext/executor types — platform-core stays
@@ -78,6 +82,7 @@ const FANSLY_STREAMS: CanonicalStream[] = [
   "dm_messages",
   "fan_earnings",
   "purchase_history",
+  "posts",
 ];
 
 /** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
@@ -88,6 +93,7 @@ const ONLYFANS_STREAMS: CanonicalStream[] = [
   "top_spenders",
   "subscribers",
   "dm_conversations",
+  "posts",
 ];
 
 // The per-platform pull maps route straight to the split handler halves —
@@ -103,6 +109,7 @@ const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   dm_messages: fanslyDmMessagesChunk,
   fan_earnings: executeFanEarningsChunk,
   purchase_history: executePurchaseHistoryChunk,
+  posts: fanslyPostsChunk,
 };
 
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
@@ -112,6 +119,7 @@ const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   top_spenders: onlyfansTopSpendersChunk,
   subscribers: onlyfansSubscribersChunk,
   dm_conversations: onlyfansDmConversationsChunk,
+  posts: onlyfansPostsChunk,
 };
 
 export const fanslyPlatformAdapter: AppPlatformAdapter = {

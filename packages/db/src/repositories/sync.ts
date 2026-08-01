@@ -255,6 +255,7 @@ function streamOrderSql(columnName: string) {
       when 'followers_reconcile' then ${SYNC_STREAM_POLICY.followers_reconcile.streamIndex}
       when 'dm_conversations' then ${SYNC_STREAM_POLICY.dm_conversations.streamIndex}
       when 'dm_messages' then ${SYNC_STREAM_POLICY.dm_messages.streamIndex}
+      when 'posts' then ${SYNC_STREAM_POLICY.posts.streamIndex}
       else 999
     end
   `);
@@ -774,7 +775,7 @@ export async function insertRawPayload(
     requestParams: Record<string, unknown>;
     responsePayload: unknown;
     mapperVersion: string;
-    payloadKind: "mapping_critical" | "dm_metadata" | "dm_messages" | "failed";
+    payloadKind: "mapping_critical" | "dm_metadata" | "dm_messages" | "posts" | "failed";
     statusCode?: number | null;
     errorMessage?: string | null;
     retainUntil: Date;

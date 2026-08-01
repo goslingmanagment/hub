@@ -265,6 +265,31 @@ describe("hub CLI: request building", () => {
     expect(body.sort).toEqual([{ field: "occurredAt", dir: "desc" }]);
   });
 
+  it("reads creator posts through the existing dataset command", async () => {
+    const calls: Array<{ method: string; input: unknown }> = [];
+    await run([
+      "dataset",
+      "--page-label", "lora-2",
+      "--dataset", "posts",
+      "--from", "2026-07-01T00:00:00Z",
+      "--to", "2026-08-01T00:00:00Z",
+      "--filter", "postRef:eq:post-42",
+      "--claim-field", "postText",
+    ], { calls });
+    expect(calls).toEqual([{
+      method: "agentDatasetQuery",
+      input: {
+        params: { pageLabel: "lora-2", dataset: "posts" },
+        body: expect.objectContaining({
+          from: "2026-07-01T00:00:00Z",
+          to: "2026-08-01T00:00:00Z",
+          filters: [{ field: "postRef", op: "eq", value: "post-42" }],
+          claim: { fields: ["postText"], targets: "all_in_scope" },
+        }),
+      },
+    }]);
+  });
+
   it("encodes a claim as two flat fields on GET and a nested object on POST", async () => {
     const calls: Array<{ method: string; input: unknown }> = [];
     await run(["threads", "--claim-field", "lifetimeSpendMills"], { calls });

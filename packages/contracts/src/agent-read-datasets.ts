@@ -236,6 +236,24 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "createdAt", dir: "desc", nullsLast: false },
     stableKey: ["noteId"],
   },
+  posts: {
+    moneyBearing: false,
+    // Creator-written post copy is verbatim material. This deliberately reuses
+    // the transcript disclosure class: a read:datasets-only key must not gain a
+    // side door to content text.
+    verbatimText: true,
+    fields: {
+      platform: "string",
+      postRef: "string",
+      postText: "string",
+      publishedAt: "timestamp",
+      firstObservedAt: "timestamp",
+      lastObservedAt: "timestamp",
+      attachmentCount: "int",
+    },
+    defaultSort: { field: "publishedAt", dir: "desc", nullsLast: false },
+    stableKey: ["postId"],
+  },
   sync_streams: {
     moneyBearing: false,
     verbatimText: false,
@@ -269,7 +287,6 @@ export type AgentDataset = keyof typeof AGENT_DATASETS;
 export const AGENT_PLANNED_DATASETS = {
   purchase_history: {},
   fan_earnings: {},
-  posts: {},
   vault_media: {},
   stories: {},
   notifications: {},

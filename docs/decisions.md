@@ -206,6 +206,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 202 | Hydration autopilot: delegated, budgeted approval | The owner may delegate to a VERSIONED in-kernel policy (`agentHydrationAutoApproveMode` off/shadow/enforce, default off) the authorization of one bounded Fansly `thread_backfill_before` attempt per request: ≤40 calls, mark-read always refused, inside `agentHydrationAutoDailyCallBudget` reserved calls per UTC day (default 0). Decisions carry `decision_source='auto_policy'` + `decision_policy_version` (0119) — never a fabricated owner id; over-budget/foreign-platform/over-cap requests stay `requested` for the owner. New platform, target kind or side effect requires a fresh numbered decision
 | 203 | Agent transaction summary | Existing operation #10 gains `summary: true` for `transactions`: one MVCC statement returns currency-grouped gross/net/fee/count over matching Hub rows plus a page-wide windowless transaction floor. No new route, table, cursor or completeness proof; `basis='matching_rows_in_hub'` is the wording boundary |
 | 204 | Coach situation preset | `coach-chat` accepts optional `preset:'situation'`: Core substitutes the pinned canonical question only when `chatterQuestion` is absent or whitespace-only, refuses preset plus a non-empty question and refuses presets on other features; the optional meta echo `presetQuestion` lets clients replay the real question, while `{presetInstructions}` stays in the uncached task block and is empty for byte-identical normal turns. The extension will route Help into this lane; `help-me` remains served for older clients and desktop |
+| 205 | Creator-post capture and Agent read | Creator posts use one default-paused ordinary `posts` sync stream: Fansly account timeline payloads are journaled before canonicalization and governed OFAPI `post_paginate` jobs commit exact response bytes before parsing; both then append projection-only `post.observed` events into the rebuildable `creator_posts` current-head projection. Existing Agent operation #10 and `hub dataset` expose verbatim post text under the existing `read:datasets` + `read:messages` rights; no new route, capability, command or FTS, and capture floors never prove vendor absence |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6394,3 +6395,34 @@ routes the Help button and hotkey into this preset turn. Core continues serving
 `help-me` unchanged for older extension builds and the desktop app. Physical
 retirement of that feature is a separate later decision, gated on desktop
 usage.
+
+**Decision #205 (2026-08-02, creator-post text is captured raw-first and read
+through the existing Agent dataset operation).** Posts are a normal sync stream,
+not a second capture subsystem. Every page receives a `posts` state, but it is
+seeded paused: deploying the schema or Agent descriptor cannot spend vendor
+credits or start a fleet crawl. An operator resumes pages deliberately after
+the normal capture gates are open. Fansly walks the creator account timeline by
+its opaque `before` cursor. OnlyFans uses a `post_paginate` kind in the existing
+governed OFAPI capture-job lane; its response `_meta` remains the authority for
+actual credits. Fansly journals the complete response payload before its post
+canonicalizer; OFAPI commits the exact response bytes before its strict parser
+or cursor settlement runs.
+
+Accepted rows append projection-only `post.observed` domain events. The
+rebuildable `creator_posts` projection keeps the current head for one
+`(page, platform post id)`, the verbatim text, publish time, first/last
+observation, attachment count and complete source lineage. A materially edited
+post creates another immutable event and advances that head. Missing rows,
+empty pages and partial timelines are NEVER deletion proof, so v1 infers no
+deletion. Media bytes, expiring media URLs, stories, scheduled posts, comments,
+reactions and post analytics are outside this slice.
+
+The read surface is the already shipped generic Agent operation #10 and its
+existing `hub dataset` command with dataset `posts`. Verbatim text deliberately
+requires both existing capabilities, `read:datasets` and `read:messages`; no
+post-specific capability, endpoint or CLI command is added. V1 has exact
+registry filters and `publishedAt` sorting but no full-text search. The global
+catalog says post capture is `unknown` because rollout is page-scoped; a page
+response derives its windowless oldest-stored-row floor from `creator_posts`
+and may report a before-floor gap, but by #197 that remains evidence about Hub
+holdings rather than proof that no older vendor posts exist.

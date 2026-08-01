@@ -1729,6 +1729,9 @@ export interface AgentDatasetRowRaw {
   platform: string | null;
   fields: Record<string, unknown>;
   sortValue: string | null;
+  observationRef: number | null;
+  ingestPath: string;
+  convergence: "final" | "converging" | "no_material_lane";
 }
 
 function datasetFilterSql(filter: AgentDatasetFilter): SQL {
@@ -1795,13 +1798,33 @@ export async function queryAgentDataset(
     limit: number;
     after?: KeysetBoundary | undefined;
   },
-): Promise<{ rows: AgentDatasetRowRaw[]; witnesses: PlaneReadWitness[] }> {
+): Promise<{
+  rows: AgentDatasetRowRaw[];
+  witnesses: PlaneReadWitness[];
+  captureFloorAt: Date | null;
+}> {
   const mapping = agentDatasetSqlMapping(input.dataset);
   if (!mapping) {
     throw new Error(`unmapped agent dataset: ${input.dataset}`);
   }
   const source = sql.raw(mapping.source);
   const windowColumn = sql.raw(`src.${mapping.windowColumn}`);
+
+  // A capture floor is a page-scoped fact about the store, never about the
+  // request's window or filters. Run the unbounded minimum independently before
+  // the result query; deriving it from returned rows would make an exact postRef
+  // filter move the floor to that post and turn a filtered miss into false
+  // evidence about capture.
+  let captureFloorAt: Date | null = null;
+  if (mapping.captureFloorPlane !== undefined) {
+    const floorResult = await db.execute<Record<string, unknown>>(sql`
+      with src as (${source})
+      select min(${windowColumn}) as floor_at
+      from src
+      where src.k_page_id = ${input.pageId}
+    `);
+    captureFloorAt = date(floorResult.rows[0]?.floor_at);
+  }
 
   const clauses: SQL[] = [
     sql`src.k_page_id = ${input.pageId}`,
@@ -1821,12 +1844,24 @@ export async function queryAgentDataset(
       sql`${sql.raw(`src.${column}`)} as ${sql.raw(`"${wire}"`)}`),
     sql`, `,
   );
+  const observationRefExpression = mapping.provenanceColumns === undefined
+    ? sql`null::bigint`
+    : sql.raw(`src.${mapping.provenanceColumns.observationRef}`);
+  const ingestPathExpression = mapping.provenanceColumns === undefined
+    ? sql`'unknown'::text`
+    : sql.raw(`src.${mapping.provenanceColumns.ingestPath}`);
+  const convergenceExpression = mapping.provenanceColumns === undefined
+    ? sql`'no_material_lane'::text`
+    : sql.raw(`src.${mapping.provenanceColumns.convergence}`);
 
   const result = await db.execute<Record<string, unknown>>(sql`
     with src as (${source}),
     keyed as (
       select src.k_key, src.k_occurred_at, src.k_fan, src.k_platform, ${projection},
-             ${sortExpression} as k_sort
+             ${sortExpression} as k_sort,
+             ${observationRefExpression} as k_observation_ref,
+             ${ingestPathExpression} as k_ingest_path,
+             ${convergenceExpression} as k_convergence
       from src
       where ${sql.join(clauses, sql` and `)}
     )
@@ -1850,9 +1885,18 @@ export async function queryAgentDataset(
         platform: row.k_platform == null ? null : String(row.k_platform),
         fields,
         sortValue: row.k_sort == null ? null : String(row.k_sort),
+        observationRef: row.k_observation_ref == null ? null : Number(row.k_observation_ref),
+        ingestPath: String(row.k_ingest_path ?? "unknown"),
+        convergence: row.k_convergence === "final" || row.k_convergence === "converging"
+          ? row.k_convergence
+          : "no_material_lane",
       };
     }),
-    witnesses: witnessesFor(mapping.readPlanes),
+    witnesses: mapping.readPlanes.map((plane) => witnessFor(
+      plane,
+      plane === mapping.captureFloorPlane ? captureFloorAt : null,
+    )),
+    captureFloorAt,
   };
 }
 
