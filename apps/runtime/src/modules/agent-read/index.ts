@@ -1,5 +1,11 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
+import { auditCtx } from "../../api/request-auth.ts";
+import {
+  issueAgentKey,
+  listAgentKeysDetailed,
+  revokeAgentKeyById,
+} from "../../services/agent-keys.ts";
 import { requireOwner } from "../../services/auth.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { AGENT_ROUTE_RPM } from "./budget.ts";
@@ -158,6 +164,38 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentDatasetQuery(appContext, principal, request.params, request.body);
+  });
+
+  // --- Slice B: owner administration of the keys themselves ---
+  //
+  // Registered HERE, not in the identity module, for one reason: the `no-store`
+  // hook above keys on the `/api/v1/agent/` prefix, and the issuance response is
+  // the single response in this system that carries a live bearer token. Their
+  // contracts live in their own module (`routes-agent-keys.ts`) so the read
+  // plane's pins keep meaning what they say.
+
+  server.post("/api/v1/agent/keys", {
+    schema: routeSchemas.agentKeyCreate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return issueAgentKey(appContext, request.body, auditCtx(principal));
+  });
+
+  server.get("/api/v1/agent/keys", {
+    schema: routeSchemas.agentKeyList,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return listAgentKeysDetailed(appContext);
+  });
+
+  server.post("/api/v1/agent/keys/:id/revoke", {
+    schema: routeSchemas.agentKeyRevoke,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return revokeAgentKeyById(appContext, { id: request.params.id }, auditCtx(principal));
   });
 }
 

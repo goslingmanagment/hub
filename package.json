@@ -18,6 +18,7 @@
     "build": "pnpm typecheck && pnpm --dir apps/dashboard build",
     "build:production": "pnpm typecheck && node scripts/build-production.mjs && pnpm --dir apps/dashboard build",
     "cli": "node --import tsx/esm apps/runtime/src/cli.ts",
+    "hub": "node --import tsx/esm packages/hub-agent-cli/src/cli.ts",
     "contracts:generate": "node --import tsx/esm packages/contracts/src/generate.ts",
     "worker": "node --import tsx/esm apps/runtime/src/worker.ts",
     "db:generate": "node scripts/db-generate-disabled.mjs",

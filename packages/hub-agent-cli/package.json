@@ -1,0 +1,16 @@
+{
+  "name": "@agency_hub_core/hub-agent-cli",
+  "private": true,
+  "type": "module",
+  "description": "hub — the Agent Read Plane CLI. One JSON document per call, over the generated kernel SDK.",
+  "bin": {
+    "hub": "./bin/hub.mjs"
+  },
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "dependencies": {
+    "@agency_hub_core/contracts": "workspace:*",
+    "@kernel/sdk": "workspace:*"
+  }
+}

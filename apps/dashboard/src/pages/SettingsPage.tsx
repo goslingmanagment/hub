@@ -7,6 +7,7 @@ import { PagesTab } from "./settings/PagesTab.js";
 import { UsersTab } from "./settings/UsersTab.js";
 import { ConfigurationTab } from "./settings/ConfigurationTab.js";
 import { AiPersonasTab } from "./settings/AiPersonasTab.js";
+import { AgentKeysTab } from "./settings/AgentKeysTab.js";
 
 const tabs: { key: SettingsTab; label: string }[] = [
   { key: "credentials", label: "Credentials" },
@@ -15,6 +16,7 @@ const tabs: { key: SettingsTab; label: string }[] = [
   { key: "personas", label: "AI Personas" },
   { key: "pages", label: "Pages" },
   { key: "users", label: "Users" },
+  { key: "agentKeys", label: "Agent Keys" },
   { key: "configuration", label: "Configuration" },
 ];
 
@@ -55,6 +57,7 @@ export function SettingsPage() {
       {activeTab === "personas" && <AiPersonasTab />}
       {activeTab === "pages" && <PagesTab />}
       {activeTab === "users" && <UsersTab />}
+      {activeTab === "agentKeys" && <AgentKeysTab />}
       {activeTab === "configuration" && <ConfigurationTab />}
     </div>
   );

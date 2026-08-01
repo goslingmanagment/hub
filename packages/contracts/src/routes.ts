@@ -17,6 +17,10 @@ import { z } from "zod";
 // below, so registration, the auth-declaration gate and the OpenAPI generator
 // keep seeing ONE flat registry.
 import { agentExportPolicyEnum, agentRouteSchemas } from "./routes-agent.ts";
+// Owner administration of the plane's KEYS. A sibling module rather than part of
+// the read plane: issuing a credential carries no evidence envelope, and folding
+// it into agentRouteSchemas would have meant loosening that module's pins.
+import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -4745,6 +4749,7 @@ export const opsMetricsResponseSchema = z.object({
 
 export const routeSchemas = {
   ...agentRouteSchemas,
+  ...agentKeyAdminRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],
