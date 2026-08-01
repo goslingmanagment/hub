@@ -705,6 +705,117 @@ export function buildProgram() {
       }
     });
 
+  const agent = program.command("agent");
+  const agentHydration = agent.command("hydration");
+
+  agentHydration
+    .command("list")
+    .description(
+      "Slice C: the owner approval queue. Prints requestRef, rowVersion and "
+        + "coverageFingerprint as JSON — the three values `agent hydration decide` needs.",
+    )
+    .option("--state <state>", "requested | approved | dispatching | completed | ...")
+    .option("--limit <n>", "rows to print", parsePositiveInt, 50)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { listAgentHydrationRequests } = await import("@agency_hub_core/db");
+        const { rows } = await listAgentHydrationRequests(app.db, {
+          ...(options.state === undefined
+            ? {}
+            : { states: [options.state as "requested"] }),
+          limit: options.limit as number,
+        });
+        const { toWireHydrationRequest } = await import("./modules/agent-read/index.ts");
+        console.log(JSON.stringify(rows.map(toWireHydrationRequest), null, 2));
+      } finally {
+        await app.close();
+      }
+    });
+
+  agentHydration
+    .command("decide")
+    .description(
+      "Slice C: approve or reject one hydration request. Runs the SAME code path as the "
+        + "dashboard (CAS on --expected-version, staleness check on --coverage-fingerprint, "
+        + "the #158 mark-read consent rule) — this is a second client, not a second "
+        + "implementation.",
+    )
+    .requiredOption("--request <uuid>", "requestRef from `agent hydration list`")
+    .requiredOption("--decision <decision>", "approve | reject")
+    .requiredOption("--expected-version <n>", "rowVersion the decision was formed against", (value: string) => {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new InvalidArgumentError("Expected a non-negative integer");
+      }
+      return parsed;
+    })
+    .requiredOption("--coverage-fingerprint <sha256>", "the fingerprint that was SHOWN to you")
+    .option("--max-calls <n>", "hard cap on vendor calls (approval needs this or --max-pages)", parsePositiveInt)
+    .option("--max-credits <n>", "hard cap on OFAPI credits", parsePositiveInt)
+    .option("--max-pages <n>", "hard cap on vendor pages", parsePositiveInt)
+    .option("--max-items <n>", "hard cap on accepted items", parsePositiveInt)
+    .option("--expires-in-hours <n>", "how long the approval stays executable", parsePositiveInt, 24)
+    .option(
+      "--allow-mark-read",
+      "#158: consent to the vendor read marking the thread READ on the platform",
+    )
+    .option("--no-allow-mark-read", "refuse the mark-read side effect (approval must state it)")
+    .option("--reason <text>", "required on a rejection")
+    .option("--as <username>", "owner user to attribute the decision to")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const decision = options.decision as string;
+        if (decision !== "approve" && decision !== "reject") {
+          throw new Error(`--decision must be approve or reject, received "${decision}"`);
+        }
+        const { findUserByUsername, listUsers } = await import("@agency_hub_core/db");
+        // The decision is attributed to a REAL owner: the audit row and the
+        // event journal both name a person, never "the CLI".
+        const actor = options.as
+          ? await findUserByUsername(app.db, options.as as string)
+          : (await listUsers(app.db)).find((user) => user.role === "owner" && user.disabledAt === null);
+        if (!actor || actor.role !== "owner") {
+          throw new Error("A hydration decision needs an owner user; pass --as <username>");
+        }
+        const { applyHydrationDecision, toWireHydrationRequest } = await import(
+          "./modules/agent-read/index.ts"
+        );
+        const outcome = await applyHydrationDecision(app, {
+          requestRef: options.request as string,
+          actorUserId: actor.id,
+          body: {
+            decision,
+            expectedVersion: options.expectedVersion as number,
+            coverageFingerprint: options.coverageFingerprint as string,
+            idempotencyKey: randomUUID(),
+            ...(decision === "approve"
+              ? {
+                expiresAt: new Date(
+                  Date.now() + (options.expiresInHours as number) * 60 * 60 * 1000,
+                ).toISOString(),
+                allowMarkReadSideEffect: options.allowMarkRead === true,
+              }
+              : {}),
+            ...(options.maxCalls === undefined ? {} : { maxCalls: options.maxCalls as number }),
+            ...(options.maxCredits === undefined
+              ? {}
+              : { maxCredits: options.maxCredits as number }),
+            ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages as number }),
+            ...(options.maxItems === undefined ? {} : { maxItems: options.maxItems as number }),
+            ...(options.reason === undefined ? {} : { reason: options.reason as string }),
+          },
+        });
+        console.log(JSON.stringify({
+          disposition: outcome.disposition,
+          request: toWireHydrationRequest(outcome.request),
+        }, null, 2));
+      } finally {
+        await app.close();
+      }
+    });
+
   const dm = program.command("dm");
   const page = program.command("page");
   const pageAdd = page.command("add");

@@ -27,9 +27,15 @@ import {
   handleAgentObservationPayload,
   handleAgentObservations,
 } from "./handlers-journal.ts";
+import {
+  handleAgentHydrationRequestCreate,
+  handleAgentHydrationRequestDecide,
+  handleAgentHydrationRequestGet,
+  handleAgentHydrationRequestList,
+} from "./handlers-hydration.ts";
 
 /**
- * The Agent Read Plane registrar: operations #1..#10 under `/api/v1/agent/*`.
+ * The Agent Read Plane registrar: operations #1..#13 under `/api/v1/agent/*`.
  *
  * THREE THINGS THIS FUNCTION IS RESPONSIBLE FOR, beyond wiring:
  *
@@ -197,6 +203,57 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     requireOwner(principal);
     return revokeAgentKeyById(appContext, { id: request.params.id }, auditCtx(principal));
   });
+
+  // #11 — the ONLY write an agent key has, and it writes an INTENT: zero vendor
+  // calls, no job, nothing queued. Only an owner decision turns it into work.
+  server.post("/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests", {
+    schema: routeSchemas.agentHydrationRequestCreate,
+    config: rateLimit("agentHydrationRequestCreate"),
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentHydrationRequestCreate(
+      appContext,
+      principal,
+      request.params,
+      request.body,
+    );
+  });
+
+  // #12 — no `:pageLabel` in the path, so the declarative page scope cannot
+  // apply: the grant check AND the "this key filed it" check are in the handler,
+  // and both miss with the same static 404 as an unknown uuid.
+  server.get("/api/v1/agent/hydration-requests/:requestRef", {
+    schema: routeSchemas.agentHydrationRequestGet,
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentHydrationRequestGet(appContext, principal, request.params);
+  });
+
+  // The owner approval queue. Owner session, like #13 — an agent key never sees
+  // another key's requests, let alone the whole board.
+  server.get("/api/v1/agent/hydration-requests", {
+    schema: routeSchemas.agentHydrationRequestList,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return handleAgentHydrationRequestList(appContext, principal, request.query);
+  });
+
+  // #13 — OWNER SESSION. The `hub` agent CLI carries an agent key and cannot
+  // mint a cookie, which is the point: the principal that asks for the work is
+  // structurally not the principal that authorizes it.
+  server.post("/api/v1/agent/hydration-requests/:requestRef/decision", {
+    schema: routeSchemas.agentHydrationRequestDecide,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireOwner(principal);
+    return handleAgentHydrationRequestDecide(
+      appContext,
+      principal,
+      request.params,
+      request.body,
+    );
+  });
 }
 
 /**
@@ -254,3 +311,11 @@ export {
 } from "./runtime.ts";
 export { staticNotFound, toSafeNumber, toSafeNumberOr } from "./errors.ts";
 export { normalizeResolveInput } from "./handlers-core.ts";
+export {
+  AGENT_HYDRATION_REQUEST_TTL_MS,
+  applyHydrationDecision,
+  hydrationCoverageFingerprint,
+  hydrationDecisionFingerprint,
+  hydrationRequestFingerprint,
+  toWireHydrationRequest,
+} from "./handlers-hydration.ts";

@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (192)
+## Routes (193)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -110,12 +110,13 @@ body remain handler-checked and are noted per route in the service layer.
 | POST | `/api/v1/admin/users/:username/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — |
 | GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — |
-| GET | `/api/v1/agent/keys` | `agentKeyList` | `owner-session` | — | — |
-| POST | `/api/v1/agent/keys` | `agentKeyCreate` | `owner-session` | — | — |
-| POST | `/api/v1/agent/keys/:id/revoke` | `agentKeyRevoke` | `owner-session` | — | — |
+| GET | `/api/v1/agent/hydration-requests` | `agentHydrationRequestList` | `owner-session` | — | — |
+| GET | `/api/v1/agent/hydration-requests/:requestRef` | `agentHydrationRequestGet` | `agentKey` | — | — |
+| POST | `/api/v1/agent/hydration-requests/:requestRef/decision` | `agentHydrationRequestDecide` | `owner-session` | — | — |
 | GET | `/api/v1/agent/observations` | `agentObservations` | `agentKey` | — | — |
 | GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — |
 | POST | `/api/v1/agent/pages/:pageLabel/datasets/:dataset/query` | `agentDatasetQuery` | `agentKey` | — | page |
+| POST | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests` | `agentHydrationRequestCreate` | `agentKey` | — | page |
 | GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages` | `agentThreadMessages` | `agentKey` | — | page |
 | GET | `/api/v1/agent/people/:platform/:platformUserId` | `agentPerson` | `agentKey` | — | — |
 | GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — |

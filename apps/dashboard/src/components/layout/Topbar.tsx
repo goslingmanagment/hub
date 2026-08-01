@@ -132,6 +132,10 @@ function buildBreadcrumbs(
 
   if (parts[0] === "notifications") return [{ label: "Overview", href: "/" }, { label: "Notifications" }];
 
+  if (parts[0] === "agent-hydration") {
+    return [{ label: "Overview", href: "/" }, { label: "Hydration requests" }];
+  }
+
   if (parts[0] === "dev") {
     const devLabels: Record<string, string> = {
       log: "Log",

@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Coins, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
+import { BarChart3, Bell, Coins, Settings, Users, Heart, Trophy, MessageSquare, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -16,6 +16,9 @@ const devLinks = [
   { to: "/dev/queue", label: "Queue", icon: ListTodo },
   { to: "/dev/db-stats", label: "DB Stats", icon: Database },
   { to: "/dev/incidents", label: "Incidents", icon: AlertTriangle },
+  // Slice C: the owner approval queue. It lives under Dev because it is an
+  // operator surface, not a daily one — an empty queue is the normal state.
+  { to: "/agent-hydration", label: "Hydration", icon: Droplets },
 ] as const;
 
 export function Sidebar({ user }: SidebarProps) {

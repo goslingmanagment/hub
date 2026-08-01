@@ -1652,6 +1652,247 @@ export const agentDatasetQueryResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// #11 / #12 / #13 — hydration (slice C)
+//
+// The ONLY writes on the plane, and they write down an INTENT, never a vendor
+// call. An agent cannot make this system talk to a platform: #11 records what it
+// would like deepened (zero vendor calls, by construction — the handler touches
+// no adapter), #13 is the owner's decision with EXPLICIT caps, and only then
+// does the executor hand the work to machinery that already exists.
+// ---------------------------------------------------------------------------
+
+export const agentHydrationLaneEnum = z.enum([
+  /** Checked FIRST, always: a free local replay must never lose to a paid lane. */
+  "free_local_replay",
+  "vendor_paid_low",
+  "vendor_paid_high",
+]);
+
+/**
+ * The eight wire states. `requested` is the only entry; `completed`,
+ * `partially_completed`, `rejected`, `expired` and `failed` are terminal.
+ *
+ * There is deliberately NO transition back from `dispatching`: one approval
+ * buys exactly one attempt (outbox discipline), and a crashed run ends `failed`
+ * so a re-run needs a fresh owner decision rather than a silent retry.
+ */
+export const agentHydrationStateEnum = z.enum([
+  "requested",
+  "approved",
+  "dispatching",
+  "partially_completed",
+  "completed",
+  "rejected",
+  "expired",
+  "failed",
+]);
+
+/** Fansly has no direct payment for this (a session, not credits): the cost is
+ *  egress quota and BAN RISK, which is not smaller than money. */
+export const agentHydrationCostNoteEnum = z.enum([
+  "no_direct_cost",
+  "egress_quota_and_ban_risk",
+  "ofapi_credits",
+]);
+
+export const agentHydrationLastErrorEnum = z.enum([
+  "none",
+  "vendor_unavailable",
+  "proxy_missing",
+  "budget_exhausted",
+  "retention_limit",
+  "quarantined",
+  "timeout",
+]);
+
+export const agentHydrationParamsSchema = z.object({
+  requestRef: z.string().uuid(),
+}).strict();
+
+export const agentHydrationRequestCreateBodySchema = z.object({
+  /**
+   * A BOUNDARY, not a window. §7 defines the Fansly lane as "an addressed deep
+   * backfill of one thread PAST A GIVEN BOUNDARY"; "everything between two dates"
+   * is not a thing this lane can express, so it is not expressible here.
+   */
+  target: z.object({
+    kind: z.literal("thread_backfill_before"),
+    beforeAt: agentIsoTimestamp.optional(),
+    beforeMessageRef: z.string().min(1).max(500).optional(),
+  }).strict(),
+  reason: z.string().min(1).max(1000),
+  maxCalls: z.number().int().min(1).max(200).optional(),
+  idempotencyKey: z.string().uuid(),
+  claim: agentClaimSchema.optional(),
+}).strict().superRefine((value, ctx) => {
+  // EXACTLY one bound. Both would be two different questions in one request;
+  // neither would mean "the whole thread", which this target cannot say.
+  const hasAt = value.target.beforeAt !== undefined;
+  const hasRef = value.target.beforeMessageRef !== undefined;
+  addAgentIssues(
+    hasAt === hasRef
+      ? [{ path: ["target"], message: "exactly one of beforeAt / beforeMessageRef is required" }]
+      : [],
+    ctx,
+  );
+});
+
+export const agentHydrationRequestSchema = z.object({
+  requestRef: z.string().uuid(),
+  state: agentHydrationStateEnum,
+  pageLabel: z.string(),
+  platform: platformEnum,
+  conversationRef: z.string().min(1).max(500),
+  target: z.object({
+    kind: z.literal("thread_backfill_before"),
+    beforeAt: agentIsoTimestamp.nullable(),
+    beforeMessageRef: z.string().nullable(),
+  }).strict(),
+  admissibility: z.object({
+    /** §7's evaluation order, reported so a refusal names what was tried. */
+    orderEvaluated: z.array(agentHydrationLaneEnum),
+    selected: agentHydrationLaneEnum.nullable(),
+    admissible: z.boolean(),
+    reason: agentRemedyReasonEnum.nullable(),
+    costNote: agentHydrationCostNoteEnum.nullable(),
+  }).strict(),
+  /** sha256 of the coverage picture shown to the owner. A decision quoting a
+   *  stale one is 409 `hydration_proposal_stale`: an approval is bound to the
+   *  content hash of exactly what was displayed. */
+  coverageFingerprint: agentSha256Hex,
+  rowVersion: z.number().int().nonnegative(),
+  requestedBy: z.object({
+    principal: z.literal("agent_key"),
+    keyPrefix: z.string(),
+  }).strict(),
+  /** The DIGEST of the caller's reason, never the sentence: a request body is a
+   *  sink like any other and free-form text does not cross this boundary. */
+  reasonSha256: agentSha256Hex,
+  reasonLength: z.number().int().nonnegative(),
+  createdAt: agentIsoTimestamp,
+  updatedAt: agentIsoTimestamp,
+  expiresAt: agentIsoTimestamp.nullable(),
+  decision: z.object({
+    decidedAt: agentIsoTimestamp,
+    approved: z.boolean(),
+    allowMarkReadSideEffect: z.boolean().nullable(),
+    maxCalls: z.number().int().positive().nullable(),
+    maxCredits: z.number().int().nonnegative().nullable(),
+    maxPages: z.number().int().positive().nullable(),
+    maxItems: z.number().int().positive().nullable(),
+  }).strict().nullable(),
+  progress: z.object({
+    dispatchCount: z.number().int().nonnegative(),
+    acceptedItems: z.number().int().nonnegative(),
+    acceptedPages: z.number().int().nonnegative(),
+    spentCredits: z.number().int().nonnegative(),
+    lastError: agentHydrationLastErrorEnum,
+    /** The pg-boss job (Fansly) or the ofapi_capture_jobs row (OnlyFans) that
+     *  the approval was handed to. Null until it was. */
+    executionRef: z.string().nullable(),
+  }).strict(),
+}).strict();
+
+export const agentHydrationRequestResponseSchema = z.object({
+  request: agentHydrationRequestSchema,
+  /** `coalesced` = the same key resent the same idempotency key with the same
+   *  normalized body, and got the SAME request back. A different body is a 409. */
+  disposition: z.enum(["created", "coalesced"]),
+  delivery: agentDeliverySchema,
+  capture: agentCaptureSchema,
+  conclusion: agentConclusionSchema,
+}).strict().superRefine((value, ctx) => addAgentIssues(agentEvidenceIssues(value, 1), ctx));
+
+export const agentHydrationRequestGetResponseSchema = z.object({
+  request: agentHydrationRequestSchema,
+  delivery: agentDeliverySchema,
+  capture: agentCaptureSchema,
+  conclusion: agentConclusionSchema,
+}).strict().superRefine((value, ctx) => addAgentIssues(agentEvidenceIssues(value, 1), ctx));
+
+export const agentHydrationRequestDecideBodySchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+  /** CAS. A stale version means somebody decided first — 409 conflict, never a
+   *  silent overwrite of the other decision. */
+  expectedVersion: z.number().int().nonnegative(),
+  coverageFingerprint: agentSha256Hex,
+  idempotencyKey: z.string().uuid(),
+  maxCalls: z.number().int().min(1).max(500).optional(),
+  maxCredits: z.number().int().min(0).max(100_000).optional(),
+  maxPages: z.number().int().min(1).max(500).optional(),
+  maxItems: z.number().int().min(1).max(100_000).optional(),
+  expiresAt: agentIsoTimestamp.optional(),
+  /** #158: the vendor `GET .../messages` MUTATES read state on the platform
+   *  (decisions.md). A silent hydration would mark a fan's chat read, so an
+   *  approval must state this explicitly — either way, but never by omission. */
+  allowMarkReadSideEffect: z.boolean().optional(),
+  reason: z.string().min(1).max(1000).optional(),
+}).strict().superRefine((value, ctx) => {
+  const issues: AgentIssue[] = [];
+  if (value.decision === "approve") {
+    if (value.maxCalls === undefined && value.maxPages === undefined) {
+      issues.push({ path: ["maxCalls"], message: "approval requires at least maxCalls or maxPages" });
+    }
+    if (value.allowMarkReadSideEffect === undefined) {
+      issues.push({
+        path: ["allowMarkReadSideEffect"],
+        message: "approval must state the mark-read side effect explicitly (#158)",
+      });
+    }
+    if (value.expiresAt === undefined) {
+      issues.push({ path: ["expiresAt"], message: "approval requires an expiry" });
+    }
+  } else {
+    if (value.reason === undefined) {
+      issues.push({ path: ["reason"], message: "rejection requires a reason" });
+    }
+    for (const field of [
+      "maxCalls",
+      "maxCredits",
+      "maxPages",
+      "maxItems",
+      "expiresAt",
+      "allowMarkReadSideEffect",
+    ] as const) {
+      if (value[field] !== undefined) {
+        issues.push({ path: [field], message: `rejection cannot carry ${field}` });
+      }
+    }
+  }
+  addAgentIssues(issues, ctx);
+});
+
+export const agentHydrationRequestDecideResponseSchema = z.object({
+  request: agentHydrationRequestSchema,
+  disposition: z.enum(["approved", "rejected", "already_decided"]),
+  delivery: agentDeliverySchema,
+  capture: agentCaptureSchema,
+  conclusion: agentConclusionSchema,
+}).strict().superRefine((value, ctx) => addAgentIssues(agentEvidenceIssues(value, 1), ctx));
+
+/**
+ * The owner's approval QUEUE.
+ *
+ * Not in the §17 catalogue, and deliberately added here: §13 rules that #13 has
+ * BOTH clients — the owner CLI and a dashboard screen — and a screen that can
+ * only fetch a request whose uuid you already know is not an approval queue. It
+ * is `owner-session`, so it widens no agent surface; the CLI reads the same rows
+ * straight from the database.
+ */
+export const agentHydrationRequestListQuerySchema = z.object({
+  state: agentHydrationStateEnum.optional(),
+  limit: paginationQuerySchema.shape.limit,
+}).strict();
+
+export const agentHydrationRequestListResponseSchema = z.object({
+  items: z.array(agentHydrationRequestSchema).max(200),
+  delivery: agentDeliverySchema,
+  capture: agentCaptureSchema,
+  conclusion: agentConclusionSchema,
+}).strict().superRefine((value, ctx) =>
+  addAgentIssues(agentEvidenceIssues(value, value.items.length), ctx));
+
+// ---------------------------------------------------------------------------
 // The route registry. `routes.ts` spreads this into `routeSchemas`.
 // ---------------------------------------------------------------------------
 
@@ -1664,6 +1905,16 @@ export const AGENT_POST_READ_OPERATIONS = [
   "agentResolve",
   "agentSearchMessages",
   "agentDatasetQuery",
+] as const;
+
+/**
+ * The plane's MUTATIONS — POSTs that are not reads and are not covered by the
+ * allowlist above (§17.15.4 names exactly these two). Enumerated so the method
+ * guard stays a closed statement rather than "anything with a body".
+ */
+export const AGENT_POST_MUTATION_OPERATIONS = [
+  "agentHydrationRequestCreate",
+  "agentHydrationRequestDecide",
 ] as const;
 
 export const agentRouteSchemas = {
@@ -1835,6 +2086,78 @@ export const agentRouteSchemas = {
       503: errorResponseSchema,
     },
   },
+  agentHydrationRequestCreate: {
+    auth: { kind: "agentKey", scope: "page" },
+    tags: ["agent"],
+    summary:
+      "Record an intent to deepen capture for one thread (ZERO vendor calls)."
+      + " 200, not 202: this stores an intent, it does not queue work — only an"
+      + " owner decision can do that",
+    params: agentPageConversationParamsSchema,
+    body: agentHydrationRequestCreateBodySchema,
+    response: {
+      200: agentHydrationRequestResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      // hydration_not_admissible | idempotency_mismatch
+      409: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  agentHydrationRequestGet: {
+    // NOT page-scoped: the path carries a uuid, and the middleware resolves
+    // scope only from `params.pageLabel`. The grant check and the "this key
+    // filed it" check happen IN THE HANDLER, and a miss is the same static 404
+    // as a uuid that never existed.
+    auth: { kind: "agentKey" },
+    tags: ["agent"],
+    summary: "Poll one hydration request filed by this agent key",
+    params: agentHydrationParamsSchema,
+    response: {
+      200: agentHydrationRequestGetResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  agentHydrationRequestDecide: {
+    auth: { kind: "owner-session" },
+    tags: ["agent"],
+    summary: "Owner decision on a hydration request (CAS + coverage fingerprint + explicit caps)",
+    params: agentHydrationParamsSchema,
+    body: agentHydrationRequestDecideBodySchema,
+    response: {
+      200: agentHydrationRequestDecideResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      // conflict (CAS) | hydration_proposal_stale | idempotency_mismatch
+      409: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  agentHydrationRequestList: {
+    auth: { kind: "owner-session" },
+    tags: ["agent"],
+    summary: "Owner approval queue: hydration requests awaiting (or past) a decision",
+    querystring: agentHydrationRequestListQuerySchema,
+    response: {
+      200: agentHydrationRequestListResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type AgentDelivery = z.infer<typeof agentDeliverySchema>;
@@ -1884,3 +2207,15 @@ export type AgentObservationsQuery = z.infer<typeof agentObservationsQuerySchema
 export type AgentResolveBody = z.infer<typeof agentResolveBodySchema>;
 export type AgentSearchMessagesBody = z.infer<typeof agentSearchMessagesBodySchema>;
 export type AgentDatasetQueryBody = z.infer<typeof agentDatasetQueryBodySchema>;
+export type AgentHydrationState = z.infer<typeof agentHydrationStateEnum>;
+export type AgentHydrationLane = z.infer<typeof agentHydrationLaneEnum>;
+export type AgentHydrationCostNote = z.infer<typeof agentHydrationCostNoteEnum>;
+export type AgentHydrationLastError = z.infer<typeof agentHydrationLastErrorEnum>;
+export type AgentHydrationRequest = z.infer<typeof agentHydrationRequestSchema>;
+export type AgentHydrationRequestCreateBody = z.infer<typeof agentHydrationRequestCreateBodySchema>;
+export type AgentHydrationRequestResponse = z.infer<typeof agentHydrationRequestResponseSchema>;
+export type AgentHydrationRequestGetResponse = z.infer<typeof agentHydrationRequestGetResponseSchema>;
+export type AgentHydrationRequestDecideBody = z.infer<typeof agentHydrationRequestDecideBodySchema>;
+export type AgentHydrationRequestDecideResponse = z.infer<typeof agentHydrationRequestDecideResponseSchema>;
+export type AgentHydrationRequestListQuery = z.infer<typeof agentHydrationRequestListQuerySchema>;
+export type AgentHydrationRequestListResponse = z.infer<typeof agentHydrationRequestListResponseSchema>;
