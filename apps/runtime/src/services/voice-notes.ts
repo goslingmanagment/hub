@@ -43,7 +43,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { canAccessPage, type AuthPrincipal } from "./auth.ts";
+import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { resolveEgress, type AppEgressContext } from "./egress/resolver.ts";
 import { hasServiceEgressProxy } from "./egress/service-proxy.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
@@ -267,7 +267,7 @@ export async function createVoiceNote(
   // resolves the ElevenLabs vendor egress seam, which needs the whole context.
   // The routes and tests already pass a full AppContext.
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   body: CreateVoiceNoteBody,
 ): Promise<VoiceNoteStatusView> {
@@ -698,7 +698,7 @@ async function dispatchVoiceNoteAfterPermit(
  */
 export async function getVoiceNoteStatus(
   app: VoiceNotesApp,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   id: number,
 ): Promise<VoiceNoteStatusView> {
@@ -716,7 +716,7 @@ export async function getVoiceNoteStatus(
  */
 export async function getVoiceNoteAudio(
   app: VoiceNotesApp,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   id: number,
 ): Promise<{ bytes: Buffer; sha256: string }> {
@@ -752,7 +752,7 @@ export async function getVoiceNoteAudio(
 
 async function resolveAccessiblePage(
   app: VoiceNotesApp,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
 ): Promise<{ id: number; label: string }> {
   const stored = await findPageByLabel(app.db, pageLabel);
@@ -774,7 +774,7 @@ async function assertRetrievalEnabled(app: VoiceNotesApp): Promise<void> {
 // Projected scoped read for status: same (id, page, user) guard, no audio bytes.
 async function getScopedVoiceNoteStatus(
   app: VoiceNotesApp,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageId: number,
   id: number,
 ): Promise<VoiceNoteStatusRow> {
@@ -788,7 +788,7 @@ async function getScopedVoiceNoteStatus(
 /** Re-read after a lost admission race and replay the winner's row. */
 async function replayConcurrentWinner(
   app: VoiceNotesApp,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   clientRequestId: string,
   requestHash: string,
 ): Promise<VoiceNoteStatusView> {

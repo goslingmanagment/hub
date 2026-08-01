@@ -9,7 +9,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import type { AuthPrincipal } from "./auth.ts";
+import type { HumanAuthPrincipal } from "./auth.ts";
 import {
   ConflictError,
   NotFoundError,
@@ -118,7 +118,7 @@ function requireEnabled(app: AppContext) {
 
 async function resolveAssignedPage(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   accountId: string,
 ) {
   const pages = await listOfapiMappedPages(app.db);
@@ -182,7 +182,7 @@ function toView(row: OfapiCommandRow, deduplicated: boolean): OfapiCommandView {
   };
 }
 
-function assertCurrentAccess(principal: AuthPrincipal, row: OfapiCommandRow) {
+function assertCurrentAccess(principal: HumanAuthPrincipal, row: OfapiCommandRow) {
   if (!principal.assignedPageIds.includes(row.pageId)) {
     throw new NotFoundError("OFAPI command not found");
   }
@@ -190,7 +190,7 @@ function assertCurrentAccess(principal: AuthPrincipal, row: OfapiCommandRow) {
 
 export async function createOfapiCommand(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   input: CreateOfapiCommandRequest,
 ): Promise<{ status: 200 | 202; command: OfapiCommandView }> {
   requireEnabled(app);
@@ -266,7 +266,7 @@ export async function createOfapiCommand(
 
 export async function getOfapiCommand(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   commandId: string,
 ) {
   requireEnabled(app);
@@ -283,7 +283,7 @@ export async function getOfapiCommand(
 
 export async function cancelOfapiCommand(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   commandId: string,
 ) {
   requireEnabled(app);

@@ -5,6 +5,7 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  searchArchiveMessages,
   setPageOfapiAccountId,
   upsertFans,
   upsertPageDmMessages,
@@ -408,5 +409,39 @@ describe("message archive projection (Stage 10)", () => {
     expect(result.inserted).toBe(0);
     const rows = await testDb.pool.query("select 1 from message_archive");
     expect(rows.rows).toHaveLength(0);
+  });
+
+  it("searches archive text literally: % and _ are characters, not wildcards", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { ofPage } = await seedPages();
+    await appendDomainEvents(testDb.db, ofPage!.id, [
+      messageEvent({ ref: "s-1", fan: "800", text: "tip 100% worth it" }),
+      messageEvent({ ref: "s-2", fan: "801", text: "no percentage here" }),
+      messageEvent({ ref: "s-3", fan: "802", text: "a_b underscore" }),
+      messageEvent({ ref: "s-4", fan: "803", text: "axb no underscore" }),
+    ]);
+    await runMessageArchiveProjection(appStub());
+
+    // Unescaped, "100%" matched every row containing "100" and a bare "%"
+    // returned the entire archive — the search box was a wildcard console.
+    const percent = await searchArchiveMessages(testDb.db, { query: "100%" });
+    expect(percent.map((row) => row.messageRef)).toEqual(["s-1"]);
+    // A bare "%" used to return the entire archive; now it finds the one
+    // message that literally contains a percent sign.
+    const bareWildcard = await searchArchiveMessages(testDb.db, { query: "%" });
+    expect(bareWildcard.map((row) => row.messageRef)).toEqual(["s-1"]);
+
+    const underscore = await searchArchiveMessages(testDb.db, { query: "a_b" });
+    expect(underscore.map((row) => row.messageRef)).toEqual(["s-3"]);
+
+    // The backslash is the clause's escape character, so it is a literal too.
+    expect(await searchArchiveMessages(testDb.db, { query: "\\" })).toHaveLength(0);
+
+    // Plain substring search keeps working.
+    const plain = await searchArchiveMessages(testDb.db, { query: "percentage" });
+    expect(plain.map((row) => row.messageRef)).toEqual(["s-2"]);
   });
 });

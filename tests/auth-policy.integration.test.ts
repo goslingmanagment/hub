@@ -1,10 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { sha256Hex } from "@agency_hub_core/shared";
 
+import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import {
+  AGENT_KEY_TOKEN_PREFIX,
   assignPageToUser,
+  authenticateAgentKey,
   createUserAccount,
   issueChatterApiKey,
 } from "../apps/runtime/src/services/auth.ts";
@@ -23,6 +27,9 @@ let testDb: StartedTestDatabase | null = null;
 let enforceServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let logServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let chatterKey = "";
+/** A live Agent Read Plane key (slice 0b): authenticates, admitted nowhere yet. */
+const agentKeyToken = `${AGENT_KEY_TOKEN_PREFIX}policyprobe000000000`;
+let agentAppContext: AppContext;
 
 function sessionCookieFrom(response: {
   headers: Record<string, string | string[] | number | undefined>;
@@ -72,7 +79,7 @@ beforeAll(async () => {
   }, { source: "cli" });
 
   const model = await createModel(testDb.db, { slug: "lana-model", name: "Lana Model" });
-  await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
+  const lanaPage = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
   await createFanslyPage(testDb.db, { modelId: model.id, label: "lily1" });
 
   const issued = await issueChatterApiKey(seedContext, {
@@ -86,6 +93,21 @@ beforeAll(async () => {
     username: "lead",
     pageLabel: "lana",
   }, { source: "cli" });
+
+  agentAppContext = seedContext;
+  await insertAgentKey(testDb.db, {
+    name: "policy-probe",
+    keyPrefix: agentKeyToken.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+    keyDigest: sha256Hex(agentKeyToken),
+    capabilities: ["read:messages"],
+    // Granted the very page the human matrix reads, so every refusal below is
+    // about the principal KIND and not about a missing page grant.
+    pageIds: lanaPage ? [lanaPage.id] : [],
+    dailyRequestBudget: 5000,
+    dailyRowBudget: 500_000,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    createdBy: null,
+  });
 
   // Both servers pin Stage 2's revenue gate to "enforce" — that is production
   // reality (flipped 2026-07-05), and the declarations must reproduce exactly it.
@@ -310,6 +332,34 @@ describe("log mode: legacy guards keep answering, statuses identical to enforce"
       });
       expect(viaLog.statusCode, `log-mode ${testCase.url}`).toBe(testCase.expected);
     }
+  });
+
+  it("refuses a live agent key on the pre-agent routes in BOTH modes", async (context) => {
+    const servers = requireServers(context);
+    if (!servers) return;
+    // Dual-layer proof (#143): in enforce mode the declaration denies before any
+    // handler; in log mode the in-handler guards must reach the same answer. The
+    // key here is real and live — it authenticates, then gets refused by scope.
+    const cases: Array<{ url: string; kind: string }> = [
+      { url: "/api/v1/auth/me", kind: "any" },
+      { url: "/api/v1/models", kind: "session" },
+      { url: "/api/v1/admin/users", kind: "owner-session" },
+      { url: "/api/v1/events/snapshot?accountId=1&afterSeq=0", kind: "apiKey" },
+      { url: "/api/v1/pages/lana/subscribers", kind: "any + page scope" },
+    ];
+    const headers = { authorization: `Bearer ${agentKeyToken}` };
+
+    for (const testCase of cases) {
+      const viaEnforce = await servers.enforce.inject({ method: "GET", url: testCase.url, headers });
+      const viaLog = await servers.log.inject({ method: "GET", url: testCase.url, headers });
+      expect(viaEnforce.statusCode, `enforce ${testCase.kind} ${testCase.url}`).toBe(403);
+      expect(viaLog.statusCode, `log ${testCase.kind} ${testCase.url}`).toBe(403);
+    }
+
+    // And the key really is live: the same token authenticates into an agent
+    // principal, so these 403s are scope decisions, not a broken credential.
+    const principal = await authenticateAgentKey(agentAppContext, agentKeyToken);
+    expect(principal?.kind).toBe("agent");
   });
 
   it("keeps the webhook's hmac handler answer identical across modes", async (context) => {

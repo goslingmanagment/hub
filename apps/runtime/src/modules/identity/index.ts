@@ -103,6 +103,9 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.me,
   }, async (request) => {
     const principal = await requirePrincipal(request);
+    // "Who am I" is a HUMAN answer: this response is a user record, and
+    // requirePrincipal has already refused any agent key. An agent reads its own
+    // identity from the agent plane's capabilities operation instead.
     return {
       authMethod: principal.authMethod,
       user: principal.user,
@@ -247,7 +250,8 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.authIssueDeviceToken,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    const authSessionId = requireSessionUser(principal);
+    requireSessionUser(principal);
+    const authSessionId = principal.authSessionId;
     const issued = await issueDeviceToken(appContext, {
       userId: principal.user.id,
       authSessionId,
@@ -266,7 +270,8 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.authReserveDeviceToken,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    const authSessionId = requireSessionUser(principal);
+    requireSessionUser(principal);
+    const authSessionId = principal.authSessionId;
     const reserved = await reservePendingDeviceToken(appContext, {
       userId: principal.user.id,
       authSessionId,

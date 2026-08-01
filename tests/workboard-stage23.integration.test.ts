@@ -23,7 +23,7 @@ import {
   unclaimWorkboardV2Fan,
   undoWorkboardContactV2,
 } from "../apps/runtime/src/modules/workboard/index.ts";
-import type { AuthPrincipal, AuthenticatedUser } from "../apps/runtime/src/services/auth.ts";
+import type { AuthenticatedUser, HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   runWorkboardFanRecompute,
@@ -83,7 +83,7 @@ async function seedUser(username: string, role: "owner" | "chatter"): Promise<nu
   return result.rows[0]!.id;
 }
 
-function sessionPrincipal(userId: number, username: string, role: "owner" | "chatter", assignedPageIds: number[] = []): AuthPrincipal {
+function sessionPrincipal(userId: number, username: string, role: "owner" | "chatter", assignedPageIds: number[] = []): HumanAuthPrincipal {
   return {
     authMethod: "session",
     user: { id: userId, username, role, mustChangePassword: false } as AuthenticatedUser,

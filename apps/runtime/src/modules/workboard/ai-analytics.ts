@@ -23,7 +23,7 @@ import {
 import { UTC_TIME_ZONE, addUtcDays, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import type { AuthPrincipal } from "../../services/auth.ts";
+import type { HumanAuthPrincipal } from "../../services/auth.ts";
 import { BadRequestError } from "../../services/errors.ts";
 import { resolveAccessibleWorkboardPage } from "./page-access.ts";
 import { type ClosingSettingsOverride, DEFAULT_MODEL, estimateCostUsd, resolveClosingSettings } from "./ai-settings.ts";
@@ -48,7 +48,7 @@ function iso(value: Date | string): string {
 
 export async function getWorkboardV2AiReport(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
 ): Promise<WorkboardV2AiReport> {
   const page = await resolveAccessibleWorkboardPage(app, principal, pageLabel);
@@ -141,7 +141,7 @@ export async function getWorkboardV2AiReport(
 
 export async function updateWorkboardV2AiSettings(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   body: WorkboardV2AiSettingsBody,
 ): Promise<WorkboardV2AiReport> {
@@ -194,7 +194,7 @@ async function executeClassifyRun(
 
 export async function runWorkboardV2AiClassify(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   pageLabel: string,
   body: WorkboardV2AiClassifyBody,
 ): Promise<WorkboardV2AiClassifyResponse> {

@@ -28,6 +28,7 @@ import {
   SESSION_COOKIE_NAME,
   authenticateBearerToken,
   authenticateSessionToken,
+  isAgentPrincipal,
   requireApiKeyUser,
   type AuthPrincipal,
 } from "../../services/auth.ts";
@@ -321,7 +322,10 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         const refreshed = apiKeyToken
           ? await authenticateBearerToken(appContext, apiKeyToken)
           : null;
-        if (!refreshed) {
+        // An agent key is refused here as it is at the route: agent keys get no
+        // SSE at all, and a live stream must not survive a re-auth that produced
+        // a principal this lane never admits.
+        if (!refreshed || isAgentPrincipal(refreshed)) {
           request.log.warn("SSE API key no longer authenticates; closing stream");
           raw.end();
           return;

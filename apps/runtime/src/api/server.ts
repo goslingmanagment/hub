@@ -27,6 +27,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import {
   canAccessPage,
+  principalLogFields,
   requireOwner,
   SESSION_COOKIE_NAME,
   type AuthPrincipal,
@@ -390,9 +391,9 @@ export async function buildApiServer(appContext: AppContext) {
       path: request.routeOptions.url,
       statusCode: reply.statusCode,
       verdict: decided.verdict,
-      userId: request.auth?.user.id,
-      role: request.auth?.user.role,
-      authMethod: request.auth?.authMethod,
+      // Identity fields per principal variant: an agent key logs its key id, a
+      // human logs the user — neither borrows the other's shape.
+      ...(request.auth ? principalLogFields(request.auth) : {}),
     }, `auth-policy ${divergence}: middleware verdict diverges from the legacy guards`);
   });
 

@@ -2,9 +2,12 @@ import { routeSchemas, type RouteAuthPolicy } from "@agency_hub_core/contracts";
 
 import { AppError } from "../services/errors.ts";
 import {
+  isAgentPrincipal,
+  requireAgentPrincipal,
   requireApiKeyUser,
   requireDashboardUser,
   requireDeviceTokenUser,
+  requireHumanPrincipal,
   requireOwner,
   requireSessionUser,
   type AuthPrincipal,
@@ -119,21 +122,36 @@ export async function computeAuthPolicyVerdict(
     case "device-token":
       kindVerdict = guardVerdict(() => requireDeviceTokenUser(principal), "device_token_required");
       break;
+    case "agentKey":
+      // The agent plane is one-way: this kind admits agent keys and nothing else.
+      kindVerdict = guardVerdict(() => requireAgentPrincipal(principal), "agent_key_required");
+      break;
     case "any":
-      kindVerdict = ALLOW;
+      // "any" is an ALLOWLIST of the pre-agent authentication methods, not a
+      // wildcard. Every kind above already refuses an agent key by its own
+      // authMethod check; this is the one that used to let everything through.
+      kindVerdict = guardVerdict(() => requireHumanPrincipal(principal), "agent_key_not_admitted");
       break;
   }
   if (!kindVerdict.allow) {
     return kindVerdict;
   }
 
-  if (auth.roles && !auth.roles.includes(principal.user.role)) {
+  // `roles` names HUMAN roles; an agent key has none and can never satisfy one.
+  // (Unreachable while `agentKey` is the only kind an agent passes and carries no
+  // roles — the check is written so that adding roles there cannot open a hole.)
+  if (auth.roles && (isAgentPrincipal(principal) || !auth.roles.includes(principal.user.role))) {
     return { allow: false, statusCode: 403, reason: "role_not_allowed" };
   }
 
   if (auth.scope === "page" && typeof input.pageLabelParam === "string") {
     const access = await input.resolvePageAccess(input.pageLabelParam);
-    if (access === "not-found") {
+    // Existence-oracle law (spec §5.6): for an AGENT principal, "this page is not
+    // yours" and "there is no such page" must be the same answer. A 403 here would
+    // let a key enumerate the agency's page labels through the middleware, before
+    // any handler runs. Human principals keep today's 403/404 distinction — the
+    // dashboard's own error messages depend on it.
+    if (access === "not-found" || (access === "denied" && isAgentPrincipal(principal))) {
       return { allow: false, statusCode: 404, reason: "page_not_found" };
     }
     if (access === "denied") {

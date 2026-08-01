@@ -195,6 +195,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 192 | Ramp-gate wake-up | An admin config write that OPENS a Fansly ramp gate queues `fan_earnings`/`purchase_history` (source `recovery`) for the affected pages, dispatched on the planner's next minutely tick; the gate is read before and after the write so only non-ramped -> ramped transitions queue anything (a needless walk is ~1400 Fansly calls), and a wake-up failure is logged and swallowed instead of failing the config write |
 | 193 | Deleted fans in top-spenders | `pageTopSpenders` carries `entries[].deletedAt` (`fans.deleted_detected_at`, ISO, null = alive) so the board can tell a deleted account from an unloaded name and stop re-asking Fansly for ids it can never resolve; deleted fans stay IN the ranking because their spend is in the totals, and the field is `.optional()` because the kernel deploys independently of the extension |
 | 194 | Fansly transaction-data correctness | Subscribers add one archive-only expired-history bootstrap; live bulk-stream gates become durable pause/resume state and skipped runs stop claiming data success; PPV target discovery adds a transaction keyset while retaining the existing media-scoped capture contract |
+| 195 | Agent principal isolation | An agent key authenticates into its OWN `AuthPrincipal` variant with NO human user (`kind: "agent"`, capabilities + explicit `page_ids`), extending #116's credential taxonomy with a third kind; route kind `agentKey` admits only agent principals, every other kind (including `any`, now an allowlist of the pre-agent methods) refuses them, and a page an agent may not read answers 404 exactly as a page that does not exist |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -5961,3 +5962,56 @@ one generic backfill problem.
    sales of an already captured target rely on inline orders.
 
 No schema migration, queue, table or new provider endpoint is introduced.
+
+**Decision #195 (2026-08-01, an agent key is a principal without a user, and
+every pre-agent surface refuses it):** Decision #116 fixed the credential
+taxonomy as "humans authenticate with a password plus per-device tokens, robots
+with API keys". The Agent Read Plane adds a third kind that neither half
+describes: a machine reader that is not a chatter's robot, holds no human
+identity at all, and must be readable-by-construction narrower than the owner
+who issued it.
+
+The obvious modelling — reuse the human principal and set the creator (the
+owner) as its user — was rejected. `canAccessPage` short-circuits on the owner
+role, so an owner-shaped agent principal would read every page in the agency and
+the key's `page_ids` grant would be decorative. `AuthPrincipal` is therefore a
+discriminated union: the existing human shape, or `{ kind: "agent", authMethod:
+"agent_key", agentKeyId, keyName, capabilities, pageIds }` with no `user` field.
+That is the enforcement mechanism, not documentation: TypeScript refuses every
+`principal.user` read until the site declares what an agent gets instead, and on
+a human-only surface the answer is always "refused". Sixteen call sites were
+walked; the per-human services (voice notes, the OFAPI command outbox and read
+gateway, the AI gateway and feature lanes, the workboard reports) now declare
+`HumanAuthPrincipal` in their signatures, the route handlers that read a user
+narrow through the existing guards (`requireOwner`, `requireDashboardUser`,
+`requireApiKeyUser`, `requireSessionUser` are assertion functions now) or
+through the new `requireHumanPrincipal`, and the two scope helpers plus the
+audit-context builder grew explicit agent branches.
+
+Isolation is symmetric and one-way. The new route kind `agentKey` admits agent
+principals and nothing else; every other kind refuses them, which required
+turning `any` from a wildcard into an explicit allowlist of the pre-agent
+authentication methods (a regression pin keeps sessions, api keys and device
+tokens passing it). Page scope for an agent is its grant, never `undefined` —
+the value that means owner-everything — and a cross-page request intersects with
+`agentScopeFor`, which fails closed on an empty intersection.
+
+The existence oracle is closed at the VERDICT layer, not only in handlers: for an
+agent principal, "this page is not in your grant" and "there is no such page"
+produce the same static 404, byte-identical, before any handler runs. Human
+principals keep today's 403/404 distinction, which the dashboard's own messages
+depend on.
+
+Key lifetime is enforced where the write happens: authentication slides
+`expires_at` (+90 days, clamped to `created_at` + 365) inside the same guarded
+statement that stamps `last_used_at`, so a revoked or expired key matches no row,
+gets no fresh timestamp and cannot be resurrected by the very request that should
+have been refused.
+
+Shipped alongside, because it is the same class of bug in the read path: the
+archive text search escapes `%`, `_` and `\` before its ILIKE, so a search for
+"100%" finds that text instead of matching every message ever archived.
+
+This slice registers NO routes and moves no operation surface — the auth-kind
+enum value is the only contract change, and the generated OpenAPI and SDK are
+byte-identical (only the authorization-policy document's kind legend moves).

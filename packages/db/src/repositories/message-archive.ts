@@ -9,6 +9,7 @@ import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { escapeLikePattern } from "./search.ts";
 
 export const MESSAGE_ARCHIVE_PROJECTION = "message_archive";
 export const MESSAGE_ARCHIVE_SHADOW_PROJECTION = "message_archive_shadow";
@@ -1301,7 +1302,12 @@ export async function searchArchiveMessages(
     return [];
   }
   const limit = Math.min(input.limit ?? 50, 200);
-  const conditions = [sql`ma.text_plain ilike ${`%${input.query}%`}`];
+  // The query is a user's literal search string, not a pattern: `%`, `_` and `\`
+  // are escaped (the `escapeLikePattern` precedent) so that searching for "100%"
+  // finds the text "100%" instead of matching every message in the archive.
+  const conditions = [
+    sql`ma.text_plain ilike ${`%${escapeLikePattern(input.query)}%`} escape '\\'`,
+  ];
   if (input.accountIds !== undefined) {
     conditions.push(sql`ma.account_id in (${sql.join(input.accountIds.map((id) => sql`${id}`), sql`, `)})`);
   }

@@ -6,8 +6,13 @@ import {
   authenticateBearerToken,
   authenticatePendingDeviceTokenForActivation,
   authenticateSessionToken,
+  isAgentPrincipal,
+  requireAgentPrincipal,
   requireDashboardUser,
+  requireHumanPrincipal,
+  type AgentAuthPrincipal,
   type AuthPrincipal,
+  type HumanAuthPrincipal,
   type PendingDeviceTokenActivationCredential,
 } from "../services/auth.ts";
 import { UnauthorizedError } from "../services/errors.ts";
@@ -33,7 +38,36 @@ function bearerToken(request: PrincipalRequest): string | null {
 }
 
 export function pageScopeFor(principal: AuthPrincipal) {
+  // `undefined` means "no filter at all" (owner-everything), so the agent branch
+  // comes first and always returns a LIST: an agent key sees its grant, and a key
+  // granted nothing sees nothing — never everything.
+  if (isAgentPrincipal(principal)) {
+    return principal.pageIds;
+  }
   return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
+}
+
+/**
+ * The page filter for an AGENT request: what the request asked for, intersected
+ * with what the key was granted.
+ *
+ * `platformRollupScopeFor` deliberately returns `requestedPageIds` bare — it is
+ * safe today only because page-scoped handlers pass `[page.id]` AFTER
+ * `canAccessPage` has already approved that page. Agent operations take page
+ * lists straight from the request, so they intersect HERE. An empty intersection
+ * is returned as an empty list and the caller must treat it as "no rows": handing
+ * `[]` to a repository that reads "no ids" as "no filter" is exactly how a scope
+ * clamp turns into an unfiltered read.
+ */
+export function agentScopeFor(
+  principal: AgentAuthPrincipal,
+  requestedPageIds: readonly number[] | undefined,
+): number[] {
+  const granted = new Set(principal.pageIds);
+  if (requestedPageIds === undefined) {
+    return [...granted];
+  }
+  return requestedPageIds.filter((pageId) => granted.has(pageId));
 }
 
 /**
@@ -53,11 +87,26 @@ export function platformRollupScopeFor(principal: AuthPrincipal, requestedPageId
   return principal.authMethod === "session" ? pageScopeFor(principal) : requestedPageIds;
 }
 
-/** Audit attribution for admin mutations issued through the API. */
-export const auditCtx = (principal: AuthPrincipal) => ({
-  source: "api" as const,
-  actorUserId: principal.user.id,
-});
+/**
+ * Audit attribution for admin mutations issued through the API.
+ *
+ * An agent key has no row in `users`, so it attributes to its key id under its
+ * own source instead of borrowing the owner who issued it. (No mutation route
+ * admits an agent principal today; the variant exists so that adding one cannot
+ * silently file the agent's action under a human.)
+ */
+export const auditCtx = (principal: AuthPrincipal) => (
+  isAgentPrincipal(principal)
+    ? {
+      source: "agent_key" as const,
+      actorUserId: null,
+      actorAgentKeyId: principal.agentKeyId,
+    }
+    : {
+      source: "api" as const,
+      actorUserId: principal.user.id,
+    }
+);
 
 function safeStringEquals(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
@@ -105,11 +154,31 @@ export function createRequestAuth(appContext: AppContext) {
     return credential;
   }
 
-  async function requirePrincipal(request: PrincipalRequest) {
+  /**
+   * The handler-facing principal of every route that predates the agent plane.
+   *
+   * It refuses an agent key HERE, at the boundary, rather than route by route:
+   * the declarative policy denies agent keys too, but only in `enforce` mode,
+   * and the dual-layer law (#143) requires the isolation property to hold with
+   * the middleware in `log` mode as well. The narrowed return type is the other
+   * half — a handler cannot read `.user` off a principal that might be an agent.
+   */
+  async function requirePrincipal(request: PrincipalRequest): Promise<HumanAuthPrincipal> {
     const principal = await resolvePrincipal(request);
     if (!principal) {
       throw new UnauthorizedError();
     }
+    requireHumanPrincipal(principal);
+    return principal;
+  }
+
+  /** The agent-plane counterpart: slice A's operations resolve through this one. */
+  async function requireAgentKeyPrincipal(request: PrincipalRequest): Promise<AgentAuthPrincipal> {
+    const principal = await resolvePrincipal(request);
+    if (!principal) {
+      throw new UnauthorizedError();
+    }
+    requireAgentPrincipal(principal);
     return principal;
   }
 
@@ -141,6 +210,7 @@ export function createRequestAuth(appContext: AppContext) {
     resolvePrincipal,
     resolvePendingDeviceToken,
     requirePrincipal,
+    requireAgentKeyPrincipal,
     requirePendingDeviceToken,
     hasValidSyncHealthMonitoringToken,
     requireSyncHealthAccess,

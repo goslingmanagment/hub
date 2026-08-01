@@ -14,6 +14,7 @@ import {
   deletePendingDeviceTokenById,
   deletePendingDeviceTokensForUser,
   findActiveApiKeysForUser,
+  findAgentKeyByDigest,
   findApiKeyByDigest,
   findAuthSessionByDigest,
   findAuthSessionById,
@@ -27,6 +28,7 @@ import {
   listUsers,
   lockUserForApiKeyRotation,
   lockUserForDeviceTokenMutation,
+  recordAgentKeyUse,
   revokeApiKeysByIds,
   revokeApiKeysForUser,
   revokeAuthSessionsForUser,
@@ -78,6 +80,9 @@ const DUMMY_PASSWORD_HASH =
 interface AuditContext {
   source: string;
   actorUserId?: number | null;
+  /** Set instead of `actorUserId` when the actor is an agent key (no human);
+   *  recorded inside the audit metadata, since `actor_user_id` references users. */
+  actorAgentKeyId?: number | null;
 }
 
 export interface AuthenticatedUser {
@@ -107,7 +112,13 @@ export interface AdminUserDetailed extends AuthenticatedUser {
   lastActiveAt: string | null;
 }
 
-export interface AuthPrincipal {
+/**
+ * A request made BY A PERSON: a cookie session, an API key or a device token,
+ * each carrying the human whose grants decide what the request may read.
+ */
+export interface HumanAuthPrincipal {
+  /** Absent by design: the discriminant only exists on the agent variant. */
+  kind?: undefined;
   authMethod: "session" | "api_key" | "device_token";
   user: AuthenticatedUser;
   assignedPageIds: number[];
@@ -118,6 +129,61 @@ export interface AuthPrincipal {
   authSessionId?: number;
   /** Owner-bound capability carried by this exact device token. */
   harvestMachineId?: string;
+}
+
+/**
+ * Agent Read Plane principal (slice 0b). There is deliberately NO `user` here.
+ *
+ * The key's creator is the owner, and an owner-shaped principal would walk
+ * straight through `canAccessPage`'s owner short-circuit and every roles-gated
+ * route, making the key's explicit `pageIds` grant decorative. Modelling the
+ * agent as its own variant makes that impossible to express: TypeScript refuses
+ * every `principal.user` read until the site says what an agent gets instead,
+ * and the answer for a human-only surface is always "refused".
+ */
+export interface AgentAuthPrincipal {
+  kind: "agent";
+  authMethod: "agent_key";
+  agentKeyId: number;
+  /** Operator-facing key name; safe for logs and audit rows, never secret. */
+  keyName: string;
+  /** Values from AGENT_CAPABILITIES; stored per key, checked per operation. */
+  capabilities: readonly string[];
+  /** The explicit page grant. No wildcard, never widened by role. */
+  pageIds: number[];
+}
+
+export type AuthPrincipal = HumanAuthPrincipal | AgentAuthPrincipal;
+
+/** The authentication methods that existed before the agent plane. */
+const HUMAN_AUTH_METHODS: ReadonlySet<AuthPrincipal["authMethod"]> = new Set<
+  AuthPrincipal["authMethod"]
+>(["session", "api_key", "device_token"]);
+
+export function isAgentPrincipal(principal: AuthPrincipal): principal is AgentAuthPrincipal {
+  return principal.kind === "agent";
+}
+
+/**
+ * Fail-closed narrowing for every pre-agent surface. The check is an explicit
+ * ALLOWLIST of the human authentication methods rather than `!== "agent"`, so a
+ * future principal kind is refused by default instead of inheriting access.
+ */
+export function requireHumanPrincipal(
+  principal: AuthPrincipal,
+): asserts principal is HumanAuthPrincipal {
+  if (isAgentPrincipal(principal) || !HUMAN_AUTH_METHODS.has(principal.authMethod)) {
+    throw new ForbiddenError("This route is not available to agent keys");
+  }
+}
+
+/** The mirror guard: an agent-plane route admits nothing but an agent key. */
+export function requireAgentPrincipal(
+  principal: AuthPrincipal,
+): asserts principal is AgentAuthPrincipal {
+  if (!isAgentPrincipal(principal)) {
+    throw new ForbiddenError("This route requires an agent key");
+  }
 }
 
 function roleNeedsPassword(role: UserRole) {
@@ -246,13 +312,19 @@ export async function recordAudit(app: Pick<AppContext, "db">, input: AuditConte
   platformAccountId?: number | null;
   metadata?: Record<string, unknown>;
 }) {
+  // An agent key has no row in `users`, so its identity travels in the metadata
+  // rather than in actor_user_id; a human audit row is byte-identical to before.
+  const metadata = input.actorAgentKeyId == null
+    ? input.metadata
+    : { ...input.metadata, actorAgentKeyId: input.actorAgentKeyId };
+
   await insertAuditEvent(app.db, {
     actorUserId: input.actorUserId ?? null,
     targetUserId: input.targetUserId ?? null,
     platformAccountId: input.platformAccountId ?? null,
     source: input.source,
     eventType: input.eventType,
-    metadata: input.metadata,
+    metadata,
   });
 
   // Stage 7 producer 6: the audit choke point dual-writes an observation.
@@ -266,7 +338,7 @@ export async function recordAudit(app: Pick<AppContext, "db">, input: AuditConte
     actorUserId: input.actorUserId ?? null,
     targetUserId: input.targetUserId ?? null,
     platformAccountId: input.platformAccountId ?? null,
-    metadata: input.metadata ?? null,
+    metadata: metadata ?? null,
   };
   await insertObservation(app.db, {
     source: "operator",
@@ -1117,6 +1189,13 @@ export async function logoutSessionToken(app: AppContext, sessionToken: string) 
 }
 
 export function canAccessPage(principal: AuthPrincipal, pageId: number) {
+  // The agent branch comes FIRST and returns: an agent key is granted exactly
+  // the pages it was issued for, and the owner short-circuit below must stay
+  // unreachable for it (the key's creator is the owner).
+  if (isAgentPrincipal(principal)) {
+    return principal.pageIds.includes(pageId);
+  }
+
   if (principal.user.role === "owner") {
     return true;
   }
@@ -1124,7 +1203,9 @@ export function canAccessPage(principal: AuthPrincipal, pageId: number) {
   return principal.assignedPageIds.includes(pageId);
 }
 
-export function requireDashboardUser(principal: AuthPrincipal) {
+export function requireDashboardUser(
+  principal: AuthPrincipal,
+): asserts principal is HumanAuthPrincipal {
   if (principal.authMethod !== "session") {
     throw new ForbiddenError("Dashboard routes require a cookie session");
   }
@@ -1133,22 +1214,29 @@ export function requireDashboardUser(principal: AuthPrincipal) {
   }
 }
 
-/** Any live cookie session, any human role (self-serve auth surface). */
-export function requireSessionUser(principal: AuthPrincipal) {
+/**
+ * Any live cookie session, any human role (self-serve auth surface). Asserts
+ * rather than returns, so the narrowed `principal.authSessionId` is available to
+ * the caller and an agent key cannot reach the body at all.
+ */
+export function requireSessionUser(
+  principal: AuthPrincipal,
+): asserts principal is HumanAuthPrincipal & { authSessionId: number } {
   if (principal.authMethod !== "session" || principal.authSessionId === undefined) {
     throw new ForbiddenError("This route requires a cookie session");
   }
-  return principal.authSessionId;
 }
 
-export function requireOwner(principal: AuthPrincipal) {
+export function requireOwner(principal: AuthPrincipal): asserts principal is HumanAuthPrincipal {
   requireDashboardUser(principal);
   if (principal.user.role !== "owner") {
     throw new ForbiddenError("Owner access required");
   }
 }
 
-export function requireApiKeyUser(principal: AuthPrincipal) {
+export function requireApiKeyUser(
+  principal: AuthPrincipal,
+): asserts principal is HumanAuthPrincipal {
   if (principal.authMethod !== "api_key" && principal.authMethod !== "device_token") {
     throw new ForbiddenError("Bearer credential required");
   }
@@ -1162,11 +1250,32 @@ export function requireDeviceTokenUser(principal: AuthPrincipal) {
 }
 
 export function requireHarvestDeviceToken(principal: AuthPrincipal) {
+  requireHumanPrincipal(principal);
   const deviceTokenId = requireDeviceTokenUser(principal);
   if (!principal.harvestMachineId) {
     throw new ForbiddenError("This device token has no Desktop harvest capability");
   }
   return { deviceTokenId, machineId: principal.harvestMachineId };
+}
+
+/**
+ * Identity fields for logs and warnings, for EITHER principal variant. Log
+ * statements must not be the reason a fail-closed union needs a `user` — an
+ * agent contributes its key id and name, never a fabricated user.
+ */
+export function principalLogFields(principal: AuthPrincipal) {
+  return isAgentPrincipal(principal)
+    ? {
+      authMethod: principal.authMethod,
+      agentKeyId: principal.agentKeyId,
+      agentKeyName: principal.keyName,
+    }
+    : {
+      authMethod: principal.authMethod,
+      userId: principal.user.id,
+      username: principal.user.username,
+      role: principal.user.role,
+    };
 }
 
 /**
@@ -1182,6 +1291,9 @@ export function enforceRevenueRouteRoleScope(
   principal: AuthPrincipal,
   routePath: string,
 ) {
+  // The log-only window is a HUMAN-role calibration device; it never applies to
+  // an agent key, which has no role to calibrate and is refused outright.
+  requireHumanPrincipal(principal);
   try {
     requireDashboardUser(principal);
   } catch (error) {
@@ -1190,10 +1302,7 @@ export function enforceRevenueRouteRoleScope(
     }
     app.logger.warn({
       path: routePath,
-      userId: principal.user.id,
-      username: principal.user.username,
-      role: principal.user.role,
-      authMethod: principal.authMethod,
+      ...principalLogFields(principal),
     }, "would-deny: revenue route requires a dashboard session role (log-only mode)");
   }
 }
@@ -1495,10 +1604,54 @@ export async function authenticateDeviceToken(app: AppContext, deviceToken: stri
   } satisfies AuthPrincipal;
 }
 
-/** Prefix-discriminated bearer authentication: api key or device token. */
+// --- Agent Read Plane keys (agent-read slice 0b) ---
+
+/** Distinct prefix: an agent key is never mistaken for a human credential. */
+export const AGENT_KEY_TOKEN_PREFIX = "agency_hub_agent_";
+
+/**
+ * Authenticates an agent key into the `user`-less agent principal.
+ *
+ * Revoked and expired keys are refused by `recordAgentKeyUse` itself: its WHERE
+ * clause carries the `revoked_at is null and expires_at > now` guard, so a dead
+ * key matches nothing, gets neither a fresh `last_used_at` nor a resurrected
+ * expiry, and returns null here. The lookup before it exists only so an unknown
+ * digest and a dead key are the same non-answer; nothing about the row is
+ * revealed either way.
+ */
+export async function authenticateAgentKey(app: AppContext, agentKeyToken: string) {
+  const record = await findAgentKeyByDigest(app.db, sha256Hex(agentKeyToken));
+  if (!record) {
+    return null;
+  }
+
+  // Slides expires_at (+90 days, clamped to created_at + 365) and stamps
+  // last_used_at in ONE guarded statement; null means the key was revoked or
+  // already expired between the lookup and the write.
+  const used = await recordAgentKeyUse(app.db, { id: record.id });
+  if (!used) {
+    return null;
+  }
+
+  return {
+    kind: "agent" as const,
+    authMethod: "agent_key" as const,
+    agentKeyId: record.id,
+    keyName: record.name,
+    capabilities: record.capabilities,
+    pageIds: record.pageIds,
+  } satisfies AgentAuthPrincipal;
+}
+
+/** Prefix-discriminated bearer authentication: agent key, api key or device token. */
 export async function authenticateBearerToken(app: AppContext, token: string) {
   if (token.startsWith(DEVICE_TOKEN_PREFIX) || token.startsWith(PENDING_DEVICE_TOKEN_PREFIX)) {
     return authenticateDeviceToken(app, token);
+  }
+  // Before the api-key fallback: an agent key must never be resolved by the
+  // legacy path, whose principal would carry a human user.
+  if (token.startsWith(AGENT_KEY_TOKEN_PREFIX)) {
+    return authenticateAgentKey(app, token);
   }
   return authenticateApiKeyToken(app, token);
 }
@@ -1580,6 +1733,7 @@ export async function revokeCurrentDeviceToken(
   principal: AuthPrincipal,
   audit: AuditContext,
 ) {
+  requireHumanPrincipal(principal);
   const deviceTokenId = requireDeviceTokenUser(principal);
   await withAuditTransaction(app, async (dbTx) => {
     const revoked = await revokeDeviceTokenById(dbTx, {

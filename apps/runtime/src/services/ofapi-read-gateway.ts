@@ -1,7 +1,7 @@
 import { listOfapiMappedPages } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import type { AuthPrincipal } from "./auth.ts";
+import type { HumanAuthPrincipal } from "./auth.ts";
 import {
   compareOfapiHistoryShadow,
   isExplicitOfapiDeepHistoryRead,
@@ -373,7 +373,7 @@ function avatarFromMetadata(metadata: Record<string, unknown>) {
 
 export async function executeOfapiReadGatewayRequest(
   app: AppContext,
-  principal: AuthPrincipal,
+  principal: HumanAuthPrincipal,
   input: {
     rawPath: string;
     rawQuery: RawQuery;
