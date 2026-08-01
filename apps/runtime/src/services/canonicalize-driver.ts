@@ -8,6 +8,7 @@
 
 import {
   appendDomainEvents,
+  appendProjectionOnlyDomainEvents,
   listObservationsForReplay,
   listPageNativeAccountRefs,
   markObservationParsed,
@@ -109,6 +110,11 @@ export interface CanonicalizationRunOptions {
   /** Narrow to specific kinds (CLI); default = every declared family kind. */
   kinds?: readonly string[];
   accountId?: number | null;
+  /** Restrict the scan to an explicit account set. Mandatory for a family
+   * whose kinds are shared across platforms — the stamp lands even on rows
+   * that produced zero events, so an unscoped run consumes the other
+   * platform's observations for good (see listObservationsForReplay). */
+  accountIds?: readonly number[];
   from?: Date | null;
   to?: Date | null;
   /** Override the version floor (CLI --parse-version); default per family. */
@@ -178,6 +184,7 @@ async function runFamily(
       source: family.source,
       ...(kinds !== undefined ? { kinds } : {}),
       accountId: options.accountId ?? null,
+      ...(options.accountIds !== undefined ? { accountIds: options.accountIds } : {}),
       from: options.from ?? null,
       to: options.to ?? null,
       afterId,
@@ -222,11 +229,20 @@ async function runFamily(
         }
 
         if (drafts.length > 0) {
-          const result = await appendDomainEvents(
-            app.db,
-            accountId!,
-            drafts.map((draft) => ({ ...draft, observationId: row.id })),
-          );
+          const inputs = drafts.map((draft) => ({ ...draft, observationId: row.id }));
+          // A projection-only family's material never reaches a client, so its
+          // hidden seq range needs the atomic checkpoint the SSE replay
+          // validator looks for. The key carries the family version: a version
+          // bump that mints EXTRA events for an already-checkpointed
+          // observation must claim a fresh checkpoint, not collide with the
+          // old one.
+          const result = family.projectionOnly === true
+            ? await appendProjectionOnlyDomainEvents(app.db, accountId!, inputs, {
+              occurredAt: row.receivedAt,
+              observationId: row.id,
+              dedupKey: `${family.source}:v${family.version}:checkpoint:${row.id}`,
+            })
+            : await appendDomainEvents(app.db, accountId!, inputs);
           totals.appended += result.appended;
           totals.deduped += result.deduped;
         }

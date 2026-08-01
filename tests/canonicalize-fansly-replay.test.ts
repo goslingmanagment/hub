@@ -3,7 +3,10 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { isProjectionOnlyDomainEventType } from "@agency_hub_core/db";
+
 import {
+  asDomainInstant,
   canonicalizeFanslyReplayObservation,
   FANSLY_REPLAY_CANONICALIZED_KINDS,
   FANSLY_REPLAY_EVENT_TYPES,
@@ -69,6 +72,17 @@ describe("Fansly replay canonicalizers (slice D)", () => {
     ]);
   });
 
+  it("declares every emitted type projection-only, so no client is handed the backfill", () => {
+    // Review round 1: these events describe year-old facts but take FRESH
+    // account_seq values, so a reconnecting SSE client would replay the whole
+    // backfill as news. The family flag and the type registry are one
+    // decision — the driver's checkpoint protocol depends on both.
+    expect(FANSLY_REPLAY_FAMILY.projectionOnly).toBe(true);
+    for (const type of FANSLY_REPLAY_EVENT_TYPES) {
+      expect(isProjectionOnlyDomainEventType(type)).toBe(true);
+    }
+  });
+
   it("emits nothing for a non-Fansly observation of a shared kind", () => {
     // dm_conversations is journaled by the OFAPI DM sync too, under the same
     // kind and a completely different shape.
@@ -119,6 +133,65 @@ describe("Fansly replay canonicalizers (slice D)", () => {
     });
   });
 
+  describe("vendor timestamps: interpret, then refuse the uninterpretable", () => {
+    // Review round 1 (P1-4). Fansly mixes epoch seconds and milliseconds in
+    // the same payload family — that is why this repo has asFanslyTimestamp
+    // at all, and why migration 0077 exists. These values become floors that
+    // fold monotonically EARLIER, so a 1970 written here can never be lifted
+    // by a later, correct run. Refuse instead of defaulting.
+    it("reads a seconds-valued timestamp as seconds, not as 1970", () => {
+      // 1745781549 seconds and 1745781549000 ms are the SAME instant; read as
+      // milliseconds the seconds value would be 1970-01-21.
+      expect(asDomainInstant(1_745_781_549)?.toISOString()).toBe("2025-04-27T19:19:09.000Z");
+      expect(asDomainInstant(1_745_781_549_000)?.toISOString()).toBe("2025-04-27T19:19:09.000Z");
+    });
+
+    it("refuses zero, negative, non-numeric and pre-platform values", () => {
+      // `lastSeenAt: 0` is live payload content, not a hypothetical.
+      for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, null, undefined, "", "123"]) {
+        expect(asDomainInstant(value)).toBeNull();
+      }
+      // 1 second and 1 millisecond after the epoch: both land before Fansly
+      // existed, so neither can be a real Fansly moment.
+      expect(asDomainInstant(1)).toBeNull();
+      expect(asDomainInstant(1_000_000_000_001)).toBeNull();
+    });
+
+    it("carries null into the event rather than a guessed default", () => {
+      const events = canonicalizeFanslyReplayObservation(observation("subscribers", {
+        subscriptions: [
+          { id: "s-zero", subscriberId: "fan-1", status: 3, createdAt: 0 },
+          { id: "s-seconds", subscriberId: "fan-2", status: 3, createdAt: 1_772_157_317 },
+        ],
+      }));
+      expect(events[0]!.data.subscribedAt).toBeNull();
+      expect(events[1]!.data.subscribedAt).toBe("2026-02-27T01:55:17.000Z");
+    });
+
+    it("withholds a follow whose id does not decode to a real moment", () => {
+      const events = canonicalizeFanslyReplayObservation(observation("followers", {
+        followers: [
+          { id: "1", followerId: "fan-1" },
+          { id: "885754550978359296", followerId: "fan-2" },
+        ],
+      }));
+      const follows = byType(events, "follow.observed");
+      expect(follows).toHaveLength(2);
+      // Follow id "1" decodes to the raw Fansly epoch — implausible, so the
+      // date is refused and the projection will skip the dated row entirely.
+      expect(follows[0]!.data.followedAt).toBeNull();
+      expect(follows[1]!.data.followedAt).toBe("2026-03-05T01:38:21.377Z");
+    });
+
+    it("refuses a zero createdAt in an aggregated profile", () => {
+      const events = canonicalizeFanslyReplayObservation(observation("followers", {
+        followers: [],
+        aggregationData: { accounts: [{ id: "fan-1", username: "u", createdAt: 0 }] },
+      }));
+      expect(events[0]!.data.createdAtExternal).toBeNull();
+    });
+  });
+
   describe("subscribers (journaled RAW)", () => {
     it("mints one subscription event per row with the canonical status", async () => {
       const response = await loadResponse<{ subscriptions: Array<Record<string, unknown>> }>(
@@ -135,7 +208,8 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       expect(first.data.autoRenew).toBe(true);
       // Fansly subscription prices are MILLS; carried through untouched.
       expect(first.data.priceMills).toBe(20000);
-      expect(first.data.subscribedAt).toBe(1772157317000);
+      expect(first.data.subscribedAt).toBe("2026-02-27T01:55:17.000Z");
+      expect(first.data.endsAt).toBe("2026-03-27T01:55:17.000Z");
     });
 
     it("ignores a payload without a subscriptions array", () => {
@@ -250,11 +324,12 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       expect(event.fanIdentityRef).toBeNull();
       expect(event.data).toEqual({
         platformAccountRef: "772956494390898689",
+        businessDate: "2026-03-15",
         username: "lanavellor",
         displayName: "Lana Vellor",
         followCount: 474,
         subscriberCount: 6,
-        createdAtExternal: 1745781549000,
+        createdAtExternal: "2025-04-27T19:19:09.000Z",
       });
       const serialized = JSON.stringify(event.data);
       expect(serialized).not.toContain("checkToken");
@@ -301,6 +376,27 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       const expired = canonicalizeFanslyReplayObservation(observation("subscribers", build(5)));
       expect(expired[0]!.dedupKey).not.toBe(active[0]!.dedupKey);
       expect(expired[0]!.data.canonicalStatus).toBe("expired");
+    });
+
+    it("keeps one page-identity witness PER UTC DAY even when nothing changed", () => {
+      // Review round 1 (P2-b): content-only keys collapsed two identical daily
+      // snapshots into one event, and the later day silently lost its
+      // follower-total witness although the journal proves the observation
+      // happened. The rollups are keyed by day, so the key must be too.
+      const payload = { account: { id: "page-1", username: "u", followCount: 100 } };
+      const monday = canonicalizeFanslyReplayObservation(
+        observation("account_me", payload, { observedAt: new Date("2026-03-15T23:00:00Z") }),
+      );
+      const tuesday = canonicalizeFanslyReplayObservation(
+        observation("account_me", payload, { observedAt: new Date("2026-03-16T01:00:00Z") }),
+      );
+      const sameDay = canonicalizeFanslyReplayObservation(
+        observation("account_me", payload, { observedAt: new Date("2026-03-15T06:00:00Z") }),
+      );
+      expect(tuesday[0]!.dedupKey).not.toBe(monday[0]!.dedupKey);
+      expect(sameDay[0]!.dedupKey).toBe(monday[0]!.dedupKey);
+      expect(monday[0]!.data.businessDate).toBe("2026-03-15");
+      expect(tuesday[0]!.data.businessDate).toBe("2026-03-16");
     });
   });
 

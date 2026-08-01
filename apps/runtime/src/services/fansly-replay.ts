@@ -194,12 +194,12 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
     const platformUserId = typeof data.platformUserId === "string" ? data.platformUserId : null;
 
     if (event.type === "fan.identity_observed" && platformUserId !== null) {
+      // Instants arrive already interpreted (ISO or null) — the canonicalizer
+      // owns the seconds-vs-milliseconds decision, this layer never repeats it.
       touchIdentity(platformUserId, event.occurredAt, {
         username: typeof data.username === "string" ? data.username : null,
         displayName: typeof data.displayName === "string" ? data.displayName : null,
-        createdAtExternal: typeof data.createdAtExternal === "number"
-          ? new Date(data.createdAtExternal)
-          : null,
+        createdAtExternal: asOptionalDate(data.createdAtExternal),
       });
       touchMembership(platformUserId, event.occurredAt, {});
       continue;
@@ -207,13 +207,16 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
 
     if (event.type === "follow.observed" && platformUserId !== null) {
       const platformFollowId = typeof data.followId === "string" ? data.followId : null;
-      // A follow with no parseable follow moment falls back to the moment we
-      // observed it — later than the truth, never earlier, so the audience
-      // floor is never claimed to be further back than the evidence allows.
-      const followedAt = asOptionalDate(data.followedAt) ?? event.occurredAt;
+      // REFUSED, not defaulted. `followedAt` is null when the follow id did
+      // not decode to a plausible Fansly moment; dating the row by the
+      // observation instead would write a follow date we never observed, and
+      // both `page_follows.followed_at` and `follower_since` are floors that
+      // fold monotonically earlier — a wrong value there is unrepairable.
+      // The fan's identity still lands; only the dated row is withheld.
+      const followedAt = asOptionalDate(data.followedAt);
       touchIdentity(platformUserId, event.occurredAt);
       touchMembership(platformUserId, event.occurredAt, { followerSince: followedAt });
-      if (platformFollowId !== null) {
+      if (platformFollowId !== null && followedAt !== null) {
         const current = follows.get(platformFollowId);
         if (current === undefined || event.occurredAt < current.observedAt) {
           follows.set(platformFollowId, {
@@ -228,14 +231,9 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
     }
 
     if (event.type === "subscription.observed" && platformUserId !== null) {
-      const subscribedAt = typeof data.subscribedAt === "number"
-        ? new Date(data.subscribedAt)
-        : null;
       touchIdentity(platformUserId, event.occurredAt);
       touchMembership(platformUserId, event.occurredAt, {
-        subscriberSince: subscribedAt !== null && !Number.isNaN(subscribedAt.getTime())
-          ? subscribedAt
-          : null,
+        subscriberSince: asOptionalDate(data.subscribedAt),
       });
       continue;
     }
@@ -276,7 +274,6 @@ export async function runFanslyReplayProjection(
   for (const accountId of accountIds) {
     totals.accounts += 1;
     let watermark = await getProjectionWatermark(app.db, FANSLY_REPLAY_PROJECTION, accountId);
-    let sawWork = false;
     for (;;) {
       const events = await listEventsSince(app.db, {
         accountId,
@@ -289,7 +286,6 @@ export async function runFanslyReplayProjection(
       const replayEvents = events.filter((event) => FANSLY_REPLAY_EVENT_TYPES.has(event.type));
       totals.eventsSeen += replayEvents.length;
       if (replayEvents.length > 0) {
-        sawWork = true;
         const folded = foldEvents(replayEvents);
         const applied = await applyFanslyReplayEvents(app.db, {
           platformAccountId: accountId,
@@ -308,11 +304,15 @@ export async function runFanslyReplayProjection(
       }
     }
 
-    if (sawWork) {
-      const rollups = await refreshFanslyReplayAudienceRollups(app.db, accountId);
-      totals.followerDaysTouched += rollups.followerDaysTouched;
-      totals.knownTotalDaysTouched += rollups.knownTotalDaysTouched;
-    }
+    // UNCONDITIONAL, for every selected account, every run. The rollups are
+    // re-derived from durable state, and the live hourly rebuild wipes the
+    // historical values this slice writes — so gating on "did this run see new
+    // events" would make the refresh happen exactly once and the advertised
+    // floors evaporate at the next live rebuild. Same for a crash between the
+    // watermark advance and the refresh: the next run repairs it.
+    const rollups = await refreshFanslyReplayAudienceRollups(app.db, accountId);
+    totals.followerDaysTouched += rollups.followerDaysTouched;
+    totals.knownTotalDaysTouched += rollups.knownTotalDaysTouched;
   }
 
   return totals;
@@ -382,6 +382,13 @@ export async function runFanslyReplay(
     families: [FANSLY_REPLAY_FAMILY],
     kinds,
     accountId: options.accountId ?? null,
+    // MUST be scoped to Fansly pages. `dm_conversations` is journaled by the
+    // OFAPI DM sync under the same kind, and the driver stamps parse_version
+    // even for observations that produced zero events — an unscoped run would
+    // mark OnlyFans rows consumed by version 1, and a future OnlyFans
+    // canonicalizer at that version would never look at them again (Stage 8's
+    // parse-version contract).
+    accountIds,
     from: window.from,
     to: window.to,
     // shadow = canonicalize and count; the driver's dry run appends nothing

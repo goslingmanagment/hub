@@ -32,6 +32,15 @@ export interface CanonicalizerFamily {
   kinds: readonly string[] | null;
   version: number;
   canonicalize: Canonicalizer;
+  /**
+   * The family's events are projection material, not client-deliverable news
+   * (every type it emits must be in PROJECTION_ONLY_DOMAIN_EVENT_TYPES). The
+   * driver then appends through the projection-only protocol, which adds the
+   * atomic stream.projection_checkpoint covering the hidden seq range — the
+   * SSE replay validator REQUIRES that checkpoint, so this flag and the type
+   * list are one decision, never two.
+   */
+  projectionOnly?: boolean;
 }
 
 export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [

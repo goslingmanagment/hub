@@ -55,11 +55,30 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "message.material_observed",
   "capture.coverage_observed",
   "capture.coverage_revoked",
+  // Fansly replay (slice D). These describe facts that are up to a year old
+  // but take FRESH account_seq values when the replay appends them, so a
+  // client reconnecting with yesterday's watermark would otherwise be handed
+  // the whole backfill as if it were news. They feed projections only; their
+  // seq range is covered by the atomic stream.projection_checkpoint.
+  "fan.identity_observed",
+  "follow.observed",
+  "subscription.observed",
+  "conversation.observed",
+  "page.identity_observed",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {
   return PROJECTION_ONLY_DOMAIN_EVENT_TYPES.has(type);
 }
+
+/** The SQL-side twin of the set above, DERIVED from it. Both exclusion sites
+ *  used to inline the three type literals, so extending the set (slice D added
+ *  five) would have silently kept delivering the new types to SSE clients
+ *  while `isProjectionOnlyDomainEventType` claimed otherwise. One source. */
+const PROJECTION_ONLY_TYPES_SQL = sql.join(
+  [...PROJECTION_ONLY_DOMAIN_EVENT_TYPES].map((type) => sql`${type}`),
+  sql`, `,
+);
 
 /**
  * Appends a batch of canonical events for ONE account. Self-transactional:
@@ -392,11 +411,7 @@ export async function listDomainEventContiguousReplayEnds(
           on event.account_id = normalized.account_id
          and event.account_seq > normalized.base_seq
          and event.account_seq <= normalized.through_seq
-         and event.type not in (
-           'message.material_observed',
-           'capture.coverage_observed',
-           'capture.coverage_revoked'
-         )
+         and event.type not in (${PROJECTION_ONLY_TYPES_SQL})
       ), classified as (
         select *,
                case
@@ -721,11 +736,7 @@ export async function listEventsSince(
       and de.account_seq > ${input.afterSeq}
       ${input.throughSeq === undefined ? sql`` : sql`and de.account_seq <= ${input.throughSeq}`}
       ${input.excludeProjectionOnly === true
-        ? sql`and de.type not in (
-            'message.material_observed',
-            'capture.coverage_observed',
-            'capture.coverage_revoked'
-          )`
+        ? sql`and de.type not in (${PROJECTION_ONLY_TYPES_SQL})`
         : sql``}
     order by de.account_seq asc
     limit ${limit}
@@ -760,6 +771,15 @@ export async function listObservationsForReplay(
     source?: string;
     kinds?: readonly string[];
     accountId?: number | null;
+    /**
+     * Restrict to an explicit account set. A family whose kinds are shared
+     * across platforms (`dm_conversations` is journaled by BOTH the Fansly and
+     * the OFAPI DM sync) MUST narrow here: the sweep stamps parse_version even
+     * when a canonicalizer returns zero events, so an unscoped run would mark
+     * the other platform's observations consumed and a future canonicalizer
+     * for them would never see the rows again.
+     */
+    accountIds?: readonly number[];
     from?: Date | null;
     to?: Date | null;
     afterId?: number | null;
@@ -776,6 +796,13 @@ export async function listObservationsForReplay(
   }
   if (input.accountId != null) {
     conditions.push(sql`o.account_id = ${input.accountId}`);
+  }
+  if (input.accountIds !== undefined) {
+    conditions.push(
+      input.accountIds.length === 0
+        ? sql`false`
+        : sql`o.account_id in (${sql.join(input.accountIds.map((id) => sql`${id}`), sql`, `)})`,
+    );
   }
   if (input.from) {
     conditions.push(sql`o.received_at >= ${input.from}`);

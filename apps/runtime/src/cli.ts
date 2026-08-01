@@ -1374,6 +1374,13 @@ export function buildProgram() {
         if (report.refused) {
           // A detached month makes every floor this run would publish a lie.
           process.exitCode = 1;
+        } else if ((report.canonicalize?.errored ?? 0) > 0) {
+          // Rows that failed to append stay unstamped and are retried, but a
+          // run that limped must not look like a clean one. An EMPTY detached
+          // partition in the append range surfaces exactly here, one
+          // ExecFindPartition 23514 per row — the preflight cannot see it,
+          // because an empty partition hides no rows.
+          process.exitCode = 1;
         }
       } finally {
         await app.close();

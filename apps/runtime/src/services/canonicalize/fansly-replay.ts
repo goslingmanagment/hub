@@ -39,7 +39,6 @@ import { fanslyFollowIdToDate } from "@agency_hub_core/shared";
 
 import type { CanonicalizerFamily } from "./index.ts";
 import {
-  asFanslyTimestamp,
   asNumber,
   asString,
   isRecord,
@@ -100,6 +99,49 @@ function observedAt(observation: CanonicalizableObservation): Date {
   return observation.observedAt ?? observation.receivedAt;
 }
 
+/** UTC day of an observation — the grain the follower rollups are keyed by. */
+function businessDate(at: Date): string {
+  return at.toISOString().slice(0, 10);
+}
+
+// ── vendor timestamps ──────────────────────────────────────────────────────
+// Fansly mixes epoch SECONDS and epoch MILLISECONDS across the same payload
+// family; misreading one as the other is what put events in 1970 and cost the
+// repo migration 0077. Live payloads also carry a literal `0` for "never".
+//
+// These values become DOMAIN timestamps, and the projection folds them with
+// `least()` — monotonically EARLIER — so a floor written from a 1970 value can
+// never be repaired by a later, correct run. Therefore: interpret with the
+// house heuristic, then REFUSE (null) anything that cannot be a real moment on
+// this platform. Null means "unknown" and the projection writes nothing for
+// it; a guessed default would be a fabricated capture floor.
+
+/** Fansly's own follow-relation epoch (2019-06-25). The platform did not
+ *  exist before it, so nothing earlier is a real Fansly moment — this is the
+ *  line that turns a seconds/ms mix-up into a refusal instead of 1970. */
+const FANSLY_PLATFORM_EPOCH_MS = 1_561_494_359_900;
+/** Overflowed or fat-fingered values (an ms value wrongly scaled as seconds
+ *  lands far up here) are refused rather than believed. */
+const IMPLAUSIBLE_FUTURE_MS = Date.UTC(2100, 0, 1);
+
+export function asDomainInstant(value: unknown): Date | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  const ms = value >= 1_000_000_000_000 ? value : value * 1000;
+  if (!Number.isFinite(ms) || ms < FANSLY_PLATFORM_EPOCH_MS || ms >= IMPLAUSIBLE_FUTURE_MS) {
+    return null;
+  }
+  const parsed = new Date(ms);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Every instant leaves the canonicalizer as an ISO string or null, so no
+ *  downstream reader ever repeats the seconds-vs-milliseconds decision. */
+function asDomainInstantIso(value: unknown): string | null {
+  return asDomainInstant(value)?.toISOString() ?? null;
+}
+
 /** Fansly `autoRenew` is 0/1 on the wire; anything else is genuinely unknown. */
 function asAutoRenew(value: unknown): boolean | null {
   const numeric = asNumber(value);
@@ -109,12 +151,23 @@ function asAutoRenew(value: unknown): boolean | null {
   return numeric !== 0;
 }
 
-/** Snowflake-derived follow date. Malformed ids are common enough in a
- *  multi-year journal that a throw here would wedge a whole page of rows. */
+/** Snowflake-derived follow date, held to the same plausibility line: an id
+ *  that does not decode to a real Fansly moment yields null, and the follow
+ *  then contributes NO row rather than one dated by guesswork. Malformed ids
+ *  are common enough in a multi-year journal that a throw here would wedge a
+ *  whole page of rows. */
 function followedAtFrom(followId: string): Date | null {
   try {
-    const date = fanslyFollowIdToDate(followId);
-    return Number.isNaN(date.getTime()) ? null : date;
+    const decoded = fanslyFollowIdToDate(followId);
+    if (Number.isNaN(decoded.getTime())) {
+      return null;
+    }
+    const ms = decoded.getTime();
+    // The decode is `epoch + (id >> 22)`, so it can never land BEFORE the
+    // epoch — landing exactly ON it means the id carried no timestamp at all
+    // (a garbage id like "1"). Dating a follow at the platform's zero instant
+    // would be a fabricated floor, so that case is refused too.
+    return ms <= FANSLY_PLATFORM_EPOCH_MS || ms >= IMPLAUSIBLE_FUTURE_MS ? null : decoded;
   } catch {
     return null;
   }
@@ -126,7 +179,8 @@ interface AccountLike {
   platformUserId: string;
   username: string | null;
   displayName: string | null;
-  createdAtExternal: number | null;
+  /** Already interpreted and plausibility-checked; null = unknown. */
+  createdAtExternal: string | null;
 }
 
 function readAccountLike(item: unknown): AccountLike | null {
@@ -141,7 +195,7 @@ function readAccountLike(item: unknown): AccountLike | null {
     platformUserId,
     username: asString(item.username),
     displayName: asString(item.displayName),
-    createdAtExternal: asNumber(item.createdAt),
+    createdAtExternal: asDomainInstantIso(item.createdAt),
   };
 }
 
@@ -269,16 +323,17 @@ function fanslySubscribers(observation: CanonicalizableObservation): CanonicalEv
       renewPriceMills: asNumber(item.renewPrice),
       autoRenew: asAutoRenew(item.autoRenew),
       subscriptionTierId: asString(item.subscriptionTierId),
-      endsAt: asNumber(item.endsAt),
-      renewDate: asNumber(item.renewDate),
-      updatedAt: asNumber(item.updatedAt),
+      // Interpreted, not raw: the window fields legitimately sit in the
+      // future, so only the epoch floor and the overflow ceiling apply.
+      endsAt: asDomainInstantIso(item.endsAt),
+      renewDate: asDomainInstantIso(item.renewDate),
+      updatedAt: asDomainInstantIso(item.updatedAt),
     };
     const dedupKey = `subscription:${subscriptionId}:${stableHash(mutable)}`;
     if (seen.has(dedupKey)) {
       continue;
     }
     seen.add(dedupKey);
-    const createdAt = asNumber(item.createdAt);
     events.push({
       type: "subscription.observed",
       occurredAt: observedAt(observation),
@@ -292,8 +347,10 @@ function fanslySubscribers(observation: CanonicalizableObservation): CanonicalEv
         canonicalStatus: rawStatus === null ? "unknown" : mapFanslySubscriptionStatus(rawStatus),
         billingCycleDays: asNumber(item.billingCycle),
         durationDays: asNumber(item.duration),
-        // Subscription window in ms epoch, verbatim from the platform.
-        subscribedAt: createdAt,
+        // Drives `page_fans.subscriber_since` through a monotone-earlier
+        // fold, so an uninterpretable value must stay null: a 1970 written
+        // here is a false floor no later run can lift.
+        subscribedAt: asDomainInstantIso(item.createdAt),
         ...mutable,
       },
       schemaVersion: 1,
@@ -394,7 +451,6 @@ function fanslyDmConversations(
     // and createdAt — the only three we read, and each may legitimately be
     // absent (a group with no messages trims to `lastMessage: null`).
     const lastMessage = isRecord(group) && isRecord(group.lastMessage) ? group.lastMessage : null;
-    const lastMessageCreatedAt = lastMessage === null ? null : asNumber(lastMessage.createdAt);
 
     events.push({
       type: "conversation.observed",
@@ -406,9 +462,7 @@ function fanslyDmConversations(
         groupId,
         ...identity,
         conversationFlags: asNumber(item.flags),
-        lastMessageAt: lastMessageCreatedAt === null
-          ? null
-          : asFanslyTimestamp(lastMessageCreatedAt, observedAt(observation)).toISOString(),
+        lastMessageAt: lastMessage === null ? null : asDomainInstantIso(lastMessage.createdAt),
         lastMessageSenderId: lastMessage === null ? null : asString(lastMessage.senderId),
       },
       schemaVersion: 1,
@@ -432,23 +486,31 @@ function fanslyAccountMe(observation: CanonicalizableObservation): CanonicalEven
   // Field-by-field by design: the raw account_me payload also carries `email`
   // and `checkToken`. A spread would journal a live session secret into the
   // queryable ledger.
+  const at = observedAt(observation);
   const identity = {
     username: asString(account.username),
     displayName: asString(account.displayName),
     followCount: asNumber(account.followCount),
     subscriberCount: asNumber(account.subscriberCount),
-    createdAtExternal: asNumber(account.createdAt),
+    createdAtExternal: asDomainInstantIso(account.createdAt),
   };
+  const day = businessDate(at);
   return [{
     type: "page.identity_observed",
-    occurredAt: observedAt(observation),
+    occurredAt: at,
     fanIdentityRef: null,
     data: {
       platformAccountRef,
+      businessDate: day,
       ...identity,
     },
     schemaVersion: 1,
-    dedupKey: `page_identity:${platformAccountRef}:${stableHash(identity)}`,
+    // The UTC day is part of the key ON PURPOSE. Content alone would collapse
+    // two identical daily snapshots into one event, and the later day would
+    // silently lose its follower-total witness even though the journal proves
+    // the observation happened — the rollups are keyed by day, so the witness
+    // must be too.
+    dedupKey: `page_identity:${platformAccountRef}:${day}:${stableHash(identity)}`,
   }];
 }
 
@@ -488,4 +550,9 @@ export const FANSLY_REPLAY_FAMILY: CanonicalizerFamily = {
   kinds: FANSLY_REPLAY_CANONICALIZED_KINDS,
   version: FANSLY_REPLAY_CANONICALIZER_VERSION,
   canonicalize: canonicalizeFanslyReplayObservation,
+  // Backfill of year-old facts under fresh account_seq values: delivering it
+  // would hand a reconnecting client a year of "news". Every type above is
+  // registered projection-only, and the driver appends the covering
+  // checkpoint.
+  projectionOnly: true,
 };
