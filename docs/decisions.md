@@ -202,6 +202,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 198 | Agent search is Postgres FTS | Message search runs `websearch_to_tsquery('simple')` over the GIN that has existed unused since migration 0059; `escapeLikePattern` is NOT applied on that path (it corrupts tsquery input), no FTS index is built for the other two message stores, and they are declared `not_indexed` so a miss reads as non-coverage rather than as absence |
 | 199 | One writer for the blockers | `concludeEnvelope` in `modules/agent-read/epistemics.ts` is the ONLY runtime site that names a blocker (pinned textually); plane reads are branded witnesses a handler cannot mint (barrel export pinned); ramp mode and cursor traversal enter through the signature — a consumed cursor takes `mutable_sort_key_traversal`, and an unfrozen population takes the `no_frozen_snapshot` caveat instead of an unearned `snapshotExhausted` |
 | 200 | Agent keys are issued, never recovered | An agent key is minted by the owner (dashboard or `POST /api/v1/agent/keys`), returns its raw token EXACTLY once and stores only `sha256(token)`; the closed capability matrix and the 365-day lifetime ceiling REFUSE a bad issuance (400) instead of narrowing it silently, the page grant is the labels that were named (no wildcard, later pages are not granted), and delivery to a model is `packages/hub-agent-cli` (`hub`): one command per agentKey operation, one JSON document per call, exit 0/3/4 with `--fail-on-partial`. The `exportPolicy` VALUE flip (spec 11 step C) is BLOCKED: both vendored clients still reject `agent_read_plane_v1` at runtime |
+| 201 | Help/Review prompts: Russian output, receipts required | `help-me` and `chat-review` templates rewritten: chatter-facing analysis pinned to Russian («ты»), fan-facing text pinned to the fan's language; fixed capped block structures (СИТУАЦИЯ/ЧТО УПУЩЕНО/СЛЕДУЮЩИЙ ХОД/РИСК; ВЕРДИКТ/ДЕНЬГИ/ПЕРСОНА/ОШИБКИ/ЧТО РАБОТАЕТ); every claim must quote a message fragment; rating bands anchored with a no-default-to-7-8 rule; both Help suggestions implement ONE recommended move; chat-review gains the shared paid-media glossary. XML wire format unchanged |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6246,3 +6247,48 @@ unannotated dump); the wire marker that ADVERTISES it is exactly the value still
 waiting on the fleet. Until then the plane is live and the marker is honest about
 saying nothing new. #57, #140 and #142 remain untouched; DP 7, DP 8 and DP 9-A are
 reaffirmed.
+
+**Decision #201 (2026-08-01, Help and Review answer in Russian and must carry
+receipts):** the `help-me` and `chat-review` prompt templates are rewritten
+around two failures the owner hit in live use: both features answered in
+English (the chatters work in Russian; the analysis was unreadable noise to its
+only audience), and both produced generic essay-shaped output that named no
+specific messages and changed no specific behavior.
+
+The language rule is split by AUDIENCE, not by feature. Chatter-facing analysis
+(help-me's coaching section, chat-review's evaluation and recommendations) is
+pinned to Russian, addressed «ты», with English trade terms allowed where they
+are the natural register (PPV, upsell, churn). Fan-facing text (help-me's two
+suggestions, chat-review's «как надо было» rewrites) is pinned to the fan's
+language inferred from the transcript, defaulting to English, because a
+ready-to-send message in the coaching language is not ready to send. This is
+the same split fan-summary and the short recap already committed to (Russian
+analysis over an English-speaking transcript).
+
+Both templates now demand receipts: every claim ties to a quoted fragment
+(under 15 words, never whole messages, never a retell), the window is judged as
+a window (no guessing at history outside it, newest messages weighted
+highest), and free-form essays are replaced by fixed capped block structures.
+Help-me: СИТУАЦИЯ / ЧТО УПУЩЕНО / СЛЕДУЮЩИЙ ХОД / РИСК, under 150 words
+total, no praise padding. Chat-review: ВЕРДИКТ / ДЕНЬГИ / ПЕРСОНА / ОШИБКИ /
+ЧТО РАБОТАЕТ, under 400 words, mistakes ranked money-first and capped at
+three, each carrying a concrete replacement message in the model's voice.
+
+Three product rules sharpen what the numbers and suggestions mean. Help-me's
+two suggestions are two RENDERINGS of the one recommended move (safe vs
+escalated), not two unrelated replies, and both must answer a direct question
+sitting in the fan's last message. Chat-review's rating bands are anchored in
+observable facts (what was converted, what was burned) with an explicit
+do-not-default-to-7-8 instruction, and the reviewer grades the chatter's play,
+never the fan's difficulty. Chat-review also gains the shared paid-media
+marker glossary: it reads the same `[… - PPV $X.XX, state]` markers every
+other transcript feature is briefed on, and its absence was the same class of
+oversight as help-me's originally missing fan bio (spec §7).
+
+The XML wire format is untouched (`coaching`/`engaging`/`flirty`,
+`rating`/`evaluation`/`recommendations`, integer 1-10), so the extension's
+parsers and overlay rendering need no change. templates.ts stays byte-identical
+to the .md files (templates-sync), and prompt-manifest.json records the new
+hashes with this decision as the documenting note. No contract or schema
+change; the fleet picks this up on the next hub deploy with no extension
+release.

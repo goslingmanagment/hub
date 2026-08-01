@@ -81,10 +81,14 @@ describe('paid-media state rule', () => {
     ['fast-reply', FAST_REPLY_TEMPLATE],
     ['improve-draft', IMPROVE_DRAFT_TEMPLATE],
     ['help-me', HELP_ME_TEMPLATE],
+    // Decision #201: chat-review reads the same PPV markers as every other
+    // transcript feature; the reviewer needs the glossary to judge the
+    // money read (a "missed pitch" verdict on an already-purchased item
+    // would be exactly the mistake the rule exists to prevent).
+    ['chat-review', CHAT_REVIEW_TEMPLATE],
     ['ping', PING_TEMPLATE],
   ];
   const TEMPLATES_WITHOUT_RULE: ReadonlyArray<[string, string]> = [
-    ['chat-review', CHAT_REVIEW_TEMPLATE],
     ['fan-summary', FAN_SUMMARY_TEMPLATE],
     ['hi-greeting', HI_GREETING_TEMPLATE],
   ];
