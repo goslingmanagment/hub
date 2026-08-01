@@ -10,10 +10,12 @@
 // code.
 //
 // Fencing: the run takes the page's REAL dm_messages sync lease
-// (`acquireTargetedPageSyncLease`) and runs inside the page-sync execution
-// context, so every `assertOwnedPageSyncLease` / `withOwnedPageSyncTransaction`
-// inside the shared code actually fences. No lease => the run refuses; it never
-// runs lease-less next to the regular executor.
+// (`acquireTargetedPageSyncLease`) and does EVERY write — the walk AND the
+// closing summary recompute — inside the page-sync execution context, so every
+// `assertOwnedPageSyncLease` / `withOwnedPageSyncTransaction` in the shared
+// code actually fences (outside the context those calls early-return, which
+// would silently reduce the fence to a no-op). No lease => the run refuses; it
+// never runs lease-less next to the regular executor.
 //
 // Bounded by construction: one job = one run. When the thread is deeper than
 // the run's request budget the outcome is reported as `partial` and the owner
@@ -26,11 +28,13 @@ import {
   assertOwnedPageSyncLease,
   ensurePageSyncStates,
   finalizePageDmConversationMessageSync,
+  getCheckpoint,
   getConversationSyncHealth,
   getPageDmConversationById,
   getPageDmMessageRetentionLimit,
   heartbeatPageSyncLease,
   isConversationSyncHealthExcluded,
+  listPageSyncStates,
   PageSyncLeaseLostError,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
   recordProjectionDebt,
@@ -41,6 +45,7 @@ import {
   withOwnedPageSyncTransaction,
   type MessageCoverageStatus,
 } from "@agency_hub_core/db";
+import { FanslyApiError } from "@agency_hub_core/fansly";
 import { isFanslyDmMessageSyncExcluded } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
@@ -49,6 +54,7 @@ import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
 import { resolvePageContextById } from "../page-context.ts";
 import { resolveFanslyPlatformAccountId } from "../fansly.ts";
 import { SyncChunkBudget, composeRequestObservers } from "./chunk-budget.ts";
+import { parseDmMessagesCursorState } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import {
   assertDmSharedRateLimitEnabled,
@@ -79,6 +85,11 @@ export interface TargetedThreadBackfillJob {
   ignoreRetentionLimit?: boolean;
 }
 
+export interface TargetedThreadBackfillSendInput extends TargetedThreadBackfillJob {
+  /** Page that owns the thread — the queue's singleton key (see below). */
+  platformAccountId: number;
+}
+
 export type TargetedThreadBackfillOutcome =
   /** The provider ran out of history (or the walk met already-stored ground). */
   | "completed"
@@ -92,6 +103,10 @@ export type TargetedThreadBackfillOutcome =
   | "breaker_open"
   /** Depth cap reached and the run was not told to ignore it. */
   | "retention_limit_reached"
+  /** Another stream of the same page is mid-chunk (Stage 25 page serialization). */
+  | "page_busy"
+  /** A yielded regular chunk is parked on this very thread — refuse, don't race. */
+  | "thread_checkpoint_in_progress"
   /** The regular executor (or another targeted run) holds the page's lease. */
   | "lease_unavailable"
   /** The lease was lost mid-run (fenced) — the run stopped immediately. */
@@ -119,9 +134,14 @@ export async function ensureTargetedThreadBackfillQueue(
   createdQueues?: Set<string>,
 ) {
   await ensureQueueCreated(boss, TARGETED_THREAD_BACKFILL_QUEUE, {
-    // `exclusive` + singletonKey = at most ONE job per thread queued or
-    // active; a second enqueue for the same thread is rejected (send → null)
-    // instead of stacking a duplicate vendor walk.
+    // `exclusive` + a PAGE singletonKey: at most one targeted job per page is
+    // queued or active. Stage 25's coordination invariant is that a page runs
+    // one sync chunk at a time (`sync.page.execute` carries the same fixed
+    // page singleton, `executor.ts:891`), and a thread belongs to exactly one
+    // page — so the page key also rejects a duplicate job for the same thread,
+    // strictly. pg-boss singletons are per QUEUE, so the cross-queue half of
+    // the invariant is enforced at run time by the page-busy lease check in
+    // `runTargetedThreadBackfill`.
     policy: "exclusive",
     expireInSeconds: TARGETED_BACKFILL_EXPIRE_SECONDS,
     heartbeatSeconds: 30,
@@ -129,11 +149,11 @@ export async function ensureTargetedThreadBackfillQueue(
   }, createdQueues);
 }
 
-/** Enqueue one targeted backfill. Returns null when the thread already has a
- * job queued or active (queue policy `exclusive` per singletonKey). */
+/** Enqueue one targeted backfill. Returns null when the page (hence the thread)
+ * already has a targeted job queued or active. */
 export async function sendTargetedThreadBackfillJob(
   boss: Pick<PgBoss, "send">,
-  input: TargetedThreadBackfillJob,
+  input: TargetedThreadBackfillSendInput,
 ): Promise<string | null> {
   return boss.send(
     TARGETED_THREAD_BACKFILL_QUEUE,
@@ -142,7 +162,7 @@ export async function sendTargetedThreadBackfillJob(
       ignoreRetentionLimit: input.ignoreRetentionLimit === true,
     } satisfies TargetedThreadBackfillJob,
     {
-      singletonKey: String(input.threadId),
+      singletonKey: String(input.platformAccountId),
       expireInSeconds: TARGETED_BACKFILL_EXPIRE_SECONDS,
       retryLimit: TARGETED_BACKFILL_RETRY_LIMIT,
     },
@@ -188,12 +208,17 @@ function emptyResult(
   };
 }
 
+function isFanslyAuthError(error: unknown) {
+  return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
+}
+
 /**
  * Walk ONE named Fansly DM thread backwards inside a single bounded run.
  *
  * Refusals (no vendor traffic at all): unknown/ineligible thread, a page that
  * is not Fansly, an open breaker window, the depth cap without an explicit
- * override, and — last — an unavailable page-sync lease.
+ * override, another stream of the page mid-chunk, a regular chunk parked on
+ * this very thread, and an unavailable page-sync lease.
  */
 export async function runTargetedThreadBackfill(
   app: AppContext,
@@ -233,16 +258,36 @@ export async function runTargetedThreadBackfill(
     return emptyResult(threadId, "retention_limit_reached", { ...base, retentionLimit });
   }
 
+  // Everything fallible resolves BEFORE the lease is taken: a throw after the
+  // acquire would leave the row `running` with a heartbeat nobody stops.
   const pageContext = await resolvePageContextById(app, platformAccountId);
   if (pageContext.platform !== "fansly") {
     return emptyResult(threadId, "unsupported_platform", { ...base, retentionLimit });
   }
-
+  const pageAccountId = resolveFanslyPlatformAccountId(pageContext.page);
   assertDmSharedRateLimitEnabled(app);
 
   // Same precondition the executor establishes before it leases: the page's
   // stream rows must exist (idempotent, tombstoned pages excluded).
   await ensurePageSyncStates(app.db, { pageId: platformAccountId, ...pageSyncDependencyInput(app) });
+
+  // Stage 25: a page runs ONE sync chunk at a time. The regular path gets that
+  // from the fixed page singleton on `sync.page.execute`; this run lives on its
+  // own queue, so it re-establishes the invariant here — any OTHER stream of
+  // the page holding a live lease means a chunk is in flight (dm_conversations
+  // full-upserts the thread summary), and racing it would regress this thread's
+  // cursor after the closing recompute.
+  const now = Date.now();
+  const pageStates = await listPageSyncStates(app.db, { pageId: platformAccountId });
+  const busyStream = pageStates.find((state) =>
+    state.stream !== "dm_messages" &&
+    state.leasedSeq !== null &&
+    state.leaseExpiresAt !== null &&
+    state.leaseExpiresAt.getTime() > now
+  );
+  if (busyStream) {
+    return emptyResult(threadId, "page_busy", { ...base, retentionLimit });
+  }
 
   const lease = await acquireTargetedPageSyncLease(app.db, {
     pageId: platformAccountId,
@@ -255,36 +300,62 @@ export async function runTargetedThreadBackfill(
     return emptyResult(threadId, "lease_unavailable", { ...base, retentionLimit });
   }
 
-  const run = await startSyncRun(app.db, {
-    platformAccountId,
-    stream: "dm_messages",
-    trigger: "manual",
-    generation: lease.leasedSeq,
-    leaseToken: lease.leaseToken,
-  });
-  if (!run) {
-    await releaseTargetedPageSyncLease(app.db, {
+  const releaseLease = () =>
+    releaseTargetedPageSyncLease(app.db, {
       pageId: platformAccountId,
       stream: "dm_messages",
       leaseToken: lease.leaseToken,
     });
-    throw new Error(`Failed to start a sync run for targeted backfill of thread ${threadId}`);
+
+  // Everything between the acquire and the heartbeat runs under a release-on-
+  // throw guard: a failure here would otherwise leave the row `running` with
+  // nobody to hand the lease back.
+  let run: NonNullable<Awaited<ReturnType<typeof startSyncRun>>>;
+  let telemetry: SyncRunTelemetry;
+  try {
+    // A yielded regular chunk can be parked ON THIS THREAD with its own
+    // `before` cursor in the checkpoint. Restarting the walk from the thread
+    // summary would re-fetch the window that chunk already holds and land on
+    // the false-overlap path, so the owner-invoked one-shot refuses instead of
+    // guessing. Read under the lease: the executor cannot be mid-write.
+    const checkpointState = parseDmMessagesCursorState(
+      (await getCheckpoint(app.db, platformAccountId, "dm_messages"))?.state,
+    );
+    if (checkpointState?.currentConversationId === threadId) {
+      await releaseLease();
+      return emptyResult(threadId, "thread_checkpoint_in_progress", { ...base, retentionLimit });
+    }
+
+    const startedRun = await startSyncRun(app.db, {
+      platformAccountId,
+      stream: "dm_messages",
+      trigger: "manual",
+      generation: lease.leasedSeq,
+      leaseToken: lease.leaseToken,
+    });
+    if (!startedRun) {
+      throw new Error(`Failed to start a sync run for targeted backfill of thread ${threadId}`);
+    }
+    run = startedRun;
+    telemetry = new SyncRunTelemetry(app, {
+      runId: run.id,
+      platformAccountId,
+      pageLabel: pageContext.page.label,
+      provider: "fansly",
+      stream: "dm_messages",
+      trigger: "manual",
+      egressKey: pageContext.egressKey,
+    });
+    await telemetry.recordRunStarted();
+    await telemetry.recordPhaseStarted("dm_messages_targeted_backfill", {
+      conversationId: threadId,
+      ignoreRetentionLimit,
+      retentionLimit,
+    });
+  } catch (error) {
+    await releaseLease().catch(() => false);
+    throw error;
   }
-  const telemetry = new SyncRunTelemetry(app, {
-    runId: run.id,
-    platformAccountId,
-    pageLabel: pageContext.page.label,
-    provider: "fansly",
-    stream: "dm_messages",
-    trigger: "manual",
-    egressKey: pageContext.egressKey,
-  });
-  await telemetry.recordRunStarted();
-  await telemetry.recordPhaseStarted("dm_messages_targeted_backfill", {
-    conversationId: threadId,
-    ignoreRetentionLimit,
-    retentionLimit,
-  });
 
   let leaseFenced = false;
   const leaseHeartbeat = setInterval(() => {
@@ -323,7 +394,6 @@ export async function runTargetedThreadBackfill(
     ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, { egressKey: pageContext.egressKey }),
   };
-  const pageAccountId = resolveFanslyPlatformAccountId(pageContext.page);
 
   const result: TargetedThreadBackfillResult = emptyResult(threadId, "partial", {
     ...base,
@@ -332,6 +402,37 @@ export async function runTargetedThreadBackfill(
     messageCoverageStatus: conversation.messageCoverageStatus,
     oldestStoredMessageIdBefore: conversation.oldestStoredMessageId,
   });
+  let walkFailure: unknown = null;
+
+  /** The thread summary is the ONLY writer of stored_message_count / oldest id;
+   * `upsertPageDmMessages` does not touch it. So a run that wrote messages and
+   * could not recompute MUST leave repairable debt: a stale oldest id makes the
+   * next deep backfill ask `before=<stale>`, meet known ids, and mark a
+   * half-backfilled thread `complete` (#135 A2b machinery, same shape). */
+  const recordSummaryDebt = async (error: unknown) => {
+    if (result.requests === 0 || result.projectionDebtRecorded) {
+      return;
+    }
+    const causeMessage = error instanceof Error && error.cause instanceof Error
+      ? error.cause.message
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    try {
+      await recordProjectionDebt(app.db, {
+        kind: PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+        platformAccountId,
+        conversationId: threadId,
+        errorSummary: causeMessage.slice(0, 500),
+      });
+      result.projectionDebtRecorded = true;
+    } catch (debtError) {
+      app.logger.error(
+        { err: debtError, threadId, platformAccountId },
+        "Targeted thread backfill could not record projection debt; thread summary is stale",
+      );
+    }
+  };
 
   try {
     await runWithPageSyncExecutionContext({
@@ -340,128 +441,151 @@ export async function runTargetedThreadBackfill(
       requestSeq: lease.leasedSeq,
       leaseToken: lease.leaseToken,
     }, async () => {
-      let before = conversation.oldestStoredMessageId;
+      try {
+        let before = conversation.oldestStoredMessageId;
 
-      while (budget.hasRequestCapacity() && budget.hasWallClockCapacity()) {
-        if (leaseFenced) {
+        while (budget.hasRequestCapacity() && budget.hasWallClockCapacity()) {
+          if (leaseFenced) {
+            result.outcome = "lease_lost";
+            break;
+          }
+
+          await assertOwnedPageSyncLease(app.db);
+          requestObserver.recordConversationTouched(threadId);
+
+          const messagePage = await fetchAndJournalFanslyDmMessagePage(app, {
+            requestContext,
+            telemetry,
+            syncRunId: run.id,
+            platformAccountId,
+            platform: "fansly",
+            pageAccountId,
+            conversation,
+            before,
+            limit: FANSLY_DM_MESSAGE_PAGE_LIMIT,
+          });
+
+          await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+            await upsertPageDmMessages(dbTx, messagePage.normalizedMessages);
+          });
+
+          result.requests += 1;
+          result.insertedMessages += messagePage.insertedMessageCount;
+          result.journaledMessages += messagePage.normalizedMessages.length;
+          result.overlapFound = result.overlapFound || messagePage.overlapFound;
+          result.providerHistoryExhausted = messagePage.providerHistoryExhausted;
+
+          if (messagePage.providerHistoryExhausted || messagePage.overlapFound) {
+            result.outcome = "completed";
+            break;
+          }
+
+          // Stage 17: only the explicit per-run override may lift the depth
+          // predicate. Checking it ONCE before the walk would let a default run
+          // that started one message under the cap retain a full extra window.
+          if (
+            !ignoreRetentionLimit &&
+            result.storedMessageCountBefore + result.insertedMessages >= retentionLimit
+          ) {
+            result.outcome = "retention_limit_reached";
+            break;
+          }
+
+          before = messagePage.oldestMessageId;
+        }
+      } catch (error) {
+        walkFailure = error;
+        result.outcome = error instanceof PageSyncLeaseLostError ? "lease_lost" : "partial";
+        if (isFanslyAuthError(error)) {
+          // Fail closed (BL-C1): unlike the executor this run does not park the
+          // page's streams or open the auth incident — it just stops, loudly.
+          app.logger.error(
+            { err: error, threadId, platformAccountId, pageLabel: pageContext.page.label },
+            "Targeted thread backfill aborted on a Fansly auth failure; page streams NOT paused (BL-C1)",
+          );
+        }
+      }
+
+      // Finalization runs INSIDE the execution context — outside it every
+      // assertOwnedPageSyncLease early-returns and the coverage verdict, the
+      // summary recompute and the prune would all run unfenced.
+      //
+      // An aborted walk does NOT finalize (a failed chunk never writes a
+      // coverage verdict, and a lost lease may not write at all) — it leaves
+      // repairable debt so the 5-minute sweep recomputes the summary.
+      if (walkFailure || result.outcome === "lease_lost") {
+        await recordSummaryDebt(walkFailure ?? new PageSyncLeaseLostError());
+        return;
+      }
+
+      // The coverage verdict uses the deep-backfill rule: a walk that ended on
+      // exhaustion or known ground is `complete`, an interrupted one stays
+      // `partial_window` so the regular crawl keeps offering the thread.
+      const messageCoverageStatus = resolveDmConversationCoverageStatus({
+        currentMode: "deep_backfill",
+        existingStatus: conversation.messageCoverageStatus,
+        overlapFound: result.overlapFound,
+        providerHistoryExhausted: result.providerHistoryExhausted,
+        hitWindowCap: false,
+      });
+      // A run told to ignore the depth cap must not have its freshly captured
+      // window pruned back by the global cache policy in the same breath.
+      const enforceRetention = ignoreRetentionLimit ? false : await isPageDmPruneAllowed(app);
+      try {
+        const finalized = await withOwnedPageSyncTransaction(app.db, async (dbTx) =>
+          finalizePageDmConversationMessageSync(dbTx, {
+            conversationId: threadId,
+            messageCoverageStatus,
+            enforceRetention,
+          }));
+        result.messageCoverageStatus = finalized.conversation?.messageCoverageStatus
+          ?? messageCoverageStatus;
+      } catch (error) {
+        if (error instanceof PageSyncLeaseLostError) {
           result.outcome = "lease_lost";
-          return;
         }
-
-        await assertOwnedPageSyncLease(app.db);
-        requestObserver.recordConversationTouched(threadId);
-
-        const messagePage = await fetchAndJournalFanslyDmMessagePage(app, {
-          requestContext,
-          telemetry,
-          syncRunId: run.id,
-          platformAccountId,
-          platform: "fansly",
-          pageAccountId,
-          conversation,
-          before,
-          limit: FANSLY_DM_MESSAGE_PAGE_LIMIT,
-        });
-
-        await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-          await upsertPageDmMessages(dbTx, messagePage.normalizedMessages);
-        });
-
-        result.requests += 1;
-        result.insertedMessages += messagePage.insertedMessageCount;
-        result.journaledMessages += messagePage.normalizedMessages.length;
-        result.overlapFound = result.overlapFound || messagePage.overlapFound;
-        result.providerHistoryExhausted = messagePage.providerHistoryExhausted;
-
-        if (messagePage.providerHistoryExhausted || messagePage.overlapFound) {
-          result.outcome = "completed";
-          return;
+        await recordSummaryDebt(error);
+        if (!(error instanceof PageSyncLeaseLostError)) {
+          app.logger.warn(
+            { err: error, threadId, platformAccountId },
+            "Targeted thread backfill finalize failed; recorded projection debt",
+          );
         }
-
-        before = messagePage.oldestMessageId;
       }
     });
-  } catch (error) {
+  } finally {
+    // Stopped only after finalization, mirroring the executor's heartbeat
+    // lifetime (executor.ts:491-502): a lease that expires mid-finalize would
+    // hand the row to the reclaimer while this run is still writing.
     clearInterval(leaseHeartbeat);
-    await telemetry.finish(
-      "failed",
-      error instanceof Error ? error.message : String(error),
-      { conversationId: threadId, ...targetedStats(result) },
-    );
-    if (!(error instanceof PageSyncLeaseLostError)) {
-      await releaseTargetedPageSyncLease(app.db, {
-        pageId: platformAccountId,
-        stream: "dm_messages",
-        leaseToken: lease.leaseToken,
-      }).catch(() => false);
-    }
-    throw error;
-  }
-
-  clearInterval(leaseHeartbeat);
-
-  if (result.outcome !== "lease_lost") {
-    // The coverage verdict uses the deep-backfill rule: a walk that ended on
-    // exhaustion or known ground is `complete`, an interrupted one stays
-    // `partial_window` so the regular crawl keeps offering the thread.
-    const messageCoverageStatus = resolveDmConversationCoverageStatus({
-      currentMode: "deep_backfill",
-      existingStatus: conversation.messageCoverageStatus,
-      overlapFound: result.overlapFound,
-      providerHistoryExhausted: result.providerHistoryExhausted,
-      hitWindowCap: false,
-    });
-    try {
-      const enforceRetention = await isPageDmPruneAllowed(app);
-      const finalized = await withOwnedPageSyncTransaction(app.db, async (dbTx) =>
-        finalizePageDmConversationMessageSync(dbTx, {
-          conversationId: threadId,
-          messageCoverageStatus,
-          enforceRetention,
-        }));
-      result.messageCoverageStatus = finalized.conversation?.messageCoverageStatus
-        ?? messageCoverageStatus;
-    } catch (error) {
-      if (error instanceof PageSyncLeaseLostError) {
-        result.outcome = "lease_lost";
-      } else {
-        // #135 A2b: the message rows are already committed and journaled; a
-        // failed summary recompute becomes repairable debt, never a lost run.
-        const causeMessage = error instanceof Error && error.cause instanceof Error
-          ? error.cause.message
-          : error instanceof Error
-            ? error.message
-            : String(error);
-        await recordProjectionDebt(app.db, {
-          kind: PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
-          platformAccountId,
-          conversationId: threadId,
-          errorSummary: causeMessage.slice(0, 500),
-        });
-        result.projectionDebtRecorded = true;
-        app.logger.warn(
-          { err: error, threadId, platformAccountId },
-          "Targeted thread backfill finalize failed; recorded projection debt",
-        );
-      }
-    }
   }
 
   await telemetry.recordDmMessagesChunkSummary(
     requestObserver.buildSummary(Date.now() - startedAtMs),
   );
+
+  if (walkFailure && !(walkFailure instanceof PageSyncLeaseLostError)) {
+    await telemetry.finish(
+      "failed",
+      walkFailure instanceof Error ? walkFailure.message : String(walkFailure),
+      { conversationId: threadId, ...targetedStats(result) },
+    );
+    await releaseLease();
+    throw walkFailure;
+  }
+
   await telemetry.finish(
-    result.outcome === "completed" ? "success" : result.outcome === "partial" ? "partial" : "skipped",
+    result.outcome === "completed"
+      ? "success"
+      : result.outcome === "partial" || result.outcome === "retention_limit_reached"
+        ? "partial"
+        : "skipped",
     result.outcome === "lease_lost" ? "Page sync lease lost" : null,
     { conversationId: threadId, ...targetedStats(result) },
   );
 
   if (result.outcome !== "lease_lost") {
-    await releaseTargetedPageSyncLease(app.db, {
-      pageId: platformAccountId,
-      stream: "dm_messages",
-      leaseToken: lease.leaseToken,
-    });
+    await releaseLease();
   }
 
   app.logger.info({ ...targetedStats(result), threadId, platformAccountId },
@@ -478,5 +602,6 @@ function targetedStats(result: TargetedThreadBackfillResult) {
     overlapFound: result.overlapFound,
     providerHistoryExhausted: result.providerHistoryExhausted,
     messageCoverageStatus: result.messageCoverageStatus,
+    projectionDebtRecorded: result.projectionDebtRecorded,
   };
 }

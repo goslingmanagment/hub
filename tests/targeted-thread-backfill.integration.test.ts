@@ -19,7 +19,10 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
+  listUnresolvedProjectionDebt,
+  PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
   storeFanslySession,
+  upsertCheckpointProgress,
   upsertFans,
 } from "@agency_hub_core/db";
 import {
@@ -30,6 +33,7 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { loadEffectiveConfig } from "../apps/runtime/src/services/effective-config.ts";
+import { emptyDmMessagesCursorState } from "../apps/runtime/src/services/sync/cursor-state.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { runTargetedThreadBackfill } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
 import {
@@ -57,10 +61,25 @@ interface ScriptedPage {
   done: boolean;
 }
 
+type ScriptedThread = ScriptedPage[] | ((callIndex: number) => ScriptedPage);
+
+interface AdapterHooks {
+  /** Fires inside the vendor call, before it returns. Throw to fail the fetch. */
+  beforeReturn?: (input: { groupId: string; callIndex: number }) => Promise<void>;
+}
+
+/** Endless history: every call returns 25 fresh older ids and `done:false`. */
+function endlessPages(prefix: string): (callIndex: number) => ScriptedPage {
+  return (callIndex) => ({
+    ids: Array.from({ length: 25 }, (_, position) => `${prefix}-${callIndex}-${position}`),
+    done: false,
+  });
+}
+
 function messagesAdapter(
-  script: Record<string, ScriptedPage[]>,
+  script: Record<string, ScriptedThread>,
   calls: AdapterCall[],
-  hooks?: { beforeReturn?: () => Promise<void> },
+  hooks?: AdapterHooks,
 ) {
   const cursors = new Map<string, number>();
   return {
@@ -84,10 +103,13 @@ function messagesAdapter(
         attemptNumber: 1,
         timestamp: new Date(),
       });
-      const index = cursors.get(params.groupId) ?? 0;
-      cursors.set(params.groupId, index + 1);
-      const page = script[params.groupId]?.[index] ?? { ids: [], done: true };
-      await hooks?.beforeReturn?.();
+      const callIndex = cursors.get(params.groupId) ?? 0;
+      cursors.set(params.groupId, callIndex + 1);
+      const scripted = script[params.groupId];
+      const page = typeof scripted === "function"
+        ? scripted(callIndex)
+        : scripted?.[callIndex] ?? { ids: [], done: true };
+      await hooks?.beforeReturn?.({ groupId: params.groupId, callIndex });
       return {
         items: page.ids.map((id, position) => ({
           id,
@@ -486,5 +508,207 @@ describe("targeted thread backfill (slice C′)", () => {
       leasedSeq: null,
       leaseToken: null,
     });
+  }, 120_000);
+  it("lease lost mid-walk leaves projection debt instead of a false-complete thread", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter(
+        { [TARGET_GROUP_ID]: endlessPages("a") },
+        calls,
+        {
+          // The first page commits; the lease is stolen inside the SECOND
+          // vendor call, so the walk aborts with rows already written.
+          beforeReturn: async ({ callIndex }) => {
+            if (callIndex === 1) {
+              await testDb!.pool.query(
+                "update page_sync_states set lease_token = 'stolen-by-executor' where page_id = $1 and stream = 'dm_messages'",
+                [page.id],
+              );
+            }
+          },
+        },
+      ) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(result.outcome).toBe("lease_lost");
+    expect(result.projectionDebtRecorded).toBe(true);
+    expect(result.requests).toBe(1);
+
+    // The summary is stale (only finalize writes it) — so the debt row MUST
+    // exist, otherwise the next deep backfill would ask before=<stale oldest>,
+    // meet known ids and mark a half-backfilled thread `complete`.
+    const debts = await listUnresolvedProjectionDebt(appContext.db, 10);
+    expect(debts).toHaveLength(1);
+    expect(debts[0]).toMatchObject({
+      kind: PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+      platformAccountId: page.id,
+      conversationId: targetThreadId,
+    });
+
+    const thread = await testDb.pool.query<{ status: string }>(
+      'select message_coverage_status as "status" from page_dm_threads where id = $1',
+      [targetThreadId],
+    );
+    expect(thread.rows[0]!.status).not.toBe("complete");
+    // Facts survived the abort.
+    expect(await countMessages(targetThreadId)).toBe(25);
+  }, 120_000);
+
+  it("vendor failure mid-walk leaves projection debt and no false-complete", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter(
+        { [TARGET_GROUP_ID]: endlessPages("a") },
+        calls,
+        {
+          beforeReturn: async ({ callIndex }) => {
+            if (callIndex === 1) {
+              throw new Error("fansly exploded mid-walk");
+            }
+          },
+        },
+      ) as never,
+    };
+
+    await expect(runTargetedThreadBackfill(appContext, { threadId: targetThreadId }))
+      .rejects.toThrow("fansly exploded mid-walk");
+
+    const debts = await listUnresolvedProjectionDebt(appContext.db, 10);
+    expect(debts).toHaveLength(1);
+    expect(debts[0]).toMatchObject({
+      kind: PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+      conversationId: targetThreadId,
+    });
+    const thread = await testDb.pool.query<{ status: string }>(
+      'select message_coverage_status as "status" from page_dm_threads where id = $1',
+      [targetThreadId],
+    );
+    expect(thread.rows[0]!.status).not.toBe("complete");
+    expect(await countMessages(targetThreadId)).toBe(25);
+    // The lease was released: a failed run must not park the page.
+    expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
+  }, 120_000);
+
+  it("stops at the request bound and reports an honest partial", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { targetThreadId } = await seedPageWithThreads();
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: endlessPages("a") }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, {
+      threadId: targetThreadId,
+      // The depth cap would fire first otherwise; this run tests the REQUEST bound.
+      ignoreRetentionLimit: true,
+    });
+
+    expect(result.outcome).toBe("partial");
+    expect(calls).toHaveLength(40);
+    expect(result.requests).toBe(40);
+    // Not exhausted => the thread stays offered to the regular crawl.
+    expect(result.messageCoverageStatus).toBe("partial_window");
+  }, 180_000);
+
+  it("re-checks the depth cap after every page in a default run", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { targetThreadId } = await seedPageWithThreads();
+    // One page under the 200-message non-spender cap: the pre-walk check passes,
+    // and the recheck must stop the walk after the first page.
+    await testDb.pool.query(
+      "update page_dm_threads set stored_message_count = 190 where id = $1",
+      [targetThreadId],
+    );
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: endlessPages("a") }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(result.outcome).toBe("retention_limit_reached");
+    expect(calls).toHaveLength(1);
+    expect(result.insertedMessages).toBe(25);
+    expect(result.messageCoverageStatus).toBe("partial_window");
+  }, 120_000);
+
+  it("refuses when a regular chunk is parked on the same thread", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "dm_messages",
+      state: {
+        ...emptyDmMessagesCursorState(),
+        currentConversationId: targetThreadId,
+        currentPlatformConversationId: TARGET_GROUP_ID,
+        currentBeforeMessageId: "a05",
+        currentMode: "deep_backfill",
+      },
+    });
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(result.outcome).toBe("thread_checkpoint_in_progress");
+    expect(calls).toHaveLength(0);
+    // The lease taken for the check was handed back.
+    expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
+  }, 120_000);
+
+  it("refuses while another stream of the same page is mid-chunk", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    // Stage 25: one sync chunk per page. Simulate a live dm_conversations chunk.
+    await testDb.pool.query(`
+      update page_sync_states
+      set status = 'running', leased_seq = request_seq, lease_owner = 'regular-executor',
+          lease_token = 'conversations-lease', lease_heartbeat_at = now(),
+          lease_expires_at = now() + interval '2 minutes'
+      where page_id = $1 and stream = 'dm_conversations'
+    `, [page.id]);
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(result.outcome).toBe("page_busy");
+    expect(calls).toHaveLength(0);
+    expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null });
   }, 120_000);
 });

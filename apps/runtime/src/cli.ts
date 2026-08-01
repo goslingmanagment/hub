@@ -10,6 +10,7 @@ import {
   createModel,
   findPageByLabel,
   findUserByUsername,
+  getPageDmConversationById,
   insertDeliveryAttempt,
   insertErasureLog,
 } from "@agency_hub_core/db";
@@ -496,7 +497,7 @@ async function queueInitialFullSyncAfterPageCreate(
 
 async function queueTargetedThreadBackfill(
   databaseUrl: string,
-  input: { threadId: number; ignoreRetentionLimit: boolean },
+  input: { threadId: number; platformAccountId: number; ignoreRetentionLimit: boolean },
 ) {
   const boss = new PgBoss({ connectionString: databaseUrl });
   attachCliPgBossErrorLogger(boss);
@@ -729,8 +730,15 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         const threadId = options.thread as number;
+        // The queue key is the PAGE (Stage 25: one sync chunk per page at a
+        // time), so the enqueue resolves the thread's page first.
+        const thread = await getPageDmConversationById(app.db, threadId);
+        if (!thread) {
+          throw new Error(`DM thread ${threadId} not found`);
+        }
         const jobId = await queueTargetedThreadBackfill(app.config.databaseUrl, {
           threadId,
+          platformAccountId: thread.platformAccountId,
           ignoreRetentionLimit: options.ignoreRetentionLimit === true,
         });
         console.log(JSON.stringify({ jobId, threadId }));
