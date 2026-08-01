@@ -83,6 +83,38 @@ const DM_THREADS = `
   left join fans f on f.id = t.fan_id
 `;
 
+/**
+ * The raw `canonical_status` values that mean "this subscription is over".
+ *
+ * ONE list, read by the dataset SQL below AND by the person operation's TypeScript
+ * projection. The two disagreed: #10 classified `ended` and `cancelled` as expired
+ * while #3 mapped only the literal `expired` and answered `unknown` for the other
+ * two, so one subscription had two states depending on which operation was asked.
+ */
+export const AGENT_SUBSCRIPTION_EXPIRED_STATUSES = ["expired", "ended", "cancelled"] as const;
+
+/** The wire state of one raw `canonical_status`. The SQL below is generated from
+ *  the same list, so a new terminal status cannot reach only one of the two. */
+export function agentSubscriptionState(
+  canonicalStatus: string | null | undefined,
+): "active" | "expired" | "unknown" {
+  if (canonicalStatus === "active") {
+    return "active";
+  }
+  return (AGENT_SUBSCRIPTION_EXPIRED_STATUSES as readonly string[])
+    .includes(canonicalStatus ?? "")
+    ? "expired"
+    : "unknown";
+}
+
+const SUBSCRIPTION_STATE_SQL = `case
+           when s.canonical_status = 'active' then 'active'
+           when s.canonical_status in (${
+  AGENT_SUBSCRIPTION_EXPIRED_STATUSES.map((status) => `'${status}'`).join(", ")
+}) then 'expired'
+           else 'unknown'
+         end`;
+
 const SUBSCRIPTIONS = `
   select s.platform_account_id as k_page_id,
          p.platform::text      as k_platform,
@@ -92,11 +124,7 @@ const SUBSCRIPTIONS = `
          p.platform::text      as f_platform,
          f.platform_user_id    as f_platform_user_id,
          s.platform_subscription_id as f_subscription_ref,
-         case
-           when s.canonical_status = 'active' then 'active'
-           when s.canonical_status in ('expired', 'ended', 'cancelled') then 'expired'
-           else 'unknown'
-         end                   as f_subscription_state,
+         ${SUBSCRIPTION_STATE_SQL} as f_subscription_state,
          s.source_created_at   as f_started_at,
          s.ends_at             as f_expires_at,
          s.price_mills         as f_price_mills,

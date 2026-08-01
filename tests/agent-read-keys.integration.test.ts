@@ -15,6 +15,7 @@ import {
   insertAgentReadAudit,
   listAgentKeys,
   recordAgentKeyUse,
+  reserveAgentKeyRows,
   revokeAgentKey,
 } from "@agency_hub_core/db";
 
@@ -509,6 +510,79 @@ describe("agent key daily budget", () => {
       (await bumpAgentKeyUsage(testDb.db, { agentKeyId: rowKey.id, requests: 1, rows: 51, now }))
         .withinBudget,
     ).toBe(false);
+  });
+
+  it("reserves rows atomically: concurrent reservations cannot overspend", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The defect this replaces: the allowance was READ before the work and the
+    // rows added after it, so concurrent requests all saw the same allowance and
+    // all spent it. A reservation is taken under the row lock, which makes the
+    // ceiling a bound rather than a report.
+    const key = await insertAgentKey(
+      testDb.db,
+      keyInput({ dailyRequestBudget: 5000, dailyRowBudget: 250 }),
+    );
+    const now = new Date("2026-08-01T09:00:00.000Z");
+
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        reserveAgentKeyRows(testDb!.db, { agentKeyId: key.id, rows: 100, now })),
+    );
+
+    expect(results.reduce((total, result) => total + result.granted, 0)).toBe(250);
+    // Two full grants, one partial, one empty — in whatever order the lock served
+    // them.
+    expect(results.filter((result) => result.granted === 100)).toHaveLength(2);
+    const stored = await getAgentKeyUsage(testDb.db, { agentKeyId: key.id, now });
+    expect(stored.rowsReturned).toBe(250);
+
+    // A spent ceiling grants NOTHING: the caller answers 429 rather than being
+    // handed a single row it cannot pay for.
+    expect((await reserveAgentKeyRows(testDb.db, { agentKeyId: key.id, rows: 50, now })).granted)
+      .toBe(0);
+
+    // ... and an unused reservation is REFUNDED, never stranded.
+    expect((await reserveAgentKeyRows(testDb.db, { agentKeyId: key.id, rows: -40, now })).granted)
+      .toBe(-40);
+    expect((await getAgentKeyUsage(testDb.db, { agentKeyId: key.id, now })).rowsReturned).toBe(210);
+  });
+
+  it("settles a reservation against ITS day, not the day it happens to finish on", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // A request that reserves at 23:59:59 and finishes at 00:00:01 used to refund
+    // against the NEW day: its own reservation stayed stranded on the old counter,
+    // and the refund subtracted rows a fresh new-day request had already reserved,
+    // letting that day walk past its budget.
+    const key = await insertAgentKey(testDb.db, keyInput());
+    const beforeMidnight = new Date("2026-08-01T23:59:59.000Z");
+    const afterMidnight = new Date("2026-08-02T00:00:01.000Z");
+
+    const reservation = await reserveAgentKeyRows(testDb.db, {
+      agentKeyId: key.id,
+      rows: 100,
+      now: beforeMidnight,
+    });
+    expect(reservation.businessDate).toBe("2026-08-01");
+    // A fresh request on the new day takes its own allowance.
+    await reserveAgentKeyRows(testDb.db, { agentKeyId: key.id, rows: 200, now: afterMidnight });
+    // ... and only now does the first request settle, having served 40 of its 100.
+    await reserveAgentKeyRows(testDb.db, {
+      agentKeyId: key.id,
+      rows: -60,
+      businessDate: reservation.businessDate,
+      now: afterMidnight,
+    });
+
+    expect(await getAgentKeyUsage(testDb.db, { agentKeyId: key.id, now: beforeMidnight }))
+      .toMatchObject({ businessDate: "2026-08-01", rowsReturned: 40 });
+    expect(await getAgentKeyUsage(testDb.db, { agentKeyId: key.id, now: afterMidnight }))
+      .toMatchObject({ businessDate: "2026-08-02", rowsReturned: 200 });
   });
 
   it("reports a zeroed counter for a day with no traffic", async (context) => {

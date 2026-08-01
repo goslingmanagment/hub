@@ -40,6 +40,7 @@ import { MESSAGE_PLANES, MONEY_PLANES, planesNotRead } from "./planes.ts";
 import {
   AGENT_COUNT_PROBE_MAX,
   AGENT_PLATFORM_CAPABILITIES,
+  AGENT_SEARCH_BACKEND_IN_USE,
   AGENT_TIMEOUT_MS,
   beginAgentRequest,
   buildDelivery,
@@ -48,6 +49,7 @@ import {
   hydrationRemedy,
   iso,
   isoOrNull,
+  observedRowFloorOf,
   operationPlanesFor,
   retentionLimitFor,
   tryAgentTimeout,
@@ -167,6 +169,10 @@ export async function handleAgentPersonTimeline(
     const pageLabel = (stored?.pageLabel as string | undefined) ?? query.pageLabel;
     const sortDir = (stored?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir;
     const claimFields = (stored?.claimFields as string[] | undefined) ?? query.claimFields ?? null;
+    // The page size comes from the CURSOR on a resumed traversal. A cursor request
+    // may not re-send `limit`, so reading the schema default instead silently
+    // changed the page size after page 1 and re-minted every later cursor with it.
+    const requestedLimit = (stored?.limit as number | undefined) ?? query.limit;
 
     const mayReadMoney = scope.has("read:money");
     const mayReadMessages = scope.has("read:messages");
@@ -190,7 +196,7 @@ export async function handleAgentPersonTimeline(
           platformUserId: params.platformUserId,
         }), "agent_timeline_identity");
 
-    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
     const timeline = identity.row === null || lanesServed.length === 0
       ? { rows: [], witnesses: [] }
       : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
@@ -236,7 +242,7 @@ export async function handleAgentPersonTimeline(
         resource: `person:${params.platform}:${params.platformUserId}`,
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
-        params: { from, to, lanes: lanesRequested, pageLabel, sortDir, claimFields, limit: query.limit },
+        params: { from, to, lanes: lanesRequested, pageLabel, sortDir, claimFields, limit: requestedLimit },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: {},
         seqHighWater: {},
@@ -271,7 +277,7 @@ export async function handleAgentPersonTimeline(
       }),
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
-      observedRowFloor: isoOrNull(timeline.rows.at(0)?.occurredAt ?? null),
+      observedRowFloor: observedRowFloorOf(timeline.rows.map((row) => row.occurredAt)),
       captureFloor: { at: null, kind: "unknown" },
     });
 
@@ -406,6 +412,9 @@ export async function handleAgentThreads(
       sortDir: (stored?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir,
       claimFields: (stored?.claimFields as string[] | undefined) ?? query.claimFields ?? null,
     };
+    // From the CURSOR on a resumed traversal: page 2 may not re-send `limit`, and
+    // the schema default silently changed the page size mid-walk.
+    const requestedLimit = (stored?.limit as number | undefined) ?? query.limit;
 
     const narrowed = effective.pageLabel === undefined
       ? scope.pages
@@ -429,7 +438,7 @@ export async function handleAgentThreads(
     // widen it back to everybody.
     const personFilter = personRequested ? { fanId: fanId ?? -1 } : {};
 
-    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
     const storedHighWater = Number(stored?.highWater ?? 0);
     const highWater = storedHighWater > 0
       ? storedHighWater
@@ -489,7 +498,7 @@ export async function handleAgentThreads(
         resource: "global",
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
-        params: { ...effective, limit: query.limit, highWater },
+        params: { ...effective, limit: requestedLimit, highWater },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: { page_dm_threads: String(highWater) },
         seqHighWater: {},
@@ -688,7 +697,9 @@ export async function handleAgentThreadMessages(
     const stored = cursor?.params as Record<string, unknown> | undefined;
     const from = String(stored?.from ?? query.from ?? "");
     const to = String(stored?.to ?? query.to ?? "");
-    const filters: AgentTranscriptFilters = {
+    // What the caller ASKED for, which is what the cursor carries and what the
+    // predicate report calls `requested`.
+    const requestedFilters: AgentTranscriptFilters = {
       direction: (stored?.direction as typeof query.direction) ?? query.direction,
       senderRole: (stored?.senderRole as typeof query.senderRole) ?? query.senderRole,
       hasMedia: (stored?.hasMedia as boolean | undefined) ?? query.hasMedia,
@@ -698,6 +709,31 @@ export async function handleAgentThreadMessages(
     };
     const sortDir = (stored?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir;
     const claimFields = (stored?.claimFields as string[] | undefined) ?? query.claimFields ?? null;
+    const requestedLimit = (stored?.limit as number | undefined) ?? query.limit;
+
+    const pageCapabilities = AGENT_PLATFORM_CAPABILITIES[page.platform as Platform];
+    /**
+     * A predicate over a field this platform never parsed is DROPPED FROM THE
+     * QUERY, not merely reported as unapplied.
+     *
+     * Reporting `applied: false` while still binding the column into the WHERE
+     * clause was the exact lie the report exists to prevent: on Fansly, where the
+     * price is not captured and the media list is journaled unparsed,
+     * `hasMedia=true` returned zero rows next to an envelope saying the filter had
+     * not been used, and an empty result with no applied filter reads as "there is
+     * no media here". The query now genuinely ignores it, so the rows come back
+     * and the envelope explains that the narrowing the caller wanted did not
+     * happen.
+     */
+    const filters: AgentTranscriptFilters = {
+      ...requestedFilters,
+      hasMedia: pageCapabilities.capturesMediaMetadata === "present"
+        ? requestedFilters.hasMedia
+        : undefined,
+      hasPrice: pageCapabilities.capturesMessagePrice === "present"
+        ? requestedFilters.hasPrice
+        : undefined,
+    };
 
     // The floor is established by its OWN unbounded query, not from the rows this
     // window returned: "the oldest thing I found" is not "the oldest thing we hold".
@@ -707,7 +743,7 @@ export async function handleAgentThreadMessages(
         conversationRef: params.conversationRef,
       }), "agent_transcript_floor");
 
-    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
     const transcriptInput = {
       pageId: page.id,
       platform: page.platform,
@@ -737,7 +773,6 @@ export async function handleAgentThreadMessages(
     );
 
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, claimFields);
-    const pageCapabilities = AGENT_PLATFORM_CAPABILITIES[page.platform as Platform];
 
     const hasMore = result.rows.length === limit;
     const last = result.rows.at(-1);
@@ -747,7 +782,9 @@ export async function handleAgentThreadMessages(
         resource: `conversation:${page.id}:${params.conversationRef}`,
         keyId: principal.agentKeyId,
         pageIds: [page.id],
-        params: { from, to, ...filters, sortDir, claimFields, limit: query.limit },
+        // The REQUESTED filters, so page 2 reports the same predicates page 1 did
+        // and drops the unsupported ones for the same reason.
+        params: { from, to, ...requestedFilters, sortDir, claimFields, limit: requestedLimit },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: { message_archive: last.messageRef },
         seqHighWater: { [String(page.id)]: last.sourceAccountSeq ?? 0 },
@@ -781,7 +818,7 @@ export async function handleAgentThreadMessages(
         plane: "message_archive",
         floorAt: isoOrNull(archiveFloor),
         windowFrom: from,
-        hydrationAdmissible: hydrationRemedy(scope).admissible,
+        hydration: hydrationRemedy(scope),
       }),
       scopeFieldStates: computeScopeFieldStates({
         fields: claimFields ?? [],
@@ -789,12 +826,7 @@ export async function handleAgentThreadMessages(
       }),
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
-      observedRowFloor: isoOrNull(
-        result.rows.reduce<Date | null>((floor, row) =>
-          row.occurredAt !== null && (floor === null || row.occurredAt < floor)
-            ? row.occurredAt
-            : floor, null),
-      ),
+      observedRowFloor: observedRowFloorOf(result.rows.map((row) => row.occurredAt)),
       captureFloor: {
         at: isoOrNull(archiveFloor),
         kind: archiveFloor === null ? "unknown" : "oldest_stored_row",
@@ -810,7 +842,7 @@ export async function handleAgentThreadMessages(
       pageIds: [page.id],
       verbatimText: true,
       requestSummary: {
-        limit: query.limit,
+        limit: requestedLimit,
         returned: result.rows.length,
         cursorConsumed,
         windowFrom: new Date(from).toISOString(),
@@ -903,28 +935,27 @@ export async function handleAgentThreadMessages(
           requested: filters.senderRole !== undefined,
           applied: filters.senderRole !== undefined,
         },
-        // A predicate over a field the platform never parsed is NOT applied, and
-        // says so with `unsupported_for_plane`. Silently "applying" it would let
-        // `hasMedia=true` return nothing and read as "there was no media".
+        // A predicate over a field the platform never parsed was DROPPED FROM THE
+        // QUERY above, and `applied: false` therefore describes the SQL that ran.
+        // Reporting it unapplied while binding it anyway is what let `hasMedia=true`
+        // return nothing and read as "there was no media".
         {
           name: "hasMedia",
-          requested: filters.hasMedia !== undefined,
-          applied: filters.hasMedia !== undefined
-            && pageCapabilities.capturesMediaMetadata === "present",
-          reason: filters.hasMedia === undefined
+          requested: requestedFilters.hasMedia !== undefined,
+          applied: filters.hasMedia !== undefined,
+          reason: requestedFilters.hasMedia === undefined
             ? "not_requested"
-            : pageCapabilities.capturesMediaMetadata === "present"
+            : filters.hasMedia !== undefined
               ? "applied"
               : "unsupported_for_plane",
         },
         {
           name: "hasPrice",
-          requested: filters.hasPrice !== undefined,
-          applied: filters.hasPrice !== undefined
-            && pageCapabilities.capturesMessagePrice === "present",
-          reason: filters.hasPrice === undefined
+          requested: requestedFilters.hasPrice !== undefined,
+          applied: filters.hasPrice !== undefined,
+          reason: requestedFilters.hasPrice === undefined
             ? "not_requested"
-            : pageCapabilities.capturesMessagePrice === "present"
+            : filters.hasPrice !== undefined
               ? "applied"
               : "unsupported_for_plane",
         },
@@ -982,13 +1013,16 @@ export async function handleAgentSearchMessages(
     const trgmPresent = configured === "fts_trgm"
       ? await detectPgTrgmExtension(scope.db)
       : false;
-    // REPORT WHAT RAN. Announcing `fts_trgm` while executing plain FTS told a
-    // caller its query had been fuzzy-matched when it had not.
-    const backend = configured === "fts_trgm" && trgmPresent ? "fts_trgm" as const : "fts" as const;
+    // REPORT WHAT RAN, which is the plain FTS statement of decision #198 in every
+    // case: there is no trigram branch in the SQL, so `fts_trgm` was a label for a
+    // query that did not exist. Announcing it told a caller its query had been
+    // fuzzy-matched when it had not, and on a miss that reads as "we even tried
+    // approximate matching".
+    const backend = AGENT_SEARCH_BACKEND_IN_USE;
 
     const from = body.from ?? "";
     const to = body.to ?? "";
-    const { limit, cappedByBudget } = scope.limitWithinRowBudget(body.limit);
+    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(body.limit);
     const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       searchAgentArchive(tx, {
         pageIds,
@@ -1056,7 +1090,8 @@ export async function handleAgentSearchMessages(
       scopeFieldStates: computeScopeFieldStates({ fields: claimFields ?? [], platforms }),
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
-      observedRowFloor: null,
+      // The hits ARE dated, and a hardcoded null threw that away.
+      observedRowFloor: observedRowFloorOf(result.rows.map((row) => row.occurredAt)),
       captureFloor: { at: null, kind: "unknown" },
     });
 
@@ -1204,6 +1239,7 @@ export async function handleAgentCoverage(
     const personPlatformUserId = (stored?.personPlatformUserId as string | undefined)
       ?? query.personPlatformUserId;
     const claimFields = (stored?.claimFields as string[] | undefined) ?? query.claimFields ?? null;
+    const requestedLimit = (stored?.limit as number | undefined) ?? query.limit;
 
     const narrowed = pageLabel === undefined
       ? scope.pages
@@ -1223,7 +1259,7 @@ export async function handleAgentCoverage(
       : null;
     const personFilter = personRequested ? { fanId: fanId ?? -1 } : {};
 
-    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
     const sourceErrors: Array<{
       source: "page_dm_threads";
       code: "statement_timeout";
@@ -1257,8 +1293,10 @@ export async function handleAgentCoverage(
     }
     const scopes = scopesResult.ok ? scopesResult.value : { rows: [], witnesses: [] };
 
+    // Scoped to the GRANT, never deployment-wide: an ungranted page's earlier row
+    // is not this key's floor and must not stand in for one.
     const journalFloor = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
-      readAgentJournalFloor(tx), "agent_journal_floor");
+      readAgentJournalFloor(tx, { pageIds, platform }), "agent_journal_floor");
 
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, claimFields);
     const notRead = planesNotRead({
@@ -1284,7 +1322,7 @@ export async function handleAgentCoverage(
           personPlatform,
           personPlatformUserId,
           claimFields,
-          limit: query.limit,
+          limit: requestedLimit,
         },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: { page_dm_threads: last.conversationRef },
@@ -1326,14 +1364,22 @@ export async function handleAgentCoverage(
         plane: "message_archive",
         floorAt,
         windowFrom: from,
-        hydrationAdmissible: hydration.admissible,
+        hydration,
       });
       const perScope = buildAgentEvidence({
         planeMode: scope.planeMode,
         claimFields,
         operationPlanes,
-        planeReads: scopes.witnesses,
-        planesNotRead: notRead,
+        // THIS conversation's witnesses, carrying THIS conversation's floor. Every
+        // item used to reuse the response-level witnesses, whose `message_archive`
+        // floor is `unknown`; a window starting AFTER the floor produces no gap, so
+        // the known date then vanished from the answer entirely.
+        planeReads: entry.witnesses,
+        planesNotRead: planesNotRead({
+          operationPlanes,
+          witnesses: entry.witnesses,
+          overrides: messagePlaneOverrides([entry.platform as Platform]),
+        }),
         // A per-scope verdict, not a page of a traversal: `windowCovered` asks
         // "does this store cover the window for THIS conversation", and the
         // walk's own pagination caveats have nothing to say about that.
@@ -1372,7 +1418,13 @@ export async function handleAgentCoverage(
       items,
       journalFloor: {
         observationsFirstReceivedAt: isoOrNull(journalFloor.observationsFirstReceivedAt),
-        detachedPartitions: journalFloor.detachedPartitions,
+        // Both journals, because #8 reports the SHAPE of the store; the operation
+        // that turns a detachment into an observations gap (#9a) takes only the
+        // observations list.
+        detachedPartitions: [
+          ...journalFloor.detachedObservationPartitions,
+          ...journalFloor.detachedDomainEventPartitions,
+        ],
       },
       delivery: buildDelivery({
         returned: items.length,

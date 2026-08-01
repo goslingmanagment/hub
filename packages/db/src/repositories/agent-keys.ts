@@ -348,6 +348,88 @@ export async function bumpAgentKeyUsage(
   };
 }
 
+export interface AgentKeyRowReservation {
+  businessDate: string;
+  /** How many rows this call was actually allowed to take. Never more than what
+   *  the ceiling still had, and never negative on a reservation. */
+  granted: number;
+  /** The counter AFTER this call. Never above `dailyRowBudget`. */
+  rowsReturned: number;
+  dailyRowBudget: number;
+}
+
+/**
+ * RESERVES row allowance before a page is served, atomically, and clamped to the
+ * ceiling.
+ *
+ * Why a reservation and not "serve, then add": the counter was read at the start of
+ * a request and written at the end, so two concurrent requests both saw the same
+ * allowance and both spent it — a key with 100 rows left served 400. Reserving
+ * first makes the ceiling a real bound instead of an after-the-fact report.
+ *
+ * ATOMICITY: the row is locked with `for update` before the arithmetic, so a
+ * concurrent reservation waits and then reads the post-commit value. `insert ..
+ * on conflict do nothing` first, because the first request of a UTC day has no
+ * counter row to lock (the same reason every other write here is an upsert).
+ *
+ * A NEGATIVE `rows` is a REFUND: a handler reserves the page size it asked for and
+ * gives back what it did not use. A refund is bounded below by zero and is never
+ * clamped by the ceiling, so returning unused allowance always works.
+ *
+ * `businessDate` PINS the day this call accounts against, and a settling caller
+ * MUST pass back the date its reservation returned. Deriving it from a fresh clock
+ * on both sides means a request that reserved at 23:59:59 and finished at 00:00:01
+ * refunds against the NEW day: the reservation is stranded on the old counter and
+ * the refund subtracts rows a fresh request has already reserved, letting the new
+ * day exceed its budget.
+ */
+export async function reserveAgentKeyRows(
+  db: Database,
+  input: { agentKeyId: number; rows: number; now?: Date; businessDate?: string },
+): Promise<AgentKeyRowReservation> {
+  const businessDate = input.businessDate ?? agentKeyBusinessDate(input.now ?? new Date());
+  const requested = Math.trunc(input.rows);
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`
+      insert into agent_key_usage_daily (agent_key_id, business_date, requests, rows_returned)
+      values (${input.agentKeyId}, ${businessDate}::date, 0, 0)
+      on conflict (agent_key_id, business_date) do nothing
+    `);
+    const current = await tx.execute<{ rows_returned: string; daily_row_budget: number }>(sql`
+      select u.rows_returned::text as rows_returned, k.daily_row_budget
+      from agent_key_usage_daily u
+      join agent_keys k on k.id = u.agent_key_id
+      where u.agent_key_id = ${input.agentKeyId} and u.business_date = ${businessDate}::date
+      for no key update of u
+    `);
+    const row = current.rows[0];
+    if (!row) {
+      throw new Error(`agent key ${input.agentKeyId} has no budget row after upsert`);
+    }
+    const used = toSafeCount(row.rows_returned);
+    const budget = Number(row.daily_row_budget);
+    // A ceiling lowered by the owner below what is already spent must not force a
+    // negative refund out of a reservation: the allowance is simply zero.
+    const granted = requested >= 0
+      ? Math.max(0, Math.min(requested, budget - used))
+      : Math.max(requested, -used);
+    if (granted !== 0) {
+      await tx.execute(sql`
+        update agent_key_usage_daily
+        set rows_returned = rows_returned + ${granted}, updated_at = now()
+        where agent_key_id = ${input.agentKeyId} and business_date = ${businessDate}::date
+      `);
+    }
+    return {
+      businessDate,
+      granted,
+      rowsReturned: used + granted,
+      dailyRowBudget: budget,
+    };
+  });
+}
+
 /** Read-only view of one key's counter for a UTC day (the capabilities response). */
 export async function getAgentKeyUsage(
   db: Database,
