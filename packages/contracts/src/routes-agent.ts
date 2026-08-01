@@ -1573,6 +1573,14 @@ export const agentDatasetFilterOpEnum = z.enum([
 export const agentDatasetQueryBodySchema = z.object({
   from: agentIsoTimestamp.optional(),
   to: agentIsoTimestamp.optional(),
+  /**
+   * One-shot aggregate over the matching `transactions` rows.
+   *
+   * This deliberately reuses #10 instead of adding a second query language or
+   * another route. A summary is a terminal read in one MVCC statement: it has no
+   * cursor and never asks an agent to add money across a moving traversal.
+   */
+  summary: z.boolean().optional(),
   filters: z.array(z.object({
     field: z.string().min(1).max(64).regex(/^[a-z][a-zA-Z0-9]*$/),
     op: agentDatasetFilterOpEnum,
@@ -1588,7 +1596,7 @@ export const agentDatasetQueryBodySchema = z.object({
 }).strict().superRefine((value, ctx) => {
   const issues = [
     ...agentWindowIssues(value),
-    ...agentCursorScopeIssues(value, ["from", "to", "claim"]),
+    ...agentCursorScopeIssues(value, ["from", "to", "summary", "claim"]),
   ];
   value.filters.forEach((filter, index) => {
     const needsNoValue = filter.op === "is_null" || filter.op === "is_not_null";
@@ -1614,6 +1622,9 @@ export const agentDatasetQueryBodySchema = z.object({
   if (value.cursor !== undefined && (value.filters.length > 0 || value.sort.length > 0)) {
     issues.push({ path: ["cursor"], message: "cursor pins the query; do not resend filters/sort" });
   }
+  if (value.summary === true && value.sort.length > 0) {
+    issues.push({ path: ["sort"], message: "summary mode has no row ordering" });
+  }
   addAgentIssues(issues, ctx);
 });
 
@@ -1630,18 +1641,43 @@ export const agentDatasetRowSchema = z.object({
   provenance: agentProvenanceSchema,
 }).strict();
 
+export const agentDatasetSummaryGroupSchema = z.object({
+  /** Null is kept distinct: mixing an unknown currency into USD would be a money lie. */
+  currency: z.string().nullable(),
+  transactionCount: z.number().int().nonnegative(),
+  grossMills: z.number().int(),
+  netMills: z.number().int(),
+  /** Null means at least one matching row did not capture a fee, not that the fee was zero. */
+  feeMills: z.number().int().nullable(),
+}).strict();
+
+export const agentDatasetSummarySchema = z.object({
+  /** The number is a statement about Hub's matching rows, never vendor completeness. */
+  basis: z.literal("matching_rows_in_hub"),
+  matchedRows: z.number().int().nonnegative(),
+  groups: z.array(agentDatasetSummaryGroupSchema).max(200),
+}).strict();
+
 export const agentDatasetQueryResponseSchema = z.object({
   datasetRef: agentDatasetEnum,
   pageLabel: z.string(),
   platform: platformEnum,
   window: z.object({ from: agentIsoTimestamp, to: agentIsoTimestamp }).strict(),
   items: z.array(agentDatasetRowSchema).max(200),
+  /** Present only for `summary: true`; omitted on ordinary row reads for wire compatibility. */
+  summary: agentDatasetSummarySchema.optional(),
   predicates: z.array(agentPredicateSchema),
   delivery: agentDeliverySchema,
   capture: agentCaptureSchema,
   conclusion: agentConclusionSchema,
 }).strict().superRefine((value, ctx) => {
-  const issues = agentEvidenceIssues(value, value.items.length);
+  const issues = agentEvidenceIssues(
+    value,
+    value.summary === undefined ? value.items.length : value.summary.groups.length,
+  );
+  if (value.summary !== undefined && value.items.length > 0) {
+    issues.push({ path: ["items"], message: "summary mode must not also return row items" });
+  }
   value.items.forEach((item, index) => {
     if (item.datasetRef !== value.datasetRef) {
       issues.push({

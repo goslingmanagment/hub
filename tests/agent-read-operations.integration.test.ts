@@ -472,6 +472,55 @@ describe("[sync-critical] agent read plane operations", () => {
     }
   });
 
+  it("#10 summarizes matching Hub transactions in one exhausted read", async () => {
+    // A different type outside the requested window proves the capture floor is
+    // page-wide and filter-independent, not the oldest row the summary matched.
+    await testDb!.pool.query(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type,
+         canonical_type, transaction_state, raw_status, gross_amount_mills,
+         source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills,
+         occurred_at, source, currency)
+       select $1, f.id, 'tx-jan-sub', 'subscription', 'subscription', 'posted', 'ok',
+         5000, 5000, 4000, 1000, '2026-01-10T00:00:00Z', 'fansly:rest', 'USD'
+       from fans f where f.platform_user_id = $2`,
+      [pageId, FAN_PLATFORM_USER_ID],
+    );
+    const response = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/transactions/query",
+      {
+        from: "2026-01-23T12:00:00Z",
+        to: "2026-02-01T00:00:00Z",
+        summary: true,
+        filters: [{ field: "transactionType", op: "eq", value: "tip" }],
+      },
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.items).toEqual([]);
+    expect(body.summary).toEqual({
+      basis: "matching_rows_in_hub",
+      matchedRows: 1,
+      groups: [{
+        currency: "USD",
+        transactionCount: 1,
+        grossMills: 100_000,
+        netMills: 80_000,
+        feeMills: 20_000,
+      }],
+    });
+    expect(body.delivery).toMatchObject({
+      returned: 1,
+      nextCursor: null,
+      snapshotExhausted: true,
+    });
+    expect(body.capture.planes.find((plane: { plane: string }) =>
+      plane.plane === "transactions").captureFloor).toEqual({
+      at: "2026-01-10T00:00:00.000Z",
+      kind: "oldest_stored_row",
+    });
+    expect(body.conclusion.blockers).toEqual([]);
+  });
+
   it("#10 refuses a field outside the dataset's allowlist, before any SQL", async () => {
     const response = await agentPost(
       "/api/v1/agent/pages/lora-2/datasets/transactions/query",

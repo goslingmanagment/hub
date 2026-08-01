@@ -19,6 +19,7 @@ import {
   queryAgentDataset,
   readAgentJournalFloor,
   readAgentObservationsHighWater,
+  summarizeAgentTransactionDataset,
   type AgentDatasetFilter,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
@@ -29,7 +30,7 @@ import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError } from "../../services/errors.ts";
 import { buildAgentEvidence, gapBeforeCaptureFloor } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
-import { AgentPlaneDisabledError, staticNotFound, toSafeNumber } from "./errors.ts";
+import { AgentPlaneDisabledError, staticNotFound, toSafeNumber, toSafeNumberOr } from "./errors.ts";
 import {
   AGENT_OBSERVATION_PAYLOAD_SESSION_CAP,
   agentObservationPayloadAllowed,
@@ -450,8 +451,15 @@ export async function handleAgentDatasetQuery(
     const rawFilters = (stored?.filters as AgentDatasetQueryBody["filters"] | undefined)
       ?? body.filters;
     const rawSort = (stored?.sort as AgentDatasetQueryBody["sort"] | undefined) ?? body.sort;
-    const claimFields = (stored?.claimFields as string[] | undefined)
+    const summaryRequested = (stored?.summary as boolean | undefined) ?? body.summary ?? false;
+    const declaredClaimFields = (stored?.claimFields as string[] | undefined)
       ?? body.claim?.fields ?? null;
+    // Summary mode has a fixed money result. It can therefore name the default
+    // claim it necessarily returns instead of forcing every caller to repeat it.
+    // An explicit caller claim still wins.
+    const claimFields = summaryRequested && declaredClaimFields === null
+      ? ["grossMills", "netMills"]
+      : declaredClaimFields;
     const requestedLimit = (stored?.limit as number | undefined) ?? body.limit;
 
     // The registry is the ONLY bridge from a name to SQL: an unknown field is a
@@ -483,6 +491,89 @@ export async function handleAgentDatasetQuery(
       throw new BadRequestError(`field is not sortable on the ${params.dataset} dataset`);
     }
     const sortKind = (definition.fields as Record<string, string>)[requestedSort.field] ?? "string";
+
+    if (summaryRequested) {
+      if (params.dataset !== "transactions") {
+        throw new BadRequestError("summary mode is currently supported only for transactions");
+      }
+
+      const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
+        summarizeAgentTransactionDataset(tx, {
+          pageId: page.id,
+          from: new Date(from),
+          to: new Date(to),
+          filters,
+        }), "agent_dataset_summary");
+      const floorAt = isoOrNull(result.floorAt);
+      const gaps = floorAt !== null && Date.parse(from) < Date.parse(floorAt)
+        ? [{
+            kind: "before_capture_floor" as const,
+            from: null,
+            to: floorAt,
+            plane: "transactions" as const,
+            // Thread hydration cannot repair a transaction-history boundary.
+            remedy: { kind: "none" as const, reason: "no_remedy_exists" as const },
+          }]
+        : [];
+      const operationPlanes = operationPlanesFor(mapping.readPlanes, claimFields);
+      const evidence = buildAgentEvidence({
+        planeMode: scope.planeMode,
+        claimFields,
+        operationPlanes,
+        planeReads: result.witnesses,
+        planesNotRead: planesNotRead({ operationPlanes, witnesses: result.witnesses }),
+        delivery: { snapshotExhausted: true, nextCursor: null },
+        cursorConsumed: false,
+        cursorCapable: false,
+        frozenSnapshot: true,
+        requestWindow: { from, to },
+        gaps,
+        scopeFieldStates: computeScopeFieldStates({
+          fields: claimFields ?? [],
+          platforms: [page.platform as Platform],
+        }),
+        sourceErrors: [],
+        scopeNarrowing: scope.scopeNarrowing,
+        observedRowFloor: null,
+        captureFloor: {
+          at: floorAt,
+          kind: floorAt === null ? "unknown" : "oldest_stored_row",
+        },
+      });
+      const groups = result.groups.map((group) => ({
+        currency: group.currency,
+        transactionCount: toSafeNumberOr(group.transactionCount, 0),
+        grossMills: toSafeNumberOr(group.grossMills, 0),
+        netMills: toSafeNumberOr(group.netMills, 0),
+        feeMills: toSafeNumber(group.feeMills),
+      }));
+      await scope.reserveExactRows(groups.length);
+      const response: AgentDatasetQueryResponse = {
+        datasetRef: params.dataset,
+        pageLabel: page.pageLabel,
+        platform: page.platform as Platform,
+        window: { from, to },
+        items: [],
+        summary: {
+          basis: "matching_rows_in_hub",
+          matchedRows: toSafeNumberOr(result.matchedRows, 0),
+          groups,
+        },
+        predicates: buildPredicates([
+          { name: "window", requested: true, applied: true },
+          {
+            name: "datasetFilter",
+            requested: rawFilters.length > 0,
+            applied: rawFilters.length > 0,
+          },
+        ]),
+        delivery: singletonDelivery(groups.length),
+        capture: evidence.capture,
+        conclusion: evidence.conclusion,
+      };
+      await scope.finish(groups.length);
+      return response;
+    }
 
     const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
     const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>

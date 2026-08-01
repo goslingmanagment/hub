@@ -1855,3 +1855,106 @@ export async function queryAgentDataset(
     witnesses: witnessesFor(mapping.readPlanes),
   };
 }
+
+export interface AgentTransactionSummaryGroupRaw {
+  currency: string | null;
+  transactionCount: bigint;
+  grossMills: bigint;
+  netMills: bigint;
+  feeMills: bigint | null;
+}
+
+/**
+ * The one aggregate agents actually need: totals over the matching transaction
+ * rows already held by Hub.
+ *
+ * It is intentionally a mode of #10, not a new route or a generic aggregation
+ * language. The floor and every currency group come from ONE SQL statement, so
+ * the answer never asks a caller to add money across cursor snapshots. The floor
+ * predicate is page-only and windowless: result filters cannot move it.
+ */
+export async function summarizeAgentTransactionDataset(
+  db: Database,
+  input: {
+    pageId: number;
+    from: Date;
+    to: Date;
+    filters: readonly AgentDatasetFilter[];
+  },
+): Promise<{
+  floorAt: Date | null;
+  matchedRows: bigint;
+  groups: AgentTransactionSummaryGroupRaw[];
+  witnesses: PlaneReadWitness[];
+}> {
+  const mapping = agentDatasetSqlMapping("transactions");
+  if (!mapping) {
+    throw new Error("unmapped agent dataset: transactions");
+  }
+
+  const grossColumn = mapping.fields.grossMills;
+  const netColumn = mapping.fields.netMills;
+  const feeColumn = mapping.fields.feeMills;
+  const currencyColumn = mapping.fields.currency;
+  if (!grossColumn || !netColumn || !feeColumn || !currencyColumn) {
+    throw new Error("transactions dataset summary columns are not mapped");
+  }
+
+  const source = sql.raw(mapping.source);
+  const windowColumn = sql.raw(`src.${mapping.windowColumn}`);
+  const matchedClauses: SQL[] = [
+    sql`(${windowColumn} is null or (${windowColumn} >= ${input.from} and ${windowColumn} < ${input.to}))`,
+  ];
+  for (const filter of input.filters) {
+    matchedClauses.push(datasetFilterSql(filter));
+  }
+  const matched = sql.join(matchedClauses, sql` and `);
+
+  const sourceGross = sql.raw(`src.${grossColumn}`);
+  const sourceNet = sql.raw(`src.${netColumn}`);
+  const sourceFee = sql.raw(`src.${feeColumn}`);
+  const sourceCurrency = sql.raw(`src.${currencyColumn}`);
+
+  const result = await db.execute<Record<string, unknown>>(sql`
+    with src as (${source})
+    select min(min(${windowColumn})) over () as floor_at,
+           ${sourceCurrency} as currency,
+           (count(src.k_key) filter (where ${matched}))::text as transaction_count,
+           coalesce(sum(${sourceGross}) filter (where ${matched}), 0)::text as gross_mills,
+           coalesce(sum(${sourceNet}) filter (where ${matched}), 0)::text as net_mills,
+           case
+             when (count(${sourceFee}) filter (where ${matched}))
+                    <> (count(src.k_key) filter (where ${matched})) then null
+             else (sum(${sourceFee}) filter (where ${matched}))::text
+           end as fee_mills
+    from src
+    where src.k_page_id = ${input.pageId}
+    group by ${sourceCurrency}
+    order by ${sourceCurrency} nulls last
+  `);
+
+  const floorAt = date(result.rows[0]?.floor_at);
+  const groups = result.rows
+    .map((row): AgentTransactionSummaryGroupRaw => ({
+      currency: row.currency == null ? null : String(row.currency),
+      transactionCount: BigInt(String(row.transaction_count ?? "0")),
+      grossMills: BigInt(String(row.gross_mills ?? "0")),
+      netMills: BigInt(String(row.net_mills ?? "0")),
+      feeMills: row.fee_mills == null ? null : BigInt(String(row.fee_mills)),
+    }))
+    // A page currency with no rows in the requested window still carries the
+    // page-wide floor. It is metadata, not a returned summary group.
+    .filter((group) => group.transactionCount > 0n);
+  const matchedRows = groups.reduce((total, group) => total + group.transactionCount, 0n);
+
+  return {
+    floorAt,
+    matchedRows,
+    groups,
+    // The registry mapping is the source-of-truth for every physical store this
+    // fixed SQL reads. Only the temporal transaction store earns the page floor;
+    // the identity join is an inventory store and honestly stays unknown.
+    witnesses: mapping.readPlanes.map((plane) =>
+      witnessFor(plane, plane === "transactions" ? floorAt : null)),
+  };
+}

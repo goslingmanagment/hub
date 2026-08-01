@@ -611,6 +611,10 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     options: {
       "page-label": { kind: "string", describe: "Page to query (required)" },
       dataset: { kind: "string", describe: "Registered dataset name (required)" },
+      summary: {
+        kind: "boolean",
+        describe: "Return one exact summary of matching Hub transaction rows instead of paginated rows (transactions only)",
+      },
       filter: { kind: "list", describe: "field:op[:value] (repeatable, max 10)" },
       sort: { kind: "list", describe: "field:asc | field:desc (repeatable, max 2)" },
       ...WINDOW_OPTIONS,
@@ -629,6 +633,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
           ...defined({
             from: readString(values, "from"),
             to: readString(values, "to"),
+            summary: readFlag(values, "summary") ? true : undefined,
             filters: filters?.map(parseFilter),
             sort: sorts?.map(parseSort),
             limit: readNumber(values, "limit"),
