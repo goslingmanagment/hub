@@ -202,6 +202,21 @@ What each refusal means, so you do not retry the wrong thing:
   page you were not granted, or a request that is not yours, is always the
   indistinguishable 404 above.
 
+**Who decides your request (decision #201).** A Fansly `thread_backfill_before`
+request may be approved by a versioned in-kernel policy instead of a human,
+within a daily call budget: your request's `decision.decisionSource` says which
+(`auto_policy` | `owner`), and an auto-approved run usually executes within a
+couple of minutes. What this means for how you file:
+
+- always state an explicit `maxCalls`, and keep it ≤ 40 (one full targeted run,
+  ~1000 messages) — the policy clamps to 40 and NEVER widens what you asked;
+- anything the policy may not decide — OnlyFans, over the day's budget, over
+  the cap — simply STAYS `requested` for the owner. Do not refile it under a
+  fresh UUID: one live approval per page and one auto-run per conversation per
+  UTC day are enforced, so the duplicate just parks;
+- `completed` is not "the whole history": re-read the capture floor and decide
+  whether another bounded request is worth filing.
+
 Since `hub` has no command for it, from this CLI the useful half is still yours
 to do by hand: report the specific gap (page, thread, conversation ref, window,
 and the `remedy` the response carried) and hand it to the owner, who can run the
