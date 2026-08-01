@@ -579,7 +579,7 @@ The chatter asks:
 </chatter_question>
 
 {coachDraftSection}
-
+{presetInstructions}
 Answer the chatter now. Use a draft fence for any proposed fan message.
 `;
 

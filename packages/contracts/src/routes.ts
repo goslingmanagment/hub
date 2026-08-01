@@ -1925,6 +1925,9 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
     // Feature-lane-only provenance for coach-chat. It is optional because the
     // raw gateway and every other feature share this existing meta frame.
     attachedRecaps: aiFeatureAttachedRecapsSchema.optional(),
+    // The server-substituted coach preset question follows the same optionality
+    // rule: the raw gateway and every other feature never set it.
+    presetQuestion: z.string().optional(),
     quota: aiGatewayQuotaSchema,
   }).strict(),
   z.object({
@@ -2115,7 +2118,8 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // worst-case schema-valid coach body sums to ~1.69M UTF-16 code units --
 // coachHistory 20x(2k question + 64k answer) = 1.32M, transcript 300k, spending
 // 20k, subscription 20k, bio 5k, draft 20k, question 2k, plus the small scalar
-// fields. The TRUE per-code-unit worst case on the JSON wire is SIX bytes: a
+// fields. The preset literal ("situation", <=11 bytes) is negligible. The TRUE
+// per-code-unit worst case on the JSON wire is SIX bytes: a
 // lone surrogate (U+D800) or an ASCII control char is a legal JSON string value
 // that JSON.stringify escapes to a six-byte `\uXXXX` sequence, so ~1.69M x 6
 // ~= 10.1MB (a printable 3-byte-UTF-8 char like the CJK "no" is only the 3-byte
@@ -2152,6 +2156,9 @@ export const aiFeatureStreamBodySchema = z.object({
     )
     .max(20)
     .optional(),
+  // Coach-chat only: substitutes the pinned canonical question when the
+  // chatterQuestion field is absent or whitespace-only.
+  preset: z.literal("situation").optional(),
   summaryMode: z.literal("short").optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no

@@ -135,6 +135,11 @@ describe("AI gateway contract", () => {
 
     expect(aiGatewayStreamFrameSchema.parse({ ...base, attachedRecaps }))
       .toMatchObject({ type: "meta", attachedRecaps });
+    const presetQuestion = "Разбери текущую ситуацию";
+    expect(aiGatewayStreamFrameSchema.parse({ ...base, presetQuestion }))
+      .toMatchObject({ type: "meta", presetQuestion });
+    expect(aiGatewayStreamFrameSchema.safeParse({ ...base, presetQuestion: 42 }).success)
+      .toBe(false);
     expect(aiGatewayStreamFrameSchema.safeParse({
       ...base,
       attachedRecaps: {

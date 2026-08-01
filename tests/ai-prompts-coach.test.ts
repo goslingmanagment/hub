@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -105,6 +107,61 @@ describe("coach-chat prompt", () => {
     expect(taskBlock?.text).toContain("как продать ppv?");
   });
 
+  it("keeps the normal uncached task block byte-identical with an empty preset slot", () => {
+    const built = buildPrompt({ ...baseInput });
+    const taskBlock = built.userBlocks[2];
+    expect(taskBlock?.text).toBe(`## Your Task
+
+The chatter asks:
+
+<chatter_question>
+как продать ppv?
+</chatter_question>
+
+
+
+Answer the chatter now. Use a draft fence for any proposed fan message.
+`);
+    expect(built.user).not.toContain("## Preset Turn");
+    expect(built.user).not.toContain("{presetInstructions}");
+
+    const withDraft = buildPrompt({
+      ...baseInput,
+      draftText: "  hey <babe> & wanna see more? 😘  ",
+    });
+    expect(
+      createHash("sha256").update(JSON.stringify(withDraft.userBlocks)).digest("hex"),
+    ).toBe("1ae9af5f607c96f1b1fbdd9d922a57e9647ccca958f50e267df57f9d8c30b814");
+  });
+
+  it("renders the situation preset only in the uncached task block", () => {
+    const built = buildPrompt({
+      ...baseInput,
+      preset: "situation",
+      draftText: "warm start",
+    });
+    expect(built.userBlocks).toHaveLength(3);
+    const [staticBlock, dynamicBlock, taskBlock] = built.userBlocks;
+    expect(staticBlock?.cache).toBe("1h");
+    expect(staticBlock?.text).not.toContain("## Preset Turn");
+    expect(dynamicBlock?.cache).toBe("5m");
+    expect(dynamicBlock?.text).not.toContain("## Preset Turn");
+    expect(taskBlock?.cache).toBe("none");
+    expect(taskBlock?.text).toContain("## Preset Turn");
+    expect(taskBlock?.text).toContain("СИТУАЦИЯ:");
+    expect(taskBlock?.text).toContain("ЧТО УПУЩЕНО:");
+    expect(taskBlock?.text).toContain("СЛЕДУЮЩИЙ ХОД:");
+    expect(taskBlock?.text).toContain("РИСК:");
+    expect(taskBlock?.text).toContain("EXACTLY two draft fences");
+    expect(taskBlock?.text.indexOf("## Chatter's Working Draft")).toBeLessThan(
+      taskBlock!.text.indexOf("## Preset Turn"),
+    );
+    expect(taskBlock?.text.indexOf("## Preset Turn")).toBeLessThan(
+      taskBlock!.text.indexOf("Answer the chatter now."),
+    );
+    expect(built.user).not.toContain("{presetInstructions}");
+  });
+
   it("bounds the whole worst-legal escaped prompt while preserving the question and newest transcript", () => {
     const amp = "&";
     const transcript =
@@ -122,6 +179,7 @@ describe("coach-chat prompt", () => {
       fanSubscriptionData: amp.repeat(20_000),
       fanBio: amp.repeat(5_000),
       chatterQuestion: amp.repeat(1_980) + "QUESTION_SENTINEL",
+      preset: "situation",
       coachHistory: Array.from({ length: 20 }, (_, index) => ({
         question: `HISTORY_Q_${index}` + amp.repeat(1_980),
         answer: `HISTORY_A_${index}` + amp.repeat(63_980),
@@ -141,6 +199,7 @@ describe("coach-chat prompt", () => {
     expect(text.length).toBeLessThanOrEqual(COACH_PROMPT_MAX_CHARS);
     expect(built.system).toContain(amp.repeat(50_000));
     expect(built.user).toContain("QUESTION_SENTINEL");
+    expect(built.user).toContain("## Preset Turn");
     expect(built.user).toContain("[older transcript omitted]");
     expect(built.user).toContain("NEWEST_TRANSCRIPT_🎉");
     expect(built.user).not.toContain("OLDEST_TRANSCRIPT_SENTINEL");

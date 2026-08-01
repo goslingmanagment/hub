@@ -92,6 +92,7 @@ export interface AiFeatureRequestBody {
   isRegeneration?: boolean;
   chatterQuestion?: string;
   coachHistory?: Array<{ question: string; answer: string }>;
+  preset?: "situation";
   summaryMode?: "short";
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
@@ -158,6 +159,14 @@ const SHORT_SUMMARY_MAX_TOKENS = 2048;
 // 3000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
 const SHORT_SUMMARY_MESSAGE_COUNT = 300;
 
+/** Decision #204: the Help button became a coach preset turn. The canonical
+ * question is kernel-side so prompt text never lives in clients (E3). Must
+ * stay <=2000 chars: it replays through coachHistory[].question. */
+const COACH_PRESET_QUESTIONS = {
+  situation:
+    "Разбери текущую ситуацию в переписке: что происходит у фана, что я упускаю и какой следующий ход. Дай два готовых варианта следующего сообщения: первый спокойный и тёплый, второй более флиртовый и эскалирующий.",
+} as const;
+
 export async function prepareAiFeatureStream(
   app: AppContext,
   principal: HumanAuthPrincipal,
@@ -191,12 +200,28 @@ export async function prepareAiFeatureStream(
   // 60k history budget in the prompt builder — a schema-valid client that trims
   // to its window setting must never be rejected.
   if (feature === "coach-chat") {
-    if (!body.chatterQuestion?.trim()) {
+    if (body.preset !== undefined) {
+      if (body.chatterQuestion?.trim()) {
+        throw new BadRequestError("coach-chat preset forbids chatterQuestion");
+      }
+    } else if (!body.chatterQuestion?.trim()) {
       throw new BadRequestError("coach-chat requires chatterQuestion");
     }
-  } else if (body.chatterQuestion !== undefined || body.coachHistory !== undefined) {
+  } else if (
+    body.chatterQuestion !== undefined
+    || body.coachHistory !== undefined
+    || body.preset !== undefined
+  ) {
     throw new BadRequestError(`${feature} does not accept coach fields`);
   }
+  const effectiveChatterQuestion = feature === "coach-chat"
+    ? body.preset !== undefined
+      ? COACH_PRESET_QUESTIONS[body.preset]
+      : body.chatterQuestion
+    : undefined;
+  const presetQuestion = feature === "coach-chat" && body.preset !== undefined
+    ? effectiveChatterQuestion
+    : undefined;
   if (body.summaryMode !== undefined && feature !== "fan-summary") {
     throw new BadRequestError(`${feature} does not accept summaryMode`);
   }
@@ -564,8 +589,9 @@ export async function prepareAiFeatureStream(
     fanSilenceDays: contextValues.fanSilenceDays,
     replyTone: policy.supportsReplyTone ? body.replyTone : undefined,
     replyMode: policy.supportsReplyMode ? body.replyMode : undefined,
-    chatterQuestion: feature === "coach-chat" ? body.chatterQuestion : undefined,
+    chatterQuestion: effectiveChatterQuestion,
     coachHistory: feature === "coach-chat" ? body.coachHistory : undefined,
+    preset: feature === "coach-chat" ? body.preset : undefined,
     recapAttach,
     transcriptCoverage:
       feature === "coach-chat" || feature === "fan-summary"
@@ -751,6 +777,7 @@ export async function prepareAiFeatureStream(
       || debugFrame !== undefined
       || body.expectedPersonaDefinitionId !== undefined
       || attachedRecaps !== undefined
+      || presetQuestion !== undefined
       ? {
         ...(contextManifest !== undefined ? { contextManifest } : {}),
         ...(debugFrame !== undefined ? { debugFrame } : {}),
@@ -758,6 +785,7 @@ export async function prepareAiFeatureStream(
           ? { personaDefinitionId: persona.definitionId }
           : {}),
         ...(attachedRecaps !== undefined ? { attachedRecaps } : {}),
+        ...(presetQuestion !== undefined ? { presetQuestion } : {}),
       }
       : undefined,
   );
