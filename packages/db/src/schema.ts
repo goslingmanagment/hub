@@ -3693,7 +3693,10 @@ export const agentKeys = pgTable(
     /** Mandatory, sliding (+90d on use) and capped at 365d from createdAt — the
      *  device-token precedent. Enforcement lives in the authenticator (slice 0b). */
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    createdBy: bigint("created_by", { mode: "number" }).references(() => users.id),
+    // `on delete restrict` mirrors 0115: the issuer of a live machine key cannot
+    // be deleted out from under its audit trail.
+    createdBy: bigint("created_by", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
@@ -3857,7 +3860,8 @@ export const agentHydrationRequests = pgTable(
     conversationRef: text("conversation_ref").notNull(),
     threadId: bigint("thread_id", { mode: "number" }),
     state: text("state").$type<AgentHydrationState>().default("requested").notNull(),
-    targetKind: text("target_kind").notNull(),
+    /** The DDL default (0117): the only kind a CHECK admits today. */
+    targetKind: text("target_kind").default("thread_backfill_before").notNull(),
     /** A BOUNDARY, not a window: exactly one of the two is set. */
     targetBeforeAt: timestamp("target_before_at", { withTimezone: true }),
     targetBeforeMessageRef: text("target_before_message_ref"),
@@ -3974,8 +3978,10 @@ export const agentHydrationEvents = pgTable(
     occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
+    // The constraint's own btree on (request_id, seq) IS the traversal index;
+    // 0117 additionally created `agent_hydration_events_request_idx` on the same
+    // pair, which 0118 drops. Do not re-add it.
     seqUniq: unique("agent_hydration_events_seq_uniq").on(table.requestId, table.seq),
-    requestIdx: index("agent_hydration_events_request_idx").on(table.requestId, table.seq),
     actorCheck: check("agent_hydration_events_actor_check", sql`
       ${table.actor} in ('agent_key', 'owner_session', 'executor', 'sweeper')
     `),

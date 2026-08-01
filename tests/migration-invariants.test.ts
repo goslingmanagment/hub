@@ -174,6 +174,39 @@ describe("database migration invariants", () => {
     expect(indexes).toContain("alter index domain_events_v2_deliverable_account_seq_idx attach partition");
   });
 
+  it("drops the duplicate hydration event index in a NEW migration", async () => {
+    const hydration = await readFile(
+      "packages/db/migrations/0117_agent_hydration_requests.sql",
+      "utf8",
+    );
+    const hygiene = await readFile(
+      "packages/db/migrations/0118_agent_read_index_hygiene.sql",
+      "utf8",
+    );
+
+    // 0117 declared a UNIQUE on (request_id, seq) AND a second btree on the same
+    // pair, so every event insert maintained two identical indexes. The
+    // constraint's own index is the one that serves the traversal.
+    expect(hydration).toContain(
+      'CONSTRAINT "agent_hydration_events_seq_uniq" UNIQUE ("request_id", "seq")',
+    );
+    expect(hydration).toContain('CREATE INDEX "agent_hydration_events_request_idx"');
+    // Forward-only: an applied migration is corrected by a later file, never edited.
+    expect(hydration.toLowerCase()).not.toContain("drop index");
+
+    expect(hygiene.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(hygiene).toContain("-- agency-hub:statement");
+    expect(hygiene).toContain(
+      "drop index concurrently if exists agent_hydration_events_request_idx",
+    );
+    // The dangling "#8 coverage:" comment 0116 ends on is a DECISION, not a
+    // missing index: every access path that operation walks is already covered.
+    // The two indexes that cover it are named here so that nobody re-adds a
+    // duplicate of the baseline UNIQUE under a new name.
+    expect(hygiene).toContain("page_dm_threads_account_conversation_uniq");
+    expect(hygiene).toContain("message_archive_account_conv_idx");
+  });
+
   it("keeps error-handling Stage 1A additive and producer-free", async () => {
     const migration = await readFile(
       "packages/db/migrations/0114_error_handling_stage_1a.sql",
