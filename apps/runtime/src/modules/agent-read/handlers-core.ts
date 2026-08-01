@@ -7,6 +7,7 @@ import {
   AGENT_PLANNED_DATASET_NAMES,
   AGENT_PREDICATE_REGISTRY,
   KERNEL_CONTRACT_HASH,
+  agentClaimFieldClass,
   agentDatasetFields,
   agentDatasetRequiredCapabilities,
   type AgentCapabilitiesResponse,
@@ -72,17 +73,13 @@ const EMPTY_GAPS = [] as const;
 
 type MoneyByType = NonNullable<AgentPersonResponse["money"]>["byType"][number];
 
-/** Claim fields whose class is money; withheld wholesale without `read:money`. */
-const MONEY_CLAIM_FIELDS = [
-  "grossMills",
-  "netMills",
-  "feeMills",
-  "amountMills",
-  "currency",
-  "transactionState",
-  "lifetimeSpendMills",
+/** Claim fields whose class is money; withheld wholesale without `read:money`.
+ *  Derived from the registry (plus the subscription-price field, which rides
+ *  the same capability) so a money field added there cannot skip this gate. */
+const MONEY_CLAIM_FIELDS: readonly string[] = [
+  ...AGENT_CLAIM_FIELDS.filter((field) => agentClaimFieldClass(field) === "money"),
   "subscriptionPriceMills",
-] as const;
+];
 
 /**
  * Operator-written FREE TEXT about a person: the same disclosure class as verbatim

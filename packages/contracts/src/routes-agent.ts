@@ -1410,10 +1410,12 @@ export const agentCoverageItemSchema = z.object({
   planes: z.array(agentPlaneSchema).length(AGENT_PLANE_COUNT),
   observedRowFloor: agentIsoTimestamp.nullable(),
   gaps: z.array(agentGapSchema),
-  /** The requested window starts at or after this scope's capture floor and no
-   *  gap was found inside it. A statement about THIS STORE's coverage of the
-   *  window, never about what happened on the platform. */
-  windowCovered: z.boolean(),
+  // `windowCovered: boolean` used to sit here. It was computed as "this item's
+  // blockers list is empty", which quietly resurrected the removed
+  // completeness proof under a friendlier name — and inverted, too: in
+  // `read_only` mode the `read_only_mode` blocker made it `false` on a
+  // perfectly covered window. The reader's verdict is `blockers` below;
+  // a store-level "covered" boolean this system cannot honestly compute.
   fieldStates: z.partialRecord(agentClaimFieldEnum, agentFieldStateSchema),
   blockers: z.array(agentBlockerEnum),
 }).strict().superRefine((value, ctx) => addAgentIssues(agentPlanesIssues(value), ctx));

@@ -258,6 +258,12 @@ HTTP-операций и команд CLI при этом **не меняетс�
   невидим, `transactions` остаётся с `posted` навсегда.
 - **Смежный известный долг:** OF-чарджбеки страдают от отсутствия `endDate`
   (P1 из прод-мониторинга 2026-07-15).
+- **Митигировано в Agent Read Plane (2026-08-01, не закрытие):** money-класс
+  получил claim-поле `refundState` — Fansly отвечает `not_captured`
+  (`capture_lane_unimplemented`), OF `captured_unparsed` (`projection_missing`),
+  так что вывод «возвратов не было» блокируется `field_state_insufficient`
+  вместо тихого ложного отрицания. Сам захват Fansly-возвратов по-прежнему
+  отсутствует — этот FEAT остаётся открытым.
 
 Приоритет между четырьмя владельцем не задан. Оценка автора: FEAT-002 самый
 дешёвый (данные уже захвачены), FEAT-004 самый ценный (деньги и асимметрия с OF).
@@ -292,10 +298,11 @@ HTTP-операций и команд CLI при этом **не меняетс�
 - **BL-A10 `domain_events_smoke_checkpoint`.** Now excluded from the detached
   partition check by an anchored name pattern; the underlying helper table should
   move out of the `domain_events_` namespace so the pattern is not load-bearing.
-- **BL-A11 transcript witness floors.** `listAgentTranscript` attributes the
-  `message_archive` floor to all four planes it returns witnesses for, including
-  `page_dm_messages` and `page_dm_threads`, whose own floors nobody computed.
-  Each arm should carry its own floor or report `unknown`.
+- **BL-A11 transcript witness floors. — FIXED (honesty slice, 2026-08-01).**
+  `listAgentTranscript` attributed the `message_archive` floor to all four
+  planes it returns witnesses for. Now only `message_archive` carries the
+  dedicated floor; the other three arms report `unknown` until someone pays for
+  their own floor queries (`tests/agent-read-transcript-witnesses.test.ts`).
 - **BL-A12 #8 correlated lateral.** `listAgentCoverageScopes` runs a
   `lateral min(ma.occurred_at)` per CANDIDATE row before the keyset and limit
   apply — the same class of cost as the `count(domain_events)` removed in round 1.

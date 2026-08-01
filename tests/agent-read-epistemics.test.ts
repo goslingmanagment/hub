@@ -328,6 +328,38 @@ describe("agent read plane: scopeFieldStates are computed before any row", () =>
     }));
     expect(conclusion.blockers).toContain("field_state_insufficient");
   });
+
+  it("refunds: Fansly never captured the lane; OF captured it into a store this plane cannot read", () => {
+    // The original incident's money half: "no refund rows" читалось как "возврата
+    // не было". Neither platform's capture can support that conclusion.
+    expect(computeScopeFieldStates({ fields: ["refundState"], platforms: ["fansly"] }).refundState)
+      .toEqual({
+        state: "not_captured",
+        remedy: { kind: "none", reason: "capture_lane_unimplemented" },
+      });
+    expect(computeScopeFieldStates({ fields: ["refundState"], platforms: ["onlyfans"] }).refundState)
+      .toEqual({
+        state: "captured_unparsed",
+        remedy: { kind: "none", reason: "projection_missing" },
+      });
+    expect(
+      computeScopeFieldStates({ fields: ["refundState"], platforms: ["fansly", "onlyfans"] })
+        .refundState?.state,
+    ).toBe("not_captured");
+  });
+
+  it("a 'no refunds happened' conclusion is blocked on BOTH platforms", () => {
+    for (const platform of ["fansly", "onlyfans"] as const) {
+      const { conclusion } = buildAgentEvidence(unrestrictedInput({
+        claimFields: ["refundState"],
+        scopeFieldStates: computeScopeFieldStates({
+          fields: ["refundState"],
+          platforms: [platform],
+        }),
+      }));
+      expect(conclusion.blockers).toContain("field_state_insufficient");
+    }
+  });
 });
 
 describe("agent read plane: plane sets", () => {

@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
 
-import type {
-  AgentCoverageResponse,
-  AgentPersonTimelineResponse,
-  AgentPlaneReason,
-  AgentSearchCaveat,
-  AgentSearchMessagesBody,
-  AgentSearchMessagesResponse,
-  AgentThreadMessagesResponse,
-  AgentThreadsResponse,
+import {
+  AGENT_CLAIM_FIELDS,
+  agentClaimFieldClass,
+  type AgentCoverageResponse,
+  type AgentPersonTimelineResponse,
+  type AgentPlaneReason,
+  type AgentSearchCaveat,
+  type AgentSearchMessagesBody,
+  type AgentSearchMessagesResponse,
+  type AgentThreadMessagesResponse,
+  type AgentThreadsResponse,
 } from "@agency_hub_core/contracts";
 import {
   countAgentThreads,
@@ -31,7 +33,6 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
 import {
   buildAgentEvidence,
-  evidenceIsUnrestricted,
   gapBeforeCaptureFloor,
 } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
@@ -75,16 +76,12 @@ const MONEY_LANES: ReadonlySet<string> = new Set(["money", "subscriptions"]);
 const MESSAGE_LANES: ReadonlySet<string> = new Set(["messages"]);
 const ALL_LANES = ["messages", "money", "subscriptions", "follows", "presence"] as const;
 
-const MONEY_CLAIM_FIELDS = [
-  "grossMills",
-  "netMills",
-  "feeMills",
-  "amountMills",
-  "currency",
-  "transactionState",
-  "lifetimeSpendMills",
+/** Derived from the registry (plus the subscription-price field, which rides
+ *  the same capability) so a money field added there cannot skip this gate. */
+const MONEY_CLAIM_FIELDS: readonly string[] = [
+  ...AGENT_CLAIM_FIELDS.filter((field) => agentClaimFieldClass(field) === "money"),
   "subscriptionPriceMills",
-] as const;
+];
 
 /**
  * Which lanes this key may actually be served.
@@ -1380,9 +1377,9 @@ export async function handleAgentCoverage(
           witnesses: entry.witnesses,
           overrides: messagePlaneOverrides([entry.platform as Platform]),
         }),
-        // A per-scope verdict, not a page of a traversal: `windowCovered` asks
-        // "does this store cover the window for THIS conversation", and the
-        // walk's own pagination caveats have nothing to say about that.
+        // A per-scope evidence block, not a page of a traversal: the item's
+        // blockers speak about THIS conversation's window, so the walk's own
+        // pagination caveats have nothing to say about it.
         delivery: { snapshotExhausted: true, nextCursor: null },
         cursorConsumed: false,
         cursorCapable: false,
@@ -1406,8 +1403,6 @@ export async function handleAgentCoverage(
         planes: perScope.capture.planes,
         observedRowFloor: isoOrNull(entry.observedRowFloor),
         gaps: perScope.capture.gaps,
-        // A statement about THIS STORE's coverage of the window, and nothing more.
-        windowCovered: evidenceIsUnrestricted(perScope),
         fieldStates: perScope.capture.scopeFieldStates,
         blockers: perScope.conclusion.blockers,
       };

@@ -139,7 +139,7 @@ Fansly-сообщений, то есть история у вендора поч
 ### Путь A (проще, без флагов) — owner-CLI, слайс C′
 
 ```
-docker exec agency-hub-api-1 node dist/cli.js dm backfill-thread \
+docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js dm backfill-thread \
   --thread 2065 --ignore-retention-limit
 ```
 Команда только ставит одноразовую задачу и печатает `{jobId, threadId}`.
@@ -174,8 +174,8 @@ from page_dm_messages where conversation_id = 2065;
 или тем же кодом из owner-CLI:
 
 ```
-docker exec agency-hub-api-1 node dist/cli.js agent hydration list --state requested
-docker exec agency-hub-api-1 node dist/cli.js agent hydration decide \
+docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js agent hydration list --state requested
+docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js agent hydration decide \
   --request <requestRef> --decision approve --expected-version <rowVersion> \
   --coverage-fingerprint <тот, что был ПОКАЗАН> \
   --max-calls 20 --max-credits 1 --max-pages 20 --no-allow-mark-read
@@ -197,7 +197,7 @@ docker exec agency-hub-api-1 node dist/cli.js agent hydration decide \
 Только потом `shadow -> on`.
 
 ```
-docker exec agency-hub-api-1 node dist/cli.js fansly:replay \
+docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js fansly:replay \
   --from 2026-01-01T00:00:00Z --to 2026-02-01T00:00:00Z --max-pages 5
 ```
 

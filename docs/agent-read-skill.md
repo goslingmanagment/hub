@@ -115,6 +115,15 @@ for the scope as a whole, computed before any row is fetched. A field can be
 observed, unobservable on this platform, or not captured. A null that is
 `unobservable` is not a null that means zero.
 
+One money trap deserves naming: **refunds**. Fansly has no refund/chargeback
+capture lane at all — a refunded transaction keeps its `posted` row forever —
+and the OnlyFans chargeback capture lives in a store this plane cannot read.
+So "no refund rows in the window" can NEVER support "no refund happened"; the
+strongest claim this system can back is "the hub holds no record of a refund".
+Declare the `refundState` claim field whenever a conclusion touches refunds:
+it comes back `not_captured` (Fansly) or `captured_unparsed` (OnlyFans) with a
+`field_state_insufficient` blocker, which is the system saying exactly that.
+
 ## What to do when blockers are not empty
 
 Read the blocker, then act on it instead of retrying blindly.
