@@ -378,6 +378,22 @@ hub dataset --page-label lora-2 --dataset transactions \
   --sort occurredAt:desc --limit 100
 ```
 
+For a page total, do NOT paginate and add row responses. Ask the same operation
+for one summary. It returns no `items`; `summary.groups[]` keeps currencies
+separate and gives `transactionCount`, `grossMills`, `netMills` and nullable
+`feeMills` over every matching transaction row in the one Hub snapshot:
+
+```
+hub dataset --page-label lora-1 --dataset transactions \
+  --from 2026-07-01T00:00:00Z --to 2026-08-01T00:00:00Z \
+  --summary
+```
+
+The wording boundary is literal: `summary.basis` is
+`matching_rows_in_hub`. Report «Hub хранит X за июль», never «на платформе было
+ровно X». This mode computes a windowless page transaction floor and needs no
+cursor; thread hydration has no bearing on it.
+
 ### Budgets and limits
 
 Your key has a daily request budget and a daily row budget, and at most two calls

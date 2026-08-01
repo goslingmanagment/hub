@@ -204,6 +204,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 200 | Agent keys are issued, never recovered | An agent key is minted by the owner (dashboard or `POST /api/v1/agent/keys`), returns its raw token EXACTLY once and stores only `sha256(token)`; the closed capability matrix and the 365-day lifetime ceiling REFUSE a bad issuance (400) instead of narrowing it silently, the page grant is the labels that were named (no wildcard, later pages are not granted), and delivery to a model is `packages/hub-agent-cli` (`hub`): one command per agentKey operation, one JSON document per call, exit 0/3/4 with `--fail-on-partial`. The `exportPolicy` VALUE flip (spec 11 step C) is BLOCKED: both vendored clients still reject `agent_read_plane_v1` at runtime |
 | 201 | Help/Review prompts: Russian output, receipts required | `help-me` and `chat-review` templates rewritten: chatter-facing analysis pinned to Russian («ты»), fan-facing text pinned to the fan's language; fixed capped block structures (СИТУАЦИЯ/ЧТО УПУЩЕНО/СЛЕДУЮЩИЙ ХОД/РИСК; ВЕРДИКТ/ДЕНЬГИ/ПЕРСОНА/ОШИБКИ/ЧТО РАБОТАЕТ); every claim must quote a message fragment; rating bands anchored with a no-default-to-7-8 rule; both Help suggestions implement ONE recommended move; chat-review gains the shared paid-media glossary. XML wire format unchanged |
 | 202 | Hydration autopilot: delegated, budgeted approval | The owner may delegate to a VERSIONED in-kernel policy (`agentHydrationAutoApproveMode` off/shadow/enforce, default off) the authorization of one bounded Fansly `thread_backfill_before` attempt per request: ≤40 calls, mark-read always refused, inside `agentHydrationAutoDailyCallBudget` reserved calls per UTC day (default 0). Decisions carry `decision_source='auto_policy'` + `decision_policy_version` (0119) — never a fabricated owner id; over-budget/foreign-platform/over-cap requests stay `requested` for the owner. New platform, target kind or side effect requires a fresh numbered decision
+| 203 | Agent transaction summary | Existing operation #10 gains `summary: true` for `transactions`: one MVCC statement returns currency-grouped gross/net/fee/count over matching Hub rows plus a page-wide windowless transaction floor. No new route, table, cursor or completeness proof; `basis='matching_rows_in_hub'` is the wording boundary |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6343,3 +6344,28 @@ claiming an exact exhausted snapshot when it hits its SQL limit (`cappedBy:
 lands). Widening the delegation — a new platform, a new target kind, any side
 effect — is not a config flip; it is a fresh numbered decision.
 
+**Decision #203 (2026-08-02, a monthly Hub total is one read, not a cursor
+ritual).** The Agent Read Plane's generic dataset rows are useful for locating a
+transaction, but they are the wrong primitive for «сколько за июль»: operation
+#10 deliberately does not freeze a cross-request cursor traversal, so adding
+hundreds of returned rows can never become one stable monetary answer. The
+owner does not need a completeness-proof project to answer that question; the
+useful and checkable claim is narrower: how much matching transaction material
+Hub holds for one page and one closed window.
+
+Therefore the existing `agentDatasetQuery` operation gains `summary: true` for
+the `transactions` dataset only. It runs one SQL statement over the same page,
+window and allowlisted filters, returning `transactionCount`, `grossMills`,
+`netMills` and nullable `feeMills`, grouped by currency so unlike currencies are
+never added. The response says `basis: matching_rows_in_hub`, returns no row
+items and no cursor, and reports an exhausted one-request snapshot. The same
+statement computes the page-wide transaction floor outside the requested window
+and outside result filters, satisfying #197 without making the returned rows
+their own floor.
+
+This is deliberately NOT a new route, dataset vocabulary, table, migration,
+hydration target or proof of vendor completeness. Ordinary #10 row responses are
+wire-identical because the additive `summary` member is emitted only when asked.
+Thread hydration cannot repair transaction history, so a window before this
+floor carries `remedy: none`. The CLI spelling is the existing command plus one
+flag: `hub dataset ... --dataset transactions --summary`.

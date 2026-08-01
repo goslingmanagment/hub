@@ -408,7 +408,26 @@ describe("hub CLI: the usage document", () => {
     const result = await run(["dataset", "--help"]);
     const error = result.document.error as { options: Record<string, string> };
     expect(Object.keys(error.options)).toContain("filter");
+    expect(Object.keys(error.options)).toContain("summary");
     expect(findHubCommand("dataset")?.operation).toBe("agentDatasetQuery");
+  });
+
+  it("passes dataset --summary as one typed #10 request", async () => {
+    const calls: Array<{ method: string; input: unknown }> = [];
+    await run([
+      "dataset",
+      "--page-label", "lora-1",
+      "--dataset", "transactions",
+      "--from", "2026-07-01T00:00:00Z",
+      "--to", "2026-08-01T00:00:00Z",
+      "--summary",
+    ], { calls });
+    expect(calls).toEqual([{
+      method: "agentDatasetQuery",
+      input: expect.objectContaining({
+        body: expect.objectContaining({ summary: true }),
+      }),
+    }]);
   });
 });
 
