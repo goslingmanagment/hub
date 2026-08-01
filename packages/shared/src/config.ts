@@ -2,6 +2,7 @@ import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
 
 import { assertProxyTargetAllowed } from "./proxy.ts";
+import { agentExportPolicyValues, type AgentExportPolicyValue } from "./types.ts";
 import {
   buildProxyConfig,
   getServiceEgressProxyUrlError,
@@ -286,7 +287,7 @@ const envSchema = z.object({
   // CODE deploy (clients validate successful responses against a vendored schema);
   // only the VALUE flip is config, and only after the fleet has re-vendored.
   AGENT_EXPORT_POLICY_VALUE: z
-    .enum(["no_raw_transcript_export_endpoint_yet", "agent_read_plane_v1"])
+    .enum(agentExportPolicyValues)
     .default("no_raw_transcript_export_endpoint_yet"),
   // Local replay of parse_version-0 Fansly observations into facts. shadow =
   // canonicalize into a count report and write nothing; on = write.
@@ -455,7 +456,7 @@ export interface AppConfig {
   /** off = hydration 503; request_only = state only; dispatch = executor runs. */
   agentHydrationMode?: "off" | "request_only" | "dispatch";
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
-  agentExportPolicyValue?: "no_raw_transcript_export_endpoint_yet" | "agent_read_plane_v1";
+  agentExportPolicyValue?: AgentExportPolicyValue;
   /** Fansly local replay of parse_version-0 observations: off | shadow | on. */
   fanslyReplayMode?: "off" | "shadow" | "on";
   /** Scheduled retention tiering; default false. The manual CLI run is ungated. */

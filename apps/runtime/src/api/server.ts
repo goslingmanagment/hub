@@ -27,6 +27,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import {
   canAccessPage,
+  isAgentPrincipal,
   principalLogFields,
   requireOwner,
   SESSION_COOKIE_NAME,
@@ -51,6 +52,7 @@ import {
 import { formatRequestValidationMessage } from "./error-boundary.ts";
 import { createRequestAuth } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
+import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
 import { registerCatalogRoutes } from "../modules/catalog/index.ts";
 import { registerAiAdminRoutes, registerAiRoutes } from "../modules/ai/index.ts";
@@ -235,6 +237,15 @@ export async function buildApiServer(appContext: AppContext) {
             in: "header",
             name: "x-monitoring-token",
           },
+          // The Agent Read Plane key. A SEPARATE scheme from bearerAuth even
+          // though both travel in `Authorization: Bearer`: merging them would
+          // publish a contract claiming a chatter api key can call the agent
+          // plane, which is exactly what the middleware refuses.
+          agentKeyAuth: {
+            type: "http",
+            scheme: "bearer",
+            description: "Agent Read Plane key (prefix agency_hub_agent_)",
+          },
         },
       },
     },
@@ -366,7 +377,14 @@ export async function buildApiServer(appContext: AppContext) {
         case 401:
           throw new UnauthorizedError();
         case 404:
-          throw new NotFoundError(`Page "${pageLabelParam}" was not found`);
+          // The message names the label for a HUMAN (the dashboard's own error
+          // states read it) and is STATIC for an agent: on the read plane a page
+          // outside the grant and a page that does not exist must be byte-for-byte
+          // the same answer, and this refusal happens BEFORE the handler, so it
+          // has to match the handler's own static 404 exactly.
+          throw request.auth && isAgentPrincipal(request.auth)
+            ? new NotFoundError()
+            : new NotFoundError(`Page "${pageLabelParam}" was not found`);
         default:
           throw new ForbiddenError(`Authorization policy denied this request (${verdict.reason})`);
       }
@@ -516,6 +534,9 @@ export async function buildApiServer(appContext: AppContext) {
   // --- Phase 4: Dashboard + Admin routes ---
 
   // --- OFAPI webhook receiver + SSE sync-event fanout (ChatMuse real-time) ---
+
+  // --- Agent Read Plane (operations 1-10) --- (module: apps/runtime/src/modules/agent-read)
+  registerAgentReadRoutes(server, moduleContext);
 
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);

@@ -1,4 +1,19 @@
 export const platforms = ["fansly", "onlyfans"] as const;
+
+/**
+ * The values `exportPolicy` may take on the wire (spec 11 staging).
+ *
+ * Declared ONCE here because three sites need it and they must not drift: the
+ * contract enum (`routes.ts`), the config descriptor's `enumValues`, and the env
+ * parser. The staging is: widen the wire type first (a code deploy the fleet
+ * re-vendors), flip the served VALUE second (a config flip). A single list is
+ * what makes "widened but not yet flipped" a checkable state rather than a hope.
+ */
+export const agentExportPolicyValues = [
+  "no_raw_transcript_export_endpoint_yet",
+  "agent_read_plane_v1",
+] as const;
+export type AgentExportPolicyValue = (typeof agentExportPolicyValues)[number];
 export type Platform = (typeof platforms)[number];
 
 export const transactionTypes = [

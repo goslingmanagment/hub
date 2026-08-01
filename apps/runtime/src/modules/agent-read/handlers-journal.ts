@@ -1,0 +1,596 @@
+import { createHash } from "node:crypto";
+
+import {
+  agentDatasetDefinition,
+  agentDatasetFieldSortable,
+  agentDatasetRequiredCapabilities,
+  type AGENT_DATASETS,
+  type AgentCapability,
+  type AgentDatasetQueryBody,
+  type AgentDatasetQueryResponse,
+  type AgentObservationPayloadResponse,
+  type AgentObservationsResponse,
+} from "@agency_hub_core/contracts";
+import {
+  agentDatasetSqlMapping,
+  countAgentReadAuditForSession,
+  findAgentObservationPayload,
+  listAgentObservations,
+  queryAgentDataset,
+  readAgentJournalFloor,
+  readAgentObservationsHighWater,
+  type AgentDatasetFilter,
+} from "@agency_hub_core/db";
+import type { Platform } from "@agency_hub_core/shared";
+
+import type { AppContext } from "../../bootstrap.ts";
+import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth.ts";
+import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import { BadRequestError } from "../../services/errors.ts";
+import { buildAgentEvidence } from "./epistemics.ts";
+import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
+import { AgentPlaneDisabledError, staticNotFound, toSafeNumber } from "./errors.ts";
+import {
+  AGENT_OBSERVATION_PAYLOAD_SESSION_CAP,
+  agentObservationPayloadAllowed,
+  scrubObservationPayload,
+} from "./observation-scrub.ts";
+import { MESSAGE_PLANES, planesNotRead } from "./planes.ts";
+import {
+  AGENT_TIMEOUT_MS,
+  beginAgentRequest,
+  buildDelivery,
+  buildPredicates,
+  computeScopeFieldStates,
+  iso,
+  isoOrNull,
+  operationPlanesFor,
+  singletonDelivery,
+  withAgentTimeout,
+  writeAgentAudit,
+} from "./runtime.ts";
+
+/**
+ * Operations #9a (observation envelopes), #9b (owner-only payload) and #10
+ * (dataset query).
+ *
+ * #9a and #9b are split because a route carries exactly ONE auth policy and the
+ * middleware decides before the handler: "envelope to the agent, body to the
+ * owner" is not expressible on one route in this codebase, so it is two.
+ */
+
+/** The UTC day every budget and the #9b session cap are measured in. */
+function startOfUtcDay(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+// ---------------------------------------------------------------------------
+// #9a agentObservations
+// ---------------------------------------------------------------------------
+
+export async function handleAgentObservations(
+  appContext: AppContext,
+  principal: AgentAuthPrincipal,
+  query: {
+    from?: string | undefined;
+    to?: string | undefined;
+    platform?: Platform | undefined;
+    pageLabel?: string | undefined;
+    source?: string | undefined;
+    kind?: string | undefined;
+    producer?: string | undefined;
+    parseVersion?: number | undefined;
+    sortDir: "asc" | "desc";
+    limit: number;
+    cursor?: string | undefined;
+  },
+): Promise<AgentObservationsResponse> {
+  // The sub-flag is checked BEFORE the request budget is spent: a request that
+  // never ran should not cost the caller its daily allowance.
+  const preConfig = await loadEffectiveConfig(appContext.db, appContext.config);
+  if (!(preConfig.agentObservationsEnabled ?? false)) {
+    throw new AgentPlaneDisabledError("agent observation reads are disabled");
+  }
+
+  const scope = await beginAgentRequest(appContext, principal, {
+    operation: "agentObservations",
+    requiredCapabilities: ["read:observations_envelope"],
+  });
+  try {
+    const cursorConsumed = query.cursor !== undefined;
+    const cursor = cursorConsumed
+      ? decodeAgentCursor(query.cursor as string, {
+        operation: "agentObservations",
+        resource: "global",
+        keyId: principal.agentKeyId,
+        pageIds: scope.pageIds,
+        archiveGeneration: scope.archiveGeneration,
+      }, scope.signing)
+      : null;
+    const stored = cursor?.params as Record<string, unknown> | undefined;
+    const from = String(stored?.from ?? query.from ?? "");
+    const to = String(stored?.to ?? query.to ?? "");
+    const effective = {
+      platform: (stored?.platform as Platform | undefined) ?? query.platform,
+      pageLabel: (stored?.pageLabel as string | undefined) ?? query.pageLabel,
+      source: (stored?.source as string | undefined) ?? query.source,
+      kind: (stored?.kind as string | undefined) ?? query.kind,
+      producer: (stored?.producer as string | undefined) ?? query.producer,
+      parseVersion: (stored?.parseVersion as number | undefined) ?? query.parseVersion,
+      sortDir: (stored?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir,
+    };
+
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    // The frozen bound is minted once and then CARRIED by the cursor, so every
+    // page of one traversal sees the same population.
+    const storedHighWater = Number(stored?.highWater ?? 0);
+    const highWater = storedHighWater > 0
+      ? storedHighWater
+      : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        readAgentObservationsHighWater(tx, scope.pageIds, {
+          from: new Date(from),
+          to: new Date(to),
+        }), "agent_observations_high_water");
+
+    const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+      listAgentObservations(tx, {
+        pageIds: scope.pageIds,
+        from: new Date(from),
+        to: new Date(to),
+        ...effective,
+        limit,
+        maxObservationId: highWater,
+        after: cursor === null
+          ? undefined
+          : {
+            sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
+            key: String(cursor.keyset.key ?? ""),
+          },
+      }), "agent_observations");
+
+    const journalFloor = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+      readAgentJournalFloor(tx), "agent_journal_floor");
+
+    // A window entirely before the journal begins is EMPTY BY CONSTRUCTION, not
+    // by absence of fact. Saying so is the difference this operation exists for.
+    const journalStartsAfterWindow = journalFloor.observationsFirstReceivedAt !== null
+      && Date.parse(to) <= journalFloor.observationsFirstReceivedAt.getTime();
+
+    const witnesses = journalStartsAfterWindow ? [] : result.witnesses;
+    const operationPlanes = operationPlanesFor(MESSAGE_PLANES, null);
+
+    const hasMore = result.rows.length === limit;
+    const last = result.rows.at(-1);
+    const nextCursor = hasMore && last !== undefined
+      ? encodeAgentCursor({
+        operation: "agentObservations",
+        resource: "global",
+        keyId: principal.agentKeyId,
+        pageIds: scope.pageIds,
+        params: { from, to, ...effective, limit: query.limit, highWater },
+        archiveGeneration: scope.archiveGeneration,
+        sourceHighWaters: { observations: String(highWater) },
+        seqHighWater: {},
+        keyset: { sortValue: last.sortValue, key: last.keysetKey },
+      }, scope.signing)
+      : null;
+    // A real monotonic bound was applied in SQL, so an exhausted snapshot is a
+    // claim this traversal has actually earned.
+    const frozenSnapshot = true;
+    const snapshotExhausted = frozenSnapshot && nextCursor === null;
+
+
+    const evidence = buildAgentEvidence({
+      planeMode: scope.planeMode,
+      claimFields: null,
+      operationPlanes,
+      planeReads: witnesses,
+      planesNotRead: planesNotRead({
+        operationPlanes,
+        witnesses,
+        overrides: journalStartsAfterWindow
+          ? { observations: { state: "not_read", reason: "journal_starts_after_window" } }
+          : {},
+      }),
+      delivery: { snapshotExhausted, nextCursor },
+      cursorConsumed,
+      cursorCapable: true,
+      frozenSnapshot,
+      requestWindow: { from, to },
+      gaps: journalFloor.detachedPartitions.length === 0 ? [] : [{
+        kind: "partition_detached" as const,
+        from: null,
+        to: null,
+        plane: "observations" as const,
+        remedy: { kind: "none" as const, reason: "partition_detached" as const },
+      }],
+      scopeFieldStates: {},
+      sourceErrors: [],
+      scopeNarrowing: scope.scopeNarrowing,
+      observedRowFloor: isoOrNull(result.rows.at(0)?.receivedAt ?? null),
+      captureFloor: {
+        at: isoOrNull(journalFloor.observationsFirstReceivedAt),
+        kind: journalFloor.observationsFirstReceivedAt === null ? "unknown" : "oldest_stored_row",
+      },
+    });
+
+    const response: AgentObservationsResponse = {
+      window: { from, to },
+      items: result.rows.map((row) => ({
+        observationRef: row.observationRef,
+        receivedAt: iso(row.receivedAt),
+        observedAt: isoOrNull(row.observedAt),
+        source: row.source as AgentObservationsResponse["items"][number]["source"],
+        producer: row.producer,
+        platform: row.platform as Platform | null,
+        pageLabel: row.pageLabel,
+        nativeAccountRef: row.nativeAccountRef,
+        kind: row.kind,
+        payloadBytes: row.payloadBytes,
+        payloadSha256: row.payloadSha256,
+        parseVersion: row.parseVersion,
+        // From the column the canonicalizer stamps. A per-row COUNT over the
+        // partitioned event table used to live here and could not prune
+        // partitions, so a 200-row page cost 200 partition scans.
+        canonicalized: row.parseVersion > 0,
+        // Whether 9b would serve this kind at all. NOT a promise of access: 9b
+        // still requires an owner session.
+        payloadAvailable: agentObservationPayloadAllowed(row.kind),
+      })),
+      delivery: buildDelivery({
+        returned: result.rows.length,
+        // A lower bound unless this is a complete, un-resumed read.
+        matched: {
+          value: result.rows.length,
+          exact: !cursorConsumed && nextCursor === null,
+        },
+        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
+        nextCursor,
+        snapshotExhausted,
+        caveats: evidence.deliveryCaveats,
+      }),
+      capture: evidence.capture,
+      conclusion: evidence.conclusion,
+    };
+    await scope.finish(result.rows.length);
+    return response;
+  } catch (error) {
+    await scope.finish(0);
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #9b agentObservationPayload — owner session
+// ---------------------------------------------------------------------------
+
+export async function handleAgentObservationPayload(
+  appContext: AppContext,
+  principal: HumanAuthPrincipal,
+  params: { observationRef: number },
+  query: { reason: string },
+): Promise<AgentObservationPayloadResponse> {
+  const db = appContext.db;
+  const config = await loadEffectiveConfig(db, appContext.config);
+  const planeMode = config.agentReadPlaneMode ?? "off";
+  if (planeMode === "off") {
+    throw new AgentPlaneDisabledError();
+  }
+  if (!(config.agentObservationsEnabled ?? false)) {
+    throw new AgentPlaneDisabledError("agent observation reads are disabled");
+  }
+
+  const row = await withAgentTimeout(db, AGENT_TIMEOUT_MS.short, (tx) =>
+    findAgentObservationPayload(tx, params.observationRef), "agent_observation_payload");
+  if (!row) {
+    throw staticNotFound();
+  }
+
+  // The cap is enforced by COUNTING the audit trail, which is also what makes it
+  // auditable. The window is the UTC DAY, matching every other budget on the
+  // plane: it was declared per-day and measured over a rolling 24 hours. TOCTOU is
+  // accepted and documented — one owner, worst case two extra reads.
+  const used = await countAgentReadAuditForSession(db, {
+    sessionUserId: principal.user.id,
+    operation: "agentObservationPayload",
+    since: startOfUtcDay(new Date()),
+  });
+  const remaining = Math.max(0, AGENT_OBSERVATION_PAYLOAD_SESSION_CAP - used);
+
+  const allowed = agentObservationPayloadAllowed(row.kind);
+  const scrubbed = allowed && remaining > 0 ? scrubObservationPayload(row.payload) : null;
+  const withheldReason = !allowed
+    ? "kind_not_allowlisted" as const
+    : remaining === 0
+      ? "session_payload_budget_exhausted" as const
+      // The scrub refuses a payload it cannot walk as an object; that refusal is a
+      // WITHHOLDING with a reason, not a silent empty body.
+      : scrubbed === null || scrubbed.payload === null
+        ? "restricted_class" as const
+        : null;
+
+  // EVERY call writes a row, including a withheld one: an owner asking about a
+  // forbidden kind is itself the fact the trail exists to record.
+  const auditRef = await writeAgentAudit(db, {
+    sessionUserId: principal.user.id,
+    operation: "agentObservationPayload",
+    pageIds: [],
+    verbatimText: withheldReason === null,
+    requestSummary: {
+      reasonSha256: createHash("sha256").update(query.reason, "utf8").digest("hex"),
+      reasonLength: query.reason.length,
+      observationKind: /^[A-Za-z0-9_:.-]{1,64}$/.test(row.kind) ? row.kind : "unnamed",
+      returned: withheldReason === null ? 1 : 0,
+      planeMode,
+    },
+  });
+
+  const evidence = buildAgentEvidence({
+    planeMode,
+    claimFields: null,
+    operationPlanes: [],
+    planeReads: [],
+    planesNotRead: [],
+    delivery: { snapshotExhausted: true, nextCursor: null },
+    cursorConsumed: false,
+    cursorCapable: false,
+    frozenSnapshot: true,
+    requestWindow: null,
+    gaps: [],
+    scopeFieldStates: {},
+    sourceErrors: [],
+    scopeNarrowing: { keyGrantExcludedPages: 0, totalPagesForQuery: 0 },
+    observedRowFloor: null,
+    captureFloor: { at: null, kind: "unknown" },
+  });
+
+  return {
+    observationRef: row.observationRef,
+    kind: row.kind,
+    source: row.source as AgentObservationPayloadResponse["source"],
+    receivedAt: iso(row.receivedAt),
+    payloadSha256: row.payloadSha256,
+    // The ROW exists and the body does not: absence never encodes a decision.
+    payload: withheldReason === null ? scrubbed?.payload ?? null : null,
+    withheldReason,
+    scrubbed: {
+      signedUrlsRemoved: scrubbed?.signedUrlsRemoved ?? 0,
+      secretsRedacted: scrubbed?.secretsRedacted ?? 0,
+      pathsRemoved: scrubbed?.pathsRemoved ?? [],
+    },
+    auditRef,
+    sessionPayloadReadsRemaining: Math.max(0, remaining - (withheldReason === null ? 1 : 0)),
+    delivery: singletonDelivery(withheldReason === null ? 1 : 0),
+    capture: evidence.capture,
+    conclusion: evidence.conclusion,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// #10 agentDatasetQuery
+// ---------------------------------------------------------------------------
+
+export async function handleAgentDatasetQuery(
+  appContext: AppContext,
+  principal: AgentAuthPrincipal,
+  params: { pageLabel: string; dataset: keyof typeof AGENT_DATASETS },
+  body: AgentDatasetQueryBody,
+): Promise<AgentDatasetQueryResponse> {
+  const required = agentDatasetRequiredCapabilities(params.dataset);
+  const scope = await beginAgentRequest(appContext, principal, {
+    operation: "agentDatasetQuery",
+    requiredCapabilities: required as readonly AgentCapability[],
+  });
+  try {
+    const page = scope.pages.find((candidate) => candidate.pageLabel === params.pageLabel);
+    if (!page) {
+      throw staticNotFound();
+    }
+
+    const definition = agentDatasetDefinition(params.dataset);
+    const mapping = agentDatasetSqlMapping(params.dataset);
+    if (!definition || !mapping) {
+      throw staticNotFound();
+    }
+
+    const cursorConsumed = body.cursor !== undefined;
+    const cursor = cursorConsumed
+      ? decodeAgentCursor(body.cursor as string, {
+        operation: "agentDatasetQuery",
+        // Bound to the DATASET and PAGE as well as the operation: a cursor minted
+        // for `transactions` on one page must not resume against `fan_notes` on
+        // another, presenting a different population as a continuation.
+        resource: `dataset:${page.id}:${params.dataset}`,
+        keyId: principal.agentKeyId,
+        pageIds: [page.id],
+        archiveGeneration: scope.archiveGeneration,
+      }, scope.signing)
+      : null;
+    const stored = cursor?.params as Record<string, unknown> | undefined;
+    const from = String(stored?.from ?? body.from ?? "");
+    const to = String(stored?.to ?? body.to ?? "");
+    const rawFilters = (stored?.filters as AgentDatasetQueryBody["filters"] | undefined)
+      ?? body.filters;
+    const rawSort = (stored?.sort as AgentDatasetQueryBody["sort"] | undefined) ?? body.sort;
+    const claimFields = (stored?.claimFields as string[] | undefined)
+      ?? body.claim?.fields ?? null;
+
+    // The registry is the ONLY bridge from a name to SQL: an unknown field is a
+    // static 400 BEFORE any statement is built, and the value that reaches SQL is
+    // the registry's own column constant, never the request's string.
+    const filters: AgentDatasetFilter[] = rawFilters.map((filter) => {
+      const column = Object.hasOwn(mapping.fields, filter.field)
+        ? mapping.fields[filter.field]
+        : undefined;
+      if (column === undefined) {
+        throw new BadRequestError(`field is not part of the ${params.dataset} dataset`);
+      }
+      return { column, op: filter.op, value: filter.value };
+    });
+
+    // The registry's DEFAULT sort is honoured when the caller supplies none: the
+    // first revision ignored it and silently ordered by the window column.
+    const requestedSort = rawSort[0] ?? {
+      field: definition.defaultSort.field,
+      dir: definition.defaultSort.dir,
+    };
+    const sortColumn = Object.hasOwn(mapping.fields, requestedSort.field)
+      ? mapping.fields[requestedSort.field]
+      : undefined;
+    if (
+      sortColumn === undefined
+      || !agentDatasetFieldSortable(params.dataset, requestedSort.field)
+    ) {
+      throw new BadRequestError(`field is not sortable on the ${params.dataset} dataset`);
+    }
+    const sortKind = (definition.fields as Record<string, string>)[requestedSort.field] ?? "string";
+
+    const { limit, cappedByBudget } = scope.limitWithinRowBudget(body.limit);
+    const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
+      queryAgentDataset(tx, {
+        dataset: params.dataset,
+        pageId: page.id,
+        from: new Date(from),
+        to: new Date(to),
+        filters,
+        sort: { column: sortColumn, kind: sortKind, dir: requestedSort.dir },
+        limit,
+        after: cursor === null
+          ? undefined
+          : {
+            sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
+            key: String(cursor.keyset.key ?? ""),
+          },
+      }), "agent_dataset");
+
+    const operationPlanes = operationPlanesFor(mapping.readPlanes, claimFields);
+
+    const hasMore = result.rows.length === limit;
+    const last = result.rows.at(-1);
+    const nextCursor = hasMore && last !== undefined
+      ? encodeAgentCursor({
+        operation: "agentDatasetQuery",
+        resource: `dataset:${page.id}:${params.dataset}`,
+        keyId: principal.agentKeyId,
+        pageIds: [page.id],
+        params: {
+          dataset: params.dataset,
+          from,
+          to,
+          filters: rawFilters,
+          sort: [requestedSort],
+          claimFields,
+          limit: body.limit,
+        },
+        archiveGeneration: scope.archiveGeneration,
+        sourceHighWaters: { [params.dataset]: last.key },
+        seqHighWater: {},
+        keyset: { sortValue: last.sortValue, key: last.key },
+      }, scope.signing)
+      : null;
+    // `snapshotExhausted` may be true ONLY where a snapshot was genuinely frozen.
+    // This traversal has no monotonic bound to freeze, so the last page still says
+    // false and carries `no_frozen_snapshot`: "there is nothing more" would be a
+    // claim about a population that can grow underneath the walk.
+    const frozenSnapshot = false;
+    const snapshotExhausted = frozenSnapshot && nextCursor === null;
+
+
+    const evidence = buildAgentEvidence({
+      planeMode: scope.planeMode,
+      claimFields,
+      operationPlanes,
+      planeReads: result.witnesses,
+      planesNotRead: planesNotRead({ operationPlanes, witnesses: result.witnesses }),
+      delivery: { snapshotExhausted, nextCursor },
+      cursorConsumed,
+      cursorCapable: true,
+      frozenSnapshot,
+      requestWindow: { from, to },
+      gaps: [],
+      scopeFieldStates: computeScopeFieldStates({
+        fields: claimFields ?? [],
+        platforms: [page.platform as Platform],
+      }),
+      sourceErrors: [],
+      scopeNarrowing: scope.scopeNarrowing,
+      observedRowFloor: isoOrNull(result.rows.at(0)?.occurredAt ?? null),
+      captureFloor: { at: null, kind: "unknown" },
+    });
+
+    const response: AgentDatasetQueryResponse = {
+      datasetRef: params.dataset,
+      pageLabel: page.pageLabel,
+      platform: page.platform as Platform,
+      window: { from, to },
+      items: result.rows.map((row) => ({
+        datasetRef: params.dataset,
+        key: row.key,
+        occurredAt: isoOrNull(row.occurredAt),
+        fanPlatformUserId: row.fanPlatformUserId,
+        fields: Object.fromEntries(Object.entries(row.fields).map(([field, value]) => [
+          field,
+          serializeDatasetValue(value),
+        ])),
+        fieldStates: {},
+        provenance: {
+          ingestPaths: ["unknown" as const],
+          convergence: "no_material_lane" as const,
+          observationRef: null,
+        },
+      })),
+      predicates: buildPredicates([
+        { name: "window", requested: true, applied: true },
+        {
+          name: "datasetFilter",
+          requested: rawFilters.length > 0,
+          applied: filters.length > 0,
+        },
+      ]),
+      delivery: buildDelivery({
+        returned: result.rows.length,
+        matched: {
+          value: result.rows.length,
+          exact: !cursorConsumed && nextCursor === null,
+        },
+        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
+        nextCursor,
+        snapshotExhausted,
+        caveats: evidence.deliveryCaveats,
+      }),
+      capture: evidence.capture,
+      conclusion: evidence.conclusion,
+    };
+    await scope.finish(result.rows.length);
+    return response;
+  } catch (error) {
+    await scope.finish(0);
+    throw error;
+  }
+}
+
+/**
+ * A dataset value on its way to the closed scalar union.
+ *
+ * Money columns are BIGINT and arrive as JavaScript BigInt, so they go through the
+ * OVERFLOW GUARD rather than a bare `Number()`: a money path that silently stops
+ * counting above 2^53 is the one conversion that must never be implicit.
+ */
+function serializeDatasetValue(value: unknown): string | number | boolean | null | string[] {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "bigint") {
+    return toSafeNumber(value);
+  }
+  if (
+    typeof value === "string" || typeof value === "number"
+    || typeof value === "boolean" || value === null
+  ) {
+    return value;
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+    return value;
+  }
+  return String(value);
+}

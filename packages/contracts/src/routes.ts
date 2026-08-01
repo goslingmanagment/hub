@@ -6,36 +6,45 @@ import {
   aiUsageFeatures,
   creatableUserRoles,
   fanFlagTypes,
-  isValidBusinessDateString,
   ofapiCaptureJobStates,
-  platforms,
   transactionReportingBuckets,
-  transactionStates,
-  transactionTypes,
   userRoles,
 } from "@agency_hub_core/shared";
 import { z } from "zod";
 
-const intId = z.number().int().positive();
-const mills = z.number().int();
-const isoTimestamp = z.string();
-const businessDate = z.string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .refine((value) => isValidBusinessDateString(value), "Invalid business date");
+// Agent Read Plane operations #1-#10. Declared in their own module (one coherent
+// contract with its own envelope law and principal) and spread into routeSchemas
+// below, so registration, the auth-declaration gate and the OpenAPI generator
+// keep seeing ONE flat registry.
+import { agentExportPolicyEnum, agentRouteSchemas } from "./routes-agent.ts";
+// House primitives shared with the sibling route modules (see primitives.ts).
+import {
+  businessDate,
+  errorResponseSchema,
+  fanLookupParamsSchema,
+  fanSearchMatchKindEnum,
+  intId,
+  isoTimestamp,
+  mills,
+  pageParamsSchema,
+  paginationQuerySchema,
+  platformEnum,
+  queryBooleanSchema,
+  sortDirEnum,
+  transactionStateEnum,
+  transactionTypeEnum,
+} from "./primitives.ts";
+
 const periodEnum = z.enum(PERIOD_OPTIONS);
 const spenderPeriodEnum = z.enum(SPENDER_PERIOD_OPTIONS);
 const spenderSeriesGranularityEnum = z.enum(SPENDER_SERIES_GRANULARITIES);
 const nonCustomPeriodEnum = z.enum(["today", "7d", "30d", "all"]);
-const platformEnum = z.enum(platforms);
 const transactionReportingBucketEnum = z.enum(transactionReportingBuckets);
-const transactionTypeEnum = z.enum(transactionTypes);
-const transactionStateEnum = z.enum(transactionStates);
 const userRoleEnum = z.enum(userRoles);
 const creatableUserRoleEnum = z.enum(creatableUserRoles);
 const fanFlagEnum = z.enum(fanFlagTypes);
 const aiUsageFeatureEnum = z.enum(aiUsageFeatures);
 const spenderScopeKindEnum = z.enum(["page", "model", "agency"]);
-const sortDirEnum = z.enum(["asc", "desc"]);
 const spenderSortByEnum = z.enum([
   "grossAmountMills",
   "creatorNetAmountMills",
@@ -51,7 +60,6 @@ const spenderSortByEnum = z.enum([
   "displayName",
 ]);
 const spenderRetentionStatusEnum = z.enum(SPENDER_RETENTION_STATUSES);
-const fanSearchMatchKindEnum = z.enum(["platformUserId", "username", "alias", "displayName"]);
 const pageSpenderAutoListBucketKeyEnum = z.enum([
   "0-25",
   "25-50",
@@ -60,26 +68,6 @@ const pageSpenderAutoListBucketKeyEnum = z.enum([
   "350-600",
   "600-plus",
 ]);
-const queryBooleanSchema = z.preprocess((value) => {
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-
-  return value;
-}, z.boolean());
-
-export const errorResponseSchema = z.object({
-  error: z.string(),
-  message: z.string(),
-  statusCode: z.number().int(),
-});
-
 export const pageRefSchema = z.object({
   id: intId,
   label: z.string(),
@@ -306,26 +294,12 @@ export const loginBodySchema = z.object({
   password: z.string().min(1).max(1024),
 });
 
-export const paginationQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
-});
-
-export const pageParamsSchema = z.object({
-  pageLabel: z.string().min(1),
-});
-
 export const pageSpenderAutoListParamsSchema = pageParamsSchema.extend({
   bucketKey: pageSpenderAutoListBucketKeyEnum,
 });
 
 export const modelParamsSchema = z.object({
   modelSlug: z.string().min(1),
-});
-
-export const fanLookupParamsSchema = z.object({
-  platform: platformEnum,
-  platformUserId: z.string().min(1),
 });
 
 export const pageFanParamsSchema = pageParamsSchema.extend({
@@ -4480,7 +4454,12 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
   acl: z.literal("owner_admin_endpoint_only"),
   audit: z.literal("source_journal_metadata_on_each_row"),
   purgePolicy: z.literal("daily_retention_purge_by_retain_until"),
-  exportPolicy: z.literal("no_raw_transcript_export_endpoint_yet"),
+  // Step A of the spec 11 staging: the WIRE type widens to the enum now, in its
+  // own deploy, so the fleet can re-vendor while the SERVED value is unchanged.
+  // The value itself moves later, from `agentExportPolicyValue` config, and only
+  // after every client's vendored runtime schema has been verified to accept the
+  // new member. Collapsing the two steps breaks clients in production.
+  exportPolicy: agentExportPolicyEnum,
   mediaPolicy: z.literal("stable_metadata_only_no_signed_urls"),
 });
 
@@ -4532,18 +4511,27 @@ export function routeSecurityFromAuth(
     case "any-session":
     case "owner-session":
       return [{ cookieAuth: [] }];
-    // An agent key travels in the same Authorization: Bearer header as the other
-    // bearers, so the published document describes it as bearerAuth until the
-    // agent operations land (slice A adds a dedicated `agentKeyAuth` scheme to
-    // the server's securitySchemes and points this kind at it).
     case "apiKey":
     case "device-token":
     case "pending-device-token":
-    case "agentKey":
       return [{ bearerAuth: [] }];
+    // An agent key travels in the same Authorization: Bearer header as the other
+    // bearers, but it gets its OWN scheme: folding it into bearerAuth would make
+    // the published contract claim a chatter api key can call the agent plane,
+    // which is precisely what the middleware refuses.
+    case "agentKey":
+      return [{ agentKeyAuth: [] }];
     case "any":
       return [{ cookieAuth: [] }, { bearerAuth: [] }];
+    default:
+      // Exhaustiveness guard: a new auth kind without a scheme must be a COMPILE
+      // error, not an operation published with no security at all.
+      return assertNeverAuthKind(auth.kind);
   }
+}
+
+function assertNeverAuthKind(kind: never): never {
+  throw new Error(`route auth kind has no OpenAPI security scheme: ${String(kind)}`);
 }
 
 // --- Configuration surface (Stage A: read-only) ---
@@ -4756,6 +4744,7 @@ export const opsMetricsResponseSchema = z.object({
 });
 
 export const routeSchemas = {
+  ...agentRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],

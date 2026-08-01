@@ -12,6 +12,7 @@ import {
 import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   asRecord,
   idToString,
@@ -378,6 +379,11 @@ function maybeIso(value: Date | null) {
 
 export async function getOfapiDmColdArchiveStatus(app: AppContext, now = new Date()) {
   const status = await getDmMessageArchiveStatus(app.db, now);
+  // Step B of the export-policy staging: the WIRE type widened to the enum in its
+  // own deploy, and the SERVED value now comes from config so the later flip is a
+  // config change rather than another code release. Declaring the key and never
+  // reading it would have made that flip a silent no-op.
+  const effective = await loadEffectiveConfig(app.db, app.config);
   return {
     enabled: isOfapiDmColdArchiveEnabled(app.config),
     retentionDays: resolveOfapiDmColdArchiveRetentionDays(app),
@@ -394,7 +400,7 @@ export async function getOfapiDmColdArchiveStatus(app: AppContext, now = new Dat
     acl: "owner_admin_endpoint_only" as const,
     audit: "source_journal_metadata_on_each_row" as const,
     purgePolicy: "daily_retention_purge_by_retain_until" as const,
-    exportPolicy: "no_raw_transcript_export_endpoint_yet" as const,
+    exportPolicy: effective.agentExportPolicyValue ?? "no_raw_transcript_export_endpoint_yet",
     mediaPolicy: "stable_metadata_only_no_signed_urls" as const,
   };
 }

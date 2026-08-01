@@ -43,6 +43,10 @@ describe("route auth declarations", () => {
       .map(([key]) => key)
       .sort();
     expect(pageScoped).toEqual([
+      // Agent Read Plane slice A: the two page-scoped agent operations. They sort
+      // to the front, which is why the list starts here now.
+      "agentDatasetQuery",
+      "agentThreadMessages",
       "createFanNote",
       "pageConversationMessages",
       "pageConversationPreview",
