@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (178)
+## Routes (189)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -108,6 +108,17 @@ body remain handler-checked and are noted per route in the service layer.
 | DELETE | `/api/v1/admin/users/:username/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — |
 | PATCH | `/api/v1/admin/users/:username/password` | `adminSetPassword` | `owner-session` | — | — |
 | POST | `/api/v1/admin/users/:username/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
+| GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — |
+| GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — |
+| GET | `/api/v1/agent/observations` | `agentObservations` | `agentKey` | — | — |
+| GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — |
+| POST | `/api/v1/agent/pages/:pageLabel/datasets/:dataset/query` | `agentDatasetQuery` | `agentKey` | — | page |
+| GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages` | `agentThreadMessages` | `agentKey` | — | page |
+| GET | `/api/v1/agent/people/:platform/:platformUserId` | `agentPerson` | `agentKey` | — | — |
+| GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — |
+| POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — |
+| POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — |
+| GET | `/api/v1/agent/threads` | `agentThreads` | `agentKey` | — | — |
 | POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — |
 | POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `apiKey` | — | — |

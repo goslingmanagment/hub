@@ -3,6 +3,16 @@ export * from "./schema.ts";
 export * from "./schema-guard.ts";
 export * from "./repositories/agent-keys.ts";
 export * from "./repositories/agent-read-audit.ts";
+// Agent Read Plane witnesses: the TYPE only. `mintPlaneReadWitness` deliberately
+// stays unexported from the barrel so a runtime handler cannot mint a "read"
+// verdict it did not earn (see the module header).
+export type {
+  PlaneReadProof,
+  PlaneReadWitness,
+} from "./repositories/agent-read-witness.ts";
+export * from "./repositories/agent-dataset-map.ts";
+export * from "./repositories/agent-read.ts";
+export * from "./repositories/agent-transcript.ts";
 export * from "./repositories/ai-transcript-union.ts";
 export * from "./repositories/erasure-fence.ts";
 export * from "./repositories/catalog.ts";

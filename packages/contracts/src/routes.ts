@@ -12,6 +12,11 @@ import {
 } from "@agency_hub_core/shared";
 import { z } from "zod";
 
+// Agent Read Plane operations #1-#10. Declared in their own module (one coherent
+// contract with its own envelope law and principal) and spread into routeSchemas
+// below, so registration, the auth-declaration gate and the OpenAPI generator
+// keep seeing ONE flat registry.
+import { agentExportPolicyEnum, agentRouteSchemas } from "./routes-agent.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -4449,7 +4454,12 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
   acl: z.literal("owner_admin_endpoint_only"),
   audit: z.literal("source_journal_metadata_on_each_row"),
   purgePolicy: z.literal("daily_retention_purge_by_retain_until"),
-  exportPolicy: z.literal("no_raw_transcript_export_endpoint_yet"),
+  // Step A of the spec 11 staging: the WIRE type widens to the enum now, in its
+  // own deploy, so the fleet can re-vendor while the SERVED value is unchanged.
+  // The value itself moves later, from `agentExportPolicyValue` config, and only
+  // after every client's vendored runtime schema has been verified to accept the
+  // new member. Collapsing the two steps breaks clients in production.
+  exportPolicy: agentExportPolicyEnum,
   mediaPolicy: z.literal("stable_metadata_only_no_signed_urls"),
 });
 
@@ -4501,18 +4511,27 @@ export function routeSecurityFromAuth(
     case "any-session":
     case "owner-session":
       return [{ cookieAuth: [] }];
-    // An agent key travels in the same Authorization: Bearer header as the other
-    // bearers, so the published document describes it as bearerAuth until the
-    // agent operations land (slice A adds a dedicated `agentKeyAuth` scheme to
-    // the server's securitySchemes and points this kind at it).
     case "apiKey":
     case "device-token":
     case "pending-device-token":
-    case "agentKey":
       return [{ bearerAuth: [] }];
+    // An agent key travels in the same Authorization: Bearer header as the other
+    // bearers, but it gets its OWN scheme: folding it into bearerAuth would make
+    // the published contract claim a chatter api key can call the agent plane,
+    // which is precisely what the middleware refuses.
+    case "agentKey":
+      return [{ agentKeyAuth: [] }];
     case "any":
       return [{ cookieAuth: [] }, { bearerAuth: [] }];
+    default:
+      // Exhaustiveness guard: a new auth kind without a scheme must be a COMPILE
+      // error, not an operation published with no security at all.
+      return assertNeverAuthKind(auth.kind);
   }
+}
+
+function assertNeverAuthKind(kind: never): never {
+  throw new Error(`route auth kind has no OpenAPI security scheme: ${String(kind)}`);
 }
 
 // --- Configuration surface (Stage A: read-only) ---
@@ -4725,6 +4744,7 @@ export const opsMetricsResponseSchema = z.object({
 });
 
 export const routeSchemas = {
+  ...agentRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],

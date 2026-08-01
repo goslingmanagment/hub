@@ -2,6 +2,8 @@
 // from routes.ts so the agent route module shares ONE declaration of each.
 export * from "./primitives.ts";
 export * from "./routes.ts";
+// Agent Read Plane operations #1-#10 (spread into routeSchemas by routes.ts).
+export * from "./routes-agent.ts";
 export * from "./authorization-policy.ts";
 export * from "./domain-event-cursor.ts";
 export * from "./sdk-runtime.ts";

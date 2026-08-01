@@ -51,6 +51,7 @@ import {
 import { formatRequestValidationMessage } from "./error-boundary.ts";
 import { createRequestAuth } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
+import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
 import { registerCatalogRoutes } from "../modules/catalog/index.ts";
 import { registerAiAdminRoutes, registerAiRoutes } from "../modules/ai/index.ts";
@@ -234,6 +235,15 @@ export async function buildApiServer(appContext: AppContext) {
             type: "apiKey",
             in: "header",
             name: "x-monitoring-token",
+          },
+          // The Agent Read Plane key. A SEPARATE scheme from bearerAuth even
+          // though both travel in `Authorization: Bearer`: merging them would
+          // publish a contract claiming a chatter api key can call the agent
+          // plane, which is exactly what the middleware refuses.
+          agentKeyAuth: {
+            type: "http",
+            scheme: "bearer",
+            description: "Agent Read Plane key (prefix agency_hub_agent_)",
           },
         },
       },
@@ -516,6 +526,9 @@ export async function buildApiServer(appContext: AppContext) {
   // --- Phase 4: Dashboard + Admin routes ---
 
   // --- OFAPI webhook receiver + SSE sync-event fanout (ChatMuse real-time) ---
+
+  // --- Agent Read Plane (operations 1-10) --- (module: apps/runtime/src/modules/agent-read)
+  registerAgentReadRoutes(server, moduleContext);
 
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);

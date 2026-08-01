@@ -190,12 +190,17 @@ appends a row here in the same change (family law: updated-in-change).
 | 186 | Critical-paging preconditions | Four fixes gate `aiCriticalAlertsEnabled`: the internal AI lane fails closed on unusable terminals via the shared consumer, incident state is ordered by event time with an atomic recovery+resolve, outbox delivery is FIFO per incident/channel, and the lease/sweep clocks outlive one physical Telegram send |
 | 187 | Plugins throw AppError | `@fastify/rate-limit` threw a duck-typed literal that only reached clients via the passthrough #184 removed, so rate-limited logins answered HTTP 500 for three days; any plugin signalling by throw must throw an `AppError`, and both rate-limit tests join the `[sync-critical]` PR slice |
 | 188 | CI gate splits into shards | The single Quality Gate job becomes Static checks + a 3-way sharded Integration matrix + a same-named aggregator (branch protection matches the literal name); no test or harness file changes — measured 688s serial -> 234s per shard |
+| 189 | No long dashes in model-facing text | Every em and en dash is removed from the text that reaches a model (templates, live instruction strings, the transcript normalizer, the paid-attachment marker); an em dash is an AI tell nobody types from a phone, and a model mirrors the style of its own prompt. Code comments are exempt: they never reach a model |
 | 190 | Voice launch hardening | Voice uses stateless quota refusal and heartbeated queued ownership; audio authorization moves into SQL, cost reconciliation accepts only non-negative PostgreSQL integers, and voice admission/dispatch join the existing material-time erasure fence |
 | 191 | A gated skip is not a successful sync | A ramp-gated chunk terminates through `skipPageSync` (no `succeeded_at`, no `progressed_at`, no touch of `consecutive_failures` / `last_error_*`), records `sync_runs.outcome = skipped` and resolves no incidents; the "Not updating" UX state is keyed on the recorded gate REASON, never on the `skipped` outcome (whose pre-existing producer is the lost-lease path on healthy streams), and bulk gated streams are excluded from the monitor's page/fleet rollup exactly as #166 already requires of sync-summary |
 | 192 | Ramp-gate wake-up | An admin config write that OPENS a Fansly ramp gate queues `fan_earnings`/`purchase_history` (source `recovery`) for the affected pages, dispatched on the planner's next minutely tick; the gate is read before and after the write so only non-ramped -> ramped transitions queue anything (a needless walk is ~1400 Fansly calls), and a wake-up failure is logged and swallowed instead of failing the config write |
 | 193 | Deleted fans in top-spenders | `pageTopSpenders` carries `entries[].deletedAt` (`fans.deleted_detected_at`, ISO, null = alive) so the board can tell a deleted account from an unloaded name and stop re-asking Fansly for ids it can never resolve; deleted fans stay IN the ranking because their spend is in the totals, and the field is `.optional()` because the kernel deploys independently of the extension |
 | 194 | Fansly transaction-data correctness | Subscribers add one archive-only expired-history bootstrap; live bulk-stream gates become durable pause/resume state and skipped runs stop claiming data success; PPV target discovery adds a transaction keyset while retaining the existing media-scoped capture contract |
 | 195 | Agent principal isolation | An agent key authenticates into its OWN `AuthPrincipal` variant with NO human user (`kind: "agent"`, capabilities + explicit `page_ids`), extending #116's credential taxonomy with a third kind; route kind `agentKey` admits only agent principals, every other kind (including `any`, now an allowlist of the pre-agent methods) refuses them, and a page an agent may not read answers 404 exactly as a page that does not exist |
+| 196 | Agent Read Plane | A machine principal reads this hub through 10 operations under `/api/v1/agent/*`, and every 200 carries three independent axes (`delivery`, `capture`, `fieldStates`) plus one `conclusion.absenceProvable`; PARTIALLY supersedes #52 strictly narrowly (transcript reads only through operations with mandatory capture/conclusion, only for an `agentKey` principal, never as an unannotated dump). #57, #140, #142 are NOT superseded; DP 7 / DP 8 / DP 9-A are reaffirmed |
+| 197 | Fansly coverage is store-derived | `ofapi_message_coverage` is OnlyFans-only by schema, so no Fansly answer can carry `basis: "cryptographic_proof"` and `absenceProvable` is structurally unreachable there; a store-derived capture floor is pinned to `null`, because `complete` is written on merely intersecting an already-stored message and the oldest returned row is not a floor |
+| 198 | Agent search is Postgres FTS | Message search runs `websearch_to_tsquery('simple')` over the GIN that has existed unused since migration 0059; `escapeLikePattern` is NOT applied on that path (it corrupts tsquery input), no FTS index is built for the other two message stores, and they are declared `not_indexed` so a miss reads as non-coverage rather than as absence |
+| 199 | One writer for absenceProvable | `concludeEnvelope` in `modules/agent-read/epistemics.ts` is the ONLY runtime site that writes the field (pinned by a textual test); plane reads are branded witnesses a handler cannot mint; ramp mode `read_only` pins it false with `read_only_mode`, and ANY response that consumed a cursor takes the `mutable_sort_key_traversal` blocker because a caveat cannot cure a cross-page skip |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6015,3 +6020,103 @@ archive text search escapes `%`, `_` and `\` before its ILIKE, so a search for
 This slice registers NO routes and moves no operation surface — the auth-kind
 enum value is the only contract change, and the generated OpenAPI and SDK are
 byte-identical (only the authorization-policy document's kind legend moves).
+
+---
+
+**Decision #196 (2026-08-01, the Agent Read Plane):** a machine principal now
+reads this hub through ten operations under `/api/v1/agent/*`. The reason it
+exists is a single production failure: asked whether a fan had paid for a custom
+in January, the system answered with an empty list, and the empty list was
+indistinguishable from "we never captured January for that thread". The money
+plane had the answer the whole time.
+
+So the contract is not "return rows". Every 200 carries three INDEPENDENT axes.
+`delivery` is a property of the response (how much came back, what capped it,
+whether the frozen membership snapshot is exhausted). `capture` is a property of
+the world, computed from the key's scope, the source and the requested window and
+from NOTHING else — a test runs the same query with and without result filters
+and compares the serialized block byte for byte, because a filter that could move
+a capture floor would let `hasMedia=true` returning zero rows "prove" that no
+media existed. `fieldStates` says, per field and BEFORE any row is fetched,
+whether that field was ever observable in this scope at all.
+
+On top of them sits exactly one field an agent may read as "this did not happen",
+and it is false unless every condition holds at once (see #199). An empty
+collection therefore always arrives with a populated `capture` and a non-empty
+`blockers` list. Never a bare `[]`.
+
+This PARTIALLY supersedes #52, strictly narrowly: transcript material leaves the
+kernel only through operations that carry mandatory `capture` and `conclusion`,
+only to an `agentKey` principal, only under a capability, with a budget, an audit
+row and a revocable key — never as an unannotated export. #57, #140 and #142 are
+explicitly NOT superseded, and DP 7 (capture first), DP 8 (break-glass reads) and
+DP 9-A (single tenant) are reaffirmed.
+
+The existence oracle is closed by construction. A page outside the key's grant
+and a page that does not exist answer the same static 404, and the two globally
+addressable operations (#3, #4) answer 200-with-empty instead, because a 404
+there would collapse "no such fan" into "the fan is on a page you cannot see" —
+which is the original failure with a different mask. The number of pages an agent
+cannot see is public through operation #1, so `scopeNarrowing` discloses nothing
+new and prevents "this fan never paid" being said about a payment on an invisible
+page.
+
+**Decision #197 (2026-08-01, Fansly coverage is store-derived):**
+`ofapi_message_coverage` is OnlyFans-only by schema, and there is no Fansly
+equivalent. A Fansly response therefore can never carry
+`basis: "cryptographic_proof"`, and `absenceProvable` is structurally unreachable
+on that platform. That is the honest answer, not a degradation, and a test pins
+both halves.
+
+Two temptations are closed with it. The store-derived capture floor is pinned to
+`null` with `kind: "unknown"`: both platforms write `message_coverage_status =
+complete` on merely INTERSECTING an already-stored message, and of 27 198 Fansly
+threads marked complete, 10 531 hold five messages or fewer and four hold none.
+And `observedRowFloor` — the oldest row a query returned — is reported as a
+diagnostic and is explicitly forbidden as a floor: "the oldest thing I found" is
+not "the oldest thing that exists", and conflating them is how an empty January
+became a fact.
+
+**Decision #198 (2026-08-01, agent search is Postgres FTS):** message search runs
+`to_tsvector('simple', text_plain) @@ websearch_to_tsquery('simple', $q)` against
+the GIN index that has existed on `message_archive` since migration 0059 and had
+never been used. `escapeLikePattern` is NOT applied on this path: it escapes
+`\`, `%` and `_` for LIKE, which is meaningless to the tsquery parser and
+actively corrupts input (`snake_case` becomes `snake\_case`).
+
+No FTS index is built for `dm_message_archive` or `page_dm_messages`, and that is
+a decision rather than an omission: both are declared `not_indexed` in the
+response, which makes a miss visible as NON-COVERAGE instead of as absence, and
+consequently `absenceProvable` on search is permanently false. Two further
+caveats are always present because they are always true: the corpus is Russian
+and the `simple` configuration does not stem (so "заплатил" will not find
+"заплатили"), and media-only messages have empty text while in a customs audit
+the delivery IS the media.
+
+`pg_trgm` is deliberately not a migration. Migrations here are forward-only,
+numbered and applied as an unbroken prefix, so a "skippable" committed migration
+does not exist; the extension is a manual owner step and the code detects it at
+runtime, falling back from `fts_trgm` to `fts` with a named caveat rather than
+breaking.
+
+**Decision #199 (2026-08-01, one writer for `absenceProvable`):** the field is
+written in exactly one runtime file, `modules/agent-read/epistemics.ts`, and a
+textual test asserts that the literal appears nowhere else. A handler that
+computed it for itself would eventually compute it slightly differently, and a
+slightly wrong `true` is worse than no field at all.
+
+Two mechanisms keep that single writer honest. Plane reads are BRANDED witnesses
+minted only inside `packages/db` (the barrel exports the type, not the
+constructor), so `state: "read"` is a fact a repository returned rather than a
+claim a handler made. And every new condition enters through the function's
+SIGNATURE rather than through a bypass: ramp mode arrives as `planeMode`
+(`read_only` pins the conclusion false with the `read_only_mode` blocker for its
+verification window), and cursor traversal arrives as `cursorConsumed`.
+
+That second one is an arbitration, not a detail. `occurred_at` and
+`last_message_at` are updated in place by the sync writers, so a keyset traversal
+can skip a row that moved between pages. Within ONE request the read is
+MVCC-consistent and a `mutable_sort_key` caveat is enough; ACROSS pages it is
+not, so any response that consumed a cursor takes the
+`mutable_sort_key_traversal` blocker. A caveat cannot cure a cross-page skip:
+absence is provable only within one snapshot-consistent read.
