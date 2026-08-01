@@ -191,6 +191,37 @@ docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js agent hydration 
 Исполнитель кормит ту же машинерию из пути A. **Один аппрув — одна попытка**:
 упавший прогон не переигрывается сам, нужно новое решение.
 
+## 3½. Автопилот заявок (`agentHydrationAutoApproveMode`, decision #202)
+
+Делегирует политике ровно одно действие: аппрув ОДНОЙ ограниченной
+Fansly-попытки `thread_backfill_before` (≤40 вызовов, mark-read всегда
+запрещён) в пределах суточного бюджета `agentHydrationAutoDailyCallBudget`
+(зарезервированные вызовы за UTC-день; дефолт 0 — политика инертна даже в
+enforce). Всё, что политике нельзя, остаётся `requested` владельцу — она
+никогда не отклоняет за него.
+
+Работает только при `agentHydrationMode=dispatch`. Ритуал включения:
+
+1. `agentHydrationAutoApproveMode: off -> shadow` — цикл пишет в лог
+   «would approve» с объёмами, решений нет. Смотреть 2–3 дня:
+   `docker logs agency-hub-worker-1 | grep autopilot` (или cycle-результаты).
+2. Выставить бюджет по увиденному объёму (консервативный старт: 40–80).
+3. `shadow -> enforce`. Проверка: строка решения несёт
+   `decision_source='auto_policy'`, `decided_by_user_id IS NULL`, событие с
+   актёром `auto_policy`; аудит-строка `agentHydrationAutoDecide` на ключ
+   заявителя.
+
+Лестница остановки (все шаги — живые флипы):
+
+| Действие | Эффект |
+|---|---|
+| `enforce -> shadow`/`off` | новых авто-решений нет; уже одобренные, но не запущенные — ПАРКУЮТСЯ (диспетчер перепроверяет источник решения) и истекают своим 6-часовым TTL |
+| `agentHydrationMode -> request_only` | никакого нового dispatch вообще |
+| — | уже запущенный Fansly-прогон дорабатывает свою одну ограниченную попытку (≤40 вызовов, ≤10 минут) |
+
+Расширение делегирования (OF, другой target, side effect) — НЕ конфиг-флип,
+а новое нумерованное решение.
+
 ## 4. Реплей Fansly (`fanslyReplayMode`)
 
 `off -> shadow` — прогон считает и **ничего не пишет**; смотреть отчёт.

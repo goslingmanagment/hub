@@ -6,6 +6,7 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  ensurePageSyncStates,
   findAgentHydrationRequestByRef,
   insertAgentKey,
   listAgentHydrationEvents,
@@ -1029,5 +1030,246 @@ describe("[sync-critical] agent hydration requests", () => {
     const refused = await agentGet(`/api/v1/agent/hydration-requests/${randomUUID()}`);
     expect(refused.statusCode).toBe(404);
     expect(refused.headers["cache-control"]).toBe("no-store");
+  });
+});
+
+describe("[sync-critical] hydration autopilot (decision #202)", () => {
+  /**
+   * The policy the owner delegated ONE act to: authorizing a single bounded
+   * Fansly thread-deepening attempt inside a daily reserved-call budget.
+   *
+   * Every test here answers "what may this policy NEVER do", because that is
+   * where the delegation's whole safety lives. A request the policy may not
+   * decide must be LEFT for the owner — never rejected on their behalf, which
+   * would silently answer a question they were meant to answer.
+   */
+
+  async function autopilot(mode: "shadow" | "enforce", budget: number) {
+    await setFlag("agentHydrationMode", "dispatch");
+    await setFlag("agentHydrationAutoApproveMode", mode);
+    await setFlag("agentHydrationAutoDailyCallBudget", String(budget));
+  }
+
+  it("shadow decides NOTHING: it reports what it would do and leaves the row alone", async () => {
+    const { request } = await fileRequest();
+    await autopilot("shadow", 200);
+
+    const boss = stubBoss();
+    const cycle = await runAgentHydrationCycle(appContext, boss);
+
+    expect(cycle.autoApprove?.mode).toBe("shadow");
+    expect(cycle.autoApprove?.approved).toBe(1);
+    expect(cycle.autoApprove?.reservedCalls).toBe(5);
+    expect(cycle.dispatched).toBe(0);
+    expect(boss.send).not.toHaveBeenCalled();
+
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("requested");
+    expect(stored.request?.decisionSource).toBeNull();
+    // Nothing was journaled either: a shadow pass is an observation, not history.
+    const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+    expect(events.map((event) => event.kind)).toEqual(["created"]);
+  });
+
+  it("enforce approves as auto_policy and dispatches within the SAME cycle", async () => {
+    const { request } = await fileRequest();
+    await autopilot("enforce", 200);
+
+    const boss = stubBoss();
+    const cycle = await runAgentHydrationCycle(appContext, boss);
+    expect(cycle.autoApprove?.approved).toBe(1);
+    expect(cycle.dispatched).toBe(1);
+
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("dispatching");
+    // The decision names its author. No fabricated owner: `decided_by_user_id`
+    // stays null, and the policy version travels with the row.
+    expect(stored.request?.decisionSource).toBe("auto_policy");
+    expect(stored.request?.decidedByUserId).toBeNull();
+    expect(stored.request?.decisionPolicyVersion).toBe(1);
+    // The two caps the policy is NEVER allowed to widen.
+    expect(stored.request?.decisionAllowMarkRead).toBe(false);
+    expect(stored.request?.decisionMaxCalls).toBeLessThanOrEqual(40);
+
+    const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+    const approved = events.find((event) => event.kind === "approved");
+    expect(approved?.actor).toBe("auto_policy");
+    expect(approved?.detail.decisionSource).toBe("auto_policy");
+    expect(approved?.detail.policyVersion).toBe(1);
+  });
+
+  it("clamps an agent's own ceiling to the policy maximum", async () => {
+    const { request } = await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 200 });
+    await autopilot("enforce", 200);
+    await runAgentHydrationCycle(appContext, stubBoss());
+
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    // 200 asked, 40 granted: the policy's per-request bound is not negotiable
+    // by the caller who benefits from widening it.
+    expect(stored.request?.decisionMaxCalls).toBe(40);
+  });
+
+  it("an over-budget request is LEFT for the owner, never auto-rejected", async () => {
+    const { request } = await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 30 });
+    await autopilot("enforce", 10);
+
+    const cycle = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(cycle.autoApprove?.skippedBudget).toBe(1);
+    expect(cycle.autoApprove?.approved).toBe(0);
+
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("requested");
+    expect(stored.request?.decisionSource).toBeNull();
+  });
+
+  it("a zero budget keeps enforce inert", async () => {
+    await fileRequest();
+    await autopilot("enforce", 0);
+    const cycle = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(cycle.autoApprove?.approved).toBe(0);
+    expect(cycle.dispatched).toBe(0);
+  });
+
+  it("today's reservations are spent, not forgotten: a second pass sees less budget", async () => {
+    await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 });
+    await autopilot("enforce", 45);
+    const first = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(first.autoApprove?.approved).toBe(1);
+    expect(first.autoApprove?.reservedCalls).toBe(40);
+
+    // A different thread, so the per-conversation and per-page guards are not
+    // what refuses it: only 5 calls remain of today's 45.
+    const pool = testDb!.pool;
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id,
+         partner_platform_user_id, stored_message_count, message_coverage_status, last_message_at,
+         oldest_stored_message_id, newest_stored_message_id, last_message_id)
+       values ($1, (select fan_id from page_dm_threads where id = $2), 'second-thread-ref',
+         '438766025723355136', 3, 'partial_window', '2026-03-02T00:00:00Z', 's-1', 's-3', 's-3')
+       returning id`,
+      [fanslyPageId, fanslyThreadId],
+    );
+    expect(rows).toHaveLength(1);
+    // Settle the first run: otherwise the one-live-approval-per-page guard is
+    // what refuses the next request, and the budget carry-over stays untested.
+    await pool.query(
+      `update agent_hydration_requests set state = 'completed', settled_at = now()
+       where state = 'dispatching'`,
+    );
+    await fileRequest("lora-2", "second-thread-ref", { maxCalls: 40 });
+
+    const second = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(second.autoApprove?.budgetRemaining).toBe(5);
+    expect(second.autoApprove?.skippedBudget).toBe(1);
+    expect(second.autoApprove?.approved).toBe(0);
+  });
+
+  it("never touches OnlyFans: its lane's read marks a fan's thread read", async () => {
+    const { request } = await fileRequest("lora-of", OF_CONVERSATION_REF);
+    await autopilot("enforce", 200);
+
+    const cycle = await runAgentHydrationCycle(appContext, stubBoss());
+    // Not even CONSIDERED — the candidate query excludes the platform, so the
+    // policy cannot consent to the mark-read side effect for the owner.
+    expect(cycle.autoApprove?.considered).toBe(0);
+
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("requested");
+  });
+
+  it("skips a page whose dm stream is auth-parked", async () => {
+    await fileRequest();
+    // Real sync-state rows, then parked exactly as pausePageSyncForAuth parks
+    // them — the state the targeted backfill now writes on a 401.
+    await ensurePageSyncStates(testDb!.db, { pageId: fanslyPageId });
+    const parked = await testDb!.pool.query(
+      `update page_sync_states set status = 'paused', blocker_kind = 'auth',
+         blocker_code = 'credentials_invalid', blocked_at = now()
+       where page_id = $1 and stream = 'dm_messages'`,
+      [fanslyPageId],
+    );
+    expect(parked.rowCount).toBe(1);
+    await autopilot("enforce", 200);
+
+    const cycle = await runAgentHydrationCycle(appContext, stubBoss());
+    // A dead session would burn the budget on requests that cannot succeed.
+    expect(cycle.autoApprove?.considered).toBe(0);
+    expect(cycle.autoApprove?.approved).toBe(0);
+  });
+
+  it("ignores a revoked key's parked wishes", async () => {
+    await fileRequest();
+    await testDb!.pool.query(
+      `update agent_keys set revoked_at = now() where key_prefix = $1`,
+      [TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6)],
+    );
+    await autopilot("enforce", 200);
+
+    const cycle = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(cycle.autoApprove?.considered).toBe(0);
+  });
+
+  it("one live approval per page at a time", async () => {
+    await fileRequest();
+    await autopilot("enforce", 200);
+    // First pass approves and dispatches; the row is now `dispatching`.
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).autoApprove?.approved).toBe(1);
+
+    await fileRequest("lora-2", CONVERSATION_REF, { idempotencyKey: randomUUID() });
+    const second = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(second.autoApprove?.considered).toBe(0);
+  });
+
+  it("leaving enforce PARKS approvals the policy already made", async () => {
+    const { request } = await fileRequest();
+    await autopilot("enforce", 200);
+    // Approve, but keep the dispatch from happening in the same pass by making
+    // the executor see the policy already switched off afterwards.
+    const boss = stubBoss();
+    await runAgentHydrationCycle(appContext, boss);
+    const dispatched = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(dispatched.request?.state).toBe("dispatching");
+
+    // A SECOND request, auto-approved, then the switch flips before its dispatch.
+    await testDb!.pool.query(
+      `update agent_hydration_requests set state = 'approved', dispatched_at = null,
+         dispatch_deadline_at = null, execution_ref = null, dispatch_count = 0
+       where request_ref = $1`,
+      [request.requestRef],
+    );
+    await setFlag("agentHydrationAutoApproveMode", "shadow");
+
+    const held = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(held.autoHeld).toBe(1);
+    expect(held.dispatched).toBe(0);
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    // Still authorized, simply not started: re-entering enforce resumes it.
+    expect(stored.request?.state).toBe("approved");
+  });
+
+  it("the owner's own decisions still dispatch while the policy is off", async () => {
+    const { request } = await fileRequest();
+    await setFlag("agentHydrationMode", "dispatch");
+    await setFlag("agentHydrationAutoApproveMode", "off");
+    const decided = await approve(request);
+    expect(decided.statusCode, decided.body).toBe(200);
+    expect(decided.json().request.decision.decisionSource).toBe("owner");
+
+    const cycle = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(cycle.autoApprove).toBeNull();
+    expect(cycle.dispatched).toBe(1);
+  });
+
+  it("the owner queue stops claiming an exhausted snapshot when it caps (BL-C1)", async () => {
+    await fileRequest();
+    const capped = await ownerGet("/api/v1/agent/hydration-requests?state=requested&limit=1");
+    expect(capped.statusCode, capped.body).toBe(200);
+    const body = capped.json();
+    expect(body.items).toHaveLength(1);
+    // The list has no cursor, so a full page must say so instead of reporting
+    // an exact, exhausted count while rows fall off the end.
+    expect(body.delivery.cappedBy).toBe("limit");
+    expect(body.delivery.snapshotExhausted).toBe(false);
+    expect(body.delivery.matchedInScope.exact).toBe(false);
   });
 });

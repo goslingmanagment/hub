@@ -24493,6 +24493,25 @@
                                     "type": "string",
                                     "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
                                   },
+                                  "decisionSource": {
+                                    "type": "string",
+                                    "enum": [
+                                      "owner",
+                                      "auto_policy"
+                                    ]
+                                  },
+                                  "policyVersion": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "approved": {
                                     "type": "boolean"
                                   },
@@ -24557,6 +24576,8 @@
                                 },
                                 "required": [
                                   "decidedAt",
+                                  "decisionSource",
+                                  "policyVersion",
                                   "approved",
                                   "allowMarkReadSideEffect",
                                   "maxCalls",
@@ -25926,6 +25947,25 @@
                                   "type": "string",
                                   "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
                                 },
+                                "decisionSource": {
+                                  "type": "string",
+                                  "enum": [
+                                    "owner",
+                                    "auto_policy"
+                                  ]
+                                },
+                                "policyVersion": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "approved": {
                                   "type": "boolean"
                                 },
@@ -25990,6 +26030,8 @@
                               },
                               "required": [
                                 "decidedAt",
+                                "decisionSource",
+                                "policyVersion",
                                 "approved",
                                 "allowMarkReadSideEffect",
                                 "maxCalls",
@@ -27461,6 +27503,25 @@
                                   "type": "string",
                                   "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
                                 },
+                                "decisionSource": {
+                                  "type": "string",
+                                  "enum": [
+                                    "owner",
+                                    "auto_policy"
+                                  ]
+                                },
+                                "policyVersion": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "approved": {
                                   "type": "boolean"
                                 },
@@ -27525,6 +27586,8 @@
                               },
                               "required": [
                                 "decidedAt",
+                                "decisionSource",
+                                "policyVersion",
                                 "approved",
                                 "allowMarkReadSideEffect",
                                 "maxCalls",
@@ -34031,6 +34094,25 @@
                                   "type": "string",
                                   "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
                                 },
+                                "decisionSource": {
+                                  "type": "string",
+                                  "enum": [
+                                    "owner",
+                                    "auto_policy"
+                                  ]
+                                },
+                                "policyVersion": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "approved": {
                                   "type": "boolean"
                                 },
@@ -34095,6 +34177,8 @@
                               },
                               "required": [
                                 "decidedAt",
+                                "decisionSource",
+                                "policyVersion",
                                 "approved",
                                 "allowMarkReadSideEffect",
                                 "maxCalls",

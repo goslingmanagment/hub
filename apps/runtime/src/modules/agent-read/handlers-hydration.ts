@@ -46,6 +46,7 @@ import {
   iso,
   isoOrNull,
   operationPlanesFor,
+  buildDelivery,
   singletonDelivery,
   withAgentTimeout,
   writeAgentAudit,
@@ -163,6 +164,9 @@ export function toWireHydrationRequest(record: AgentHydrationRequestRecord): Age
       ? null
       : {
         decidedAt: iso(record.decidedAt),
+        // Backstop for pre-0119 rows only; the migration backfills 'owner'.
+        decisionSource: record.decisionSource ?? "owner",
+        policyVersion: record.decisionPolicyVersion,
         approved: record.decisionApproved === true,
         allowMarkReadSideEffect: record.decisionAllowMarkRead,
         maxCalls: record.decisionMaxCalls,
@@ -534,7 +538,7 @@ export async function applyHydrationDecision(
     },
     expectedVersion: body.expectedVersion,
     approved,
-    sessionUserId: input.actorUserId,
+    decidedBy: { source: "owner", sessionUserId: input.actorUserId },
     allowMarkReadSideEffect: body.allowMarkReadSideEffect ?? null,
     maxCalls: body.maxCalls ?? null,
     maxCredits: body.maxCredits ?? null,
@@ -621,9 +625,23 @@ export async function handleAgentHydrationRequestList(
     scopeNarrowing: NO_NARROWING,
   });
 
+  // A full page means MORE MAY EXIST: this list has no cursor (backlog BL-C),
+  // and the old envelope claimed an exact, exhausted snapshot at exactly the
+  // moment rows started silently falling off the end. `cappedBy: "limit"` with
+  // an inexact count is the honest half until a cursor lands.
+  const capped = rows.length >= query.limit;
   return {
     items: rows.map(toWireHydrationRequest),
-    delivery: singletonDelivery(rows.length),
+    delivery: capped
+      ? buildDelivery({
+        returned: rows.length,
+        matched: { value: rows.length, exact: false },
+        cappedBy: "limit",
+        nextCursor: null,
+        snapshotExhausted: false,
+        caveats: [],
+      })
+      : singletonDelivery(rows.length),
     capture: evidence.capture,
     conclusion: evidence.conclusion,
   };
