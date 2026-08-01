@@ -44,6 +44,8 @@ import {
   upsertPageDmMessages,
   withOwnedPageSyncTransaction,
   type MessageCoverageStatus,
+  type PageSyncState,
+  type SyncStream,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import { isFanslyDmMessageSyncExcluded } from "@agency_hub_core/shared";
@@ -105,6 +107,8 @@ export type TargetedThreadBackfillOutcome =
   | "retention_limit_reached"
   /** Another stream of the same page is mid-chunk (Stage 25 page serialization). */
   | "page_busy"
+  /** A chunk of another stream ran DURING this run — summary left to the sweeper. */
+  | "concurrent_page_chunk"
   /** A yielded regular chunk is parked on this very thread — refuse, don't race. */
   | "thread_checkpoint_in_progress"
   /** The regular executor (or another targeted run) holds the page's lease. */
@@ -213,6 +217,59 @@ function isFanslyAuthError(error: unknown) {
 }
 
 /**
+ * Identity of every OTHER stream's chunk activity on the page. Only fields a
+ * RUNNING chunk moves are included — a planner cadence bump or a manual request
+ * (request_seq/status/requested_at) must not read as a concurrent chunk.
+ */
+function fingerprintOtherStreams(states: readonly PageSyncState[]) {
+  const fingerprints = new Map<SyncStream, string>();
+  for (const state of states) {
+    if (state.stream === "dm_messages") {
+      continue;
+    }
+    fingerprints.set(state.stream, [
+      state.leasedSeq ?? "-",
+      state.leaseToken ?? "-",
+      state.appliedSeq,
+      state.startedAt?.getTime() ?? "-",
+      state.progressedAt?.getTime() ?? "-",
+      state.finishedAt?.getTime() ?? "-",
+      state.succeededAt?.getTime() ?? "-",
+    ].join("|"));
+  }
+  return fingerprints;
+}
+
+/**
+ * Did another stream of this page run a chunk while the targeted walk was in
+ * flight? The dm_conversations chunk snapshots `storedMessageCount` /
+ * `oldestStoredMessageId` / `messageCoverageStatus` at read time
+ * (`executor-handlers.ts:~2802`) and writes them back through the non
+ * head-guarded half of the thread upsert (`page-dm.ts:~220`), so a chunk that
+ * overlaps this run would REGRESS the cursor right after this run recomputed
+ * it — and the next regular deep backfill would then meet a false overlap and
+ * mark a half-backfilled thread `complete`. Before this slice the fixed page
+ * singleton made those two chunks mutually exclusive; a job on a separate
+ * queue removes that guarantee, so detection is fail-closed here.
+ */
+async function findConcurrentPageChunk(
+  app: Pick<AppContext, "db">,
+  platformAccountId: number,
+  baseline: ReadonlyMap<SyncStream, string>,
+) {
+  const current = fingerprintOtherStreams(
+    await listPageSyncStates(app.db, { pageId: platformAccountId }),
+  );
+  for (const [stream, fingerprint] of current) {
+    const before = baseline.get(stream);
+    if (before === undefined || before !== fingerprint) {
+      return stream;
+    }
+  }
+  return null;
+}
+
+/**
  * Walk ONE named Fansly DM thread backwards inside a single bounded run.
  *
  * Refusals (no vendor traffic at all): unknown/ineligible thread, a page that
@@ -271,24 +328,6 @@ export async function runTargetedThreadBackfill(
   // stream rows must exist (idempotent, tombstoned pages excluded).
   await ensurePageSyncStates(app.db, { pageId: platformAccountId, ...pageSyncDependencyInput(app) });
 
-  // Stage 25: a page runs ONE sync chunk at a time. The regular path gets that
-  // from the fixed page singleton on `sync.page.execute`; this run lives on its
-  // own queue, so it re-establishes the invariant here — any OTHER stream of
-  // the page holding a live lease means a chunk is in flight (dm_conversations
-  // full-upserts the thread summary), and racing it would regress this thread's
-  // cursor after the closing recompute.
-  const now = Date.now();
-  const pageStates = await listPageSyncStates(app.db, { pageId: platformAccountId });
-  const busyStream = pageStates.find((state) =>
-    state.stream !== "dm_messages" &&
-    state.leasedSeq !== null &&
-    state.leaseExpiresAt !== null &&
-    state.leaseExpiresAt.getTime() > now
-  );
-  if (busyStream) {
-    return emptyResult(threadId, "page_busy", { ...base, retentionLimit });
-  }
-
   const lease = await acquireTargetedPageSyncLease(app.db, {
     pageId: platformAccountId,
     stream: "dm_messages",
@@ -312,7 +351,28 @@ export async function runTargetedThreadBackfill(
   // nobody to hand the lease back.
   let run: NonNullable<Awaited<ReturnType<typeof startSyncRun>>>;
   let telemetry: SyncRunTelemetry;
+  let otherStreamBaseline: ReadonlyMap<SyncStream, string>;
   try {
+    // Stage 25: a page runs ONE sync chunk at a time. The regular path gets
+    // that from the fixed page singleton on `sync.page.execute`; this run lives
+    // on its own queue, so it re-establishes the invariant here. Read UNDER the
+    // lease and used twice: refuse outright when another stream is already
+    // mid-chunk, and keep the snapshot as the baseline that finalize time
+    // compares against (a chunk that starts AFTER this check is caught there).
+    const now = Date.now();
+    const pageStates = await listPageSyncStates(app.db, { pageId: platformAccountId });
+    const busyStream = pageStates.find((state) =>
+      state.stream !== "dm_messages" &&
+      state.leasedSeq !== null &&
+      state.leaseExpiresAt !== null &&
+      state.leaseExpiresAt.getTime() > now
+    );
+    if (busyStream) {
+      await releaseLease();
+      return emptyResult(threadId, "page_busy", { ...base, retentionLimit });
+    }
+    otherStreamBaseline = fingerprintOtherStreams(pageStates);
+
     // A yielded regular chunk can be parked ON THIS THREAD with its own
     // `before` cursor in the checkpoint. Restarting the walk from the thread
     // summary would re-fetch the window that chunk already holds and land on
@@ -518,6 +578,29 @@ export async function runTargetedThreadBackfill(
         return;
       }
 
+      // Fail closed on a chunk of ANOTHER stream that ran during this walk:
+      // writing the verdict now would be overwritten by that chunk's stale
+      // thread snapshot, and the regression re-arms the false-complete path.
+      // The sweeper recomputes the summary once the page is quiet again.
+      const concurrentStream = await findConcurrentPageChunk(
+        app,
+        platformAccountId,
+        otherStreamBaseline,
+      );
+      if (concurrentStream) {
+        result.outcome = "concurrent_page_chunk";
+        await recordSummaryDebt(
+          new Error(
+            `A ${concurrentStream} chunk ran on page ${platformAccountId} during the targeted backfill; thread summary left to the projection-debt sweep`,
+          ),
+        );
+        app.logger.warn(
+          { threadId, platformAccountId, concurrentStream },
+          "Targeted thread backfill skipped finalization: another stream chunked this page mid-run",
+        );
+        return;
+      }
+
       // The coverage verdict uses the deep-backfill rule: a walk that ended on
       // exhaustion or known ground is `complete`, an interrupted one stays
       // `partial_window` so the regular crawl keeps offering the thread.
@@ -577,7 +660,9 @@ export async function runTargetedThreadBackfill(
   await telemetry.finish(
     result.outcome === "completed"
       ? "success"
-      : result.outcome === "partial" || result.outcome === "retention_limit_reached"
+      : result.outcome === "partial" ||
+          result.outcome === "retention_limit_reached" ||
+          result.outcome === "concurrent_page_chunk"
         ? "partial"
         : "skipped",
     result.outcome === "lease_lost" ? "Page sync lease lost" : null,

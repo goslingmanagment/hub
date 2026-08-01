@@ -711,4 +711,57 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(calls).toHaveLength(0);
     expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null });
   }, 120_000);
+  it("skips finalization and leaves debt when another stream chunks the page mid-run", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter(
+        { [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] },
+        calls,
+        {
+          // A dm_conversations chunk starts AFTER the page-busy pre-check. It
+          // snapshots the thread summary and writes it back at its own end, so
+          // finalizing here would be silently regressed.
+          beforeReturn: async () => {
+            await testDb!.pool.query(`
+              update page_sync_states
+              set status = 'running', leased_seq = request_seq, lease_owner = 'regular-executor',
+                  lease_token = 'conversations-lease', lease_heartbeat_at = now(),
+                  lease_expires_at = now() + interval '2 minutes', started_at = now()
+              where page_id = $1 and stream = 'dm_conversations'
+            `, [page.id]);
+          },
+        },
+      ) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(result.outcome).toBe("concurrent_page_chunk");
+    expect(result.projectionDebtRecorded).toBe(true);
+    expect(result.requests).toBe(1);
+
+    const debts = await listUnresolvedProjectionDebt(appContext.db, 10);
+    expect(debts).toHaveLength(1);
+    expect(debts[0]).toMatchObject({
+      kind: PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+      conversationId: targetThreadId,
+    });
+
+    // No verdict was written: the thread keeps its seeded summary (which the
+    // sweeper recomputes), and is NOT marked complete.
+    const thread = await testDb.pool.query<{ status: string; stored: number }>(
+      'select message_coverage_status as "status", stored_message_count as "stored" from page_dm_threads where id = $1',
+      [targetThreadId],
+    );
+    expect(thread.rows[0]).toMatchObject({ status: "partial_window", stored: 5 });
+    // The captured facts still landed.
+    expect(await countMessages(targetThreadId)).toBe(1);
+    expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
+  }, 120_000);
 });
