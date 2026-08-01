@@ -22,6 +22,7 @@ export * from "./repositories/dm-message-archive.ts";
 export * from "./repositories/fans.ts";
 export * from "./repositories/auth.ts";
 export * from "./repositories/fan-page-identity.ts";
+export * from "./repositories/fansly-replay-projection.ts";
 export * from "./repositories/fan-profiles.ts";
 export * from "./repositories/fan-metadata.ts";
 export * from "./repositories/ai-usage.ts";

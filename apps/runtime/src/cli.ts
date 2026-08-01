@@ -1345,6 +1345,42 @@ export function buildProgram() {
     });
 
   program
+    .command("fansly:replay")
+    .description(
+      "Slice D: canonicalize the four parse_version-0 Fansly pull kinds (followers, subscribers, "
+        + "dm_conversations, account_me) out of the journal and project them into the identity/"
+        + "audience planes. Zero vendor credits. Gated by fanslyReplayMode (off/shadow/on); refuses "
+        + "outright when a journal partition covering the window is detached.",
+    )
+    .option("--account <id>", "restrict to one internal page id", parsePositiveInt)
+    .option("--kind <k>", "replayed kind; may be repeated (default: all four)", collectStringOption, [])
+    .option("--from <iso>", "received_at lower bound (inclusive)")
+    .option("--to <iso>", "received_at upper bound (exclusive)")
+    .option("--page-size <n>", "observations per batch (default 200)", parsePositiveInt)
+    .option("--max-pages <n>", "batches per run; the run is resumable (default 20)", parsePositiveInt)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { runFanslyReplay } = await import("./services/fansly-replay.ts");
+        const report = await runFanslyReplay(app, {
+          ...(options.account !== undefined ? { accountId: options.account as number } : {}),
+          ...(options.kind.length > 0 ? { kinds: options.kind as string[] } : {}),
+          ...(options.from ? { from: new Date(options.from) } : {}),
+          ...(options.to ? { to: new Date(options.to) } : {}),
+          ...(options.pageSize !== undefined ? { pageSize: options.pageSize as number } : {}),
+          ...(options.maxPages !== undefined ? { maxPages: options.maxPages as number } : {}),
+        });
+        console.log(JSON.stringify(report, null, 2));
+        if (report.refused) {
+          // A detached month makes every floor this run would publish a lie.
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("events:replay")
     .description(
       "Stage 8: re-run canonicalizers over retained observations (idempotent via domain_event_keys)",
