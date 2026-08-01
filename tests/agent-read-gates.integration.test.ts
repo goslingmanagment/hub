@@ -790,15 +790,27 @@ describe("[sync-critical] agent read plane: review round 2", () => {
   });
 
   it("P2c matchedInScope is inexact on any resumed or truncated read", async () => {
-    const first = (await get(`/api/v1/agent/coverage?${WINDOW}&limit=1`)).json();
-    expect(first.delivery.matchedInScope.exact).toBe(false);
-    const second = (await get(
-      `/api/v1/agent/coverage?cursor=${encodeURIComponent(first.delivery.nextCursor)}`,
-    )).json();
-    // The LAST page used to report its own length with `exact: true`, which on a
-    // multi-page traversal is simply a false number.
-    expect(second.delivery.nextCursor).toBeNull();
-    expect(second.delivery.matchedInScope.exact).toBe(false);
+    let page = (await get(`/api/v1/agent/coverage?${WINDOW}&limit=1`)).json();
+    expect(page.delivery.matchedInScope.exact).toBe(false);
+    const walked: string[] = page.items.map((item: { conversationRef: string }) =>
+      item.conversationRef);
+
+    for (let guard = 0; page.delivery.nextCursor !== null && guard < 6; guard += 1) {
+      page = (await get(
+        `/api/v1/agent/coverage?cursor=${encodeURIComponent(page.delivery.nextCursor)}`,
+      )).json();
+      // Page 2 and every page after it carry page 1's SIZE, which the cursor
+      // holds: reading the schema default (50) instead changed the traversal's
+      // shape after page 1 and re-minted every later cursor with the wrong size.
+      expect(page.items.length).toBeLessThanOrEqual(1);
+      // The LAST page used to report its own length with `exact: true`, which on a
+      // multi-page traversal is simply a false number.
+      expect(page.delivery.matchedInScope.exact).toBe(false);
+      walked.push(...page.items.map((item: { conversationRef: string }) => item.conversationRef));
+    }
+    // Three scopes, one per page, each exactly once.
+    expect(walked).toHaveLength(3);
+    expect(new Set(walked).size).toBe(3);
 
     // A complete, un-resumed read is still exact.
     const whole = (await get(`/api/v1/agent/coverage?${WINDOW}`)).json();

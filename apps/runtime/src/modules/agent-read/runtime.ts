@@ -18,6 +18,7 @@ import {
   insertAgentReadAudit,
   listAgentGrantPages,
   readArchiveGeneration,
+  reserveAgentKeyRows,
   withAgentStatementTimeout,
   type AgentGrantPage,
   type Database,
@@ -31,7 +32,7 @@ import { agentScopeFor } from "../../api/request-auth.ts";
 import { AGENT_CONCURRENCY_LIMIT, acquireAgentSlot, assertWithinAgentBudget, releaseAgentSlot } from "./budget.ts";
 import type { AgentCursorSigning } from "./cursors.ts";
 import { ServiceUnavailableError } from "../../services/errors.ts";
-import { AgentCapabilityMissingError, AgentPlaneDisabledError } from "./errors.ts";
+import { AgentBudgetExhaustedError, AgentCapabilityMissingError, AgentPlaneDisabledError } from "./errors.ts";
 import type { AgentPlaneMode } from "./epistemics.ts";
 
 /**
@@ -238,15 +239,20 @@ export interface AgentRequestScope {
   scopeNarrowing: AgentScopeNarrowing;
   has(capability: AgentCapability): boolean;
   /**
-   * Clamps a requested page size to what the daily ROW budget still allows.
+   * RESERVES page size against the daily ROW budget, atomically, and clamps the
+   * request to what was granted.
    *
-   * The first revision checked the budget before the work and added the returned
-   * rows afterwards, comparing nothing in between: a key with one row of
-   * allowance left was served a full 200-row page, and `cappedBy: "budget"` was
-   * unreachable. Now the allowance bounds the page and says so.
+   * Two revisions of this were wrong. The first checked the budget before the work
+   * and added the returned rows afterwards, comparing nothing in between: a key
+   * with one row of allowance left was served a full 200-row page. The second
+   * clamped the page but read the allowance without reserving it, so two
+   * concurrent requests spent the same allowance twice, and it raised a ZERO
+   * allowance back to one row — which quietly served a row the budget did not
+   * have, every request, forever. A zero allowance is now a 429 before any work.
    */
-  limitWithinRowBudget(requested: number): { limit: number; cappedByBudget: boolean };
-  /** Settles the row budget and releases the concurrency slot. Always called. */
+  limitWithinRowBudget(requested: number): Promise<{ limit: number; cappedByBudget: boolean }>;
+  /** Settles the row budget (refunding what the reservation did not use) and
+   *  releases the concurrency slot. Always called. */
   finish(rowsReturned: number): Promise<void>;
 }
 
@@ -340,10 +346,18 @@ export async function beginAgentRequest(
 
   acquireAgentSlot(principal.agentKeyId);
   let settled = false;
+  /** Rows this request has already taken out of the daily ceiling. */
+  let reserved = 0;
   try {
     const usage = await bumpAgentKeyUsage(db, { agentKeyId: principal.agentKeyId, requests: 1 });
     assertWithinAgentBudget(usage);
-    const rowAllowance = Math.max(0, usage.dailyRowBudget - usage.rowsReturned);
+    // A key whose rows are EXACTLY spent passes `withinBudget` (the counter has
+    // not been exceeded, it has been met) and used to be served anyway, one row at
+    // a time, indefinitely. No allowance means no answer: refused before it runs,
+    // which is what a 429 says.
+    if (usage.rowsReturned >= usage.dailyRowBudget) {
+      throw new AgentBudgetExhaustedError("agent key daily row budget exhausted");
+    }
 
     const pageIds = agentScopeFor(principal, requestedPageIds);
     // Even the scaffolding runs under a timeout: `listAgentGrantPages` and the
@@ -378,9 +392,19 @@ export async function beginAgentRequest(
         totalPagesForQuery: totalPages,
       },
       has: (capability) => granted.has(capability),
-      limitWithinRowBudget(requested: number) {
-        const limit = Math.max(1, Math.min(requested, rowAllowance));
-        return { limit, cappedByBudget: limit < requested };
+      async limitWithinRowBudget(requested: number) {
+        const reservation = await reserveAgentKeyRows(db, {
+          agentKeyId: principal.agentKeyId,
+          rows: Math.max(0, requested),
+        });
+        if (reservation.granted <= 0) {
+          throw new AgentBudgetExhaustedError("agent key daily row budget exhausted");
+        }
+        reserved += reservation.granted;
+        return {
+          limit: reservation.granted,
+          cappedByBudget: reservation.granted < requested,
+        };
       },
       async finish(rowsReturned: number) {
         if (settled) {
@@ -388,10 +412,15 @@ export async function beginAgentRequest(
         }
         settled = true;
         try {
-          if (rowsReturned > 0) {
-            await bumpAgentKeyUsage(db, {
+          // The delta, not the total: a reservation that served fewer rows than it
+          // held REFUNDS the difference, and an operation that reserved nothing
+          // (the bundled ones) settles its whole cost here — clamped at the
+          // ceiling by the same statement, so the counter cannot overshoot.
+          const delta = rowsReturned - reserved;
+          if (delta !== 0) {
+            await reserveAgentKeyRows(db, {
               agentKeyId: principal.agentKeyId,
-              rows: rowsReturned,
+              rows: delta,
             });
           }
         } finally {
@@ -514,6 +543,38 @@ export function retentionLimitFor(
 export function isoOrNull(value: Date | null | undefined): string | null {
   return value == null ? null : value.toISOString();
 }
+
+/**
+ * `capture.observedRowFloor`: the EARLIEST instant among the rows this page
+ * returned.
+ *
+ * A reduction over all of them, never `rows.at(0)`. The default sort here is
+ * DESCENDING, so the first row is the NEWEST one, and reporting it as a floor
+ * inverted the field on every unsorted read — a diagnostic that says the opposite
+ * of what it means is worse than an absent one.
+ */
+export function observedRowFloorOf(
+  values: ReadonlyArray<Date | null | undefined>,
+): string | null {
+  let floor: Date | null = null;
+  for (const value of values) {
+    if (value != null && (floor === null || value < floor)) {
+      floor = value;
+    }
+  }
+  return isoOrNull(floor);
+}
+
+/**
+ * The search backend to REPORT, which is by definition the one that ran.
+ *
+ * `fts_trgm` is a configuration position, not an implementation: every statement
+ * on the search path is the plain `websearch_to_tsquery` of decision #198, and no
+ * trigram branch exists. Announcing `fts_trgm` because the flag said so told a
+ * caller its query had been fuzzy-matched when it had not — which on a miss reads
+ * as "we even tried approximate matching and found nothing".
+ */
+export const AGENT_SEARCH_BACKEND_IN_USE = "fts" as const;
 
 export function iso(value: Date): string {
   return value.toISOString();

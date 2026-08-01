@@ -16,7 +16,7 @@ import {
   type AgentResolveResponse,
 } from "@agency_hub_core/contracts";
 import {
-  detectPgTrgmExtension,
+  agentSubscriptionState,
   findAgentPersonIdentity,
   getAgentKeyById,
   getAgentKeyUsage,
@@ -38,6 +38,7 @@ import {
   AGENT_CONCURRENCY_LIMIT,
   AGENT_COUNT_PROBE_MAX,
   AGENT_PLATFORM_CAPABILITIES,
+  AGENT_SEARCH_BACKEND_IN_USE,
   AGENT_TIMEOUT_MS,
   beginAgentRequest,
   buildDelivery,
@@ -49,6 +50,7 @@ import {
   retentionLimitFor,
   singletonDelivery,
   withAgentTimeout,
+  writeAgentAudit,
 } from "./runtime.ts";
 
 // #1 REPORTS the gauge; it never mutates it (the slot was taken by
@@ -104,14 +106,16 @@ export async function handleAgentCapabilities(
     operation: "agentCapabilities",
   });
   try {
-    const [key, usage, trgm] = await Promise.all([
+    const [key, usage] = await Promise.all([
       getAgentKeyById(scope.db, principal.agentKeyId),
       getAgentKeyUsage(scope.db, { agentKeyId: principal.agentKeyId }),
-      detectPgTrgmExtension(scope.db),
     ]);
 
+    // What #7 WILL RUN, not what the flag says. `fts_trgm` names a query this
+    // deployment does not have; advertising it here and returning plain FTS there
+    // is the same lie in two places.
     const configuredBackend = scope.config.agentSearchBackend ?? "fts";
-    const searchBackend = configuredBackend === "fts_trgm" && !trgm ? "fts" : configuredBackend;
+    const searchBackend = configuredBackend === "off" ? "off" : AGENT_SEARCH_BACKEND_IN_USE;
 
     // The degenerate envelope of a control operation, normative per §17.15.5: the
     // grant is never truncated, so the snapshot is exhausted by definition, and
@@ -321,7 +325,7 @@ export async function handleAgentResolve(
 
     // A resolve can carry 50 inputs x 20 candidates: charging it as one row let
     // the two fan-facing operations walk past the daily row budget entirely.
-    const { limit: candidateLimit, cappedByBudget } = scope.limitWithinRowBudget(
+    const { limit: candidateLimit, cappedByBudget } = await scope.limitWithinRowBudget(
       Math.min(20 * body.inputs.length, 1000),
     );
     const resolved = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
@@ -651,9 +655,11 @@ export async function handleAgentPerson(
       subscriptions: subscriptions === null ? null : subscriptions.rows.map((subscription) => ({
         pageLabel: subscription.pageLabel,
         subscriptionRef: subscription.subscriptionRef,
-        subscriptionState: subscription.canonicalStatus === "active"
-          ? "active" as const
-          : subscription.canonicalStatus === "expired" ? "expired" as const : "unknown" as const,
+        // ONE mapping, shared with the dataset projection. This branch used to map
+        // only the literal `expired`, so `ended` and `cancelled` came back
+        // `unknown` here and `expired` from #10 — two answers about one
+        // subscription, depending on which operation was asked.
+        subscriptionState: agentSubscriptionState(subscription.canonicalStatus),
         subscriptionTierName: subscription.tierName,
         subscriptionPriceMills: toSafeNumber(subscription.priceMills),
         renewPriceMills: toSafeNumber(subscription.renewPriceMills),
@@ -689,6 +695,27 @@ export async function handleAgentPerson(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
+    // Notes and summaries are operator-written FREE TEXT about a person: the same
+    // disclosure class as a transcript, and #6 and snippet-enabled #7 both leave a
+    // row for it. This one served the material and left nothing, so the owner's
+    // acceptance of a machine principal reading it rested on a trail with a hole
+    // in it. Written BEFORE the response goes out, like the others.
+    if (crm !== null) {
+      await writeAgentAudit(scope.db, {
+        agentKeyId: principal.agentKeyId,
+        operation: "agentPerson",
+        pageIds,
+        verbatimText: true,
+        // Structured facts from the allowlist only: how many free-text records
+        // crossed, never a character of what they said.
+        requestSummary: {
+          platform: params.platform,
+          returned: crm.data.notes.length + crm.data.summaries.length,
+          planeMode: scope.planeMode,
+        },
+      });
+    }
+
     // `delivery.returned` counts PEOPLE (one, or none); the row budget counts the
     // rows the bundle actually carried, which for a busy fan is hundreds.
     const bundleRows = (extras?.data.memberships.length ?? 0)

@@ -27,7 +27,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError } from "../../services/errors.ts";
-import { buildAgentEvidence } from "./epistemics.ts";
+import { buildAgentEvidence, gapBeforeCaptureFloor } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
 import { AgentPlaneDisabledError, staticNotFound, toSafeNumber } from "./errors.ts";
 import {
@@ -42,8 +42,10 @@ import {
   buildDelivery,
   buildPredicates,
   computeScopeFieldStates,
+  hydrationRemedy,
   iso,
   isoOrNull,
+  observedRowFloorOf,
   operationPlanesFor,
   singletonDelivery,
   withAgentTimeout,
@@ -120,43 +122,65 @@ export async function handleAgentObservations(
       sortDir: (stored?.sortDir as "asc" | "desc" | undefined) ?? query.sortDir,
     };
 
-    const { limit, cappedByBudget } = scope.limitWithinRowBudget(query.limit);
+    const requestedLimit = (stored?.limit as number | undefined) ?? query.limit;
+
+    // THE FLOOR FIRST, AND SCOPED TO THE GRANT.
+    //
+    // It used to be read after the page-scoped observation query and with no scope
+    // at all, so an ungranted page's January row was the minimum a key whose own
+    // pages start in March was judged against: an empty February window looked
+    // like a window inside the journal, and the pre-capture condition was missed.
+    const journalFloor = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+      readAgentJournalFloor(tx, {
+        pageIds: scope.pageIds,
+        platform: effective.platform,
+        pageLabel: effective.pageLabel,
+      }), "agent_journal_floor");
+    const floorAt = journalFloor.observationsFirstReceivedAt;
+
+    // A window entirely before the journal begins is EMPTY BY CONSTRUCTION, not
+    // by absence of fact. Saying so is the difference this operation exists for —
+    // and the read is skipped rather than run and then disowned.
+    const journalStartsAfterWindow = floorAt !== null && Date.parse(to) <= floorAt.getTime();
+
+    const { limit, cappedByBudget } = journalStartsAfterWindow
+      ? { limit: 0, cappedByBudget: false }
+      : await scope.limitWithinRowBudget(requestedLimit);
     // The frozen bound is minted once and then CARRIED by the cursor, so every
     // page of one traversal sees the same population.
     const storedHighWater = Number(stored?.highWater ?? 0);
-    const highWater = storedHighWater > 0
-      ? storedHighWater
+    const highWater = journalStartsAfterWindow
+      ? 0
+      : storedHighWater > 0
+        ? storedHighWater
+        : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+          readAgentObservationsHighWater(tx, scope.pageIds, {
+            from: new Date(from),
+            to: new Date(to),
+          }), "agent_observations_high_water");
+
+    const result = journalStartsAfterWindow
+      ? { rows: [], witnesses: [] }
       : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
-        readAgentObservationsHighWater(tx, scope.pageIds, {
+        listAgentObservations(tx, {
+          pageIds: scope.pageIds,
           from: new Date(from),
           to: new Date(to),
-        }), "agent_observations_high_water");
+          ...effective,
+          limit,
+          maxObservationId: highWater,
+          // Rides on the witness, so `capture.planes[]` names the floor even when
+          // the window starts after it and no gap is emitted.
+          journalFloor: floorAt,
+          after: cursor === null
+            ? undefined
+            : {
+              sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
+              key: String(cursor.keyset.key ?? ""),
+            },
+        }), "agent_observations");
 
-    const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
-      listAgentObservations(tx, {
-        pageIds: scope.pageIds,
-        from: new Date(from),
-        to: new Date(to),
-        ...effective,
-        limit,
-        maxObservationId: highWater,
-        after: cursor === null
-          ? undefined
-          : {
-            sortValue: cursor.keyset.sortValue === null ? null : String(cursor.keyset.sortValue),
-            key: String(cursor.keyset.key ?? ""),
-          },
-      }), "agent_observations");
-
-    const journalFloor = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
-      readAgentJournalFloor(tx), "agent_journal_floor");
-
-    // A window entirely before the journal begins is EMPTY BY CONSTRUCTION, not
-    // by absence of fact. Saying so is the difference this operation exists for.
-    const journalStartsAfterWindow = journalFloor.observationsFirstReceivedAt !== null
-      && Date.parse(to) <= journalFloor.observationsFirstReceivedAt.getTime();
-
-    const witnesses = journalStartsAfterWindow ? [] : result.witnesses;
+    const witnesses = result.witnesses;
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, null);
 
     const hasMore = result.rows.length === limit;
@@ -167,7 +191,7 @@ export async function handleAgentObservations(
         resource: "global",
         keyId: principal.agentKeyId,
         pageIds: scope.pageIds,
-        params: { from, to, ...effective, limit: query.limit, highWater },
+        params: { from, to, ...effective, limit: requestedLimit, highWater },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: { observations: String(highWater) },
         seqHighWater: {},
@@ -197,20 +221,34 @@ export async function handleAgentObservations(
       cursorCapable: true,
       frozenSnapshot,
       requestWindow: { from, to },
-      gaps: journalFloor.detachedPartitions.length === 0 ? [] : [{
-        kind: "partition_detached" as const,
-        from: null,
-        to: null,
-        plane: "observations" as const,
-        remedy: { kind: "none" as const, reason: "partition_detached" as const },
-      }],
+      gaps: [
+        // The gap this operation exists to publish: a window reaching back past the
+        // scoped journal floor. Without it a February question against a March
+        // journal produced an empty list, no gap and no remedy — an absence that
+        // was never established.
+        ...gapBeforeCaptureFloor({
+          plane: "observations",
+          floorAt: isoOrNull(floorAt),
+          windowFrom: from,
+          hydrationAdmissible: hydrationRemedy(scope).admissible,
+        }),
+        // ONLY the observations partitions: a detached `domain_events` month is a
+        // hole in a different plane and used to announce a gap here.
+        ...(journalFloor.detachedObservationPartitions.length === 0 ? [] : [{
+          kind: "partition_detached" as const,
+          from: null,
+          to: null,
+          plane: "observations" as const,
+          remedy: { kind: "none" as const, reason: "partition_detached" as const },
+        }]),
+      ],
       scopeFieldStates: {},
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
-      observedRowFloor: isoOrNull(result.rows.at(0)?.receivedAt ?? null),
+      observedRowFloor: observedRowFloorOf(result.rows.map((row) => row.receivedAt)),
       captureFloor: {
-        at: isoOrNull(journalFloor.observationsFirstReceivedAt),
-        kind: journalFloor.observationsFirstReceivedAt === null ? "unknown" : "oldest_stored_row",
+        at: isoOrNull(floorAt),
+        kind: floorAt === null ? "unknown" : "oldest_stored_row",
       },
     });
 
@@ -414,6 +452,7 @@ export async function handleAgentDatasetQuery(
     const rawSort = (stored?.sort as AgentDatasetQueryBody["sort"] | undefined) ?? body.sort;
     const claimFields = (stored?.claimFields as string[] | undefined)
       ?? body.claim?.fields ?? null;
+    const requestedLimit = (stored?.limit as number | undefined) ?? body.limit;
 
     // The registry is the ONLY bridge from a name to SQL: an unknown field is a
     // static 400 BEFORE any statement is built, and the value that reaches SQL is
@@ -445,7 +484,7 @@ export async function handleAgentDatasetQuery(
     }
     const sortKind = (definition.fields as Record<string, string>)[requestedSort.field] ?? "string";
 
-    const { limit, cappedByBudget } = scope.limitWithinRowBudget(body.limit);
+    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
     const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
       queryAgentDataset(tx, {
         dataset: params.dataset,
@@ -480,7 +519,7 @@ export async function handleAgentDatasetQuery(
           filters: rawFilters,
           sort: [requestedSort],
           claimFields,
-          limit: body.limit,
+          limit: requestedLimit,
         },
         archiveGeneration: scope.archiveGeneration,
         sourceHighWaters: { [params.dataset]: last.key },
@@ -514,9 +553,34 @@ export async function handleAgentDatasetQuery(
       }),
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
-      observedRowFloor: isoOrNull(result.rows.at(0)?.occurredAt ?? null),
+      observedRowFloor: observedRowFloorOf(result.rows.map((row) => row.occurredAt)),
       captureFloor: { at: null, kind: "unknown" },
     });
+
+    // A dataset the REGISTRY declares as carrying verbatim text is audited exactly
+    // like a transcript read. Driven by the flag rather than by a list of dataset
+    // names here, so a future dataset that gains a text body cannot serve prose
+    // without a trail: `fan_notes` shipped with the capability gate and no audit
+    // row, which is half of the owner's condition for a machine principal reading
+    // this material at all.
+    if (definition.verbatimText) {
+      await writeAgentAudit(scope.db, {
+        agentKeyId: principal.agentKeyId,
+        operation: "agentDatasetQuery",
+        pageIds: [page.id],
+        verbatimText: true,
+        requestSummary: {
+          datasetRef: params.dataset,
+          limit: requestedLimit,
+          returned: result.rows.length,
+          cursorConsumed,
+          windowFrom: new Date(from).toISOString(),
+          windowTo: new Date(to).toISOString(),
+          platform: page.platform,
+          planeMode: scope.planeMode,
+        },
+      });
+    }
 
     const response: AgentDatasetQueryResponse = {
       datasetRef: params.dataset,

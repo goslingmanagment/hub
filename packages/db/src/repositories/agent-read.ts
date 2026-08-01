@@ -11,7 +11,7 @@ import {
   type KeysetBoundary,
   type KeysetDirection,
 } from "./agent-keyset.ts";
-import { witnessesFor, type PlaneReadWitness } from "./agent-read-witness.ts";
+import { witnessFor, witnessesFor, type PlaneReadWitness } from "./agent-read-witness.ts";
 
 /**
  * Every read the Agent Read Plane performs, except the transcript union (its own
@@ -175,24 +175,52 @@ export async function detectPgTrgmExtension(db: Database): Promise<boolean> {
 
 export interface AgentJournalFloor {
   observationsFirstReceivedAt: Date | null;
-  detachedPartitions: string[];
+  /** Detached months of `observations` — the ONLY ones that gap the journal plane. */
+  detachedObservationPartitions: string[];
+  /**
+   * Detached months of `domain_events`. A different plane, reported separately:
+   * one merged list made a detached EVENT month announce a gap in an observations
+   * journal that had never been interrupted.
+   */
+  detachedDomainEventPartitions: string[];
 }
 
 /**
- * Journal-wide facts no per-thread row can carry: when the verbatim journal
- * begins, and which monthly partitions are currently detached.
+ * The scope a journal floor is computed IN.
+ *
+ * NEVER optional. The first revision took no scope at all, so a page outside the
+ * key's grant supplied the minimum: a key whose own pages start in March judged an
+ * empty February window against somebody else's January row and missed the
+ * pre-capture condition entirely. A floor is a statement about THIS key's scope,
+ * or it is not a floor.
+ *
+ * `platform` and `pageLabel` narrow the SCOPE, which is why they belong here. A
+ * result filter such as `kind` deliberately does not: a filter that could move a
+ * capture floor would let an empty result prove an absence.
+ */
+export interface AgentJournalFloorScope {
+  readonly pageIds: readonly number[];
+  readonly platform?: string | undefined;
+  readonly pageLabel?: string | undefined;
+}
+
+/**
+ * Journal facts no per-thread row can carry: when the verbatim journal begins FOR
+ * THIS SCOPE, and which monthly partitions are currently detached.
  *
  * A window earlier than the journal floor is EMPTY BY CONSTRUCTION, and saying so
  * is the difference between "no such fact" and "no journal for that month". The
  * name pattern is anchored so that a helper table like
  * `domain_events_smoke_checkpoint` cannot masquerade as a detached month.
  */
-export async function readAgentJournalFloor(db: Database): Promise<AgentJournalFloor> {
-  const floor = await db.execute<{ first_received_at: Date | null }>(
-    sql`select min(received_at) as first_received_at from observations`,
-  );
-  const detached = await db.execute<{ relname: string }>(sql`
-    select c.relname
+export async function readAgentJournalFloor(
+  db: Database,
+  scope: AgentJournalFloorScope,
+): Promise<AgentJournalFloor> {
+  const detached = await db.execute<{ relname: string; plane: string }>(sql`
+    select c.relname,
+           case when c.relname ~ '^observations_' then 'observations'
+                else 'domain_events' end as plane
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public'
@@ -202,9 +230,41 @@ export async function readAgentJournalFloor(db: Database): Promise<AgentJournalF
       and not exists (select 1 from pg_inherits i where i.inhrelid = c.oid)
     order by c.relname
   `);
+  const detachedObservationPartitions = detached.rows
+    .filter((row) => String(row.plane) === "observations")
+    .map((row) => String(row.relname));
+  const detachedDomainEventPartitions = detached.rows
+    .filter((row) => String(row.plane) !== "observations")
+    .map((row) => String(row.relname));
+
+  // An empty grant sees no journal rows at all, so it has no floor to report —
+  // and must not inherit the deployment's.
+  if (scope.pageIds.length === 0) {
+    return {
+      observationsFirstReceivedAt: null,
+      detachedObservationPartitions,
+      detachedDomainEventPartitions,
+    };
+  }
+
+  const clauses: SQL[] = [sql`o.account_id in ${pageIdList(scope.pageIds)}`];
+  if (scope.platform !== undefined) {
+    clauses.push(sql`o.platform = ${scope.platform}`);
+  }
+  if (scope.pageLabel !== undefined) {
+    clauses.push(sql`p.label = ${scope.pageLabel}`);
+  }
+  const floor = await db.execute<{ first_received_at: Date | null }>(sql`
+    select min(o.received_at) as first_received_at
+    from observations o
+    left join pages p on p.id = o.account_id
+    where ${sql.join(clauses, sql` and `)}
+  `);
+
   return {
     observationsFirstReceivedAt: date(floor.rows[0]?.first_received_at),
-    detachedPartitions: detached.rows.map((row) => String(row.relname)),
+    detachedObservationPartitions,
+    detachedDomainEventPartitions,
   };
 }
 
@@ -1373,6 +1433,15 @@ export interface AgentCoverageScopeRow {
   observedRowFloor: Date | null;
   /** Oldest row at all: this scope's capture floor. */
   archiveFloor: Date | null;
+  /**
+   * THIS scope's witnesses, carrying THIS scope's floor.
+   *
+   * Per row rather than per response: every item used to reuse the response-level
+   * witnesses, whose `message_archive` floor is `unknown`, so a window starting
+   * after a conversation's floor (hence with no gap to name it) lost the known
+   * date altogether — the one fact the operation exists to publish.
+   */
+  witnesses: PlaneReadWitness[];
   sortValue: string;
   keysetKey: string;
 }
@@ -1437,22 +1506,31 @@ export async function listAgentCoverageScopes(
   `);
 
   return {
-    rows: result.rows.map((row) => ({
-      pageId: Number(row.platform_account_id),
-      pageLabel: String(row.label),
-      platform: String(row.platform),
-      conversationRef: String(row.platform_conversation_id),
-      fanPlatformUserId: row.fan_platform_user_id == null
-        ? null
-        : String(row.fan_platform_user_id),
-      lastMessageSyncAt: date(row.last_message_sync_at),
-      quarantineUntil: date(row.quarantine_until),
-      storedMessageCount: Number(row.stored_message_count ?? 0),
-      observedRowFloor: date(row.observed_row_floor),
-      archiveFloor: date(row.archive_floor),
-      sortValue: String(row.k_sort),
-      keysetKey: String(row.k_key),
-    })),
+    rows: result.rows.map((row) => {
+      const archiveFloor = date(row.archive_floor);
+      return {
+        pageId: Number(row.platform_account_id),
+        pageLabel: String(row.label),
+        platform: String(row.platform),
+        conversationRef: String(row.platform_conversation_id),
+        fanPlatformUserId: row.fan_platform_user_id == null
+          ? null
+          : String(row.fan_platform_user_id),
+        lastMessageSyncAt: date(row.last_message_sync_at),
+        quarantineUntil: date(row.quarantine_until),
+        storedMessageCount: Number(row.stored_message_count ?? 0),
+        observedRowFloor: date(row.observed_row_floor),
+        archiveFloor,
+        // The thread row itself establishes no floor; the lateral scan over
+        // `message_archive` does, and only for THIS conversation.
+        witnesses: [
+          witnessFor("page_dm_threads"),
+          witnessFor("message_archive", archiveFloor),
+        ],
+        sortValue: String(row.k_sort),
+        keysetKey: String(row.k_key),
+      };
+    }),
     witnesses: witnessesFor(["page_dm_threads", "message_archive"]),
   };
 }
@@ -1494,6 +1572,12 @@ export async function listAgentObservations(
     limit: number;
     after?: KeysetBoundary | undefined;
     maxObservationId?: number | undefined;
+    /**
+     * The SCOPED journal floor, established by its own unbounded query. It rides
+     * on the witness so `capture.planes[]` carries the date even when the window
+     * starts after it and no gap is emitted.
+     */
+    journalFloor?: Date | null | undefined;
   },
 ): Promise<{ rows: AgentObservationRow[]; witnesses: PlaneReadWitness[] }> {
   if (input.pageIds.length === 0) {
@@ -1564,7 +1648,7 @@ export async function listAgentObservations(
       sortValue: String(row.k_sort),
       keysetKey: String(row.k_key),
     })),
-    witnesses: witnessesFor(["observations"]),
+    witnesses: witnessesFor(["observations"], input.journalFloor),
   };
 }
 

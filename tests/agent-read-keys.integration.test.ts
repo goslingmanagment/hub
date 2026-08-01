@@ -15,6 +15,7 @@ import {
   insertAgentReadAudit,
   listAgentKeys,
   recordAgentKeyUse,
+  reserveAgentKeyRows,
   revokeAgentKey,
 } from "@agency_hub_core/db";
 
@@ -509,6 +510,44 @@ describe("agent key daily budget", () => {
       (await bumpAgentKeyUsage(testDb.db, { agentKeyId: rowKey.id, requests: 1, rows: 51, now }))
         .withinBudget,
     ).toBe(false);
+  });
+
+  it("reserves rows atomically: concurrent reservations cannot overspend", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The defect this replaces: the allowance was READ before the work and the
+    // rows added after it, so concurrent requests all saw the same allowance and
+    // all spent it. A reservation is taken under the row lock, which makes the
+    // ceiling a bound rather than a report.
+    const key = await insertAgentKey(
+      testDb.db,
+      keyInput({ dailyRequestBudget: 5000, dailyRowBudget: 250 }),
+    );
+    const now = new Date("2026-08-01T09:00:00.000Z");
+
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        reserveAgentKeyRows(testDb!.db, { agentKeyId: key.id, rows: 100, now })),
+    );
+
+    expect(results.reduce((total, result) => total + result.granted, 0)).toBe(250);
+    // Two full grants, one partial, one empty — in whatever order the lock served
+    // them.
+    expect(results.filter((result) => result.granted === 100)).toHaveLength(2);
+    const stored = await getAgentKeyUsage(testDb.db, { agentKeyId: key.id, now });
+    expect(stored.rowsReturned).toBe(250);
+
+    // A spent ceiling grants NOTHING: the caller answers 429 rather than being
+    // handed a single row it cannot pay for.
+    expect((await reserveAgentKeyRows(testDb.db, { agentKeyId: key.id, rows: 50, now })).granted)
+      .toBe(0);
+
+    // ... and an unused reservation is REFUNDED, never stranded.
+    expect((await reserveAgentKeyRows(testDb.db, { agentKeyId: key.id, rows: -40, now })).granted)
+      .toBe(-40);
+    expect((await getAgentKeyUsage(testDb.db, { agentKeyId: key.id, now })).rowsReturned).toBe(210);
   });
 
   it("reports a zeroed counter for a day with no traffic", async (context) => {

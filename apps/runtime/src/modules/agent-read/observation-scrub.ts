@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * Operation 9b: which capture-journal payloads may be shown at all, and what has
  * to come out of them first.
@@ -102,6 +104,21 @@ export interface ObservationScrubResult {
 const MAX_SCRUB_DEPTH = 24;
 const MAX_PATHS_REPORTED = 200;
 
+/**
+ * `pathsRemoved` entries are `z.string().min(1).max(200)` on the wire, and a
+ * violation is a 500 raised by the SERIALIZER — after the audit row was written
+ * and after the caller was told nothing. Two real payload shapes produced one: a
+ * scalar or array at the top level notes the ROOT, whose path is the empty string,
+ * and a deep object with long JSON keys notes a path over 200 characters.
+ *
+ * The root gets a nonempty marker, and an over-long path is truncated with a
+ * digest of the whole thing appended — bounded, and still distinguishable from
+ * every other truncated path.
+ */
+const ROOT_PATH_MARKER = "$";
+const MAX_PATH_LENGTH = 200;
+const PATH_DIGEST_LENGTH = 32;
+
 /** URL-decodes a query-parameter NAME, treating a malformed escape as suspicious
  *  rather than throwing. `decodeURIComponent("%ZZ")` throws, and a scrubber that
  *  throws on hostile input is not fail-closed, it is fail-crashed. */
@@ -150,15 +167,29 @@ function looksLikeSignedUrl(value: string): boolean {
  * The alternative — "unknown shape, must be fine" — is how a scrubber quietly
  * stops scrubbing when a vendor adds a field.
  */
+/** One reported path, forced inside the response schema's `[1, 200]` bound. */
+export function boundedScrubPath(path: string): string {
+  if (path === "") {
+    return ROOT_PATH_MARKER;
+  }
+  if (path.length <= MAX_PATH_LENGTH) {
+    return path;
+  }
+  const digest = createHash("sha256").update(path, "utf8").digest("hex")
+    .slice(0, PATH_DIGEST_LENGTH);
+  return `${path.slice(0, MAX_PATH_LENGTH - PATH_DIGEST_LENGTH - 1)}~${digest}`;
+}
+
 export function scrubObservationPayload(payload: unknown): ObservationScrubResult {
   let signedUrlsRemoved = 0;
   let secretsRedacted = 0;
   const pathsRemoved: string[] = [];
 
   const note = (path: string) => {
-    if (pathsRemoved.length < MAX_PATHS_REPORTED) {
-      pathsRemoved.push(path);
+    if (pathsRemoved.length >= MAX_PATHS_REPORTED) {
+      return;
     }
+    pathsRemoved.push(boundedScrubPath(path));
   };
 
   const walk = (value: unknown, path: string, depth: number): unknown => {

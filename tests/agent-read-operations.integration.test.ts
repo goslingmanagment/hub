@@ -208,6 +208,15 @@ async function seedFixture() {
      values ($1, 'dm_messages', 'idle', 86400, 0, '2026-03-05T00:00:00Z')`,
     [pageId],
   );
+
+  // Operator-written free text about this fan: the same disclosure class as a
+  // transcript, and the material #3 and #10 must not serve without a trail.
+  await pool.query(
+    `insert into fan_notes (fan_id, platform_account_id, body, created_at)
+     values ($1, $2, 'paid for the january custom, chase the delivery',
+       '2026-02-01T00:00:00Z')`,
+    [fanId, pageId],
+  );
 }
 
 function agentGet(url: string) {
@@ -516,6 +525,30 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(calls).toEqual([]);
   });
 
+  it("#3 and #10 agree about a subscription that ENDED", async () => {
+    await testDb!.pool.query(
+      `insert into page_subscriptions (platform_subscription_id, platform_account_id, fan_id,
+         raw_status, canonical_status, price_mills, renew_price_mills, source_created_at, ends_at,
+         is_current)
+       select 'sub-ended', $1, f.id, 3, 'ended', 5000, 5000, '2026-01-01T00:00:00Z',
+         '2026-02-01T00:00:00Z', false
+       from fans f where f.platform_user_id = $2`,
+      [pageId, FAN_PLATFORM_USER_ID],
+    );
+
+    const person = (await agentGet(`/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}`)).json();
+    // `ended` used to fall through to `unknown` here while the dataset projection
+    // called it `expired`: one subscription, two states, depending on which
+    // operation was asked.
+    expect(person.subscriptions[0].subscriptionState).toBe("expired");
+
+    const dataset = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/subscriptions/query",
+      { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" },
+    );
+    expect(dataset.json().items[0].fields.subscriptionState).toBe("expired");
+  });
+
   it("a cursor round-trips a real traversal", async () => {
     const first = await agentGet(
       `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages?${MARCH}&limit=1`,
@@ -537,3 +570,266 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(secondBody.conclusion.blockers).toContain("mutable_sort_key_traversal");
   });
 });
+
+/**
+ * Review round 3: the two FALSE-ABSENCE defects and their neighbours.
+ *
+ * Every test here fails when its fix is reverted, and the two false-absence ones
+ * assert the ENVELOPE and the BODY agree: never an empty result next to a
+ * predicate the response says it did not apply, and never a window reaching back
+ * past the capture floor without a gap that names it.
+ */
+describe("[sync-critical] agent read plane: review round 3", () => {
+  it("P1-1 an unsupported filter is DROPPED from the query, not applied behind the report", async () => {
+    // Fansly journals `attachments` unparsed, so `hasMedia` has nothing to filter
+    // on. It used to reach the WHERE clause anyway: two of the three messages have
+    // no media row, so `hasMedia=true` returned ONE message next to an envelope
+    // saying the filter had not been applied — an answer an agent reads as "there
+    // is no other media here".
+    const response = await agentGet(
+      `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages?${MARCH}&hasMedia=true`,
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const predicate = body.predicates.find((entry: { name: string }) => entry.name === "hasMedia");
+    expect(predicate).toMatchObject({
+      requested: true,
+      applied: false,
+      reason: "unsupported_for_plane",
+    });
+    // THE AGREEMENT: the SQL genuinely did not narrow, so every message comes
+    // back. A shorter list than the unfiltered read would mean the filter ran.
+    expect(body.items.map((item: { messageRef: string }) => item.messageRef))
+      .toEqual(["m-1", "m-2", "m-3"]);
+    expect(body.delivery.matchedInScope.value).toBe(3);
+
+    // `hasPrice` is the same story on this platform: not captured at all.
+    const priced = await agentGet(
+      `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages?${MARCH}&hasPrice=true`,
+    );
+    const pricedBody = priced.json();
+    expect(pricedBody.predicates.find((entry: { name: string }) => entry.name === "hasPrice"))
+      .toMatchObject({ requested: true, applied: false, reason: "unsupported_for_plane" });
+    expect(pricedBody.items).toHaveLength(3);
+  });
+
+  it("P1-2 #3 leaves an audit row when it serves CRM free text", async () => {
+    const response = await agentGet(`/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}`);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().crm.notes[0].noteText).toContain("january custom");
+
+    const { rows } = await testDb!.pool.query<{
+      verbatim_text: boolean;
+      request_summary: Record<string, unknown>;
+      page_ids: number[];
+    }>(
+      `select verbatim_text, request_summary, page_ids from agent_read_audit
+       where operation = 'agentPerson'`,
+    );
+    // Notes and summaries are operator-written prose: the same class as a
+    // transcript, and #6 has always left a row for it.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.verbatim_text).toBe(true);
+    expect(rows[0]!.request_summary.returned).toBe(1);
+    expect(Object.keys(rows[0]!.request_summary).sort())
+      .toEqual(["planeMode", "platform", "returned"]);
+  });
+
+  it("P1-3 a verbatim DATASET is audited, and a non-verbatim one is not", async () => {
+    const window = { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" };
+    await agentPost("/api/v1/agent/pages/lora-2/datasets/transactions/query", window);
+    const afterTransactions = await testDb!.pool.query<{ count: string }>(
+      "select count(*)::text as count from agent_read_audit where operation = 'agentDatasetQuery'",
+    );
+    // Money is not prose: the dataset route audits verbatim TEXT, not every read.
+    expect(afterTransactions.rows[0]!.count).toBe("0");
+
+    const notes = await agentPost("/api/v1/agent/pages/lora-2/datasets/fan_notes/query", window);
+    expect(notes.statusCode).toBe(200);
+    expect(notes.json().items[0].fields.noteText).toContain("january custom");
+
+    const { rows } = await testDb!.pool.query<{
+      verbatim_text: boolean;
+      request_summary: Record<string, unknown>;
+    }>(
+      `select verbatim_text, request_summary from agent_read_audit
+       where operation = 'agentDatasetQuery'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.verbatim_text).toBe(true);
+    // Driven by the registry's `verbatimText` flag, so the dataset that earned the
+    // row names itself.
+    expect(rows[0]!.request_summary.datasetRef).toBe("fan_notes");
+  });
+
+  it("P1-4/P1-5 the journal floor is the GRANTED scope's, and a pre-floor window gaps", async () => {
+    // A page OUTSIDE the key's grant, journaled since January. The key's own page
+    // is journaled from March.
+    const { rows: modelRows } = await testDb!.pool.query<{ model_id: string }>(
+      "select model_id from pages where id = $1",
+      [pageId],
+    );
+    const ungranted = await createFanslyPage(testDb!.db, {
+      modelId: Number(modelRows[0]!.model_id),
+      label: "lora-9",
+    });
+    const ungrantedPageId = ungranted!.id;
+    await insertObservation(ungrantedPageId, "2026-01-05T00:00:00Z", "ungranted-january");
+    await insertObservation(pageId, "2026-03-04T00:00:00Z", "granted-march");
+    await setConfigOverride(testDb!.db, {
+      key: "agentObservationsEnabled",
+      value: "true",
+      userId: null,
+      groupId: randomUUID(),
+    });
+
+    // A window that STARTS before the granted floor and reaches past it.
+    const spanning = await agentGet(
+      "/api/v1/agent/observations?from=2026-02-01T00:00:00Z&to=2026-04-01T00:00:00Z",
+    );
+    expect(spanning.statusCode).toBe(200);
+    const body = spanning.json();
+    // The floor is MARCH — this key's own. January belongs to a page it cannot see
+    // and used to supply the minimum, which hid the pre-capture condition.
+    expect(body.capture.planes.find((plane: { plane: string }) =>
+      plane.plane === "observations").captureFloor).toEqual({
+      at: "2026-03-04T00:00:00.000Z",
+      kind: "oldest_stored_row",
+    });
+    // THE AGREEMENT: the window reaches back before that floor, so the answer
+    // carries the gap and the blocker instead of leaving February to read as empty.
+    expect(body.capture.gaps.some((gap: { kind: string; to: string | null }) =>
+      gap.kind === "before_capture_floor" && gap.to === "2026-03-04T00:00:00.000Z")).toBe(true);
+    expect(body.conclusion.blockers).toContain("window_before_capture_floor");
+    expect(body.items).toHaveLength(1);
+
+    // A window entirely before the floor is empty BY CONSTRUCTION, and says so.
+    const before = await agentGet(
+      "/api/v1/agent/observations?from=2026-02-01T00:00:00Z&to=2026-02-28T00:00:00Z",
+    );
+    const beforeBody = before.json();
+    expect(beforeBody.items).toEqual([]);
+    expect(beforeBody.capture.planes.find((plane: { plane: string }) =>
+      plane.plane === "observations")).toMatchObject({
+      state: "not_read",
+      reason: "journal_starts_after_window",
+    });
+    expect(beforeBody.capture.gaps.some((gap: { kind: string }) =>
+      gap.kind === "before_capture_floor")).toBe(true);
+  });
+
+  it("P1-6 #8 names a conversation's floor even when the window starts AFTER it", async () => {
+    // The archive for this thread starts at 10:00 on 1 March; the window starts an
+    // hour later, so there is no gap to carry the date. The floor is still a known
+    // fact and must still be in the answer.
+    const response = await agentGet(
+      "/api/v1/agent/coverage?from=2026-03-01T11:00:00Z&to=2026-03-10T00:00:00Z",
+    );
+    expect(response.statusCode).toBe(200);
+    const item = response.json().items[0];
+    expect(item.gaps).toEqual([]);
+    expect(item.planes.find((plane: { plane: string }) => plane.plane === "message_archive"))
+      .toMatchObject({
+        state: "read",
+        captureFloor: { at: "2026-03-01T10:00:00.000Z", kind: "oldest_stored_row" },
+      });
+  });
+
+  it("P1-7 a spent row budget is refused, never served one row at a time", async () => {
+    const owner = await createUser(testDb!.db, {
+      username: "owner-round3",
+      role: "owner",
+      passwordHash: null,
+    });
+    const token = `${AGENT_KEY_TOKEN_PREFIX}round3-two-row-budget`;
+    await insertAgentKey(testDb!.db, {
+      name: "two-rows",
+      keyPrefix: token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+      keyDigest: sha256Hex(token),
+      capabilities: ["read:messages"],
+      pageIds: [pageId],
+      dailyRequestBudget: 100,
+      dailyRowBudget: 2,
+      expiresAt: new Date(Date.now() + 30 * DAY_MS),
+      createdBy: owner?.id ?? null,
+    });
+    const tinyGet = (url: string) =>
+      server!.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}` } });
+
+    const first = await tinyGet(
+      `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages?${MARCH}&limit=200`,
+    );
+    expect(first.statusCode).toBe(200);
+    expect(first.json().items).toHaveLength(2);
+    expect(first.json().delivery.cappedBy).toBe("budget");
+
+    // Zero allowance USED to be raised back to one row, so a spent key kept being
+    // served forever, one row per request.
+    const second = await tinyGet(
+      `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages?${MARCH}&limit=200`,
+    );
+    expect(second.statusCode).toBe(429);
+    expect(second.json().error).toBe("agent_budget_exhausted");
+
+    const { rows } = await testDb!.pool.query<{ rows_returned: string }>(
+      "select rows_returned::text as rows_returned from agent_key_usage_daily",
+    );
+    // The DB-backed ceiling is a BOUND: nothing above it, ever.
+    expect(rows.every((row) => Number(row.rows_returned) <= 2)).toBe(true);
+  });
+
+  it("P2a page 2 of a traversal keeps page 1's page SIZE", async () => {
+    const first = (await agentGet(
+      `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages?${MARCH}&limit=1`,
+    )).json();
+    const second = await agentGet(
+      `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/messages`
+      + `?cursor=${encodeURIComponent(first.delivery.nextCursor)}`,
+    );
+    // A cursor request may not re-send `limit`, so the schema default (50) used to
+    // take over and the traversal changed shape after page 1.
+    expect(second.json().items).toHaveLength(1);
+    expect(second.json().delivery.nextCursor).not.toBeNull();
+  });
+
+  it("P2b observedRowFloor is the EARLIEST row returned, not the first one", async () => {
+    const response = await agentPost("/api/v1/agent/search/messages", {
+      q: "custom",
+      from: "2026-03-01T00:00:00Z",
+      to: "2026-03-10T00:00:00Z",
+    });
+    expect(response.statusCode).toBe(200);
+    // Hits are dated; a hardcoded null threw the diagnostic away.
+    expect(response.json().capture.observedRowFloor).toBe("2026-03-01T10:00:00.000Z");
+  });
+
+  it("P2d the reported search backend is the one that RAN", async () => {
+    await testDb!.pool.query("create extension if not exists pg_trgm");
+    await setConfigOverride(testDb!.db, {
+      key: "agentSearchBackend",
+      value: "fts_trgm",
+      userId: null,
+      groupId: randomUUID(),
+    });
+    const search = await agentPost("/api/v1/agent/search/messages", {
+      q: "custom",
+      from: "2026-03-01T00:00:00Z",
+      to: "2026-03-10T00:00:00Z",
+    });
+    // The extension is present and the flag asks for trigram, but no statement on
+    // this path uses one: the label follows the SQL, not the configuration.
+    expect(search.json().backend).toBe("fts");
+    expect((await agentGet("/api/v1/agent/capabilities")).json().contract.searchBackend)
+      .toBe("fts");
+  });
+});
+
+async function insertObservation(accountId: number, receivedAt: string, key: string) {
+  await testDb!.pool.query(
+    `insert into observations (source, producer, platform, account_id, kind, payload,
+       payload_hash, idempotency_key, received_at, parse_version)
+     values ('pull', 'fansly:rest', 'fansly', $1, 'dm_conversations', '{"items":[]}'::jsonb,
+       sha256(convert_to($2, 'UTF8')), $2, $3, 1)`,
+    [accountId, key, receivedAt],
+  );
+}
