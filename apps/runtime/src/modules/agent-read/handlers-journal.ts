@@ -8,6 +8,8 @@ import {
   type AgentCapability,
   type AgentDatasetQueryBody,
   type AgentDatasetQueryResponse,
+  type AgentFieldState,
+  type AgentIngestPath,
   type AgentObservationPayloadResponse,
   type AgentObservationsResponse,
 } from "@agency_hub_core/contracts";
@@ -595,6 +597,30 @@ export async function handleAgentDatasetQuery(
 
     const operationPlanes = operationPlanesFor(mapping.readPlanes, claimFields);
 
+    const floorAt = isoOrNull(result.captureFloorAt);
+    const gaps = floorAt !== null
+      && mapping.captureFloorPlane !== undefined
+      && Date.parse(from) < Date.parse(floorAt)
+      ? [{
+          kind: "before_capture_floor" as const,
+          from: null,
+          to: floorAt,
+          plane: mapping.captureFloorPlane as AgentDatasetQueryResponse["capture"]["gaps"][number]["plane"],
+          remedy: {
+            // V1 collection is incremental from the previously captured head.
+            // Re-running it can observe a newer prefix, but cannot extend the
+            // historical floor backwards. Advertising recapture here would
+            // send an operator to an action that cannot close this gap.
+            kind: "none" as const,
+            reason: "journal_before_capture_start" as const,
+          },
+        }]
+      : [];
+    const scopeFieldStates = computeScopeFieldStates({
+      fields: claimFields ?? [],
+      platforms: [page.platform as Platform],
+    });
+
     const hasMore = result.rows.length === limit;
     const last = result.rows.at(-1);
     const nextCursor = hasMore && last !== undefined
@@ -637,15 +663,15 @@ export async function handleAgentDatasetQuery(
       cursorCapable: true,
       frozenSnapshot,
       requestWindow: { from, to },
-      gaps: [],
-      scopeFieldStates: computeScopeFieldStates({
-        fields: claimFields ?? [],
-        platforms: [page.platform as Platform],
-      }),
+      gaps,
+      scopeFieldStates,
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
       observedRowFloor: observedRowFloorOf(result.rows.map((row) => row.occurredAt)),
-      captureFloor: { at: null, kind: "unknown" },
+      captureFloor: {
+        at: floorAt,
+        kind: floorAt === null ? "unknown" : "oldest_stored_row",
+      },
     });
 
     // A dataset the REGISTRY declares as carrying verbatim text is audited exactly
@@ -685,13 +711,16 @@ export async function handleAgentDatasetQuery(
         fanPlatformUserId: row.fanPlatformUserId,
         fields: Object.fromEntries(Object.entries(row.fields).map(([field, value]) => [
           field,
-          serializeDatasetValue(value),
+          serializeDatasetValue(
+            value,
+            (definition.fields as Readonly<Record<string, string>>)[field],
+          ),
         ])),
-        fieldStates: {},
+        fieldStates: datasetRowFieldStates(row.fields, scopeFieldStates),
         provenance: {
-          ingestPaths: ["unknown" as const],
-          convergence: "no_material_lane" as const,
-          observationRef: null,
+          ingestPaths: [row.ingestPath as AgentIngestPath],
+          convergence: row.convergence,
+          observationRef: row.observationRef,
         },
       })),
       predicates: buildPredicates([
@@ -731,7 +760,19 @@ export async function handleAgentDatasetQuery(
  * OVERFLOW GUARD rather than a bare `Number()`: a money path that silently stops
  * counting above 2^53 is the one conversion that must never be implicit.
  */
-function serializeDatasetValue(value: unknown): string | number | boolean | null | string[] {
+function serializeDatasetValue(
+  value: unknown,
+  kind: string | undefined,
+): string | number | boolean | null | string[] {
+  // Raw derived-table projections do not carry Drizzle column metadata, so pg
+  // may return timestamptz values as its display string instead of a Date. The
+  // dataset wire contract is RFC 3339 regardless of which mapping supplied it.
+  if (kind === "timestamp" && (value instanceof Date || typeof value === "string")) {
+    const instant = value instanceof Date ? value : new Date(value);
+    if (!Number.isNaN(instant.getTime())) {
+      return instant.toISOString();
+    }
+  }
   if (value instanceof Date) {
     return value.toISOString();
   }
@@ -748,4 +789,35 @@ function serializeDatasetValue(value: unknown): string | number | boolean | null
     return value;
   }
   return String(value);
+}
+
+/** Row states refine the scope-level capability without pretending that a null
+ * or empty value was present. Only claim fields physically carried by this
+ * dataset appear on the row; an unrelated claim remains blocked by its unread
+ * plane in the top-level evidence. */
+function datasetRowFieldStates(
+  fields: Readonly<Record<string, unknown>>,
+  scopeFieldStates: Readonly<Record<string, AgentFieldState>>,
+): Record<string, AgentFieldState> {
+  const result: Record<string, AgentFieldState> = {};
+  for (const [field, state] of Object.entries(scopeFieldStates)) {
+    if (!Object.hasOwn(fields, field)) {
+      continue;
+    }
+    const value = fields[field];
+    if (value === null) {
+      result[field] = {
+        state: "source_did_not_provide",
+        remedy: { kind: "none", reason: "no_remedy_exists" },
+      };
+    } else if (value === "") {
+      result[field] = {
+        state: "observed_empty",
+        remedy: { kind: "none", reason: "no_remedy_exists" },
+      };
+    } else {
+      result[field] = state;
+    }
+  }
+  return result;
 }

@@ -22,7 +22,7 @@ export const WORKBOARD_CLASSIFY_QUEUE = "workboard.classify-closing";
 // Stage 23: debounced per-fan recompute driven by domain events.
 export const WORKBOARD_FAN_RECOMPUTE_QUEUE = "workboard.fan-recompute";
 
-export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages";
+export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages" | "posts";
 
 export interface SyncPageExecutePayload {
   platformAccountId: number;

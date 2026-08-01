@@ -166,6 +166,173 @@ export type StrictOfapiMessagePage =
     reason: string;
   };
 
+export type StrictOfapiPostPage =
+  | {
+    accepted: true;
+    rawCount: number;
+    items: Record<string, unknown>[];
+    acceptedItems: Record<string, unknown>[];
+    boundaryDuplicateCount: number;
+    explicitlyIrrelevantCount: number;
+    headPostId: string | null;
+    tailPostId: string | null;
+    stopReached: boolean;
+    hasNextPage: boolean;
+  }
+  | {
+    accepted: false;
+    rawCount: number;
+    rejectedCount: number;
+    reason: string;
+  };
+
+/**
+ * Strict background-capture contract for GET /api/{account}/posts.
+ *
+ * The vendored OFAPI OpenAPI snapshot specifies `{data: {list, hasMore}}`
+ * with offset pagination. Valid-but-different JSON is captured and parked,
+ * never interpreted as an empty page. Adjacent requests deliberately overlap
+ * by one post id so offset movement cannot silently create a gap while new
+ * posts are being published.
+ */
+export function parseStrictOfapiPostPage(
+  body: unknown,
+  input: {
+    requiredOverlapId?: string | null;
+    stopAtPostId?: string | null;
+    /** A prior-run anchor is fresh observed material and may carry an edit.
+     * A same-job verification stop was already accepted during the scan and
+     * must stay a boundary duplicate instead. Overlap always wins/excludes. */
+    acceptStopItem?: boolean;
+  } = {},
+): StrictOfapiPostPage {
+  const root = asRecord(body);
+  const data = asRecord(root?.data);
+  if (!root || !data || !Array.isArray(data.list)) {
+    return { accepted: false, rawCount: 0, rejectedCount: 1, reason: "data_list_missing" };
+  }
+  if (typeof data.hasMore !== "boolean") {
+    return {
+      accepted: false,
+      rawCount: data.list.length,
+      rejectedCount: 1,
+      reason: "has_more_missing",
+    };
+  }
+  for (const marker of ["headMarker", "tailMarker"] as const) {
+    const value = data[marker];
+    if (value !== undefined && value !== null && typeof value !== "string") {
+      return {
+        accepted: false,
+        rawCount: data.list.length,
+        rejectedCount: 1,
+        reason: `${marker}_invalid`,
+      };
+    }
+  }
+
+  const items: Record<string, unknown>[] = [];
+  const ids: string[] = [];
+  const seenIds = new Set<string>();
+  let previousPublishedAtMs: number | null = null;
+  for (const raw of data.list) {
+    const item = asRecord(raw);
+    const id = itemId(item?.id);
+    const postedAt = typeof item?.postedAt === "string"
+      ? new Date(item.postedAt)
+      : null;
+    const rawTextValid = item?.rawText === undefined || item.rawText === null ||
+      typeof item.rawText === "string";
+    const textValid = item?.text === undefined || item.text === null ||
+      typeof item.text === "string";
+    if (
+      !item ||
+      !id ||
+      !postedAt ||
+      Number.isNaN(postedAt.getTime()) ||
+      !rawTextValid ||
+      !textValid
+    ) {
+      return {
+        accepted: false,
+        rawCount: data.list.length,
+        rejectedCount: 1,
+        reason: "post_item_invalid",
+      };
+    }
+    if (seenIds.has(id)) {
+      return {
+        accepted: false,
+        rawCount: data.list.length,
+        rejectedCount: 1,
+        reason: "post_id_duplicate",
+      };
+    }
+    const publishedAtMs = postedAt.getTime();
+    if (previousPublishedAtMs !== null && publishedAtMs > previousPublishedAtMs) {
+      return {
+        accepted: false,
+        rawCount: data.list.length,
+        rejectedCount: 1,
+        reason: "post_order_invalid",
+      };
+    }
+    previousPublishedAtMs = publishedAtMs;
+    seenIds.add(id);
+    ids.push(id);
+    items.push(item);
+  }
+
+  const requiredOverlapId = input.requiredOverlapId ?? null;
+  const overlapIndex = requiredOverlapId === null ? -1 : ids.indexOf(requiredOverlapId);
+  if (requiredOverlapId !== null && overlapIndex < 0) {
+    return {
+      accepted: false,
+      rawCount: items.length,
+      rejectedCount: 1,
+      reason: "page_overlap_missing",
+    };
+  }
+  const stopAtPostId = input.stopAtPostId ?? null;
+  const stopIndex = stopAtPostId === null ? -1 : ids.indexOf(stopAtPostId);
+  const stopReached = stopIndex >= 0;
+  const acceptStopItem = input.acceptStopItem !== false;
+
+  const boundaryIndices = new Set<number>();
+  if (overlapIndex >= 0) boundaryIndices.add(overlapIndex);
+  if (stopIndex >= 0 && !acceptStopItem) boundaryIndices.add(stopIndex);
+  const acceptedItems = items.filter((_item, index) =>
+    !boundaryIndices.has(index) &&
+    (stopIndex < 0 || index < stopIndex || (acceptStopItem && index === stopIndex))
+  );
+  const boundaryDuplicateCount = boundaryIndices.size;
+  const explicitlyIrrelevantCount = stopIndex < 0
+    ? 0
+    : items.filter((_item, index) => index > stopIndex && !boundaryIndices.has(index)).length;
+
+  if (data.hasMore && !stopReached && items.length < 2) {
+    return {
+      accepted: false,
+      rawCount: items.length,
+      rejectedCount: 1,
+      reason: "has_more_without_overlap_progress",
+    };
+  }
+
+  return {
+    accepted: true,
+    rawCount: items.length,
+    items,
+    acceptedItems,
+    boundaryDuplicateCount,
+    explicitlyIrrelevantCount,
+    headPostId: ids[0] ?? null,
+    tailPostId: ids.at(-1) ?? null,
+    stopReached,
+    hasNextPage: data.hasMore,
+  };
+}
+
 /**
  * The certificate boundary for List Messages. Only the production-proven
  * `{data: [...], _pagination: {next_page: string|null}}` shape is accepted.

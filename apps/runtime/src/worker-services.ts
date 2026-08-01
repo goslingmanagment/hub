@@ -48,6 +48,7 @@ import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
 import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
+import { runCreatorPostsProjection } from "./services/projections/creator-posts.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
   runWorkboardFanRecompute,
@@ -363,6 +364,14 @@ export async function startWorkerServices(
       }
     } catch (error) {
       app.logger.error({ error }, "Fan-earnings projection sweep failed");
+    }
+    try {
+      const posts = await runCreatorPostsProjection(app);
+      if (posts.upserted > 0) {
+        app.logger.info(posts, "Creator-posts projection sweep complete");
+      }
+    } catch (error) {
+      app.logger.error({ error }, "Creator-posts projection sweep failed");
     }
     try {
       const acceptance = await runAiAcceptanceProjection(app);

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
+  appendProjectionOnlyDomainEvents,
   blockOfapiCaptureJobLease,
   captureOfapiAttemptResponse,
   getComposableOfapiMessageCoverageProof,
@@ -21,10 +22,16 @@ import {
 import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { clampDraftOccurredAt } from "./canonicalize-driver.ts";
+import {
+  buildPostObservedDraft,
+  POSTS_CANONICALIZER_VERSION,
+} from "./canonicalize/posts.ts";
 import {
   capturePayloadResponse,
   parseOfapiJsonBytes,
   parseStrictOfapiMessagePage,
+  parseStrictOfapiPostPage,
 } from "./ofapi-capture-contract.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { OFAPI_CAPTURE_MATERIALIZER_VERSION } from "./ofapi-capture-materialization.ts";
@@ -66,6 +73,11 @@ interface ChatPaginateTarget {
   limit: number;
 }
 
+interface PostPaginateTarget {
+  anchorPostId: string | null;
+  limit: number;
+}
+
 function stringField(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -94,6 +106,20 @@ function parseTarget(job: OfapiCaptureJobRecord): ChatPaginateTarget | null {
   return { chatId, frozenHeadId, anchorMessageId, limit };
 }
 
+function parsePostTarget(job: OfapiCaptureJobRecord): PostPaginateTarget | null {
+  const anchorPostId = job.target.anchorPostId === null || job.target.anchorPostId === undefined
+    ? null
+    : stringField(job.target.anchorPostId);
+  const rawLimit = job.target.limit;
+  const limit = typeof rawLimit === "number" && Number.isInteger(rawLimit)
+    ? Math.max(2, Math.min(100, rawLimit))
+    : 100;
+  if (!job.maxPages || !job.maxCalls || !job.maxCredits) {
+    return null;
+  }
+  return { anchorPostId, limit };
+}
+
 function cursorField(job: OfapiCaptureJobRecord, field: string) {
   return stringField(job.cursor?.[field]);
 }
@@ -113,6 +139,116 @@ function cursorPages(job: OfapiCaptureJobRecord) {
 function cursorCount(job: OfapiCaptureJobRecord, field: string) {
   const value = job.cursor?.[field];
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function postCursorPhase(job: OfapiCaptureJobRecord): "scan" | "verify_head" {
+  return job.cursor?.phase === "verify_head" ? "verify_head" : "scan";
+}
+
+function postCursorOffset(job: OfapiCaptureJobRecord) {
+  const offset = job.cursor?.offset;
+  return typeof offset === "number" && Number.isInteger(offset) && offset >= 0 ? offset : 0;
+}
+
+interface PostProtocolBudget {
+  remainingPages: number;
+  remainingCalls: number;
+}
+
+/**
+ * Remaining protocol budget after the response currently being parsed.
+ * `attemptCount` already includes that response's admitted request, while
+ * `pages` includes that response's accepted provider page. Keeping both on
+ * the same "after current page" boundary avoids the classic one-call
+ * off-by-one at the scan -> verify_head transition.
+ */
+function postProtocolBudget(
+  job: OfapiCaptureJobRecord,
+  pages: number,
+): PostProtocolBudget {
+  return {
+    remainingPages: Math.max(0, (job.maxPages ?? 0) - pages),
+    remainingCalls: Math.max(0, (job.maxCalls ?? 0) - job.attemptCount),
+  };
+}
+
+function hasPostProtocolAllowance(
+  budget: PostProtocolBudget,
+  futureRequests: number,
+) {
+  return budget.remainingPages >= futureRequests &&
+    budget.remainingCalls >= futureRequests;
+}
+
+function postTerminalFact(
+  job: OfapiCaptureJobRecord,
+  input: {
+    headPostId: string | null;
+    oldestPostId: string | null;
+    anchorPostId: string | null;
+    anchorReached: boolean;
+    verification: "anchor" | "exhaustion" | "empty";
+    pages: number;
+    rawCount: number;
+    acceptedCount: number;
+    boundaryDuplicateCount: number;
+    explicitlyIrrelevantCount: number;
+    observationId: number;
+    observationReceivedAt: Date;
+  },
+) {
+  const payload = {
+    scope: "posts",
+    source: "pagination_complete",
+    jobId: job.id,
+    pageId: job.pageId,
+    ofapiAccountId: job.ofapiAccountId,
+    target: job.target,
+    targetHash: job.targetHash,
+    range: {
+      headPostId: input.headPostId,
+      oldestPostId: input.oldestPostId,
+      anchorPostId: input.anchorPostId,
+    },
+    evidence: {
+      anchorReached: input.anchorReached,
+      verification: input.verification,
+      pages: input.pages,
+      lastPageObservation: {
+        id: input.observationId,
+        receivedAt: input.observationReceivedAt.toISOString(),
+      },
+    },
+    counts: {
+      raw: input.rawCount,
+      accepted: input.acceptedCount,
+      boundaryDuplicate: input.boundaryDuplicateCount,
+      explicitlyIrrelevant: input.explicitlyIrrelevantCount,
+      rejected: 0,
+    },
+    sourceContractVersion: job.sourceContractVersion,
+    parserVersion: job.parserVersion,
+  };
+  return {
+    producer: "ofapi-mirror-background",
+    kind: "ofapi.posts_capture_completed.v1",
+    payload,
+    payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+    idempotencyKey: `posts-capture-complete:${job.id}:${job.targetHash}`,
+    observedAt: new Date(),
+    result: {
+      headPostId: input.headPostId,
+      oldestPostId: input.oldestPostId,
+      anchorPostId: input.anchorPostId,
+      anchorReached: input.anchorReached,
+      verification: input.verification,
+      pages: input.pages,
+      rawCount: input.rawCount,
+      acceptedCount: input.acceptedCount,
+      boundaryDuplicateCount: input.boundaryDuplicateCount,
+      explicitlyIrrelevantCount: input.explicitlyIrrelevantCount,
+    },
+  };
 }
 
 function advancePageChainHash(
@@ -296,6 +432,395 @@ function terminalFact(
   };
 }
 
+async function parseCapturedPostJob(
+  app: AppContext,
+  job: OfapiCaptureJobRecord,
+  observation: NonNullable<Awaited<ReturnType<typeof loadOfapiCaptureObservation>>>,
+  captured: NonNullable<ReturnType<typeof capturePayloadResponse>>,
+  parsedJson: ReturnType<typeof parseOfapiJsonBytes>,
+): Promise<OfapiCaptureChunkResult> {
+  if (!job.leaseToken) {
+    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+  }
+  const settle = (input: Omit<Parameters<typeof settleOfapiCaptureParse>[1],
+    "jobId" | "attemptId" | "leaseToken" | "observationId" | "observationReceivedAt"
+  >) => settleOfapiCaptureParse(app.db, {
+    jobId: job.id,
+    attemptId: observation.attemptId!,
+    leaseToken: job.leaseToken!,
+    observationId: observation.id,
+    observationReceivedAt: observation.receivedAt,
+    ...input,
+  });
+  const lostFence = (): OfapiCaptureChunkResult => {
+    app.logger.warn(
+      { jobId: job.id, observationId: observation.id },
+      "OFAPI posts parse settlement lost its job fence",
+    );
+    return { kind: "failed", pageId: job.pageId, jobId: job.id } satisfies OfapiCaptureChunkResult;
+  };
+
+  if (captured.status < 200 || captured.status >= 300) {
+    const retryable = captured.status === 429 || captured.status >= 500;
+    const settled = await settle({
+      parserOutcome: "intentional_noop",
+      rawCount: 0,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: retryable
+        ? {
+          kind: "retry",
+          nextAttemptAt: retryAfter(captured.headers, new Date()),
+          reasonCode: captured.status === 429 ? "rate_limited" : "vendor_5xx",
+        }
+        : {
+          kind: "blocked",
+          reasonCode: captured.status === 404 ? "posts_not_found" : `http_${captured.status}`,
+        },
+    });
+    if (!settled) return lostFence();
+    return {
+      kind: retryable ? "failed" : "blocked",
+      pageId: job.pageId,
+      jobId: job.id,
+    };
+  }
+
+  const target = parsePostTarget(job);
+  if (!parsedJson.validJson || !target) {
+    const settled = await settle({
+      parserOutcome: "contract_rejected",
+      rawCount: 0,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 1,
+      disposition: {
+        kind: "blocked",
+        reasonCode: !target ? "target_invalid" : "invalid_json",
+      },
+    });
+    return settled
+      ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+      : lostFence();
+  }
+
+  const phase = postCursorPhase(job);
+  const requiredOverlapId = cursorField(job, "overlapPostId");
+  const capturedHeadPostId = cursorField(job, "capturedHeadPostId");
+  const verificationHeadPostId = cursorField(job, "verificationHeadPostId");
+  const stopAtPostId = phase === "scan" ? target.anchorPostId : capturedHeadPostId;
+  const page = parseStrictOfapiPostPage(parsedJson.body, {
+    requiredOverlapId,
+    stopAtPostId,
+    // A previous-run anchor is a fresh sighting: include it so edits and
+    // lastObservedAt advance. The verify_head stop belongs to this same job's
+    // scan and is therefore accounting-only duplicate evidence.
+    acceptStopItem: phase === "scan" && target.anchorPostId !== null,
+  });
+  if (!page.accepted) {
+    const settled = await settle({
+      parserOutcome: "contract_rejected",
+      rawCount: page.rawCount,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: page.rejectedCount,
+      disposition: {
+        kind: "blocked",
+        reasonCode: "contract_rejected",
+        reasonMessage: page.reason,
+      },
+    });
+    return settled
+      ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+      : lostFence();
+  }
+
+  // Materialize only after the durable bytes pass the strict provider
+  // contract. This commit happens before parse settlement; a crash in between
+  // is safe because both the post events and their projection checkpoint are
+  // keyed by the immutable capture observation id and therefore dedupe on the
+  // retry. The inverse ordering (settle first) could strand creator_posts.
+  try {
+    const materializedAt = new Date();
+    // `acceptedItems` is the only material seam. Excluded boundaries (the
+    // required overlap and a same-job verification stop) were already
+    // materialized; a prior-run stop anchor may be accepted to observe edits.
+    // Rows after either kind of stop are stale for this bounded capture.
+    // Appending `items` here would turn accounting-only boundary evidence into
+    // fresh post observations and could regress a current projection head.
+    const drafts = page.acceptedItems.map((item) => {
+      const postId = typeof item.id === "string" || typeof item.id === "number"
+        ? String(item.id)
+        : (() => { throw new Error("Strict OFAPI post lost its id"); })();
+      const text = typeof item.rawText === "string"
+        ? item.rawText
+        : typeof item.text === "string" ? item.text : "";
+      const media = Array.isArray(item.media)
+        ? item.media
+        : Array.isArray(item.attachments) ? item.attachments : [];
+      return clampDraftOccurredAt(buildPostObservedDraft({
+        platform: "onlyfans",
+        observationId: observation.id,
+        postId,
+        // Agent postText is provider-verbatim. Do not apply the DM text
+        // normalizer: HTML, entities, whitespace and line endings are data.
+        textPlain: text,
+        publishedAt: new Date(item.postedAt as string),
+        observedAt: observation.receivedAt,
+        attachmentCount: media.length,
+      }), observation.receivedAt, materializedAt);
+    });
+    await appendProjectionOnlyDomainEvents(
+      app.db,
+      job.pageId,
+      drafts.map((draft) => ({ ...draft, observationId: observation.id })),
+      {
+        occurredAt: observation.receivedAt,
+        observationId: observation.id,
+        dedupKey: `projection-checkpoint:ofapi-posts:v${POSTS_CANONICALIZER_VERSION}:${observation.id}`,
+        data: {
+          profile: "creator_posts_v1",
+          originClass: "ofapi_capture",
+        },
+      },
+    );
+    await markObservationParsed(app.db, {
+      observationId: observation.id,
+      receivedAt: observation.receivedAt,
+      parseVersion: POSTS_CANONICALIZER_VERSION,
+    });
+  } catch (error) {
+    app.logger.error(
+      { err: error, jobId: job.id, observationId: observation.id },
+      "Captured OFAPI posts page could not be materialized",
+    );
+    const settled = await settle({
+      parserOutcome: "failed",
+      rawCount: page.rawCount,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 0,
+      disposition: {
+        kind: "parser_failed",
+        reasonMessage: error instanceof Error ? error.message : String(error),
+      },
+    });
+    return settled
+      ? { kind: "failed", pageId: job.pageId, jobId: job.id }
+      : lostFence();
+  }
+
+  const pages = cursorPages(job) + 1;
+  const rawCount = cursorCount(job, "rawCount") + page.rawCount;
+  const acceptedCount = job.acceptedItems + page.acceptedItems.length;
+  const boundaryDuplicateCount = cursorCount(job, "boundaryDuplicateCount") +
+    page.boundaryDuplicateCount;
+  const explicitlyIrrelevantCount = cursorCount(job, "explicitlyIrrelevantCount") +
+    page.explicitlyIrrelevantCount;
+  const protocolBudget = postProtocolBudget(job, pages);
+  const pageAcceptedTail = page.acceptedItems.at(-1)?.id;
+  const acceptedTailId = typeof pageAcceptedTail === "string" || typeof pageAcceptedTail === "number"
+    ? String(pageAcceptedTail)
+    : null;
+  const nextCapturedHeadPostId = capturedHeadPostId ?? page.headPostId;
+  const nextVerificationHeadPostId = phase === "verify_head"
+    ? verificationHeadPostId ?? page.headPostId
+    : verificationHeadPostId;
+  const previousOldestPostId = cursorField(job, "oldestPostId");
+  const nextOldestPostId = phase === "scan"
+    ? acceptedTailId ?? previousOldestPostId
+    : previousOldestPostId;
+
+  const complete = async (
+    verification: "anchor" | "exhaustion" | "empty",
+    anchorReached: boolean,
+  ): Promise<OfapiCaptureChunkResult> => {
+    const terminal = postTerminalFact(job, {
+      headPostId: nextVerificationHeadPostId ?? nextCapturedHeadPostId,
+      oldestPostId: nextOldestPostId,
+      anchorPostId: target.anchorPostId,
+      anchorReached,
+      verification,
+      pages,
+      rawCount,
+      acceptedCount,
+      boundaryDuplicateCount,
+      explicitlyIrrelevantCount,
+      observationId: observation.id,
+      observationReceivedAt: observation.receivedAt,
+    });
+    const { result, ...terminalObservation } = terminal;
+    const settled = await settle({
+      parserOutcome: "accepted",
+      rawCount: page.rawCount,
+      acceptedCount: page.acceptedItems.length,
+      boundaryDuplicateCount: page.boundaryDuplicateCount,
+      explicitlyIrrelevantCount: page.explicitlyIrrelevantCount,
+      rejectedCount: 0,
+      disposition: {
+        kind: "complete",
+        terminal: terminalObservation,
+        result,
+      },
+    });
+    return settled
+      ? { kind: "success", pageId: job.pageId, jobId: job.id }
+      : lostFence();
+  };
+
+  if (page.stopReached) {
+    return complete("anchor", true);
+  }
+  if (!page.hasNextPage) {
+    if (phase === "verify_head" || target.anchorPostId !== null) {
+      // The frozen anchor may have been deleted. A one-row-overlapped walk to
+      // vendor EOF is still a complete capture of the current timeline.
+      return complete(page.rawCount === 0 ? "empty" : "exhaustion", false);
+    }
+    if (nextCapturedHeadPostId === null) {
+      return complete("empty", false);
+    }
+
+    // Initial backfill reached EOF. Rewalk the head until it overlaps the
+    // frozen first post (or reaches EOF) so inserts during offset pagination
+    // cannot leave an unobserved newer prefix.
+    // A non-empty initial scan is complete only after at least one fresh head
+    // request. Refuse to enter verify_head unless both independent caps still
+    // admit that request; otherwise the job would become ready but could never
+    // produce its required terminal verification.
+    if (!hasPostProtocolAllowance(protocolBudget, 1)) {
+      const settled = await settle({
+        parserOutcome: "accepted",
+        rawCount: page.rawCount,
+        acceptedCount: page.acceptedItems.length,
+        boundaryDuplicateCount: page.boundaryDuplicateCount,
+        explicitlyIrrelevantCount: page.explicitlyIrrelevantCount,
+        rejectedCount: 0,
+        disposition: {
+          kind: "blocked",
+          reasonCode: "head_verification_budget_exhausted",
+          reasonMessage:
+            `Initial posts scan reached EOF with ${protocolBudget.remainingPages} page and ` +
+            `${protocolBudget.remainingCalls} call slots remaining; head verification needs one`,
+        },
+      });
+      return settled
+        ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+        : lostFence();
+    }
+
+    const settled = await settle({
+      parserOutcome: "accepted",
+      rawCount: page.rawCount,
+      acceptedCount: page.acceptedItems.length,
+      boundaryDuplicateCount: page.boundaryDuplicateCount,
+      explicitlyIrrelevantCount: page.explicitlyIrrelevantCount,
+      rejectedCount: 0,
+      disposition: {
+        kind: "progress",
+        cursor: {
+          phase: "verify_head",
+          offset: 0,
+          pages,
+          rawCount,
+          boundaryDuplicateCount,
+          explicitlyIrrelevantCount,
+          capturedHeadPostId: nextCapturedHeadPostId,
+          oldestPostId: nextOldestPostId,
+        },
+        acceptedItems: page.acceptedItems.length,
+      },
+    });
+    return settled
+      ? { kind: "success", pageId: job.pageId, jobId: job.id }
+      : lostFence();
+  }
+
+  if (page.tailPostId === null) {
+    const settled = await settle({
+      parserOutcome: "contract_rejected",
+      rawCount: page.rawCount,
+      acceptedCount: 0,
+      boundaryDuplicateCount: 0,
+      explicitlyIrrelevantCount: 0,
+      rejectedCount: 1,
+      disposition: {
+        kind: "blocked",
+        reasonCode: "contract_rejected",
+        reasonMessage: "hasMore page has no tail post id",
+      },
+    });
+    return settled
+      ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+      : lostFence();
+  }
+
+  // Continuing an initial scan needs TWO future requests in the worst case:
+  // one more scan page (which may be EOF) and the mandatory head verification
+  // page after it. Incremental and verify_head walks need only their next page.
+  const requiredFutureRequests = phase === "scan" && target.anchorPostId === null ? 2 : 1;
+  if (!hasPostProtocolAllowance(protocolBudget, requiredFutureRequests)) {
+    const settled = await settle({
+      parserOutcome: "accepted",
+      rawCount: page.rawCount,
+      acceptedCount: page.acceptedItems.length,
+      boundaryDuplicateCount: page.boundaryDuplicateCount,
+      explicitlyIrrelevantCount: page.explicitlyIrrelevantCount,
+      rejectedCount: 0,
+      disposition: {
+        kind: "blocked",
+        reasonCode: phase === "scan" && target.anchorPostId === null
+          ? "head_verification_budget_exhausted"
+          : "post_pagination_budget_exhausted",
+        reasonMessage:
+          `Posts ${phase} needs ${requiredFutureRequests} future request slot(s), but ` +
+          `${protocolBudget.remainingPages} page and ${protocolBudget.remainingCalls} call slots remain`,
+      },
+    });
+    return settled
+      ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+      : lostFence();
+  }
+
+  const offset = postCursorOffset(job);
+  const settled = await settle({
+    parserOutcome: "accepted",
+    rawCount: page.rawCount,
+    acceptedCount: page.acceptedItems.length,
+    boundaryDuplicateCount: page.boundaryDuplicateCount,
+    explicitlyIrrelevantCount: page.explicitlyIrrelevantCount,
+    rejectedCount: 0,
+    disposition: {
+      kind: "progress",
+      cursor: {
+        phase,
+        // Deliberately overlap the previous tail by one row. New head inserts
+        // may create duplicates but cannot silently shift the older frontier.
+        offset: offset + page.rawCount - 1,
+        overlapPostId: page.tailPostId,
+        pages,
+        rawCount,
+        boundaryDuplicateCount,
+        explicitlyIrrelevantCount,
+        capturedHeadPostId: nextCapturedHeadPostId,
+        ...(nextVerificationHeadPostId
+          ? { verificationHeadPostId: nextVerificationHeadPostId }
+          : {}),
+        ...(nextOldestPostId ? { oldestPostId: nextOldestPostId } : {}),
+      },
+      acceptedItems: page.acceptedItems.length,
+    },
+  });
+  return settled
+    ? { kind: "success", pageId: job.pageId, jobId: job.id }
+    : lostFence();
+}
+
 async function parseCapturedJob(
   app: AppContext,
   job: OfapiCaptureJobRecord,
@@ -360,6 +885,9 @@ async function parseCapturedJob(
       parsedJson,
     });
     return { kind: result, pageId: job.pageId, jobId: job.id };
+  }
+  if (job.kind === "post_paginate") {
+    return parseCapturedPostJob(app, job, observation, captured, parsedJson);
   }
   if (job.kind !== "chat_paginate") {
     await blockJob(app, job, "unsupported_job_kind", `Unsupported job kind ${job.kind}`);
@@ -715,6 +1243,20 @@ export async function executeOfapiCaptureJobChunk(
     reservedCredits: 1;
     timeoutMs: number;
     maxResponseBytes: number;
+  } | {
+    operation: "ofapi_capture_posts";
+    endpointClass: "posts";
+    method: "GET";
+    requestSemantics: "safe_read";
+    pathname: string;
+    query: Record<string, string>;
+    bodyBytes: null;
+    contentType: null;
+    request: Record<string, unknown>;
+    observationKind: "ofapi.posts_page.v1";
+    reservedCredits: 1;
+    timeoutMs: number;
+    maxResponseBytes: number;
   } | null = null;
   if (job.kind === "chat_paginate") {
     const target = parseTarget(job);
@@ -746,6 +1288,37 @@ export async function executeOfapiCaptureJobChunk(
         maxResponseBytes: 10 * 1024 * 1024,
       };
     }
+  } else if (job.kind === "post_paginate") {
+    const target = parsePostTarget(job);
+    if (target) {
+      const offset = postCursorOffset(job);
+      const query = {
+        limit: String(target.limit),
+        offset: String(offset),
+        order: "publish_date",
+        sort: "desc",
+      };
+      requestPlan = {
+        operation: "ofapi_capture_posts",
+        endpointClass: "posts",
+        method: "GET",
+        requestSemantics: "safe_read",
+        pathname: `/${encodeURIComponent(job.ofapiAccountId)}/posts`,
+        query,
+        bodyBytes: null,
+        contentType: null,
+        request: {
+          query,
+          phase: postCursorPhase(job),
+          requiredOverlapId: cursorField(job, "overlapPostId"),
+          anchorPostId: target.anchorPostId,
+        },
+        observationKind: "ofapi.posts_page.v1",
+        reservedCredits: 1,
+        timeoutMs: 65_000,
+        maxResponseBytes: 10 * 1024 * 1024,
+      };
+    }
   } else if (job.kind === "account_export") {
     requestPlan = buildOfapiExportQuoteRequest(job);
   }
@@ -753,7 +1326,7 @@ export async function executeOfapiCaptureJobChunk(
     await blockJob(
       app,
       job,
-      job.kind === "chat_paginate" || job.kind === "account_export"
+      job.kind === "chat_paginate" || job.kind === "post_paginate" || job.kind === "account_export"
         ? "target_invalid"
         : "unsupported_job_kind",
       `Capture request cannot be built for ${job.kind}`,

@@ -12,6 +12,7 @@ import {
   agentDatasetRequiredCapabilities,
   type AgentCapabilitiesResponse,
   type AgentCapability,
+  type AgentDataset,
   type AgentPersonResponse,
   type AgentResolveBody,
   type AgentResolveResponse,
@@ -70,6 +71,22 @@ import { agentConcurrencyInUse } from "./budget.ts";
  */
 
 const EMPTY_GAPS = [] as const;
+
+/** Runtime catalog facts that are deliberately not part of the dataset wire
+ * vocabulary. Posts are queryable on both platform implementations, but their
+ * collectors roll out paused and capture is page-specific; the global catalog
+ * must therefore stay `unknown` instead of advertising `present` before a page
+ * has established its own floor. The page-scoped dataset response carries the
+ * actual witness and floor. */
+const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
+  platforms: Platform[];
+  captureState: AgentCapabilitiesResponse["datasets"][number]["captureState"];
+}>> = {
+  posts: {
+    platforms: ["fansly", "onlyfans"],
+    captureState: "unknown",
+  },
+};
 
 type MoneyByType = NonNullable<AgentPersonResponse["money"]>["byType"][number];
 
@@ -149,22 +166,25 @@ export async function handleAgentCapabilities(
 
     const granted = new Set(principal.capabilities);
     const datasets: AgentCapabilitiesResponse["datasets"] = [
-      ...AGENT_DATASET_NAMES.map((dataset) => ({
-        dataset,
-        availability: "available" as const,
-        platforms: ["fansly", "onlyfans"] as Platform[],
-        moneyBearing: AGENT_DATASETS[dataset].moneyBearing,
-        requiredCapabilities: [...agentDatasetRequiredCapabilities(dataset)],
-        captureState: "present" as const,
-        fields: agentDatasetFields(dataset).map((field) => ({
-          field: field.field,
-          // The registry calls it `kind`; the wire calls it `type`.
-          type: field.kind,
-          filterable: field.filterable,
-          sortable: field.sortable,
-        })),
-        defaultSort: AGENT_DATASETS[dataset].defaultSort.field,
-      })),
+      ...AGENT_DATASET_NAMES.map((dataset) => {
+        const runtime = AGENT_DATASET_CATALOG_OVERRIDES[dataset];
+        return {
+          dataset,
+          availability: "available" as const,
+          platforms: runtime?.platforms ?? (["fansly", "onlyfans"] as Platform[]),
+          moneyBearing: AGENT_DATASETS[dataset].moneyBearing,
+          requiredCapabilities: [...agentDatasetRequiredCapabilities(dataset)],
+          captureState: runtime?.captureState ?? ("present" as const),
+          fields: agentDatasetFields(dataset).map((field) => ({
+            field: field.field,
+            // The registry calls it `kind`; the wire calls it `type`.
+            type: field.kind,
+            filterable: field.filterable,
+            sortable: field.sortable,
+          })),
+          defaultSort: AGENT_DATASETS[dataset].defaultSort.field,
+        };
+      }),
       // The catalog NAMES its holes. A dataset omitted because it has no serving
       // table would be indistinguishable from one that does not exist, which is
       // the whole failure mode this plane exists to remove.

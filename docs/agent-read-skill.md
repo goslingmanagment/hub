@@ -378,6 +378,36 @@ hub dataset --page-label lora-2 --dataset transactions \
   --sort occurredAt:desc --limit 100
 ```
 
+Creator posts use the same operation and command; there is no second posts API.
+The row carries `postRef`, verbatim `postText`, `publishedAt`, observation bounds
+and `attachmentCount`. Because the text is verbatim, the key needs BOTH
+`read:datasets` and `read:messages`, and every successful read is audited. List a
+page's posts newest first:
+
+```
+hub dataset --page-label lora-2 --dataset posts \
+  --from 2026-07-01T00:00:00Z --to 2026-08-01T00:00:00Z \
+  --sort publishedAt:desc --limit 100 \
+  --claim-field postRef --claim-field postText
+```
+
+Read one known post through an exact registry filter:
+
+```
+hub dataset --page-label lora-2 --dataset posts \
+  --from 2026-07-01T00:00:00Z --to 2026-08-01T00:00:00Z \
+  --filter postRef:eq:post-42 --claim-field postText
+```
+
+V1 has no post full-text search. Do not imitate one with `contains` or ILIKE;
+those operators are deliberately absent. `hub capabilities` reports the global
+posts capture state as `unknown` because collectors roll out per page. The
+page-scoped response's `creator_posts.captureFloor`, gaps and blockers are the
+evidence to use for that page. A `before_capture_floor` gap has remedy
+`none: journal_before_capture_start`: v1 collection is incremental from the
+stored head, so simply running it again cannot recover history from before the
+first capture.
+
 For a page total, do NOT paginate and add row responses. Ask the same operation
 for one summary. It returns no `items`; `summary.groups[]` keeps currencies
 separate and gives `transactionCount`, `grossMills`, `netMills` and nullable

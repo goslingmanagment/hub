@@ -57,7 +57,7 @@ export type AgentClaimClassDefinition = {
 };
 
 /**
- * The six claim classes. A request may declare `claim.fields`; each field maps
+ * The seven claim classes. A request may declare `claim.fields`; each field maps
  * to exactly one class (pinned by test), and the conclusion is evaluated against
  * the union of the REQUIRED planes of the named fields.
  *
@@ -149,6 +149,19 @@ export const AGENT_CLAIM_CLASSES = {
       summaryText: { required: ["fan_summaries"] },
       profileBody: { required: ["fan_profiles"] },
       fanFlag: { required: ["fan_flags"] },
+    },
+  },
+  content: {
+    // The projection is authoritative for the current creator-post material;
+    // journal rows remain lineage evidence and are not re-read by dataset #10.
+    evidentiary: ["observations", "sync_raw_payloads"],
+    fields: {
+      postRef: { required: ["creator_posts"] },
+      postText: { required: ["creator_posts"] },
+      publishedAt: { required: ["creator_posts"] },
+      firstObservedAt: { required: ["creator_posts"] },
+      lastObservedAt: { required: ["creator_posts"] },
+      attachmentCount: { required: ["creator_posts"] },
     },
   },
 } as const satisfies Record<string, AgentClaimClassDefinition>;

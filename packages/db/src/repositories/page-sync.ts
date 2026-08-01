@@ -24,6 +24,7 @@ export const SYNC_STREAMS = [
   "dm_messages",
   "fan_earnings",
   "purchase_history",
+  "posts",
 ] as const;
 
 export type SyncStream = typeof SYNC_STREAMS[number];
@@ -223,6 +224,20 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 15 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // Creator posts ship as a durable but default-paused capture lane. Keep the
+  // stream out of block-domain policy until the per-page canary is explicitly
+  // opened; an inert rollout must not degrade existing page health.
+  posts: {
+    stream: "posts",
+    domain: "messages_history",
+    cadenceSeconds: 6 * 3600,
+    basePriority: 14,
+    streamIndex: 12,
+    defaultWorkClass: "history",
+    queueDelayThresholdMs: 90 * 60_000,
+    progressStallThresholdMs: 30 * 60_000,
+    freshnessSlaSeconds: null,
+  },
 };
 
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
@@ -286,6 +301,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     dm_messages: 25,
     fan_earnings: 20,
     purchase_history: 19,
+    posts: 18,
   },
   recovery: {
     light: 70,
@@ -299,6 +315,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     dm_messages: 35,
     fan_earnings: 30,
     purchase_history: 29,
+    posts: 28,
   },
   anomaly: {
     light: 70,
@@ -312,6 +329,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     dm_messages: 35,
     fan_earnings: 30,
     purchase_history: 29,
+    posts: 28,
   },
   manual: {
     light: 100,
@@ -325,6 +343,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     dm_messages: 65,
     fan_earnings: 60,
     purchase_history: 59,
+    posts: 58,
   },
   onboarding: {
     light: 100,
@@ -338,6 +357,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     dm_messages: 65,
     fan_earnings: 60,
     purchase_history: 59,
+    posts: 58,
   },
   reset: {
     light: 100,
@@ -351,6 +371,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     dm_messages: 65,
     fan_earnings: 60,
     purchase_history: 59,
+    posts: 58,
   },
 };
 
@@ -496,6 +517,7 @@ function streamOrderSql(columnName: string) {
       when 'dm_messages' then ${SYNC_STREAM_POLICY.dm_messages.streamIndex}
       when 'fan_earnings' then ${SYNC_STREAM_POLICY.fan_earnings.streamIndex}
       when 'purchase_history' then ${SYNC_STREAM_POLICY.purchase_history.streamIndex}
+      when 'posts' then ${SYNC_STREAM_POLICY.posts.streamIndex}
       else 999
     end
   `);
@@ -515,6 +537,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'dm_messages' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].dm_messages}
       when 'fan_earnings' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].fan_earnings}
       when 'purchase_history' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].purchase_history}
+      when 'posts' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].posts}
       else 0
     end
   `;
@@ -613,6 +636,7 @@ export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): Sync
       "top_spenders",
       "subscribers",
       "dm_conversations",
+      "posts",
     ];
 }
 
@@ -787,6 +811,34 @@ function buildSeedPageSyncState(
   const requestSource: SyncRequestSource | null = shouldRecover
     ? (onboarding ? "onboarding" : "recovery")
     : null;
+
+  if (stream === "posts") {
+    return {
+      pageId: page.id,
+      stream,
+      status: "paused",
+      requestSeq: 0,
+      appliedSeq: 0,
+      requestSource: null,
+      dispatchSource: "scheduled",
+      requestPayload: {},
+      requestedAt: null,
+      finishedAt: null,
+      succeededAt: null,
+      cadenceSeconds: policy.cadenceSeconds,
+      slotOffsetSeconds,
+      lastScheduledSlot: currentSlot,
+      blockerKind: null,
+      blockerCode: null,
+      blockerMessage: null,
+      blockedAt: null,
+      workClass: policy.defaultWorkClass,
+      progress: {},
+      consecutiveFailures: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
 
   return {
     pageId: page.id,

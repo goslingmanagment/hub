@@ -217,6 +217,23 @@ async function seedFixture() {
        '2026-02-01T00:00:00Z')`,
     [fanId, pageId],
   );
+
+  // Creator posts are a current-head projection over captured observations.
+  // Two publication dates make the default ordering and the page-wide capture
+  // floor independently visible: an exact-ref filter must not move the floor.
+  await pool.query(
+    `insert into creator_posts (account_id, platform, platform_post_id, text_plain,
+       published_at, first_observed_at, last_observed_at, content_hash,
+       attachment_count, source_event_id, source_observation_id, source_account_seq)
+     values
+       ($1, 'fansly', 'post-old', 'first captured creator post',
+        '2026-02-10T09:00:00Z', '2026-03-01T00:00:00Z', '2026-03-02T00:00:00Z',
+        repeat('a', 64), 1, 9101, $2, 101),
+       ($1, 'fansly', 'post-new', 'newer creator post with two attachments',
+        '2026-03-05T12:30:00Z', '2026-03-06T00:00:00Z', '2026-03-07T00:00:00Z',
+        repeat('b', 64), 2, 9102, $3, 102)`,
+    [pageId, 9001, 9002],
+  );
 }
 
 function agentGet(url: string) {
@@ -470,6 +487,141 @@ describe("[sync-critical] agent read plane operations", () => {
       expect(response.statusCode, dataset).toBe(200);
       expect(response.json().datasetRef, dataset).toBe(dataset);
     }
+  });
+
+  it("#10 serves creator posts with honest capture and lineage", async () => {
+    const { rows: postObservationRows } = await testDb!.pool.query<{ id: string }>(
+      `insert into observations (source, producer, platform, account_id, kind, payload,
+         payload_hash, idempotency_key, observed_at, received_at, parse_version)
+       values
+         ('pull', 'fansly:rest', 'fansly', $1, 'posts',
+          '{"id":"post-old"}'::jsonb, sha256(convert_to('post-old', 'UTF8')),
+          'agent-post-old', '2026-03-01T00:00:00Z', '2026-03-01T00:00:01Z', 1),
+         ('pull', 'fansly:rest', 'fansly', $1, 'posts',
+          '{"id":"post-new"}'::jsonb, sha256(convert_to('post-new', 'UTF8')),
+          'agent-post-new', '2026-03-06T00:00:00Z', '2026-03-06T00:00:01Z', 1)
+       returning id::text`,
+      [pageId],
+    );
+    await testDb!.pool.query(
+      `update creator_posts
+       set source_observation_id = case platform_post_id
+         when 'post-old' then $2::bigint else $3::bigint end
+       where account_id = $1`,
+      [pageId, postObservationRows[0]!.id, postObservationRows[1]!.id],
+    );
+
+    const request = {
+      from: "2026-02-01T00:00:00Z",
+      to: "2026-04-01T00:00:00Z",
+      claim: {
+        fields: [
+          "postRef",
+          "postText",
+          "publishedAt",
+          "firstObservedAt",
+          "lastObservedAt",
+          "attachmentCount",
+        ],
+        targets: "all_in_scope",
+      },
+    };
+    const response = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/posts/query",
+      request,
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+
+    // Default order is publication time descending; post copy is served
+    // verbatim through the existing generic dataset operation.
+    expect(body.items.map((item: { fields: { postRef: string } }) => item.fields.postRef))
+      .toEqual(["post-new", "post-old"]);
+    expect(Object.keys(body.items[0].fields).sort()).toEqual([
+      "attachmentCount",
+      "firstObservedAt",
+      "lastObservedAt",
+      "platform",
+      "postRef",
+      "postText",
+      "publishedAt",
+    ]);
+    expect(body.items[0].fields).toMatchObject({
+      platform: "fansly",
+      postRef: "post-new",
+      postText: "newer creator post with two attachments",
+      publishedAt: "2026-03-05T12:30:00.000Z",
+      firstObservedAt: "2026-03-06T00:00:00.000Z",
+      lastObservedAt: "2026-03-07T00:00:00.000Z",
+      attachmentCount: 2,
+    });
+    expect(body.items[0].fieldStates.postText.state).toBe("present");
+    expect(body.items[0].provenance).toMatchObject({
+      ingestPaths: ["fansly_pull"],
+      convergence: "converging",
+    });
+    expect(body.items[0].provenance.observationRef).toEqual(expect.any(Number));
+
+    const postsPlane = body.capture.planes.find(
+      (plane: { plane: string }) => plane.plane === "creator_posts",
+    );
+    expect(postsPlane).toMatchObject({
+      state: "read",
+      captureFloor: {
+        at: "2026-02-10T09:00:00.000Z",
+        kind: "oldest_stored_row",
+      },
+    });
+    expect(body.capture.gaps).toContainEqual(expect.objectContaining({
+      kind: "before_capture_floor",
+      plane: "creator_posts",
+      to: "2026-02-10T09:00:00.000Z",
+      remedy: {
+        kind: "none",
+        reason: "journal_before_capture_start",
+      },
+    }));
+    expect(body.conclusion.blockers).toContain("window_before_capture_floor");
+
+    // Filtering to one exact ref changes the result set, never the evidence
+    // about when this page's post capture begins. Selecting the oldest row keeps
+    // observedRowFloor equal too, so the full capture envelope is byte-identical.
+    const exact = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/posts/query",
+      {
+        ...request,
+        filters: [{ field: "postRef", op: "eq", value: "post-old" }],
+      },
+    );
+    expect(exact.statusCode).toBe(200);
+    const exactBody = exact.json();
+    expect(exactBody.items.map((item: { fields: { postRef: string } }) => item.fields.postRef))
+      .toEqual(["post-old"]);
+    expect(JSON.stringify(exactBody.capture)).toBe(JSON.stringify(body.capture));
+
+    const catalog = (await agentGet("/api/v1/agent/capabilities")).json();
+    expect(catalog.datasets.find((entry: { dataset: string }) => entry.dataset === "posts"))
+      .toMatchObject({
+        availability: "available",
+        platforms: ["fansly", "onlyfans"],
+        moneyBearing: false,
+        requiredCapabilities: ["read:datasets", "read:messages"],
+        captureState: "unknown",
+        defaultSort: "publishedAt",
+      });
+    expect(catalog.planes.find((plane: { plane: string }) => plane.plane === "creator_posts"))
+      .toMatchObject({ enabled: true, textSearchIndexed: false });
+
+    const audits = await testDb!.pool.query<{
+      verbatim_text: boolean;
+      request_summary: Record<string, unknown>;
+    }>(
+      `select verbatim_text, request_summary from agent_read_audit
+       where operation = 'agentDatasetQuery' order by id`,
+    );
+    expect(audits.rows).toHaveLength(2);
+    expect(audits.rows.every((row) => row.verbatim_text)).toBe(true);
+    expect(audits.rows.every((row) => row.request_summary.datasetRef === "posts")).toBe(true);
   });
 
   it("#10 summarizes matching Hub transactions in one exhausted read", async () => {

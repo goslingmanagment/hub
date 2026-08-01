@@ -23,6 +23,7 @@ export interface CanonicalEventDraft {
   conversationRef?: string | null;
   messageRef?: string | null;
   transactionRef?: string | null;
+  postRef?: string | null;
   data: Record<string, unknown>;
   schemaVersion: number;
   dedupKey: string;

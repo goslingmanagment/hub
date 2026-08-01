@@ -333,6 +333,7 @@ describe("agent read plane: the B2 window/cursor law", () => {
   it("only AVAILABLE datasets are addressable; planned ones are a boundary 400", () => {
     expect(agentDatasetEnum.options).not.toContain("purchase_history");
     expect(agentDatasetEnum.options).not.toContain("fan_earnings");
+    expect(agentDatasetEnum.options).toContain("posts");
   });
 });
 
@@ -393,6 +394,7 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
         .toBe(carriesText);
     }
     expect(agentDatasetRequiredCapabilities("fan_notes")).toContain("read:messages");
+    expect(agentDatasetRequiredCapabilities("posts")).toEqual(["read:datasets", "read:messages"]);
     expect(agentDatasetRequiredCapabilities("dm_threads")).not.toContain("read:messages");
   });
 });

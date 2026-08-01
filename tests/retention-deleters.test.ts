@@ -28,6 +28,7 @@ const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/services/domain-events-stream.ts",
   "apps/runtime/src/services/events-stream.ts",
   "apps/runtime/src/services/projections/fan-earnings.ts",
+  "apps/runtime/src/services/projections/creator-posts.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
   "apps/runtime/src/services/sync/rate-limiter.ts",

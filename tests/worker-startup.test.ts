@@ -105,6 +105,10 @@ const fanEarningsMocks = vi.hoisted(() => ({
   runFanEarningsProjection: vi.fn(),
 }));
 
+const creatorPostsMocks = vi.hoisted(() => ({
+  runCreatorPostsProjection: vi.fn(),
+}));
+
 const aiAcceptanceMocks = vi.hoisted(() => ({
   runAiAcceptanceProjection: vi.fn(),
 }));
@@ -131,6 +135,7 @@ vi.mock(
   () => coverageProjectionMocks,
 );
 vi.mock("../apps/runtime/src/services/projections/fan-earnings.ts", () => fanEarningsMocks);
+vi.mock("../apps/runtime/src/services/projections/creator-posts.ts", () => creatorPostsMocks);
 vi.mock("../apps/runtime/src/services/projections/ai-acceptance.ts", () => aiAcceptanceMocks);
 vi.mock("../apps/runtime/src/services/ofapi-chargebacks-sync.ts", () => ({
   OFAPI_CHARGEBACKS_RECONCILE_QUEUE: "ofapi.chargebacks.reconcile",
@@ -263,6 +268,7 @@ describe("worker startup", () => {
     messageArchiveMocks.runMessageArchiveProjection.mockReset();
     coverageProjectionMocks.runOfapiMessageCoverageProjection.mockReset();
     fanEarningsMocks.runFanEarningsProjection.mockReset();
+    creatorPostsMocks.runCreatorPostsProjection.mockReset();
     aiAcceptanceMocks.runAiAcceptanceProjection.mockReset();
 
     dbMocks.closeOrphanedSyncRuns.mockResolvedValue({
@@ -464,11 +470,13 @@ describe("worker startup", () => {
       new Error("poison coverage fact"),
     );
     fanEarningsMocks.runFanEarningsProjection.mockResolvedValue({ upserted: 1 });
+    creatorPostsMocks.runCreatorPostsProjection.mockResolvedValue({ upserted: 1 });
     aiAcceptanceMocks.runAiAcceptanceProjection.mockResolvedValue({ projected: 1 });
 
     const runtime = await startWorkerServices(app as never, boss as never);
     await expect(getMessageArchiveSweepHandler(boss)()).resolves.toBeUndefined();
     expect(fanEarningsMocks.runFanEarningsProjection).toHaveBeenCalledTimes(1);
+    expect(creatorPostsMocks.runCreatorPostsProjection).toHaveBeenCalledTimes(1);
     expect(aiAcceptanceMocks.runAiAcceptanceProjection).toHaveBeenCalledTimes(1);
     expect(app.logger.error).toHaveBeenCalledWith(
       { error: expect.any(Error) },

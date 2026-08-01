@@ -29,6 +29,10 @@ import {
   type ExecutorRequestContext,
   type StreamChunkResult,
 } from "../services/sync/executor-handlers.ts";
+import {
+  fanslyPostsChunk,
+  onlyfansPostsChunk,
+} from "../services/sync/posts.ts";
 
 // Kernel Stage 18: the two platform adapters, assembled in the app layer
 // (pull handlers need AppContext/executor types — platform-core stays
@@ -59,7 +63,7 @@ export type ExecutorPullHandler = (
  * sync-all must not fire the heavy crawls). Always a subset of
  * capabilities.streams (pinned by the registry suite). A scope absent from
  * the map is unsupported on that platform (resolveStreamsForScope throws). */
-export type SyncScopePolicy = Partial<Record<"light" | "followers" | "all" | "data" | "messages", CanonicalStream[]>>;
+export type SyncScopePolicy = Partial<Record<"light" | "followers" | "all" | "data" | "messages" | "posts", CanonicalStream[]>>;
 
 export type AppPlatformAdapter = PlatformAdapter<ExecutorPullHandler> & {
   syncScopes: SyncScopePolicy;
@@ -78,6 +82,7 @@ const FANSLY_STREAMS: CanonicalStream[] = [
   "dm_messages",
   "fan_earnings",
   "purchase_history",
+  "posts",
 ];
 
 /** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
@@ -88,6 +93,7 @@ const ONLYFANS_STREAMS: CanonicalStream[] = [
   "top_spenders",
   "subscribers",
   "dm_conversations",
+  "posts",
 ];
 
 // The per-platform pull maps route straight to the split handler halves —
@@ -103,6 +109,7 @@ const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   dm_messages: fanslyDmMessagesChunk,
   fan_earnings: executeFanEarningsChunk,
   purchase_history: executePurchaseHistoryChunk,
+  posts: fanslyPostsChunk,
 };
 
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
@@ -112,6 +119,7 @@ const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   top_spenders: onlyfansTopSpendersChunk,
   subscribers: onlyfansSubscribersChunk,
   dm_conversations: onlyfansDmConversationsChunk,
+  posts: onlyfansPostsChunk,
 };
 
 export const fanslyPlatformAdapter: AppPlatformAdapter = {
@@ -127,6 +135,7 @@ export const fanslyPlatformAdapter: AppPlatformAdapter = {
   syncScopes: {
     light: ["light"],
     followers: ["followers"],
+    posts: ["posts"],
     data: ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"],
     messages: ["dm_conversations", "dm_messages"],
     all: [
@@ -167,6 +176,7 @@ export const onlyfansPlatformAdapter: AppPlatformAdapter = {
   },
   syncScopes: {
     light: ["light", "transactions", "fan_identities"],
+    posts: ["posts"],
     data: ["light", "transactions", "fan_identities", "top_spenders", "subscribers"],
     messages: ["dm_conversations"],
     all: [

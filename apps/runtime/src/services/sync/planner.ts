@@ -20,6 +20,7 @@ import { pageSyncDependencyInput } from "./dependencies.ts";
 import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
 import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
 import { pauseDisabledOnlyFansTopSpendersForAllPages } from "./onlyfans-top-spenders.ts";
+import { pauseIneligibleOnlyFansPostsForAllPages } from "./posts.ts";
 import { reconcileFanslyBulkStreamScheduling } from "./fansly-stream-scheduling.ts";
 
 const INACTIVE_SYNC_RUN_THRESHOLD_MS = 90 * 1000;
@@ -76,6 +77,12 @@ export async function runSyncPlannerCycle(
     app.logger.warn({
       pausedOnlyFansTopSpenderPages,
     }, "Paused OnlyFans top spenders because ONLYFANS_TOP_SPENDERS_ENABLED is false");
+  }
+  const pausedOnlyFansPostsPages = await pauseIneligibleOnlyFansPostsForAllPages(app, now);
+  if (pausedOnlyFansPostsPages > 0) {
+    app.logger.warn({
+      pausedOnlyFansPostsPages,
+    }, "Paused OnlyFans posts because background capture is disabled or the page is unmapped");
   }
   await scheduleDuePageSync(app.db, { now, ...dependencyInput });
 

@@ -1836,11 +1836,16 @@ export function buildProgram() {
   program
     .command("projection:rebuild")
     .description("Stage 10/W10: rebuild a projection from the domain-event ledger "
-      + "(fan_earnings_stats = truncate scope + replay; message_archive = shadow build, never in-place)")
-    .argument("<projection>", "projection name (fan_earnings_stats | message_archive)")
+      + "(creator_posts/fan_earnings_stats = truncate scope + replay; "
+      + "message_archive = shadow build, never in-place)")
+    .argument("<projection>", "projection name (creator_posts | fan_earnings_stats | message_archive)")
     .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
     .action(async (projection, options) => {
-      if (projection !== "message_archive" && projection !== "fan_earnings_stats") {
+      if (
+        projection !== "message_archive"
+        && projection !== "fan_earnings_stats"
+        && projection !== "creator_posts"
+      ) {
         throw new Error(`Unknown projection: ${projection}`);
       }
       const app = await createAppContext();
@@ -1866,7 +1871,10 @@ export function buildProgram() {
           );
           return;
         }
-        const result = await rebuildFanEarningsProjection(app, scope);
+        const result = projection === "creator_posts"
+          ? await (await import("./services/projections/creator-posts.ts"))
+            .rebuildCreatorPostsProjection(app, scope)
+          : await rebuildFanEarningsProjection(app, scope);
         console.log(JSON.stringify(result));
       } finally {
         await app.close();
@@ -2099,7 +2107,7 @@ export function buildProgram() {
 
   sync
     .option("--page <label>")
-    .option("--scope <scope>", "light|followers|all", "all")
+    .option("--scope <scope>", "light|followers|data|messages|posts|all", "all")
     .option("--transactions-start <iso>", "OnlyFans-only manual rescan start", parseDateOption)
     .option("--no-wait", "queue the sync and return without waiting")
     .action(async (options) => {
@@ -2109,7 +2117,7 @@ export function buildProgram() {
 
       const app = await createAppContext();
       try {
-        if (options.scope === "followers" && options.transactionsStart) {
+        if (options.transactionsStart && options.scope !== "light" && options.scope !== "all") {
           throw new Error("--transactions-start is only supported with light or all sync scopes");
         }
 

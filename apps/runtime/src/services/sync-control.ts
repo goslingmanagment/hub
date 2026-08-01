@@ -6,6 +6,7 @@ import {
   listPageSyncStates,
   listPlatformAccounts,
   requestPageSync as requestPageSyncRows,
+  resumePageSync,
   resolvePageSyncPriority,
   type SyncRequestSource,
   type SyncStream,
@@ -30,6 +31,12 @@ import {
   ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
   pauseDisabledOnlyFansDmPollingForPage,
 } from "./sync/onlyfans-dm-polling.ts";
+import { BadRequestError } from "./errors.ts";
+import {
+  getOnlyFansPostsCaptureIneligibility,
+  pauseIneligibleOnlyFansPostsForPage,
+  PostsCaptureConfigurationError,
+} from "./sync/posts.ts";
 
 export interface RequestedSyncRequest {
   stream: SyncStream;
@@ -66,6 +73,16 @@ export async function requestPageSync(
     throw new Error(`Page not found for label "${input.pageLabel}"`);
   }
 
+  if (input.scope === "posts") {
+    if (input.reason !== "manual") {
+      throw new BadRequestError("The posts sync scope is an explicit per-page operator action");
+    }
+    const ineligibility = getOnlyFansPostsCaptureIneligibility(app.config, storedPage.page);
+    if (ineligibility !== null) {
+      throw new BadRequestError(new PostsCaptureConfigurationError(ineligibility).message);
+    }
+  }
+
   const requestedStreams = resolveStreamsForScope(storedPage.page.platform, input.scope);
   const streams = filterOnlyFansTopSpendersStreams(
     storedPage.page.platform,
@@ -94,6 +111,7 @@ export async function requestPageSync(
     await pauseDisabledOnlyFansDmPollingForPage(app, storedPage.page.id, now);
     await pauseDisabledOnlyFansAudienceForPage(app, storedPage.page.id, now);
     await pauseDisabledOnlyFansTopSpendersForPage(app, storedPage.page.id, now);
+    await pauseIneligibleOnlyFansPostsForPage(app, storedPage.page.id, now);
   }
 
   if (streams.length === 0) {
@@ -123,6 +141,16 @@ export async function requestPageSync(
     now,
     ...dependencyInput,
   });
+  if (input.scope === "posts") {
+    // requestPageSyncRows intentionally preserves a durable pause. The
+    // explicit operator-only scope first records the new generation, then
+    // opens just this page through the ordinary resume FSM.
+    await resumePageSync(app.db, {
+      pageId: storedPage.page.id,
+      streams,
+      now,
+    });
+  }
 
   const priority = streams.reduce((current, stream) => {
     return Math.max(current, resolvePageSyncPriority(stream, input.reason));
@@ -149,6 +177,9 @@ export async function requestAllPagesSync(
     reason: SyncRequestSource;
   },
 ) {
+  if (input.scope === "posts") {
+    throw new BadRequestError("The posts sync scope is per-page only");
+  }
   const pages = await listPlatformAccounts(app.db);
   const results = [] as Array<{
     pageLabel: string;

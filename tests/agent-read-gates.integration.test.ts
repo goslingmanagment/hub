@@ -702,7 +702,7 @@ describe("[sync-critical] agent read plane: review round 2", () => {
     expect(granted.state).toBe("read");
   });
 
-  it("P1-4 the notes dataset requires read:messages", async () => {
+  it("P1-4 verbatim datasets require read:messages", async () => {
     const window = { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" };
     // `read:datasets` alone used to read note bodies verbatim through this route,
     // while the very same material sat behind `read:messages` on #3.
@@ -716,6 +716,21 @@ describe("[sync-critical] agent read plane: review round 2", () => {
 
     expect((await post(
       "/api/v1/agent/pages/lora-2/datasets/fan_notes/query",
+      window,
+      MESSAGES_TOKEN,
+    )).statusCode).toBe(200);
+    // Creator post copy is the same disclosure class as notes and transcripts.
+    // The dataset is allowed to be empty here; the boundary gate must still run
+    // before SQL and require both read:datasets and read:messages.
+    const postsRefused = await post(
+      "/api/v1/agent/pages/lora-2/datasets/posts/query",
+      window,
+      NARROW_TOKEN,
+    );
+    expect(postsRefused.statusCode).toBe(403);
+    expect(postsRefused.json().error).toBe("agent_capability_missing");
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/posts/query",
       window,
       MESSAGES_TOKEN,
     )).statusCode).toBe(200);

@@ -160,7 +160,11 @@ export interface CanonicalizationRunOptions {
 const sweepCursors = new Map<string, number | null>();
 
 function sweepCursorKey(family: CanonicalizerFamily): string {
-  return `${family.source}:v${family.version}`;
+  // Multiple independently-versioned families may share one observation
+  // source (pull/posts is projection-only while the general pull family is
+  // deliverable). Include the declared kind lane so their sweep cursors can
+  // never alias when their version numbers happen to match.
+  return `${family.source}:${family.kinds?.join(",") ?? "*"}:v${family.version}`;
 }
 
 /** Test hook: start every family's next sweep from the signal head. */

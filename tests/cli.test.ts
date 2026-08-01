@@ -638,6 +638,52 @@ describe("CLI parsing", () => {
     expect(logSpy).toHaveBeenCalledWith("Queued followers sync for lora-main");
   });
 
+  it("activates the explicit per-page posts scope through the existing sync command", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    cliMocks.requestPageSync.mockResolvedValue({
+      page: { id: 55, label: "lora-main" },
+      requests: [{ stream: "posts", requestedSeq: 1 }],
+      wakeupId: "job-posts-55",
+    });
+
+    const program = buildProgram();
+    await program.parseAsync([
+      "sync",
+      "--page",
+      "lora-main",
+      "--scope",
+      "posts",
+      "--no-wait",
+    ], { from: "user" });
+
+    expect(cliMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      pageLabel: "lora-main",
+      scope: "posts",
+      reason: "manual",
+      onlyFansTransactionsStart: null,
+    });
+    expect(cliMocks.waitForRequestedSyncRequests).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith("Queued posts sync for lora-main");
+  });
+
+  it("rejects a transactions start window for the posts scope", async () => {
+    const program = buildProgram();
+
+    await expect(program.parseAsync([
+      "sync",
+      "--page",
+      "lora-main",
+      "--scope",
+      "posts",
+      "--transactions-start",
+      "2026-08-01T00:00:00Z",
+    ], { from: "user" })).rejects.toThrow(
+      "--transactions-start is only supported with light or all sync scopes",
+    );
+
+    expect(cliMocks.requestPageSync).not.toHaveBeenCalled();
+  });
+
   it("runs the Fansly page alias backfill with repeated page filters", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const program = buildProgram();

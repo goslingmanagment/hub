@@ -7183,7 +7183,8 @@
                               "campaign_snapshot",
                               "head_repair",
                               "account_export",
-                              "export_import"
+                              "export_import",
+                              "post_paginate"
                             ]
                           },
                           "state": {
@@ -13610,7 +13611,8 @@
                                     "followers",
                                     "all",
                                     "data",
-                                    "messages"
+                                    "messages",
+                                    "posts"
                                   ]
                                 }
                               },
@@ -15123,7 +15125,8 @@
                               "dm_messages",
                               "followers_reconcile",
                               "fan_earnings",
-                              "purchase_history"
+                              "purchase_history",
+                              "posts"
                             ]
                           },
                           "requestedSeq": {
@@ -15365,7 +15368,8 @@
                               "dm_messages",
                               "followers_reconcile",
                               "fan_earnings",
-                              "purchase_history"
+                              "purchase_history",
+                              "posts"
                             ]
                           },
                           "requestedSeq": {
@@ -15636,7 +15640,8 @@
                               "dm_messages",
                               "followers_reconcile",
                               "fan_earnings",
-                              "purchase_history"
+                              "purchase_history",
+                              "posts"
                             ]
                           },
                           "requestedSeq": {
@@ -15878,7 +15883,8 @@
                               "dm_messages",
                               "followers_reconcile",
                               "fan_earnings",
-                              "purchase_history"
+                              "purchase_history",
+                              "posts"
                             ]
                           },
                           "requestedSeq": {
@@ -16703,7 +16709,8 @@
                       "followers",
                       "all",
                       "data",
-                      "messages"
+                      "messages",
+                      "posts"
                     ]
                   }
                 },
@@ -16744,7 +16751,8 @@
                         "followers",
                         "all",
                         "data",
-                        "messages"
+                        "messages",
+                        "posts"
                       ]
                     }
                   },
@@ -16752,6 +16760,35 @@
                     "accepted",
                     "pageLabel",
                     "scope"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
                   ],
                   "additionalProperties": false
                 }
@@ -20934,7 +20971,8 @@
                                 "dm_messages",
                                 "followers_reconcile",
                                 "fan_earnings",
-                                "purchase_history"
+                                "purchase_history",
+                                "posts"
                               ]
                             },
                             "additionalProperties": {
@@ -20964,8 +21002,8 @@
                       }
                     },
                     "planes": {
-                      "minItems": 20,
-                      "maxItems": 20,
+                      "minItems": 21,
+                      "maxItems": 21,
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -20992,7 +21030,8 @@
                               "fan_notes",
                               "fan_summaries",
                               "fan_profiles",
-                              "fan_flags"
+                              "fan_flags",
+                              "creator_posts"
                             ]
                           },
                           "enabled": {
@@ -21029,6 +21068,7 @@
                                   "followers_daily",
                                   "fan_aliases",
                                   "fan_notes",
+                                  "posts",
                                   "sync_streams"
                                 ]
                               },
@@ -21037,7 +21077,6 @@
                                 "enum": [
                                   "purchase_history",
                                   "fan_earnings",
-                                  "posts",
                                   "vault_media",
                                   "stories",
                                   "notifications",
@@ -21237,7 +21276,13 @@
                           "noteText",
                           "summaryText",
                           "profileBody",
-                          "fanFlag"
+                          "fanFlag",
+                          "postRef",
+                          "postText",
+                          "publishedAt",
+                          "firstObservedAt",
+                          "lastObservedAt",
+                          "attachmentCount"
                         ]
                       }
                     },
@@ -21330,8 +21375,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -21360,7 +21405,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -21430,7 +21476,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -21541,7 +21588,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -21761,7 +21809,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -21862,7 +21911,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -22392,7 +22447,13 @@
                   "noteText",
                   "summaryText",
                   "profileBody",
-                  "fanFlag"
+                  "fanFlag",
+                  "postRef",
+                  "postText",
+                  "publishedAt",
+                  "firstObservedAt",
+                  "lastObservedAt",
+                  "attachmentCount"
                 ]
               }
             },
@@ -22480,8 +22541,8 @@
                             ]
                           },
                           "planes": {
-                            "minItems": 20,
-                            "maxItems": 20,
+                            "minItems": 21,
+                            "maxItems": 21,
                             "type": "array",
                             "items": {
                               "anyOf": [
@@ -22510,7 +22571,8 @@
                                         "fan_notes",
                                         "fan_summaries",
                                         "fan_profiles",
-                                        "fan_flags"
+                                        "fan_flags",
+                                        "creator_posts"
                                       ]
                                     },
                                     "state": {
@@ -22580,7 +22642,8 @@
                                         "fan_notes",
                                         "fan_summaries",
                                         "fan_profiles",
-                                        "fan_flags"
+                                        "fan_flags",
+                                        "creator_posts"
                                       ]
                                     },
                                     "state": {
@@ -22691,7 +22754,8 @@
                                     "fan_notes",
                                     "fan_summaries",
                                     "fan_profiles",
-                                    "fan_flags"
+                                    "fan_flags",
+                                    "creator_posts"
                                   ]
                                 },
                                 "remedy": {
@@ -22925,7 +22989,13 @@
                                 "noteText",
                                 "summaryText",
                                 "profileBody",
-                                "fanFlag"
+                                "fanFlag",
+                                "postRef",
+                                "postText",
+                                "publishedAt",
+                                "firstObservedAt",
+                                "lastObservedAt",
+                                "attachmentCount"
                               ]
                             },
                             "additionalProperties": {
@@ -23282,8 +23352,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -23312,7 +23382,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -23382,7 +23453,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -23493,7 +23565,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -23713,7 +23786,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -23814,7 +23888,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -24760,8 +24840,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -24790,7 +24870,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -24860,7 +24941,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -24971,7 +25053,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -25191,7 +25274,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -25292,7 +25376,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -26213,8 +26303,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -26243,7 +26333,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -26313,7 +26404,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -26424,7 +26516,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -26644,7 +26737,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -26745,7 +26839,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -27777,8 +27877,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -27807,7 +27907,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -27877,7 +27978,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -27988,7 +28090,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -28208,7 +28311,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -28309,7 +28413,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -29811,8 +29921,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -29841,7 +29951,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -29911,7 +30022,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -30022,7 +30134,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -30242,7 +30355,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -30343,7 +30457,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -30977,8 +31097,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -31007,7 +31127,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -31077,7 +31198,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -31188,7 +31310,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -31408,7 +31531,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -31509,7 +31633,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -32120,7 +32250,13 @@
                             "noteText",
                             "summaryText",
                             "profileBody",
-                            "fanFlag"
+                            "fanFlag",
+                            "postRef",
+                            "postText",
+                            "publishedAt",
+                            "firstObservedAt",
+                            "lastObservedAt",
+                            "attachmentCount"
                           ]
                         }
                       },
@@ -32166,6 +32302,7 @@
                 "followers_daily",
                 "fan_aliases",
                 "fan_notes",
+                "posts",
                 "sync_streams"
               ]
             },
@@ -32199,6 +32336,7 @@
                         "followers_daily",
                         "fan_aliases",
                         "fan_notes",
+                        "posts",
                         "sync_streams"
                       ]
                     },
@@ -32248,6 +32386,7 @@
                               "followers_daily",
                               "fan_aliases",
                               "fan_notes",
+                              "posts",
                               "sync_streams"
                             ]
                           },
@@ -32351,7 +32490,13 @@
                                 "noteText",
                                 "summaryText",
                                 "profileBody",
-                                "fanFlag"
+                                "fanFlag",
+                                "postRef",
+                                "postText",
+                                "publishedAt",
+                                "firstObservedAt",
+                                "lastObservedAt",
+                                "attachmentCount"
                               ]
                             },
                             "additionalProperties": {
@@ -32821,8 +32966,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -32851,7 +32996,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -32921,7 +33067,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -33032,7 +33179,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -33252,7 +33400,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -33353,7 +33502,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -33891,7 +34046,13 @@
                             "noteText",
                             "summaryText",
                             "profileBody",
-                            "fanFlag"
+                            "fanFlag",
+                            "postRef",
+                            "postText",
+                            "publishedAt",
+                            "firstObservedAt",
+                            "lastObservedAt",
+                            "attachmentCount"
                           ]
                         }
                       },
@@ -34446,8 +34607,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -34476,7 +34637,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -34546,7 +34708,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -34657,7 +34820,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -34877,7 +35041,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -34978,7 +35143,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -35606,7 +35777,13 @@
                   "noteText",
                   "summaryText",
                   "profileBody",
-                  "fanFlag"
+                  "fanFlag",
+                  "postRef",
+                  "postText",
+                  "publishedAt",
+                  "firstObservedAt",
+                  "lastObservedAt",
+                  "attachmentCount"
                 ]
               }
             },
@@ -36158,7 +36335,8 @@
                               "fan_notes",
                               "fan_summaries",
                               "fan_profiles",
-                              "fan_flags"
+                              "fan_flags",
+                              "creator_posts"
                             ]
                           },
                           "fieldStates": {
@@ -36204,7 +36382,13 @@
                                 "noteText",
                                 "summaryText",
                                 "profileBody",
-                                "fanFlag"
+                                "fanFlag",
+                                "postRef",
+                                "postText",
+                                "publishedAt",
+                                "firstObservedAt",
+                                "lastObservedAt",
+                                "attachmentCount"
                               ]
                             },
                             "additionalProperties": {
@@ -36626,8 +36810,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -36656,7 +36840,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -36726,7 +36911,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -36837,7 +37023,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -37057,7 +37244,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -37158,7 +37346,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -37647,7 +37841,13 @@
                   "noteText",
                   "summaryText",
                   "profileBody",
-                  "fanFlag"
+                  "fanFlag",
+                  "postRef",
+                  "postText",
+                  "publishedAt",
+                  "firstObservedAt",
+                  "lastObservedAt",
+                  "attachmentCount"
                 ]
               }
             },
@@ -38447,7 +38647,13 @@
                                     "noteText",
                                     "summaryText",
                                     "profileBody",
-                                    "fanFlag"
+                                    "fanFlag",
+                                    "postRef",
+                                    "postText",
+                                    "publishedAt",
+                                    "firstObservedAt",
+                                    "lastObservedAt",
+                                    "attachmentCount"
                                   ]
                                 },
                                 "additionalProperties": {
@@ -39133,7 +39339,13 @@
                           "noteText",
                           "summaryText",
                           "profileBody",
-                          "fanFlag"
+                          "fanFlag",
+                          "postRef",
+                          "postText",
+                          "publishedAt",
+                          "firstObservedAt",
+                          "lastObservedAt",
+                          "attachmentCount"
                         ]
                       },
                       "additionalProperties": {
@@ -39477,8 +39689,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -39507,7 +39719,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -39577,7 +39790,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -39688,7 +39902,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -39908,7 +40123,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -40009,7 +40225,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -40555,7 +40777,13 @@
                   "noteText",
                   "summaryText",
                   "profileBody",
-                  "fanFlag"
+                  "fanFlag",
+                  "postRef",
+                  "postText",
+                  "publishedAt",
+                  "firstObservedAt",
+                  "lastObservedAt",
+                  "attachmentCount"
                 ]
               }
             },
@@ -40926,7 +41154,13 @@
                                 "noteText",
                                 "summaryText",
                                 "profileBody",
-                                "fanFlag"
+                                "fanFlag",
+                                "postRef",
+                                "postText",
+                                "publishedAt",
+                                "firstObservedAt",
+                                "lastObservedAt",
+                                "attachmentCount"
                               ]
                             },
                             "additionalProperties": {
@@ -41335,8 +41569,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -41365,7 +41599,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -41435,7 +41670,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -41546,7 +41782,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -41766,7 +42003,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -41867,7 +42105,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -42382,7 +42626,13 @@
                             "noteText",
                             "summaryText",
                             "profileBody",
-                            "fanFlag"
+                            "fanFlag",
+                            "postRef",
+                            "postText",
+                            "publishedAt",
+                            "firstObservedAt",
+                            "lastObservedAt",
+                            "attachmentCount"
                           ]
                         }
                       },
@@ -42640,7 +42890,13 @@
                                       "noteText",
                                       "summaryText",
                                       "profileBody",
-                                      "fanFlag"
+                                      "fanFlag",
+                                      "postRef",
+                                      "postText",
+                                      "publishedAt",
+                                      "firstObservedAt",
+                                      "lastObservedAt",
+                                      "attachmentCount"
                                     ]
                                   },
                                   "additionalProperties": {
@@ -43015,8 +43271,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -43045,7 +43301,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -43115,7 +43372,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -43226,7 +43484,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -43446,7 +43705,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -43547,7 +43807,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -44100,7 +44366,13 @@
                             "noteText",
                             "summaryText",
                             "profileBody",
-                            "fanFlag"
+                            "fanFlag",
+                            "postRef",
+                            "postText",
+                            "publishedAt",
+                            "firstObservedAt",
+                            "lastObservedAt",
+                            "attachmentCount"
                           ]
                         }
                       },
@@ -44281,7 +44553,13 @@
                                 "noteText",
                                 "summaryText",
                                 "profileBody",
-                                "fanFlag"
+                                "fanFlag",
+                                "postRef",
+                                "postText",
+                                "publishedAt",
+                                "firstObservedAt",
+                                "lastObservedAt",
+                                "attachmentCount"
                               ]
                             },
                             "additionalProperties": {
@@ -44680,8 +44958,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -44710,7 +44988,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -44780,7 +45059,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -44891,7 +45171,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -45111,7 +45392,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -45212,7 +45494,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -45804,7 +46092,13 @@
                   "noteText",
                   "summaryText",
                   "profileBody",
-                  "fanFlag"
+                  "fanFlag",
+                  "postRef",
+                  "postText",
+                  "publishedAt",
+                  "firstObservedAt",
+                  "lastObservedAt",
+                  "attachmentCount"
                 ]
               }
             },
@@ -46260,7 +46554,13 @@
                                 "noteText",
                                 "summaryText",
                                 "profileBody",
-                                "fanFlag"
+                                "fanFlag",
+                                "postRef",
+                                "postText",
+                                "publishedAt",
+                                "firstObservedAt",
+                                "lastObservedAt",
+                                "attachmentCount"
                               ]
                             },
                             "additionalProperties": {
@@ -46671,8 +46971,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 20,
-                          "maxItems": 20,
+                          "minItems": 21,
+                          "maxItems": 21,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -46701,7 +47001,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -46771,7 +47072,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   "state": {
@@ -46882,7 +47184,8 @@
                                   "fan_notes",
                                   "fan_summaries",
                                   "fan_profiles",
-                                  "fan_flags"
+                                  "fan_flags",
+                                  "creator_posts"
                                 ]
                               },
                               "remedy": {
@@ -47102,7 +47405,8 @@
                                       "fan_notes",
                                       "fan_summaries",
                                       "fan_profiles",
-                                      "fan_flags"
+                                      "fan_flags",
+                                      "creator_posts"
                                     ]
                                   },
                                   {
@@ -47203,7 +47507,13 @@
                               "noteText",
                               "summaryText",
                               "profileBody",
-                              "fanFlag"
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount"
                             ]
                           },
                           "additionalProperties": {
@@ -67252,7 +67562,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -67308,7 +67619,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "role": {
@@ -67810,7 +68122,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -67866,7 +68179,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "role": {
@@ -68368,7 +68682,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -68424,7 +68739,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "role": {
@@ -68926,7 +69242,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -68982,7 +69299,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "role": {
@@ -69484,7 +69802,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69540,7 +69859,8 @@
                                           "dm_messages",
                                           "followers_reconcile",
                                           "fan_earnings",
-                                          "purchase_history"
+                                          "purchase_history",
+                                          "posts"
                                         ]
                                       },
                                       "role": {
@@ -70315,7 +70635,8 @@
                                   "dm_messages",
                                   "followers_reconcile",
                                   "fan_earnings",
-                                  "purchase_history"
+                                  "purchase_history",
+                                  "posts"
                                 ]
                               },
                               "cadenceSeconds": {
@@ -70371,7 +70692,8 @@
                                   "dm_messages",
                                   "followers_reconcile",
                                   "fan_earnings",
-                                  "purchase_history"
+                                  "purchase_history",
+                                  "posts"
                                 ]
                               },
                               "role": {
@@ -76753,7 +77075,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -76809,7 +77132,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "role": {
@@ -77311,7 +77635,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -77367,7 +77692,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "role": {
@@ -77869,7 +78195,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -77925,7 +78252,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "role": {
@@ -78427,7 +78755,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -78483,7 +78812,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "role": {
@@ -78985,7 +79315,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79041,7 +79372,8 @@
                                             "dm_messages",
                                             "followers_reconcile",
                                             "fan_earnings",
-                                            "purchase_history"
+                                            "purchase_history",
+                                            "posts"
                                           ]
                                         },
                                         "role": {
@@ -79425,7 +79757,8 @@
                           "dm_messages",
                           "followers_reconcile",
                           "fan_earnings",
-                          "purchase_history"
+                          "purchase_history",
+                          "posts"
                         ]
                       },
                       "operation": {
@@ -80221,7 +80554,8 @@
                                     "dm_messages",
                                     "followers_reconcile",
                                     "fan_earnings",
-                                    "purchase_history"
+                                    "purchase_history",
+                                    "posts"
                                   ]
                                 },
                                 "status": {
@@ -80905,7 +81239,8 @@
                               "dm_messages",
                               "followers_reconcile",
                               "fan_earnings",
-                              "purchase_history"
+                              "purchase_history",
+                              "posts"
                             ]
                           },
                           "eventType": {

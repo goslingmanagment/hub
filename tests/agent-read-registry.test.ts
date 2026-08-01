@@ -97,6 +97,8 @@ describe("agent read registry", () => {
     // A lifetime figure is not answered by a windowed transactions read.
     expect(requiredPlanesForClaimFields(["lifetimeSpendMills"])).toEqual(["fan_spend_lifetime"]);
     expect(requiredPlanesForClaimFields(["grossMills"])).toEqual(["transactions"]);
+    expect(requiredPlanesForClaimFields(["postRef", "postText", "publishedAt"]))
+      .toEqual(["creator_posts"]);
     // Union across fields of different classes.
     expect(requiredPlanesForClaimFields(["profileBody", "grossMills"]))
       .toEqual(["fan_profiles", "transactions"]);

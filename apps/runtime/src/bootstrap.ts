@@ -9,6 +9,7 @@ import type {
   FanslyGroupDetail,
   FanslyMessagesPageResponse,
   FanslyMessagingGroupsPageResponse,
+  FanslyPostsPageResponse,
   FanslyRequestContext,
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
@@ -70,6 +71,15 @@ export type AdapterLike = ProviderAdapter<
       before?: string | null;
     },
   ): Promise<FanslyMessagesPageResponse>;
+  getPostsPage(
+    context: FanslyRequestContext,
+    accountId: string,
+    params?: {
+      before?: string | null;
+      wallId?: string | null;
+      pageIndex?: number;
+    },
+  ): Promise<FanslyPostsPageResponse>;
   getEarningsAccountsPage(
     context: FanslyRequestContext,
     params: {
@@ -92,6 +102,7 @@ export type AdapterLike = ProviderAdapter<
       accountIds?: string | null;
       accountMediaId?: string | null;
       accountMediaBundleId?: string | null;
+      before?: string | null;
       limit?: number;
     },
   ): Promise<{ items: unknown; raw: unknown }>;

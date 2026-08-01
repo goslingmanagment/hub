@@ -89,6 +89,7 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "followers_reconcile",
   "fan_earnings",
   "purchase_history",
+  "posts",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
@@ -2467,7 +2468,8 @@ export type OfapiCaptureJobKind =
   | "campaign_snapshot"
   | "head_repair"
   | "account_export"
-  | "export_import";
+  | "export_import"
+  | "post_paginate";
 export type OfapiCaptureJobGoal =
   | "history_to_exhaustion"
   | "connect_to_anchor"
@@ -3212,6 +3214,7 @@ export const domainEvents = pgTable(
     conversationRef: text("conversation_ref"),
     messageRef: text("message_ref"),
     transactionRef: text("transaction_ref"),
+    postRef: text("post_ref"),
     data: jsonb("data").notNull(),
     schemaVersion: integer("schema_version").notNull(),
     observationId: bigint("observation_id", { mode: "number" }).notNull(),
@@ -3315,6 +3318,70 @@ export const messageArchive = pgTable(
     textSearchIdx: index("message_archive_text_search_idx").using(
       "gin",
       sql`to_tsvector('simple', ${table.textPlain})`,
+    ),
+  }),
+);
+
+// Creator-post current-head projection. Raw provider payloads remain in
+// observations and every material version remains in post.observed events;
+// this table is only the latest account/post view and is safe to rebuild.
+export const creatorPosts = pgTable(
+  "creator_posts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    accountId: bigint("account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    platformPostId: text("platform_post_id").notNull(),
+    textPlain: text("text_plain").default("").notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    attachmentCount: integer("attachment_count").default(0).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    accountPostUniq: unique("creator_posts_account_post_uniq").on(
+      table.accountId,
+      table.platformPostId,
+    ),
+    postIdCheck: check(
+      "creator_posts_post_id_check",
+      sql`length(${table.platformPostId}) > 0`,
+    ),
+    contentHashCheck: check(
+      "creator_posts_content_hash_check",
+      sql`${table.contentHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    attachmentCountCheck: check(
+      "creator_posts_attachment_count_check",
+      sql`${table.attachmentCount} >= 0`,
+    ),
+    sourceAccountSeqCheck: check(
+      "creator_posts_source_account_seq_check",
+      sql`${table.sourceAccountSeq} > 0`,
+    ),
+    observedOrderCheck: check(
+      "creator_posts_observed_order_check",
+      sql`${table.lastObservedAt} >= ${table.firstObservedAt}`,
+    ),
+    accountPublishedIdx: index("creator_posts_account_published_idx").on(
+      table.accountId,
+      table.publishedAt.desc(),
+      table.id.desc(),
+    ),
+    accountObservedIdx: index("creator_posts_account_observed_idx").on(
+      table.accountId,
+      table.lastObservedAt.desc(),
+      table.id.desc(),
     ),
   }),
 );

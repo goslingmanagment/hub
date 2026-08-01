@@ -231,6 +231,38 @@ export interface FanslyMessagesPageResponse {
   raw: FanslyMessagesPage;
 }
 
+/** Minimal stable fields observed on GET /timelinenew/{accountId}. Unknown
+ * additive provider fields stay present in the raw page captured by the sync
+ * layer; this interface intentionally does not try to model the large media
+ * aggregation family returned alongside posts. */
+export interface FanslyPost {
+  id: string;
+  accountId?: string;
+  content?: string | null;
+  createdAt?: number;
+  attachments?: Array<Record<string, unknown>>;
+  wallIds?: string[] | null;
+  pinned?: boolean | null;
+}
+
+export interface FanslyPostsPage {
+  posts: FanslyPost[];
+  [key: string]: unknown;
+}
+
+export interface FanslyPostsPageResponse {
+  items: FanslyPost[];
+  accountId: string;
+  wallId: string | null;
+  before: string;
+  nextBefore: string | null;
+  done: boolean;
+  /** False means the successful provider envelope drifted away from
+   * `{posts: [...]}`. Callers must capture raw before rejecting the page. */
+  contractAccepted: boolean;
+  raw: FanslyPostsPage | unknown;
+}
+
 export interface FanslyEarningsAccountsPageResponse {
   items: FanslyEarningsAccount[];
   after: Date | null;
