@@ -118,6 +118,18 @@
 - **Закрыть:** bounded streaming download, digest до ZIP parsing, затем limits
   на entries и суммарный uncompressed size; real pipeline tests.
 
+### BL-C1 — Адресная догрузка треда не паркует страницу при auth-ошибке
+
+- **Сбой:** при 401/403 от Fansly адресный прогон (слайс C′) только логирует и
+  падает; в отличие от штатного исполнителя он не ставит `blocker_kind='auth'`,
+  не паркует остальные потоки страницы (`pausePageSyncForAuth`) и не открывает
+  auth-инцидент, поэтому страница продолжает жечь квоту мёртвой сессией до
+  ближайшего штатного чанка.
+- **Код:** `apps/runtime/src/services/sync/targeted-thread-backfill.ts`
+  (`isFanslyAuthError`), эталон — `apps/runtime/src/services/sync/executor.ts:664-736`.
+- **Закрыть:** вынести auth-ветку исполнителя в вызываемую функцию и
+  переиспользовать её здесь (сейчас она inline ~60 строк).
+
 ## P3 / срок до соответствующего cutover
 
 ### UV-007 — Legacy harvest dedup не видит detached partition

@@ -57,6 +57,7 @@ const cliMocks = vi.hoisted(() => {
     createAppContext: vi.fn(),
     findPageByLabel: vi.fn(),
     findUserByUsername: vi.fn(),
+    getPageDmConversationById: vi.fn(),
     handleSuccessfulPageVerificationRecovery: vi.fn(),
     insertDeliveryAttempt: vi.fn(),
     listPages: vi.fn(),
@@ -87,6 +88,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
     countHarvestObservations: cliMocks.countHarvestObservations,
     findPageByLabel: cliMocks.findPageByLabel,
     findUserByUsername: cliMocks.findUserByUsername,
+    getPageDmConversationById: cliMocks.getPageDmConversationById,
     insertDeliveryAttempt: cliMocks.insertDeliveryAttempt,
     listHarvestTransactionResidue: cliMocks.listHarvestTransactionResidue,
   };
@@ -149,6 +151,7 @@ vi.mock("../apps/runtime/src/services/sync.ts", async () => {
 
 import { buildProgram } from "../apps/runtime/src/cli.ts";
 import { SYNC_PLANNER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
+import { TARGETED_THREAD_BACKFILL_QUEUE } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
 import {
   renderStatusDetail,
   renderWatchEventLine,
@@ -245,6 +248,7 @@ describe("CLI parsing", () => {
       credentials: null,
       proxy: null,
     });
+    cliMocks.getPageDmConversationById.mockResolvedValue({ id: 2065, platformAccountId: 44 });
     cliMocks.listPages.mockResolvedValue([]);
     cliMocks.countHarvestObservations.mockResolvedValue(0);
     cliMocks.listHarvestTransactionResidue.mockResolvedValue({ total: 0, sample: [] });
@@ -699,6 +703,58 @@ describe("CLI parsing", () => {
     expect(boss.stop).toHaveBeenCalledTimes(1);
     expect(app?.close).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith("sync.planner is already queued or active");
+  });
+
+  it("queues a targeted thread backfill and prints the job as JSON", async () => {
+    cliMocks.bossBehavior.sendResult = "thread-job-1";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "dm",
+      "backfill-thread",
+      "--thread",
+      "2065",
+      "--ignore-retention-limit",
+    ], { from: "user" });
+
+    const boss = cliMocks.bossInstances[0];
+    const app = await cliMocks.createAppContext.mock.results[0]?.value;
+    expect(boss).toBeDefined();
+    expect(boss?.start).toHaveBeenCalledTimes(1);
+    // The queue is created with the singleton-per-thread policy before the send.
+    expect(boss?.createQueue).toHaveBeenCalledWith(
+      TARGETED_THREAD_BACKFILL_QUEUE,
+      expect.objectContaining({ policy: "exclusive", retryLimit: 0 }),
+    );
+    expect(boss?.send).toHaveBeenCalledWith(
+      TARGETED_THREAD_BACKFILL_QUEUE,
+      { threadId: 2065, ignoreRetentionLimit: true },
+      expect.objectContaining({ singletonKey: "44", retryLimit: 0 }),
+    );
+    expect(boss?.stop).toHaveBeenCalledTimes(1);
+    expect(app?.close).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify({ jobId: "thread-job-1", threadId: 2065 }));
+  });
+
+  it("prints a null job id when the thread already has a backfill queued or active", async () => {
+    cliMocks.bossBehavior.sendResult = null;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = buildProgram();
+
+    await program.parseAsync([
+      "dm",
+      "backfill-thread",
+      "--thread",
+      "2065",
+    ], { from: "user" });
+
+    expect(cliMocks.bossInstances[0]?.send).toHaveBeenCalledWith(
+      TARGETED_THREAD_BACKFILL_QUEUE,
+      { threadId: 2065, ignoreRetentionLimit: false },
+      expect.objectContaining({ singletonKey: "44" }),
+    );
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify({ jobId: null, threadId: 2065 }));
   });
 
   it("sends a Telegram test message when configured", async () => {

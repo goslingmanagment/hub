@@ -84,6 +84,12 @@ import {
 } from "./services/ofapi-events.ts";
 import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
+import {
+  ensureTargetedThreadBackfillQueue,
+  parseTargetedThreadBackfillJob,
+  runTargetedThreadBackfill,
+  TARGETED_THREAD_BACKFILL_QUEUE,
+} from "./services/sync/targeted-thread-backfill.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
   ensureSyncQueues,
@@ -197,6 +203,7 @@ export async function startWorkerServices(
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
+  await ensureTargetedThreadBackfillQueue(boss, createdQueues);
   // Stage 25: cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
 
@@ -205,6 +212,22 @@ export async function startWorkerServices(
     includeMetadata: true,
   }, async () => {
     await runSyncPlannerCycle(app, boss);
+  });
+
+  // Slice C′: owner-initiated targeted thread backfill. One job = one bounded
+  // run of ONE thread under the page's real dm_messages sync lease; the queue
+  // policy keeps at most one job per thread queued or active.
+  await boss.work(TARGETED_THREAD_BACKFILL_QUEUE, { batchSize: 1 }, async (jobs) => {
+    for (const job of jobs) {
+      const payload = parseTargetedThreadBackfillJob(job.data);
+      if (!payload) {
+        app.logger.error({ jobId: job.id, data: job.data },
+          "Targeted thread backfill job carried no usable threadId");
+        continue;
+      }
+      const result = await runTargetedThreadBackfill(app, payload);
+      app.logger.info({ jobId: job.id, ...result }, "Targeted thread backfill job complete");
+    }
   });
 
   await boss.work(RAW_PAYLOAD_CLEANUP_QUEUE, { batchSize: 1 }, async () => {

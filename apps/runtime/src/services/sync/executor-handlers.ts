@@ -8,7 +8,6 @@ import {
   deactivatePageSubscriptionsByGeneration,
   finalizePageDmConversationMessageSync,
   getEarliestSpenderTransactionAt,
-  getExistingPageDmMessageIds,
   getPageDmConversationById,
   getCheckpoint,
   getCurrentSubscribers,
@@ -72,8 +71,6 @@ import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
   type FanslyDmMessageSyncExcludedReason,
-  type HttpRequestEvent,
-  type HttpRequestObserver,
 } from "@agency_hub_core/shared";
 
 import type { CanonicalStream } from "@agency_hub_core/platform-core";
@@ -148,14 +145,21 @@ import {
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
   dmRetentionDate,
-  normalizeDmTipAmountCents,
-  normalizeFanslyTimestamp,
   persistRawPayload,
   refreshPageMetadata,
   retentionDate,
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
 } from "./shared.ts";
+import {
+  assertDmSharedRateLimitEnabled,
+  DmMessagesChunkRequestObserver,
+  FANSLY_DM_MESSAGE_PAGE_LIMIT,
+  fetchAndJournalFanslyDmMessagePage,
+  normalizeDmTimestampWithAnomaly,
+  resolveDmConversationCoverageStatus,
+  resolveDmSenderRole,
+} from "./fansly-dm-messages.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage, type HydrationCaptureContext } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
 import {
@@ -214,32 +218,6 @@ function shouldSkipOnlyFansDmPolling(
     !isOnlyFansDmPollingEnabled(app.config) &&
     // OFAPI-mapped pages run their DM streams through the OFAPI REST handlers.
     !isOfapiDmSyncEligiblePage(app.config, input.pageContext.page);
-}
-
-function resolveDmConversationCoverageStatus(input: {
-  currentMode: "backfill" | "deep_backfill" | "incremental";
-  existingStatus: MessageCoverageStatus;
-  overlapFound: boolean;
-  providerHistoryExhausted: boolean;
-  hitWindowCap: boolean;
-}): MessageCoverageStatus {
-  if (input.currentMode === "incremental") {
-    return input.existingStatus;
-  }
-
-  if (input.providerHistoryExhausted || input.overlapFound) {
-    return "complete";
-  }
-
-  if (input.currentMode === "deep_backfill") {
-    return "partial_window";
-  }
-
-  if (input.hitWindowCap) {
-    return "partial_window";
-  }
-
-  return input.existingStatus;
 }
 
 function shouldRequestDmMessagesFollowup(conversation: {
@@ -358,55 +336,6 @@ export type StreamChunkResult = {
    *  degrade chatter-visible block health. That is a separate decision. */
   gatedSkip?: string | null;
 };
-
-class DmMessagesChunkRequestObserver implements HttpRequestObserver {
-  private readonly touchedConversationIds = new Set<number>();
-  private readonly requestGapsMs: number[] = [];
-  private requestCount = 0;
-  private rateLimit429s = 0;
-  private lastStartedAtMs: number | null = null;
-
-  recordConversationTouched(conversationId: number) {
-    this.touchedConversationIds.add(conversationId);
-  }
-
-  async onRequestEvent(event: HttpRequestEvent) {
-    if (event.operation !== "messages") {
-      return;
-    }
-
-    if (event.state === "started") {
-      this.requestCount += 1;
-
-      const startedAtMs = event.timestamp instanceof Date ? event.timestamp.getTime() : Number.NaN;
-      if (Number.isFinite(startedAtMs)) {
-        if (this.lastStartedAtMs !== null) {
-          this.requestGapsMs.push(startedAtMs - this.lastStartedAtMs);
-        }
-        this.lastStartedAtMs = startedAtMs;
-      }
-      return;
-    }
-
-    if ("httpStatus" in event && event.httpStatus === 429) {
-      this.rateLimit429s += 1;
-    }
-  }
-
-  buildSummary(chunkDurationMs: number): DmMessagesChunkSummary {
-    const totalGapMs = this.requestGapsMs.reduce((sum, value) => sum + value, 0);
-    return {
-      conversationsProcessed: this.touchedConversationIds.size,
-      messageFetchRequests: this.requestCount,
-      rateLimit429s: this.rateLimit429s,
-      chunkDurationMs,
-      averageGapMs: this.requestGapsMs.length > 0
-        ? Math.round(totalGapMs / this.requestGapsMs.length)
-        : 0,
-    };
-  }
-}
-
 
 function asRecord(value: unknown) {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -593,12 +522,6 @@ async function recordFollowerMappingBlockedAnomaly(
   });
 }
 
-function assertDmSharedRateLimitEnabled(app: AppContext) {
-  if (!app.config.syncSharedRateLimitEnabled) {
-    throw new Error("DM sync requires SYNC_SHARED_RATE_LIMIT_ENABLED=true");
-  }
-}
-
 function truncateDmPreview(content: string | null | undefined, maxLength = 280) {
   const normalized = normalizeDmMessageText(content);
   if (!normalized) {
@@ -608,71 +531,6 @@ function truncateDmPreview(content: string | null | undefined, maxLength = 280) 
   return normalized.length <= maxLength
     ? normalized
     : `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
-}
-
-function isClearlyImplausibleDmTimestamp(timestamp: Date, now = new Date()) {
-  return timestamp.getTime() < Date.UTC(2010, 0, 1) ||
-    timestamp.getTime() > now.getTime() + (24 * 60 * 60 * 1000);
-}
-
-async function recordDmTimestampAnomaly(
-  telemetry: SyncRunTelemetry,
-  input: {
-    context: string;
-    rawValue: number | string;
-    normalizedAt: Date;
-  },
-) {
-  await telemetry.addAnomaly({
-    code: "dm_timestamp_implausible",
-    severity: "warn",
-    message: "DM timestamp normalized to an implausible value",
-    details: {
-      context: input.context,
-      rawValue: input.rawValue,
-      normalizedAt: input.normalizedAt.toISOString(),
-    },
-  });
-}
-
-async function normalizeDmTimestampWithAnomaly(
-  telemetry: SyncRunTelemetry,
-  input: {
-    context: string;
-    value: number | null | undefined;
-  },
-) {
-  if (typeof input.value !== "number" || !Number.isFinite(input.value)) {
-    return null;
-  }
-
-  const normalized = normalizeFanslyTimestamp(input.value);
-  if (isClearlyImplausibleDmTimestamp(normalized)) {
-    await recordDmTimestampAnomaly(telemetry, {
-      context: input.context,
-      rawValue: input.value,
-      normalizedAt: normalized,
-    });
-  }
-
-  return normalized;
-}
-
-function resolveDmSenderRole(
-  senderId: string | null | undefined,
-  pageAccountId: string,
-  partnerPlatformUserId: string | null | undefined,
-) {
-  if (!senderId) {
-    return "unknown" as const;
-  }
-  if (senderId === pageAccountId) {
-    return "model" as const;
-  }
-  if (partnerPlatformUserId && senderId === partnerPlatformUserId) {
-    return "fan" as const;
-  }
-  return "unknown" as const;
 }
 
 function buildUtcMonthKey(date: Date) {
@@ -3314,12 +3172,23 @@ export async function fanslyDmMessagesChunk(
         await assertOwnedPageSyncLease(app.db);
         dmMessagesRequestObserver.recordConversationTouched(currentConversation.id);
 
-        let page;
+        // The fetch + verbatim journal + normalization is the unit shared with
+        // the targeted thread backfill (slice C′). It stays inside this
+        // try/catch exactly as the bare adapter call did: only a terminal
+        // Fansly 5xx reaches the partner-unresolvable recovery below, every
+        // other failure (including a capture failure) rethrows as before.
+        let messagePage;
         try {
-          page = await app.adapter.getMessagesPage(requestContext, {
-            groupId: currentConversation.platformConversationId,
-            limit: 25,
+          messagePage = await fetchAndJournalFanslyDmMessagePage(app, {
+            requestContext,
+            telemetry: input.telemetry,
+            syncRunId: input.syncRunId,
+            platformAccountId: input.pageContext.page.id,
+            platform: input.pageContext.platform,
+            pageAccountId,
+            conversation: currentConversation,
             before: state.currentBeforeMessageId,
+            limit: FANSLY_DM_MESSAGE_PAGE_LIMIT,
           });
         } catch (error) {
           if (
@@ -3419,65 +3288,7 @@ export async function fanslyDmMessagesChunk(
           );
           continue conversationLoop;
         }
-        // Stage 1: DM message pages are captured raw (previously zero raw
-        // persistence on this path); far-future retention via dmRetentionDate.
-        await persistRawPayload(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          syncRunId: input.syncRunId,
-          endpoint: "dm_messages",
-          requestParams: {
-            groupId: currentConversation.platformConversationId,
-            limit: 25,
-            before: state.currentBeforeMessageId ?? null,
-          },
-          responsePayload: page.raw,
-          mapperVersion: FANSLY_MAPPER_VERSION,
-          payloadKind: "dm_messages",
-          retainUntil: dmRetentionDate(),
-        }, {
-          action: "inserting dm_messages raw payload",
-          platform: "fansly",
-        });
-
-        const existingIds = await getExistingPageDmMessageIds(app.db, {
-          conversationId: currentConversation.id,
-          platformMessageIds: page.items.map((message) => message.id),
-        });
-        const overlapFound = page.items.some((message) => existingIds.has(message.id));
-
-        const normalizedMessages: Parameters<typeof upsertPageDmMessages>[1] = [];
-        for (const message of page.items) {
-          const createdAt = await normalizeDmTimestampWithAnomaly(input.telemetry, {
-            context: "dm_messages:message",
-            value: message.createdAt,
-          });
-          if (!createdAt) {
-            continue;
-          }
-
-          normalizedMessages.push({
-            conversationId: currentConversation.id,
-            platformAccountId: input.pageContext.page.id,
-            platformMessageId: message.id,
-            senderPlatformUserId: message.senderId ?? null,
-            senderRole: resolveDmSenderRole(
-              message.senderId ?? null,
-              pageAccountId,
-              currentConversation.partnerPlatformUserId,
-            ),
-            createdAt,
-            content: message.content ?? "",
-            totalTipAmountCents: normalizeDmTipAmountCents(
-              input.pageContext.platform,
-              message.totalTipAmount,
-            ),
-            inReplyToMessageId: message.inReplyTo ?? null,
-            inReplyToRootMessageId: message.inReplyToRoot ?? null,
-          });
-        }
-        const insertedMessageCount = normalizedMessages
-          .filter((message) => !existingIds.has(message.platformMessageId))
-          .length;
+        const { normalizedMessages, insertedMessageCount, overlapFound } = messagePage;
         collectedThisConversation += insertedMessageCount;
         processedMessages += normalizedMessages.length;
         const nextLiveRequestState = deepBackfillMaxRequests <= 0
@@ -3489,8 +3300,7 @@ export async function fanslyDmMessagesChunk(
             deepBackfillLiveRequestsPerDeep,
           );
 
-        const oldestMessageId = page.items.at(-1)?.id ?? null;
-        const providerHistoryExhausted = page.done || !oldestMessageId;
+        const { oldestMessageId, providerHistoryExhausted } = messagePage;
         const hitWindowCap =
           currentMode === "backfill" &&
           (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_LIVE_BACKFILL_CAP;

@@ -10,6 +10,7 @@ import {
   createModel,
   findPageByLabel,
   findUserByUsername,
+  getPageDmConversationById,
   insertDeliveryAttempt,
   insertErasureLog,
 } from "@agency_hub_core/db";
@@ -103,6 +104,10 @@ import {
 } from "./services/sync.ts";
 import { resolvePageContext } from "./services/page-context.ts";
 import { ensureSyncQueues, sendSyncPlannerWakeup } from "./services/sync-queue.ts";
+import {
+  ensureTargetedThreadBackfillQueue,
+  sendTargetedThreadBackfillJob,
+} from "./services/sync/targeted-thread-backfill.ts";
 import {
   buildStatusRows,
   listStalledRuns,
@@ -490,6 +495,22 @@ async function queueInitialFullSyncAfterPageCreate(
   }
 }
 
+async function queueTargetedThreadBackfill(
+  databaseUrl: string,
+  input: { threadId: number; platformAccountId: number; ignoreRetentionLimit: boolean },
+) {
+  const boss = new PgBoss({ connectionString: databaseUrl });
+  attachCliPgBossErrorLogger(boss);
+
+  try {
+    await boss.start();
+    await ensureTargetedThreadBackfillQueue(boss);
+    return await sendTargetedThreadBackfillJob(boss, input);
+  } finally {
+    await boss.stop().catch(() => undefined);
+  }
+}
+
 async function queuePlannerRecovery(
   databaseUrl: string,
 ) {
@@ -684,6 +705,7 @@ export function buildProgram() {
       }
     });
 
+  const dm = program.command("dm");
   const page = program.command("page");
   const pageAdd = page.command("add");
   const sync = program.command("sync");
@@ -691,6 +713,40 @@ export function buildProgram() {
   const queue = program.command("queue");
   const telegram = program.command("telegram");
   const serviceEgress = program.command("service-egress");
+
+  dm
+    .command("backfill-thread")
+    .description(
+      "Slice C′: queue a one-shot deep backfill of ONE Fansly DM thread. The worker "
+        + "executes it under the page's dm_messages sync lease; this process never "
+        + "touches the vendor.",
+    )
+    .requiredOption("--thread <id>", "page_dm_threads id", parsePositiveInt)
+    .option(
+      "--ignore-retention-limit",
+      "walk past the per-thread depth cap for THIS run only (global config unchanged)",
+    )
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const threadId = options.thread as number;
+        // The queue key is the PAGE (Stage 25: one sync chunk per page at a
+        // time), so the enqueue resolves the thread's page first.
+        const thread = await getPageDmConversationById(app.db, threadId);
+        if (!thread) {
+          throw new Error(`DM thread ${threadId} not found`);
+        }
+        const jobId = await queueTargetedThreadBackfill(app.config.databaseUrl, {
+          threadId,
+          platformAccountId: thread.platformAccountId,
+          ignoreRetentionLimit: options.ignoreRetentionLimit === true,
+        });
+        console.log(JSON.stringify({ jobId, threadId }));
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("tiering:run")
     .description("Stage 28: export→verify→detach aged ledger partitions into the lake")
