@@ -104,11 +104,14 @@ for (const file of [
   "domain-event-cursor.ts",
   "authorization-policy.ts",
   "contract-hash.ts",
-  // Agent Read Plane vocabulary. The barrel re-exports it, and this staging
-  // list is a fixed whitelist — omitting a barrel dependency fails the vendor
-  // compile outright (TS2307), breaking every client re-vendor. Pinned by
-  // tests/vendor-sdk-staging.test.ts.
+  // Agent Read Plane vocabularies. The barrel re-exports all three, and this
+  // staging list is a fixed whitelist — omitting a barrel dependency fails the
+  // vendor compile outright (TS2307) and breaks every client re-vendor. That
+  // has now happened twice, so tests/vendor-sdk-staging.test.ts DERIVES the
+  // requirement from the barrel instead of pinning names one at a time.
   "agent-read-registry.ts",
+  "agent-read-capabilities.ts",
+  "agent-read-datasets.ts",
   "index.ts",
 ]) {
   stageFile(`packages/contracts/src/${file}`, join(staging, `src/contracts/${file}`), toShared);

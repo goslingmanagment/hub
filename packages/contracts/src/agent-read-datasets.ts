@@ -59,7 +59,13 @@ export type AgentDatasetSort = {
 };
 
 export type AgentDatasetDefinition = {
-  /** Money-bearing datasets additionally require the `read:money` capability. */
+  /**
+   * Money-bearing datasets additionally require the `read:money` capability.
+   *
+   * A dataset carrying ANY field of kind `mills` is money-bearing by definition
+   * — pinned by test, because the appendix declared one such dataset otherwise
+   * and that quietly put a fan's lifetime spend behind a read:datasets-only key.
+   */
   readonly moneyBearing: boolean;
   /** Wire field -> scalar kind. This map IS the filter/sort allowlist. */
   readonly fields: Readonly<Record<string, AgentDatasetFieldKind>>;
@@ -80,7 +86,12 @@ export type AgentDatasetDefinition = {
  */
 export const AGENT_DATASETS = {
   fan_memberships: {
-    moneyBearing: false,
+    // MONEY-BEARING because of `lifetimeSpendMills`. The appendix's prose names
+    // only subscriptions/transactions/fan_spend_daily as money-bearing while its
+    // own catalog puts a mills field on THIS dataset; the two statements
+    // contradict each other, and following the narrower one would hand a
+    // read:datasets-only key a fan's lifetime spend without read:money.
+    moneyBearing: true,
     fields: {
       platform: "string",
       platformUserId: "string",

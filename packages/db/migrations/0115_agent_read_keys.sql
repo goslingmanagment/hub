@@ -36,7 +36,10 @@ CREATE TABLE "agent_keys" (
   "daily_request_budget" integer NOT NULL DEFAULT 5000,
   "daily_row_budget"     integer NOT NULL DEFAULT 500000,
   -- Mandatory expiry (device-token precedent): sliding 90 days on use, hard cap
-  -- 365 days from created_at, both enforced by the authenticator (slice 0b).
+  -- 365 days from created_at. The cap is a CHECK, not merely repository logic:
+  -- a key that outlives its ceiling is exactly the failure a mandatory expiry
+  -- exists to prevent, so NO path — issuance, sliding, or a hand-run UPDATE —
+  -- may produce one.
   "expires_at"           timestamptz NOT NULL,
   "created_by"           bigint REFERENCES "users"("id") ON DELETE RESTRICT,
   "created_at"           timestamptz NOT NULL DEFAULT now(),
@@ -52,6 +55,9 @@ CREATE TABLE "agent_keys" (
     ]::text[]
   ),
   CONSTRAINT "agent_keys_expires_at_check" CHECK ("expires_at" > "created_at"),
+  CONSTRAINT "agent_keys_max_lifetime_check" CHECK (
+    "expires_at" <= "created_at" + interval '365 days'
+  ),
   CONSTRAINT "agent_keys_daily_request_budget_check" CHECK ("daily_request_budget" >= 0),
   CONSTRAINT "agent_keys_daily_row_budget_check" CHECK ("daily_row_budget" >= 0)
 );
@@ -87,8 +93,12 @@ CREATE TABLE "agent_read_audit" (
   -- or any other caller text.
   "request_summary" jsonb NOT NULL DEFAULT '{}'::jsonb,
   "occurred_at"     timestamptz NOT NULL DEFAULT now(),
+  -- EXACTLY ONE principal. "At least one" would admit a row claiming both a
+  -- machine and a human authored the same read, which is never true and would
+  -- make the #9b per-session count over-report while attributing an agent read
+  -- to a person.
   CONSTRAINT "agent_read_audit_principal_check" CHECK (
-    "agent_key_id" IS NOT NULL OR "session_user_id" IS NOT NULL
+    num_nonnulls("agent_key_id", "session_user_id") = 1
   )
 );
 

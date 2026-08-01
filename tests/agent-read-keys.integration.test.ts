@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   AGENT_KEY_MAX_LIFETIME_DAYS,
   AGENT_KEY_SLIDING_TTL_DAYS,
+  AgentKeyConstraintError,
+  AgentKeyLifetimeError,
   agentKeyBusinessDate,
   bumpAgentKeyUsage,
   countAgentReadAuditForSession,
@@ -29,6 +31,8 @@ let testDb: StartedTestDatabase | null = null;
 let seededArchiveGeneration: { id: number; generation: string } | null = null;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** sha256 of the empty string — a real digest, used where a real one is required. */
+const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 beforeAll(async () => {
   const started = await startIntegrationTestDatabase();
@@ -197,11 +201,20 @@ describe("agent key repository", () => {
       context.skip();
       return;
     }
-    // Issuance rejects in code; this CHECK is the fail-closed backstop, so a bug
-    // in a future issuance path cannot mint a grant nothing can check.
-    await expect(
-      insertAgentKey(testDb.db, keyInput({ capabilities: ["read:everything"] })),
-    ).rejects.toThrow(/agent_keys_capabilities_check/);
+    // The table CHECK is the fail-closed backstop under the issuing route's own
+    // validation, so a bug in a future issuance path cannot mint a grant nothing
+    // in the code can check.
+    const rejected = await insertAgentKey(
+      testDb.db,
+      keyInput({ capabilities: ["read:everything"] }),
+    ).catch((error: unknown) => error);
+
+    expect(rejected).toBeInstanceOf(AgentKeyConstraintError);
+    expect((rejected as AgentKeyConstraintError).constraint).toBe("agent_keys_capabilities_check");
+    // The driver's own error embeds the statement AND its parameters, which for
+    // this table include the key digest. The typed error must not carry them.
+    expect(String(rejected)).not.toContain("insert into");
+    expect(String(rejected)).not.toContain("digest-");
 
     const all = await insertAgentKey(
       testDb.db,
@@ -216,12 +229,48 @@ describe("agent key repository", () => {
       return;
     }
     await insertAgentKey(testDb.db, keyInput({ name: "twin", keyDigest: "digest-twin" }));
+
+    const duplicateName = await insertAgentKey(
+      testDb.db,
+      keyInput({ name: "twin", keyDigest: "digest-other" }),
+    ).catch((error: unknown) => error);
+    expect(duplicateName).toBeInstanceOf(AgentKeyConstraintError);
+    expect((duplicateName as AgentKeyConstraintError).constraint).toBe("agent_keys_name_key");
+
+    const duplicateDigest = await insertAgentKey(
+      testDb.db,
+      keyInput({ name: "other", keyDigest: "digest-twin" }),
+    ).catch((error: unknown) => error);
+    expect(duplicateDigest).toBeInstanceOf(AgentKeyConstraintError);
+    expect((duplicateDigest as AgentKeyConstraintError).constraint)
+      .toBe("agent_keys_key_digest_key");
+    // Neither attempt may leak the digest it tried to store.
+    expect(String(duplicateDigest)).not.toContain("digest-twin");
+  });
+
+  it("refuses an issuance beyond the hard lifetime ceiling", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Rejected, NOT silently clamped: an owner who asked for two years and got a
+    // key that quietly dies in one would find out from a broken agent.
+    const now = new Date();
     await expect(
-      insertAgentKey(testDb.db, keyInput({ name: "twin", keyDigest: "digest-other" })),
-    ).rejects.toThrow(/agent_keys_name_key|duplicate key/);
-    await expect(
-      insertAgentKey(testDb.db, keyInput({ name: "other", keyDigest: "digest-twin" })),
-    ).rejects.toThrow(/agent_keys_key_digest_key|duplicate key/);
+      insertAgentKey(
+        testDb.db,
+        keyInput({
+          createdAt: now,
+          expiresAt: new Date(now.getTime() + (AGENT_KEY_MAX_LIFETIME_DAYS + 1) * DAY_MS),
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AgentKeyLifetimeError);
+
+    // And the table itself refuses the same row, so no other writer can mint one.
+    await expect(testDb.pool.query(
+      `insert into agent_keys (name, key_prefix, key_digest, expires_at)
+       values ('too-long', 'p', 'd', now() + interval '400 days')`,
+    )).rejects.toThrow(/agent_keys_max_lifetime_check/);
   });
 
   it("slides the expiry forward on use and stamps last_used_at", async (context) => {
@@ -250,10 +299,15 @@ describe("agent key repository", () => {
       return;
     }
     const created = await insertAgentKey(testDb.db, keyInput());
-    // Age the row: a key issued a year ago is at its ceiling, and a use must not
-    // renew it into immortality — the owner has to issue a new one.
+    // Age the row: a key issued nearly a year ago is at its ceiling, and a use
+    // must not renew it into immortality — the owner has to issue a new one.
+    // created_at and expires_at move together because the table now refuses any
+    // row whose expiry sits past created_at + 365 days.
     await testDb.pool.query(
-      "update agent_keys set created_at = now() - interval '360 days' where id = $1",
+      `update agent_keys
+          set created_at = now() - interval '360 days',
+              expires_at = now() + interval '3 days'
+        where id = $1`,
       [created.id],
     );
 
@@ -269,17 +323,33 @@ describe("agent key repository", () => {
     );
   });
 
-  it("never shortens an expiry that is already further out", async (context) => {
+  it("keeps a further-out expiry only while it is inside the ceiling", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
+    // THE EARLIER PIN HERE WAS THE BUG. It read "never shortens an expiry that is
+    // already further out", which described `greatest(current, slid)` alone — and
+    // that outer greatest() preserved an expiry sitting PAST the 365-day ceiling,
+    // making the ceiling advisory. The rule is: a further-out expiry survives
+    // while it is inside the cap, and the cap always wins otherwise.
     const now = new Date();
     const far = new Date(now.getTime() + 200 * DAY_MS);
-    const created = await insertAgentKey(testDb.db, keyInput({ expiresAt: far }));
+    const created = await insertAgentKey(testDb.db, keyInput({ createdAt: now, expiresAt: far }));
 
     const used = await recordAgentKeyUse(testDb.db, { id: created.id, now });
     expect(used!.expiresAt.getTime()).toBe(far.getTime());
+    expect(used!.cappedByMaxLifetime).toBe(false);
+
+    // And an expiry can never GET past the ceiling in the first place — not even
+    // by a hand-run UPDATE — which is what makes the preserved-expiry branch
+    // safe. Ageing this row while its expiry stays 200 days out would put it
+    // beyond created_at + 365 days, and the table refuses that outright.
+    await expect(testDb.pool.query(
+      "update agent_keys set created_at = now() - interval '190 days' where id = $1",
+      [created.id],
+    )).rejects.toThrow(/agent_keys_max_lifetime_check/);
+    // The clamp itself is pinned by "never slides past the hard lifetime cap".
   });
 
   it("reports nothing for a key that does not exist", async (context) => {
@@ -288,6 +358,44 @@ describe("agent key repository", () => {
       return;
     }
     expect(await recordAgentKeyUse(testDb.db, { id: 987654 })).toBeNull();
+  });
+
+  it("does not touch a revoked key", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // A revoked key must not get a fresh last_used_at and must not have its
+    // expiry resurrected by the very request that should have been refused.
+    const created = await insertAgentKey(testDb.db, keyInput());
+    await revokeAgentKey(testDb.db, { id: created.id });
+
+    expect(await recordAgentKeyUse(testDb.db, { id: created.id })).toBeNull();
+
+    const after = await findAgentKeyByDigest(testDb.db, created.keyDigest);
+    expect(after?.lastUsedAt).toBeNull();
+    expect(after?.expiresAt.getTime()).toBe(created.expiresAt.getTime());
+  });
+
+  it("does not touch an already-expired key", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const created = await insertAgentKey(testDb.db, keyInput());
+    await testDb.pool.query(
+      `update agent_keys
+          set created_at = now() - interval '100 days',
+              expires_at = now() - interval '1 day'
+        where id = $1`,
+      [created.id],
+    );
+
+    expect(await recordAgentKeyUse(testDb.db, { id: created.id })).toBeNull();
+
+    const after = await findAgentKeyByDigest(testDb.db, created.keyDigest);
+    expect(after?.lastUsedAt).toBeNull();
+    expect(after!.expiresAt.getTime()).toBeLessThan(Date.now());
   });
 });
 
@@ -431,10 +539,12 @@ describe("agent read audit", () => {
       pageIds: [7],
       verbatimText: true,
       requestSummary: {
-        qSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        qSha256: EMPTY_SHA256,
         qLength: 17,
         limit: 50,
         returned: 3,
+        cursorConsumed: false,
+        windowFrom: "2026-07-01T00:00:00.000Z",
       },
     });
 
@@ -442,10 +552,12 @@ describe("agent read audit", () => {
     expect(row.pageIds).toEqual([7]);
     expect(row.sessionUserId).toBeNull();
     expect(row.requestSummary).toEqual({
-      qSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      qSha256: EMPTY_SHA256,
       qLength: 17,
       limit: 50,
       returned: 3,
+      cursorConsumed: false,
+      windowFrom: "2026-07-01T00:00:00.000Z",
     });
   });
 
@@ -476,7 +588,38 @@ describe("agent read audit", () => {
         ...base,
         requestSummary: { cappedBy: "did rick pay for the custom" },
       }),
-    ).rejects.toThrow(/bounded identifier or digest/);
+    ).rejects.toThrow(/must be a bounded identifier/);
+
+    // A digest-shaped key must carry an actual digest — a short word satisfies
+    // any "no whitespace" rule while being exactly the text we refuse to store.
+    await expect(
+      insertAgentReadAudit(testDb.db, { ...base, requestSummary: { qSha256: "rick" } }),
+    ).rejects.toThrow(/lowercase hex sha256 digest/);
+    await expect(
+      insertAgentReadAudit(testDb.db, {
+        ...base,
+        requestSummary: { reasonSha256: EMPTY_SHA256.toUpperCase() },
+      }),
+    ).rejects.toThrow(/lowercase hex sha256 digest/);
+
+    // A count-shaped key must carry a count, not a numeric-sounding string.
+    await expect(
+      insertAgentReadAudit(testDb.db, { ...base, requestSummary: { qLength: "secret" } }),
+    ).rejects.toThrow(/non-negative integer/);
+    await expect(
+      insertAgentReadAudit(testDb.db, { ...base, requestSummary: { returned: -1 } }),
+    ).rejects.toThrow(/non-negative integer/);
+    await expect(
+      insertAgentReadAudit(testDb.db, { ...base, requestSummary: { limit: 1.5 } }),
+    ).rejects.toThrow(/non-negative integer/);
+
+    // Flags and instants keep their own shapes.
+    await expect(
+      insertAgentReadAudit(testDb.db, { ...base, requestSummary: { cursorConsumed: "yes" } }),
+    ).rejects.toThrow(/must be a boolean/);
+    await expect(
+      insertAgentReadAudit(testDb.db, { ...base, requestSummary: { windowFrom: "last tuesday" } }),
+    ).rejects.toThrow(/ISO-8601 instant/);
 
     // Structured values are not a loophole either.
     await expect(
@@ -484,16 +627,16 @@ describe("agent read audit", () => {
         ...base,
         requestSummary: { returned: { nested: "text" } },
       }),
-    ).rejects.toThrow(/must be a string, number, boolean or null/);
+    ).rejects.toThrow(/non-negative integer/);
 
-    // Nothing was written by any of the three attempts.
+    // Nothing was written by ANY of the attempts.
     const count = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from agent_read_audit",
     );
     expect(count.rows[0]!.n).toBe("0");
   });
 
-  it("needs a principal", async (context) => {
+  it("needs exactly one principal", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -505,6 +648,27 @@ describe("agent read audit", () => {
         verbatimText: true,
       }),
     ).rejects.toThrow(/needs a principal/);
+
+    // Both set would claim a machine AND a human authored one read: it inflates
+    // the #9b per-session count and attributes an agent's read to a person.
+    const key = await insertAgentKey(testDb.db, keyInput());
+    const owner = await createOwner("audit-both");
+    await expect(
+      insertAgentReadAudit(testDb.db, {
+        agentKeyId: key.id,
+        sessionUserId: owner.id,
+        operation: "agentObservationPayload",
+        pageIds: [],
+        verbatimText: true,
+      }),
+    ).rejects.toThrow(/exactly one principal/);
+
+    // The table refuses the same row, so no other writer can produce one.
+    await expect(testDb.pool.query(
+      `insert into agent_read_audit (agent_key_id, session_user_id, operation)
+       values ($1, $2, 'agentObservationPayload')`,
+      [key.id, owner.id],
+    )).rejects.toThrow(/agent_read_audit_principal_check/);
   });
 
   it("counts an owner session's reads of one operation inside a window", async (context) => {

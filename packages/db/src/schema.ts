@@ -3712,6 +3712,12 @@ export const agentKeys = pgTable(
     expiresAtCheck: check("agent_keys_expires_at_check", sql`
       ${table.expiresAt} > ${table.createdAt}
     `),
+    // The hard ceiling is a constraint, not just repository logic: no path —
+    // issuance, the sliding renewal, or a hand-run UPDATE — may mint a key that
+    // outlives the cap the mandatory expiry exists to impose.
+    maxLifetimeCheck: check("agent_keys_max_lifetime_check", sql`
+      ${table.expiresAt} <= ${table.createdAt} + interval '365 days'
+    `),
     requestBudgetCheck: check("agent_keys_daily_request_budget_check", sql`
       ${table.dailyRequestBudget} >= 0
     `),
@@ -3776,8 +3782,12 @@ export const agentReadAudit = pgTable(
       table.operation,
       table.occurredAt,
     ),
+    // EXACTLY ONE principal. "At least one" would admit a row claiming a machine
+    // and a human authored the same read — never true, and it would make the
+    // #9b per-session count over-report while attributing an agent read to a
+    // person.
     principalCheck: check("agent_read_audit_principal_check", sql`
-      ${table.agentKeyId} is not null or ${table.sessionUserId} is not null
+      num_nonnulls(${table.agentKeyId}, ${table.sessionUserId}) = 1
     `),
   }),
 );

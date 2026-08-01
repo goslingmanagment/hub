@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { agentKeys, type agentKeyUsageDaily } from "../schema.ts";
@@ -14,15 +14,82 @@ import { agentKeys, type agentKeyUsageDaily } from "../schema.ts";
  *    `INSERT .. ON CONFLICT DO UPDATE .. RETURNING`, and the returning row is
  *    joined to the key so the caller compares consumption against the ceiling
  *    inside the same statement rather than in a second, racy round trip.
- * 2. **Expiry slides on use, but never past the hard cap.** Keys are never
+ * 2. **Expiry slides on use, but the hard cap ALWAYS wins.** Keys are never
  *    immortal: a live key stays alive (+90 days from now) while it is being used,
- *    but the cap holds at 365 days from issuance, at which point the owner must
- *    issue a new one. This mirrors the device-token precedent.
+ *    but the ceiling holds at 365 days from issuance, at which point the owner
+ *    must issue a new one. The clamp is written `least(greatest(current, slid),
+ *    cap)` — an earlier revision put `greatest` on the outside, which PRESERVED
+ *    an expiry already past the ceiling and made the cap advisory. Enforcement is
+ *    also a table CHECK, so no path can mint an over-long key.
+ * 3. **A revoked or expired key is inert.** Every mutation carries the
+ *    `revoked_at is null and expires_at > now` guard, so touching a dead key
+ *    neither stamps `last_used_at` nor resurrects its expiry; the caller gets
+ *    `null` and refuses the request.
  *
  * `rows_returned` is a BIGINT and this pool parses OID 20 as a JavaScript BigInt,
  * so every read of it here casts to text and converts once, at the edge, with an
  * explicit safety check — a raw BigInt thrown at `JSON.stringify` throws.
+ *
+ * Constraint violations are translated into the typed errors below rather than
+ * propagated: the driver's own message embeds the full statement AND its bound
+ * parameters, which for this table include the key digest.
  */
+
+/** A table constraint refused the write. Carries the rule, never the statement. */
+export class AgentKeyConstraintError extends Error {
+  readonly constraint: string;
+
+  constructor(message: string, constraint: string) {
+    super(message);
+    this.name = "AgentKeyConstraintError";
+    this.constraint = constraint;
+  }
+}
+
+/** An issuance asked for a lifetime the ceiling does not allow. */
+export class AgentKeyLifetimeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentKeyLifetimeError";
+  }
+}
+
+const CONSTRAINT_MESSAGES: Readonly<Record<string, string>> = {
+  agent_keys_name_key: "an agent key with this name already exists",
+  agent_keys_key_digest_key: "an agent key with this digest already exists",
+  agent_keys_capabilities_check:
+    "capability outside the closed matrix (see AGENT_CAPABILITIES in packages/contracts)",
+  agent_keys_max_lifetime_check: "expires_at is beyond the 365-day ceiling from created_at",
+  agent_keys_expires_at_check: "expires_at must be after created_at",
+};
+
+/**
+ * Walks the driver's cause chain for the violated constraint. Postgres reports
+ * it structurally (`error.constraint`); the surrounding message is deliberately
+ * discarded, so a rejected insert cannot leak the digest it carried.
+ */
+function violatedConstraint(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current !== null && typeof current === "object"; depth += 1) {
+    const constraint = (current as { constraint?: unknown }).constraint;
+    if (typeof constraint === "string" && constraint.length > 0) {
+      return constraint;
+    }
+    current = (current as { cause?: unknown }).cause ?? null;
+  }
+  return null;
+}
+
+function rethrowAsConstraintError(error: unknown): never {
+  const constraint = violatedConstraint(error);
+  if (constraint !== null) {
+    throw new AgentKeyConstraintError(
+      CONSTRAINT_MESSAGES[constraint] ?? `agent key write violated ${constraint}`,
+      constraint,
+    );
+  }
+  throw error;
+}
 
 export type AgentKeyRow = typeof agentKeys.$inferSelect;
 export type AgentKeyUsageRow = typeof agentKeyUsageDaily.$inferSelect;
@@ -65,36 +132,57 @@ export interface InsertAgentKeyInput {
   dailyRowBudget: number;
   expiresAt: Date;
   createdBy: number | null;
+  /** Issuance instant; defaults to the database `now()`. Tests pin it. */
+  createdAt?: Date;
 }
 
 /**
- * Issues one key row. Capability validation against the closed matrix belongs to
- * the caller (issuance rejects an unknown capability rather than dropping it); the
- * table's CHECK constraint is the fail-closed backstop.
+ * Issues one key row.
+ *
+ * The requested lifetime is REJECTED, not silently clamped, when it exceeds the
+ * ceiling: an owner who asked for two years and received a key that quietly
+ * expires in one would learn about it from a broken agent, not from the issuance.
+ *
+ * The capability list is checked by the table's CHECK constraint (mapped here to
+ * a typed error). The vocabulary itself lives in `packages/contracts`, which this
+ * package deliberately does not depend on; the issuing route validates against
+ * `AGENT_CAPABILITIES` before it ever reaches SQL, and this is the backstop.
  */
 export async function insertAgentKey(
   db: Database,
   input: InsertAgentKeyInput,
 ): Promise<AgentKeyRow> {
-  const [row] = await db
-    .insert(agentKeys)
-    .values({
-      name: input.name,
-      keyPrefix: input.keyPrefix,
-      keyDigest: input.keyDigest,
-      capabilities: input.capabilities,
-      pageIds: input.pageIds,
-      dailyRequestBudget: input.dailyRequestBudget,
-      dailyRowBudget: input.dailyRowBudget,
-      expiresAt: input.expiresAt,
-      createdBy: input.createdBy,
-    })
-    .returning();
-
-  if (!row) {
-    throw new Error("insertAgentKey returned no row");
+  const ceiling = addDays(input.createdAt ?? new Date(), AGENT_KEY_MAX_LIFETIME_DAYS);
+  if (input.expiresAt.getTime() > ceiling.getTime()) {
+    throw new AgentKeyLifetimeError(
+      `an agent key may not live past ${AGENT_KEY_MAX_LIFETIME_DAYS} days from issuance`,
+    );
   }
-  return row;
+
+  try {
+    const [row] = await db
+      .insert(agentKeys)
+      .values({
+        name: input.name,
+        keyPrefix: input.keyPrefix,
+        keyDigest: input.keyDigest,
+        capabilities: input.capabilities,
+        pageIds: input.pageIds,
+        dailyRequestBudget: input.dailyRequestBudget,
+        dailyRowBudget: input.dailyRowBudget,
+        expiresAt: input.expiresAt,
+        createdBy: input.createdBy,
+        ...(input.createdAt ? { createdAt: input.createdAt } : {}),
+      })
+      .returning();
+
+    if (!row) {
+      throw new Error("insertAgentKey returned no row");
+    }
+    return row;
+  } catch (error) {
+    rethrowAsConstraintError(error);
+  }
 }
 
 /** Lookup by digest. Returns revoked and expired keys too — the AUTHENTICATOR
@@ -141,10 +229,17 @@ export interface AgentKeyUseResult {
 }
 
 /**
- * Records a use: stamps `last_used_at` and slides `expires_at` to
- * now + 90 days, clamped to created_at + 365 days. Never SHORTENS an existing
- * expiry (`greatest`), so a key issued with a long custom expiry is not silently
- * cut back by its own traffic.
+ * Records a use: stamps `last_used_at` and slides `expires_at` to now + 90 days,
+ * CLAMPED to created_at + 365 days.
+ *
+ * Order matters: `least(greatest(current, slid), cap)`. Putting `greatest` on the
+ * outside — as the first revision did — preserves an expiry that already sits
+ * past the ceiling, which makes the ceiling advisory and lets a key drift toward
+ * immortal. A further-out expiry is preserved only while it is inside the cap.
+ *
+ * A revoked or already-expired key matches NOTHING: it must not get a fresh
+ * `last_used_at` and must not have its expiry resurrected by the very request
+ * that should have been refused. The caller sees `null` and denies.
  */
 export async function recordAgentKeyUse(
   db: Database,
@@ -157,15 +252,16 @@ export async function recordAgentKeyUse(
     .update(agentKeys)
     .set({
       lastUsedAt: now,
-      expiresAt: sql`greatest(
-        ${agentKeys.expiresAt},
-        least(
-          ${slid}::timestamptz,
-          ${agentKeys.createdAt} + ${`${AGENT_KEY_MAX_LIFETIME_DAYS} days`}::interval
-        )
+      expiresAt: sql`least(
+        greatest(${agentKeys.expiresAt}, ${slid}::timestamptz),
+        ${agentKeys.createdAt} + ${`${AGENT_KEY_MAX_LIFETIME_DAYS} days`}::interval
       )`,
     })
-    .where(eq(agentKeys.id, input.id))
+    .where(and(
+      eq(agentKeys.id, input.id),
+      isNull(agentKeys.revokedAt),
+      gt(agentKeys.expiresAt, now),
+    ))
     .returning({
       lastUsedAt: agentKeys.lastUsedAt,
       expiresAt: agentKeys.expiresAt,
@@ -177,8 +273,9 @@ export async function recordAgentKeyUse(
   }
   return {
     lastUsedAt: row.lastUsedAt,
-    // A resulting expiry SHORTER than the requested slide can only come from the
-    // hard cap: `greatest` never shortens, and the slide itself is the target.
+    // An expiry SHORTER than the requested slide can only come from the ceiling:
+    // the inner `greatest` never returns less than `slid`, so anything smaller is
+    // the outer clamp having bitten.
     expiresAt: row.expiresAt,
     cappedByMaxLifetime: row.expiresAt.getTime() < slid.getTime(),
   };

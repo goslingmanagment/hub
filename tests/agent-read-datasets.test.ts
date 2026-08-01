@@ -106,9 +106,28 @@ describe("agent read dataset vocabulary", () => {
     }
   });
 
+  it("treats every dataset carrying a mills field as money-bearing", () => {
+    // Derived rather than hand-listed. The appendix's prose named three
+    // money-bearing datasets while its own catalog put `lifetimeSpendMills` on a
+    // fourth (fan_memberships) — which would have served a fan's lifetime spend
+    // to a read:datasets-only key. A declaration can no longer disagree with its
+    // own fields.
+    for (const dataset of AGENT_DATASET_NAMES) {
+      const carriesMills = agentDatasetFields(dataset).some((field) => field.kind === "mills");
+      if (carriesMills) {
+        expect(AGENT_DATASETS[dataset].moneyBearing, `${dataset} carries mills`).toBe(true);
+      }
+    }
+  });
+
   it("marks exactly the money-bearing datasets and makes them require read:money", () => {
     const money = AGENT_DATASET_NAMES.filter((name) => AGENT_DATASETS[name].moneyBearing);
-    expect([...money]).toEqual(["subscriptions", "transactions", "fan_spend_daily"]);
+    expect([...money]).toEqual([
+      "fan_memberships",
+      "subscriptions",
+      "transactions",
+      "fan_spend_daily",
+    ]);
 
     for (const dataset of AGENT_DATASET_NAMES) {
       const required = agentDatasetRequiredCapabilities(dataset);
