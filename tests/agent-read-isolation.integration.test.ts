@@ -232,6 +232,55 @@ describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (
     expect([404, 503]).toContain(payload.statusCode);
   });
 
+  it("the hydration family is isolated in BOTH directions (#11-#13)", async () => {
+    // #13 and the owner approval queue are owner-session. The principal that
+    // ASKS for the work is structurally not the principal that authorizes it, so
+    // the key that can file a request cannot decide one — and cannot even see
+    // the board.
+    const decide = await server!.inject({
+      method: "POST",
+      url: `/api/v1/agent/hydration-requests/${randomUUID()}/decision`,
+      headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+      payload: {
+        decision: "approve",
+        expectedVersion: 0,
+        coverageFingerprint: "0".repeat(64),
+        idempotencyKey: randomUUID(),
+        // A CONTRACT-VALID approval, so the refusal below is about the
+        // principal and not about the body: a 400 here would pass the assertion
+        // while proving nothing about isolation.
+        maxCalls: 1,
+        maxPages: 1,
+        maxCredits: 1,
+        expiresAt: "2026-12-01T00:00:00Z",
+        allowMarkReadSideEffect: false,
+      },
+    });
+    expect([401, 403]).toContain(decide.statusCode);
+    const queue = await agentGet("/api/v1/agent/hydration-requests");
+    expect([401, 403]).toContain(queue.statusCode);
+
+    // ... and symmetrically: the owner cookie opens the whole dashboard and
+    // neither of the two agentKey hydration operations.
+    const create = await server!.inject({
+      method: "POST",
+      url: "/api/v1/agent/pages/lora-2/threads/abc/hydration-requests",
+      headers: { cookie: ownerCookie },
+      payload: {
+        target: { kind: "thread_backfill_before", beforeAt: "2026-02-01T00:00:00Z" },
+        reason: "owner should not be able to file this",
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect([401, 403]).toContain(create.statusCode);
+    const poll = await server!.inject({
+      method: "GET",
+      url: `/api/v1/agent/hydration-requests/${randomUUID()}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect([401, 403]).toContain(poll.statusCode);
+  });
+
   it("a REAL chatter api key is refused on every agentKey route", async () => {
     for (const url of ["/api/v1/agent/capabilities", "/api/v1/agent/threads"]) {
       const response = await server!.inject({

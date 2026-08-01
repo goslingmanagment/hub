@@ -61,6 +61,9 @@ export const AGENT_ROUTE_RPM = {
   agentThreadMessages: 60,
   agentSearchMessages: 20,
   agentDatasetQuery: 20,
+  /** Slice C: filing an intent is cheap, but it is the ONE write an agent has,
+   *  and a flood of intents is a flood of owner decisions to make. */
+  agentHydrationRequestCreate: 10,
 } as const satisfies Readonly<Record<string, number>>;
 
 /**

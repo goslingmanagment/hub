@@ -10,6 +10,7 @@ import {
   AGENT_DATASET_NAMES,
   AGENT_PLANE_COUNT,
   AGENT_PLANE_NAMES,
+  AGENT_POST_MUTATION_OPERATIONS,
   AGENT_POST_READ_OPERATIONS,
   AGENT_PREDICATE_REGISTRY,
   agentBlockerEnum,
@@ -48,10 +49,16 @@ const AGENT_OPERATIONS = [
   "agentObservations",
   "agentObservationPayload",
   "agentDatasetQuery",
+  // Slice C — the hydration family. #11/#12 are agentKey, #13 and the owner
+  // approval queue are owner-session.
+  "agentHydrationRequestCreate",
+  "agentHydrationRequestGet",
+  "agentHydrationRequestDecide",
+  "agentHydrationRequestList",
 ] as const;
 
 describe("agent read plane: the operation surface", () => {
-  it("lands exactly the eleven routes of operations 1-10 (9 splits into 9a/9b)", () => {
+  it("lands exactly the routes of operations 1-13 (9 splits into 9a/9b, plus the owner queue)", () => {
     expect(Object.keys(agentRouteSchemas).sort()).toEqual([...AGENT_OPERATIONS].sort());
     for (const key of AGENT_OPERATIONS) {
       expect(routeSchemas).toHaveProperty(key);
@@ -64,18 +71,31 @@ describe("agent read plane: the operation surface", () => {
       const kind = (schema as { auth: { kind: string } }).auth.kind;
       (byKind[kind] ??= []).push(key);
     }
-    expect(byKind["owner-session"]).toEqual(["agentObservationPayload"]);
+    expect((byKind["owner-session"] ?? []).sort()).toEqual([
+      "agentHydrationRequestDecide",
+      "agentHydrationRequestList",
+      "agentObservationPayload",
+    ]);
+    const ownerSession = new Set([
+      "agentHydrationRequestDecide",
+      "agentHydrationRequestList",
+      "agentObservationPayload",
+    ]);
     expect((byKind.agentKey ?? []).sort()).toEqual(
-      AGENT_OPERATIONS.filter((key) => key !== "agentObservationPayload").sort(),
+      AGENT_OPERATIONS.filter((key) => !ownerSession.has(key)).sort(),
     );
   });
 
-  it("page scope is declared on exactly the two operations whose path carries :pageLabel", () => {
+  it("page scope is declared on exactly the operations whose path carries :pageLabel", () => {
     const pageScoped = Object.entries(agentRouteSchemas)
       .filter(([, schema]) => (schema as { auth: { scope?: string } }).auth.scope === "page")
       .map(([key]) => key)
       .sort();
-    expect(pageScoped).toEqual(["agentDatasetQuery", "agentThreadMessages"]);
+    expect(pageScoped).toEqual([
+      "agentDatasetQuery",
+      "agentHydrationRequestCreate",
+      "agentThreadMessages",
+    ]);
   });
 
   it("POST-as-read is exactly the reviewed allowlist of three", () => {
@@ -87,10 +107,18 @@ describe("agent read plane: the operation surface", () => {
       "agentSearchMessages",
       "agentDatasetQuery",
     ]);
+    // The plane's MUTATIONS are enumerated separately (§17.15.4) — a body is
+    // allowed on a read POST from the allowlist, or on one of these two, and
+    // nowhere else.
+    expect([...AGENT_POST_MUTATION_OPERATIONS]).toEqual([
+      "agentHydrationRequestCreate",
+      "agentHydrationRequestDecide",
+    ]);
     for (const key of AGENT_OPERATIONS) {
       const schema = agentRouteSchemas[key] as { body?: unknown };
-      const isPost = (AGENT_POST_READ_OPERATIONS as readonly string[]).includes(key);
-      expect(Boolean(schema.body)).toBe(isPost);
+      const takesBody = (AGENT_POST_READ_OPERATIONS as readonly string[]).includes(key)
+        || (AGENT_POST_MUTATION_OPERATIONS as readonly string[]).includes(key);
+      expect(Boolean(schema.body)).toBe(takesBody);
     }
   });
 

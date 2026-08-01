@@ -59,6 +59,56 @@ export class AgentCursorInvalidError extends AppError {
 }
 
 /**
+ * The hydration target is out of reach, or no lane serves this platform.
+ *
+ * A 409 rather than a 404: the PAGE is inside the grant, so this says nothing
+ * about anything the caller may not see — it says the action cannot be taken.
+ * The data-shaped half of the same fact is `gaps[].remedy.admissible` on #6/#8.
+ */
+export class AgentHydrationNotAdmissibleError extends AppError {
+  constructor(message = "hydration target is not admissible") {
+    super(message, 409, "hydration_not_admissible");
+  }
+}
+
+/** The same idempotency key with a different normalized body. Returning the
+ *  first request would silently answer a question nobody asked. */
+export class AgentIdempotencyMismatchError extends AppError {
+  constructor() {
+    super(
+      "this idempotency key was already used with a different request body",
+      409,
+      "idempotency_mismatch",
+    );
+  }
+}
+
+/** CAS miss on a decision: somebody decided first, or the request has left the
+ *  state a decision applies to. Never an overwrite of the other decision. */
+export class AgentHydrationConflictError extends AppError {
+  constructor() {
+    super("this hydration request has already moved on", 409, "conflict");
+  }
+}
+
+/**
+ * The coverage picture moved between the proposal and the decision.
+ *
+ * Lesson `tg` 21: an approval is bound to the content hash of exactly what was
+ * displayed. Approving against a stale picture is approving spend on a state
+ * that no longer exists.
+ */
+export class AgentHydrationProposalStaleError extends AppError {
+  constructor() {
+    super(
+      "the coverage picture changed since this request was shown; re-read it and decide again",
+      409,
+      "hydration_proposal_stale",
+    );
+  }
+}
+
+/**
  * THE 404 of the plane. Missing and out-of-grant are the same bytes; the real
  * reason goes only to the internal audit trail.
  *

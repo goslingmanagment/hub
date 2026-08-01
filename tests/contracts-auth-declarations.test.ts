@@ -43,9 +43,13 @@ describe("route auth declarations", () => {
       .map(([key]) => key)
       .sort();
     expect(pageScoped).toEqual([
-      // Agent Read Plane slice A: the two page-scoped agent operations. They sort
-      // to the front, which is why the list starts here now.
+      // Agent Read Plane: the three page-scoped agent operations (slice A's two
+      // plus slice C's hydration create). They sort to the front, which is why
+      // the list starts here now. #12 is NOT page-scoped: its path carries a
+      // uuid, so the middleware cannot resolve a scope and the handler checks
+      // the grant itself.
       "agentDatasetQuery",
+      "agentHydrationRequestCreate",
       "agentThreadMessages",
       "createFanNote",
       "pageConversationMessages",

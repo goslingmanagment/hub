@@ -83,6 +83,12 @@ import {
   startOfapiEventWorker,
 } from "./services/ofapi-events.ts";
 import { sendDailyRevenueTelegramReport } from "./services/telegram-report.ts";
+import {
+  AGENT_HYDRATION_QUEUE,
+  ensureAgentHydrationQueue,
+  runAgentHydrationCycle,
+  settleAgentHydrationFromBackfill,
+} from "./services/agent-hydration.ts";
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
 import {
   ensureTargetedThreadBackfillQueue,
@@ -204,6 +210,7 @@ export async function startWorkerServices(
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureTargetedThreadBackfillQueue(boss, createdQueues);
+  await ensureAgentHydrationQueue(boss, createdQueues);
   // Stage 25: cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
 
@@ -226,7 +233,24 @@ export async function startWorkerServices(
         continue;
       }
       const result = await runTargetedThreadBackfill(app, payload);
+      // Slice C: a run that answered a hydration request settles it here, with
+      // the outcome in hand. A crash before this leaves the request
+      // `dispatching` until the stuck sweeper closes it — the correct order of
+      // failure: an unsettled request is visible, a wrongly-settled one is not.
+      if (payload.hydrationRequestRef !== undefined) {
+        await settleAgentHydrationFromBackfill(app, payload.hydrationRequestRef, result);
+      }
       app.logger.info({ jobId: job.id, ...result }, "Targeted thread backfill job complete");
+    }
+  });
+
+  // Slice C: the hydration executor. It expires, sweeps, reconciles and — only
+  // when `agentHydrationMode` is `dispatch` — hands approvals to the backfill
+  // queue or to an ofapi capture job. It never calls a vendor itself.
+  await boss.work(AGENT_HYDRATION_QUEUE, { batchSize: 1 }, async () => {
+    const cycle = await runAgentHydrationCycle(app, boss);
+    if (cycle.dispatched > 0 || cycle.swept > 0 || cycle.expired > 0 || cycle.reconciled > 0) {
+      app.logger.info(cycle, "Agent hydration cycle complete");
     }
   });
 

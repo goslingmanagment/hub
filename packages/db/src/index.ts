@@ -9,6 +9,7 @@ export * from "./repositories/agent-read-audit.ts";
 // `tests/agent-read-witness-barrel.test.ts` pins this export list.
 export type { PlaneReadWitness } from "./repositories/agent-read-witness.ts";
 export * from "./repositories/agent-dataset-map.ts";
+export * from "./repositories/agent-hydration.ts";
 export * from "./repositories/agent-read.ts";
 export * from "./repositories/agent-transcript.ts";
 export * from "./repositories/ai-transcript-union.ts";

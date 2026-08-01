@@ -3808,3 +3808,180 @@ export const archiveGeneration = pgTable(
     singletonCheck: check("archive_generation_singleton_check", sql`${table.id} = 1`),
   }),
 );
+
+// ── Agent Read Plane (slice C): hydration requests ──────────────────────────
+// An agent writes down an INTENT; the owner decides; the executor hands the
+// approved work to machinery that already exists. Both tables are business
+// facts (what was asked, what was allowed, what it cost) and nothing deletes
+// from them on a schedule.
+
+/** The eight wire states of MERGED 17.11. `requested` is the only entry. */
+export type AgentHydrationState =
+  | "requested"
+  | "approved"
+  | "dispatching"
+  | "partially_completed"
+  | "completed"
+  | "rejected"
+  | "expired"
+  | "failed";
+
+export type AgentHydrationLane = "free_local_replay" | "vendor_paid_low" | "vendor_paid_high";
+
+export type AgentHydrationCostNote =
+  | "no_direct_cost"
+  | "egress_quota_and_ban_risk"
+  | "ofapi_credits";
+
+export type AgentHydrationLastError =
+  | "none"
+  | "vendor_unavailable"
+  | "proxy_missing"
+  | "budget_exhausted"
+  | "retention_limit"
+  | "quarantined"
+  | "timeout";
+
+export const agentHydrationRequests = pgTable(
+  "agent_hydration_requests",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** The wire identifier. Never the serial: that would leak volume and order. */
+    requestRef: uuid("request_ref").notNull().unique(),
+    agentKeyId: bigint("agent_key_id", { mode: "number" })
+      .references(() => agentKeys.id, { onDelete: "restrict" })
+      .notNull(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    conversationRef: text("conversation_ref").notNull(),
+    threadId: bigint("thread_id", { mode: "number" }),
+    state: text("state").$type<AgentHydrationState>().default("requested").notNull(),
+    targetKind: text("target_kind").notNull(),
+    /** A BOUNDARY, not a window: exactly one of the two is set. */
+    targetBeforeAt: timestamp("target_before_at", { withTimezone: true }),
+    targetBeforeMessageRef: text("target_before_message_ref"),
+    /** Caller text never lands verbatim (sink allowlist). */
+    reasonSha256: char("reason_sha256", { length: 64 }).notNull(),
+    reasonLength: integer("reason_length").notNull(),
+    requestedMaxCalls: integer("requested_max_calls"),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    requestFingerprint: char("request_fingerprint", { length: 64 }).notNull(),
+    /** The approval is bound to the content hash of what the owner was shown. */
+    coverageFingerprint: char("coverage_fingerprint", { length: 64 }).notNull(),
+    laneOrderEvaluated: text("lane_order_evaluated").array().default([]).notNull(),
+    laneSelected: text("lane_selected").$type<AgentHydrationLane>(),
+    laneCostNote: text("lane_cost_note").$type<AgentHydrationCostNote>(),
+    admissible: boolean("admissible").notNull(),
+    admissibilityReason: text("admissibility_reason"),
+    rowVersion: integer("row_version").default(0).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decidedByUserId: bigint("decided_by_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
+    decisionApproved: boolean("decision_approved"),
+    /** #158 consent: the vendor read mutates read state on the platform. */
+    decisionAllowMarkRead: boolean("decision_allow_mark_read"),
+    decisionMaxCalls: integer("decision_max_calls"),
+    decisionMaxCredits: integer("decision_max_credits"),
+    decisionMaxPages: integer("decision_max_pages"),
+    decisionMaxItems: integer("decision_max_items"),
+    decisionReasonSha256: char("decision_reason_sha256", { length: 64 }),
+    decisionReasonLength: integer("decision_reason_length"),
+    decisionIdempotencyKey: uuid("decision_idempotency_key"),
+    decisionFingerprint: char("decision_fingerprint", { length: 64 }),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    dispatchDeadlineAt: timestamp("dispatch_deadline_at", { withTimezone: true }),
+    executionLane: text("execution_lane").$type<AgentHydrationLane>(),
+    /** pg-boss job id (Fansly) or ofapi_capture_jobs uuid (OnlyFans). */
+    executionRef: text("execution_ref"),
+    dispatchCount: integer("dispatch_count").default(0).notNull(),
+    acceptedItems: bigint("accepted_items", { mode: "number" }).default(0).notNull(),
+    acceptedPages: bigint("accepted_pages", { mode: "number" }).default(0).notNull(),
+    spentCredits: integer("spent_credits").default(0).notNull(),
+    lastError: text("last_error").$type<AgentHydrationLastError>().default("none").notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    idempotencyUniq: uniqueIndex("agent_hydration_requests_idempotency_uniq")
+      .on(table.agentKeyId, table.idempotencyKey),
+    stateIdx: index("agent_hydration_requests_state_idx").on(table.state, table.createdAt),
+    pageThreadIdx: index("agent_hydration_requests_page_thread_idx")
+      .on(table.pageId, table.conversationRef, table.createdAt),
+    stateCheck: check("agent_hydration_requests_state_check", sql`
+      ${table.state} in ('requested', 'approved', 'dispatching', 'partially_completed',
+                         'completed', 'rejected', 'expired', 'failed')
+    `),
+    targetKindCheck: check("agent_hydration_requests_target_kind_check", sql`
+      ${table.targetKind} = 'thread_backfill_before'
+    `),
+    targetBoundCheck: check("agent_hydration_requests_target_bound_check", sql`
+      num_nonnulls(${table.targetBeforeAt}, ${table.targetBeforeMessageRef}) = 1
+    `),
+    laneCheck: check("agent_hydration_requests_lane_check", sql`
+      ${table.laneSelected} is null or ${table.laneSelected} in
+        ('free_local_replay', 'vendor_paid_low', 'vendor_paid_high')
+    `),
+    costNoteCheck: check("agent_hydration_requests_cost_note_check", sql`
+      ${table.laneCostNote} is null or ${table.laneCostNote} in
+        ('no_direct_cost', 'egress_quota_and_ban_risk', 'ofapi_credits')
+    `),
+    lastErrorCheck: check("agent_hydration_requests_last_error_check", sql`
+      ${table.lastError} in ('none', 'vendor_unavailable', 'proxy_missing',
+                            'budget_exhausted', 'retention_limit', 'quarantined', 'timeout')
+    `),
+    approvalExpiryCheck: check("agent_hydration_requests_approval_expiry_check", sql`
+      ${table.decisionApproved} is distinct from true
+      or (${table.expiresAt} is not null and ${table.decisionAllowMarkRead} is not null)
+    `),
+    reasonLengthCheck: check("agent_hydration_requests_reason_length_check", sql`
+      ${table.reasonLength} >= 0 and ${table.reasonLength} <= 1000
+    `),
+    countersCheck: check("agent_hydration_requests_counters_check", sql`
+      ${table.dispatchCount} >= 0 and ${table.acceptedItems} >= 0
+      and ${table.acceptedPages} >= 0 and ${table.spentCredits} >= 0
+    `),
+  }),
+);
+
+/** Append-only history of every transition. The request row is the CURRENT
+ *  state; this is how it got there, and nothing updates or deletes a row. */
+export const agentHydrationEvents = pgTable(
+  "agent_hydration_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    requestId: bigint("request_id", { mode: "number" })
+      .references(() => agentHydrationRequests.id, { onDelete: "restrict" })
+      .notNull(),
+    /** Gapless per request, allocated in the transition's own transaction. */
+    seq: integer("seq").notNull(),
+    kind: text("kind").notNull(),
+    fromState: text("from_state").$type<AgentHydrationState>(),
+    toState: text("to_state").$type<AgentHydrationState>().notNull(),
+    rowVersion: integer("row_version").notNull(),
+    actor: text("actor").$type<"agent_key" | "owner_session" | "executor" | "sweeper">().notNull(),
+    agentKeyId: bigint("agent_key_id", { mode: "number" })
+      .references(() => agentKeys.id, { onDelete: "restrict" }),
+    sessionUserId: bigint("session_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
+    /** Bounded structured facts only, same law as agent_read_audit. */
+    detail: jsonb("detail")
+      .$type<Record<string, string | number | boolean | null>>()
+      .default({})
+      .notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    seqUniq: unique("agent_hydration_events_seq_uniq").on(table.requestId, table.seq),
+    requestIdx: index("agent_hydration_events_request_idx").on(table.requestId, table.seq),
+    actorCheck: check("agent_hydration_events_actor_check", sql`
+      ${table.actor} in ('agent_key', 'owner_session', 'executor', 'sweeper')
+    `),
+    kindCheck: check("agent_hydration_events_kind_check", sql`
+      ${table.kind} in ('created', 'approved', 'rejected', 'dispatched',
+                        'settled', 'expired', 'failed')
+    `),
+  }),
+);

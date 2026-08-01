@@ -1,5 +1,6 @@
 import type { PgBoss } from "pg-boss";
 
+import { ensureAgentHydrationQueue, ensureAgentHydrationSchedule } from "./agent-hydration.ts";
 import { ensureCanonicalizeQueues, ensureCanonicalizeSchedule } from "./canonicalize-driver.ts";
 import { ensureOpsMetricsQueue, ensureOpsMetricsSchedule } from "./golden-signals.ts";
 import { ensureTieringQueue, ensureTieringSchedule } from "./tiering/index.ts";
@@ -57,6 +58,7 @@ export async function registerAllSchedules(
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureTieringQueue(boss, createdQueues);
+  await ensureAgentHydrationQueue(boss, createdQueues);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
@@ -78,5 +80,6 @@ export async function registerAllSchedules(
     ensureOpsMetricsSchedule(boss),
     ensureNotificationDeliveryOutboxSchedule(boss),
     ensureTieringSchedule(boss),
+    ensureAgentHydrationSchedule(boss),
   ]);
 }
