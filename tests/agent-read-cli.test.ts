@@ -398,7 +398,7 @@ describe("hub CLI: the usage document", () => {
     expect(Object.keys(error.commands).sort())
       .toEqual(HUB_COMMANDS.map((command) => command.name).sort());
     expect(error.exitCodes).toEqual({
-      "0": "answer complete",
+      "0": "call succeeded; `blockers` may still be non-empty, read it",
       "3": "answer has blockers and --fail-on-partial was passed",
       "4": "no answer",
     });

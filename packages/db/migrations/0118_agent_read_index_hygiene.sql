@@ -1,0 +1,60 @@
+-- agency-hub:no-transaction
+-- Agent Read Plane, index hygiene after the seam review of the seven slices.
+--
+-- Two items, both forward-only fixes to indexes that shipped in 0116/0117. The
+-- earlier files are applied in CI and dev databases and are NOT edited: this is
+-- the migration that corrects them.
+--
+-- 1. `agent_hydration_events_request_idx (request_id, seq)` DROPPED.
+--
+--    0117 created it one statement after declaring the UNIQUE constraint
+--    `agent_hydration_events_seq_uniq ("request_id", "seq")`. A UNIQUE
+--    constraint is backed by a btree index on exactly those columns in exactly
+--    that order, so the second index served no query the first could not, and
+--    every hydration event insert paid to maintain both. The traversal that
+--    reads this table (`select ... where request_id = $1 order by seq`) is
+--    served by the constraint's index. Dropped CONCURRENTLY out of habit rather
+--    than need — the table is empty while the plane is off, but a drop that
+--    takes ACCESS EXCLUSIVE on a live table is never the version worth keeping
+--    in the file.
+--
+-- 2. #8 coverage: the dangling comment at the END of 0116 is NOT a missing
+--    index. It reads "the (page, conversation) keyset walk is ordered by the
+--    page LABEL," and stops mid-sentence; the conclusion it was headed for
+--    belongs in the same family as 0116's three other "deliberately NOT here"
+--    entries, and is recorded here so the next reader does not add the index
+--    that sentence seems to promise. The query
+--    (`listAgentCoverageScopes`, packages/db/src/repositories/agent-read.ts)
+--    walks `page_dm_threads t join pages p` with a lateral min over
+--    `message_archive`, ordered by `(p.label, t.platform_conversation_id)`.
+--    Every access path it uses is ALREADY indexed:
+--
+--      * the per-page scan and the keyset tiebreak — the baseline UNIQUE
+--        `page_dm_threads_account_conversation_uniq
+--        (platform_account_id, platform_conversation_id)` (0000);
+--      * the `--person` arm — `page_dm_threads_account_fan_idx` (0000);
+--      * the lateral `min(occurred_at)` per conversation, both the unfiltered
+--        one and the window-filtered one — `message_archive_account_conv_idx
+--        (account_id, conversation_ref, occurred_at)` (0059), which covers
+--        every column that lateral touches;
+--      * `page_dm_message_sync_health` joins on its PRIMARY KEY, `fans` on its.
+--
+--    And the ORDER BY itself is not index-servable by construction: `label`
+--    lives on `pages`, a DIFFERENT table from the one being walked, and no
+--    btree spans two relations. Adding a `page_dm_threads (platform_account_id,
+--    platform_conversation_id)` index "for the traversal" would be a byte-exact
+--    duplicate of the baseline UNIQUE under a new name — precisely the failure
+--    0116's own header documents ("`IF NOT EXISTS` only checks the NAME, so a
+--    second copy under a new name would have built silently and cost a write on
+--    every message forever") and precisely the failure item 1 above removes. So
+--    the honest artefact is this note, not an index.
+--
+--    What DOES limit #8 at scale is not an access path: the lateral is
+--    evaluated for every candidate thread before the sort and the LIMIT, so a
+--    grant spanning tens of thousands of threads pays a probe per thread. That
+--    is a query shape, changeable only by pushing the keyset bound below the
+--    lateral, and it is deliberately left alone here — this migration is
+--    hygiene, not a redesign.
+
+-- agency-hub:statement
+drop index concurrently if exists agent_hydration_events_request_idx;

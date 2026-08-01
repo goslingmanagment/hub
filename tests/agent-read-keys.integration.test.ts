@@ -125,6 +125,29 @@ describe("agent read plane schema (migration 0115)", () => {
     );
   });
 
+  it("keeps exactly one physical index per (request_id, seq) on the event log", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // 0117 created `agent_hydration_events_request_idx (request_id, seq)` one
+    // statement after the UNIQUE constraint on the same pair, which is backed by
+    // its own btree: two identical indexes, both maintained on every insert.
+    // 0118 drops the redundant one, and this asserts the DATABASE agrees.
+    const indexes = await testDb.pool.query<{ indexname: string; indexdef: string }>(
+      "select indexname, indexdef from pg_indexes"
+        + " where tablename = 'agent_hydration_events' order by indexname",
+    );
+    const names = indexes.rows.map((row) => row.indexname);
+    expect(names).toContain("agent_hydration_events_seq_uniq");
+    expect(names).not.toContain("agent_hydration_events_request_idx");
+    const onTheSamePair = indexes.rows.filter((row) =>
+      /\(request_id, seq\)/.test(row.indexdef));
+    expect(onTheSamePair.map((row) => row.indexname)).toEqual([
+      "agent_hydration_events_seq_uniq",
+    ]);
+  });
+
   it("seeds the archive generation singleton and refuses a second row", async (context) => {
     if (!testDb) {
       context.skip();

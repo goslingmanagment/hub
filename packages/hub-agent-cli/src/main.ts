@@ -25,9 +25,13 @@ import {
  *    error, bad flag: all of them print a document. An agent parsing stdout never
  *    has to branch on "did it print anything".
  * 2. **The exit code carries the epistemic verdict, not just the transport.**
- *    `0` the answer came back complete; `3` the answer came back but the hub
- *    listed reasons it is narrower than the question, and `--fail-on-partial` was
- *    asked for; `4` no answer (hub error, refusal, timeout, bad flags).
+ *    `0` the answer came back — and NOTHING MORE: without `--fail-on-partial` a
+ *    response whose `blockers` is non-empty still exits `0`, which is the normal
+ *    case (`claim_not_declared` fires on every claimless call). `3` the answer
+ *    came back, the hub listed reasons it is narrower than the question, AND
+ *    `--fail-on-partial` was asked for; `4` no answer (hub error, refusal,
+ *    timeout, bad flags). Completeness is read from the document, never from the
+ *    exit code.
  *
  * WHY 3 EXISTS AT ALL. The obvious design, copied from the sibling `tg` tool, is
  * "always exit 0 and let the document speak". That works there because a failure
@@ -42,7 +46,7 @@ import {
  * fails loudly here instead of handing an agent a body it will misread.
  */
 
-/** The answer came back and the hub listed nothing narrowing it. */
+/** The call succeeded. NOT a completeness verdict: `blockers` can be non-empty. */
 export const HUB_EXIT_OK = 0;
 /** The answer came back with blockers, and --fail-on-partial was passed. */
 export const HUB_EXIT_PARTIAL = 3;
@@ -98,7 +102,7 @@ function usageDocument(message: string, command?: HubCommand): Record<string, un
           credentials: `HUB_AGENT_KEY, or HUB_AGENT_KEY=... in ${HUB_CREDENTIALS_PATH}`,
           baseUrl: `HUB_BASE_URL (default ${HUB_DEFAULT_BASE_URL})`,
           exitCodes: {
-            "0": "answer complete",
+            "0": "call succeeded; `blockers` may still be non-empty, read it",
             "3": "answer has blockers and --fail-on-partial was passed",
             "4": "no answer",
           },

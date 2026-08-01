@@ -644,8 +644,14 @@ export async function loadAgentPersonIdentityExtras(
         pageAlias: row.page_alias == null ? null : String(row.page_alias),
       })),
     },
+    // NOT `fans`: none of the three statements above reads it. The caller (#3)
+    // reaches here only after `findAgentPersonIdentity`, which does read `fans`
+    // and returns its own witness for it, so the wire was never wrong — but a
+    // witness is a proof that a query RAN (decision #199), and one minted beside
+    // three statements that never touched the store is a proof of nothing. The
+    // day this function is called from somewhere else, that witness would be a
+    // false `state: "read"`.
     witnesses: witnessesFor([
-      "fans",
       "page_fans",
       "fan_username_aliases",
       "page_fan_aliases",
