@@ -27,6 +27,7 @@
 // over the same journal appends zero events and changes no row.
 
 import {
+  getFanslyReplayEligibleSpan,
   getFanslyReplayFloors,
   getProjectionWatermark,
   listDetachedJournalPartitions,
@@ -40,12 +41,12 @@ import {
   type FanslyReplayFloors,
   type FanslyReplayFollowInput,
   type FanslyReplayIdentityInput,
-  type FanslyReplayMembershipInput,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
   FANSLY_REPLAY_CANONICALIZED_KINDS,
+  FANSLY_REPLAY_CANONICALIZER_VERSION,
   FANSLY_REPLAY_EVENT_TYPES,
   FANSLY_REPLAY_FAMILY,
 } from "./canonicalize/fansly-replay.ts";
@@ -70,13 +71,14 @@ export interface FanslyReplayOptions {
   kinds?: readonly string[];
   pageSize?: number;
   maxPages?: number;
+  /** Resume a bounded run after this observation id (see report.coverage). */
+  afterId?: number | null;
 }
 
 export interface FanslyReplayProjectionResult {
   accounts: number;
   eventsSeen: number;
   fansTouched: number;
-  membershipsTouched: number;
   followsInserted: number;
   followerDaysTouched: number;
   knownTotalDaysTouched: number;
@@ -89,10 +91,30 @@ export interface FanslyReplayReport {
   preflight: {
     ok: boolean;
     window: { from: string | null; to: string | null };
+    /** `occurred_at` range this run would write into; null when nothing is
+     *  eligible. Scopes the domain_events arm of the census. */
+    writeRange: { from: string | null; to: string | null };
     detachedPartitions: DetachedJournalPartition[];
   };
   kinds: readonly string[];
   accountIds: number[];
+  /**
+   * What this bounded run actually looked at. A dry run stamps nothing and so
+   * cannot advance on its own; without this an operator repeating the default
+   * shadow invocation would re-examine the same prefix forever and never learn
+   * that the corpus is larger than the bound. `nextAfterId` is the exact
+   * continuation cursor — feed it back as `--after-id`.
+   */
+  coverage: {
+    eligibleTotal: number;
+    examined: number;
+    remaining: number;
+    complete: boolean;
+    nextAfterId: number | null;
+  };
+  /** Counts-only parser diagnostics (e.g. refused vendor timestamps). A
+   *  systematic decode failure must not read as a clean run. */
+  parserDiagnostics: Record<string, number>;
   canonicalize: CanonicalizationRunResult | null;
   projection: FanslyReplayProjectionResult | null;
   floors: {
@@ -106,7 +128,6 @@ function emptyProjectionResult(): FanslyReplayProjectionResult {
     accounts: 0,
     eventsSeen: 0,
     fansTouched: 0,
-    membershipsTouched: 0,
     followsInserted: 0,
     followerDaysTouched: 0,
     knownTotalDaysTouched: 0,
@@ -127,25 +148,15 @@ function asOptionalDate(value: unknown): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function earlier(current: Date | null, candidate: Date | null): Date | null {
-  if (candidate === null) {
-    return current;
-  }
-  if (current === null) {
-    return candidate;
-  }
-  return candidate < current ? candidate : current;
-}
-
 /**
- * Folds one batch of ledger events into the three projection inputs, deduped
- * per platform user so a single statement never hits the same conflict target
- * twice. "Since" dates fold to the EARLIEST seen in the batch; the SQL then
- * folds that against whatever the row already holds.
+ * Folds one batch of ledger events into the two projection inputs, deduped per
+ * platform user so a single statement never hits the same conflict target
+ * twice. `page_fans` is deliberately absent: a replay knows only about PAST
+ * relationships and those columns describe the CURRENT one (see
+ * applyFanslyReplayEvents).
  */
 function foldEvents(events: readonly { type: string; occurredAt: Date; data: unknown }[]) {
   const identities = new Map<string, FanslyReplayIdentityInput>();
-  const memberships = new Map<string, FanslyReplayMembershipInput>();
   const follows = new Map<string, FanslyReplayFollowInput>();
 
   const touchIdentity = (
@@ -173,22 +184,6 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
     });
   };
 
-  const touchMembership = (
-    platformUserId: string,
-    occurredAt: Date,
-    since: { followerSince?: Date | null; subscriberSince?: Date | null },
-  ) => {
-    const current = memberships.get(platformUserId);
-    memberships.set(platformUserId, {
-      platformUserId,
-      followerSince: earlier(current?.followerSince ?? null, since.followerSince ?? null),
-      subscriberSince: earlier(current?.subscriberSince ?? null, since.subscriberSince ?? null),
-      observedAt: current === undefined || occurredAt < current.observedAt
-        ? occurredAt
-        : current.observedAt,
-    });
-  };
-
   for (const event of events) {
     const data = asRecord(event.data);
     const platformUserId = typeof data.platformUserId === "string" ? data.platformUserId : null;
@@ -201,7 +196,6 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
         displayName: typeof data.displayName === "string" ? data.displayName : null,
         createdAtExternal: asOptionalDate(data.createdAtExternal),
       });
-      touchMembership(platformUserId, event.occurredAt, {});
       continue;
     }
 
@@ -210,12 +204,11 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
       // REFUSED, not defaulted. `followedAt` is null when the follow id did
       // not decode to a plausible Fansly moment; dating the row by the
       // observation instead would write a follow date we never observed, and
-      // both `page_follows.followed_at` and `follower_since` are floors that
-      // fold monotonically earlier — a wrong value there is unrepairable.
-      // The fan's identity still lands; only the dated row is withheld.
+      // `page_follows.followed_at` is a floor that folds monotonically
+      // earlier — a wrong value there is unrepairable. The fan's identity
+      // still lands; only the dated row is withheld.
       const followedAt = asOptionalDate(data.followedAt);
       touchIdentity(platformUserId, event.occurredAt);
-      touchMembership(platformUserId, event.occurredAt, { followerSince: followedAt });
       if (platformFollowId !== null && followedAt !== null) {
         const current = follows.get(platformFollowId);
         if (current === undefined || event.occurredAt < current.observedAt) {
@@ -231,10 +224,10 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
     }
 
     if (event.type === "subscription.observed" && platformUserId !== null) {
+      // Identity only. The subscription INTERVAL stays in the ledger: writing
+      // it into `page_fans.subscriber_since` would backdate a fan's current
+      // membership with an ended historical one.
       touchIdentity(platformUserId, event.occurredAt);
-      touchMembership(platformUserId, event.occurredAt, {
-        subscriberSince: asOptionalDate(data.subscribedAt),
-      });
       continue;
     }
 
@@ -243,15 +236,13 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
         ? data.partnerPlatformUserId
         : null;
       if (partner !== null) {
-        // A conversation proves the fan existed and reached this page. It
-        // proves NOTHING about following or subscribing, so it contributes
-        // membership presence with both "since" dates left null.
+        // A conversation proves the fan existed and reached this page, and
+        // nothing about following or subscribing.
         touchIdentity(partner, event.occurredAt, {
           username: typeof data.partnerUsername === "string" ? data.partnerUsername : null,
           displayName: null,
           createdAtExternal: null,
         });
-        touchMembership(partner, event.occurredAt, {});
       }
       continue;
     }
@@ -259,7 +250,6 @@ function foldEvents(events: readonly { type: string; occurredAt: Date; data: unk
 
   return {
     identities: [...identities.values()],
-    memberships: [...memberships.values()],
     follows: [...follows.values()],
   };
 }
@@ -290,11 +280,9 @@ export async function runFanslyReplayProjection(
         const applied = await applyFanslyReplayEvents(app.db, {
           platformAccountId: accountId,
           identities: folded.identities,
-          memberships: folded.memberships,
           follows: folded.follows,
         });
         totals.fansTouched += applied.fansTouched;
-        totals.membershipsTouched += applied.membershipsTouched;
         totals.followsInserted += applied.followsInserted;
       }
       watermark = events[events.length - 1]!.accountSeq;
@@ -328,20 +316,30 @@ export async function runFanslyReplay(
     ? FANSLY_REPLAY_CANONICALIZED_KINDS.filter((kind) => options.kinds!.includes(kind))
     : FANSLY_REPLAY_CANONICALIZED_KINDS;
   const window = { from: options.from ?? null, to: options.to ?? null };
+  const windowIso = {
+    from: window.from === null ? null : window.from.toISOString(),
+    to: window.to === null ? null : window.to.toISOString(),
+  };
 
   const base: FanslyReplayReport = {
     mode,
     refused: false,
     preflight: {
       ok: true,
-      window: {
-        from: window.from === null ? null : window.from.toISOString(),
-        to: window.to === null ? null : window.to.toISOString(),
-      },
+      window: windowIso,
+      writeRange: { from: null, to: null },
       detachedPartitions: [],
     },
     kinds,
     accountIds: [],
+    coverage: {
+      eligibleTotal: 0,
+      examined: 0,
+      remaining: 0,
+      complete: true,
+      nextAfterId: null,
+    },
+    parserDiagnostics: {},
     canonicalize: null,
     projection: null,
     floors: { before: [], after: [] },
@@ -351,21 +349,6 @@ export async function runFanslyReplay(
     return base;
   }
 
-  // Step 1 — the preflight, before any read of the journal and long before
-  // any write. A detached month is not a warning here.
-  const detachedPartitions = await listDetachedJournalPartitions(app.db, window);
-  if (detachedPartitions.length > 0) {
-    app.logger.error(
-      { detachedPartitions, window: base.preflight.window },
-      "Fansly replay refused: journal partitions covering the replay window are detached",
-    );
-    return {
-      ...base,
-      refused: true,
-      preflight: { ok: false, window: base.preflight.window, detachedPartitions },
-    };
-  }
-
   const pages = await listPageNativeAccountRefs(app.db);
   const accountIds = pages
     .filter((page) => FANSLY_REPLAY_PLATFORMS.has(page.platform))
@@ -373,10 +356,64 @@ export async function runFanslyReplay(
     .map((page) => page.id)
     .sort((left, right) => left - right);
 
+  // What this run is ELIGIBLE to consume, and therefore the exact
+  // `occurred_at` range it can write into (events are stamped at observation
+  // time). Both feed the preflight: a partition that cannot hold a row this
+  // run reads or writes is not a violation.
+  const eligible = await getFanslyReplayEligibleSpan(app.db, {
+    belowParseVersion: FANSLY_REPLAY_CANONICALIZER_VERSION,
+    source: FANSLY_REPLAY_FAMILY.source,
+    kinds,
+    accountIds,
+    from: window.from,
+    to: window.to,
+    afterId: options.afterId ?? null,
+  });
+  const writeRangeIso = {
+    from: eligible.writeFrom === null ? null : eligible.writeFrom.toISOString(),
+    to: eligible.writeTo === null ? null : eligible.writeTo.toISOString(),
+  };
+
+  // Step 1 — the preflight, before any read of the journal and long before any
+  // write. A detached month is not a warning here.
+  const detachedPartitions = await listDetachedJournalPartitions(app.db, {
+    from: window.from,
+    to: window.to,
+    accountIds,
+    journalKinds: kinds,
+    eventTypes: [...FANSLY_REPLAY_EVENT_TYPES],
+    writeFrom: eligible.writeFrom,
+    writeTo: eligible.writeTo,
+  });
+  if (detachedPartitions.length > 0) {
+    app.logger.error(
+      { detachedPartitions, window: windowIso, writeRange: writeRangeIso },
+      "Fansly replay refused: detached journal partitions intersect this run",
+    );
+    return {
+      ...base,
+      accountIds,
+      refused: true,
+      preflight: {
+        ok: false,
+        window: windowIso,
+        writeRange: writeRangeIso,
+        detachedPartitions,
+      },
+    };
+  }
+
   const floorsBefore: FanslyReplayFloors[] = [];
   for (const accountId of accountIds) {
     floorsBefore.push(await getFanslyReplayFloors(app.db, accountId, kinds));
   }
+
+  const diagnosticCounts = new Map<string, number>();
+  const diagnostics = {
+    record: (code: string) => {
+      diagnosticCounts.set(code, (diagnosticCounts.get(code) ?? 0) + 1);
+    },
+  };
 
   const canonicalize = await runCanonicalization(app, {
     families: [FANSLY_REPLAY_FAMILY],
@@ -394,6 +431,8 @@ export async function runFanslyReplay(
     // shadow = canonicalize and count; the driver's dry run appends nothing
     // and stamps nothing, so the next `on` run sees exactly the same corpus.
     dryRun: mode === "shadow",
+    diagnostics,
+    ...(options.afterId != null ? { afterId: options.afterId } : {}),
     ...(options.pageSize !== undefined ? { pageSize: options.pageSize } : {}),
     ...(options.maxPages !== undefined ? { maxPagesPerFamily: options.maxPages } : {}),
   });
@@ -407,9 +446,34 @@ export async function runFanslyReplay(
     floorsAfter.push(await getFanslyReplayFloors(app.db, accountId, kinds));
   }
 
+  const remaining = Math.max(0, eligible.total - canonicalize.scanned);
+  const coverage = {
+    eligibleTotal: eligible.total,
+    examined: canonicalize.scanned,
+    remaining,
+    complete: remaining === 0,
+    nextAfterId: remaining === 0 ? null : canonicalize.lastObservationId,
+  };
+  if (!coverage.complete) {
+    // A shadow run cannot advance by itself (it stamps nothing), so silence
+    // here would let the same prefix be verified over and over while the
+    // staged-flag ritual believes the corpus was covered.
+    app.logger.warn(
+      { coverage, mode },
+      "Fansly replay examined only part of the eligible corpus; resume with afterId",
+    );
+  }
+  const parserDiagnostics = Object.fromEntries([...diagnosticCounts.entries()].sort());
+  if (diagnosticCounts.size > 0) {
+    app.logger.warn({ parserDiagnostics }, "Fansly replay refused vendor values it could not read");
+  }
+
   return {
     ...base,
     accountIds,
+    preflight: { ok: true, window: windowIso, writeRange: writeRangeIso, detachedPartitions: [] },
+    coverage,
+    parserDiagnostics,
     canonicalize,
     projection,
     floors: { before: floorsBefore, after: floorsAfter },

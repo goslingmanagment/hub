@@ -136,10 +136,26 @@ export function asDomainInstant(value: unknown): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-/** Every instant leaves the canonicalizer as an ISO string or null, so no
- *  downstream reader ever repeats the seconds-vs-milliseconds decision. */
-function asDomainInstantIso(value: unknown): string | null {
-  return asDomainInstant(value)?.toISOString() ?? null;
+/**
+ * Every instant leaves the canonicalizer as an ISO string or null, so no
+ * downstream reader ever repeats the seconds-vs-milliseconds decision.
+ *
+ * A refusal is COUNTED. Refusing is right for one bad value, but a SYSTEMATIC
+ * decode failure would otherwise produce a green report with quietly fewer
+ * rows; the counter is what turns "dropped on purpose" into something an
+ * operator can see. An absent field is not a refusal — only a present value
+ * we declined to believe.
+ */
+function asDomainInstantIso(
+  value: unknown,
+  context: CanonicalizeRunContext | undefined,
+  code: string,
+): string | null {
+  const instant = asDomainInstant(value);
+  if (instant === null && value !== undefined && value !== null) {
+    context?.diagnostics?.record(`timestamp_refused:${code}`);
+  }
+  return instant?.toISOString() ?? null;
 }
 
 /** Fansly `autoRenew` is 0/1 on the wire; anything else is genuinely unknown. */
@@ -156,20 +172,27 @@ function asAutoRenew(value: unknown): boolean | null {
  *  then contributes NO row rather than one dated by guesswork. Malformed ids
  *  are common enough in a multi-year journal that a throw here would wedge a
  *  whole page of rows. */
-function followedAtFrom(followId: string): Date | null {
+function followedAtFrom(
+  followId: string,
+  context: CanonicalizeRunContext | undefined,
+): Date | null {
+  const refuse = () => {
+    context?.diagnostics?.record("timestamp_refused:followers.followId");
+    return null;
+  };
   try {
     const decoded = fanslyFollowIdToDate(followId);
     if (Number.isNaN(decoded.getTime())) {
-      return null;
+      return refuse();
     }
     const ms = decoded.getTime();
     // The decode is `epoch + (id >> 22)`, so it can never land BEFORE the
     // epoch — landing exactly ON it means the id carried no timestamp at all
     // (a garbage id like "1"). Dating a follow at the platform's zero instant
     // would be a fabricated floor, so that case is refused too.
-    return ms <= FANSLY_PLATFORM_EPOCH_MS || ms >= IMPLAUSIBLE_FUTURE_MS ? null : decoded;
+    return ms <= FANSLY_PLATFORM_EPOCH_MS || ms >= IMPLAUSIBLE_FUTURE_MS ? refuse() : decoded;
   } catch {
-    return null;
+    return refuse();
   }
 }
 
@@ -183,7 +206,10 @@ interface AccountLike {
   createdAtExternal: string | null;
 }
 
-function readAccountLike(item: unknown): AccountLike | null {
+function readAccountLike(
+  item: unknown,
+  context: CanonicalizeRunContext | undefined,
+): AccountLike | null {
   if (!isRecord(item)) {
     return null;
   }
@@ -195,7 +221,7 @@ function readAccountLike(item: unknown): AccountLike | null {
     platformUserId,
     username: asString(item.username),
     displayName: asString(item.displayName),
-    createdAtExternal: asDomainInstantIso(item.createdAt),
+    createdAtExternal: asDomainInstantIso(item.createdAt, context, "accounts.createdAt"),
   };
 }
 
@@ -205,6 +231,7 @@ function readAccountLike(item: unknown): AccountLike | null {
 function identityEvents(
   observation: CanonicalizableObservation,
   accounts: unknown,
+  context: CanonicalizeRunContext | undefined,
 ): CanonicalEventDraft[] {
   if (!Array.isArray(accounts)) {
     return [];
@@ -212,7 +239,7 @@ function identityEvents(
   const events: CanonicalEventDraft[] = [];
   const seen = new Set<string>();
   for (const item of accounts) {
-    const account = readAccountLike(item);
+    const account = readAccountLike(item, context);
     if (account === null) {
       continue;
     }
@@ -243,14 +270,17 @@ function identityEvents(
 
 // ── followers ──────────────────────────────────────────────────────────────
 
-function fanslyFollowers(observation: CanonicalizableObservation): CanonicalEventDraft[] {
+function fanslyFollowers(
+  observation: CanonicalizableObservation,
+  context: CanonicalizeRunContext | undefined,
+): CanonicalEventDraft[] {
   if (!isRecord(observation.payload)) {
     return [];
   }
   const aggregation = isRecord(observation.payload.aggregationData)
     ? observation.payload.aggregationData
     : {};
-  const events: CanonicalEventDraft[] = identityEvents(observation, aggregation.accounts);
+  const events: CanonicalEventDraft[] = identityEvents(observation, aggregation.accounts, context);
 
   const followers = observation.payload.followers;
   if (!Array.isArray(followers)) {
@@ -271,7 +301,7 @@ function fanslyFollowers(observation: CanonicalizableObservation): CanonicalEven
       continue;
     }
     seen.add(dedupKey);
-    const followedAt = followedAtFrom(followId);
+    const followedAt = followedAtFrom(followId, context);
     events.push({
       type: "follow.observed",
       occurredAt: observedAt(observation),
@@ -279,9 +309,10 @@ function fanslyFollowers(observation: CanonicalizableObservation): CanonicalEven
       data: {
         followId,
         platformUserId: followerId,
-        // The follow relation id IS the follow moment (snowflake); null only
-        // when the id is unparseable, and the projection then leaves the
-        // row's followed_at to the observation time rather than guessing.
+        // The follow relation id IS the follow moment (snowflake). Null when
+        // the id does not decode to a real Fansly moment — and the projection
+        // then creates NO page_follows row at all, rather than dating one by
+        // guesswork.
         followedAt: followedAt === null ? null : followedAt.toISOString(),
       },
       schemaVersion: 1,
@@ -293,7 +324,10 @@ function fanslyFollowers(observation: CanonicalizableObservation): CanonicalEven
 
 // ── subscribers ────────────────────────────────────────────────────────────
 
-function fanslySubscribers(observation: CanonicalizableObservation): CanonicalEventDraft[] {
+function fanslySubscribers(
+  observation: CanonicalizableObservation,
+  context: CanonicalizeRunContext | undefined,
+): CanonicalEventDraft[] {
   if (!isRecord(observation.payload)) {
     return [];
   }
@@ -317,7 +351,16 @@ function fanslySubscribers(observation: CanonicalizableObservation): CanonicalEv
     // Money stays as the integer the platform sent: Fansly subscription
     // prices are MILLS (page_subscriptions.price_mills holds the same
     // number). Nothing here does arithmetic on them.
-    const mutable = {
+    const data = {
+      subscriptionId,
+      platformUserId: subscriberId,
+      historyId: asString(item.historyId),
+      planId: asString(item.planId),
+      subscriptionTierName: asString(item.subscriptionTierName),
+      canonicalStatus: rawStatus === null ? "unknown" : mapFanslySubscriptionStatus(rawStatus),
+      billingCycleDays: asNumber(item.billingCycle),
+      durationDays: asNumber(item.duration),
+      subscribedAt: asDomainInstantIso(item.createdAt, context, "subscriptions.createdAt"),
       rawStatus,
       priceMills: asNumber(item.price),
       renewPriceMills: asNumber(item.renewPrice),
@@ -325,11 +368,17 @@ function fanslySubscribers(observation: CanonicalizableObservation): CanonicalEv
       subscriptionTierId: asString(item.subscriptionTierId),
       // Interpreted, not raw: the window fields legitimately sit in the
       // future, so only the epoch floor and the overflow ceiling apply.
-      endsAt: asDomainInstantIso(item.endsAt),
-      renewDate: asDomainInstantIso(item.renewDate),
-      updatedAt: asDomainInstantIso(item.updatedAt),
+      endsAt: asDomainInstantIso(item.endsAt, context, "subscriptions.endsAt"),
+      renewDate: asDomainInstantIso(item.renewDate, context, "subscriptions.renewDate"),
+      updatedAt: asDomainInstantIso(item.updatedAt, context, "subscriptions.updatedAt"),
     };
-    const dedupKey = `subscription:${subscriptionId}:${stableHash(mutable)}`;
+    // Hash the WHOLE payload, not a hand-picked subset. An enumerated subset
+    // silently suppresses a correction to any field outside it: a later
+    // snapshot that fills or fixes `createdAt` while the rest is unchanged
+    // would collide on `domain_event_keys` and never be appended. Hashing
+    // everything makes that class of bug structurally impossible. The
+    // subscription id stays in the key prefix so the rows remain groupable.
+    const dedupKey = `subscription:${subscriptionId}:${stableHash(data)}`;
     if (seen.has(dedupKey)) {
       continue;
     }
@@ -338,21 +387,7 @@ function fanslySubscribers(observation: CanonicalizableObservation): CanonicalEv
       type: "subscription.observed",
       occurredAt: observedAt(observation),
       fanIdentityRef: subscriberId,
-      data: {
-        subscriptionId,
-        platformUserId: subscriberId,
-        historyId: asString(item.historyId),
-        planId: asString(item.planId),
-        subscriptionTierName: asString(item.subscriptionTierName),
-        canonicalStatus: rawStatus === null ? "unknown" : mapFanslySubscriptionStatus(rawStatus),
-        billingCycleDays: asNumber(item.billingCycle),
-        durationDays: asNumber(item.duration),
-        // Drives `page_fans.subscriber_since` through a monotone-earlier
-        // fold, so an uninterpretable value must stay null: a 1970 written
-        // here is a false floor no later run can lift.
-        subscribedAt: asDomainInstantIso(item.createdAt),
-        ...mutable,
-      },
+      data,
       schemaVersion: 1,
       dedupKey,
     });
@@ -396,7 +431,7 @@ function fanslyDmConversations(
   const aggregation = isRecord(observation.payload.aggregationData)
     ? observation.payload.aggregationData
     : {};
-  const events: CanonicalEventDraft[] = identityEvents(observation, aggregation.accounts);
+  const events: CanonicalEventDraft[] = identityEvents(observation, aggregation.accounts, context);
 
   const conversations = observation.payload.data;
   if (!Array.isArray(conversations)) {
@@ -462,7 +497,9 @@ function fanslyDmConversations(
         groupId,
         ...identity,
         conversationFlags: asNumber(item.flags),
-        lastMessageAt: lastMessage === null ? null : asDomainInstantIso(lastMessage.createdAt),
+        lastMessageAt: lastMessage === null
+          ? null
+          : asDomainInstantIso(lastMessage.createdAt, context, "groups.lastMessage.createdAt"),
         lastMessageSenderId: lastMessage === null ? null : asString(lastMessage.senderId),
       },
       schemaVersion: 1,
@@ -474,7 +511,10 @@ function fanslyDmConversations(
 
 // ── account_me ─────────────────────────────────────────────────────────────
 
-function fanslyAccountMe(observation: CanonicalizableObservation): CanonicalEventDraft[] {
+function fanslyAccountMe(
+  observation: CanonicalizableObservation,
+  context: CanonicalizeRunContext | undefined,
+): CanonicalEventDraft[] {
   if (!isRecord(observation.payload) || !isRecord(observation.payload.account)) {
     return [];
   }
@@ -492,7 +532,7 @@ function fanslyAccountMe(observation: CanonicalizableObservation): CanonicalEven
     displayName: asString(account.displayName),
     followCount: asNumber(account.followCount),
     subscriberCount: asNumber(account.subscriberCount),
-    createdAtExternal: asDomainInstantIso(account.createdAt),
+    createdAtExternal: asDomainInstantIso(account.createdAt, context, "account.createdAt"),
   };
   const day = businessDate(at);
   return [{
@@ -532,15 +572,59 @@ export function canonicalizeFanslyReplayObservation(
   }
   switch (observation.kind) {
     case "followers":
-      return fanslyFollowers(observation);
+      return fanslyFollowers(observation, context);
     case "subscribers":
-      return fanslySubscribers(observation);
+      return fanslySubscribers(observation, context);
     case "dm_conversations":
       return fanslyDmConversations(observation, context);
     case "account_me":
-      return fanslyAccountMe(observation);
+      return fanslyAccountMe(observation, context);
     default:
       return [];
+  }
+}
+
+/**
+ * Shape gate. Answers ONE question: does this payload match a shape we know?
+ *
+ * "Zero events" is ambiguous by itself — an empty followers page and a payload
+ * whose whole structure drifted both produce it, yet only the first may be
+ * stamped consumed. Stamping the second would remove it from every future
+ * replay as effectively as deleting it, which is precisely what the
+ * parse_version contract exists to prevent (and the same bug shape as the
+ * OnlyFans stamping fixed in review round 1, this time for Fansly).
+ *
+ * So: the CONTAINER must be present and of the right type. Its contents may be
+ * empty — that is a real, stampable observation of "nothing there".
+ */
+export function canParseFanslyReplayObservation(
+  observation: CanonicalizableObservation,
+): boolean {
+  if (observation.platform !== "fansly") {
+    // Not ours to judge; the account scoping keeps these out of the scan and
+    // the dispatch returns no events regardless.
+    return true;
+  }
+  if (!isRecord(observation.payload)) {
+    return false;
+  }
+  const payload = observation.payload;
+  switch (observation.kind) {
+    case "followers": {
+      // The trimmer always emits both keys; a payload missing them entirely is
+      // a shape we do not recognise.
+      const aggregation = isRecord(payload.aggregationData) ? payload.aggregationData : null;
+      return Array.isArray(payload.followers)
+        || (aggregation !== null && Array.isArray(aggregation.accounts));
+    }
+    case "subscribers":
+      return Array.isArray(payload.subscriptions);
+    case "dm_conversations":
+      return Array.isArray(payload.data);
+    case "account_me":
+      return isRecord(payload.account) && asString(payload.account.id) !== null;
+    default:
+      return true;
   }
 }
 
@@ -550,6 +634,7 @@ export const FANSLY_REPLAY_FAMILY: CanonicalizerFamily = {
   kinds: FANSLY_REPLAY_CANONICALIZED_KINDS,
   version: FANSLY_REPLAY_CANONICALIZER_VERSION,
   canonicalize: canonicalizeFanslyReplayObservation,
+  canParse: canParseFanslyReplayObservation,
   // Backfill of year-old facts under fresh account_seq values: delivering it
   // would hand a reconnecting client a year of "news". Every type above is
   // registered projection-only, and the driver appends the covering

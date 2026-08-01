@@ -441,12 +441,35 @@ export async function rebuildRevenueRollups(
   });
 }
 
+/**
+ * Rebuilds the page's daily follower rollup from `page_follows`.
+ *
+ * `new_followers` is fully derived and is recomputed from scratch, as it
+ * always was. `known_total_followers` is NOT derivable from `page_follows` —
+ * the live sync only ever knows TODAY's total — so the rebuild must not
+ * destroy a historical value it cannot recreate. It used to: the DELETE below
+ * cleared every row and the INSERT re-created historical days with a NULL
+ * total, which silently erased the per-day totals the Fansly replay backfills
+ * from the `page.identity_observed` ledger (slice D). Now the rebuild
+ * PRESERVES any total it did not produce, so the two writers agree instead of
+ * fighting: this one owns today's value and the follower counts, the replay
+ * owns the historical totals. Re-deriving from the ledger here was the
+ * alternative and was rejected — it would put a `domain_events` scan on the
+ * hot sync path for a value this function does not own.
+ */
 export async function rebuildFollowerRollups(
   db: Database,
   platformAccountId: number,
   knownTotalFollowers: number | null,
 ) {
   await db.transaction(async (tx) => {
+    const preserved = await tx.execute<{ business_date: string; known_total_followers: number }>(sql`
+      select business_date::text as business_date, known_total_followers
+      from daily_followers
+      where platform_account_id = ${platformAccountId}
+        and known_total_followers is not null
+        and business_date < (now() at time zone 'UTC')::date
+    `);
     await tx.delete(dailyFollowers).where(eq(dailyFollowers.platformAccountId, platformAccountId));
     await tx.execute(sql`
       insert into daily_followers (
@@ -477,6 +500,22 @@ export async function rebuildFollowerRollups(
         known_total_followers = excluded.known_total_followers,
         updated_at = excluded.updated_at
     `);
+    if (preserved.rows.length > 0) {
+      // Restore only where the rebuild left a hole: today's value stays the
+      // live one, and a day that no longer has any follows simply has no row
+      // to restore into (absence already means "unknown").
+      await tx.execute(sql`
+        update daily_followers df
+        set known_total_followers = x.known_total_followers,
+            updated_at = now()
+        from jsonb_to_recordset(${JSON.stringify(preserved.rows)}::jsonb) as x(
+          business_date date, known_total_followers integer
+        )
+        where df.platform_account_id = ${platformAccountId}
+          and df.business_date = x.business_date
+          and df.known_total_followers is null
+      `);
+    }
   });
 }
 

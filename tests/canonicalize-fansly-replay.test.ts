@@ -8,6 +8,7 @@ import { isProjectionOnlyDomainEventType } from "@agency_hub_core/db";
 import {
   asDomainInstant,
   canonicalizeFanslyReplayObservation,
+  canParseFanslyReplayObservation,
   FANSLY_REPLAY_CANONICALIZED_KINDS,
   FANSLY_REPLAY_EVENT_TYPES,
   FANSLY_REPLAY_FAMILY,
@@ -421,6 +422,65 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       // the same (account, dedup_key) claim twice.
       expect(new Set(events.map((event) => event.dedupKey)).size).toBe(events.length);
     }
+  });
+
+  describe("shape gate (review round 2, P2-2)", () => {
+    it("accepts a legitimately EMPTY snapshot — that is a real observation", () => {
+      const empty: Array<[string, unknown]> = [
+        ["followers", { followers: [], aggregationData: { accounts: [] } }],
+        ["subscribers", { stats: { total: 0 }, subscriptions: [] }],
+        ["dm_conversations", { data: [], aggregationData: { accounts: [], groups: [] } }],
+        ["account_me", { account: { id: "page-1" } }],
+      ];
+      for (const [kind, payload] of empty) {
+        expect(canParseFanslyReplayObservation(observation(kind, payload))).toBe(true);
+      }
+    });
+
+    it("refuses a drifted payload so the row is never stamped consumed", () => {
+      const drifted: Array<[string, unknown]> = [
+        ["followers", { items: [] }],
+        ["subscribers", { stats: { total: 3 }, subscriberList: [] }],
+        ["dm_conversations", { conversations: [] }],
+        ["account_me", { account: { username: "no id" } }],
+        ["account_me", { profile: {} }],
+      ];
+      for (const [kind, payload] of drifted) {
+        expect(canParseFanslyReplayObservation(observation(kind, payload))).toBe(false);
+      }
+      for (const payload of [null, 42, "text", []]) {
+        expect(canParseFanslyReplayObservation(observation("followers", payload))).toBe(false);
+      }
+    });
+
+    it("is wired onto the family, not merely exported", () => {
+      expect(FANSLY_REPLAY_FAMILY.canParse).toBe(canParseFanslyReplayObservation);
+    });
+  });
+
+  it("counts refused timestamps rather than dropping them silently", () => {
+    const counts = new Map<string, number>();
+    const context = {
+      nativeAccountRefByAccountId: new Map<number, string | null>(),
+      diagnostics: {
+        record: (code: string) => counts.set(code, (counts.get(code) ?? 0) + 1),
+      },
+    };
+    canonicalizeFanslyReplayObservation(
+      observation("subscribers", {
+        subscriptions: [{ id: "s1", subscriberId: "fan-1", status: 3, createdAt: 0, endsAt: 5 }],
+      }),
+      context,
+    );
+    canonicalizeFanslyReplayObservation(
+      observation("followers", { followers: [{ id: "1", followerId: "fan-1" }] }),
+      context,
+    );
+    expect(Object.fromEntries(counts)).toEqual({
+      "timestamp_refused:subscriptions.createdAt": 1,
+      "timestamp_refused:subscriptions.endsAt": 1,
+      "timestamp_refused:followers.followId": 1,
+    });
   });
 
   it("returns zero events for garbage payloads instead of throwing", () => {

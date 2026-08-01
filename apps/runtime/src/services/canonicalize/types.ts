@@ -32,6 +32,14 @@ export interface CanonicalEventDraft {
  *  that don't need it simply ignore the argument. */
 export interface CanonicalizeRunContext {
   nativeAccountRefByAccountId: ReadonlyMap<number, string | null>;
+  /**
+   * Counts-only sink for parser diagnostics. A canonicalizer that REFUSES a
+   * value (rather than guessing one) drops a fact on the floor; with no
+   * counter a systematic decode failure looks exactly like a clean run that
+   * happened to yield fewer rows. Codes are fixed strings — never payload
+   * content.
+   */
+  diagnostics?: { record: (code: string) => void };
 }
 
 export type Canonicalizer = (

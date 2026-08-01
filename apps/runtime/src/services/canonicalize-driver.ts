@@ -96,6 +96,15 @@ export interface CanonicalizationRunResult {
   /** Observations with events but no mapped account — retried next sweep. */
   skippedUnmapped: number;
   /**
+   * Rows the family's shape gate refused: the payload matches no shape the
+   * family knows, so it stays UNSTAMPED and replayable for a future parser.
+   * Distinct from a legitimately EMPTY snapshot, which is consumed normally.
+   */
+  skippedUnparseable: number;
+  /** Highest observation id examined this run — the exact continuation cursor
+   * for a bounded run (feed it back as `afterId`). Null when nothing matched. */
+  lastObservationId: number | null;
+  /**
    * Rows whose canonicalize/append/stamp threw — logged, left UNSTAMPED
    * (retried next sweep), never allowed to wedge the run. Parsers are total
    * by design, so anything here is a transient DB error or a genuine bug
@@ -133,6 +142,15 @@ export interface CanonicalizationRunOptions {
   /** Paging-bound overrides (tests; mirrors the corrections reconciler). */
   pageSize?: number;
   maxPagesPerFamily?: number;
+  /** Start the keyset scan after this observation id. The continuation cursor
+   * for a bounded run: a run that hit `maxPagesPerFamily` reports
+   * `lastObservationId`, and passing it back here resumes EXACTLY where it
+   * stopped — which is what makes a dry run (which stamps nothing, so it
+   * cannot advance by itself) able to cover a large corpus. Ignored when
+   * `useSweepCursor` is set. */
+  afterId?: number | null;
+  /** Counts-only parser diagnostics sink, handed to every canonicalizer. */
+  diagnostics?: { record: (code: string) => void };
 }
 
 /** Where each family's NEXT sweep resumes (see useSweepCursor). Module-level
@@ -158,6 +176,7 @@ async function runFamily(
   runContext: {
     nativeAccountRefByAccountId: ReadonlyMap<number, string | null>;
     accountIdByNativeRef: ReadonlyMap<string, number>;
+    diagnostics?: { record: (code: string) => void };
   },
 ) {
   const kinds = options.kinds !== undefined
@@ -176,7 +195,7 @@ async function runFamily(
   const maxPages = options.maxPagesPerFamily ?? SWEEP_MAX_PAGES_PER_FAMILY;
   let afterId: number | null = useCursor
     ? sweepCursors.get(sweepCursorKey(family)) ?? null
-    : null;
+    : options.afterId ?? null;
   let reachedEnd = false;
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     const rows: ReplayObservationRow[] = await listObservationsForReplay(app.db, {
@@ -198,6 +217,9 @@ async function runFamily(
 
     for (const row of rows) {
       totals.scanned += 1;
+      totals.lastObservationId = totals.lastObservationId === null
+        ? row.id
+        : Math.max(totals.lastObservationId, row.id);
       totals.maxLagSeconds = Math.max(
         totals.maxLagSeconds,
         Math.round((now.getTime() - row.receivedAt.getTime()) / 1000),
@@ -207,6 +229,14 @@ async function runFamily(
       // the version floor and is retried next run; everything after it in
       // this run still processes (afterId already advanced past the page).
       try {
+        // Shape gate BEFORE anything else: a payload the family cannot read
+        // must not be stamped consumed. Stamping it would delete it from
+        // every future replay just as surely as a DROP would — the exact
+        // failure the parse_version contract exists to prevent.
+        if (family.canParse !== undefined && !family.canParse(row)) {
+          totals.skippedUnparseable += 1;
+          continue;
+        }
         const drafts = family.canonicalize(row, runContext)
           .map((draft) => clampDraftOccurredAt(draft, row.receivedAt, now));
         // Capture-first rows (webhook) carry only the vendor account ref;
@@ -283,6 +313,8 @@ export async function runCanonicalization(
     deduped: 0,
     stamped: 0,
     skippedUnmapped: 0,
+    skippedUnparseable: 0,
+    lastObservationId: null,
     errored: 0,
     maxLagSeconds: 0,
   };
@@ -307,6 +339,7 @@ export async function runCanonicalization(
       pages.map((page) => [page.id, page.nativeAccountRef] as const),
     ),
     accountIdByNativeRef,
+    ...(options.diagnostics !== undefined ? { diagnostics: options.diagnostics } : {}),
   };
   for (const family of options.families ?? CANONICALIZER_FAMILIES) {
     // Family isolation: a structural failure in one family (e.g. its list

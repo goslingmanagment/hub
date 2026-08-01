@@ -110,34 +110,55 @@ function overlapsWindow(
   return true;
 }
 
+export interface FanslyReplayPreflightScope {
+  /** The journal read window (`observations.received_at`). */
+  from?: Date | null;
+  to?: Date | null;
+  /** Pages this run replays. Empty = nothing is in scope. */
+  accountIds: readonly number[];
+  /** Observation kinds this run reads. */
+  journalKinds: readonly string[];
+  /** Event types this run appends and projects. */
+  eventTypes: readonly string[];
+  /** `occurred_at` range this run will WRITE events into (derived from the
+   *  eligible observations); null when the run will write nothing. */
+  writeFrom?: Date | null;
+  writeTo?: Date | null;
+}
+
 /**
- * MANDATORY PREFLIGHT. Every relation named like a partition of a journal
- * parent that is NOT attached right now (`pg_inherits`) — parked in
- * `tiered_pending_drop` by Stage 28 tiering, or left detached in `public`.
+ * MANDATORY PREFLIGHT. Relations named like a partition of a journal parent
+ * that are NOT attached right now (`pg_inherits`) — parked in
+ * `tiered_pending_drop` by Stage 28 tiering, or left detached in `public` —
+ * AND that actually intersect what THIS run touches.
  *
- * Nonempty means months of ledger are invisible to the replay while their rows
- * still exist. Canonicalizing across that hole and then publishing a capture
- * floor mints a floor that lies about which months were ever captured. The
- * runner refuses; the owner re-attaches first.
+ * The hazard is real: rows in a parked partition still exist but are invisible,
+ * so canonicalizing across the hole and then publishing a capture floor mints a
+ * floor that lies about which months were captured. But an unscoped census is
+ * just as wrong in the other direction — it refuses forever on a healthy
+ * database. Production carries exactly that state today: four parked
+ * `domain_events` monthlies from 2024/2025 holding 30 `transaction.posted`
+ * rows, kept detached on purpose because migration 0077 re-covered their range
+ * with overlapping YEARLY partitions and re-attaching is therefore impossible.
+ * None of it can collide with a replay whose sources start in 2026.
  *
- * Window scoping differs by parent ON PURPOSE:
- *   * `observations` / `sync_raw_payloads` are read through the replay window
- *     (`received_at`), so only partitions overlapping it can hide input;
- *   * `domain_events` is read by the PROJECTION, which walks each account from
- *     its watermark with no window at all. A detached month holding events
- *     there is fatal regardless of the requested window: `listEventsSince`
- *     cannot see those rows, the watermark marches straight past their seqs,
- *     and they are never projected. The window never excuses it.
+ * So a detached partition is an offender only when it is NON-EMPTY (R-014) and
+ * intersects this run, per parent:
  *
- * ONLY PARTITIONS THAT HOLD ROWS COUNT. An empty detached partition hides
- * nothing, and the healthy production schema HAS several: migration 0077
- * deliberately leaves the 2024/2025 `domain_events` monthlies detached in
- * `public` after re-covering their range with yearly partitions. Refusing on
- * those would mean refusing forever.
+ *   * `observations` — holds rows for a replayed page and a replayed kind, and
+ *     overlaps the replay window (`received_at`). That is exactly the input
+ *     this run reads, so hidden rows there would corrupt the floors.
+ *   * `sync_raw_payloads` — unpartitioned today, so nothing matches; kept for
+ *     the day it is partitioned.
+ *   * `domain_events` — either it holds events of a REPLAYED TYPE for a
+ *     replayed page (the projection walks each account from its watermark with
+ *     no window; hidden rows are skipped silently and forever), or its range
+ *     overlaps the `occurred_at` range this run will write into (appends there
+ *     would fail 23514). Foreign types and foreign accounts cannot do either.
  */
 export async function listDetachedJournalPartitions(
   db: Database,
-  window: { from?: Date | null; to?: Date | null } = {},
+  scope: FanslyReplayPreflightScope,
 ): Promise<DetachedJournalPartition[]> {
   const detached = await db.execute<{ schema: string; name: string }>(sql`
     select n.nspname as schema, c.relname as name
@@ -154,19 +175,63 @@ export async function listDetachedJournalPartitions(
       )
     order by n.nspname, c.relname
   `);
+  if (detached.rows.length === 0 || scope.accountIds.length === 0) {
+    return [];
+  }
 
-  const bounds = { from: window.from ?? null, to: window.to ?? null };
+  const readWindow = { from: scope.from ?? null, to: scope.to ?? null };
+  const writeWindow = { from: scope.writeFrom ?? null, to: scope.writeTo ?? null };
+  const hasWriteRange = scope.writeFrom != null || scope.writeTo != null;
+  const accounts = sql.join(scope.accountIds.map((id) => sql`${id}`), sql`, `);
   const offenders: DetachedJournalPartition[] = [];
+
   for (const relation of detached.rows) {
     const range = partitionRange(relation.name);
-    const windowScoped = range.table !== "domain_events";
-    if (windowScoped && !overlapsWindow(range, bounds)) {
-      continue;
+    const target = quotedRelation(relation.schema, relation.name);
+    let rowCount = 0;
+
+    if (range.table === "domain_events") {
+      // Arm 1: does it hide events the PROJECTION would have applied?
+      const types = scope.eventTypes.length === 0
+        ? null
+        : sql.join(scope.eventTypes.map((type) => sql`${type}`), sql`, `);
+      if (types !== null) {
+        const held = await db.execute<{ n: string }>(sql`
+          select count(*)::text as n from ${target}
+          where account_id in (${accounts}) and type in (${types})
+        `);
+        rowCount = Number(held.rows[0]?.n ?? 0);
+      }
+      // Arm 2: would this run try to WRITE into that month? Still gated on
+      // non-emptiness (R-014) — an empty partition in the write range fails
+      // loudly per row (23514) and surfaces through `errored`, which the CLI
+      // turns into a non-zero exit.
+      if (rowCount === 0 && hasWriteRange && overlapsWindow(range, writeWindow)) {
+        const any = await db.execute<{ n: string }>(sql`
+          select count(*)::text as n from ${target}
+        `);
+        rowCount = Number(any.rows[0]?.n ?? 0);
+      }
+    } else if (range.table === "observations") {
+      if (!overlapsWindow(range, readWindow) || scope.journalKinds.length === 0) {
+        continue;
+      }
+      const kinds = sql.join(scope.journalKinds.map((kind) => sql`${kind}`), sql`, `);
+      const held = await db.execute<{ n: string }>(sql`
+        select count(*)::text as n from ${target}
+        where account_id in (${accounts}) and kind in (${kinds})
+      `);
+      rowCount = Number(held.rows[0]?.n ?? 0);
+    } else {
+      if (!overlapsWindow(range, readWindow)) {
+        continue;
+      }
+      const held = await db.execute<{ n: string }>(sql`
+        select count(*)::text as n from ${target}
+      `);
+      rowCount = Number(held.rows[0]?.n ?? 0);
     }
-    const count = await db.execute<{ n: string }>(sql`
-      select count(*)::text as n from ${quotedRelation(relation.schema, relation.name)}
-    `);
-    const rowCount = Number(count.rows[0]?.n ?? 0);
+
     if (rowCount === 0) {
       continue;
     }
@@ -182,6 +247,75 @@ export async function listDetachedJournalPartitions(
   return offenders;
 }
 
+export interface FanslyReplayEligibleSpan {
+  /** Rows still awaiting this canonicalizer version under the run's filters. */
+  total: number;
+  /** Earliest / latest `occurred_at` the run would stamp on new events —
+   *  events take the observation time (`observed_at`, else `received_at`). */
+  writeFrom: Date | null;
+  writeTo: Date | null;
+}
+
+/**
+ * The run's own footprint, measured before it starts: how many observations it
+ * is eligible to consume, and the exact `occurred_at` band its appends would
+ * land in. The preflight needs the band to decide whether a detached
+ * `domain_events` month could possibly collide, and the report needs the count
+ * to say honestly how much of the corpus a bounded (especially dry) run left
+ * unexamined.
+ */
+export async function getFanslyReplayEligibleSpan(
+  db: Database,
+  input: {
+    belowParseVersion: number;
+    source: string;
+    kinds: readonly string[];
+    accountIds: readonly number[];
+    from?: Date | null;
+    to?: Date | null;
+    afterId?: number | null;
+  },
+): Promise<FanslyReplayEligibleSpan> {
+  if (input.accountIds.length === 0 || input.kinds.length === 0) {
+    return { total: 0, writeFrom: null, writeTo: null };
+  }
+  const conditions = [
+    sql`o.parse_version < ${input.belowParseVersion}`,
+    sql`o.source = ${input.source}`,
+    sql`o.kind in (${sql.join(input.kinds.map((kind) => sql`${kind}`), sql`, `)})`,
+    sql`o.account_id in (${sql.join(input.accountIds.map((id) => sql`${id}`), sql`, `)})`,
+  ];
+  if (input.from) {
+    conditions.push(sql`o.received_at >= ${input.from}`);
+  }
+  if (input.to) {
+    conditions.push(sql`o.received_at < ${input.to}`);
+  }
+  if (input.afterId != null) {
+    conditions.push(sql`o.id > ${input.afterId}`);
+  }
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select count(*)::text as total,
+           min(coalesce(o.observed_at, o.received_at)) as write_from,
+           max(coalesce(o.observed_at, o.received_at)) as write_to
+    from observations o
+    where ${sql.join(conditions, sql` and `)}
+  `);
+  const row = result.rows[0] ?? {};
+  const toDate = (value: unknown): Date | null => {
+    if (value == null) {
+      return null;
+    }
+    const parsed = value instanceof Date ? value : new Date(String(value));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+  return {
+    total: Number(row.total ?? 0),
+    writeFrom: toDate(row.write_from),
+    writeTo: toDate(row.write_to),
+  };
+}
+
 // ── projection appliers ────────────────────────────────────────────────────
 
 export interface FanslyReplayIdentityInput {
@@ -189,13 +323,6 @@ export interface FanslyReplayIdentityInput {
   username: string | null;
   displayName: string | null;
   createdAtExternal: Date | null;
-  observedAt: Date;
-}
-
-export interface FanslyReplayMembershipInput {
-  platformUserId: string;
-  followerSince: Date | null;
-  subscriberSince: Date | null;
   observedAt: Date;
 }
 
@@ -208,7 +335,6 @@ export interface FanslyReplayFollowInput {
 
 export interface FanslyReplayApplyResult {
   fansTouched: number;
-  membershipsTouched: number;
   followsInserted: number;
 }
 
@@ -220,26 +346,33 @@ function jsonParam(rows: readonly unknown[]) {
  * Applies one batch of replayed facts for ONE Fansly page, in a single
  * transaction. Caller-deduped by key (a jsonb batch with two rows for the same
  * conflict target cannot be applied twice in one statement).
+ *
+ * `page_fans` IS NOT WRITTEN AT ALL — not created, not updated.
+ * `follower_since` / `subscriber_since` describe the fan's CURRENT
+ * relationship, and a replay only ever knows about past ones. A fan whose old
+ * relationship ENDED and who later started a NEW one would have the current
+ * membership backdated to the old start (`least()` cannot tell the two apart),
+ * and the ordinary reconciles then rewrite or clear those fields from ACTIVE
+ * rows only (`repositories/fans.ts` followers / subscribers) — so the damage
+ * would neither be caught nor be repairable by a rerun, whose watermark has
+ * already passed the events. Historical intervals live where they belong:
+ * follows in `page_follows` (inactive rows, dated by the relation id) and
+ * subscriptions in the event ledger, which is also why `subscription.observed`
+ * has no projection in run-1.
  */
 export async function applyFanslyReplayEvents(
   db: Database,
   input: {
     platformAccountId: number;
     identities: readonly FanslyReplayIdentityInput[];
-    memberships: readonly FanslyReplayMembershipInput[];
     follows: readonly FanslyReplayFollowInput[];
   },
 ): Promise<FanslyReplayApplyResult> {
   const result: FanslyReplayApplyResult = {
     fansTouched: 0,
-    membershipsTouched: 0,
     followsInserted: 0,
   };
-  if (
-    input.identities.length === 0
-    && input.memberships.length === 0
-    && input.follows.length === 0
-  ) {
+  if (input.identities.length === 0 && input.follows.length === 0) {
     return result;
   }
 
@@ -276,45 +409,6 @@ export async function applyFanslyReplayEvents(
         returning fans.id
       `);
       result.fansTouched = applied.rows.length;
-    }
-
-    if (input.memberships.length > 0) {
-      // UPDATE ONLY — a replay never CREATES a page_fans row.
-      //
-      // `page_fans` is the workboard's candidate set: the board selects from
-      // it filtered by page and `fans.deleted_detected_at is null` and nothing
-      // else (repositories/workboard-v2.ts). Minting a row per historical
-      // follower would drop thousands of year-old fans onto the owner's live
-      // board — an effect nowhere in this slice's scope. The audience floors
-      // do not need it either: they read `page_follows`, which this module
-      // does insert into.
-      //
-      // So the replay only backfills the two HISTORICAL dates on rows the page
-      // already has, folded monotonically earlier. Current state
-      // (is_follower / is_subscriber) is never written.
-      const rows = input.memberships.map((membership) => ({
-        platform_user_id: membership.platformUserId,
-        follower_since: membership.followerSince === null
-          ? null
-          : membership.followerSince.toISOString(),
-        subscriber_since: membership.subscriberSince === null
-          ? null
-          : membership.subscriberSince.toISOString(),
-      }));
-      const applied = await tx.execute(sql`
-        update page_fans pf set
-          follower_since = least(pf.follower_since, x.follower_since),
-          subscriber_since = least(pf.subscriber_since, x.subscriber_since)
-        from jsonb_to_recordset(${jsonParam(rows)}) as x(
-          platform_user_id text, follower_since timestamptz, subscriber_since timestamptz
-        )
-        join fans f on f.platform = 'fansly' and f.platform_user_id = x.platform_user_id
-        where pf.platform_account_id = ${input.platformAccountId}
-          and pf.fan_id = f.id
-          and (x.follower_since is not null or x.subscriber_since is not null)
-        returning pf.id
-      `);
-      result.membershipsTouched = applied.rows.length;
     }
 
     if (input.follows.length > 0) {
@@ -357,27 +451,34 @@ export interface FanslyReplayRollupResult {
  * Audience rollups, derived not destroyed — and RE-DERIVED on every run.
  *
  * Both statements read durable sources (`page_follows` and the event ledger),
- * never this run's batch, so they are pure functions of committed state. That
- * is what makes the historical values SURVIVE: the live hourly
- * `rebuildFollowerRollups` DELETEs the page's `daily_followers` rows and
- * rebuilds them with `known_total_followers` set only for today, wiping every
- * historical value. The runner therefore calls this for every selected
- * account on every run, not only when new events showed up — a refresh gated
- * on "did this run see work" would run exactly once, and the floors it
- * advertises would quietly evaporate at the next live rebuild (or after a
- * crash between the watermark advance and the refresh).
+ * never this run's batch, so they are pure functions of committed state, and
+ * the runner calls them for every selected account on every run — a refresh
+ * gated on "did this run see new events" would fire exactly once and never
+ * again once the watermark reached the head.
+ *
+ * Survival across an ORDINARY sync is the live rebuild's job, not this one's:
+ * `rebuildFollowerRollups` now preserves any `known_total_followers` it did
+ * not produce instead of clearing it. This function is the writer; that one
+ * agreed to stop destroying.
  *
  * Statement 1 UPSERTS `new_followers` from `page_follows` with `greatest`, so
  * a replay can never lower a live count; `page_follows` only ever grows.
  *
- * Statement 2 fills `known_total_followers`, which today is NULL for every
+ * Statement 2 fills `known_total_followers`, which is otherwise NULL for every
  * past day. It is deliberately an UPDATE, never an insert: a day with an
  * `account_me` snapshot but no follows would otherwise get a row claiming
  * `new_followers = 0`, and "0 new followers" is a very different statement
  * from "we do not know" — the column is NOT NULL and `reporting.ts` SUMS it.
- * Absence of a row already means unknown, which is the honest answer. It also
- * takes the LATEST snapshot of each day (by occurred_at, then account_seq),
- * not the peak: that matches how the live rebuild fills today's value.
+ * Absence of a row already means unknown, which is the honest answer. It takes
+ * the LATEST snapshot of each day (by occurred_at, then account_seq), not the
+ * peak, matching how the live rebuild fills today's value.
+ *
+ * Its guard is BY DAY, not by nullness. `where known_total_followers is null`
+ * froze a historical day at whichever witness a bounded run happened to reach
+ * first: a later same-day snapshot canonicalized in the NEXT run could never
+ * replace it, defeating the latest-witness ordering above. Past days are owned
+ * by the ledger and always take the latest witness; only TODAY defers to the
+ * live value, which is fresher than anything canonicalized so far.
  */
 export async function refreshFanslyReplayAudienceRollups(
   db: Database,
@@ -413,12 +514,18 @@ export async function refreshFanslyReplayAudienceRollups(
                de.occurred_at desc, de.account_seq desc
     )
     update daily_followers df set
-      known_total_followers = coalesce(df.known_total_followers, witness.follow_count),
+      known_total_followers = case
+        when df.business_date < (now() at time zone 'UTC')::date then witness.follow_count
+        else coalesce(df.known_total_followers, witness.follow_count)
+      end,
       updated_at = now()
     from witness
     where df.platform_account_id = ${platformAccountId}
       and df.business_date = witness.business_date
-      and df.known_total_followers is null
+      and df.known_total_followers is distinct from (case
+        when df.business_date < (now() at time zone 'UTC')::date then witness.follow_count
+        else coalesce(df.known_total_followers, witness.follow_count)
+      end)
     returning df.id
   `);
 

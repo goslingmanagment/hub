@@ -1358,6 +1358,12 @@ export function buildProgram() {
     .option("--to <iso>", "received_at upper bound (exclusive)")
     .option("--page-size <n>", "observations per batch (default 200)", parsePositiveInt)
     .option("--max-pages <n>", "batches per run; the run is resumable (default 20)", parsePositiveInt)
+    .option(
+      "--after-id <n>",
+      "resume after this observation id — take coverage.nextAfterId from the previous run. A "
+        + "shadow run stamps nothing, so this is the only way it advances past its first batch",
+      parsePositiveInt,
+    )
     .action(async (options) => {
       const app = await createAppContext();
       try {
@@ -1369,8 +1375,15 @@ export function buildProgram() {
           ...(options.to ? { to: new Date(options.to) } : {}),
           ...(options.pageSize !== undefined ? { pageSize: options.pageSize as number } : {}),
           ...(options.maxPages !== undefined ? { maxPages: options.maxPages as number } : {}),
+          ...(options.afterId !== undefined ? { afterId: options.afterId as number } : {}),
         });
         console.log(JSON.stringify(report, null, 2));
+        if (!report.refused && !report.coverage.complete) {
+          console.log(
+            `[partial] examined ${report.coverage.examined} of ${report.coverage.eligibleTotal} `
+              + `eligible rows; resume with --after-id ${report.coverage.nextAfterId}`,
+          );
+        }
         if (report.refused) {
           // A detached month makes every floor this run would publish a lie.
           process.exitCode = 1;

@@ -226,6 +226,13 @@ async function seedFebruaryObservation(pageId: number) {
   });
 }
 
+
+function asData(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 async function countRows(table: string, where = "true"): Promise<number> {
   const result = await testDb!.pool.query<{ n: string }>(
     `select count(*)::text as n from ${table} where ${where}`,
@@ -357,10 +364,10 @@ describe("Fansly replay runner (slice D)", () => {
       { business_date: FOLLOW_DAY, new_followers: 2, known_total_followers: 470 },
     ]);
 
-    // Review round 1 (P2-c): page_fans is the workboard's candidate set, so a
-    // replay never CREATES a row there — thousands of year-old fans on the
-    // owner's live board is not this slice's business. The audience floors
-    // read page_follows, which is populated above.
+    // Review round 1 (P2-c) + round 2 (P1-B): page_fans is not written AT ALL
+    // — not created (it is the workboard's candidate set) and not updated
+    // (follower_since / subscriber_since describe the CURRENT relationship,
+    // and a replay only ever knows past ones).
     expect(await countRows("page_fans")).toBe(0);
 
     // The report shows the planes reaching back toward the journal.
@@ -505,10 +512,11 @@ describe("Fansly replay runner (slice D)", () => {
        values ('fansly', $1, 'todays_name', 'Todays Name', now(), now())`,
       [FAN_A],
     );
+    const liveFollowerSince = new Date("2026-06-01T00:00:00Z");
     await testDb.pool.query(
       `insert into page_fans (fan_id, platform_account_id, is_follower, is_subscriber, follower_since)
-       select id, $1, true, true, now() from fans where platform_user_id = $2`,
-      [pageId, FAN_A],
+       select id, $1, true, true, $3 from fans where platform_user_id = $2`,
+      [pageId, FAN_A, liveFollowerSince],
     );
     await testDb.pool.query(
       `insert into page_follows (platform_account_id, fan_id, platform_follow_id, followed_at, is_active)
@@ -539,9 +547,10 @@ describe("Fansly replay runner (slice D)", () => {
     expect(row.is_follower).toBe(true);
     expect(row.is_subscriber).toBe(true);
     expect(row.is_active).toBe(true);
-    // The two things a replay MAY move: both strictly earlier.
+    // The one thing a replay MAY move on an existing row: fans.first_seen_at,
+    // strictly earlier. Round 2 (P1-B): membership dates are NOT touched.
     expect(row.first_seen_at.getTime()).toBe(OBSERVED_AT.getTime());
-    expect(row.follower_since.toISOString()).toBe(FIRST_FOLLOWED_AT);
+    expect(row.follower_since.getTime()).toBe(liveFollowerSince.getTime());
     // Still exactly one follow row for that relation — insert-only.
     expect(await countRows("page_follows", "platform_follow_id = '885754550978359296'")).toBe(1);
   });
@@ -604,10 +613,13 @@ describe("Fansly replay runner (slice D)", () => {
     };
     expect(await knownTotal()).toBe(470);
 
-    // The live followers sync runs hourly: it DELETEs the page's rows and
-    // rebuilds them from page_follows, leaving known_total_followers NULL for
-    // every day but today.
-    await rebuildFollowerRollups(testDb.db, pageId, null);
+    // Round 2: the live rebuild no longer clears this (see P1-C), so the loss
+    // is simulated directly — any external clear must be repaired by the next
+    // run, whether or not that run finds new events.
+    await testDb.pool.query(
+      "update daily_followers set known_total_followers = null where platform_account_id = $1",
+      [pageId],
+    );
     expect(await knownTotal()).toBeNull();
 
     // A second replay finds no new events at all — the watermark is already at
@@ -729,44 +741,347 @@ describe("Fansly replay runner (slice D)", () => {
       payloadHash: sha256("follows-ts"),
       idempotencyKey: `${pageId}:followers:ts`,
     });
-    // A live page_fans row so the "since" backfill has somewhere to land.
+    const report = await runFanslyReplay(appStub("on"));
+
+    // The undatable follow contributes NO page_follows row at all, so no
+    // daily_followers day either — the audience floor is never moved by a
+    // guess, and a 1970 date exists nowhere.
+    expect(await countRows("page_follows")).toBe(0);
+    expect(await countRows("daily_followers")).toBe(0);
+    const ledger = await listEventsSince(testDb.db, { accountId: pageId, afterSeq: 0 });
+    const subscriptions = ledger.filter((event) => event.type === "subscription.observed");
+    const byUser = new Map(
+      subscriptions.map((event) => [event.fanIdentityRef, asData(event.data)]),
+    );
+    // Refused, not defaulted: unknown stays unknown.
+    expect(byUser.get(FAN_A)!.subscribedAt).toBeNull();
+    // The seconds-valued twin is read correctly rather than as 1970.
+    expect(byUser.get(FAN_B)!.subscribedAt).toBe("2026-02-27T01:55:17.000Z");
+    expect(ledger.some((event) => event.occurredAt.getUTCFullYear() === 1970)).toBe(false);
+    expect(JSON.stringify(ledger.map((event) => event.data))).not.toContain("1970-");
+
+    // Round 2 (P2-5): refusals are counted, so a systematic decode failure
+    // cannot read as a clean run.
+    expect(report.parserDiagnostics).toMatchObject({
+      "timestamp_refused:followers.followId": 1,
+      "timestamp_refused:subscriptions.createdAt": 1,
+    });
+  });
+  // ── review round 2 regressions ───────────────────────────────────────────
+
+  it("P1-A: a non-empty parked partition OUTSIDE this run's reach does NOT refuse", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await seedPage();
+    await seedJournal(pageId);
+
+    // Mirrors the deployed database exactly: four parked domain_events
+    // monthlies from 2024/2025 holding transaction.posted rows for a Fansly
+    // page this replay DOES cover. They are kept detached on purpose — 0077
+    // re-covered their range with overlapping YEARLY partitions, so
+    // re-attaching is impossible — and the replay's sources start in 2026, so
+    // nothing it reads or writes can collide with them.
+    // domain_events_2025_11 is ALREADY detached — that is migration 0077's
+    // doing, and it is why re-attaching is impossible (the yearly partition
+    // now covers the range). Rows go straight into the parked table, exactly
+    // as tiering left them on production.
+    await testDb.pool.query("create schema if not exists tiered_pending_drop");
+    await testDb.pool.query(
+      `insert into domain_events_2025_11 (
+         id, account_id, account_seq, type, occurred_at, data, schema_version,
+         observation_id, dedup_key
+       ) overriding system value
+       values (900001, $1, 900001, 'transaction.posted', '2025-11-14T10:00:00Z', '{}'::jsonb, 1, 1, 'prod-shape:txn')`,
+      [pageId],
+    );
+    await testDb.pool.query("alter table domain_events_2025_11 set schema tiered_pending_drop");
+    try {
+      const parked = await testDb.pool.query<{ n: string }>(
+        "select count(*)::text as n from tiered_pending_drop.domain_events_2025_11",
+      );
+      expect(Number(parked.rows[0]!.n)).toBe(1);
+
+      const report = await runFanslyReplay(appStub("on"));
+      expect(report.preflight.detachedPartitions).toEqual([]);
+      expect(report.refused).toBe(false);
+      // The run really did its work rather than passing by doing nothing.
+      expect(report.canonicalize!.stamped).toBeGreaterThan(0);
+      // And the write range it reported is what made the parked month
+      // irrelevant: 2026 sources can never land in a 2025 partition.
+      expect(report.preflight.writeRange.from!.startsWith("2026")).toBe(true);
+    } finally {
+      await testDb.pool.query("alter table tiered_pending_drop.domain_events_2025_11 set schema public");
+      await testDb.pool.query("truncate table domain_events_2025_11");
+    }
+  });
+
+  it("P1-A: a parked partition holding a REPLAYED type for a replayed page DOES refuse", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await seedPage();
+    await seedJournal(pageId);
+
+    await testDb.pool.query("create schema if not exists tiered_pending_drop");
+    await testDb.pool.query(
+      `insert into domain_events_2025_11 (
+         id, account_id, account_seq, type, occurred_at, data, schema_version,
+         observation_id, dedup_key
+       ) overriding system value
+       values (900002, $1, 900002, 'follow.observed', '2025-11-14T10:00:00Z',
+               '{"platformUserId":"x","followId":"parked"}'::jsonb, 1, 1, 'prod-shape:follow')`,
+      [pageId],
+    );
+    await testDb.pool.query("alter table domain_events_2025_11 set schema tiered_pending_drop");
+    try {
+      // Same partition, same page, same month as the passing case above — only
+      // the event TYPE differs, and that is the whole difference between "the
+      // projection would silently skip these" and "irrelevant".
+      const report = await runFanslyReplay(appStub("on"));
+      expect(report.refused).toBe(true);
+      expect(report.preflight.detachedPartitions.map((partition) => partition.name))
+        .toEqual(["domain_events_2025_11"]);
+      expect(await parseVersions()).toEqual([0, 0, 0, 0, 0]);
+    } finally {
+      await testDb.pool.query("alter table tiered_pending_drop.domain_events_2025_11 set schema public");
+      await testDb.pool.query("truncate table domain_events_2025_11");
+    }
+  });
+
+  it("P1-B: an ended old relationship never backdates a newer current membership", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await seedPage();
+    await seedJournal(pageId);
+
+    // The fan followed long ago (the journal proves it), that relationship
+    // ended, and a NEW current one started this June. The live rows describe
+    // the current relationship and must survive untouched.
+    const currentSince = new Date("2026-06-01T00:00:00Z");
     await testDb.pool.query(
       `insert into fans (platform, platform_user_id, first_seen_at, last_seen_at)
-       values ('fansly', $1, now(), now()), ('fansly', $2, now(), now())`,
-      [FAN_A, FAN_B],
+       values ('fansly', $1, now(), now())`,
+      [FAN_A],
     );
     await testDb.pool.query(
-      `insert into page_fans (fan_id, platform_account_id) select id, $1 from fans`,
-      [pageId],
+      `insert into page_fans (fan_id, platform_account_id, is_follower, follower_since, is_subscriber, subscriber_since)
+       select id, $1, true, $2, true, $2 from fans where platform_user_id = $3`,
+      [pageId, currentSince, FAN_A],
     );
 
     await runFanslyReplay(appStub("on"));
 
     const membership = await testDb.pool.query<{
-      platform_user_id: string;
-      subscriber_since: Date | null;
-      follower_since: Date | null;
+      follower_since: Date;
+      subscriber_since: Date;
     }>(
-      `select f.platform_user_id, pf.subscriber_since, pf.follower_since
-       from page_fans pf join fans f on f.id = pf.fan_id
-       order by f.platform_user_id`,
-      [],
+      `select pf.follower_since, pf.subscriber_since from page_fans pf
+       join fans f on f.id = pf.fan_id where f.platform_user_id = $1`,
+      [FAN_A],
     );
-    const byUser = new Map(membership.rows.map((row) => [row.platform_user_id, row]));
-    // Refused, not defaulted: unknown stays unknown. `least()` folds these
-    // only earlier, so a 1970 written once could never be repaired.
-    expect(byUser.get(FAN_A)!.subscriber_since).toBeNull();
-    expect(byUser.get(FAN_A)!.follower_since).toBeNull();
-    // The seconds-valued twin is read correctly rather than as 1970.
-    expect(byUser.get(FAN_B)!.subscriber_since?.toISOString()).toBe("2026-02-27T01:55:17.000Z");
+    const row = membership.rows[0]!;
+    expect(row.follower_since.getTime()).toBe(currentSince.getTime());
+    expect(row.subscriber_since.getTime()).toBe(currentSince.getTime());
+    // The historical interval is not lost — it lives where it belongs, on an
+    // INACTIVE page_follows row dated by the relation id.
+    const historical = await testDb.pool.query<{ followed_at: Date; is_active: boolean }>(
+      "select followed_at, is_active from page_follows where platform_follow_id = '885754550978359296'",
+    );
+    expect(historical.rows[0]!.is_active).toBe(false);
+    expect(historical.rows[0]!.followed_at.toISOString()).toBe(FIRST_FOLLOWED_AT);
+  });
 
-    // The undatable follow contributes no page_follows row and therefore no
-    // daily_followers day — the audience floor is not moved by a guess.
-    expect(await countRows("page_follows")).toBe(0);
-    expect(await countRows("daily_followers")).toBe(0);
-    const oldest = await testDb.pool.query<{ oldest: Date | null }>(
-      "select min(subscriber_since) as oldest from page_fans",
+  it("P1-C: historical totals survive an ordinary followers sync", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await seedPage();
+    await seedJournal(pageId);
+    await runFanslyReplay(appStub("on"));
+
+    const knownTotal = async () => {
+      const rows = await testDb!.pool.query<{ known_total_followers: number | null }>(
+        "select known_total_followers from daily_followers where platform_account_id = $1 and business_date = $2",
+        [pageId, FOLLOW_DAY],
+      );
+      return rows.rows[0]?.known_total_followers ?? null;
+    };
+    expect(await knownTotal()).toBe(470);
+
+    // This is what an ordinary followers sync ends with. Previously it DELETEd
+    // every row and recreated historical days with a NULL total, silently
+    // erasing the backfill; now it preserves what it did not produce.
+    await rebuildFollowerRollups(testDb.db, pageId, 999);
+    expect(await knownTotal()).toBe(470);
+    // Today's value is still the live one — the two writers own different days.
+    const today = new Date().toISOString().slice(0, 10);
+    const todayRow = await testDb.pool.query<{ known_total_followers: number | null }>(
+      "select known_total_followers from daily_followers where platform_account_id = $1 and business_date = $2",
+      [pageId, today],
     );
-    expect(oldest.rows[0]!.oldest?.getUTCFullYear()).toBe(2026);
+    if (todayRow.rows.length > 0) {
+      expect(todayRow.rows[0]!.known_total_followers).toBe(999);
+    }
+  });
+
+  it("P2-1: a later same-day witness replaces an earlier one across bounded runs", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await seedPage();
+    await seedJournal(pageId);
+    await runFanslyReplay(appStub("on"));
+
+    const knownTotal = async () => {
+      const rows = await testDb!.pool.query<{ known_total_followers: number | null }>(
+        "select known_total_followers from daily_followers where platform_account_id = $1 and business_date = $2",
+        [pageId, FOLLOW_DAY],
+      );
+      return rows.rows[0]?.known_total_followers ?? null;
+    };
+    expect(await knownTotal()).toBe(470);
+
+    // A LATER snapshot of the same UTC day, canonicalized by a separate run —
+    // exactly what a bounded corpus produces. The day must move to it, not
+    // freeze at whichever witness the first run happened to reach.
+    await insertObservation(testDb.db, {
+      source: "pull",
+      producer: "sync:fansly:account_me",
+      platform: "fansly",
+      accountId: pageId,
+      kind: "account_me",
+      observedAt: new Date(`${FOLLOW_DAY}T22:00:00Z`),
+      receivedAt: RECEIVED_AT,
+      payload: { account: { id: PAGE_ACCOUNT_REF, username: "lanavellor", followCount: 512 } },
+      payloadHash: sha256("account_me-late"),
+      idempotencyKey: `${pageId}:account_me_late:1`,
+    });
+    await runFanslyReplay(appStub("on"));
+    expect(await knownTotal()).toBe(512);
+  });
+
+  it("P2-2: an unparseable payload is left UNSTAMPED for a future parser", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await seedPage();
+    // Shape drift: the container this family reads is simply not there.
+    await insertObservation(testDb.db, {
+      source: "pull",
+      producer: "sync:fansly:subscribers",
+      platform: "fansly",
+      accountId: pageId,
+      kind: "subscribers",
+      payload: { stats: { total: 3 }, subscriberList: [{ id: "s1" }] },
+      payloadHash: sha256("drifted"),
+      idempotencyKey: `${pageId}:subscribers:drift`,
+      receivedAt: RECEIVED_AT,
+    });
+    // A legitimately EMPTY snapshot of the same kind: zero events, but a real
+    // observation of "nothing there" — this one IS consumed.
+    await insertObservation(testDb.db, {
+      source: "pull",
+      producer: "sync:fansly:subscribers",
+      platform: "fansly",
+      accountId: pageId,
+      kind: "subscribers",
+      payload: { stats: { total: 0 }, subscriptions: [] },
+      payloadHash: sha256("empty"),
+      idempotencyKey: `${pageId}:subscribers:empty`,
+      receivedAt: RECEIVED_AT,
+    });
+
+    const report = await runFanslyReplay(appStub("on"));
+    expect(report.canonicalize).toMatchObject({ scanned: 2, stamped: 1, skippedUnparseable: 1 });
+
+    const rows = await testDb.pool.query<{ parse_version: number; payload: Record<string, unknown> }>(
+      "select parse_version, payload from observations order by id",
+    );
+    // The drifted row stays replayable; the empty one is done with.
+    expect(rows.rows[0]!.parse_version).toBe(0);
+    expect(rows.rows[1]!.parse_version).toBe(1);
+  });
+
+  it("P2-3: a later snapshot correcting only createdAt still appends", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await seedPage();
+    const base = {
+      source: "pull" as const,
+      producer: "sync:fansly:subscribers",
+      platform: "fansly" as const,
+      accountId: pageId,
+      kind: "subscribers",
+      receivedAt: RECEIVED_AT,
+    };
+    await insertObservation(testDb.db, {
+      ...base,
+      observedAt: new Date("2026-03-10T08:00:00Z"),
+      payload: { subscriptions: [{ id: "s1", subscriberId: FAN_A, status: 3, price: 1, createdAt: 0 }] },
+      payloadHash: sha256("sub-v1"),
+      idempotencyKey: `${pageId}:subscribers:v1`,
+    });
+    // Everything else identical; only the previously-unusable createdAt is now
+    // present. A hand-picked hash would suppress this correction forever.
+    await insertObservation(testDb.db, {
+      ...base,
+      observedAt: new Date("2026-03-10T09:00:00Z"),
+      payload: {
+        subscriptions: [
+          { id: "s1", subscriberId: FAN_A, status: 3, price: 1, createdAt: 1_772_157_317_000 },
+        ],
+      },
+      payloadHash: sha256("sub-v2"),
+      idempotencyKey: `${pageId}:subscribers:v2`,
+    });
+
+    await runFanslyReplay(appStub("on"));
+    const subscriptions = (await listEventsSince(testDb.db, { accountId: pageId, afterSeq: 0 }))
+      .filter((event) => event.type === "subscription.observed")
+      .map((event) => asData(event.data).subscribedAt);
+    expect(subscriptions).toEqual([null, "2026-02-27T01:55:17.000Z"]);
+  });
+
+  it("P2-4: a bounded shadow run reports what it left unexamined and how to resume", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const pageId = await seedPage();
+    await seedJournal(pageId);
+
+    // Bound the run below the corpus size, as the defaults do on production.
+    const first = await runFanslyReplay(appStub("shadow"), { pageSize: 2, maxPages: 1 });
+    expect(first.coverage).toMatchObject({ eligibleTotal: 5, examined: 2, remaining: 3, complete: false });
+    expect(first.coverage.nextAfterId).not.toBeNull();
+
+    // A dry run stamps nothing, so without the cursor the next invocation
+    // would re-examine the same prefix forever.
+    const repeat = await runFanslyReplay(appStub("shadow"), { pageSize: 2, maxPages: 1 });
+    expect(repeat.coverage.examined).toBe(2);
+    expect(repeat.coverage.nextAfterId).toBe(first.coverage.nextAfterId);
+
+    const resumed = await runFanslyReplay(appStub("shadow"), {
+      pageSize: 2,
+      maxPages: 1,
+      afterId: first.coverage.nextAfterId,
+    });
+    expect(resumed.coverage).toMatchObject({ eligibleTotal: 3, examined: 2, remaining: 1 });
+    const last = await runFanslyReplay(appStub("shadow"), {
+      pageSize: 10,
+      maxPages: 5,
+      afterId: resumed.coverage.nextAfterId,
+    });
+    expect(last.coverage).toMatchObject({ remaining: 0, complete: true, nextAfterId: null });
   });
 });
