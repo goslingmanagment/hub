@@ -171,6 +171,18 @@ async function seedThreads() {
     [fanslyPageId, fanId, CONVERSATION_REF],
   );
   fanslyThreadId = Number(threadRows[0]!.id);
+  // Stored messages, so an approved `beforeAt` boundary has something to resolve
+  // against: the oldest message at or after the instant is the cursor to page
+  // back from.
+  await pool.query(
+    `insert into page_dm_messages (conversation_id, platform_account_id, platform_message_id,
+       sender_platform_user_id, sender_role, created_at, content)
+     values
+       ($1, $2, 'm-100', '438766025723355136', 'fan', '2026-02-10T00:00:00Z', 'older'),
+       ($1, $2, 'm-106', '438766025723355136', 'fan', '2026-02-20T00:00:00Z', 'boundary'),
+       ($1, $2, 'm-112', '438766025723355136', 'fan', '2026-03-01T00:00:00Z', 'newest')`,
+    [fanslyThreadId, fanslyPageId],
+  );
 
   const { rows: ofFanRows } = await pool.query<{ id: string }>(
     `insert into fans (platform, platform_user_id, username, first_seen_at)
@@ -419,6 +431,247 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(stored.request?.executionLane).toBe("vendor_paid_low");
   });
 
+  it("the approved BOUNDARY reaches the lane, not a generic walk (P1-1)", async () => {
+    // An approval says "deepen PAST this message". If the boundary never reaches
+    // the job, the vendor spend AND the completeness verdict describe a
+    // different scope than the one the owner authorized.
+    const { request } = await fileRequest("lora-2", CONVERSATION_REF, {
+      target: { kind: "thread_backfill_before", beforeMessageRef: "m-106" },
+    });
+    await approve(request, { maxItems: 40 });
+    await setFlag("agentHydrationMode", "dispatch");
+    const boss = stubBoss();
+    expect((await runAgentHydrationCycle(appContext, boss)).dispatched).toBe(1);
+    const payload = boss.send.mock.calls[0]![1] as Record<string, unknown>;
+    const parsed = parseTargetedThreadBackfillJob(payload);
+    expect(parsed!.startBeforeMessageRef).toBe("m-106");
+    // The item ceiling travels too, or an explicit item cap is unenforceable on
+    // a lane whose every request accepts up to 25 messages.
+    expect(parsed!.maxItems).toBe(40);
+  });
+
+  it("a `beforeAt` boundary resolves to the message the walk starts before (P1-1)", async () => {
+    const { request } = await fileRequest("lora-2", CONVERSATION_REF, {
+      target: { kind: "thread_backfill_before", beforeAt: "2026-02-15T00:00:00Z" },
+    });
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    const boss = stubBoss();
+    await runAgentHydrationCycle(appContext, boss);
+    const payload = boss.send.mock.calls[0]![1] as Record<string, unknown>;
+    // The oldest stored message at or after the instant — not the thread's
+    // deepest message, which is what a generic walk would have used.
+    expect(payload.startBeforeMessageRef).toBe("m-106");
+  });
+
+  it("the OnlyFans job freezes its head at the approved boundary (P1-1)", async () => {
+    const { request } = await fileRequest("lora-of", OF_CONVERSATION_REF, {
+      target: { kind: "thread_backfill_before", beforeMessageRef: "of-3" },
+    });
+    await approve(request, { allowMarkReadSideEffect: true });
+    await setFlag("agentHydrationMode", "dispatch");
+    await runAgentHydrationCycle(appContext, stubBoss());
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    const { rows } = await testDb!.pool.query<{ target: Record<string, unknown> }>(
+      "select target from ofapi_capture_jobs where id = $1::uuid",
+      [stored.request?.executionRef],
+    );
+    // NOT the thread's own last message id: the approved boundary.
+    expect(rows[0]!.target.frozenHeadId).toBe("of-3");
+  });
+
+  it("coverage is recomputed at decision time, not compared with itself (P1-2)", async () => {
+    const { request } = await fileRequest();
+    // Somebody deepened the thread between the filing and the decision: the
+    // owner would now be paying for history we already hold. The old check
+    // compared the request's own stored fingerprint with the echoed copy and
+    // could never see this.
+    await testDb!.pool.query(
+      `update page_dm_threads set stored_message_count = 900, oldest_stored_message_id = 'm-1'
+       where id = $1`,
+      [fanslyThreadId],
+    );
+    const stale = await approve(request);
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error).toBe("hydration_proposal_stale");
+  });
+
+  it("dispatch refuses when coverage moved after the decision, WITHOUT burning the attempt (P1-2)", async () => {
+    const { request } = await fileRequest();
+    expect((await approve(request)).statusCode).toBe(200);
+    await testDb!.pool.query(
+      "update page_dm_threads set stored_message_count = 900 where id = $1",
+      [fanslyThreadId],
+    );
+    await setFlag("agentHydrationMode", "dispatch");
+    const boss = stubBoss();
+    expect((await runAgentHydrationCycle(appContext, boss)).dispatched).toBe(0);
+    expect(boss.send).not.toHaveBeenCalled();
+    // Still approved: the attempt was NOT consumed, so the owner keeps the
+    // decision and it closes by expiry rather than by a spurious failure.
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("approved");
+    expect(stored.request?.dispatchCount).toBe(0);
+  });
+
+  it("a missing OFAPI mapping does not consume the approval (P2b)", async () => {
+    await testDb!.pool.query("update pages set ofapi_account_id = null where id = $1", [
+      onlyfansPageId,
+    ]);
+    const { request } = await fileRequest("lora-of", OF_CONVERSATION_REF);
+    await approve(request, { allowMarkReadSideEffect: true });
+    await setFlag("agentHydrationMode", "dispatch");
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(0);
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("approved");
+    expect(stored.request?.dispatchCount).toBe(0);
+    const { rows } = await testDb!.pool.query("select id from ofapi_capture_jobs");
+    expect(rows).toHaveLength(0);
+  });
+
+  it("an INDETERMINATE send is left dispatching, never marked failed (P1-4)", async () => {
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    // The send threw after possibly landing: the job may be running right now.
+    const flaky = {
+      send: vi.fn(async () => {
+        throw new Error("connection reset after the insert");
+      }),
+    } as unknown as Parameters<typeof runAgentHydrationCycle>[1];
+    expect((await runAgentHydrationCycle(appContext, flaky)).dispatched).toBe(0);
+
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    // NOT failed. Settling here would let the owner authorize the same paid work
+    // a second time while the first copy is still going.
+    expect(stored.request?.state).toBe("dispatching");
+    expect(stored.request?.executionRef).not.toBeNull();
+  });
+
+  it("OFAPI coalescence attaches only to a matching target and caps (P1-6)", async () => {
+    // Somebody else's exhaustion job already occupies this chat's active slot,
+    // with far larger ceilings. Attaching would make this tightly capped
+    // hydration track and report work it never authorized.
+    await testDb!.pool.query(
+      `insert into ofapi_capture_jobs (id, page_id, ofapi_account_id, kind, goal, state,
+         active_slot_key, target, target_hash, budget_scope, created_by,
+         max_calls, max_credits, max_pages, max_items,
+         source_contract_version, parser_version, proof_policy_version)
+       values (gen_random_uuid(), $1, 'acct_of_test', 'chat_paginate', 'history_to_exhaustion',
+         'ready', $2, '{"chatId":"of-chat-4242","frozenHeadId":"of-999","anchorMessageId":null,"limit":100}'::jsonb,
+         repeat('a', 64), 'bulk', 'owner', 999, 999, 999, 99999, 'v1', 'v1', 'v1')`,
+      [onlyfansPageId, `page:${onlyfansPageId}:chat:${OF_CONVERSATION_REF}`],
+    );
+
+    const { request } = await fileRequest("lora-of", OF_CONVERSATION_REF);
+    await approve(request, { allowMarkReadSideEffect: true });
+    await setFlag("agentHydrationMode", "dispatch");
+    await runAgentHydrationCycle(appContext, stubBoss());
+
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    // Refused, not silently attached to the stranger's job.
+    expect(stored.request?.state).toBe("failed");
+    const { rows } = await testDb!.pool.query<{ max_calls: number }>(
+      "select max_calls from ofapi_capture_jobs where page_id = $1",
+      [onlyfansPageId],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.max_calls).toBe(999);
+  });
+
+  it("a terminal job past its deadline is settled from its RESULT, not as a timeout (P1-5)", async () => {
+    const { request } = await fileRequest("lora-of", OF_CONVERSATION_REF);
+    await approve(request, { allowMarkReadSideEffect: true });
+    await setFlag("agentHydrationMode", "dispatch");
+    await runAgentHydrationCycle(appContext, stubBoss());
+    const dispatched = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    // It finished AFTER the deadline but before this cycle.
+    await testDb!.pool.query(
+      `update ofapi_capture_jobs set state = 'blocked', reason_code = 'gap_open',
+         accepted_items = 250, accepted_pages = 3, spent_credits = 3 where id = $1::uuid`,
+      [dispatched.request!.executionRef],
+    );
+    await testDb!.pool.query(
+      "update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 hour'",
+    );
+
+    await runAgentHydrationCycle(appContext, stubBoss());
+    const settled = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    // The real outcome and the real spend, not `failed/timeout` with zeroes.
+    expect(settled.request?.state).toBe("partially_completed");
+    expect(settled.request?.lastError).toBe("budget_exhausted");
+    expect(settled.request?.acceptedItems).toBe(250);
+    expect(settled.request?.spentCredits).toBe(3);
+  });
+
+  it("state never moves without its journal entry (P1-3)", async () => {
+    const { request } = await fileRequest();
+    await approve(request);
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+    // Every version the row has ever had is accounted for by an event, and the
+    // events are in the order the transitions happened.
+    expect(events.map((event) => event.rowVersion)).toEqual([0, stored.request!.rowVersion]);
+    expect(events.map((event) => event.toState)).toEqual(["requested", "approved"]);
+  });
+
+  it("an expired request cannot be decided even before the sweeper sees it (P2f)", async () => {
+    const { request } = await fileRequest();
+    await testDb!.pool.query(
+      "update agent_hydration_requests set expires_at = now() - interval '1 minute'",
+    );
+    const late = await approve(request);
+    expect(late.statusCode).toBe(409);
+    expect(late.json().error).toBe("conflict");
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("requested");
+  });
+
+  it("a refused poll does not spend the key's row budget (P2g)", async () => {
+    const rowsCharged = async () => {
+      const { rows } = await testDb!.pool.query<{ total: string }>(
+        "select coalesce(sum(rows_returned), 0)::text as total from agent_key_usage_daily",
+      );
+      return rows[0]!.total;
+    };
+    const before = await rowsCharged();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const missing = await agentGet(`/api/v1/agent/hydration-requests/${randomUUID()}`);
+      expect(missing.statusCode).toBe(404);
+    }
+    // A request that delivered nothing charges nothing: repeated failed polls
+    // must not burn a daily allowance for zero rows.
+    expect(await rowsCharged()).toBe(before);
+
+    // ... and a poll that DOES deliver still charges its row, so the fix is not
+    // simply "never charge".
+    const { request } = await fileRequest();
+    const served = await agentGet(`/api/v1/agent/hydration-requests/${request.requestRef}`);
+    expect(served.statusCode).toBe(200);
+    expect(await rowsCharged()).not.toBe(before);
+  });
+
+  it("#12 claims no plane it did not read (P1-7)", async () => {
+    const { request } = await fileRequest();
+    const polled = await agentGet(`/api/v1/agent/hydration-requests/${request.requestRef}`);
+    expect(polled.statusCode).toBe(200);
+    const threads = polled.json().capture.planes
+      .find((plane: { plane: string }) => plane.plane === "page_dm_threads");
+    // This operation reads the request table, `pages` and `agent_keys` — it never
+    // touches the thread inventory, so the envelope must not say it did.
+    // Decision #199: a witness proves a query actually ran.
+    expect(threads.state).not.toBe("read");
+
+    // ... while #11, which DOES query the thread to resolve the target, says so.
+    expect(
+      (await agentPost(
+        `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/hydration-requests`,
+        createBody(),
+      )).json().capture.planes.find((plane: { plane: string }) => plane.plane === "page_dm_threads")
+        .state,
+    ).toBe("read");
+  });
+
   it("#13 reject -> nothing is ever enqueued", async () => {
     const { request } = await fileRequest();
     const rejected = await ownerPost(
@@ -619,6 +872,21 @@ describe("[sync-critical] agent hydration requests", () => {
       .toEqual({ state: "completed", lastError: "none" });
     expect(ofapiJobSettlement({ state: "blocked", reasonCode: "gap_open" }))
       .toEqual({ state: "partially_completed", lastError: "budget_exhausted" });
+    // The owner's own ceiling binding is BUDGET, never a vendor outage — the
+    // difference between "your limit stopped it" and "OnlyFans is broken", which
+    // is the difference between reading a number and debugging a vendor.
+    expect(ofapiJobSettlement({
+      state: "blocked",
+      reasonCode: "job_cap",
+      acceptedItems: 120,
+      acceptedPages: 2,
+    })).toEqual({ state: "partially_completed", lastError: "budget_exhausted" });
+    expect(ofapiJobSettlement({
+      state: "blocked",
+      reasonCode: "item_cap_exceeded",
+      acceptedItems: 0,
+      acceptedPages: 0,
+    })).toEqual({ state: "failed", lastError: "budget_exhausted" });
     expect(ofapiJobSettlement({ state: "blocked", reasonCode: "target_invalid" }))
       .toEqual({ state: "failed", lastError: "vendor_unavailable" });
     expect(ofapiJobSettlement({ state: "cancelled", reasonCode: null }))

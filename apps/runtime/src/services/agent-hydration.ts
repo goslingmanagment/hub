@@ -31,6 +31,9 @@ import {
   findAgentHydrationThread,
   findPageById,
   getOfapiCaptureJob,
+  hashOfapiCaptureValue,
+  hydrationCoverageFingerprint,
+  resolveAgentHydrationBoundaryRef,
   listDispatchableAgentHydrationRequests,
   listDispatchingAgentHydrationRequests,
   listExpirableAgentHydrationRequests,
@@ -99,7 +102,10 @@ export const AGENT_HYDRATION_LANES: Readonly<Record<Platform, {
     minimumCredits: 0,
   },
   onlyfans: {
-    lane: "vendor_paid_low",
+    // Credit-backed. §7's lane ordering reserves `vendor_paid_high` for money
+    // that leaves an account, and reporting it as `low` told the owner the wrong
+    // risk class on the one lane that literally bills.
+    lane: "vendor_paid_high",
     costNote: "ofapi_credits",
     readMarksThreadRead: true,
     minimumCredits: 1,
@@ -193,8 +199,12 @@ export async function runAgentHydrationCycle(
   }
 
   result.expired = await expireAgentHydration(app);
-  result.swept = await sweepStuckAgentHydration(app);
+  // RECONCILE FIRST. A job that reached a terminal state after its deadline but
+  // before this cycle would otherwise be buried by the timeout sweep as
+  // `failed`, and its real outcome, accepted counts and spend could never be
+  // recovered — reconciliation only ever looks at `dispatching` rows.
   result.reconciled = await reconcileAgentHydrationDispatches(app);
+  result.swept = await sweepStuckAgentHydration(app);
 
   // `request_only` stops HERE. Everything above is bookkeeping about work that
   // already happened; everything below starts new work.
@@ -247,23 +257,32 @@ export async function sweepStuckAgentHydration(app: AppContext): Promise<number>
   const rows = await listStuckAgentHydrationDispatches(app.db, { limit: SWEEP_BATCH_LIMIT });
   let swept = 0;
   for (const row of rows) {
+    const job = await ofapiJobFor(app, row);
     // ... unless the work it authorized is demonstrably STILL RUNNING. A durable
     // OnlyFans capture job can outlive any deadline we picked, and calling it
     // dead while it is still spending credits would take the spend out of the
-    // owner's view. Reconciliation settles it the moment it terminates.
-    if (await executionStillAlive(app, row)) {
+    // owner's view.
+    if (job !== null && OFAPI_LIVE_STATES.has(job.state)) {
       app.logger.info(
         { requestRef: row.requestRef, executionRef: row.executionRef },
         "Agent hydration dispatch is past its deadline but its capture job is still running",
       );
       continue;
     }
-    const { outcome } = await settleAgentHydrationRequest(app.db, {
-      id: row.id,
-      toState: "failed",
-      lastError: "timeout",
-      actor: "sweeper",
-    });
+    // ... and a job that DID finish is settled from what it actually did. The
+    // deadline says nothing about the outcome; the job's own record does.
+    const settlement = job === null ? null : ofapiJobSettlement(job);
+    const { outcome } = await settleAgentHydrationRequest(app.db, settlement === null
+      ? { id: row.id, toState: "failed", lastError: "timeout", actor: "sweeper" }
+      : {
+        id: row.id,
+        toState: settlement.state,
+        lastError: settlement.lastError,
+        acceptedItems: job!.acceptedItems,
+        acceptedPages: job!.acceptedPages,
+        spentCredits: job!.spentCredits,
+        actor: "sweeper",
+      });
     if (outcome === "applied") {
       swept += 1;
       app.logger.warn(
@@ -315,18 +334,14 @@ export async function reconcileAgentHydrationDispatches(app: AppContext): Promis
 /** Capture-job states that mean the OFAPI executor still owns this work. */
 const OFAPI_LIVE_STATES = new Set(["ready", "leased", "awaiting_parse", "retry_wait"]);
 
-async function executionStillAlive(
-  app: AppContext,
-  row: AgentHydrationRequestRecord,
-): Promise<boolean> {
-  // Only the OnlyFans lane has a durable row to ask. A Fansly targeted job is
-  // bounded to one run and expires with its own queue entry, so a passed
-  // deadline there really does mean the run is gone.
+/** The durable capture job a request points at, when it has one. Only the
+ *  OnlyFans lane does: a Fansly targeted job is bounded to one run and dies with
+ *  its own queue entry, so a passed deadline there really does mean it is gone. */
+async function ofapiJobFor(app: AppContext, row: AgentHydrationRequestRecord) {
   if (row.platform !== "onlyfans" || row.executionRef === null) {
-    return false;
+    return null;
   }
-  const job = await getOfapiCaptureJob(app.db, row.executionRef);
-  return job !== null && OFAPI_LIVE_STATES.has(job.state);
+  return getOfapiCaptureJob(app.db, row.executionRef);
 }
 
 /**
@@ -348,18 +363,39 @@ async function executionStillAlive(
  *   any other `blocked`/`cancelled` — a refusal (bad target, no transport, no
  *                                    egress): nothing was hydrated.
  */
-export function ofapiJobSettlement(job: { state: string; reasonCode: string | null }):
+/** Reason codes that mean "a ceiling bound", not "the vendor broke". */
+const CAP_REASON_CODES = new Set(["gap_open", "job_cap", "item_cap_exceeded", "manifest_cap"]);
+
+export function ofapiJobSettlement(job: {
+  state: string;
+  reasonCode: string | null;
+  acceptedItems?: number;
+  acceptedPages?: number;
+}):
   | { state: "completed" | "partially_completed" | "failed"; lastError: AgentHydrationLastError }
   | null {
   if (job.state === "complete") {
     return { state: "completed", lastError: "none" };
   }
   if (job.state === "blocked") {
-    return job.reasonCode === "gap_open"
-      // Real progress, stopped by the ceiling the owner set. Naming the cap is
-      // the difference between "we have it all" and "we have what you paid for".
-      ? { state: "partially_completed", lastError: "budget_exhausted" }
-      : { state: "failed", lastError: "vendor_unavailable" };
+    // `gap_open` = the walk stopped at its own page ceiling with history still
+    // to the left. `job_cap` = the approved call/credit ceiling bound.
+    // `item_cap_exceeded` = the approved item ceiling bound. All three are the
+    // OWNER'S NUMBER doing its job, and reporting them as a vendor outage would
+    // send somebody debugging OnlyFans over a limit they typed themselves.
+    const reasonCode = job.reasonCode ?? "";
+    if (CAP_REASON_CODES.has(reasonCode)) {
+      // `gap_open` is only ever written AFTER a page was accepted, so it is
+      // progress by construction. The budget denials can fire before the first
+      // call, and "we spent nothing and got nothing" is a failure, not a partial.
+      const madeProgress = reasonCode === "gap_open"
+        || (job.acceptedItems ?? 0) > 0
+        || (job.acceptedPages ?? 0) > 0;
+      return madeProgress
+        ? { state: "partially_completed", lastError: "budget_exhausted" }
+        : { state: "failed", lastError: "budget_exhausted" };
+    }
+    return { state: "failed", lastError: "vendor_unavailable" };
   }
   if (job.state === "cancelled") {
     return { state: "failed", lastError: "quarantined" };
@@ -388,27 +424,64 @@ async function dispatchAgentHydrationRequest(
     return false;
   }
 
+  // ---- Revalidation, ALL of it, BEFORE the claim ----------------------------
+  //
+  // Everything checked here is a reason the work cannot start. A miss must not
+  // consume the approval's single attempt: the request stays `approved` and
+  // either the condition clears or the expiry closes it. "Read surfaces are
+  // never approval surfaces" cuts both ways — an approval is not a dispatch
+  // either, and the world is checked again here.
+  const refuse = (reason: string) => {
+    app.logger.warn(
+      { requestRef: request.requestRef, pageLabel: request.pageLabel, reason },
+      "Agent hydration approval is not dispatchable right now; attempt NOT consumed",
+    );
+    return false;
+  };
+
   const { thread } = await findAgentHydrationThread(app.db, {
     pageId: request.pageId,
     conversationRef: request.conversationRef,
   });
   if (!thread) {
-    // Revalidation failed BEFORE the attempt was claimed, so the approval keeps
-    // its attempt; it will expire on its own if the thread never comes back.
-    app.logger.warn(
-      { requestRef: request.requestRef, pageLabel: request.pageLabel },
-      "Agent hydration target is no longer a visible thread; not dispatching",
-    );
-    return false;
+    return refuse("target is no longer a visible thread");
   }
 
+  // The DEPTH the owner approved against. If somebody deepened this thread since
+  // the decision, the approved spend buys history we already have.
+  const currentCoverage = hydrationCoverageFingerprint({
+    pageId: request.pageId,
+    conversationRef: request.conversationRef,
+    storedMessageCount: thread.storedMessageCount,
+    oldestStoredMessageId: thread.oldestStoredMessageId,
+    messageCoverageStatus: thread.messageCoverageStatus,
+  });
+  if (currentCoverage !== request.coverageFingerprint) {
+    return refuse("thread coverage moved since the decision");
+  }
+
+  // The approved BOUNDARY, resolved to the cursor each lane pages backwards
+  // from. The target says "deepen PAST this point", so the boundary is where the
+  // walk starts — an approval for "before message X" that executed as a generic
+  // walk would spend on, and report about, a different scope than the one the
+  // owner authorized.
+  const boundaryRef = await resolveApprovedBoundary(app, request, thread);
+
+  // Stable prerequisites of the OnlyFans lane. Neither can appear on its own
+  // between now and the claim, so checking them here is what keeps a missing
+  // mapping from eating the attempt and settling `failed` without ever creating
+  // a job.
+  const preparation = await LANE_PREPARERS[platform]({ app, request, thread, boundaryRef });
+  if (!preparation.ok) {
+    return refuse(preparation.reason);
+  }
+
+  // ---- The single attempt --------------------------------------------------
   const deadlineAt = new Date(Date.now() + DISPATCH_DEADLINE_MS[platform]);
   const executionLane = request.laneSelected ?? lane.lane;
   // The reference is minted HERE, before the job exists, and both the claim and
   // the job itself use it. A crash anywhere after the claim therefore leaves a
-  // row that points at the work it authorized, instead of a `dispatching` row
-  // with a null reference that reconciliation skips while the job it created
-  // goes on spending.
+  // row that points at the work it authorized.
   const executionRef = randomUUID();
   const claimed = await claimAgentHydrationRequestForDispatch(app.db, {
     id: request.id,
@@ -417,34 +490,52 @@ async function dispatchAgentHydrationRequest(
     executionLane,
     executionRef,
   });
-  if (claimed.outcome === "conflict") {
+  if (claimed.outcome !== "applied") {
     return false;
   }
 
   try {
-    const actualRef = await enqueueByLane(app, boss, request, {
+    const enqueued = await LANE_DISPATCHERS[platform]({
+      app,
+      boss,
+      request,
       threadId: thread.id,
-      frozenHeadId: thread.lastMessageId,
+      boundaryRef,
+      frozenHeadId: preparation.frozenHeadId,
+      ofapiAccountId: preparation.ofapiAccountId,
       executionRef,
     });
-    if (actualRef === null) {
-      // Fail closed. The attempt is spent: the owner sees `failed` and decides
-      // again, rather than the system quietly retrying paid work on its own.
+    if (enqueued.kind === "refused") {
+      // DETERMINATE: nothing was queued, and we know it. The attempt is spent —
+      // the owner sees `failed` and decides again rather than the system quietly
+      // retrying paid work on its own.
       await settleAgentHydrationRequest(app.db, {
         id: request.id,
         toState: "failed",
-        lastError: "vendor_unavailable",
+        lastError: enqueued.lastError,
       });
       return false;
     }
-    if (actualRef !== executionRef) {
-      // The job COALESCED onto an occupied active slot. The request must point
-      // at the job that will really spend, so the reference moves once — the
-      // only reason it ever moves after the claim.
+    if (enqueued.kind === "already_done") {
+      // The exact target was already captured. Settle from that job instead of
+      // paying for it twice.
+      await settleAgentHydrationRequest(app.db, {
+        id: request.id,
+        toState: enqueued.state,
+        lastError: "none",
+        acceptedItems: enqueued.acceptedItems,
+        acceptedPages: enqueued.acceptedPages,
+        spentCredits: enqueued.spentCredits,
+      });
+      return false;
+    }
+    if (enqueued.executionRef !== executionRef) {
+      // The job coalesced onto a MATCHING active job (target and caps verified
+      // by the dispatcher). Point at the one that will really spend.
       await recordAgentHydrationExecution(app.db, {
         id: request.id,
         executionLane,
-        executionRef: actualRef,
+        executionRef: enqueued.executionRef,
       });
     }
     app.logger.info(
@@ -452,7 +543,8 @@ async function dispatchAgentHydrationRequest(
         requestRef: request.requestRef,
         pageLabel: request.pageLabel,
         platform,
-        executionRef: actualRef,
+        executionRef: enqueued.executionRef,
+        boundaryRef,
         maxCalls: request.decisionMaxCalls,
         allowMarkReadSideEffect: request.decisionAllowMarkRead,
       },
@@ -460,74 +552,157 @@ async function dispatchAgentHydrationRequest(
     );
     return true;
   } catch (error) {
-    await settleAgentHydrationRequest(app.db, {
-      id: request.id,
-      toState: "failed",
-      lastError: "vendor_unavailable",
-    });
+    // INDETERMINATE. The send may have landed and lost its response; the job may
+    // be running right now. Settling `failed` here would let the owner authorize
+    // the SAME paid work a second time while the first copy is still going —
+    // the outbox law is explicit that an indeterminate send is never
+    // auto-resolved. The row stays `dispatching`, pointing at the reference we
+    // minted, and reconciliation or the deadline closes it from evidence.
     app.logger.error(
-      { err: error, requestRef: request.requestRef },
-      "Agent hydration dispatch failed; the approval is spent and needs a fresh decision",
+      { err: error, requestRef: request.requestRef, executionRef },
+      "Agent hydration dispatch is INDETERMINATE; left dispatching for reconciliation",
     );
     return false;
   }
 }
 
 /**
- * The lane table, as DISPATCHERS — one entry per platform, looked up, never
- * compared. A branch on a platform literal here would both spend the ratchet and
- * hide the asymmetry this table exists to publish.
+ * The approved boundary, as a message ref.
+ *
+ * `beforeMessageRef` is already one. `beforeAt` is resolved against what we hold:
+ * the oldest stored message at or after that instant is the cursor to page back
+ * from. When nothing resolves, the answer is `null` and each lane falls back to
+ * the deepest point it holds — which is the same walk the owner asked for, just
+ * without a tighter starting point.
  */
+async function resolveApprovedBoundary(
+  app: AppContext,
+  request: AgentHydrationRequestRecord,
+  thread: { id: number },
+): Promise<string | null> {
+  if (request.targetBeforeMessageRef !== null) {
+    return request.targetBeforeMessageRef;
+  }
+  if (request.targetBeforeAt === null) {
+    return null;
+  }
+  return resolveAgentHydrationBoundaryRef(app.db, {
+    threadId: thread.id,
+    beforeAt: request.targetBeforeAt,
+  });
+}
+
 interface LaneDispatchInput {
   app: AppContext;
   boss: Pick<PgBoss, "send">;
   request: AgentHydrationRequestRecord;
   threadId: number;
+  /** The approved boundary, resolved: where this lane starts paging backwards. */
+  boundaryRef: string | null;
   frozenHeadId: string | null;
+  ofapiAccountId: string | null;
   /** Pre-minted; the created job MUST carry it (see `dispatchAgentHydrationRequest`). */
   executionRef: string;
 }
 
-/**
- * The ceiling the Fansly run must not exceed.
- *
- * Both approved numbers bound the same thing on this lane — one vendor request
- * per message page — so the run gets the SMALLER of them. `null` is no longer
- * reachable (the contract requires every ceiling on an approval), and the fallback
- * is deliberately the tightest number rather than the run's own full budget: the
- * failure to avoid is an approval whose ceiling silently does not arrive.
- */
-function fanslyRequestCeiling(request: AgentHydrationRequestRecord): number {
-  const caps = [request.decisionMaxCalls, request.decisionMaxPages]
-    .filter((cap): cap is number => cap !== null && cap > 0);
-  return caps.length === 0 ? 1 : Math.min(...caps);
+type LaneEnqueueResult =
+  | { kind: "enqueued"; executionRef: string }
+  /** Determinate: nothing was queued and we know it. */
+  | { kind: "refused"; lastError: "vendor_unavailable" | "budget_exhausted" }
+  /** The exact target was already captured; settle from that job, do not re-pay. */
+  | {
+    kind: "already_done";
+    state: "completed" | "partially_completed";
+    acceptedItems: number;
+    acceptedPages: number;
+    spentCredits: number;
+  };
+
+interface LanePreparation {
+  ok: boolean;
+  reason: string;
+  frozenHeadId: string | null;
+  ofapiAccountId: string | null;
 }
 
+/**
+ * The stable prerequisites of each lane, checked BEFORE the attempt is claimed.
+ *
+ * A page with no OFAPI mapping, or a thread with no head to freeze, cannot
+ * produce a job at all — and neither condition is going to appear between this
+ * check and the claim. Discovering them after the CAS burned the owner's single
+ * attempt on a job that was never created.
+ */
+const LANE_PREPARERS: Readonly<Record<Platform, (input: {
+  app: AppContext;
+  request: AgentHydrationRequestRecord;
+  thread: { lastMessageId: string | null };
+  boundaryRef: string | null;
+}) => Promise<LanePreparation>>> = {
+  fansly: async () => ({
+    ok: true,
+    reason: "",
+    frozenHeadId: null,
+    ofapiAccountId: null,
+  }),
+  onlyfans: async ({ app, request, thread, boundaryRef }) => {
+    const stored = await findPageById(app.db, request.pageId);
+    const ofapiAccountId = stored?.page.ofapiAccountId ?? null;
+    // The boundary IS the pagination start when one was approved; otherwise the
+    // thread's head.
+    const frozenHeadId = boundaryRef ?? thread.lastMessageId;
+    if (ofapiAccountId === null) {
+      return { ok: false, reason: "page has no OFAPI account mapping", frozenHeadId, ofapiAccountId };
+    }
+    if (frozenHeadId === null) {
+      return { ok: false, reason: "thread has no head to freeze", frozenHeadId, ofapiAccountId };
+    }
+    return { ok: true, reason: "", frozenHeadId, ofapiAccountId };
+  },
+};
+
+/**
+ * The lane table, as DISPATCHERS — one entry per platform, looked up, never
+ * compared. A branch on a platform literal here would both spend the ratchet and
+ * hide the asymmetry this table exists to publish.
+ */
 const LANE_DISPATCHERS: Readonly<
-  Record<Platform, (input: LaneDispatchInput) => Promise<string | null>>
+  Record<Platform, (input: LaneDispatchInput) => Promise<LaneEnqueueResult>>
 > = {
-  fansly: async ({ boss, request, threadId, executionRef }) => {
-    // Slice C's whole job: hand the thread to C'. The owner's ceiling becomes the
-    // run's request budget, and the depth cap is lifted for THIS run only — going
-    // past the cap is precisely what the owner approved.
-    return sendTargetedThreadBackfillJob(boss, {
+  fansly: async ({ boss, request, threadId, boundaryRef, executionRef }) => {
+    // Slice C's whole job: hand the thread to C'. The owner's ceilings become
+    // the run's budgets, the approved boundary becomes its starting cursor, and
+    // the depth cap is lifted for THIS run only — going past the cap is
+    // precisely what the owner approved.
+    const jobId = await sendTargetedThreadBackfillJob(boss, {
       threadId,
       platformAccountId: request.pageId,
       ignoreRetentionLimit: true,
       maxRequests: fanslyRequestCeiling(request),
+      ...(request.decisionMaxItems === null ? {} : { maxItems: request.decisionMaxItems }),
+      ...(boundaryRef === null ? {} : { startBeforeMessageRef: boundaryRef }),
       hydrationRequestRef: request.requestRef,
       jobId: executionRef,
     });
+    return jobId === null
+      ? { kind: "refused", lastError: "vendor_unavailable" }
+      : { kind: "enqueued", executionRef: jobId };
   },
-  onlyfans: async ({ app, request, frozenHeadId, executionRef }) => {
-    const stored = await findPageById(app.db, request.pageId);
-    const ofapiAccountId = stored?.page.ofapiAccountId ?? null;
+  onlyfans: async ({ app, request, boundaryRef, frozenHeadId, ofapiAccountId, executionRef }) => {
     if (ofapiAccountId === null || frozenHeadId === null) {
-      return null;
+      return { kind: "refused", lastError: "vendor_unavailable" };
     }
     // Every governed OnlyFans vendor call belongs to exactly one durable capture
-    // job (#158). The approval's caps become the job's caps verbatim — that is
-    // what makes the owner's numbers binding rather than decorative.
+    // job (#158). The approval's caps become the job's caps verbatim, and the
+    // approved boundary becomes the frozen head it pages back from.
+    const target = {
+      chatId: request.conversationRef,
+      frozenHeadId,
+      anchorMessageId: null,
+      limit: 100,
+      reason: "agent_hydration_request",
+    };
+    const desiredTargetHash = hashOfapiCaptureValue(target);
     const created = await createOrGetOfapiCaptureJob(app.db, {
       id: executionRef,
       pageId: request.pageId,
@@ -535,16 +710,11 @@ const LANE_DISPATCHERS: Readonly<
       kind: "chat_paginate",
       goal: "history_to_exhaustion",
       activeSlotKey: `page:${request.pageId}:chat:${request.conversationRef}`,
-      target: {
-        chatId: request.conversationRef,
-        frozenHeadId,
-        anchorMessageId: null,
-        limit: 100,
-        reason: "agent_hydration_request",
-      },
+      target,
       manifest: {
         version: "agent-hydration-v1",
         hydrationRequestRef: request.requestRef,
+        boundaryRef,
         // #158 consent, carried INTO the execution record: the job row is where
         // an auditor looks, and the answer must be there and not only in the
         // request that authorized it.
@@ -558,21 +728,51 @@ const LANE_DISPATCHERS: Readonly<
       maxPages: request.decisionMaxPages,
       maxItems: request.decisionMaxItems,
     });
-    return created.job.id;
+    if (created.created) {
+      return { kind: "enqueued", executionRef: created.job.id };
+    }
+
+    // COALESCENCE IS NOT FREE. `createOrGetOfapiCaptureJob` returns whatever
+    // occupies the chat's active slot, whatever its target, goal or ceilings. A
+    // tightly capped hydration attaching to somebody's exhaustion job would
+    // track and report work it never authorized, and the owner's ceiling would
+    // become decorative. Attach ONLY to the same target with the same limits.
+    const sameTarget = created.job.targetHash === desiredTargetHash
+      && created.job.goal === "history_to_exhaustion";
+    const sameCaps = created.job.maxCalls === request.decisionMaxCalls
+      && created.job.maxCredits === request.decisionMaxCredits
+      && created.job.maxPages === request.decisionMaxPages
+      && created.job.maxItems === request.decisionMaxItems;
+    if (!sameTarget || !sameCaps) {
+      return { kind: "refused", lastError: "vendor_unavailable" };
+    }
+    if (created.job.state === "complete") {
+      // The very same target already ran to exhaustion. Reporting that is the
+      // honest answer; paying for it again is not.
+      return {
+        kind: "already_done",
+        state: "completed",
+        acceptedItems: created.job.acceptedItems,
+        acceptedPages: created.job.acceptedPages,
+        spentCredits: created.job.spentCredits,
+      };
+    }
+    return { kind: "enqueued", executionRef: created.job.id };
   },
 };
 
-async function enqueueByLane(
-  app: AppContext,
-  boss: Pick<PgBoss, "send">,
-  request: AgentHydrationRequestRecord,
-  target: { threadId: number; frozenHeadId: string | null; executionRef: string },
-): Promise<string | null> {
-  const dispatcher = LANE_DISPATCHERS[request.platform as Platform];
-  if (!dispatcher) {
-    return null;
-  }
-  return dispatcher({ app, boss, request, ...target });
+/**
+ * The ceiling the Fansly run must not exceed.
+ *
+ * Both approved numbers bound the same thing on this lane — one vendor request
+ * per message page — so the run gets the SMALLER of them. The fallback is
+ * deliberately the tightest number rather than the run's own full budget: the
+ * failure to avoid is an approval whose ceiling silently does not arrive.
+ */
+function fanslyRequestCeiling(request: AgentHydrationRequestRecord): number {
+  const caps = [request.decisionMaxCalls, request.decisionMaxPages]
+    .filter((cap): cap is number => cap !== null && cap > 0);
+  return caps.length === 0 ? 1 : Math.min(...caps);
 }
 
 /**

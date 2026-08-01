@@ -314,7 +314,6 @@ export { normalizeResolveInput } from "./handlers-core.ts";
 export {
   AGENT_HYDRATION_REQUEST_TTL_MS,
   applyHydrationDecision,
-  hydrationCoverageFingerprint,
   hydrationDecisionFingerprint,
   hydrationRequestFingerprint,
   toWireHydrationRequest,

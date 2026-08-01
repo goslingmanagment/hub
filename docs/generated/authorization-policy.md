@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (193)
+## Routes (196)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -113,6 +113,9 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/agent/hydration-requests` | `agentHydrationRequestList` | `owner-session` | — | — |
 | GET | `/api/v1/agent/hydration-requests/:requestRef` | `agentHydrationRequestGet` | `agentKey` | — | — |
 | POST | `/api/v1/agent/hydration-requests/:requestRef/decision` | `agentHydrationRequestDecide` | `owner-session` | — | — |
+| GET | `/api/v1/agent/keys` | `agentKeyList` | `owner-session` | — | — |
+| POST | `/api/v1/agent/keys` | `agentKeyCreate` | `owner-session` | — | — |
+| POST | `/api/v1/agent/keys/:id/revoke` | `agentKeyRevoke` | `owner-session` | — | — |
 | GET | `/api/v1/agent/observations` | `agentObservations` | `agentKey` | — | — |
 | GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — |
 | POST | `/api/v1/agent/pages/:pageLabel/datasets/:dataset/query` | `agentDatasetQuery` | `agentKey` | — | page |

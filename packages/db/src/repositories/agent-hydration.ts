@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
@@ -7,6 +9,7 @@ import type {
   AgentHydrationLastError,
   AgentHydrationState,
 } from "../schema.ts";
+import { insertAgentReadAudit, type InsertAgentReadAuditInput } from "./agent-read-audit.ts";
 import { witnessFor, type PlaneReadWitness } from "./agent-read-witness.ts";
 
 /**
@@ -97,6 +100,19 @@ export type AgentHydrationActor = "agent_key" | "owner_session" | "executor" | "
 
 /** Bounded structured facts only — never a caller's sentence. */
 export type AgentHydrationEventDetail = Record<string, string | number | boolean | null>;
+
+/**
+ * Runs a state transition and its journal append as ONE transaction.
+ *
+ * The file header states the invariant; this is what enforces it. Two separate
+ * statements let a failed append leave state that moved with no history, and let
+ * two concurrent transitions interleave so `dispatched` is journaled before the
+ * `approved` that authorized it. Both are unacceptable in a record whose whole
+ * job is to say who allowed what.
+ */
+async function inTransaction<T>(db: Database, body: (tx: Database) => Promise<T>): Promise<T> {
+  return db.transaction(async (tx) => body(tx as unknown as Database));
+}
 
 function num(value: unknown): number {
   const parsed = typeof value === "bigint" ? Number(value) : Number(value);
@@ -228,6 +244,36 @@ async function appendEvent(
   `);
 }
 
+/**
+ * The content hash of the DEPTH facts an approval is bound to.
+ *
+ * DEPTH ONLY, deliberately: how many messages we hold, where our record of the
+ * thread begins, and what the coverage projection calls it. The head facts
+ * (`lastMessageAt`, newest stored id) move every time the fan sends a message
+ * and say nothing about how far back we reach — binding an approval to them
+ * would make ordinary traffic invalidate a decision about history.
+ *
+ * What it DOES catch is the thing that matters: somebody already deepened this
+ * thread between the proposal and the decision, so the owner would be paying for
+ * work that is already done.
+ */
+export function hydrationCoverageFingerprint(input: {
+  pageId: number;
+  conversationRef: string;
+  storedMessageCount: number;
+  oldestStoredMessageId: string | null;
+  messageCoverageStatus: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "agent-hydration-coverage-v2",
+    input.pageId,
+    input.conversationRef,
+    input.storedMessageCount,
+    input.oldestStoredMessageId,
+    input.messageCoverageStatus,
+  ]), "utf8").digest("hex");
+}
+
 export interface AgentHydrationThread {
   id: number;
   storedMessageCount: number;
@@ -282,6 +328,31 @@ export async function findAgentHydrationThread(
   };
 }
 
+/**
+ * Resolves an approved `beforeAt` boundary to the message the walk must start
+ * BEFORE.
+ *
+ * The target is "deepen this thread PAST this boundary", so the boundary is
+ * where the walk begins, not where it stops: the oldest message we already hold
+ * at or after that instant is exactly the cursor both lanes page backwards from.
+ * `null` means we hold nothing at or after the boundary, and the caller falls
+ * back to the deepest point we do hold.
+ */
+export async function resolveAgentHydrationBoundaryRef(
+  db: Database,
+  input: { threadId: number; beforeAt: Date },
+): Promise<string | null> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select m.platform_message_id
+    from page_dm_messages m
+    where m.conversation_id = ${input.threadId}
+      and m.created_at >= ${input.beforeAt}
+    order by m.created_at asc, m.platform_message_id asc
+    limit 1
+  `);
+  return nullableText(result.rows[0]?.platform_message_id);
+}
+
 export interface CreateAgentHydrationRequestInput {
   requestRef: string;
   agentKeyId: number;
@@ -318,72 +389,74 @@ export async function createAgentHydrationRequest(
   db: Database,
   input: CreateAgentHydrationRequestInput,
 ): Promise<{ created: boolean; request: AgentHydrationRequestRecord }> {
-  const inserted = await db.execute<Record<string, unknown>>(sql`
-    insert into agent_hydration_requests (
-      request_ref, agent_key_id, page_id, conversation_ref, thread_id,
-      state, target_kind, target_before_at, target_before_message_ref,
-      reason_sha256, reason_length, requested_max_calls,
-      idempotency_key, request_fingerprint, coverage_fingerprint,
-      lane_order_evaluated, lane_selected, lane_cost_note,
-      admissible, admissibility_reason, expires_at
-    ) values (
-      ${input.requestRef}::uuid,
-      ${input.agentKeyId},
-      ${input.pageId},
-      ${input.conversationRef},
-      ${input.threadId},
-      'requested',
-      'thread_backfill_before',
-      ${input.targetBeforeAt},
-      ${input.targetBeforeMessageRef},
-      ${input.reasonSha256},
-      ${input.reasonLength},
-      ${input.requestedMaxCalls},
-      ${input.idempotencyKey}::uuid,
-      ${input.requestFingerprint},
-      ${input.coverageFingerprint},
-      ${sql.param([...input.laneOrderEvaluated])}::text[],
-      ${input.laneSelected},
-      ${input.laneCostNote},
-      ${input.admissible},
-      ${input.admissibilityReason},
-      ${input.expiresAt}
-    )
-    on conflict (agent_key_id, idempotency_key) do nothing
-    returning id
-  `);
+  return inTransaction(db, async (tx) => {
+    const inserted = await tx.execute<Record<string, unknown>>(sql`
+      insert into agent_hydration_requests (
+        request_ref, agent_key_id, page_id, conversation_ref, thread_id,
+        state, target_kind, target_before_at, target_before_message_ref,
+        reason_sha256, reason_length, requested_max_calls,
+        idempotency_key, request_fingerprint, coverage_fingerprint,
+        lane_order_evaluated, lane_selected, lane_cost_note,
+        admissible, admissibility_reason, expires_at
+      ) values (
+        ${input.requestRef}::uuid,
+        ${input.agentKeyId},
+        ${input.pageId},
+        ${input.conversationRef},
+        ${input.threadId},
+        'requested',
+        'thread_backfill_before',
+        ${input.targetBeforeAt},
+        ${input.targetBeforeMessageRef},
+        ${input.reasonSha256},
+        ${input.reasonLength},
+        ${input.requestedMaxCalls},
+        ${input.idempotencyKey}::uuid,
+        ${input.requestFingerprint},
+        ${input.coverageFingerprint},
+        ${sql.param([...input.laneOrderEvaluated])}::text[],
+        ${input.laneSelected},
+        ${input.laneCostNote},
+        ${input.admissible},
+        ${input.admissibilityReason},
+        ${input.expiresAt}
+      )
+      on conflict (agent_key_id, idempotency_key) do nothing
+      returning id
+    `);
 
-  const insertedId = inserted.rows[0]?.id;
-  if (insertedId !== undefined) {
-    const id = num(insertedId);
-    await appendEvent(db, {
-      requestId: id,
-      kind: "created",
-      fromState: null,
-      toState: "requested",
-      rowVersion: 0,
-      actor: "agent_key",
-      agentKeyId: input.agentKeyId,
-      detail: { admissible: input.admissible, lane: input.laneSelected },
-    });
-    const created = await findAgentHydrationRequestById(db, id);
-    if (!created) {
-      throw new Error("createAgentHydrationRequest lost the row it just inserted");
+    const insertedId = inserted.rows[0]?.id;
+    if (insertedId !== undefined) {
+      const id = num(insertedId);
+      await appendEvent(tx, {
+        requestId: id,
+        kind: "created",
+        fromState: null,
+        toState: "requested",
+        rowVersion: 0,
+        actor: "agent_key",
+        agentKeyId: input.agentKeyId,
+        detail: { admissible: input.admissible, lane: input.laneSelected },
+      });
+      const created = await findAgentHydrationRequestById(tx, id);
+      if (!created) {
+        throw new Error("createAgentHydrationRequest lost the row it just inserted");
+      }
+      return { created: true, request: created };
     }
-    return { created: true, request: created };
-  }
 
-  const existing = await db.execute<Record<string, unknown>>(sql`
-    select ${REQUEST_COLUMNS} ${REQUEST_FROM}
-    where r.agent_key_id = ${input.agentKeyId}
-      and r.idempotency_key = ${input.idempotencyKey}::uuid
-    limit 1
-  `);
-  const row = existing.rows[0];
-  if (!row) {
-    throw new Error("agent hydration idempotency conflict resolved to no row");
-  }
-  return { created: false, request: mapRequest(row) };
+    const existing = await tx.execute<Record<string, unknown>>(sql`
+      select ${REQUEST_COLUMNS} ${REQUEST_FROM}
+      where r.agent_key_id = ${input.agentKeyId}
+        and r.idempotency_key = ${input.idempotencyKey}::uuid
+      limit 1
+    `);
+    const row = existing.rows[0];
+    if (!row) {
+      throw new Error("agent hydration idempotency conflict resolved to no row");
+    }
+    return { created: false, request: mapRequest(row) };
+  });
 }
 
 export async function findAgentHydrationRequestById(
@@ -398,12 +471,14 @@ export async function findAgentHydrationRequestById(
 }
 
 /**
- * Looks a request up by its wire ref, with a witness for the plane the read
- * touched.
+ * Looks a request up by its wire ref.
  *
- * `page_dm_threads` is the plane a hydration request is ABOUT, and the request
- * row carries the thread it targets — so a lookup that finds the request has, in
- * the epistemic sense, read the thread inventory for that scope.
+ * NO WITNESS. This statement reads `agent_hydration_requests`, `pages` and
+ * `agent_keys` — it does not touch `page_dm_threads`, and decision #199 is that
+ * a witness proves a query actually ran. The earlier version minted a
+ * thread-plane witness here on the reasoning that a request is ABOUT a thread,
+ * which is precisely the "claimed a read it never performed" defect that was
+ * removed from slice A.
  */
 export async function findAgentHydrationRequestByRef(
   db: Database,
@@ -413,10 +488,7 @@ export async function findAgentHydrationRequestByRef(
     select ${REQUEST_COLUMNS} ${REQUEST_FROM} where r.request_ref = ${requestRef}::uuid limit 1
   `);
   const row = result.rows[0];
-  return {
-    request: row ? mapRequest(row) : null,
-    witnesses: [witnessFor("page_dm_threads")],
-  };
+  return { request: row ? mapRequest(row) : null, witnesses: [] };
 }
 
 export async function listAgentHydrationRequests(
@@ -433,13 +505,11 @@ export async function listAgentHydrationRequests(
     order by r.created_at desc, r.id desc
     limit ${input.limit}
   `);
-  return {
-    rows: result.rows.map(mapRequest),
-    witnesses: [witnessFor("page_dm_threads")],
-  };
+  // No witness: this reads the request table, not the thread inventory.
+  return { rows: result.rows.map(mapRequest), witnesses: [] };
 }
 
-export type AgentHydrationCasOutcome = "applied" | "conflict";
+export type AgentHydrationCasOutcome = "applied" | "conflict" | "coverage_stale";
 
 export interface DecideAgentHydrationRequestInput {
   id: number;
@@ -456,16 +526,28 @@ export interface DecideAgentHydrationRequestInput {
   reasonLength: number | null;
   idempotencyKey: string;
   decisionFingerprint: string;
+  /** The fingerprint the DECIDER quoted. Compared against freshly computed
+   *  coverage inside this transaction, never against the stored copy. */
+  coverageFingerprint: string;
+  /** Written in the SAME transaction as the decision: authorizing vendor spend
+   *  is exactly the act the audit trail exists to record, and a commit that
+   *  outlived its audit insert would be permanently unaccounted for. */
+  audit: InsertAgentReadAuditInput;
   now?: Date;
 }
 
 /**
- * The owner's decision, CAS'd on `row_version` AND on `state = 'requested'`.
+ * The owner's decision.
  *
- * Both halves matter: the version catches a stale form, and the state catches a
- * request that has already been decided or expired. The caller supplies
- * `expectedVersion` from the body, so a second approve of the same request
- * cannot pass — which is exactly the double-approve the wire calls 409 conflict.
+ * ONE TRANSACTION, four things: recompute the thread's CURRENT depth coverage
+ * and compare it with what the decider quoted, CAS on version AND state AND
+ * expiry, append the journal event, and write the audit row.
+ *
+ * The coverage half used to be done by the handler comparing the request's own
+ * stored fingerprint with the value the client echoed back — a comparison of the
+ * proposal with itself, which succeeded without ever reading the thread. An
+ * approval could therefore commit against coverage that had changed since
+ * filing, which is to say the owner could pay for work already done.
  */
 export async function decideAgentHydrationRequest(
   db: Database,
@@ -473,50 +555,92 @@ export async function decideAgentHydrationRequest(
 ): Promise<{ outcome: AgentHydrationCasOutcome; request: AgentHydrationRequestRecord | null }> {
   const now = input.now ?? new Date();
   const toState: AgentHydrationState = input.approved ? "approved" : "rejected";
-  const updated = await db.execute<Record<string, unknown>>(sql`
-    update agent_hydration_requests set
-      state = ${toState},
-      row_version = row_version + 1,
-      decided_at = ${now},
-      decided_by_user_id = ${input.sessionUserId},
-      decision_approved = ${input.approved},
-      decision_allow_mark_read = ${input.allowMarkReadSideEffect},
-      decision_max_calls = ${input.maxCalls},
-      decision_max_credits = ${input.maxCredits},
-      decision_max_pages = ${input.maxPages},
-      decision_max_items = ${input.maxItems},
-      decision_reason_sha256 = ${input.reasonSha256},
-      decision_reason_length = ${input.reasonLength},
-      decision_idempotency_key = ${input.idempotencyKey}::uuid,
-      decision_fingerprint = ${input.decisionFingerprint},
-      expires_at = coalesce(${input.expiresAt}, expires_at),
-      updated_at = ${now}
-    where id = ${input.id}
-      and row_version = ${input.expectedVersion}
-      and state = 'requested'
-    returning id, row_version
-  `);
-  const row = updated.rows[0];
-  if (!row) {
-    return { outcome: "conflict", request: await findAgentHydrationRequestById(db, input.id) };
-  }
-  await appendEvent(db, {
-    requestId: input.id,
-    kind: input.approved ? "approved" : "rejected",
-    fromState: "requested",
-    toState,
-    rowVersion: num(row.row_version),
-    actor: "owner_session",
-    sessionUserId: input.sessionUserId,
-    detail: {
-      allowMarkReadSideEffect: input.allowMarkReadSideEffect,
-      maxCalls: input.maxCalls,
-      maxCredits: input.maxCredits,
-      maxPages: input.maxPages,
-      maxItems: input.maxItems,
-    },
+  return inTransaction(db, async (tx) => {
+    const target = await tx.execute<Record<string, unknown>>(sql`
+      select r.page_id, r.conversation_ref
+      from agent_hydration_requests r
+      where r.id = ${input.id}
+      for update
+    `);
+    const targetRow = target.rows[0];
+    if (!targetRow) {
+      return { outcome: "conflict" as const, request: null };
+    }
+    const pageId = num(targetRow.page_id);
+    const conversationRef = String(targetRow.conversation_ref);
+    const { thread } = await findAgentHydrationThread(tx, { pageId, conversationRef });
+    const currentCoverage = thread === null
+      ? null
+      : hydrationCoverageFingerprint({
+        pageId,
+        conversationRef,
+        storedMessageCount: thread.storedMessageCount,
+        oldestStoredMessageId: thread.oldestStoredMessageId,
+        messageCoverageStatus: thread.messageCoverageStatus,
+      });
+    if (currentCoverage === null || currentCoverage !== input.coverageFingerprint) {
+      return {
+        outcome: "coverage_stale" as const,
+        request: await findAgentHydrationRequestById(tx, input.id),
+      };
+    }
+
+    const updated = await tx.execute<Record<string, unknown>>(sql`
+      update agent_hydration_requests set
+        state = ${toState},
+        row_version = row_version + 1,
+        coverage_fingerprint = ${currentCoverage},
+        decided_at = ${now},
+        decided_by_user_id = ${input.sessionUserId},
+        decision_approved = ${input.approved},
+        decision_allow_mark_read = ${input.allowMarkReadSideEffect},
+        decision_max_calls = ${input.maxCalls},
+        decision_max_credits = ${input.maxCredits},
+        decision_max_pages = ${input.maxPages},
+        decision_max_items = ${input.maxItems},
+        decision_reason_sha256 = ${input.reasonSha256},
+        decision_reason_length = ${input.reasonLength},
+        decision_idempotency_key = ${input.idempotencyKey}::uuid,
+        decision_fingerprint = ${input.decisionFingerprint},
+        expires_at = coalesce(${input.expiresAt}, expires_at),
+        updated_at = ${now}
+      where id = ${input.id}
+        and row_version = ${input.expectedVersion}
+        and state = 'requested'
+        -- An expired request is not decidable, swept or not. Without this a
+        -- decision could revive it AND replace its TTL in one statement.
+        and (expires_at is null or expires_at > ${now})
+      returning id, row_version
+    `);
+    const row = updated.rows[0];
+    if (!row) {
+      return {
+        outcome: "conflict" as const,
+        request: await findAgentHydrationRequestById(tx, input.id),
+      };
+    }
+    await appendEvent(tx, {
+      requestId: input.id,
+      kind: input.approved ? "approved" : "rejected",
+      fromState: "requested",
+      toState,
+      rowVersion: num(row.row_version),
+      actor: "owner_session",
+      sessionUserId: input.sessionUserId,
+      detail: {
+        allowMarkReadSideEffect: input.allowMarkReadSideEffect,
+        maxCalls: input.maxCalls,
+        maxCredits: input.maxCredits,
+        maxPages: input.maxPages,
+        maxItems: input.maxItems,
+      },
+    });
+    await insertAgentReadAudit(tx, input.audit);
+    return {
+      outcome: "applied" as const,
+      request: await findAgentHydrationRequestById(tx, input.id),
+    };
   });
-  return { outcome: "applied", request: await findAgentHydrationRequestById(db, input.id) };
 }
 
 /** Approved requests the executor may dispatch: in date, admissible, not expired. */
@@ -562,34 +686,44 @@ export async function claimAgentHydrationRequestForDispatch(
   },
 ): Promise<{ outcome: AgentHydrationCasOutcome; request: AgentHydrationRequestRecord | null }> {
   const now = input.now ?? new Date();
-  const updated = await db.execute<Record<string, unknown>>(sql`
-    update agent_hydration_requests set
-      state = 'dispatching',
-      row_version = row_version + 1,
-      dispatched_at = ${now},
-      dispatch_deadline_at = ${input.deadlineAt},
-      dispatch_count = dispatch_count + 1,
-      execution_lane = ${input.executionLane},
-      execution_ref = ${input.executionRef},
-      updated_at = ${now}
-    where id = ${input.id}
-      and row_version = ${input.expectedVersion}
-      and state = 'approved'
-    returning id, row_version
-  `);
-  const row = updated.rows[0];
-  if (!row) {
-    return { outcome: "conflict", request: await findAgentHydrationRequestById(db, input.id) };
-  }
-  await appendEvent(db, {
-    requestId: input.id,
-    kind: "dispatched",
-    fromState: "approved",
-    toState: "dispatching",
-    rowVersion: num(row.row_version),
-    actor: "executor",
+  return inTransaction(db, async (tx) => {
+    const updated = await tx.execute<Record<string, unknown>>(sql`
+      update agent_hydration_requests set
+        state = 'dispatching',
+        row_version = row_version + 1,
+        dispatched_at = ${now},
+        dispatch_deadline_at = ${input.deadlineAt},
+        dispatch_count = dispatch_count + 1,
+        execution_lane = ${input.executionLane},
+        execution_ref = ${input.executionRef},
+        updated_at = ${now}
+      where id = ${input.id}
+        and row_version = ${input.expectedVersion}
+        and state = 'approved'
+        -- An approval whose window closed buys nothing, sweeper or no sweeper.
+        and (expires_at is null or expires_at > ${now})
+      returning id, row_version
+    `);
+    const row = updated.rows[0];
+    if (!row) {
+      return {
+        outcome: "conflict" as const,
+        request: await findAgentHydrationRequestById(tx, input.id),
+      };
+    }
+    await appendEvent(tx, {
+      requestId: input.id,
+      kind: "dispatched",
+      fromState: "approved",
+      toState: "dispatching",
+      rowVersion: num(row.row_version),
+      actor: "executor",
+    });
+    return {
+      outcome: "applied" as const,
+      request: await findAgentHydrationRequestById(tx, input.id),
+    };
   });
-  return { outcome: "applied", request: await findAgentHydrationRequestById(db, input.id) };
 }
 
 /**
@@ -644,37 +778,45 @@ export async function settleAgentHydrationRequest(
   input: SettleAgentHydrationRequestInput,
 ): Promise<{ outcome: AgentHydrationCasOutcome; request: AgentHydrationRequestRecord | null }> {
   const now = input.now ?? new Date();
-  const updated = await db.execute<Record<string, unknown>>(sql`
-    update agent_hydration_requests set
-      state = ${input.toState},
-      row_version = row_version + 1,
-      last_error = ${input.lastError ?? "none"},
-      accepted_items = ${input.acceptedItems ?? 0},
-      accepted_pages = ${input.acceptedPages ?? 0},
-      spent_credits = ${input.spentCredits ?? 0},
-      settled_at = ${now},
-      updated_at = ${now}
-    where id = ${input.id} and state = 'dispatching'
-    returning id, row_version
-  `);
-  const row = updated.rows[0];
-  if (!row) {
-    return { outcome: "conflict", request: await findAgentHydrationRequestById(db, input.id) };
-  }
-  await appendEvent(db, {
-    requestId: input.id,
-    kind: input.toState === "failed" ? "failed" : "settled",
-    fromState: "dispatching",
-    toState: input.toState,
-    rowVersion: num(row.row_version),
-    actor: input.actor ?? "executor",
-    detail: {
-      lastError: input.lastError ?? "none",
-      acceptedItems: input.acceptedItems ?? 0,
-      acceptedPages: input.acceptedPages ?? 0,
-    },
+  return inTransaction(db, async (tx) => {
+    const updated = await tx.execute<Record<string, unknown>>(sql`
+      update agent_hydration_requests set
+        state = ${input.toState},
+        row_version = row_version + 1,
+        last_error = ${input.lastError ?? "none"},
+        accepted_items = ${input.acceptedItems ?? 0},
+        accepted_pages = ${input.acceptedPages ?? 0},
+        spent_credits = ${input.spentCredits ?? 0},
+        settled_at = ${now},
+        updated_at = ${now}
+      where id = ${input.id} and state = 'dispatching'
+      returning id, row_version
+    `);
+    const row = updated.rows[0];
+    if (!row) {
+      return {
+        outcome: "conflict" as const,
+        request: await findAgentHydrationRequestById(tx, input.id),
+      };
+    }
+    await appendEvent(tx, {
+      requestId: input.id,
+      kind: input.toState === "failed" ? "failed" : "settled",
+      fromState: "dispatching",
+      toState: input.toState,
+      rowVersion: num(row.row_version),
+      actor: input.actor ?? "executor",
+      detail: {
+        lastError: input.lastError ?? "none",
+        acceptedItems: input.acceptedItems ?? 0,
+        acceptedPages: input.acceptedPages ?? 0,
+      },
+    });
+    return {
+      outcome: "applied" as const,
+      request: await findAgentHydrationRequestById(tx, input.id),
+    };
   });
-  return { outcome: "applied", request: await findAgentHydrationRequestById(db, input.id) };
 }
 
 /**
@@ -735,28 +877,30 @@ export async function expireAgentHydrationRequest(
   input: { id: number; fromState: Extract<AgentHydrationState, "requested" | "approved">; now?: Date },
 ): Promise<AgentHydrationCasOutcome> {
   const now = input.now ?? new Date();
-  const updated = await db.execute<Record<string, unknown>>(sql`
-    update agent_hydration_requests set
-      state = 'expired',
-      row_version = row_version + 1,
-      settled_at = ${now},
-      updated_at = ${now}
-    where id = ${input.id} and state = ${input.fromState}
-    returning id, row_version
-  `);
-  const row = updated.rows[0];
-  if (!row) {
-    return "conflict";
-  }
-  await appendEvent(db, {
-    requestId: input.id,
-    kind: "expired",
-    fromState: input.fromState,
-    toState: "expired",
-    rowVersion: num(row.row_version),
-    actor: "sweeper",
+  return inTransaction(db, async (tx) => {
+    const updated = await tx.execute<Record<string, unknown>>(sql`
+      update agent_hydration_requests set
+        state = 'expired',
+        row_version = row_version + 1,
+        settled_at = ${now},
+        updated_at = ${now}
+      where id = ${input.id} and state = ${input.fromState}
+      returning id, row_version
+    `);
+    const row = updated.rows[0];
+    if (!row) {
+      return "conflict" as const;
+    }
+    await appendEvent(tx, {
+      requestId: input.id,
+      kind: "expired",
+      fromState: input.fromState,
+      toState: "expired",
+      rowVersion: num(row.row_version),
+      actor: "sweeper",
+    });
+    return "applied" as const;
   });
-  return "applied";
 }
 
 export interface AgentHydrationEventRecord {

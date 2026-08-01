@@ -93,6 +93,21 @@ export interface TargetedThreadBackfillJob {
    * cannot buy a longer run than one job is allowed to be.
    */
   maxRequests?: number;
+  /**
+   * Slice C: the owner-approved ITEM ceiling. Checked between vendor pages, so
+   * the run stops as soon as it has accepted at least this many messages; the
+   * unit of acceptance is a page, so the last page may cross it.
+   */
+  maxItems?: number;
+  /**
+   * Slice C: the approved BOUNDARY, as the message this walk starts before.
+   *
+   * The target says "deepen this thread PAST this point", so the boundary is
+   * where the walk begins. Without it every approved boundary executed as a
+   * generic walk from the deepest message we already held — spending on, and
+   * reporting about, a different scope than the one that was approved.
+   */
+  startBeforeMessageRef?: string;
   /** Slice C: the hydration request this run answers, so its outcome settles
    *  the request instead of vanishing into the job log. */
   hydrationRequestRef?: string;
@@ -182,6 +197,10 @@ export async function sendTargetedThreadBackfillJob(
       threadId: input.threadId,
       ignoreRetentionLimit: input.ignoreRetentionLimit === true,
       ...(input.maxRequests === undefined ? {} : { maxRequests: input.maxRequests }),
+      ...(input.maxItems === undefined ? {} : { maxItems: input.maxItems }),
+      ...(input.startBeforeMessageRef === undefined
+        ? {}
+        : { startBeforeMessageRef: input.startBeforeMessageRef }),
       ...(input.hydrationRequestRef === undefined
         ? {}
         : { hydrationRequestRef: input.hydrationRequestRef }),
@@ -208,10 +227,18 @@ export function parseTargetedThreadBackfillJob(data: unknown): TargetedThreadBac
     && record.maxRequests > 0
     ? record.maxRequests
     : undefined;
+  const maxItems = typeof record.maxItems === "number" && Number.isInteger(record.maxItems)
+    && record.maxItems > 0
+    ? record.maxItems
+    : undefined;
   return {
     threadId,
     ignoreRetentionLimit: record.ignoreRetentionLimit === true,
     ...(maxRequests === undefined ? {} : { maxRequests }),
+    ...(maxItems === undefined ? {} : { maxItems }),
+    ...(typeof record.startBeforeMessageRef === "string" && record.startBeforeMessageRef.length > 0
+      ? { startBeforeMessageRef: record.startBeforeMessageRef }
+      : {}),
     ...(typeof record.hydrationRequestRef === "string"
       ? { hydrationRequestRef: record.hydrationRequestRef }
       : {}),
@@ -534,7 +561,9 @@ export async function runTargetedThreadBackfill(
       leaseToken: lease.leaseToken,
     }, async () => {
       try {
-        let before = conversation.oldestStoredMessageId;
+        // The approved boundary when there is one (slice C), otherwise the
+        // deepest message we already hold — the walk goes backwards from here.
+        let before = input.startBeforeMessageRef ?? conversation.oldestStoredMessageId;
 
         while (budget.hasRequestCapacity() && budget.hasWallClockCapacity()) {
           if (leaseFenced) {
@@ -580,6 +609,15 @@ export async function runTargetedThreadBackfill(
             result.storedMessageCountBefore + result.insertedMessages >= retentionLimit
           ) {
             result.outcome = "retention_limit_reached";
+            break;
+          }
+
+          // Slice C: the owner-approved item ceiling. Checked here rather than
+          // trusted to the request budget, because one request accepts up to 25
+          // messages and an explicit item cap could otherwise be blown past
+          // several times over inside the approved call count.
+          if (input.maxItems !== undefined && result.insertedMessages >= input.maxItems) {
+            result.outcome = "partial";
             break;
           }
 

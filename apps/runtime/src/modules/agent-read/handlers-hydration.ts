@@ -17,6 +17,7 @@ import {
   decideAgentHydrationRequest,
   findAgentHydrationRequestByRef,
   findAgentHydrationThread,
+  hydrationCoverageFingerprint,
   listAgentHydrationRequests,
   type AgentHydrationRequestRecord,
 } from "@agency_hub_core/db";
@@ -83,35 +84,6 @@ const HYDRATION_PLANES = ["page_dm_threads"] as const;
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-/**
- * The content hash of the coverage picture an approval is bound to.
- *
- * Everything in it is a fact about how much of the thread this store holds. If
- * any of it moved between the proposal and the decision, the owner approved
- * spending against a picture that no longer exists, and #13 answers 409
- * `hydration_proposal_stale` (lesson `tg` 21).
- */
-export function hydrationCoverageFingerprint(input: {
-  pageId: number;
-  conversationRef: string;
-  storedMessageCount: number;
-  oldestStoredMessageId: string | null;
-  newestStoredMessageId: string | null;
-  messageCoverageStatus: string;
-  lastMessageAt: Date | null;
-}): string {
-  return sha256(JSON.stringify([
-    "agent-hydration-coverage-v1",
-    input.pageId,
-    input.conversationRef,
-    input.storedMessageCount,
-    input.oldestStoredMessageId,
-    input.newestStoredMessageId,
-    input.messageCoverageStatus,
-    input.lastMessageAt === null ? null : input.lastMessageAt.toISOString(),
-  ]));
 }
 
 /**
@@ -263,6 +235,27 @@ async function assertHydrationEnabled(appContext: AppContext): Promise<AgentPlan
 // #11 agentHydrationRequestCreate
 // ---------------------------------------------------------------------------
 
+/**
+ * Settles the row budget for a singleton operation.
+ *
+ * A refused request delivered NOTHING, so it must not spend the key's daily row
+ * allowance: repeated failed polls would otherwise burn a budget for zero rows.
+ * Every other handler on the plane settles zero on the error path; these did not.
+ */
+async function finishRows<T>(
+  scope: { finish(rows: number): Promise<void> },
+  body: () => Promise<T>,
+): Promise<T> {
+  let delivered = 0;
+  try {
+    const result = await body();
+    delivered = 1;
+    return result;
+  } finally {
+    await scope.finish(delivered);
+  }
+}
+
 export async function handleAgentHydrationRequestCreate(
   appContext: AppContext,
   principal: AgentAuthPrincipal,
@@ -277,7 +270,7 @@ export async function handleAgentHydrationRequestCreate(
     operation: "agentHydrationRequestCreate",
     requiredCapabilities: ["request:hydration"],
   });
-  try {
+  return finishRows(scope, async () => {
     // In-handler grant guard (dual-layer law #143): a page outside the grant
     // answers the SAME static 404 as a page that does not exist.
     const page = scope.pages.find((candidate) => candidate.pageLabel === params.pageLabel);
@@ -311,9 +304,7 @@ export async function handleAgentHydrationRequestCreate(
       conversationRef: params.conversationRef,
       storedMessageCount: thread.storedMessageCount,
       oldestStoredMessageId: thread.oldestStoredMessageId,
-      newestStoredMessageId: thread.newestStoredMessageId,
       messageCoverageStatus: thread.messageCoverageStatus,
-      lastMessageAt: thread.lastMessageAt,
     });
     const requestFingerprint = hydrationRequestFingerprint({
       pageId: page.id,
@@ -383,9 +374,7 @@ export async function handleAgentHydrationRequestCreate(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-  } finally {
-    await scope.finish(1);
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +392,7 @@ export async function handleAgentHydrationRequestGet(
     operation: "agentHydrationRequestGet",
     requiredCapabilities: ["request:hydration"],
   });
-  try {
+  return finishRows(scope, async () => {
     const { request, witnesses } = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       findAgentHydrationRequestByRef(tx, params.requestRef), "agent_hydration_get");
 
@@ -431,9 +420,7 @@ export async function handleAgentHydrationRequestGet(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-  } finally {
-    await scope.finish(1);
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -497,13 +484,6 @@ export async function applyHydrationDecision(
     return { planeMode, request, disposition: "already_decided", witnesses };
   }
 
-  // The approval is bound to the content hash of what was SHOWN. A picture that
-  // moved underneath means the owner would be approving spend against a state
-  // that no longer exists.
-  if (request.coverageFingerprint !== body.coverageFingerprint) {
-    throw new AgentHydrationProposalStaleError();
-  }
-
   const platform = request.platform as Platform;
   const lane = AGENT_HYDRATION_LANES[platform];
   // #158: an approval that refuses the side effect cannot be executed on a
@@ -531,8 +511,27 @@ export async function applyHydrationDecision(
   }
 
   const approved = body.decision === "approve";
+  // The coverage comparison, the CAS, the journal event and the audit row all
+  // happen INSIDE one transaction: the quoted fingerprint is checked against
+  // freshly read thread state, not against the request's own stored copy (which
+  // would be the proposal compared with itself).
   const { outcome, request: decided } = await decideAgentHydrationRequest(db, {
     id: request.id,
+    coverageFingerprint: body.coverageFingerprint,
+    audit: {
+      sessionUserId: input.actorUserId,
+      operation: "agentHydrationRequestDecide",
+      pageIds: [request.pageId],
+      verbatimText: false,
+      requestSummary: {
+        ...(body.reason === undefined
+          ? {}
+          : { reasonSha256: sha256(body.reason), reasonLength: body.reason.length }),
+        platform,
+        planeMode,
+        returned: 1,
+      },
+    },
     expectedVersion: body.expectedVersion,
     approved,
     sessionUserId: input.actorUserId,
@@ -548,28 +547,16 @@ export async function applyHydrationDecision(
     decisionFingerprint,
   });
 
+  // The thread's depth moved between the proposal and the decision: the owner
+  // would be paying for history somebody already fetched.
+  if (outcome === "coverage_stale") {
+    throw new AgentHydrationProposalStaleError();
+  }
   // The CAS lost: somebody decided first, or the request left `requested` (it
   // expired, or it is already executing). Never an overwrite.
   if (outcome === "conflict" || !decided) {
     throw new AgentHydrationConflictError();
   }
-
-  // EVERY decision leaves an audit row, on top of the append-only event journal:
-  // authorizing vendor spend is exactly the act the trail exists to record.
-  await writeAgentAudit(db, {
-    sessionUserId: input.actorUserId,
-    operation: "agentHydrationRequestDecide",
-    pageIds: [request.pageId],
-    verbatimText: false,
-    requestSummary: {
-      ...(body.reason === undefined
-        ? {}
-        : { reasonSha256: sha256(body.reason), reasonLength: body.reason.length }),
-      platform,
-      planeMode,
-      returned: 1,
-    },
-  });
 
   return {
     planeMode,
