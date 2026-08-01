@@ -6,36 +6,40 @@ import {
   aiUsageFeatures,
   creatableUserRoles,
   fanFlagTypes,
-  isValidBusinessDateString,
   ofapiCaptureJobStates,
-  platforms,
   transactionReportingBuckets,
-  transactionStates,
-  transactionTypes,
   userRoles,
 } from "@agency_hub_core/shared";
 import { z } from "zod";
 
-const intId = z.number().int().positive();
-const mills = z.number().int();
-const isoTimestamp = z.string();
-const businessDate = z.string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .refine((value) => isValidBusinessDateString(value), "Invalid business date");
+// House primitives shared with the sibling route modules (see primitives.ts).
+import {
+  businessDate,
+  errorResponseSchema,
+  fanLookupParamsSchema,
+  fanSearchMatchKindEnum,
+  intId,
+  isoTimestamp,
+  mills,
+  pageParamsSchema,
+  paginationQuerySchema,
+  platformEnum,
+  queryBooleanSchema,
+  sortDirEnum,
+  transactionStateEnum,
+  transactionTypeEnum,
+} from "./primitives.ts";
+
 const periodEnum = z.enum(PERIOD_OPTIONS);
 const spenderPeriodEnum = z.enum(SPENDER_PERIOD_OPTIONS);
 const spenderSeriesGranularityEnum = z.enum(SPENDER_SERIES_GRANULARITIES);
 const nonCustomPeriodEnum = z.enum(["today", "7d", "30d", "all"]);
-const platformEnum = z.enum(platforms);
 const transactionReportingBucketEnum = z.enum(transactionReportingBuckets);
-const transactionTypeEnum = z.enum(transactionTypes);
-const transactionStateEnum = z.enum(transactionStates);
 const userRoleEnum = z.enum(userRoles);
 const creatableUserRoleEnum = z.enum(creatableUserRoles);
 const fanFlagEnum = z.enum(fanFlagTypes);
 const aiUsageFeatureEnum = z.enum(aiUsageFeatures);
 const spenderScopeKindEnum = z.enum(["page", "model", "agency"]);
-const sortDirEnum = z.enum(["asc", "desc"]);
 const spenderSortByEnum = z.enum([
   "grossAmountMills",
   "creatorNetAmountMills",
@@ -51,7 +55,6 @@ const spenderSortByEnum = z.enum([
   "displayName",
 ]);
 const spenderRetentionStatusEnum = z.enum(SPENDER_RETENTION_STATUSES);
-const fanSearchMatchKindEnum = z.enum(["platformUserId", "username", "alias", "displayName"]);
 const pageSpenderAutoListBucketKeyEnum = z.enum([
   "0-25",
   "25-50",
@@ -60,26 +63,6 @@ const pageSpenderAutoListBucketKeyEnum = z.enum([
   "350-600",
   "600-plus",
 ]);
-const queryBooleanSchema = z.preprocess((value) => {
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-
-  return value;
-}, z.boolean());
-
-export const errorResponseSchema = z.object({
-  error: z.string(),
-  message: z.string(),
-  statusCode: z.number().int(),
-});
-
 export const pageRefSchema = z.object({
   id: intId,
   label: z.string(),
@@ -306,26 +289,12 @@ export const loginBodySchema = z.object({
   password: z.string().min(1).max(1024),
 });
 
-export const paginationQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
-});
-
-export const pageParamsSchema = z.object({
-  pageLabel: z.string().min(1),
-});
-
 export const pageSpenderAutoListParamsSchema = pageParamsSchema.extend({
   bucketKey: pageSpenderAutoListBucketKeyEnum,
 });
 
 export const modelParamsSchema = z.object({
   modelSlug: z.string().min(1),
-});
-
-export const fanLookupParamsSchema = z.object({
-  platform: platformEnum,
-  platformUserId: z.string().min(1),
 });
 
 export const pageFanParamsSchema = pageParamsSchema.extend({

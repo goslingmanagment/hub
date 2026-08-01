@@ -1,3 +1,6 @@
+// House primitives (mills, platformEnum, the error body, pagination) — extracted
+// from routes.ts so the agent route module shares ONE declaration of each.
+export * from "./primitives.ts";
 export * from "./routes.ts";
 export * from "./authorization-policy.ts";
 export * from "./domain-event-cursor.ts";
