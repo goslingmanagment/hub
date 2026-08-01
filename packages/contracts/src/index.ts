@@ -4,6 +4,8 @@ export * from "./primitives.ts";
 export * from "./routes.ts";
 // Agent Read Plane operations #1-#10 (spread into routeSchemas by routes.ts).
 export * from "./routes-agent.ts";
+// Slice B: owner administration of the plane's keys (issue / list / revoke).
+export * from "./routes-agent-keys.ts";
 export * from "./authorization-policy.ts";
 export * from "./domain-event-cursor.ts";
 export * from "./sdk-runtime.ts";

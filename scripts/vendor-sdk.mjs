@@ -106,6 +106,9 @@ for (const file of [
   // The Agent Read Plane operations. routes.ts spreads them into routeSchemas,
   // so a vendored SDK without this file cannot compile at all.
   "routes-agent.ts",
+  // Owner administration of the plane's keys (slice B). routes.ts spreads these
+  // into routeSchemas too, so the same rule applies: no file, no compile.
+  "routes-agent-keys.ts",
   "sdk-runtime.ts",
   "domain-event-cursor.ts",
   "authorization-policy.ts",

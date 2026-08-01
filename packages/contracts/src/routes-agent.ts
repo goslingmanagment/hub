@@ -795,12 +795,22 @@ export const agentCapabilitiesResponseSchema = z.object({
 // #2 agentResolve — POST /api/v1/agent/resolve
 // ---------------------------------------------------------------------------
 
+/** Named and exported so a caller (the CLI) can VALIDATE a hint against the same
+ *  literal the route accepts, instead of restating the list. */
+export const agentResolveHintEnum = z.enum([
+  "auto",
+  "url",
+  "platformUserId",
+  "username",
+  "alias",
+  "displayName",
+]);
+
 const agentResolveInputSchema = z.object({
   raw: z.string().min(1).max(300),
   /** `auto` and `url` do NOT require the caller to know which key it holds —
    *  that ignorance is exactly what produced the false "no such fan" in Gate R1. */
-  hint: z.enum(["auto", "url", "platformUserId", "username", "alias", "displayName"])
-    .default("auto"),
+  hint: agentResolveHintEnum.default("auto"),
 }).strict();
 
 export const agentResolveBodySchema = z.object({
@@ -1072,6 +1082,13 @@ export const agentPersonTimelineResponseSchema = z.object({
 // #5 agentThreads
 // ---------------------------------------------------------------------------
 
+/** Exported for the same reason as the hint enum: derived, never restated. */
+export const agentThreadsOrderByEnum = z.enum([
+  "lastMessageAt",
+  "storedMessageCount",
+  "pageLabel",
+]);
+
 export const agentThreadsQuerySchema = z.object({
   platform: platformEnum.optional(),
   pageLabel: z.string().min(1).optional(),
@@ -1081,7 +1098,7 @@ export const agentThreadsQuerySchema = z.object({
   quarantined: queryBooleanSchema.optional(),
   hasMessagesSince: agentIsoTimestamp.optional(),
   minStoredMessages: z.coerce.number().int().min(0).max(100_000).optional(),
-  orderBy: z.enum(["lastMessageAt", "storedMessageCount", "pageLabel"]).default("lastMessageAt"),
+  orderBy: agentThreadsOrderByEnum.default("lastMessageAt"),
   sortDir: sortDirEnum.default("desc"),
   limit: paginationQuerySchema.shape.limit,
   cursor: agentCursorString.optional(),

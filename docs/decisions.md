@@ -201,6 +201,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 197 | Capture floor, not absence proof | The `absenceProvable` field and its certification machinery (coverage proofs, capture ceiling, gap-detection mode) are REMOVED before shipping: unreachable on every real route and the slowest reads in the slice. What ships is `captureFloor` (`oldest_stored_row`, from its own unbounded query) plus the `before_capture_floor` gap and blocker — "we hold nothing before DATE" is checkable, "nothing happened before DATE" is not expressible |
 | 198 | Agent search is Postgres FTS | Message search runs `websearch_to_tsquery('simple')` over the GIN that has existed unused since migration 0059; `escapeLikePattern` is NOT applied on that path (it corrupts tsquery input), no FTS index is built for the other two message stores, and they are declared `not_indexed` so a miss reads as non-coverage rather than as absence |
 | 199 | One writer for the blockers | `concludeEnvelope` in `modules/agent-read/epistemics.ts` is the ONLY runtime site that names a blocker (pinned textually); plane reads are branded witnesses a handler cannot mint (barrel export pinned); ramp mode and cursor traversal enter through the signature — a consumed cursor takes `mutable_sort_key_traversal`, and an unfrozen population takes the `no_frozen_snapshot` caveat instead of an unearned `snapshotExhausted` |
+| 200 | Agent keys are issued, never recovered | An agent key is minted by the owner (dashboard or `POST /api/v1/agent/keys`), returns its raw token EXACTLY once and stores only `sha256(token)`; the closed capability matrix and the 365-day lifetime ceiling REFUSE a bad issuance (400) instead of narrowing it silently, the page grant is the labels that were named (no wildcard, later pages are not granted), and delivery to a model is `packages/hub-agent-cli` (`hub`): one command per agentKey operation, one JSON document per call, exit 0/3/4 with `--fail-on-partial`. The `exportPolicy` VALUE flip (spec 11 step C) is BLOCKED: both vendored clients still reject `agent_read_plane_v1` at runtime |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6141,3 +6142,71 @@ blocker. Its sibling `no_frozen_snapshot` is the same honesty applied to the
 population: operations with a monotonic bound to freeze (threads, observations)
 apply it in SQL and may report `snapshotExhausted`; the ones without say so out
 loud rather than implying a stability nobody earned.
+
+
+**Decision #200 (2026-08-01, an agent key is issued once and delivered through
+one CLI):** the plane's credentials and their delivery, decided together because
+the same property runs through both: a machine principal must never be able to
+widen, recover or misread its own grant.
+
+**Issuance.** `POST /api/v1/agent/keys` (owner session) mints a key and returns
+the raw token in that response and nowhere else; the row holds `sha256(token)`,
+the listing schema has no field that could express either the token or the
+digest, and a lost token is re-issued rather than recovered. The routes live under
+`/api/v1/agent/` specifically so the plane's `Cache-Control: no-store` hook covers
+the one response in this system that carries a live bearer token, and their
+contracts live in a sibling module (`routes-agent-keys.ts`) so the read plane's
+own pins (eleven operations, exactly one owner-session, an evidence envelope on
+every 200) keep meaning what they say.
+
+Two rules REFUSE rather than adjust. A capability outside `AGENT_CAPABILITIES` is
+a 400: silently dropping a typo would mint a key the owner believes is narrower
+than it is. A lifetime past the 365-day ceiling is a 400 too, not a clamp: an
+owner who asked for two years and received one would learn about it from a broken
+agent months later. Neither rule is re-implemented at the route. The capability
+enum is derived from the same constant the table CHECK enforces, and the ceiling
+is decided once inside `insertAgentKey`; the route only translates the typed
+refusals into HTTP. The page grant is explicit labels resolved to ids at
+issuance, so a page created tomorrow is granted by nothing.
+
+**Delivery.** `packages/hub-agent-cli`, bin `hub`, exactly one command per
+agentKey operation and nothing composite. All HTTP goes through the generated SDK,
+which validates every successful response against the same Zod contract the server
+enforces; a CLI with its own fetch would trade that away and trip the raw-fetch
+ratchet besides. Auth is `HUB_AGENT_KEY` or `~/.config/hub/credentials`, base URL
+`HUB_BASE_URL`. The CLI writes no state (the `tg` tool taught that lesson with
+eight abandoned receipts).
+
+Exit codes are the part worth arguing about. The sibling tool exits 0 even on
+failure, which works there because a failure is a document in the same ontology.
+Here it is not: a 404 means the conclusion is unreachable, and reporting that with
+a zero exit is the same lie as printing a bare `[]`. So: 0 an answer came back, 3
+an answer came back carrying blockers and `--fail-on-partial` was passed, 4 no
+answer. A document is printed on stdout in every case, and `blockers` is lifted to
+the top of it so an agent reading nothing else still sees the verdict.
+`docs/agent-read-skill.md` is the model-facing half of this.
+
+Owner-session operations (9b payloads, #13 hydration decisions) are absent from
+this CLI on purpose: an agent key cannot reach them, so a command for them could
+only produce a confident 401.
+
+**exportPolicy staging (spec 11), and where it stopped.** The sequence is (A)
+widen the wire literal to an enum, (B) serve the value from config, (C) flip the
+value, and collapsing it breaks clients in production because the SDK validates
+successful responses against a VENDORED schema. A and B shipped with the plane's
+operations. C did NOT ship: verification was done by loading each client's
+vendored RUNTIME schema and `safeParse`-ing a response carrying
+`agent_read_plane_v1` (a hash comparison always false-stops because this work
+moves the hub hash, and a text grep can hit a `.d.ts` while the runtime `.js`
+still carries the old `z.literal`). Both `of-desktop` and `fansly-ext` REJECT it;
+the dashboard's workspace SDK accepts. `agentExportPolicyValue` therefore stays at
+`no_raw_transcript_export_endpoint_yet` until the owner re-vendors both clients,
+after which the flip is a live config change with its own verification window.
+
+This is also where #52's partial supersede becomes operative. #196 recorded the
+narrow supersede in principle (transcript reads only through operations carrying
+mandatory `capture`/`conclusion`, only for an `agentKey` principal, never as an
+unannotated dump); the wire marker that ADVERTISES it is exactly the value still
+waiting on the fleet. Until then the plane is live and the marker is honest about
+saying nothing new. #57, #140 and #142 remain untouched; DP 7, DP 8 and DP 9-A are
+reaffirmed.

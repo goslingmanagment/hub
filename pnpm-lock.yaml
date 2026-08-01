@@ -254,6 +254,12 @@ importers:
         specifier: ^7.27.2
         version: 7.27.2
 
+  packages/hub-agent-cli:
+    dependencies:
+      '@kernel/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
   packages/platform-core:
     dependencies:
       '@agency_hub_core/shared':
