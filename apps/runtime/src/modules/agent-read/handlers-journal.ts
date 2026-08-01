@@ -174,6 +174,11 @@ export async function handleAgentObservations(
         keyset: { sortValue: last.sortValue, key: last.keysetKey },
       }, scope.signing)
       : null;
+    // A real monotonic bound was applied in SQL, so an exhausted snapshot is a
+    // claim this traversal has actually earned.
+    const frozenSnapshot = true;
+    const snapshotExhausted = frozenSnapshot && nextCursor === null;
+
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -187,11 +192,10 @@ export async function handleAgentObservations(
           ? { observations: { state: "not_read", reason: "journal_starts_after_window" } }
           : {},
       }),
-      delivery: { snapshotExhausted: nextCursor === null, nextCursor },
+      delivery: { snapshotExhausted, nextCursor },
       cursorConsumed,
       cursorCapable: true,
-      // `observations.id` is monotonic, so the bound above is real.
-      frozenSnapshot: true,
+      frozenSnapshot,
       requestWindow: { from, to },
       gaps: journalFloor.detachedPartitions.length === 0 ? [] : [{
         kind: "partition_detached" as const,
@@ -235,10 +239,14 @@ export async function handleAgentObservations(
       })),
       delivery: buildDelivery({
         returned: result.rows.length,
-        matched: { value: result.rows.length, exact: nextCursor === null },
+        // A lower bound unless this is a complete, un-resumed read.
+        matched: {
+          value: result.rows.length,
+          exact: !cursorConsumed && nextCursor === null,
+        },
         cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
-        snapshotExhausted: nextCursor === null,
+        snapshotExhausted,
         caveats: evidence.deliveryCaveats,
       }),
       capture: evidence.capture,
@@ -480,6 +488,13 @@ export async function handleAgentDatasetQuery(
         keyset: { sortValue: last.sortValue, key: last.key },
       }, scope.signing)
       : null;
+    // `snapshotExhausted` may be true ONLY where a snapshot was genuinely frozen.
+    // This traversal has no monotonic bound to freeze, so the last page still says
+    // false and carries `no_frozen_snapshot`: "there is nothing more" would be a
+    // claim about a population that can grow underneath the walk.
+    const frozenSnapshot = false;
+    const snapshotExhausted = frozenSnapshot && nextCursor === null;
+
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -487,12 +502,10 @@ export async function handleAgentDatasetQuery(
       operationPlanes,
       planeReads: result.witnesses,
       planesNotRead: planesNotRead({ operationPlanes, witnesses: result.witnesses }),
-      delivery: { snapshotExhausted: nextCursor === null, nextCursor },
+      delivery: { snapshotExhausted, nextCursor },
       cursorConsumed,
       cursorCapable: true,
-      // A dataset is a join over live tables with no cheap monotonic bound, so the
-      // response SAYS the population can move rather than implying a frozen one.
-      frozenSnapshot: false,
+      frozenSnapshot,
       requestWindow: { from, to },
       gaps: [],
       scopeFieldStates: computeScopeFieldStates({
@@ -536,10 +549,13 @@ export async function handleAgentDatasetQuery(
       ]),
       delivery: buildDelivery({
         returned: result.rows.length,
-        matched: { value: result.rows.length, exact: nextCursor === null },
+        matched: {
+          value: result.rows.length,
+          exact: !cursorConsumed && nextCursor === null,
+        },
         cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
-        snapshotExhausted: nextCursor === null,
+        snapshotExhausted,
         caveats: evidence.deliveryCaveats,
       }),
       capture: evidence.capture,

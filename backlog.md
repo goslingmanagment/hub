@@ -292,3 +292,16 @@ HTTP-операций и команд CLI при этом **не меняетс�
 - **BL-A10 `domain_events_smoke_checkpoint`.** Now excluded from the detached
   partition check by an anchored name pattern; the underlying helper table should
   move out of the `domain_events_` namespace so the pattern is not load-bearing.
+- **BL-A11 transcript witness floors.** `listAgentTranscript` attributes the
+  `message_archive` floor to all four planes it returns witnesses for, including
+  `page_dm_messages` and `page_dm_threads`, whose own floors nobody computed.
+  Each arm should carry its own floor or report `unknown`.
+- **BL-A12 #8 correlated lateral.** `listAgentCoverageScopes` runs a
+  `lateral min(ma.occurred_at)` per CANDIDATE row before the keyset and limit
+  apply — the same class of cost as the `count(domain_events)` removed in round 1.
+  Push the floor lookup after the page is chosen, or index for it.
+- **BL-A13 `ORDER BY to_char(...)` is unindexable** on `observations`, and it
+  detoasts each payload before sorting. Needs an expression index or a numeric
+  sort key. Related: `readAgentJournalFloor` runs through the THROWING timeout
+  wrapper inside #8, so a slow journal can kill a response whose main source was
+  deliberately allowed to degrade through `tryAgentTimeout`.

@@ -40,6 +40,7 @@ import {
   AGENT_PLATFORM_CAPABILITIES,
   AGENT_TIMEOUT_MS,
   beginAgentRequest,
+  buildDelivery,
   computeScopeFieldStates,
   hydrationRemedy,
   iso,
@@ -81,9 +82,15 @@ const MONEY_CLAIM_FIELDS = [
   "subscriptionPriceMills",
 ] as const;
 
-/** Operator-written free text about a person: same disclosure class as verbatim
- *  transcript material, so it rides `read:messages`. */
-const CRM_CLAIM_FIELDS = ["noteText", "summaryText", "profileBody", "fanFlag"] as const;
+/**
+ * Operator-written FREE TEXT about a person: the same disclosure class as verbatim
+ * transcript material, so it rides `read:messages`.
+ *
+ * `fanFlag` is deliberately NOT here. It is a value from a closed enum, it is
+ * served to every key, and listing it would have made `scopeFieldStates` declare
+ * unavailable exactly what the body was handing over.
+ */
+const CRM_CLAIM_FIELDS = ["noteText", "summaryText", "profileBody"] as const;
 
 // ---------------------------------------------------------------------------
 // #1 agentCapabilities
@@ -312,13 +319,18 @@ export async function handleAgentResolve(
     }));
     const allValues = [...new Set(perInput.flatMap((entry) => entry.normalized))];
 
+    // A resolve can carry 50 inputs x 20 candidates: charging it as one row let
+    // the two fan-facing operations walk past the daily row budget entirely.
+    const { limit: candidateLimit, cappedByBudget } = scope.limitWithinRowBudget(
+      Math.min(20 * body.inputs.length, 1000),
+    );
     const resolved = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       resolveAgentFanCandidates(tx, {
         pageIds: scope.pageIds,
         platform: body.platform ?? null,
         values: allValues,
         includeAliases: body.includeAliases,
-        limit: Math.min(20 * body.inputs.length, 1000),
+        limit: candidateLimit,
       }), "agent_resolve");
 
     const fanIds = [...new Set(resolved.matches.map((match) => match.fanId))];
@@ -421,13 +433,22 @@ export async function handleAgentResolve(
       };
     });
 
+    // Charged in CANDIDATES, which is what the request actually cost.
+    const candidateRows = items.reduce((total, item) => total + item.candidates.length, 0);
     const response: AgentResolveResponse = {
       items,
-      delivery: singletonDelivery(items.length),
+      delivery: buildDelivery({
+        returned: items.length,
+        matched: { value: items.length, exact: true },
+        cappedBy: cappedByBudget ? "budget" : null,
+        nextCursor: null,
+        snapshotExhausted: true,
+        caveats: [],
+      }),
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(items.length);
+    await scope.finish(Math.max(items.length, candidateRows));
     return response;
   } catch (error) {
     await scope.finish(0);
@@ -668,7 +689,17 @@ export async function handleAgentPerson(
       capture: evidence.capture,
       conclusion: evidence.conclusion,
     };
-    await scope.finish(identity.row === null ? 0 : 1);
+    // `delivery.returned` counts PEOPLE (one, or none); the row budget counts the
+    // rows the bundle actually carried, which for a busy fan is hundreds.
+    const bundleRows = (extras?.data.memberships.length ?? 0)
+      + (extras?.data.aliases.length ?? 0)
+      + (extras?.data.flags.length ?? 0)
+      + (money?.data.byType.length ?? 0)
+      + (subscriptions?.rows.length ?? 0)
+      + (crm?.data.notes.length ?? 0)
+      + (crm?.data.summaries.length ?? 0)
+      + (threads?.rows.length ?? 0);
+    await scope.finish((identity.row === null ? 0 : 1) + bundleRows);
     return response;
   } catch (error) {
     await scope.finish(0);

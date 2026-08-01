@@ -17,7 +17,9 @@ import {
   agentCaptureSchema,
   agentClaimFieldEnum,
   agentDatasetEnum,
+  agentDatasetFieldIsVerbatimText,
   agentDatasetQueryBodySchema,
+  agentDatasetRequiredCapabilities,
   agentDeliverySchema,
   agentPersonTimelineQuerySchema,
   agentPlaneNameEnum,
@@ -333,6 +335,23 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
       const carriesMills = Object.values(definition.fields).includes("mills");
       expect(definition.moneyBearing, dataset).toBe(carriesMills);
     }
+  });
+
+  it("a dataset serving free text is exactly one requiring read:messages", () => {
+    // `fan_notes` selects the note body verbatim — the same material #3 puts
+    // behind `read:messages`. Without this rule a `read:datasets`-only key read
+    // the notes through the dataset route instead, so the capability on #3 was a
+    // door with an open window beside it. Derived from the FIELD MAP so a future
+    // dataset that grows a text body cannot inherit the narrower requirement.
+    for (const dataset of AGENT_DATASET_NAMES) {
+      const definition = AGENT_DATASETS[dataset];
+      const carriesText = Object.keys(definition.fields).some(agentDatasetFieldIsVerbatimText);
+      expect(definition.verbatimText, dataset).toBe(carriesText);
+      expect(agentDatasetRequiredCapabilities(dataset).includes("read:messages"), dataset)
+        .toBe(carriesText);
+    }
+    expect(agentDatasetRequiredCapabilities("fan_notes")).toContain("read:messages");
+    expect(agentDatasetRequiredCapabilities("dm_threads")).not.toContain("read:messages");
   });
 });
 

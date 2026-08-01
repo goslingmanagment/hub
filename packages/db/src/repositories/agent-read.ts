@@ -1074,6 +1074,16 @@ export interface AgentThreadsQuery {
   /** Frozen membership bound: threads created after the traversal started are
    *  excluded, which is what makes `snapshotExhausted` mean something. */
   maxThreadId?: number | undefined;
+  /**
+   * Whether to join `fan_spend_lifetime`.
+   *
+   * It is a MONEY read, and the value derived from it (the Fansly retention tier,
+   * 200 vs 1000) is a payment oracle: the deeper tier applies if and only if the
+   * fan has spent. A `read:messages`-only key must therefore not cause this join
+   * at all — and when it does not happen, no witness is minted for it either, so
+   * `capture.planes` cannot claim a read that never ran.
+   */
+  includeLifetimeSpend: boolean;
 }
 
 function threadsWhere(query: AgentThreadsQuery): SQL {
@@ -1136,15 +1146,19 @@ export async function listAgentThreads(
              t.oldest_stored_message_id, t.newest_stored_message_id,
              t.message_coverage_status::text as coverage_status, t.last_message_sync_at,
              h.quarantine_until,
-             fsl.creator_net_amount_mills::text as lifetime_spend_mills,
+             ${query.includeLifetimeSpend
+               ? sql`fsl.creator_net_amount_mills::text`
+               : sql`null::text`} as lifetime_spend_mills,
              ${threadSortExpression(query.orderBy)} as k_sort,
              ${renderNumeric(sql`t.id`)} as k_key
       from page_dm_threads t
       join pages p on p.id = t.platform_account_id
       left join page_dm_message_sync_health h on h.conversation_id = t.id
       left join fans f on f.id = t.fan_id
-      left join fan_spend_lifetime fsl
-        on fsl.fan_id = t.fan_id and fsl.platform_account_id = t.platform_account_id
+      ${query.includeLifetimeSpend
+        ? sql`left join fan_spend_lifetime fsl
+        on fsl.fan_id = t.fan_id and fsl.platform_account_id = t.platform_account_id`
+        : sql``}
       where ${threadsWhere(query)}
     )
     select * from keyed
@@ -1186,7 +1200,12 @@ export async function listAgentThreads(
       sortValue: row.k_sort == null ? null : String(row.k_sort),
       keysetKey: String(row.k_key),
     })),
-    witnesses: witnessesFor(["page_dm_threads"]),
+    // The money plane appears here only when it was actually joined.
+    witnesses: witnessesFor(
+      query.includeLifetimeSpend
+        ? ["page_dm_threads", "fan_spend_lifetime"]
+        : ["page_dm_threads"],
+    ),
   };
 }
 

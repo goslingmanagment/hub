@@ -67,6 +67,19 @@ export type AgentDatasetDefinition = {
    * and that quietly put a fan's lifetime spend behind a read:datasets-only key.
    */
   readonly moneyBearing: boolean;
+  /**
+   * Datasets carrying operator- or fan-written FREE TEXT additionally require
+   * `read:messages`.
+   *
+   * `fan_notes` selects the note body verbatim, which is the same disclosure
+   * class as a transcript — and the person operation puts exactly that material
+   * behind `read:messages`. Without this flag a `read:datasets`-only key read the
+   * notes through the dataset route instead, so the capability was a door with a
+   * window next to it. Declared here rather than as a list at the handler, and
+   * pinned by test against the field map, so a future dataset that adds a text
+   * body cannot inherit the narrower requirement.
+   */
+  readonly verbatimText: boolean;
   /** Wire field -> scalar kind. This map IS the filter/sort allowlist. */
   readonly fields: Readonly<Record<string, AgentDatasetFieldKind>>;
   readonly defaultSort: AgentDatasetSort;
@@ -92,6 +105,7 @@ export const AGENT_DATASETS = {
     // contradict each other, and following the narrower one would hand a
     // read:datasets-only key a fan's lifetime spend without read:money.
     moneyBearing: true,
+    verbatimText: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -107,6 +121,7 @@ export const AGENT_DATASETS = {
   },
   dm_threads: {
     moneyBearing: false,
+    verbatimText: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -121,6 +136,7 @@ export const AGENT_DATASETS = {
   },
   subscriptions: {
     moneyBearing: true,
+    verbatimText: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -136,6 +152,7 @@ export const AGENT_DATASETS = {
   },
   transactions: {
     moneyBearing: true,
+    verbatimText: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -154,6 +171,7 @@ export const AGENT_DATASETS = {
   },
   fan_spend_daily: {
     moneyBearing: true,
+    verbatimText: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -168,6 +186,7 @@ export const AGENT_DATASETS = {
   },
   follows: {
     moneyBearing: false,
+    verbatimText: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -180,6 +199,7 @@ export const AGENT_DATASETS = {
   },
   followers_daily: {
     moneyBearing: false,
+    verbatimText: false,
     fields: {
       platform: "string",
       businessDate: "date",
@@ -190,6 +210,7 @@ export const AGENT_DATASETS = {
   },
   fan_aliases: {
     moneyBearing: false,
+    verbatimText: false,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -203,6 +224,7 @@ export const AGENT_DATASETS = {
   },
   fan_notes: {
     moneyBearing: false,
+    verbatimText: true,
     fields: {
       platform: "string",
       platformUserId: "string",
@@ -216,6 +238,7 @@ export const AGENT_DATASETS = {
   },
   sync_streams: {
     moneyBearing: false,
+    verbatimText: false,
     fields: {
       stream: "string",
       syncStatus: "string",
@@ -289,15 +312,34 @@ export function agentDatasetDefinition(dataset: string): AgentDatasetDefinition 
 
 /**
  * The capabilities a key must hold to query this dataset: `read:datasets` always,
- * plus `read:money` for a money-bearing one. Derived from the declaration so a
- * dataset that turns money-bearing cannot keep the narrower requirement.
+ * plus `read:money` for a money-bearing one and `read:messages` for one that
+ * serves free text. Derived from the declaration, so a dataset that gains a money
+ * field or a text body cannot keep the narrower requirement.
  */
 export function agentDatasetRequiredCapabilities(
   dataset: AgentDataset,
 ): readonly AgentCapability[] {
-  return AGENT_DATASETS[dataset].moneyBearing
-    ? ["read:datasets", "read:money"]
-    : ["read:datasets"];
+  const definition = AGENT_DATASETS[dataset];
+  const capabilities: AgentCapability[] = ["read:datasets"];
+  if (definition.moneyBearing) {
+    capabilities.push("read:money");
+  }
+  if (definition.verbatimText) {
+    capabilities.push("read:messages");
+  }
+  return capabilities;
+}
+
+/**
+ * The naming convention the pin test enforces: a wire field whose name ends in
+ * `Text` carries free-form content someone wrote.
+ *
+ * A convention rather than a per-field flag because the scalar KIND cannot tell
+ * `noteText` from `username` — both are `string` — and the thing that must not
+ * drift is "does this dataset hand over prose", which the field name already says.
+ */
+export function agentDatasetFieldIsVerbatimText(field: string): boolean {
+  return /Text$/.test(field);
 }
 
 /** Every declared field of a dataset is filterable — the map IS the allowlist. */

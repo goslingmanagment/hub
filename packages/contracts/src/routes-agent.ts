@@ -260,7 +260,15 @@ export const agentDeliverySchema = z.object({
   matchedInScope: agentCountSchema,
   cappedBy: z.enum(["limit", "snapshot", "budget"]).nullable(),
   nextCursor: agentCursorString.nullable(),
-  /** The frozen membership snapshot is exhausted. Says NOTHING about history. */
+  /**
+   * The frozen membership snapshot is exhausted. Says NOTHING about history.
+   *
+   * May be `true` ONLY where a snapshot was genuinely frozen — an operation with a
+   * monotonic bound it applied in SQL. An operation carrying `no_frozen_snapshot`
+   * leaves this `false` on every page including the last: "there is nothing more"
+   * is a claim, and a traversal whose population can grow underneath it has not
+   * earned that claim.
+   */
   snapshotExhausted: z.boolean(),
   caveats: z.array(agentDeliveryCaveatEnum),
 }).strict();

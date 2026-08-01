@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   createFanslyPage,
   createModel,
+  createOnlyFansPage,
   createUser,
   insertAgentKey,
   setConfigOverride,
@@ -32,15 +33,22 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FULL_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-full-key-token`;
 const NARROW_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-narrow-key-token`;
+const MESSAGES_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-messages-only-token`;
 
 let testDb: StartedTestDatabase | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let pageId = 0;
+/** A SECOND page on the OTHER platform, so a lost `platform` filter is visible.
+ *  Without it a broadened traversal returns the same rows and the regression that
+ *  prompted this test would have gone unnoticed a second time. */
+let onlyFansPageId = 0;
 
 const RICK = "100000000000000001";
 const MAYA = "100000000000000002";
 const RICK_THREAD = "900000000000000001";
 const MAYA_THREAD = "900000000000000002";
+const OF_FAN = "100000000000000003";
+const OF_THREAD = "900000000000000004";
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -64,10 +72,12 @@ beforeEach(async (context) => {
     throw new Error("fixture model was not created");
   }
   const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "lora-2" });
-  if (!page) {
-    throw new Error("fixture page was not created");
+  const ofPage = await createOnlyFansPage(testDb.db, { modelId: model.id, label: "lora-of" });
+  if (!page || !ofPage) {
+    throw new Error("fixture pages were not created");
   }
   pageId = page.id;
+  onlyFansPageId = ofPage.id;
 
   const owner = await createUser(testDb.db, {
     username: "owner",
@@ -75,7 +85,7 @@ beforeEach(async (context) => {
     passwordHash: null,
   });
   const common = {
-    pageIds: [pageId],
+    pageIds: [pageId, onlyFansPageId],
     dailyRequestBudget: 5000,
     dailyRowBudget: 500_000,
     expiresAt: new Date(Date.now() + 30 * DAY_MS),
@@ -96,6 +106,15 @@ beforeEach(async (context) => {
     keyPrefix: NARROW_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
     keyDigest: sha256Hex(NARROW_TOKEN),
     capabilities: ["read:datasets"],
+  });
+  // Messages WITHOUT money: the probe for every field that leaks the existence of
+  // a payment through something that is not obviously money.
+  await insertAgentKey(testDb.db, {
+    ...common,
+    name: "messages-only",
+    keyPrefix: MESSAGES_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+    keyDigest: sha256Hex(MESSAGES_TOKEN),
+    capabilities: ["read:messages", "read:datasets"],
   });
 
   await setConfigOverride(testDb.db, {
@@ -145,6 +164,14 @@ async function seedTwoFans() {
          '2026-01-23T12:00:00Z', 'fansly:rest', 'USD')`,
       [pageId, fanId, `tx-${username}`],
     );
+    // The Fansly retention TIER is derived from lifetime spend, which is what
+    // makes it a payment oracle for a key without read:money.
+    await pool.query(
+      `insert into fan_spend_lifetime (platform_account_id, fan_id, gross_amount_mills,
+         creator_net_amount_mills, last_transaction_at)
+       values ($1, $2, 50000, 40000, '2026-01-23T12:00:00Z')`,
+      [pageId, fanId],
+    );
     await pool.query(
       `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id,
          partner_platform_user_id, stored_message_count, message_coverage_status, last_message_at)
@@ -160,6 +187,20 @@ async function seedTwoFans() {
       [pageId, conversationRef, `m-${username}`, platformUserId],
     );
   }
+
+  // One thread on the OTHER platform. A traversal filtered to `fansly` must never
+  // surface it, on page 1 or on page 5.
+  const { rows } = await pool.query<{ id: string }>(
+    `insert into fans (platform, platform_user_id, username, first_seen_at)
+     values ('onlyfans', $1, 'ofguy', '2026-01-05T00:00:00Z') returning id`,
+    [OF_FAN],
+  );
+  await pool.query(
+    `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id,
+       partner_platform_user_id, stored_message_count, message_coverage_status, last_message_at)
+     values ($1, $2, $3, $4, 1, 'complete', '2026-03-03T00:00:00Z')`,
+    [onlyFansPageId, Number(rows[0]!.id), OF_THREAD, OF_FAN],
+  );
 }
 
 function get(url: string, token = FULL_TOKEN) {
@@ -259,8 +300,9 @@ describe("[sync-critical] agent read plane: capability gates", () => {
 
 describe("[sync-critical] agent read plane: filters are applied, not just accepted", () => {
   it("#5 person filter returns ONLY that fan's threads", async () => {
+    // Three threads in the grant: two Fansly fans and one on the OnlyFans page.
     const all = await get("/api/v1/agent/threads");
-    expect(all.json().items).toHaveLength(2);
+    expect(all.json().items).toHaveLength(3);
 
     const filtered = await get(
       `/api/v1/agent/threads?personPlatform=fansly&personPlatformUserId=${RICK}`,
@@ -282,7 +324,7 @@ describe("[sync-critical] agent read plane: filters are applied, not just accept
 
   it("#8 person filter narrows the coverage scopes", async () => {
     const all = await get(`/api/v1/agent/coverage?${WINDOW}`);
-    expect(all.json().items).toHaveLength(2);
+    expect(all.json().items).toHaveLength(3);
 
     const filtered = await get(
       `/api/v1/agent/coverage?${WINDOW}&personPlatform=fansly&personPlatformUserId=${MAYA}`,
@@ -458,7 +500,7 @@ describe("[sync-critical] agent read plane: pagination neither skips nor repeats
       }
       url = `/api/v1/agent/threads?limit=1&cursor=${encodeURIComponent(page.delivery.nextCursor)}`;
     }
-    expect(seen.sort()).toEqual([RICK_THREAD, MAYA_THREAD].sort());
+    expect(seen.sort()).toEqual([RICK_THREAD, MAYA_THREAD, OF_THREAD].sort());
   });
 
   it("#5 a NULL sort value does not hide the rows behind it", async () => {
@@ -484,7 +526,7 @@ describe("[sync-critical] agent read plane: pagination neither skips nor repeats
     }
     expect(new Set(seen).size).toBe(seen.length);
     expect(seen).toContain("900000000000000003");
-    expect(seen).toHaveLength(3);
+    expect(seen).toHaveLength(4);
   });
 
   it("a cursor refuses a scope field added on page 2", async () => {
@@ -543,5 +585,227 @@ describe("[sync-critical] agent read plane: the row budget bounds the page", () 
     expect(body.items).toHaveLength(1);
     expect(body.delivery.cappedBy).toBe("budget");
     expect(body.delivery.nextCursor).not.toBeNull();
+  });
+});
+
+describe("[sync-critical] agent read plane: review round 2", () => {
+  it("P1-1 page 2 of a FILTERED traversal keeps the filter", async () => {
+    // The regression this test exists for: total cursor exclusivity made the
+    // cursor the ONLY carrier of the scope, so any field the cursor failed to
+    // store silently widened the walk on page 2. It cost #8 its `platform`.
+    //
+    // The check is generic on purpose — one case per paginated operation, each
+    // walking a FILTERED population one row at a time and asserting every page
+    // stays inside the filter.
+    const cases: Array<{ name: string; first: string; forbidden: string }> = [
+      {
+        name: "#5 threads / person",
+        first: `/api/v1/agent/threads?limit=1&personPlatform=fansly&personPlatformUserId=${RICK}`,
+        forbidden: MAYA_THREAD,
+      },
+      {
+        name: "#8 coverage / person",
+        first: `/api/v1/agent/coverage?${WINDOW}&limit=1`
+          + `&personPlatform=fansly&personPlatformUserId=${RICK}`,
+        forbidden: MAYA_THREAD,
+      },
+      {
+        name: "#8 coverage / conversationRef",
+        first: `/api/v1/agent/coverage?${WINDOW}&limit=1&pageLabel=lora-2`
+          + `&conversationRef=${RICK_THREAD}`,
+        forbidden: MAYA_THREAD,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const seen: string[] = [];
+      let url = testCase.first;
+      for (let guard = 0; guard < 10; guard += 1) {
+        const page = (await get(url)).json();
+        for (const item of page.items as Array<{ conversationRef: string }>) {
+          seen.push(item.conversationRef);
+        }
+        if (page.delivery.nextCursor === null) {
+          break;
+        }
+        // A cursor request may re-send NOTHING, so the filter must survive inside
+        // the cursor or not at all.
+        const base = testCase.first.split("?")[0];
+        url = `${base}?cursor=${encodeURIComponent(page.delivery.nextCursor)}`;
+      }
+      expect(seen, testCase.name).not.toContain(testCase.forbidden);
+      expect(seen, testCase.name).toContain(RICK_THREAD);
+    }
+  });
+
+  it("P1-1 #8 keeps its PLATFORM filter across pages", async () => {
+    // THE regression. `platform` was accepted, applied on page 1, refused on the
+    // wire for page 2 (correctly — a cursor pins the scope), and NOT stored in the
+    // cursor, so the traversal quietly broadened to every granted platform.
+    //
+    // The grant spans both platforms and the OnlyFans page holds a thread, so a
+    // widened walk surfaces it and this assertion catches it. That the fixture
+    // lacked a second platform is why the first version of this test passed
+    // against the bug.
+    const unfiltered = (await get(`/api/v1/agent/coverage?${WINDOW}`)).json();
+    expect(unfiltered.items).toHaveLength(3);
+
+    const seen: string[] = [];
+    let url = `/api/v1/agent/coverage?${WINDOW}&limit=1&platform=fansly`;
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = (await get(url)).json();
+      for (const item of page.items as Array<{ platform: string; conversationRef: string }>) {
+        expect(item.platform).toBe("fansly");
+        seen.push(item.conversationRef);
+      }
+      if (page.delivery.nextCursor === null) {
+        break;
+      }
+      url = `/api/v1/agent/coverage?cursor=${encodeURIComponent(page.delivery.nextCursor)}`;
+    }
+    expect(seen.sort()).toEqual([RICK_THREAD, MAYA_THREAD].sort());
+    expect(seen).not.toContain(OF_THREAD);
+  });
+
+  it("P1-2 #8 requires read:messages", async () => {
+    const refused = await get(`/api/v1/agent/coverage?${WINDOW}`, NARROW_TOKEN);
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error).toBe("agent_capability_missing");
+    expect((await get(`/api/v1/agent/coverage?${WINDOW}`, MESSAGES_TOKEN)).statusCode).toBe(200);
+  });
+
+  it("P1-3 the retention tier does not leak the existence of a payment", async () => {
+    // 1000 instead of 200 says "this fan has spent" without ever naming money.
+    const pick = (body: { items: Array<{ conversationRef: string }> }) =>
+      body.items.find((item) => item.conversationRef === RICK_THREAD) as Record<string, unknown>;
+
+    const withMoney = pick((await get("/api/v1/agent/threads")).json());
+    expect(withMoney.retentionLimit).toBe(1000);
+
+    const withoutMoneyBody = (await get("/api/v1/agent/threads", MESSAGES_TOKEN)).json();
+    const withoutMoney = pick(withoutMoneyBody);
+    expect(withoutMoney.retentionLimit).toBeNull();
+    // ... and the response says WHICH null this is, rather than leaving it to read
+    // as "this platform has no cap" (which is what null means on OnlyFans).
+    expect((withoutMoney.fieldStates as Record<string, unknown>).lifetimeSpendMills).toEqual({
+      state: "unknown",
+      remedy: { kind: "none", reason: "capability_not_granted" },
+    });
+    // The plane must reflect what was actually read: no join, no witness.
+    const plane = withoutMoneyBody.capture.planes.find(
+      (entry: { plane: string }) => entry.plane === "fan_spend_lifetime",
+    );
+    expect(plane).toMatchObject({ state: "not_read", reason: "capability_not_granted" });
+    const granted = (await get("/api/v1/agent/threads")).json().capture.planes.find(
+      (entry: { plane: string }) => entry.plane === "fan_spend_lifetime",
+    );
+    expect(granted.state).toBe("read");
+  });
+
+  it("P1-4 the notes dataset requires read:messages", async () => {
+    const window = { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" };
+    // `read:datasets` alone used to read note bodies verbatim through this route,
+    // while the very same material sat behind `read:messages` on #3.
+    const refused = await post(
+      "/api/v1/agent/pages/lora-2/datasets/fan_notes/query",
+      window,
+      NARROW_TOKEN,
+    );
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error).toBe("agent_capability_missing");
+
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/fan_notes/query",
+      window,
+      MESSAGES_TOKEN,
+    )).statusCode).toBe(200);
+    // A dataset with no text body is unaffected.
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/dm_threads/query",
+      window,
+      NARROW_TOKEN,
+    )).statusCode).toBe(200);
+  });
+
+  it("P1-5 snapshotExhausted is only claimed where a snapshot was frozen", async () => {
+    // #5 and #9a apply a monotonic bound in SQL and may claim it; the rest carry
+    // `no_frozen_snapshot` and must stay false even on the LAST page, because
+    // "there is nothing more" is a claim about a population that can still grow.
+    const threads = (await get("/api/v1/agent/threads")).json();
+    expect(threads.delivery.nextCursor).toBeNull();
+    expect(threads.delivery.snapshotExhausted).toBe(true);
+    expect(threads.delivery.caveats).not.toContain("no_frozen_snapshot");
+
+    for (const url of [
+      `/api/v1/agent/coverage?${WINDOW}`,
+      `/api/v1/agent/people/fansly/${RICK}/timeline?${WINDOW}`,
+    ]) {
+      const body = (await get(url)).json();
+      expect(body.delivery.nextCursor, url).toBeNull();
+      expect(body.delivery.snapshotExhausted, url).toBe(false);
+      expect(body.delivery.caveats, url).toContain("no_frozen_snapshot");
+      // ... and the blocker says the same thing, so the two never disagree.
+      expect(body.conclusion.blockers, url).toContain("delivery_not_exhausted");
+    }
+  });
+
+  it("P2a fan flags: the envelope and the body agree", async () => {
+    await testDb!.pool.query(
+      `insert into fan_flags (fan_id, flag) select f.id, 'vip' from fans f
+       where f.platform_user_id = $1`,
+      [RICK],
+    );
+    const body = (await get(`/api/v1/agent/people/fansly/${RICK}`, NARROW_TOKEN)).json();
+    // A flag is a value from a closed enum, not prose: it is served, so the field
+    // state must NOT declare it unavailable.
+    expect(body.identity.flags).toHaveLength(1);
+    expect(body.capture.scopeFieldStates.fanFlag).toBeUndefined();
+  });
+
+  it("P2b #2 and #3 charge the row budget for what they carried", async () => {
+    const owner = await createUser(testDb!.db, {
+      username: "owner-rows",
+      role: "owner",
+      passwordHash: null,
+    });
+    const token = `${AGENT_KEY_TOKEN_PREFIX}row-budget-probe-token`;
+    await insertAgentKey(testDb!.db, {
+      name: "rows",
+      keyPrefix: token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+      keyDigest: sha256Hex(token),
+      capabilities: ["read:messages", "read:money", "read:datasets"],
+      pageIds: [pageId],
+      dailyRequestBudget: 100,
+      dailyRowBudget: 3,
+      expiresAt: new Date(Date.now() + DAY_MS),
+      createdBy: owner?.id ?? null,
+    });
+    // The person card carries memberships, threads, money rows and subscriptions;
+    // charging it as ONE row let the two fan-facing operations walk past the daily
+    // budget entirely.
+    expect((await get(`/api/v1/agent/people/fansly/${RICK}`, token)).statusCode).toBe(200);
+    const second = await get(`/api/v1/agent/people/fansly/${MAYA}`, token);
+    expect(second.statusCode).toBe(429);
+    expect(second.json().error).toBe("agent_budget_exhausted");
+  });
+
+  it("P2c matchedInScope is inexact on any resumed or truncated read", async () => {
+    const first = (await get(`/api/v1/agent/coverage?${WINDOW}&limit=1`)).json();
+    expect(first.delivery.matchedInScope.exact).toBe(false);
+    const second = (await get(
+      `/api/v1/agent/coverage?cursor=${encodeURIComponent(first.delivery.nextCursor)}`,
+    )).json();
+    // The LAST page used to report its own length with `exact: true`, which on a
+    // multi-page traversal is simply a false number.
+    expect(second.delivery.nextCursor).toBeNull();
+    expect(second.delivery.matchedInScope.exact).toBe(false);
+
+    // A complete, un-resumed read is still exact.
+    const whole = (await get(`/api/v1/agent/coverage?${WINDOW}`)).json();
+    expect(whole.delivery.matchedInScope).toEqual({
+      value: 3,
+      exact: true,
+      countBasis: "post_dedup",
+    });
   });
 });

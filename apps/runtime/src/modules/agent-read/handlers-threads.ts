@@ -243,6 +243,13 @@ export async function handleAgentPersonTimeline(
         keyset: { sortValue: last.sortValue, key: last.stableRef },
       }, scope.signing)
       : null;
+    // `snapshotExhausted` may be true ONLY where a snapshot was genuinely frozen.
+    // This traversal has no monotonic bound to freeze, so the last page still says
+    // false and carries `no_frozen_snapshot`: "there is nothing more" would be a
+    // claim about a population that can grow underneath the walk.
+    const frozenSnapshot = false;
+    const snapshotExhausted = frozenSnapshot && nextCursor === null;
+
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -250,11 +257,11 @@ export async function handleAgentPersonTimeline(
       operationPlanes,
       planeReads: witnesses,
       planesNotRead: planesNotRead({ operationPlanes, witnesses, overrides }),
-      delivery: { snapshotExhausted: nextCursor === null, nextCursor },
+      delivery: { snapshotExhausted, nextCursor },
       cursorConsumed,
       cursorCapable: true,
       // A five-lane union over live tables has no single monotonic bound to freeze.
-      frozenSnapshot: false,
+      frozenSnapshot,
       requestWindow: { from, to },
       gaps: [],
       scopeFieldStates: computeScopeFieldStates({
@@ -324,10 +331,15 @@ export async function handleAgentPersonTimeline(
       ]),
       delivery: buildDelivery({
         returned: timeline.rows.length,
-        matched: { value: timeline.rows.length, exact: nextCursor === null },
+        // A lower bound unless this is a complete, un-resumed read: on any later
+        // page the count of THIS page is simply not the count in scope.
+        matched: {
+          value: timeline.rows.length,
+          exact: !cursorConsumed && nextCursor === null,
+        },
         cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
-        snapshotExhausted: nextCursor === null,
+        snapshotExhausted,
         caveats: evidence.deliveryCaveats,
       }),
       capture: evidence.capture,
@@ -424,9 +436,14 @@ export async function handleAgentThreads(
       : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
         readAgentThreadsHighWater(tx, pageIds), "agent_threads_high_water");
 
+    // The retention TIER (200 vs 1000 on Fansly) applies if and only if the fan
+    // has spent, so reading it without `read:money` publishes the existence of a
+    // payment through a field that looks like a platform constant.
+    const mayReadMoney = scope.has("read:money");
     const dbQuery = {
       pageIds,
       platform: effective.platform,
+      includeLifetimeSpend: mayReadMoney,
       ...personFilter,
       coverageStatus: effective.coverageStatus,
       quarantined: effective.quarantined,
@@ -457,7 +474,10 @@ export async function handleAgentThreads(
     );
 
     const operationPlanes = operationPlanesFor(
-      result.witnesses.map((witness) => witness.plane),
+      // `fan_spend_lifetime` stays IN the set either way: the operation could have
+      // consulted it, and "we chose not to" is a different statement from "this
+      // store has nothing to do with your question".
+      [...result.witnesses.map((witness) => witness.plane), "fan_spend_lifetime"],
       effective.claimFields,
     );
 
@@ -476,6 +496,11 @@ export async function handleAgentThreads(
         keyset: { sortValue: last.sortValue, key: last.keysetKey },
       }, scope.signing)
       : null;
+    // A real monotonic bound was applied in SQL, so an exhausted snapshot is a
+    // claim this traversal has actually earned.
+    const frozenSnapshot = true;
+    const snapshotExhausted = frozenSnapshot && nextCursor === null;
+
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -485,13 +510,22 @@ export async function handleAgentThreads(
       planesNotRead: planesNotRead({
         operationPlanes,
         witnesses: result.witnesses,
-        overrides: messagePlaneOverrides(platforms),
+        overrides: {
+          ...messagePlaneOverrides(platforms),
+          ...(mayReadMoney
+            ? {}
+            : {
+              fan_spend_lifetime: {
+                state: "not_read" as const,
+                reason: "capability_not_granted" as const,
+              },
+            }),
+        },
       }),
-      delivery: { snapshotExhausted: nextCursor === null, nextCursor },
+      delivery: { snapshotExhausted, nextCursor },
       cursorConsumed,
       cursorCapable: true,
-      // `page_dm_threads.id` is monotonic and the bound above is applied in SQL.
-      frozenSnapshot: true,
+      frozenSnapshot,
       requestWindow: null,
       gaps: [],
       scopeFieldStates: computeScopeFieldStates({
@@ -531,8 +565,20 @@ export async function handleAgentThreads(
         // SAME predicate, so a caller never chases a thread that answers nothing.
         transcriptWillReturnRows: row.storedMessageCount > 0,
         hydrationRemedy: hydrationRemedy(scope),
-        retentionLimit: retentionLimitFor(row.platform as Platform, row.lifetimeSpendMills),
-        fieldStates: {},
+        // null WITHOUT `read:money`, because the tier cannot be known without the
+        // spend and guessing the default would state a number that may be wrong.
+        // The field state below says which of the two nulls this is.
+        retentionLimit: mayReadMoney
+          ? retentionLimitFor(row.platform as Platform, row.lifetimeSpendMills)
+          : null,
+        fieldStates: mayReadMoney
+          ? {}
+          : {
+            lifetimeSpendMills: {
+              state: "unknown" as const,
+              remedy: { kind: "none" as const, reason: "capability_not_granted" as const },
+            },
+          },
         provenance: {
           ingestPaths: ["unknown" as const],
           convergence: "no_material_lane" as const,
@@ -577,7 +623,7 @@ export async function handleAgentThreads(
         matched,
         cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
-        snapshotExhausted: nextCursor === null,
+        snapshotExhausted,
         caveats: evidence.deliveryCaveats,
       }),
       capture: evidence.capture,
@@ -708,6 +754,13 @@ export async function handleAgentThreadMessages(
         keyset: { sortValue: last.sortValue, key: last.keysetKey },
       }, scope.signing)
       : null;
+    // `snapshotExhausted` may be true ONLY where a snapshot was genuinely frozen.
+    // This traversal has no monotonic bound to freeze, so the last page still says
+    // false and carries `no_frozen_snapshot`: "there is nothing more" would be a
+    // claim about a population that can grow underneath the walk.
+    const frozenSnapshot = false;
+    const snapshotExhausted = frozenSnapshot && nextCursor === null;
+
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -719,10 +772,10 @@ export async function handleAgentThreadMessages(
         witnesses: result.witnesses,
         overrides: messagePlaneOverrides([page.platform as Platform]),
       }),
-      delivery: { snapshotExhausted: nextCursor === null, nextCursor },
+      delivery: { snapshotExhausted, nextCursor },
       cursorConsumed,
       cursorCapable: true,
-      frozenSnapshot: false,
+      frozenSnapshot,
       requestWindow: { from, to },
       gaps: gapBeforeCaptureFloor({
         plane: "message_archive",
@@ -883,7 +936,7 @@ export async function handleAgentThreadMessages(
         matched,
         cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
-        snapshotExhausted: nextCursor === null,
+        snapshotExhausted,
         caveats: evidence.deliveryCaveats,
       }),
       capture: evidence.capture,
@@ -992,6 +1045,8 @@ export async function handleAgentSearchMessages(
           page_dm_threads: { state: "not_read", reason: "not_queried_by_this_operation" },
         },
       }),
+      // Bound, not paginated: there is no snapshot to exhaust and no cursor to
+      // carry one, so both stay false rather than implying completeness.
       delivery: { snapshotExhausted: false, nextCursor: null },
       cursorConsumed: false,
       cursorCapable: false,
@@ -1118,7 +1173,13 @@ export async function handleAgentCoverage(
     claimFields?: string[] | undefined;
   },
 ): Promise<AgentCoverageResponse> {
-  const scope = await beginAgentRequest(appContext, principal, { operation: "agentCoverage" });
+  const scope = await beginAgentRequest(appContext, principal, {
+    operation: "agentCoverage",
+    // The response carries conversation refs, fan ids and a message-archive floor:
+    // the same thread inventory #2 and #5 gate. An ungated probe was a way to
+    // enumerate who talks to whom without holding the capability for it.
+    requiredCapabilities: ["read:messages"],
+  });
   try {
     const cursorConsumed = query.cursor !== undefined;
     const cursor = cursorConsumed
@@ -1133,6 +1194,10 @@ export async function handleAgentCoverage(
     const stored = cursor?.params as Record<string, unknown> | undefined;
     const from = String(stored?.from ?? query.from ?? "");
     const to = String(stored?.to ?? query.to ?? "");
+    // EVERY scope field is read back from the cursor. Since a cursor request may
+    // not re-send them, anything the cursor fails to store silently widens the
+    // traversal on page 2 — which is exactly how `platform` was lost here.
+    const platform = (stored?.platform as Platform | undefined) ?? query.platform;
     const pageLabel = (stored?.pageLabel as string | undefined) ?? query.pageLabel;
     const conversationRef = (stored?.conversationRef as string | undefined) ?? query.conversationRef;
     const personPlatform = (stored?.personPlatform as Platform | undefined) ?? query.personPlatform;
@@ -1170,7 +1235,7 @@ export async function handleAgentCoverage(
     const scopesResult = await tryAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
       listAgentCoverageScopes(tx, {
         pageIds,
-        platform: query.platform,
+        platform,
         ...personFilter,
         conversationRef,
         from: new Date(from),
@@ -1213,6 +1278,7 @@ export async function handleAgentCoverage(
         params: {
           from,
           to,
+          platform,
           pageLabel,
           conversationRef,
           personPlatform,
@@ -1226,6 +1292,13 @@ export async function handleAgentCoverage(
         keyset: { sortValue: last.sortValue, key: last.keysetKey },
       }, scope.signing)
       : null;
+    // `snapshotExhausted` may be true ONLY where a snapshot was genuinely frozen.
+    // This traversal has no monotonic bound to freeze, so the last page still says
+    // false and carries `no_frozen_snapshot`: "there is nothing more" would be a
+    // claim about a population that can grow underneath the walk.
+    const frozenSnapshot = false;
+    const snapshotExhausted = frozenSnapshot && nextCursor === null;
+
 
     const hydration = hydrationRemedy(scope);
     const evidence = buildAgentEvidence({
@@ -1234,10 +1307,10 @@ export async function handleAgentCoverage(
       operationPlanes,
       planeReads: scopes.witnesses,
       planesNotRead: notRead,
-      delivery: { snapshotExhausted: nextCursor === null, nextCursor },
+      delivery: { snapshotExhausted, nextCursor },
       cursorConsumed,
       cursorCapable: true,
-      frozenSnapshot: false,
+      frozenSnapshot,
       requestWindow: { from, to },
       gaps: [],
       scopeFieldStates: computeScopeFieldStates({ fields: claimFields ?? [], platforms }),
@@ -1261,10 +1334,13 @@ export async function handleAgentCoverage(
         operationPlanes,
         planeReads: scopes.witnesses,
         planesNotRead: notRead,
+        // A per-scope verdict, not a page of a traversal: `windowCovered` asks
+        // "does this store cover the window for THIS conversation", and the
+        // walk's own pagination caveats have nothing to say about that.
         delivery: { snapshotExhausted: true, nextCursor: null },
-        cursorConsumed,
-        cursorCapable: true,
-        frozenSnapshot: false,
+        cursorConsumed: false,
+        cursorCapable: false,
+        frozenSnapshot: true,
         requestWindow: { from, to },
         gaps,
         scopeFieldStates: computeScopeFieldStates({
@@ -1300,10 +1376,10 @@ export async function handleAgentCoverage(
       },
       delivery: buildDelivery({
         returned: items.length,
-        matched: { value: items.length, exact: nextCursor === null },
+        matched: { value: items.length, exact: !cursorConsumed && nextCursor === null },
         cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
         nextCursor,
-        snapshotExhausted: nextCursor === null,
+        snapshotExhausted,
         caveats: evidence.deliveryCaveats,
       }),
       capture: evidence.capture,
