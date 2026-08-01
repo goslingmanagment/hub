@@ -26,6 +26,9 @@ const captureTransportMocks = vi.hoisted(() => ({
 const fanslySchedulingMocks = vi.hoisted(() => ({
   reconcileFanslyBulkStreamScheduling: vi.fn(),
 }));
+const postsSchedulingMocks = vi.hoisted(() => ({
+  pauseIneligibleOnlyFansPostsForAllPages: vi.fn(),
+}));
 
 vi.mock("@agency_hub_core/db", async () => {
   const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
@@ -58,6 +61,10 @@ vi.mock("../apps/runtime/src/services/sync/fansly-stream-scheduling.ts", () => (
   reconcileFanslyBulkStreamScheduling:
     fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling,
 }));
+vi.mock("../apps/runtime/src/services/sync/posts.ts", () => ({
+  pauseIneligibleOnlyFansPostsForAllPages:
+    postsSchedulingMocks.pauseIneligibleOnlyFansPostsForAllPages,
+}));
 
 import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
 
@@ -74,6 +81,7 @@ describe("sync planner", () => {
     dbMocks.findPageById.mockReset();
     captureTransportMocks.recoverExpiredOfapiInteractiveResponses.mockReset();
     fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling.mockReset();
+    postsSchedulingMocks.pauseIneligibleOnlyFansPostsForAllPages.mockReset();
     queueMocks.sendSyncPageWakeup.mockReset();
     dbMocks.closeInactiveSyncRuns.mockResolvedValue({
       totalCount: 0,
@@ -100,6 +108,7 @@ describe("sync planner", () => {
       resumed: 0,
       recoveryGenerations: 0,
     });
+    postsSchedulingMocks.pauseIneligibleOnlyFansPostsForAllPages.mockResolvedValue(0);
   });
 
   it("runs inactive cleanup before promoting rows and emits one wakeup per runnable page", async () => {
@@ -163,6 +172,10 @@ describe("sync planner", () => {
       errorSummary: "Sync run auto-closed after inactivity",
     });
     expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { now });
+    expect(postsSchedulingMocks.pauseIneligibleOnlyFansPostsForAllPages).toHaveBeenCalledWith(
+      expect.objectContaining({ db: {} }),
+      now,
+    );
     expect(dbMocks.scheduleDuePageSync).toHaveBeenCalledWith({}, { now });
     expect(captureTransportMocks.recoverExpiredOfapiInteractiveResponses).toHaveBeenCalledWith(
       expect.objectContaining({ db: {} }),

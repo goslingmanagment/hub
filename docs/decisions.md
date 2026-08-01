@@ -6400,13 +6400,21 @@ usage.
 through the existing Agent dataset operation).** Posts are a normal sync stream,
 not a second capture subsystem. Every page receives a `posts` state, but it is
 seeded paused: deploying the schema or Agent descriptor cannot spend vendor
-credits or start a fleet crawl. An operator resumes pages deliberately after
-the normal capture gates are open. Fansly walks the creator account timeline by
-its opaque `before` cursor. OnlyFans uses a `post_paginate` kind in the existing
-governed OFAPI capture-job lane; its response `_meta` remains the authority for
-actual credits. Fansly journals the complete response payload before its post
-canonicalizer; OFAPI commits the exact response bytes before its strict parser
-or cursor settlement runs.
+credits or start a fleet crawl. An operator opens exactly one page through the
+existing trigger surface (`POST /api/v1/admin/sync/trigger` with
+`scope: "posts"`, or `pnpm cli sync --page <label> --scope posts`); `all` deliberately
+does not include posts. The trigger records a generation and uses the ordinary
+resume FSM. On OnlyFans it fails before either write unless background capture
+is enabled and the page has an OFAPI account mapping. If either prerequisite
+later disappears, the planner parks that page again; a handler race records a
+configuration failure, never a successful sync or the Fansly bulk-only
+`gatedSkip`. Fansly walks the creator account timeline by
+its opaque `before` cursor (`GET /timelinenew/{accountId}?before=...&after=0`).
+OnlyFans uses `GET /{ofapiAccountId}/posts?limit=100&offset=...&order=publish_date&sort=desc`
+through a `post_paginate` kind in the existing governed OFAPI capture-job lane;
+its response `_meta` remains the authority for actual credits. Fansly journals
+the complete response payload before its post canonicalizer; OFAPI commits the
+exact response bytes before its strict parser or cursor settlement runs.
 
 Accepted rows append projection-only `post.observed` domain events. The
 rebuildable `creator_posts` projection keeps the current head for one
@@ -6425,4 +6433,6 @@ registry filters and `publishedAt` sorting but no full-text search. The global
 catalog says post capture is `unknown` because rollout is page-scoped; a page
 response derives its windowless oldest-stored-row floor from `creator_posts`
 and may report a before-floor gap, but by #197 that remains evidence about Hub
-holdings rather than proof that no older vendor posts exist.
+holdings rather than proof that no older vendor posts exist. V1 has no backward
+post-history intent, so another incremental run is not advertised as a remedy
+for a window before that floor.

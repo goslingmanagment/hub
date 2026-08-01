@@ -32,7 +32,7 @@ describe("platform registry (Stage 18)", () => {
   it("capabilities cover resolveStreamsForScope outputs for every scope", () => {
     for (const platform of ["fansly", "onlyfans"] as const) {
       const capabilities = new Set(appPlatformRegistry.get(platform).capabilities.streams);
-      for (const scope of ["light", "followers", "all", "data", "messages"] as const) {
+      for (const scope of ["light", "followers", "all", "data", "messages", "posts"] as const) {
         let streams: ReturnType<typeof resolveStreamsForScope>;
         try {
           streams = resolveStreamsForScope(platform, scope);

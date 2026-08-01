@@ -56,6 +56,7 @@ import {
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
 import { pauseDisabledOnlyFansDmPollingForPage } from "./onlyfans-dm-polling.ts";
+import { PostsCaptureConfigurationError } from "./posts.ts";
 import { SyncRunTelemetry } from "./observability.ts";
 import { persistFailedSyncPayload } from "./shared.ts";
 
@@ -216,6 +217,13 @@ function classifyTaskFailure(
   blockerCode?: string;
   blockerReason?: string;
 } {
+  if (error instanceof PostsCaptureConfigurationError) {
+    return {
+      mode: "retry",
+      retryClass: "configuration_wait",
+    };
+  }
+
   // W3.1 (decision #124): a refused proxyless resolution is a config state,
   // not a transient — park the stream (manual action: assign a proxy) instead
   // of hot-retrying a guaranteed refusal every cycle.

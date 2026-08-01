@@ -341,6 +341,83 @@ async function createCaptureExecutionFixture(input: {
   return { ...seeded, app, dispatchGovernedRaw, job: created.job };
 }
 
+function postsPage(input: {
+  items: Array<{
+    id: string;
+    postedAt: string;
+    rawText?: string | null;
+    text?: string | null;
+    media?: unknown[];
+  }>;
+  hasMore: boolean;
+}) {
+  return Buffer.from(JSON.stringify({
+    data: { list: input.items, hasMore: input.hasMore },
+    _meta: { _credits: { used: 1, balance: 999 } },
+  }));
+}
+
+async function createPostCaptureExecutionFixture(input: {
+  responses: Buffer[];
+  anchorPostId?: string | null;
+  maxCalls: number;
+  maxPages: number;
+}) {
+  const seeded = await seed();
+  const now = new Date();
+  await testDb!.pool.query(`
+    update ofapi_credit_state
+    set last_balance = 1000,
+        last_balance_at = $1,
+        updated_at = $1
+    where id = 1
+  `, [now]);
+
+  const responses = [...input.responses];
+  const dispatchGovernedRaw = vi.fn(async (
+    _context: unknown,
+    request: { beforeDispatch: () => Promise<boolean> },
+  ) => {
+    if (!await request.beforeDispatch()) {
+      throw new Error("durable dispatch fence was not acquired");
+    }
+    const bodyBytes = responses.shift();
+    if (!bodyBytes) throw new Error("unexpected extra OFAPI posts request");
+    return {
+      status: 200,
+      bodyBytes,
+      headers: { "content-type": "application/json" },
+      receivedAt: new Date(),
+    };
+  });
+  const app = createTestAppContext(testDb!, {
+    ofapi: { dispatchGovernedRaw } as never,
+    ofapiMirrorBackgroundCaptureEnabled: true,
+    ofapiDmDailyCreditBudget: 100,
+    ofapiBackfillDailyCreditBudget: 100,
+    ofapiCreditFloor: 10,
+  });
+  await saveProxy(app, seeded.page.id, { url: "http://127.0.0.1:65535" });
+  const created = await createOrGetOfapiCaptureJob(testDb!.db, {
+    pageId: seeded.page.id,
+    ofapiAccountId: seeded.accountId,
+    kind: "post_paginate",
+    activeSlotKey: `page:${seeded.page.id}:posts`,
+    target: {
+      anchorPostId: input.anchorPostId ?? null,
+      limit: 100,
+    },
+    budgetScope: input.anchorPostId == null ? "bulk" : "live",
+    createdBy: "owner",
+    maxCalls: input.maxCalls,
+    maxCredits: input.maxCalls,
+    maxPages: input.maxPages,
+    maxItems: null,
+    now,
+  });
+  return { ...seeded, app, dispatchGovernedRaw, job: created.job };
+}
+
 async function createExportQuoteExecutionFixture(
   dispatchGovernedRaw: ReturnType<typeof vi.fn>,
   options: {
@@ -1819,6 +1896,210 @@ describe("OFAPI capture correctness repository", () => {
     `, [terminalKey, fixture.page.id, `anchor-race-coverage:${repair.job.id}`]);
     expect(forbidden.rows[0]).toEqual({ observations: "0", events: "0" });
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("idle");
+  });
+
+  it("materializes only accepted OFAPI posts and completes initial head verification at the exact cap", async () => {
+    if (!testDb) return;
+    const verbatim = "  <p>A &amp; B</p>\r\n ";
+    const fixture = await createPostCaptureExecutionFixture({
+      maxCalls: 3,
+      maxPages: 3,
+      responses: [
+        postsPage({
+          items: [
+            { id: "103", postedAt: "2026-08-01T03:00:00.000Z", rawText: verbatim },
+            { id: "102", postedAt: "2026-08-01T02:00:00.000Z", rawText: "second" },
+          ],
+          hasMore: true,
+        }),
+        postsPage({
+          items: [
+            { id: "102", postedAt: "2026-08-01T02:00:00.000Z", rawText: "second" },
+            { id: "101", postedAt: "2026-08-01T01:00:00.000Z", rawText: "oldest" },
+          ],
+          hasMore: false,
+        }),
+        postsPage({
+          items: [
+            { id: "104", postedAt: "2026-08-01T04:00:00.000Z", rawText: "new head" },
+            { id: "103", postedAt: "2026-08-01T03:00:00.000Z", rawText: verbatim },
+            {
+              id: "102",
+              postedAt: "2026-08-01T02:00:00.000Z",
+              rawText: "stale mutation must not materialize",
+            },
+          ],
+          hasMore: true,
+        }),
+      ],
+    });
+
+    for (let chunk = 0; chunk < 6; chunk += 1) {
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe(
+        "success",
+      );
+    }
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(3);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "complete",
+      result: {
+        headPostId: "104",
+        oldestPostId: "101",
+        pages: 3,
+        rawCount: 7,
+        acceptedCount: 4,
+        boundaryDuplicateCount: 2,
+        explicitlyIrrelevantCount: 1,
+      },
+    });
+
+    const material = await testDb.pool.query<{
+      post_ref: string;
+      text_plain: string;
+      observations: string;
+    }>(`
+      select post_ref,
+             min(data->>'textPlain') as text_plain,
+             count(*)::text as observations
+      from domain_events
+      where account_id = $1 and type = 'post.observed'
+      group by post_ref
+      order by post_ref
+    `, [fixture.page.id]);
+    expect(material.rows).toEqual([
+      { post_ref: "101", text_plain: "oldest", observations: "1" },
+      { post_ref: "102", text_plain: "second", observations: "1" },
+      { post_ref: "103", text_plain: verbatim, observations: "1" },
+      { post_ref: "104", text_plain: "new head", observations: "1" },
+    ]);
+
+    const attempts = await testDb.pool.query<{
+      raw_count: number;
+      accepted_count: number;
+      boundary_duplicate_count: number;
+      explicitly_irrelevant_count: number;
+    }>(`
+      select raw_count::int as raw_count,
+             accepted_count::int as accepted_count,
+             boundary_duplicate_count::int as boundary_duplicate_count,
+             explicitly_irrelevant_count::int as explicitly_irrelevant_count
+      from ofapi_request_attempts
+      where capture_job_id = $1
+      order by owner_attempt_no
+    `, [fixture.job.id]);
+    expect(attempts.rows).toEqual([
+      {
+        raw_count: 2,
+        accepted_count: 2,
+        boundary_duplicate_count: 0,
+        explicitly_irrelevant_count: 0,
+      },
+      {
+        raw_count: 2,
+        accepted_count: 1,
+        boundary_duplicate_count: 1,
+        explicitly_irrelevant_count: 0,
+      },
+      {
+        raw_count: 3,
+        accepted_count: 1,
+        boundary_duplicate_count: 1,
+        explicitly_irrelevant_count: 1,
+      },
+    ]);
+  });
+
+  it("reserves both the page and call allowance required for initial head verification", async () => {
+    if (!testDb) return;
+    const firstPage = postsPage({
+      items: [
+        { id: "2", postedAt: "2026-08-01T02:00:00.000Z", rawText: "head" },
+        { id: "1", postedAt: "2026-08-01T01:00:00.000Z", rawText: "tail" },
+      ],
+      hasMore: true,
+    });
+    for (const caps of [
+      { maxPages: 2, maxCalls: 3 },
+      { maxPages: 3, maxCalls: 2 },
+    ]) {
+      const fixture = await createPostCaptureExecutionFixture({
+        ...caps,
+        responses: [firstPage],
+      });
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe(
+        "success",
+      );
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe(
+        "blocked",
+      );
+      expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+        state: "blocked",
+        reasonCode: "head_verification_budget_exhausted",
+        result: null,
+        terminalObservationId: null,
+      });
+      expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("reports failure when terminal OFAPI posts settlement loses its lease fence", async () => {
+    if (!testDb) return;
+    const fixture = await createPostCaptureExecutionFixture({
+      anchorPostId: "10",
+      maxCalls: 1,
+      maxPages: 1,
+      responses: [postsPage({
+        items: [
+          { id: "11", postedAt: "2026-08-01T02:00:00.000Z", rawText: "new" },
+          { id: "10", postedAt: "2026-08-01T01:00:00.000Z", rawText: "anchor" },
+        ],
+        hasMore: false,
+      })],
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe(
+      "success",
+    );
+
+    await testDb.pool.query(`
+      create function test_steal_ofapi_posts_lease() returns trigger
+      language plpgsql as $$
+      begin
+        update ofapi_capture_jobs
+        set lease_token = '00000000-0000-4000-8000-000000000001'::uuid
+        where page_id = new.account_id
+          and kind = 'post_paginate'
+          and state = 'awaiting_parse';
+        return new;
+      end
+      $$;
+      create trigger test_steal_ofapi_posts_lease
+      after insert on domain_events
+      for each row
+      when (new.type = 'post.observed')
+      execute function test_steal_ofapi_posts_lease();
+    `);
+    try {
+      expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe(
+        "failed",
+      );
+    } finally {
+      await testDb.pool.query(`
+        drop trigger if exists test_steal_ofapi_posts_lease on domain_events;
+        drop function if exists test_steal_ofapi_posts_lease();
+      `);
+    }
+
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "awaiting_parse",
+      terminalObservationId: null,
+    });
+    const terminal = await testDb.pool.query<{ observations: string }>(`
+      select count(*)::text as observations
+      from observations
+      where kind = 'ofapi.posts_capture_completed.v1'
+        and payload->>'jobId' = $1
+    `, [fixture.job.id]);
+    expect(terminal.rows[0]?.observations).toBe("0");
   });
 
   it("materializes each captured page once with the producer's inclusive-boundary rule", async () => {

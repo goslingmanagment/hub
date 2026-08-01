@@ -18,7 +18,7 @@ export function useAdminSyncTrigger() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
-    mutationFn: (body: { pageLabel: string; scope: "light" | "followers" | "all" | "data" | "messages" }) =>
+    mutationFn: (body: { pageLabel: string; scope: "light" | "followers" | "all" | "data" | "messages" | "posts" }) =>
       kernel.adminSyncTrigger({ body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["syncMonitor"] });

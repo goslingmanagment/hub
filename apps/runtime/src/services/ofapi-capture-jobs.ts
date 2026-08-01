@@ -19,10 +19,7 @@ import {
   type OfapiHttpOutcome,
   type OfapiMessageCoverageProofReference,
 } from "@agency_hub_core/db";
-import {
-  normalizeDmMessageText,
-  OFAPI_MIRROR_BUDGET_DEFAULTS,
-} from "@agency_hub_core/shared";
+import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { clampDraftOccurredAt } from "./canonicalize-driver.ts";
@@ -151,6 +148,36 @@ function postCursorPhase(job: OfapiCaptureJobRecord): "scan" | "verify_head" {
 function postCursorOffset(job: OfapiCaptureJobRecord) {
   const offset = job.cursor?.offset;
   return typeof offset === "number" && Number.isInteger(offset) && offset >= 0 ? offset : 0;
+}
+
+interface PostProtocolBudget {
+  remainingPages: number;
+  remainingCalls: number;
+}
+
+/**
+ * Remaining protocol budget after the response currently being parsed.
+ * `attemptCount` already includes that response's admitted request, while
+ * `pages` includes that response's accepted provider page. Keeping both on
+ * the same "after current page" boundary avoids the classic one-call
+ * off-by-one at the scan -> verify_head transition.
+ */
+function postProtocolBudget(
+  job: OfapiCaptureJobRecord,
+  pages: number,
+): PostProtocolBudget {
+  return {
+    remainingPages: Math.max(0, (job.maxPages ?? 0) - pages),
+    remainingCalls: Math.max(0, (job.maxCalls ?? 0) - job.attemptCount),
+  };
+}
+
+function hasPostProtocolAllowance(
+  budget: PostProtocolBudget,
+  futureRequests: number,
+) {
+  return budget.remainingPages >= futureRequests &&
+    budget.remainingCalls >= futureRequests;
 }
 
 function postTerminalFact(
@@ -425,10 +452,17 @@ async function parseCapturedPostJob(
     observationReceivedAt: observation.receivedAt,
     ...input,
   });
+  const lostFence = (): OfapiCaptureChunkResult => {
+    app.logger.warn(
+      { jobId: job.id, observationId: observation.id },
+      "OFAPI posts parse settlement lost its job fence",
+    );
+    return { kind: "failed", pageId: job.pageId, jobId: job.id } satisfies OfapiCaptureChunkResult;
+  };
 
   if (captured.status < 200 || captured.status >= 300) {
     const retryable = captured.status === 429 || captured.status >= 500;
-    await settle({
+    const settled = await settle({
       parserOutcome: "intentional_noop",
       rawCount: 0,
       acceptedCount: 0,
@@ -446,6 +480,7 @@ async function parseCapturedPostJob(
           reasonCode: captured.status === 404 ? "posts_not_found" : `http_${captured.status}`,
         },
     });
+    if (!settled) return lostFence();
     return {
       kind: retryable ? "failed" : "blocked",
       pageId: job.pageId,
@@ -455,7 +490,7 @@ async function parseCapturedPostJob(
 
   const target = parsePostTarget(job);
   if (!parsedJson.validJson || !target) {
-    await settle({
+    const settled = await settle({
       parserOutcome: "contract_rejected",
       rawCount: 0,
       acceptedCount: 0,
@@ -467,7 +502,9 @@ async function parseCapturedPostJob(
         reasonCode: !target ? "target_invalid" : "invalid_json",
       },
     });
-    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+    return settled
+      ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+      : lostFence();
   }
 
   const phase = postCursorPhase(job);
@@ -478,9 +515,13 @@ async function parseCapturedPostJob(
   const page = parseStrictOfapiPostPage(parsedJson.body, {
     requiredOverlapId,
     stopAtPostId,
+    // A previous-run anchor is a fresh sighting: include it so edits and
+    // lastObservedAt advance. The verify_head stop belongs to this same job's
+    // scan and is therefore accounting-only duplicate evidence.
+    acceptStopItem: phase === "scan" && target.anchorPostId !== null,
   });
   if (!page.accepted) {
-    await settle({
+    const settled = await settle({
       parserOutcome: "contract_rejected",
       rawCount: page.rawCount,
       acceptedCount: 0,
@@ -493,7 +534,9 @@ async function parseCapturedPostJob(
         reasonMessage: page.reason,
       },
     });
-    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+    return settled
+      ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+      : lostFence();
   }
 
   // Materialize only after the durable bytes pass the strict provider
@@ -503,7 +546,13 @@ async function parseCapturedPostJob(
   // retry. The inverse ordering (settle first) could strand creator_posts.
   try {
     const materializedAt = new Date();
-    const drafts = page.items.map((item) => {
+    // `acceptedItems` is the only material seam. Excluded boundaries (the
+    // required overlap and a same-job verification stop) were already
+    // materialized; a prior-run stop anchor may be accepted to observe edits.
+    // Rows after either kind of stop are stale for this bounded capture.
+    // Appending `items` here would turn accounting-only boundary evidence into
+    // fresh post observations and could regress a current projection head.
+    const drafts = page.acceptedItems.map((item) => {
       const postId = typeof item.id === "string" || typeof item.id === "number"
         ? String(item.id)
         : (() => { throw new Error("Strict OFAPI post lost its id"); })();
@@ -517,7 +566,9 @@ async function parseCapturedPostJob(
         platform: "onlyfans",
         observationId: observation.id,
         postId,
-        textPlain: normalizeDmMessageText(text),
+        // Agent postText is provider-verbatim. Do not apply the DM text
+        // normalizer: HTML, entities, whitespace and line endings are data.
+        textPlain: text,
         publishedAt: new Date(item.postedAt as string),
         observedAt: observation.receivedAt,
         attachmentCount: media.length,
@@ -547,7 +598,7 @@ async function parseCapturedPostJob(
       { err: error, jobId: job.id, observationId: observation.id },
       "Captured OFAPI posts page could not be materialized",
     );
-    await settle({
+    const settled = await settle({
       parserOutcome: "failed",
       rawCount: page.rawCount,
       acceptedCount: 0,
@@ -559,7 +610,9 @@ async function parseCapturedPostJob(
         reasonMessage: error instanceof Error ? error.message : String(error),
       },
     });
-    return { kind: "failed", pageId: job.pageId, jobId: job.id };
+    return settled
+      ? { kind: "failed", pageId: job.pageId, jobId: job.id }
+      : lostFence();
   }
 
   const pages = cursorPages(job) + 1;
@@ -569,6 +622,7 @@ async function parseCapturedPostJob(
     page.boundaryDuplicateCount;
   const explicitlyIrrelevantCount = cursorCount(job, "explicitlyIrrelevantCount") +
     page.explicitlyIrrelevantCount;
+  const protocolBudget = postProtocolBudget(job, pages);
   const pageAcceptedTail = page.acceptedItems.at(-1)?.id;
   const acceptedTailId = typeof pageAcceptedTail === "string" || typeof pageAcceptedTail === "number"
     ? String(pageAcceptedTail)
@@ -585,7 +639,7 @@ async function parseCapturedPostJob(
   const complete = async (
     verification: "anchor" | "exhaustion" | "empty",
     anchorReached: boolean,
-  ) => {
+  ): Promise<OfapiCaptureChunkResult> => {
     const terminal = postTerminalFact(job, {
       headPostId: nextVerificationHeadPostId ?? nextCapturedHeadPostId,
       oldestPostId: nextOldestPostId,
@@ -601,7 +655,7 @@ async function parseCapturedPostJob(
       observationReceivedAt: observation.receivedAt,
     });
     const { result, ...terminalObservation } = terminal;
-    await settle({
+    const settled = await settle({
       parserOutcome: "accepted",
       rawCount: page.rawCount,
       acceptedCount: page.acceptedItems.length,
@@ -614,7 +668,9 @@ async function parseCapturedPostJob(
         result,
       },
     });
-    return { kind: "success", pageId: job.pageId, jobId: job.id } satisfies OfapiCaptureChunkResult;
+    return settled
+      ? { kind: "success", pageId: job.pageId, jobId: job.id }
+      : lostFence();
   };
 
   if (page.stopReached) {
@@ -633,7 +689,32 @@ async function parseCapturedPostJob(
     // Initial backfill reached EOF. Rewalk the head until it overlaps the
     // frozen first post (or reaches EOF) so inserts during offset pagination
     // cannot leave an unobserved newer prefix.
-    await settle({
+    // A non-empty initial scan is complete only after at least one fresh head
+    // request. Refuse to enter verify_head unless both independent caps still
+    // admit that request; otherwise the job would become ready but could never
+    // produce its required terminal verification.
+    if (!hasPostProtocolAllowance(protocolBudget, 1)) {
+      const settled = await settle({
+        parserOutcome: "accepted",
+        rawCount: page.rawCount,
+        acceptedCount: page.acceptedItems.length,
+        boundaryDuplicateCount: page.boundaryDuplicateCount,
+        explicitlyIrrelevantCount: page.explicitlyIrrelevantCount,
+        rejectedCount: 0,
+        disposition: {
+          kind: "blocked",
+          reasonCode: "head_verification_budget_exhausted",
+          reasonMessage:
+            `Initial posts scan reached EOF with ${protocolBudget.remainingPages} page and ` +
+            `${protocolBudget.remainingCalls} call slots remaining; head verification needs one`,
+        },
+      });
+      return settled
+        ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+        : lostFence();
+    }
+
+    const settled = await settle({
       parserOutcome: "accepted",
       rawCount: page.rawCount,
       acceptedCount: page.acceptedItems.length,
@@ -655,11 +736,13 @@ async function parseCapturedPostJob(
         acceptedItems: page.acceptedItems.length,
       },
     });
-    return { kind: "success", pageId: job.pageId, jobId: job.id };
+    return settled
+      ? { kind: "success", pageId: job.pageId, jobId: job.id }
+      : lostFence();
   }
 
   if (page.tailPostId === null) {
-    await settle({
+    const settled = await settle({
       parserOutcome: "contract_rejected",
       rawCount: page.rawCount,
       acceptedCount: 0,
@@ -672,11 +755,40 @@ async function parseCapturedPostJob(
         reasonMessage: "hasMore page has no tail post id",
       },
     });
-    return { kind: "blocked", pageId: job.pageId, jobId: job.id };
+    return settled
+      ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+      : lostFence();
+  }
+
+  // Continuing an initial scan needs TWO future requests in the worst case:
+  // one more scan page (which may be EOF) and the mandatory head verification
+  // page after it. Incremental and verify_head walks need only their next page.
+  const requiredFutureRequests = phase === "scan" && target.anchorPostId === null ? 2 : 1;
+  if (!hasPostProtocolAllowance(protocolBudget, requiredFutureRequests)) {
+    const settled = await settle({
+      parserOutcome: "accepted",
+      rawCount: page.rawCount,
+      acceptedCount: page.acceptedItems.length,
+      boundaryDuplicateCount: page.boundaryDuplicateCount,
+      explicitlyIrrelevantCount: page.explicitlyIrrelevantCount,
+      rejectedCount: 0,
+      disposition: {
+        kind: "blocked",
+        reasonCode: phase === "scan" && target.anchorPostId === null
+          ? "head_verification_budget_exhausted"
+          : "post_pagination_budget_exhausted",
+        reasonMessage:
+          `Posts ${phase} needs ${requiredFutureRequests} future request slot(s), but ` +
+          `${protocolBudget.remainingPages} page and ${protocolBudget.remainingCalls} call slots remain`,
+      },
+    });
+    return settled
+      ? { kind: "blocked", pageId: job.pageId, jobId: job.id }
+      : lostFence();
   }
 
   const offset = postCursorOffset(job);
-  await settle({
+  const settled = await settle({
     parserOutcome: "accepted",
     rawCount: page.rawCount,
     acceptedCount: page.acceptedItems.length,
@@ -704,7 +816,9 @@ async function parseCapturedPostJob(
       acceptedItems: page.acceptedItems.length,
     },
   });
-  return { kind: "success", pageId: job.pageId, jobId: job.id };
+  return settled
+    ? { kind: "success", pageId: job.pageId, jobId: job.id }
+    : lostFence();
 }
 
 async function parseCapturedJob(

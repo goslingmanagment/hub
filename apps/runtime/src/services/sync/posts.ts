@@ -2,8 +2,12 @@ import {
   assertOwnedPageSyncLease,
   createOrGetOfapiCaptureJob,
   findActiveOfapiCaptureJobBySlot,
+  findPageById,
   getCheckpoint,
   getOfapiCaptureJob,
+  listPagesByPlatform,
+  listPageSyncStates,
+  pausePageSync,
   upsertCheckpoint,
   upsertCheckpointProgress,
   type PageSyncLease,
@@ -23,6 +27,79 @@ const FANSLY_POSTS_MAPPER_VERSION = "fansly-posts-v1";
 const OFAPI_POSTS_CAPTURE_LIMIT = 100;
 const OFAPI_POSTS_CAPTURE_MAX_PAGES = 1_000;
 const OFAPI_POSTS_CAPTURE_PRIORITY = 30;
+
+export type OnlyFansPostsCaptureIneligibility =
+  | "ofapi_posts_capture_disabled"
+  | "ofapi_account_unmapped";
+
+export class PostsCaptureConfigurationError extends Error {
+  constructor(readonly code: OnlyFansPostsCaptureIneligibility) {
+    super(code === "ofapi_posts_capture_disabled"
+      ? "OnlyFans posts capture is disabled; manual action required: enable OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED before activating this page"
+      : "OnlyFans posts capture requires an OFAPI account mapping; manual action required: map this page before activating posts");
+    this.name = "PostsCaptureConfigurationError";
+  }
+}
+
+export function getOnlyFansPostsCaptureIneligibility(
+  config: Pick<AppContext["config"], "ofapiMirrorBackgroundCaptureEnabled"> | undefined,
+  page: { platform: string; ofapiAccountId?: string | null },
+): OnlyFansPostsCaptureIneligibility | null {
+  if (page.platform !== "onlyfans") {
+    return null;
+  }
+  if (!isOfapiBackgroundCaptureRunnable(config)) {
+    return "ofapi_posts_capture_disabled";
+  }
+  return typeof page.ofapiAccountId === "string" && page.ofapiAccountId.length > 0
+    ? null
+    : "ofapi_account_unmapped";
+}
+
+async function pauseOnlyFansPostsForPage(app: AppContext, pageId: number, now: Date) {
+  const states = await listPageSyncStates(app.db, { pageId, streams: ["posts"] });
+  if (states.length === 1 && states[0]?.status === "paused") {
+    return false;
+  }
+  await pausePageSync(app.db, { pageId, streams: ["posts"], now });
+  return true;
+}
+
+/** Keep an activated OnlyFans lane inert when its global gate or page mapping
+ * disappears. Re-enabling either prerequisite does not auto-resume the page;
+ * the operator must use the explicit per-page `posts` scope again. */
+export async function pauseIneligibleOnlyFansPostsForPage(
+  app: AppContext,
+  pageId: number,
+  now = new Date(),
+) {
+  const stored = await findPageById(app.db, pageId);
+  if (
+    !stored ||
+    stored.page.platform !== "onlyfans" ||
+    getOnlyFansPostsCaptureIneligibility(app.config, stored.page) === null
+  ) {
+    return false;
+  }
+  return pauseOnlyFansPostsForPage(app, pageId, now);
+}
+
+export async function pauseIneligibleOnlyFansPostsForAllPages(
+  app: AppContext,
+  now = new Date(),
+) {
+  let pausedPages = 0;
+  const pages = await listPagesByPlatform(app.db, "onlyfans");
+  for (const page of pages) {
+    if (
+      getOnlyFansPostsCaptureIneligibility(app.config, page) !== null &&
+      await pauseOnlyFansPostsForPage(app, page.id, now)
+    ) {
+      pausedPages += 1;
+    }
+  }
+  return pausedPages;
+}
 
 type ExecutorRequestContext = {
   budget: SyncChunkBudget;
@@ -275,22 +352,19 @@ export async function onlyfansPostsChunk(
     throw new Error("OnlyFans posts sync requires an OnlyFans page");
   }
   await input.telemetry.recordPhaseStarted("posts");
-  if (!isOfapiBackgroundCaptureRunnable(app.config)) {
-    return {
-      satisfied: true,
-      yieldReason: null,
-      gatedSkip: "ofapi_posts_capture_disabled",
-      stats: { skipped: "ofapi_posts_capture_disabled" },
-    };
+  const ineligibility = getOnlyFansPostsCaptureIneligibility(app.config, {
+    ...input.pageContext.page,
+    platform: input.pageContext.platform,
+  });
+  if (ineligibility !== null) {
+    // The normal path is parked by the planner. This error is the race-safe
+    // fallback: it records no false success and the executor classifies it as
+    // a configuration wait until the planner restores the durable pause.
+    throw new PostsCaptureConfigurationError(ineligibility);
   }
   const ofapiAccountId = input.pageContext.page.ofapiAccountId;
   if (!ofapiAccountId) {
-    return {
-      satisfied: true,
-      yieldReason: null,
-      gatedSkip: "ofapi_account_unmapped",
-      stats: { skipped: "ofapi_account_unmapped" },
-    };
+    throw new PostsCaptureConfigurationError("ofapi_account_unmapped");
   }
 
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "posts");

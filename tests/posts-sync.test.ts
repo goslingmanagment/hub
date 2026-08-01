@@ -4,8 +4,12 @@ const dbMocks = vi.hoisted(() => ({
   assertOwnedPageSyncLease: vi.fn(async () => {}),
   createOrGetOfapiCaptureJob: vi.fn(),
   findActiveOfapiCaptureJobBySlot: vi.fn(),
+  findPageById: vi.fn(),
   getCheckpoint: vi.fn(),
   getOfapiCaptureJob: vi.fn(),
+  listPagesByPlatform: vi.fn(),
+  listPageSyncStates: vi.fn(),
+  pausePageSync: vi.fn(),
   upsertCheckpoint: vi.fn(),
   upsertCheckpointProgress: vi.fn(),
 }));
@@ -27,6 +31,7 @@ import {
   fanslyPostsChunk,
   onlyfansPostsChunk,
   parsePostsCursorState,
+  PostsCaptureConfigurationError,
 } from "../apps/runtime/src/services/sync/posts.ts";
 
 function telemetry() {
@@ -59,7 +64,7 @@ function fanslyInput(budget = new SyncChunkBudget()) {
   } as never;
 }
 
-function onlyfansInput() {
+function onlyfansInput(ofapiAccountId: string | null = "ofapi-77") {
   return {
     budget: new SyncChunkBudget(),
     pageContext: {
@@ -67,7 +72,7 @@ function onlyfansInput() {
       page: {
         id: 77,
         label: "onlyfans-posts",
-        ofapiAccountId: "ofapi-77",
+        ofapiAccountId,
         metadata: {},
       },
       egressKey: "onlyfans:77",
@@ -240,18 +245,27 @@ describe("posts sync handlers", () => {
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
   });
 
-  it("keeps OFAPI posts inert while the background capture gate is off", async () => {
-    const result = await onlyfansPostsChunk({
+  it("fails honestly instead of claiming a gated success when OFAPI capture is off", async () => {
+    await expect(onlyfansPostsChunk({
       db: {},
       config: { ofapiMirrorBackgroundCaptureEnabled: false },
-    } as never, onlyfansInput());
-
-    expect(result).toEqual({
-      satisfied: true,
-      yieldReason: null,
-      gatedSkip: "ofapi_posts_capture_disabled",
-      stats: { skipped: "ofapi_posts_capture_disabled" },
+    } as never, onlyfansInput())).rejects.toMatchObject({
+      name: "PostsCaptureConfigurationError",
+      code: "ofapi_posts_capture_disabled",
     });
+
+    expect(dbMocks.getCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.createOrGetOfapiCaptureJob).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing OFAPI mapping as configuration error, never gated success", async () => {
+    await expect(onlyfansPostsChunk({
+      db: {},
+      config: { ofapiMirrorBackgroundCaptureEnabled: true },
+    } as never, onlyfansInput(null))).rejects.toEqual(
+      new PostsCaptureConfigurationError("ofapi_account_unmapped"),
+    );
+
     expect(dbMocks.getCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.createOrGetOfapiCaptureJob).not.toHaveBeenCalled();
   });

@@ -63,7 +63,7 @@ export type ExecutorPullHandler = (
  * sync-all must not fire the heavy crawls). Always a subset of
  * capabilities.streams (pinned by the registry suite). A scope absent from
  * the map is unsupported on that platform (resolveStreamsForScope throws). */
-export type SyncScopePolicy = Partial<Record<"light" | "followers" | "all" | "data" | "messages", CanonicalStream[]>>;
+export type SyncScopePolicy = Partial<Record<"light" | "followers" | "all" | "data" | "messages" | "posts", CanonicalStream[]>>;
 
 export type AppPlatformAdapter = PlatformAdapter<ExecutorPullHandler> & {
   syncScopes: SyncScopePolicy;
@@ -135,6 +135,7 @@ export const fanslyPlatformAdapter: AppPlatformAdapter = {
   syncScopes: {
     light: ["light"],
     followers: ["followers"],
+    posts: ["posts"],
     data: ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"],
     messages: ["dm_conversations", "dm_messages"],
     all: [
@@ -175,6 +176,7 @@ export const onlyfansPlatformAdapter: AppPlatformAdapter = {
   },
   syncScopes: {
     light: ["light", "transactions", "fan_identities"],
+    posts: ["posts"],
     data: ["light", "transactions", "fan_identities", "top_spenders", "subscribers"],
     messages: ["dm_conversations"],
     all: [

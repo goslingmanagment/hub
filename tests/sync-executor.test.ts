@@ -7,6 +7,7 @@ import { PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { ProxyMissingError } from "../apps/runtime/src/services/errors.ts";
+import { PostsCaptureConfigurationError } from "../apps/runtime/src/services/sync/posts.ts";
 
 const dbMocks = vi.hoisted(() => ({
   acquirePageSyncLease: vi.fn(),
@@ -1091,6 +1092,38 @@ describe("sync executor", () => {
       needsContinuation: true,
       continuationPriority: 40,
     });
+  });
+
+  it("records posts gate or mapping races as configuration errors, never successful skips", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "posts" as const,
+    });
+    handlerMocks.executeStreamChunk.mockRejectedValue(
+      new PostsCaptureConfigurationError("ofapi_account_unmapped"),
+    );
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "posts",
+      retryKind: "configuration_wait",
+    }));
+    expect(dbMocks.completePageSync).not.toHaveBeenCalled();
+    expect(dbMocks.skipPageSync).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
+      "failed",
+      expect.objectContaining({
+        summary: expect.stringContaining("requires an OFAPI account mapping"),
+      }),
+      { chunkStatus: "failed" },
+    );
   });
 
   it("treats lost leases during auth blocking as skipped", async () => {

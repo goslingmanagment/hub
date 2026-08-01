@@ -26,7 +26,7 @@ describe("OFAPI posts capture contract", () => {
     expect(page).toMatchObject({
       accepted: true,
       rawCount: 4,
-      boundaryDuplicateCount: 2,
+      boundaryDuplicateCount: 1,
       explicitlyIrrelevantCount: 1,
       headPostId: "103",
       tailPostId: "100",
@@ -34,8 +34,37 @@ describe("OFAPI posts capture contract", () => {
       hasNextPage: true,
     });
     if (page.accepted) {
-      expect(page.acceptedItems.map((item) => String(item.id))).toEqual(["103"]);
+      expect(page.acceptedItems.map((item) => String(item.id))).toEqual(["103", "101"]);
     }
+  });
+
+  it("accepts a prior-run stop anchor for edits but excludes a same-job verification stop", async () => {
+    const bytes = await readFile(FIXTURE_URL);
+    const decoded = parseOfapiJsonBytes(bytes);
+    const incremental = parseStrictOfapiPostPage(decoded.body, {
+      requiredOverlapId: "102",
+      stopAtPostId: "101",
+      acceptStopItem: true,
+    });
+    const verification = parseStrictOfapiPostPage(decoded.body, {
+      requiredOverlapId: "102",
+      stopAtPostId: "101",
+      acceptStopItem: false,
+    });
+
+    if (!incremental.accepted || !verification.accepted) {
+      throw new Error("fixture unexpectedly failed the strict posts contract");
+    }
+    expect(incremental.acceptedItems.map((item) => String(item.id))).toEqual(["103", "101"]);
+    expect(incremental).toMatchObject({
+      boundaryDuplicateCount: 1,
+      explicitlyIrrelevantCount: 1,
+    });
+    expect(verification.acceptedItems.map((item) => String(item.id))).toEqual(["103"]);
+    expect(verification).toMatchObject({
+      boundaryDuplicateCount: 2,
+      explicitlyIrrelevantCount: 1,
+    });
   });
 
   it("fails closed on generic list envelopes and missing overlap", () => {

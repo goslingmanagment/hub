@@ -1571,7 +1571,7 @@ const connectionStatusEnum = z.enum([
   "active", "stale", "error", "expired", "never_synced", "unverified",
 ]);
 
-const syncTriggerScopeEnum = z.enum(["light", "followers", "all", "data", "messages"]);
+const syncTriggerScopeEnum = z.enum(["light", "followers", "all", "data", "messages", "posts"]);
 
 const transactionSortByEnum = z.enum(["occurredAt", "grossAmountMills", "netAmountMills"]);
 
@@ -6770,6 +6770,7 @@ export const routeSchemas = {
     body: syncTriggerBodySchema,
     response: {
       202: syncTriggerResponseSchema,
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,

@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
 
+import { syncTriggerBodySchema } from "@agency_hub_core/contracts";
+
 import {
   filterStreamsForSyncConfig,
+  requestAllPagesSync,
   resolveStreamsForScope,
 } from "../apps/runtime/src/services/sync-control.ts";
 
 describe("resolveStreamsForScope", () => {
+  it("exposes posts as an explicit one-stream scope on both platforms", () => {
+    expect(resolveStreamsForScope("fansly", "posts")).toEqual(["posts"]);
+    expect(resolveStreamsForScope("onlyfans", "posts")).toEqual(["posts"]);
+    expect(syncTriggerBodySchema.parse({ pageLabel: "creator-1", scope: "posts" }))
+      .toEqual({ pageLabel: "creator-1", scope: "posts" });
+  });
+
+  it("keeps posts activation per-page instead of exposing a fleet crawl", async () => {
+    await expect(requestAllPagesSync({} as never, {} as never, {
+      scope: "posts",
+      reason: "manual",
+    })).rejects.toThrow("posts sync scope is per-page only");
+  });
+
   it("treats follower reconcile as part of Fansly data sync", () => {
     expect(resolveStreamsForScope("fansly", "data")).toEqual([
       "light",

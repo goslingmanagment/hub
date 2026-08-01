@@ -13611,7 +13611,8 @@
                                     "followers",
                                     "all",
                                     "data",
-                                    "messages"
+                                    "messages",
+                                    "posts"
                                   ]
                                 }
                               },
@@ -16708,7 +16709,8 @@
                       "followers",
                       "all",
                       "data",
-                      "messages"
+                      "messages",
+                      "posts"
                     ]
                   }
                 },
@@ -16749,7 +16751,8 @@
                         "followers",
                         "all",
                         "data",
-                        "messages"
+                        "messages",
+                        "posts"
                       ]
                     }
                   },
@@ -16757,6 +16760,35 @@
                     "accepted",
                     "pageLabel",
                     "scope"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
                   ],
                   "additionalProperties": false
                 }

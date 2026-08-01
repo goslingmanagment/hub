@@ -2107,7 +2107,7 @@ export function buildProgram() {
 
   sync
     .option("--page <label>")
-    .option("--scope <scope>", "light|followers|all", "all")
+    .option("--scope <scope>", "light|followers|data|messages|posts|all", "all")
     .option("--transactions-start <iso>", "OnlyFans-only manual rescan start", parseDateOption)
     .option("--no-wait", "queue the sync and return without waiting")
     .action(async (options) => {
@@ -2117,7 +2117,7 @@ export function buildProgram() {
 
       const app = await createAppContext();
       try {
-        if (options.scope === "followers" && options.transactionsStart) {
+        if (options.transactionsStart && options.scope !== "light" && options.scope !== "all") {
           throw new Error("--transactions-start is only supported with light or all sync scopes");
         }
 

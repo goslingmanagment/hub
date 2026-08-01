@@ -200,6 +200,10 @@ export function parseStrictOfapiPostPage(
   input: {
     requiredOverlapId?: string | null;
     stopAtPostId?: string | null;
+    /** A prior-run anchor is fresh observed material and may carry an edit.
+     * A same-job verification stop was already accepted during the scan and
+     * must stay a boundary duplicate instead. Overlap always wins/excludes. */
+    acceptStopItem?: boolean;
   } = {},
 ): StrictOfapiPostPage {
   const root = asRecord(body);
@@ -292,12 +296,14 @@ export function parseStrictOfapiPostPage(
   const stopAtPostId = input.stopAtPostId ?? null;
   const stopIndex = stopAtPostId === null ? -1 : ids.indexOf(stopAtPostId);
   const stopReached = stopIndex >= 0;
+  const acceptStopItem = input.acceptStopItem !== false;
 
   const boundaryIndices = new Set<number>();
   if (overlapIndex >= 0) boundaryIndices.add(overlapIndex);
-  if (stopIndex >= 0) boundaryIndices.add(stopIndex);
+  if (stopIndex >= 0 && !acceptStopItem) boundaryIndices.add(stopIndex);
   const acceptedItems = items.filter((_item, index) =>
-    !boundaryIndices.has(index) && (stopIndex < 0 || index < stopIndex)
+    !boundaryIndices.has(index) &&
+    (stopIndex < 0 || index < stopIndex || (acceptStopItem && index === stopIndex))
   );
   const boundaryDuplicateCount = boundaryIndices.size;
   const explicitlyIrrelevantCount = stopIndex < 0
