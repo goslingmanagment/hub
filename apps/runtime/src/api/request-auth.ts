@@ -82,8 +82,13 @@ export function agentScopeFor(
  *
  * Cookie sessions keep the full visible-platform view; every bearer is clamped
  * to the pages the request actually named.
+ *
+ * HUMAN principals only, by type. The behavior is unchanged, but an agent key
+ * would land in the bare `requestedPageIds` branch — no intersection with its
+ * grant and no compile error to warn whoever wrote the handler. Agent-plane
+ * operations take `agentScopeFor` instead, and the compiler now says so.
  */
-export function platformRollupScopeFor(principal: AuthPrincipal, requestedPageIds: number[]) {
+export function platformRollupScopeFor(principal: HumanAuthPrincipal, requestedPageIds: number[]) {
   return principal.authMethod === "session" ? pageScopeFor(principal) : requestedPageIds;
 }
 

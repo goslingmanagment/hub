@@ -56,7 +56,12 @@ import {
 
 import { platformRollupScopeFor } from "../api/request-auth.ts";
 import type { AppContext } from "../bootstrap.ts";
-import { canAccessPage, isAgentPrincipal, type AuthPrincipal } from "./auth.ts";
+import {
+  canAccessPage,
+  isAgentPrincipal,
+  requireHumanPrincipal,
+  type AuthPrincipal,
+} from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 
 type ScopeFields = {
@@ -327,6 +332,10 @@ async function resolveSpenderScope(
   principal: AuthPrincipal,
   input: ScopeFields,
 ) {
+  // Money reads are a human surface: every scope rule below is written in terms
+  // of cookie-session-vs-bearer, a distinction an agent key does not have. It is
+  // refused here rather than silently sorted into the bearer branch.
+  requireHumanPrincipal(principal);
   const scopedPageIds = visiblePageIdsForPrincipal(principal);
 
   // Bearer principals never get cross-page aggregates. This used to test

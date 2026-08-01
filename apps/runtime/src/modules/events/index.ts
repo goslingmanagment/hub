@@ -836,7 +836,9 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           : sessionToken
             ? await authenticateSessionToken(appContext, sessionToken)
             : null;
-        if (!refreshed) {
+        // Symmetric with the v1 lane: agent keys get no SSE, so a re-auth that
+        // resolves to one closes the stream instead of re-deriving its grants.
+        if (!refreshed || isAgentPrincipal(refreshed)) {
           request.log.warn("v2 SSE credential no longer authenticates; closing stream");
           raw.end();
           return;
