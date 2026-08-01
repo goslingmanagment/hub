@@ -27,6 +27,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import {
   canAccessPage,
+  isAgentPrincipal,
   principalLogFields,
   requireOwner,
   SESSION_COOKIE_NAME,
@@ -376,7 +377,14 @@ export async function buildApiServer(appContext: AppContext) {
         case 401:
           throw new UnauthorizedError();
         case 404:
-          throw new NotFoundError(`Page "${pageLabelParam}" was not found`);
+          // The message names the label for a HUMAN (the dashboard's own error
+          // states read it) and is STATIC for an agent: on the read plane a page
+          // outside the grant and a page that does not exist must be byte-for-byte
+          // the same answer, and this refusal happens BEFORE the handler, so it
+          // has to match the handler's own static 404 exactly.
+          throw request.auth && isAgentPrincipal(request.auth)
+            ? new NotFoundError()
+            : new NotFoundError(`Page "${pageLabelParam}" was not found`);
         default:
           throw new ForbiddenError(`Authorization policy denied this request (${verdict.reason})`);
       }

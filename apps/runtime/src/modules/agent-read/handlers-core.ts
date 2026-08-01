@@ -273,9 +273,11 @@ export function normalizeResolveInput(raw: string, hint: string): string[] {
     const withoutScheme = trimmed.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
     const withoutQuery = withoutScheme.split(/[?#]/, 1)[0] ?? "";
     const segments = withoutQuery.split("/").filter((segment) => segment.length > 0);
-    const last = segments.at(-1);
-    if (last !== undefined && segments.length > 1) {
-      push(last);
+    // EVERY segment after the host, not just the last one: a profile link with a
+    // trailing section (`/posts`, `/media`) would otherwise resolve the section
+    // instead of the person. `normalized[]` reports exactly what was tried.
+    for (const segment of segments.slice(1)) {
+      push(segment);
     }
   }
   return forms;

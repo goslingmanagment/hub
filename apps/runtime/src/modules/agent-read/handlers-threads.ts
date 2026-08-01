@@ -34,7 +34,11 @@ import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
-import { buildAgentEvidence, type PlaneNotReadReason } from "./epistemics.ts";
+import {
+  buildAgentEvidence,
+  evidenceProvesAbsence,
+  type PlaneNotReadReason,
+} from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
 import { staticNotFound, toSafeNumber } from "./errors.ts";
 import { MESSAGE_PLANES, MONEY_PLANES, planesNotRead } from "./planes.ts";
@@ -65,7 +69,7 @@ import {
  *
  * #7 pages not at all, on purpose ("bound it, do not paginate"): it returns at
  * most 100 locators with an inexact `matchedInScope`, and its two structurally
- * unindexed planes make `absenceProvable` permanently false there.
+ * unindexed planes make a provable absence permanently unreachable there.
  */
 
 const NO_LANE_CEILING = {
@@ -112,7 +116,7 @@ function mergeLaneCeiling(
 
 /** The OF-only archive is a REQUIRED plane for message claims, so on a Fansly
  *  scope it is `not_read` with its real reason — which is precisely why no Fansly
- *  answer can ever be `absenceProvable`. */
+ *  answer can ever prove an absence. */
 function messagePlaneOverrides(
   platforms: readonly Platform[],
 ): Record<string, { state: "not_read" | "not_indexed"; reason: AgentPlaneReason }> {
@@ -1294,7 +1298,7 @@ export async function handleAgentCoverage(
         gapDetection: "head_only" as const,
         observedRowFloor: isoOrNull(entry.observedRowFloor),
         gaps: perScope.capture.gaps,
-        windowCovered: perScope.conclusion.absenceProvable,
+        windowCovered: evidenceProvesAbsence(perScope),
         fieldStates: perScope.capture.scopeFieldStates,
         blockers: perScope.conclusion.blockers,
       };

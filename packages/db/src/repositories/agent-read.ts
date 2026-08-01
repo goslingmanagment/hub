@@ -386,7 +386,7 @@ export async function resolveAgentFanCandidates(
   // about where real platform logic lives.
   const platformFilter = input.platform == null
     ? sql`true`
-    : sql`f.platform = ${input.platform}::platform`;
+    : sql`f.platform = ${input.platform}`;
 
   const result = await db.execute<Record<string, unknown>>(sql`
     with visible_fans as (
@@ -529,7 +529,7 @@ export async function findAgentPersonIdentity(
     select f.id, f.platform::text as platform, f.platform_user_id, f.username, f.display_name,
            f.created_at_external, f.first_seen_at, f.last_seen_at, f.deleted_detected_at
     from fans f
-    where f.platform = ${input.platform}::platform
+    where f.platform = ${input.platform}
       and f.platform_user_id = ${input.platformUserId}
       and (
         exists (select 1 from page_fans pf
@@ -1066,7 +1066,7 @@ export interface AgentThreadsQuery {
 function threadsWhere(query: AgentThreadsQuery): SQL {
   const clauses: SQL[] = [sql`t.platform_account_id in ${pageIdList(query.pageIds)}`];
   if (query.platform !== undefined) {
-    clauses.push(sql`p.platform = ${query.platform}::platform`);
+    clauses.push(sql`p.platform = ${query.platform}`);
   }
   if (query.fanId !== undefined) {
     clauses.push(sql`t.fan_id = ${query.fanId}`);
@@ -1352,7 +1352,7 @@ export async function listAgentCoverageScopes(
   }
   const clauses: SQL[] = [sql`t.platform_account_id in ${pageIdList(input.pageIds)}`];
   if (input.platform !== undefined) {
-    clauses.push(sql`p.platform = ${input.platform}::platform`);
+    clauses.push(sql`p.platform = ${input.platform}`);
   }
   if (input.fanId !== undefined) {
     clauses.push(sql`t.fan_id = ${input.fanId}`);

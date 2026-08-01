@@ -160,3 +160,57 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     return handleAgentDatasetQuery(appContext, principal, request.params, request.body);
   });
 }
+
+/**
+ * The module's public surface.
+ *
+ * Deep imports into `modules/<name>/**` are lint-banned, so anything outside the
+ * module (today: the test suite, which pins these properties) comes through
+ * here. What is re-exported is exactly what has an assertable invariant, and
+ * NOTHING that would let a caller bypass one: `concludeEnvelope` is reachable
+ * because its verdict is the thing under test, while the witness constructor
+ * that would let a caller fabricate a "read" is not exported by `packages/db`
+ * at all.
+ */
+export {
+  buildAgentEvidence,
+  concludeEnvelope,
+  evidenceProvesAbsence,
+  type AgentEvidence,
+  type AgentEvidenceInput,
+  type AgentPlaneMode,
+} from "./epistemics.ts";
+export {
+  agentParamsHash,
+  canonicalJson,
+  decodeAgentCursor,
+  encodeAgentCursor,
+  type AgentCursorPayload,
+  type AgentCursorSigning,
+} from "./cursors.ts";
+export {
+  AGENT_CONCURRENCY_LIMIT,
+  AGENT_ROUTE_RPM,
+  acquireAgentSlot,
+  agentConcurrencyInUse,
+  assertWithinAgentBudget,
+  releaseAgentSlot,
+  resetAgentConcurrencyForTests,
+} from "./budget.ts";
+export {
+  AGENT_OBSERVATION_PAYLOAD_ALLOWLIST,
+  AGENT_OBSERVATION_PAYLOAD_DENYLIST,
+  AGENT_OBSERVATION_PAYLOAD_SESSION_CAP,
+  agentObservationPayloadAllowed,
+  scrubObservationPayload,
+} from "./observation-scrub.ts";
+export {
+  AGENT_COUNT_PROBE_MAX,
+  AGENT_PLATFORM_CAPABILITIES,
+  AGENT_TIMEOUT_MS,
+  computeScopeFieldStates,
+  hasProofLaneForClaim,
+  operationPlanesFor,
+} from "./runtime.ts";
+export { staticNotFound, toSafeNumber, toSafeNumberOr } from "./errors.ts";
+export { normalizeResolveInput } from "./handlers-core.ts";

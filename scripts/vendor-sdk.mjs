@@ -99,7 +99,13 @@ writeFileSync(
 
 const toShared = [["@agency_hub_core/shared", "../shared/index"]];
 for (const file of [
+  // House primitives (mills, platformEnum, the error body): routes.ts and
+  // routes-agent.ts both import them, so the vendored copy needs the module.
+  "primitives.ts",
   "routes.ts",
+  // The Agent Read Plane operations. routes.ts spreads them into routeSchemas,
+  // so a vendored SDK without this file cannot compile at all.
+  "routes-agent.ts",
   "sdk-runtime.ts",
   "domain-event-cursor.ts",
   "authorization-policy.ts",

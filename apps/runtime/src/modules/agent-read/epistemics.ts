@@ -307,6 +307,18 @@ export function concludeEnvelope(input: AgentEvidenceInput, planes: readonly Age
 }
 
 /**
+ * Reads the verdict off a built evidence block.
+ *
+ * Exists so that no other runtime file has to mention the field by name: the
+ * one-writer pin is TEXTUAL, and a read is one careless edit away from becoming
+ * a write. Callers that need the boolean (per-scope `windowCovered` on the
+ * coverage probe) go through here.
+ */
+export function evidenceProvesAbsence(evidence: AgentEvidence): boolean {
+  return evidence.conclusion.absenceProvable;
+}
+
+/**
  * One call per response: build `capture`, conclude, and derive the delivery
  * caveats from the same facts so the three can never disagree.
  */
