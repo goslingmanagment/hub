@@ -871,6 +871,8 @@ export interface ArchiveShadowSwitchResult {
   liveRows: number;
   retiredRows: number;
   watermarksReset: number;
+  /** The archive generation AFTER this swap; every older read cursor is now invalid. */
+  archiveGeneration: number;
 }
 
 /**
@@ -1004,11 +1006,28 @@ export async function switchMessageArchiveShadowTables(
       delete from projection_seq_watermarks where projection = ${MESSAGE_ARCHIVE_SHADOW_PROJECTION}
     `);
 
+    // Agent Read Plane: a read cursor carries the archive generation it was
+    // minted under. The live table has just been replaced by a different physical
+    // table, so resuming an older cursor could skip rows while still reporting
+    // "the snapshot is exhausted" — a false "I read everything". Bumping inside
+    // the same transaction means no reader can observe the swap without the bump.
+    // A MANUAL reverse rename must bump it too — docs/runbooks/message-archive-rebuild.md.
+    const generation = await tx.execute<{ generation: string }>(sql`
+      insert into archive_generation (id, generation, bumped_at, reason)
+      values (1, 1, now(), 'message_archive rebuild swap')
+      on conflict (id) do update set
+        generation = archive_generation.generation + 1,
+        bumped_at = now(),
+        reason = excluded.reason
+      returning generation::text as generation
+    `);
+
     return {
       retiredTable: retired,
       liveRows: Number(counts.rows[0]?.shadow_rows ?? 0),
       retiredRows: Number(counts.rows[0]?.old_rows ?? 0),
       watermarksReset: carried.rows.length,
+      archiveGeneration: Number(generation.rows[0]?.generation ?? 0),
     };
   });
 }

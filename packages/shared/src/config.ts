@@ -263,6 +263,41 @@ const envSchema = z.object({
   WB_CLOSING_LLM_MODEL: z.string().trim().min(1).default("claude-haiku-4-5"),
   WB_CLOSING_LLM_DAILY_CAP_MIN: z.coerce.number().int().positive().default(50),
   WB_CLOSING_LLM_DAILY_CAP_MAX: z.coerce.number().int().positive().default(400),
+  // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
+  // is inert, and every one is LIVE-wired: the owner ramps them from the dashboard,
+  // one flip per verification window, never a bundle and never a restart.
+  //
+  // off = every agent route answers 503; read_only = routes serve but
+  // `conclusion.absenceProvable` is pinned false with the `read_only_mode` blocker
+  // (the ramp window); full = normal.
+  AGENT_READ_PLANE_MODE: z.enum(["off", "read_only", "full"]).default("off"),
+  // Observation envelopes/payloads (#9a/#9b) expose raw captured vendor material,
+  // so they carry their own gate on top of the plane mode.
+  AGENT_OBSERVATIONS_ENABLED: booleanSchema.default(false),
+  // off = search answers 503; fts = Postgres FTS over the GIN expression that
+  // already exists on message_archive; fts_trgm additionally needs the pg_trgm
+  // extension, which is a MANUAL owner DBA step outside the migration chain —
+  // absent at runtime the plane falls back to `fts` and says so in a caveat.
+  AGENT_SEARCH_BACKEND: z.enum(["off", "fts", "fts_trgm"]).default("fts"),
+  // off = hydration operations answer 503; request_only = requests can be filed and
+  // decided but nothing executes; dispatch = the executor drains approvals.
+  AGENT_HYDRATION_MODE: z.enum(["off", "request_only", "dispatch"]).default("off"),
+  // The value served in `exportPolicy`. Widening the wire literal to this enum is a
+  // CODE deploy (clients validate successful responses against a vendored schema);
+  // only the VALUE flip is config, and only after the fleet has re-vendored.
+  AGENT_EXPORT_POLICY_VALUE: z
+    .enum(["no_raw_transcript_export_endpoint_yet", "agent_read_plane_v1"])
+    .default("no_raw_transcript_export_endpoint_yet"),
+  // Local replay of parse_version-0 Fansly observations into facts. shadow =
+  // canonicalize into a count report and write nothing; on = write.
+  FANSLY_REPLAY_MODE: z.enum(["off", "shadow", "on"]).default("off"),
+  // Kernel Stage 28 retention tiering, now behind an explicit switch, DEFAULT OFF.
+  // The scheduled 04:40 UTC callback detaches aged partitions; a detached month
+  // makes the read plane mint false capture floors and breaks a replay with the
+  // documented 23514 failure. Default false means the window between deploy and the
+  // owner's decision never opens. The owner CLI manual run (`tiering:run`) stays
+  // UNGATED — it is an explicit act, not a schedule.
+  RETENTION_TIERING_ENABLED: booleanSchema.default(false),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -410,6 +445,21 @@ export interface AppConfig {
   wbClosingLlmModel?: string;
   wbClosingLlmDailyCapMin?: number;
   wbClosingLlmDailyCapMax?: number;
+  // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
+  /** off = 503 on every agent route; read_only = serve with absenceProvable pinned false; full. */
+  agentReadPlaneMode?: "off" | "read_only" | "full";
+  /** Gate on the observation envelope/payload operations (#9a/#9b). */
+  agentObservationsEnabled?: boolean;
+  /** off = search 503; fts; fts_trgm (falls back to fts when pg_trgm is absent). */
+  agentSearchBackend?: "off" | "fts" | "fts_trgm";
+  /** off = hydration 503; request_only = state only; dispatch = executor runs. */
+  agentHydrationMode?: "off" | "request_only" | "dispatch";
+  /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
+  agentExportPolicyValue?: "no_raw_transcript_export_endpoint_yet" | "agent_read_plane_v1";
+  /** Fansly local replay of parse_version-0 observations: off | shadow | on. */
+  fanslyReplayMode?: "off" | "shadow" | "on";
+  /** Scheduled retention tiering; default false. The manual CLI run is ungated. */
+  retentionTieringEnabled?: boolean;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -642,6 +692,13 @@ export function loadConfig(
     wbClosingLlmModel: parsed.WB_CLOSING_LLM_MODEL,
     wbClosingLlmDailyCapMin: parsed.WB_CLOSING_LLM_DAILY_CAP_MIN,
     wbClosingLlmDailyCapMax: parsed.WB_CLOSING_LLM_DAILY_CAP_MAX,
+    agentReadPlaneMode: parsed.AGENT_READ_PLANE_MODE,
+    agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
+    agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
+    agentHydrationMode: parsed.AGENT_HYDRATION_MODE,
+    agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
+    fanslyReplayMode: parsed.FANSLY_REPLAY_MODE,
+    retentionTieringEnabled: parsed.RETENTION_TIERING_ENABLED,
   };
 }
 

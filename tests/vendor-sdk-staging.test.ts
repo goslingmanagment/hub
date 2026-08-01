@@ -12,12 +12,33 @@ describe("vendored SDK surfaces the ai-stop-reason predicate", () => {
     const script = await readFile("scripts/vendor-sdk.mjs", "utf8");
     // The staging array the compiler bundles from packages/shared.
     expect(script).toContain('"spender-retention.ts", "ai-stop-reason.ts"');
-    // Every module the contracts barrel re-exports must be staged, or the
-    // vendor compile dies with TS2307 and no client can re-vendor. This is the
-    // second time the fixed staging list silently diverged from the barrel.
-    expect(script).toContain('"agent-read-registry.ts"');
     // The generated shared barrel that re-exports the staged modules.
     expect(script).toContain('export * from "./ai-stop-reason";');
+  });
+
+  it("stages EVERY module the contracts barrel re-exports", async () => {
+    // Derived, not hand-listed. The fixed staging list has now silently
+    // diverged from the barrel twice, and each time the symptom was a TS2307
+    // during a CLIENT re-vendor — far from the edit that caused it. Reading the
+    // barrel here turns "added an export, forgot the staging list" into a CI
+    // failure in the same change.
+    const [script, contractsIndex] = await Promise.all([
+      readFile("scripts/vendor-sdk.mjs", "utf8"),
+      readFile("packages/contracts/src/index.ts", "utf8"),
+    ]);
+
+    const reExported = [...contractsIndex.matchAll(/export \* from "\.\/([\w.-]+)";/g)]
+      .map((match) => match[1]!);
+    expect(reExported.length).toBeGreaterThan(0);
+
+    const missing = reExported.filter((file) => !script.includes(`"${file}"`));
+    expect(missing, "contracts barrel modules missing from the vendor staging list").toEqual([]);
+    // Spot-pin the Agent Read Plane trio so the derivation itself cannot rot.
+    expect(reExported).toEqual(expect.arrayContaining([
+      "agent-read-registry.ts",
+      "agent-read-capabilities.ts",
+      "agent-read-datasets.ts",
+    ]));
   });
 
   it("re-exports isOutputExhausted through the contracts barrel", async () => {
