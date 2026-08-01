@@ -5,7 +5,7 @@
 // parse_version stamped after consumption. Bumping a family's version makes
 // the sweep revisit its kinds — replay is the steady-state mechanism.
 
-import type { Canonicalizer } from "./types.ts";
+import type { CanonicalizableObservation, Canonicalizer } from "./types.ts";
 import {
   canonicalizeClientCaptureObservation,
   CLIENT_CAPTURE_CANONICALIZED_KINDS,
@@ -32,6 +32,23 @@ export interface CanonicalizerFamily {
   kinds: readonly string[] | null;
   version: number;
   canonicalize: Canonicalizer;
+  /**
+   * Shape gate. `false` = the payload matches NO shape this family knows, so
+   * the row is left UNSTAMPED for a future parser instead of being consumed
+   * with zero events. Without it a drifted payload is indistinguishable from a
+   * legitimately EMPTY snapshot, and "capture now, parse later" quietly
+   * becomes "capture now, never parse". Families without drift risk omit it.
+   */
+  canParse?: (observation: CanonicalizableObservation) => boolean;
+  /**
+   * The family's events are projection material, not client-deliverable news
+   * (every type it emits must be in PROJECTION_ONLY_DOMAIN_EVENT_TYPES). The
+   * driver then appends through the projection-only protocol, which adds the
+   * atomic stream.projection_checkpoint covering the hidden seq range — the
+   * SSE replay validator REQUIRES that checkpoint, so this flag and the type
+   * list are one decision, never two.
+   */
+  projectionOnly?: boolean;
 }
 
 export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [

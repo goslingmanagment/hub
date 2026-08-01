@@ -305,3 +305,73 @@ HTTP-операций и команд CLI при этом **не меняетс�
   sort key. Related: `readAgentJournalFloor` runs through the THROWING timeout
   wrapper inside #8, so a slow journal can kill a response whose main source was
   deliberately allowed to degrade through `tryAgentTimeout`.
+
+## FEAT-005 — остаток Fansly-реплея: три вида + `accountMedia`/`tips` (слайс D run-1, 2026-08-01)
+
+Не дефект и не забытое: **сознательно отложено** решением R-010 плана
+(`.agentic/agent-read-plane/PLAN.md` §8). Спека §13 перечисляет семь
+Fansly-видов на `parse_version 0` плюс разбор `accountMedia`/`tips` внутри
+страниц `dm_messages`; run-1 слайса D выпустил **четыре** — ровно те, что
+двигают уже существующие плоскости чтения (`followers`, `subscribers`,
+`dm_conversations`, `account_me` → `fans` / `page_fans` / `page_follows` /
+`daily_followers`). Остальные требуют новых проекций, то есть новой работы, а
+не дописывания канонизатора, и записаны здесь честным «запланировано», а не
+молча выброшены.
+
+Инфраструктура уже стоит и переиспользуется: семейство канонизаторов вне
+`CANONICALIZER_FAMILIES`, preflight по `pg_inherits`, флаг `fanslyReplayMode`,
+`fansly:replay` в owner-CLI. Каждый пункт ниже = канонизатор + проекция + свои
+golden-фикстуры; вендор и кредиты не нужны — байты уже в журнале.
+
+### Что осталось от семи видов
+
+- **`account_lookup`** (`/account?ids=` — батч профилей фанов). Плоскость
+  идентичности: имена/аватары/`createdAt` фанов на исторические даты. Сегодня
+  живой путь гидратирует их в `fans`, но только для тех, кто попал в текущий
+  снапшот; реплей достаёт профили тех, кого текущие снапшоты уже не показывают.
+- **`group_detail`** (`/messaging/groups/:id`). Полный состав участников треда и
+  его флаги — то, чего нет в постранично тримленном `dm_conversations`.
+  Проекция — `page_dm_threads`, а её generation/visibility-машинерия делится с
+  живым синком; трогать её нужно отдельным слайсом, не хвостом реплея.
+- **`earnings_accounts`** (`/earnings/accounts`). Денежная плоскость: суммы по
+  фанам. Требует того же аккуратного обращения с mills, что и семейство
+  `fan_earnings_*`, и сверки с `transactions` — деньги отдельным заходом.
+
+### `accountMedia` / `accountMediaBundles` / `tips` внутри `dm_messages`
+
+Спека §10 называет это «главной дырой Fansly (вложения)»: страницы
+`dm_messages` уже лежат в журнале вербатим вместе с `accountMedia`,
+`accountMediaBundles`, `tips`, `tipGoals`, `stories`, `storyOrders`, а
+канонизатор `dm_messages` (sync-pull v4) читает из них только `messages` и
+историю покупок. Реплей вложений = отдельная проекция медиа, которой сейчас нет
+ни в каком виде; пересекается с FEAT-001.
+
+### BL-D — мелкий долг из ревью слайса D
+
+- **BL-D-1:** миграция `0104` инлайнит третий по счёту список литералов
+  projection-only-типов в предикате частичного индекса. Сегодня безвредно
+  (предикат индекса — надмножество), но это ещё одна копия того же знания;
+  свести к одному источнику при следующем касании индексов.
+- **BL-D-2:** исторические интервалы подписок (`subscription.observed`) живут
+  только в леджере — проекции нет. `page_subscriptions` завязан на generation/
+  is_current живого синка, и писать туда историю из реплея безопасно нельзя без
+  отдельного слайса.
+
+### Историческая серия follower-тоталов (обнаружено ревью слайса D)
+
+`daily_followers.known_total_followers` реплей заполняет ТОЛЬКО те дни, где
+строка уже есть (то есть где в тот день реально были новые фолловы). Дню, у
+которого есть снапшот `account_me`, но нет фолловов, строку не создаём: колонка
+`new_followers` — NOT NULL и суммируется в отчётах, поэтому «0 новых» вместо
+«не знаем» было бы ложью. Полная посуточная серия тоталов лежит в
+`domain_events` (`page.identity_observed`, по свидетелю на UTC-день) и ждёт
+собственной плоскости `page_identity_daily` — отдельный слайс, не хвост
+реплея.
+
+### Чего реплеем не вернуть (не задача, а долг захвата)
+
+`content` у `dm_conversations` и полнота `followers` выброшены **до** журнала
+(`redactFanslyMessageLike` / `trimFanslyFollowerPayload` в
+`apps/runtime/src/services/sync/shared.ts`). Это нарушения capture-first в
+самом захвате; чинится там, а не реплеем. Слайс D run-1 сознательно читает
+только тримленную форму.
