@@ -256,6 +256,9 @@ importers:
 
   packages/hub-agent-cli:
     dependencies:
+      '@agency_hub_core/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@kernel/sdk':
         specifier: workspace:*
         version: link:../sdk

@@ -110,9 +110,34 @@ specific gap you found (page, thread, window) and let them run it.
 hub <command> [flags]
 ```
 
+### Getting `hub` on your PATH
+
+The CLI is not published; it lives in the hub checkout and runs from source. Any
+one of these works, and all three behave identically from any directory:
+
+```
+# 1. after `pnpm install` in the checkout, pnpm has linked the bin:
+<checkout>/node_modules/.bin/hub <command>
+
+# 2. put that on your PATH once:
+export PATH="<checkout>/node_modules/.bin:$PATH"
+
+# 3. or call the bin directly, no install step at all:
+node <checkout>/packages/hub-agent-cli/bin/hub.mjs <command>
+```
+
+From inside the checkout, `pnpm hub <command>` is the same thing.
+
+### Configuration
+
 Auth comes from `HUB_AGENT_KEY`, or from `HUB_AGENT_KEY=...` in
 `~/.config/hub/credentials`. The base URL comes from `HUB_BASE_URL` and defaults
 to production. The CLI stores nothing and creates nothing.
+
+If you use the credentials file, `chmod 600` it. The CLI refuses to run when that
+file is readable by anyone else, and tells you the command to fix it: the file
+holds a live bearer token, and the CLI cannot repair a mode on a file it never
+created.
 
 Output is exactly one JSON document on stdout, every time, success or failure:
 

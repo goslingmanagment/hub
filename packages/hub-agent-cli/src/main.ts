@@ -68,6 +68,7 @@ export interface HubCliDeps {
   /** Injected by tests; production builds one from the resolved credentials. */
   createHubClient?: (options: { baseUrl: string; token: string }) => KernelClient;
   readFile?: (path: string) => string | null;
+  fileMode?: (path: string) => number | null;
 }
 
 function usageDocument(message: string, command?: HubCommand): Record<string, unknown> {
@@ -230,6 +231,7 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     credentials = resolveHubCredentials({
       env: deps.env,
       ...(deps.readFile ? { readFile: deps.readFile } : {}),
+      ...(deps.fileMode ? { fileMode: deps.fileMode } : {}),
     });
   } catch (error) {
     if (error instanceof HubCredentialsError) {

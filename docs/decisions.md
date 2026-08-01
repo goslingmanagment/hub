@@ -6186,6 +6186,19 @@ answer. A document is printed on stdout in every case, and `blockers` is lifted 
 the top of it so an agent reading nothing else still sees the verdict.
 `docs/agent-read-skill.md` is the model-facing half of this.
 
+Two properties keep that output contract true rather than merely intended (review
+round 1). The bin names the repo's tsconfig explicitly, so the workspace path
+aliases resolve identically from any working directory; without it the documented
+`hub <command>` worked only from the repo root and died elsewhere with a stack
+trace, empty stdout and exit 1, breaking both invariants at once. And the bin
+wraps its own bootstrap, so even a loader failure emits one document and exit 4.
+A spawn test drives the REAL bin from outside the repository, because the
+internal-module tests structurally could not see that class of bug. Separately,
+the credentials file is REFUSED when its mode lets anyone else read it: the CLI
+never creates that file so it cannot fix the mode, and staying quiet about a
+world-readable bearer token is how it stays world-readable (the ssh private-key
+precedent, remedy included in the message).
+
 Owner-session operations (9b payloads, #13 hydration decisions) are absent from
 this CLI on purpose: an agent key cannot reach them, so a command for them could
 only produce a confident 401.

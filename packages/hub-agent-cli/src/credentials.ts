@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,13 @@ import { join } from "node:path";
  * where one-shot invocations left eight abandoned receipts behind. A missing file
  * is not an error worth a stack trace; it is one clear message naming both places
  * the key could have been.
+ *
+ * BUT IT DOES REFUSE AN OVER-PERMISSIVE ONE (review round 1). The file holds a
+ * live bearer token to every granted page's transcripts and money. Because the
+ * CLI never creates the file it cannot fix the mode either, so the only honest
+ * options are silence and refusal, and silence around a world-readable secret is
+ * how it stays world-readable. This is the ssh private-key precedent, including
+ * the remedy in the message.
  */
 
 export const HUB_DEFAULT_BASE_URL = "https://gosling-agency.ru";
@@ -24,6 +31,8 @@ export interface HubCredentialsInput {
   env: Record<string, string | undefined>;
   /** Injected by tests; production reads the real file. */
   readFile?: (path: string) => string | null;
+  /** Injected by tests; production stats the real file. `null` = no such file. */
+  fileMode?: (path: string) => number | null;
 }
 
 function defaultReadFile(path: string): string | null {
@@ -32,6 +41,19 @@ function defaultReadFile(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+function defaultFileMode(path: string): number | null {
+  try {
+    return statSync(path).mode & 0o777;
+  } catch {
+    return null;
+  }
+}
+
+/** Any group or other bit set on a file holding a bearer token. */
+function isOverPermissive(mode: number): boolean {
+  return (mode & 0o077) !== 0;
 }
 
 /**
@@ -85,6 +107,13 @@ export class HubCredentialsError extends Error {}
  */
 export function resolveHubCredentials(input: HubCredentialsInput): HubCredentials {
   const readFile = input.readFile ?? defaultReadFile;
+  const mode = (input.fileMode ?? defaultFileMode)(HUB_CREDENTIALS_PATH);
+  if (mode !== null && isOverPermissive(mode)) {
+    throw new HubCredentialsError(
+      `${HUB_CREDENTIALS_PATH} is readable by others (mode ${mode.toString(8).padStart(4, "0")}); `
+      + `run: chmod 600 ${HUB_CREDENTIALS_PATH}`,
+    );
+  }
   const fileText = readFile(HUB_CREDENTIALS_PATH);
   const fileValues = fileText === null ? {} : parseHubCredentialsFile(fileText);
 
