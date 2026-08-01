@@ -43,6 +43,29 @@ export const AGENT_DATASET_FIELD_KINDS = [
 
 export type AgentDatasetFieldKind = (typeof AGENT_DATASET_FIELD_KINDS)[number];
 
+/**
+ * The closed filter-operator vocabulary. The route schema and the kind-aware
+ * validator below both derive from this value so an operator cannot be accepted
+ * on the wire but forgotten by the semantic boundary (or vice versa).
+ */
+export const AGENT_DATASET_FILTER_OPS = [
+  "eq",
+  "neq",
+  "lt",
+  "lte",
+  "gt",
+  "gte",
+  "in",
+  "is_null",
+  "is_not_null",
+] as const;
+
+export type AgentDatasetFilterOperator = (typeof AGENT_DATASET_FILTER_OPS)[number];
+
+/** Shared by the window contract and timestamp filter validation. */
+export const AGENT_RFC3339_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+
 /** Kinds that admit a deterministic ORDER BY. See `agentDatasetFieldSortable`. */
 const ORDERED_FIELD_KINDS: ReadonlySet<AgentDatasetFieldKind> = new Set<AgentDatasetFieldKind>([
   "int",
@@ -325,6 +348,130 @@ const DEFINITION_BY_NAME: ReadonlyMap<string, AgentDatasetDefinition> = new Map(
 
 export function agentDatasetDefinition(dataset: string): AgentDatasetDefinition | undefined {
   return DEFINITION_BY_NAME.get(dataset);
+}
+
+type AgentDatasetFilterKindRule = {
+  /** Value-bearing operators; the two null predicates are valid for every kind. */
+  readonly operators: readonly AgentDatasetFilterOperator[];
+  readonly acceptsValue: (operator: AgentDatasetFilterOperator, value: unknown) => boolean;
+};
+
+const EQUALITY_AND_ORDER_OPERATORS = [
+  "eq",
+  "neq",
+  "lt",
+  "lte",
+  "gt",
+  "gte",
+] as const satisfies readonly AgentDatasetFilterOperator[];
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const instant = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(instant) && new Date(instant).toISOString().slice(0, 10) === value;
+}
+
+function isRfc3339Timestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !AGENT_RFC3339_TIMESTAMP_PATTERN.test(value)) {
+    return false;
+  }
+  // Date.parse catches impossible dates/times that the deliberately readable
+  // wire regex cannot (for example 2026-02-30 or an hour of 29).
+  return isCalendarDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
+}
+
+/**
+ * The semantic filter boundary, keyed by the registry's declared field kind.
+ *
+ * This is intentionally a small matrix, not a generic query language. Numeric
+ * kinds require safe integers (money remains mills); booleans admit equality
+ * only; timestamps/dates must be real wire values; and `in` stays limited to
+ * textual values because the public scalar union has only `string[]` arrays.
+ */
+const FILTER_RULE_BY_KIND = {
+  string: {
+    operators: [...EQUALITY_AND_ORDER_OPERATORS, "in"],
+    acceptsValue: (operator, value) => operator === "in"
+      ? isStringArray(value)
+      : typeof value === "string",
+  },
+  int: {
+    operators: EQUALITY_AND_ORDER_OPERATORS,
+    acceptsValue: (_operator, value) => typeof value === "number" && Number.isSafeInteger(value),
+  },
+  mills: {
+    operators: EQUALITY_AND_ORDER_OPERATORS,
+    acceptsValue: (_operator, value) => typeof value === "number" && Number.isSafeInteger(value),
+  },
+  bool: {
+    operators: ["eq", "neq"],
+    acceptsValue: (_operator, value) => typeof value === "boolean",
+  },
+  timestamp: {
+    operators: EQUALITY_AND_ORDER_OPERATORS,
+    acceptsValue: (_operator, value) => isRfc3339Timestamp(value),
+  },
+  date: {
+    operators: [...EQUALITY_AND_ORDER_OPERATORS, "in"],
+    acceptsValue: (operator, value) => operator === "in"
+      ? isStringArray(value) && value.every(isCalendarDate)
+      : isCalendarDate(value),
+  },
+  // There is no string-array field today and no array operator with honest SQL
+  // semantics in v1. Null checks remain available without guessing one.
+  string_array: {
+    operators: [],
+    acceptsValue: () => false,
+  },
+} as const satisfies Record<AgentDatasetFieldKind, AgentDatasetFilterKindRule>;
+
+export type AgentDatasetFilterIssue =
+  | { readonly code: "unknown_field" }
+  | {
+    readonly code: "operator_not_supported" | "value_type_mismatch";
+    readonly kind: AgentDatasetFieldKind;
+  };
+
+/**
+ * Validates a dataset filter after the path/body schemas but before SQL mapping.
+ * The issue contains no caller value, so a 400 can be logged or returned without
+ * echoing potentially sensitive filter material.
+ */
+export function agentDatasetFilterIssue(
+  dataset: string,
+  input: {
+    readonly field: string;
+    readonly op: AgentDatasetFilterOperator;
+    readonly value?: unknown;
+  },
+): AgentDatasetFilterIssue | null {
+  const definition = agentDatasetDefinition(dataset);
+  const fields = definition?.fields as Record<string, AgentDatasetFieldKind> | undefined;
+  const kind = fields !== undefined && Object.hasOwn(fields, input.field)
+    ? fields[input.field]
+    : undefined;
+  if (kind === undefined) {
+    return { code: "unknown_field" };
+  }
+
+  const carriesNoValue = input.op === "is_null" || input.op === "is_not_null";
+  if (carriesNoValue) {
+    return input.value === undefined ? null : { code: "value_type_mismatch", kind };
+  }
+
+  const rule: AgentDatasetFilterKindRule = FILTER_RULE_BY_KIND[kind];
+  if (!rule.operators.includes(input.op)) {
+    return { code: "operator_not_supported", kind };
+  }
+  return rule.acceptsValue(input.op, input.value)
+    ? null
+    : { code: "value_type_mismatch", kind };
 }
 
 /**

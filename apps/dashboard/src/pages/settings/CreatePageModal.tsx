@@ -101,7 +101,8 @@ export function CreatePageModal({
   const hasRequiredCredentials = platform === "fansly"
       ? credentials.authorization.trim().length > 0
       : credentials.onlyFansToken.trim().length > 0 && credentials.onlyFansUsername.trim().length > 0;
-  const canVerify = !proxyError && hasRequiredCredentials;
+  const hasRequiredProxy = platform !== "fansly" || credentials.proxyRaw.trim().length > 0;
+  const canVerify = !proxyError && hasRequiredCredentials && hasRequiredProxy;
 
   const canCreate = verifyState === "verified" &&
     !proxyError &&

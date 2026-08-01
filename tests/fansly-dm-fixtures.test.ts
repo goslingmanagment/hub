@@ -11,7 +11,7 @@ import {
 import { FanslyAdapter } from "../packages/fansly/src/adapter.ts";
 
 async function loadResponseFixture<T>(name: string) {
-  const file = path.resolve("reference/responses", name);
+  const file = path.resolve("tests/fixtures/fansly", name);
   const raw = await readFile(file, "utf8");
   const parsed = JSON.parse(raw) as {
     data: {
@@ -62,11 +62,11 @@ describe("Fansly DM fixtures", () => {
     expect(result.accounts.length).toBeGreaterThan(0);
     expect(result.groups.length).toBeGreaterThan(0);
     expect(result.items[0]).toMatchObject({
-      groupId: "878739490577862656",
-      partnerAccountId: "622205078341689346",
+      groupId: "group_alpha",
+      partnerAccountId: "acct_fan_alpha",
     });
     expect(result.groups[0]).toMatchObject({
-      id: "878739490577862656",
+      id: "group_alpha",
     });
     expect(result.groups.some((group) => (
       typeof group.lastMessage?.id === "string" &&
@@ -131,19 +131,19 @@ describe("Fansly DM fixtures", () => {
       session: {
         authorization: "token",
       },
-    }, "878739490577862656");
+    }, "group_alpha");
 
     expect(result.parsed).toMatchObject({
-      id: "878739490577862656",
+      id: "group_alpha",
       users: expect.arrayContaining([
-        expect.objectContaining({ userId: "622205078341689346" }),
-        expect.objectContaining({ userId: "772956494390898689" }),
+        expect.objectContaining({ userId: "acct_fan_alpha" }),
+        expect.objectContaining({ userId: "acct_creator" }),
       ]),
     });
     expect(result.parsed.lastMessage).toMatchObject({
-      id: "885511997599272960",
-      senderId: "772956494390898689",
-      createdAt: 1772616871,
+      id: "message_head",
+      senderId: "acct_creator",
+      createdAt: 1767323105,
     });
   });
 
@@ -165,20 +165,20 @@ describe("Fansly DM fixtures", () => {
         authorization: "token",
       },
     }, {
-      groupId: "878739490577862656",
+      groupId: "group_alpha",
       limit: 25,
     });
 
-    expect(result.groupId).toBe("878739490577862656");
+    expect(result.groupId).toBe("group_alpha");
     expect(result.items).toHaveLength(2);
     expect(result.items[0]).toMatchObject({
-      id: "885512029928960000",
-      senderId: "772956494390898689",
+      id: "message_head",
+      senderId: "acct_creator",
     });
     expect(result.items[1]).toMatchObject({
-      id: "885511997599272960",
-      inReplyTo: "885512029928960000",
-      totalTipAmount: 250,
+      id: "message_reply",
+      inReplyTo: "message_head",
+      totalTipAmount: 321,
     });
   });
 

@@ -1,9 +1,6 @@
-// W8.2 / A43 (decision #133): the fan_earnings walk used to ADVANCE AND
-// PERSIST its cursor past skipped fans — a run that ended on skips sealed
-// them in (and defused the mass-skip breaker). It now copies
-// purchase_history's hold-back discipline: the persisted cursor moves only
-// past SUCCESSFUL fans, and a zero-success chunk leaves the checkpoint
-// untouched entirely.
+// W8.2 / A43 (decision #133): the fan_earnings cursor is a contiguous
+// successful prefix. A fan-scoped rejection stops the walk; no later fan may
+// move the durable cursor across it, and the failed run may not stamp success.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -135,7 +132,60 @@ async function buildChunkInput(
 }
 
 describe("Stage 16 fan-earnings walk cursor (A43 hold-back)", () => {
-  it("holds the persisted cursor at the last SUCCESS when the chunk ends on a skip", async (context) => {
+  it("captures lifetime stats before a monthly fan-scoped rejection", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page } = await seedPageWithSpenders(["fe-partial"]);
+    const statsRow = {
+      correlationAccountId: "fe-partial",
+      type: 2110,
+      totalGross: 100,
+      totalNet: 80,
+    };
+    appContext = {
+      ...appContext,
+      adapter: {
+        async getEarningsStatsAccountsPage(
+          requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+        ) {
+          await requestContext.requestObserver?.onRequestEvent({ state: "started" });
+          return { items: [statsRow], raw: [statsRow] };
+        },
+        async getEarningsMonthlyStatsAccountsPage(
+          requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+        ) {
+          await requestContext.requestObserver?.onRequestEvent({ state: "started" });
+          throw new FanslyApiError("monthly unavailable", 404);
+        },
+      } as never,
+    };
+
+    await expect(executeFanEarningsChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry(), new SyncChunkBudget(10, 60_000)),
+    )).rejects.toThrow("monthly unavailable");
+
+    const payloads = await testDb.pool.query<{
+      endpoint: string;
+      request_params: { correlationAccountId?: string };
+      response_payload: unknown;
+    }>(
+      `select endpoint, request_params, response_payload
+       from sync_raw_payloads
+       where page_id = $1
+       order by id`,
+      [page.id],
+    );
+    expect(payloads.rows).toEqual([expect.objectContaining({
+      endpoint: "fan_earnings_stats",
+      request_params: expect.objectContaining({ correlationAccountId: "fe-partial" }),
+      response_payload: [statsRow],
+    })]);
+  });
+
+  it("stops on the first rejection and persists only the contiguous successful prefix", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -144,29 +194,22 @@ describe("Stage 16 fan-earnings walk cursor (A43 hold-back)", () => {
     const requested: string[] = [];
     appContext = { ...appContext, adapter: earningsAdapter(new Set(["fe-2"]), requested) };
 
-    // Budget for 4 calls: fe-1 succeeds (2 calls), fe-2 rejects on its first
-    // call (1 call, fan-scoped skip), then the 2-call reservation no longer
-    // fits — the chunk ends ON the skip.
     const telemetry = fakeTelemetry();
-    const result = await executeFanEarningsChunk(
+    await expect(executeFanEarningsChunk(
       appContext,
-      await buildChunkInput(page, telemetry, new SyncChunkBudget(4, 60_000)),
-    );
+      await buildChunkInput(page, telemetry, new SyncChunkBudget(10, 60_000)),
+    )).rejects.toThrow("account gone");
 
     expect(requested).toEqual(["fe-1", "fe-1", "fe-2"]);
-    expect(result).toMatchObject({
-      satisfied: false,
-      yieldReason: "request_budget",
-      stats: { fansFetched: 1, fansSkipped: 1 },
-    });
     expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
       code: "fan_earnings_fan_rejected",
     }));
 
-    // THE FIX: the persisted cursor resumes from fe-1 (last success), not
-    // from the skipped fe-2 — pre-A43 this read { cursorFanId: fans[1].id }.
+    // The rejected fan remains the next keyset row. This failed run records
+    // progress but never becomes the stream's last successful run.
     const checkpoint = await getCheckpoint(appContext.db, page.id, "fan_earnings");
     expect(checkpoint?.state).toMatchObject({ cursorFanId: fans[0]!.id });
+    expect(checkpoint?.cursorLastSucceededRunId ?? null).toBeNull();
 
     // The successful fan's capture landed (one stats + one monthly journal).
     const payloads = await testDb.pool.query<{ endpoint: string }>(
@@ -177,7 +220,7 @@ describe("Stage 16 fan-earnings walk cursor (A43 hold-back)", () => {
       .toEqual(["fan_earnings_monthly", "fan_earnings_stats"]);
   });
 
-  it("leaves the checkpoint UNTOUCHED when a budget-bounded chunk fetched nothing", async (context) => {
+  it("leaves the checkpoint untouched when the first fan rejects", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -185,24 +228,15 @@ describe("Stage 16 fan-earnings walk cursor (A43 hold-back)", () => {
     const { page } = await seedPageWithSpenders(["fe-1", "fe-2"]);
     appContext = { ...appContext, adapter: earningsAdapter(new Set(["fe-1", "fe-2"]), []) };
 
-    // Budget for 2 calls: fe-1 rejects (1 call), the next 2-call unit no
-    // longer fits — zero-success chunk, NOT a completed walk (so the
-    // mass-skip breaker stays armed for a full walk).
-    const result = await executeFanEarningsChunk(
+    await expect(executeFanEarningsChunk(
       appContext,
-      await buildChunkInput(page, fakeTelemetry(), new SyncChunkBudget(2, 60_000)),
-    );
-
-    expect(result).toMatchObject({
-      satisfied: false,
-      stats: { fansFetched: 0, fansSkipped: 1 },
-    });
-    // No zero-capture "progress" stamped: the next run retries fe-1.
+      await buildChunkInput(page, fakeTelemetry(), new SyncChunkBudget(10, 60_000)),
+    )).rejects.toThrow("account gone");
     const checkpoint = await getCheckpoint(appContext.db, page.id, "fan_earnings");
     expect(checkpoint?.state ?? null).toBeNull();
   });
 
-  it("still stamps the completion reset when the walk finishes (skips included)", async (context) => {
+  it("never completes a walk that encountered a rejected fan", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -211,34 +245,60 @@ describe("Stage 16 fan-earnings walk cursor (A43 hold-back)", () => {
     const requested: string[] = [];
     appContext = { ...appContext, adapter: earningsAdapter(new Set(["fe-2"]), requested) };
 
-    const result = await executeFanEarningsChunk(
+    await expect(executeFanEarningsChunk(
       appContext,
       await buildChunkInput(page, fakeTelemetry(), new SyncChunkBudget(10, 60_000)),
-    );
+    )).rejects.toThrow("account gone");
 
-    expect(result).toMatchObject({
-      satisfied: true,
-      stats: { fansFetched: 2, fansSkipped: 1, walkCompleted: true },
-    });
+    expect(requested).toEqual(["fe-1", "fe-1", "fe-2"]);
     const checkpoint = await getCheckpoint(appContext.db, page.id, "fan_earnings");
-    expect(checkpoint?.state).toMatchObject({ cursorFanId: 0 });
+    expect(checkpoint?.state).toMatchObject({ cursorFanId: expect.any(Number) });
+    expect(checkpoint?.state).not.toMatchObject({ cursorFanId: 0 });
+    expect(checkpoint?.cursorLastSucceededRunId ?? null).toBeNull();
   });
 
-  it("refuses to stamp completion when EVERY fan was skipped (mass-skip breaker, unchanged)", async (context) => {
+  it("retries the same rejected head fan on the next invocation", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     const { page } = await seedPageWithSpenders(["fe-1", "fe-2"]);
-    appContext = { ...appContext, adapter: earningsAdapter(new Set(["fe-1", "fe-2"]), []) };
+    const requested: string[] = [];
+    appContext = {
+      ...appContext,
+      adapter: earningsAdapter(new Set(["fe-1", "fe-2"]), requested),
+    };
 
-    await expect(
-      executeFanEarningsChunk(
-        appContext,
-        await buildChunkInput(page, fakeTelemetry(), new SyncChunkBudget(10, 60_000)),
-      ),
-    ).rejects.toThrow("skipped all 2 fans");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(
+        executeFanEarningsChunk(
+          appContext,
+          await buildChunkInput(page, fakeTelemetry(), new SyncChunkBudget(10, 60_000)),
+        ),
+      ).rejects.toThrow("account gone");
+    }
+    expect(requested).toEqual(["fe-1", "fe-1"]);
     const checkpoint = await getCheckpoint(appContext.db, page.id, "fan_earnings");
     expect(checkpoint?.state ?? null).toBeNull();
+  });
+
+  it("stamps completion only after an all-success walk", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page } = await seedPageWithSpenders(["fe-1", "fe-2"]);
+    appContext = { ...appContext, adapter: earningsAdapter(new Set(), []) };
+
+    const result = await executeFanEarningsChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry(), new SyncChunkBudget(10, 60_000)),
+    );
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: { fansFetched: 2, fansSkipped: 0, walkCompleted: true },
+    });
+    expect((await getCheckpoint(appContext.db, page.id, "fan_earnings"))?.state)
+      .toMatchObject({ cursorFanId: 0 });
   });
 });

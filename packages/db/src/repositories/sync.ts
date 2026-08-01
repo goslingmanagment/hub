@@ -537,6 +537,7 @@ export async function listFanslyMessagePurchaseTargetsAfterId(
 export interface FanslyPurchaseHistoryCaptureRow {
   id: number;
   targetKey: string;
+  requestBefore: string | null;
   statusCode: number | null;
   responsePayload: unknown;
 }
@@ -554,6 +555,7 @@ export async function listFanslyPurchaseHistoryCaptures(
   const result = await db.execute<{
     id: string;
     targetKey: string;
+    requestBefore: string | null;
     statusCode: number | null;
     responsePayload: unknown;
   }>(sql`
@@ -565,6 +567,7 @@ export async function listFanslyPurchaseHistoryCaptures(
                then 'bundle:' || (rp.request_params ->> 'accountMediaBundleId')
              else null
            end as "targetKey",
+           nullif(rp.request_params ->> 'before', '') as "requestBefore",
            rp.status_code as "statusCode",
            rp.response_payload as "responsePayload"
     from ${syncRawPayloads} rp
@@ -579,6 +582,7 @@ export async function listFanslyPurchaseHistoryCaptures(
   return result.rows.map((row) => ({
     id: Number(row.id),
     targetKey: row.targetKey,
+    requestBefore: row.requestBefore,
     statusCode: row.statusCode,
     responsePayload: row.responsePayload,
   }));

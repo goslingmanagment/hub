@@ -18,7 +18,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
-import { removeProxy, resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
+import { resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
@@ -227,8 +227,7 @@ export async function updatePageCredentials(
 
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
   const storedEgressKey = resolveStoredProxyEgressKey(stored.proxy);
-  const hasExplicitProxyInput = body.proxy !== undefined;
-  const explicitProxy = body.proxy ? normalizeProxyInput(body.proxy) : null;
+  const explicitProxy = body.proxy === undefined ? null : normalizeProxyInput(body.proxy);
   if (explicitProxy) {
     await assertAllowedProxyTarget(explicitProxy);
   }
@@ -298,14 +297,10 @@ export async function updatePageCredentials(
     });
   }
 
-  if (hasExplicitProxyInput) {
-    if (proxy) {
-      await saveProxy(app, stored.page.id, proxy, {
-        rateLimitScopeKey: preservesStoredProxyRoute ? stored.proxy?.rateLimitScopeKey : undefined,
-      });
-    } else {
-      await removeProxy(app, stored.page.id);
-    }
+  if (explicitProxy && proxy) {
+    await saveProxy(app, stored.page.id, proxy, {
+      rateLimitScopeKey: preservesStoredProxyRoute ? stored.proxy?.rateLimitScopeKey : undefined,
+    });
   }
 
   const recoveredAt = new Date();

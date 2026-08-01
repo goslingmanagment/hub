@@ -48,18 +48,6 @@ function encryptCredentials(
   );
 }
 
-async function storeProxyIfPresent(
-  app: Pick<AppContext, "config" | "db">,
-  platformAccountId: number,
-  proxy: ProxyConfig | null,
-) {
-  if (!proxy) {
-    return;
-  }
-
-  await saveProxy(app, platformAccountId, proxy);
-}
-
 function rethrowPageIdentityConflict(error: unknown): never {
   if (
     error instanceof DuplicatePageLabelError ||
@@ -88,18 +76,23 @@ export async function onboardFanslyPage(
     modelSlug: string;
     label: string;
     session: FanslySessionBundle;
-    proxy?: ProxyConfig | null;
+    proxy: ProxyConfig;
   },
 ) {
+  // Keep the service boundary fail-closed even when a non-contract caller
+  // reaches it (CLI/tests/internal code). Verification must never get a
+  // chance to fall back to the Hub's direct address.
+  if (!input.proxy) {
+    throw new BadRequestError("Fansly onboarding requires a non-null proxy");
+  }
+
   const model = await findModelBySlug(app.db, input.modelSlug);
   if (!model) {
     throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
   }
 
-  const proxy = input.proxy ? normalizeProxyInput(input.proxy) : null;
-  if (proxy) {
-    await assertAllowedProxyTarget(proxy);
-  }
+  const proxy = normalizeProxyInput(input.proxy);
+  await assertAllowedProxyTarget(proxy);
   const egressKey = buildProxyEgressKey(proxy);
   const rateLimitWaiter = createSyncRateLimitWaiter(app, { egressKey });
   const verification = await app.adapter.verifySession({
@@ -128,7 +121,7 @@ export async function onboardFanslyPage(
         keyVersion: app.config.encryptionKeyVersion,
       });
 
-      await storeProxyIfPresent({ ...app, db: dbTx }, created.id, proxy);
+      await saveProxy({ ...app, db: dbTx }, created.id, proxy);
 
       await updatePageMetadata(dbTx, created.id, {
         platformAccountIdValue: verified.account.id,

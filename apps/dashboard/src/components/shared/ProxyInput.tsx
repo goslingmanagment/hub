@@ -7,10 +7,12 @@ export function ProxyInput({
   value,
   onChange,
   initialStoredProxy,
+  required = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   initialStoredProxy?: { url: string; hasAuth: boolean } | null;
+  required?: boolean;
 }) {
   const testProxy = useAdminTestProxy();
   const [testResult, setTestResult] = useState<{ ip: string } | null>(null);
@@ -40,7 +42,7 @@ export function ProxyInput({
 
   return (
     <div className="space-y-2">
-      <Field label={`Proxy${initialStoredProxy ? "" : " (optional)"}`}>
+      <Field label={`Proxy${required || initialStoredProxy ? "" : " (optional)"}`}>
         <div className="flex gap-2">
           <input
             value={value}

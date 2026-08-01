@@ -215,8 +215,8 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     );
 
     expect(requested).toEqual([
-      { accountMediaId: "media-from-tx", limit: 100 },
-      { accountMediaBundleId: "bundle-from-tx", limit: 100 },
+      { accountMediaId: "media-from-tx", before: null, limit: 100 },
+      { accountMediaBundleId: "bundle-from-tx", before: null, limit: 100 },
     ]);
     expect(result).toMatchObject({
       satisfied: true,
@@ -229,7 +229,7 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     });
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
     expect(checkpoint?.state).toMatchObject({
-      version: 3,
+      version: 4,
       transactionCursorId: expect.any(Number),
       pendingTargets: [],
     });
@@ -284,6 +284,43 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("fails before egress when raw-DM discovery conflicts with a captured target kind", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await capturePurchaseHistoryTarget(page.id, {
+      requestParams: { accountMediaId: "raw-ambiguous-content" },
+      responsePayload: { accountMediaOrderHistory: [] },
+    });
+    await captureDmPage(page.id, {
+      messages: [{
+        id: "message-conflict",
+        attachments: [{ contentType: 2, contentId: "raw-ambiguous-content" }],
+      }],
+      accountMediaBundles: [{
+        id: "raw-ambiguous-content",
+        permissions: { permissionFlags: [{ flags: 1 }] },
+      }],
+    });
+    const request = vi.fn();
+    appContext = {
+      ...appContext,
+      adapter: {
+        getMediaOrderHistoryPage: request,
+      } as never,
+    };
+
+    await expect(executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    )).rejects.toMatchObject({
+      code: "purchase_history_target_kind_conflict",
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("discovers PPV media from captured DMs and never sends accountIds", async (context) => {
     if (!testDb) {
       context.skip();
@@ -310,9 +347,9 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     );
 
     expect(requested).toEqual([
-      { accountMediaBundleId: "bundle-1", limit: 100 },
-      { accountMediaId: "media-1", limit: 100 },
-      { accountMediaId: "ordered-media", limit: 100 },
+      { accountMediaBundleId: "bundle-1", before: null, limit: 100 },
+      { accountMediaId: "media-1", before: null, limit: 100 },
+      { accountMediaId: "ordered-media", before: null, limit: 100 },
     ]);
     expect(requested.every((params) => !("accountIds" in params))).toBe(true);
     expect(result).toMatchObject({
@@ -413,6 +450,7 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     expect(first.satisfied).toBe(true);
     expect(requested).toEqual([{
       accountMediaBundleId: "shared-content-id",
+      before: null,
       limit: 100,
     }]);
 
@@ -460,13 +498,20 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
         pendingTargets: [{ kind: "single", contentId: "media-1" }],
       },
     });
-    // This is the exact crash window: the response fact committed, while the
-    // pending checkpoint still points at the same target.
+    // This is the exact crash window: two response facts committed, while the
+    // pending checkpoint still points at page one.
     await capturePurchaseHistoryTarget(page.id, {
-      requestParams: { accountMediaId: "media-1", limit: 100 },
-      responsePayload: { accountMediaOrderHistory: [{ id: "order-1" }] },
+      requestParams: { accountMediaId: "media-1", before: null, limit: 100 },
+      responsePayload: { accountMediaOrderHistory: [{ orderId: "order-1" }] },
     });
-    const adapterSpy = vi.fn(async () => ({
+    await capturePurchaseHistoryTarget(page.id, {
+      requestParams: { accountMediaId: "media-1", before: "order-1", limit: 100 },
+      responsePayload: { accountMediaOrderHistory: [] },
+    });
+    const adapterSpy = vi.fn(async (
+      _context: unknown,
+      _params: Record<string, unknown>,
+    ) => ({
       items: [],
       raw: { accountMediaOrderHistory: [] },
     }));
@@ -488,6 +533,68 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
     expect(checkpoint?.state).toMatchObject({ pendingTargets: [] });
     expect(checkpoint?.state.completedAt).toEqual(expect.any(String));
+  });
+
+  it("resumes from the captured last orderId when the page checkpoint is stale", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await captureDmPage(page.id, {
+      messages: [{ attachments: [{ contentType: 1, contentId: "media-resume" }] }],
+      accountMedia: [{
+        id: "media-resume",
+        permissions: { permissionFlags: [{ flags: 1 }] },
+      }],
+    });
+    const dmCapture = await testDb.pool.query<{ id: string }>(
+      "select id::text from sync_raw_payloads where endpoint = 'dm_messages'",
+    );
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "purchase_history",
+      state: {
+        version: 3,
+        transactionCursorId: 0,
+        rawPayloadCursorId: Number(dmCapture.rows[0]!.id),
+        pendingTargets: [
+          { kind: "single", contentId: "media-resume" },
+          // A legacy inference may have queued the same global content id in
+          // the alternate namespace after the real target. Reconciliation
+          // must discard it regardless of pending-target order.
+          { kind: "bundle", contentId: "media-resume" },
+        ],
+      },
+    });
+    await capturePurchaseHistoryTarget(page.id, {
+      requestParams: { accountMediaId: "media-resume", before: null, limit: 100 },
+      responsePayload: { accountMediaOrderHistory: [{ orderId: "order-resume" }] },
+    });
+    const adapterSpy = vi.fn(async (
+      _context: unknown,
+      _params: Record<string, unknown>,
+    ) => ({
+      items: [],
+      raw: { accountMediaOrderHistory: [] },
+    }));
+    appContext = {
+      ...appContext,
+      adapter: { getMediaOrderHistoryPage: adapterSpy } as never,
+    };
+
+    const result = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    );
+
+    expect(result).toMatchObject({ satisfied: true, stats: { targetsFetched: 1 } });
+    expect(adapterSpy).toHaveBeenCalledTimes(1);
+    expect(adapterSpy.mock.calls[0]?.[1]).toEqual({
+      accountMediaId: "media-resume",
+      before: "order-resume",
+      limit: 100,
+    });
   });
 
   it("makes zero adapter calls with the feature flag off", async (context) => {
@@ -533,10 +640,12 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     ).rejects.toThrow("invalid params");
     const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
     expect(checkpoint?.state).toMatchObject({
-      version: 3,
-      pendingTargets: expect.arrayContaining([
-        { kind: "bundle", contentId: "bundle-1" },
-      ]),
+      version: 4,
+      pendingTargets: [
+        { kind: "bundle", contentId: "bundle-1", before: null },
+        { kind: "single", contentId: "media-1", before: null },
+        { kind: "single", contentId: "ordered-media", before: null },
+      ],
     });
   });
 
@@ -588,7 +697,7 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
     expect(adapterSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("captures but blocks a response at the cursorless 100-row cap", async (context) => {
+  it("paginates a 100-row page and a short page until the provider returns empty", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -601,10 +710,74 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
         permissions: { permissionFlags: [{ flags: 1 }] },
       }],
     });
-    const adapterSpy = vi.fn(async () => ({
+    const adapterSpy = vi.fn(async (_context: unknown, params: { before?: string | null }) => {
+      if (params.before === null) {
+        return {
+          items: [],
+          raw: {
+            accountMediaOrderHistory: Array.from(
+              { length: 100 },
+              (_, index) => ({ orderId: `order-${index + 1}` }),
+            ),
+          },
+        };
+      }
+      if (params.before === "order-100") {
+        return {
+          items: [],
+          raw: { accountMediaOrderHistory: [{ orderId: "order-101" }] },
+        };
+      }
+      return { items: [], raw: { accountMediaOrderHistory: [] } };
+    });
+    appContext = {
+      ...appContext,
+      adapter: { getMediaOrderHistoryPage: adapterSpy } as never,
+    };
+
+    const result = await executePurchaseHistoryChunk(
+      appContext,
+      await buildChunkInput(page, fakeTelemetry()),
+    );
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: {
+        targetsFetched: 1,
+        pagesFetched: 3,
+        orderRowsCaptured: 101,
+        walkCompleted: true,
+      },
+    });
+    expect(adapterSpy.mock.calls.map(([, params]) => params)).toEqual([
+      { accountMediaId: "media-100", before: null, limit: 100 },
+      { accountMediaId: "media-100", before: "order-100", limit: 100 },
+      { accountMediaId: "media-100", before: "order-101", limit: 100 },
+    ]);
+    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
+    expect(checkpoint?.state).toMatchObject({
+      version: 4,
+      pendingTargets: [],
+    });
+  });
+
+  it("captures a repeated cursor once and blocks later runs locally", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await captureDmPage(page.id, {
+      messages: [{ attachments: [{ contentType: 1, contentId: "media-loop" }] }],
+      accountMedia: [{
+        id: "media-loop",
+        permissions: { permissionFlags: [{ flags: 1 }] },
+      }],
+    });
+    const adapterSpy = vi.fn(async (_context: unknown, params: { before?: string | null }) => ({
       items: [],
       raw: {
-        accountMediaOrderHistory: Array.from({ length: 100 }, (_, index) => ({ id: index })),
+        accountMediaOrderHistory: [{ orderId: params.before ?? "order-loop" }],
       },
     }));
     appContext = {
@@ -614,16 +787,19 @@ describe("Stage 16 media-scoped purchase-history walk", () => {
 
     await expect(
       executePurchaseHistoryChunk(appContext, await buildChunkInput(page, fakeTelemetry())),
-    ).rejects.toMatchObject({ code: "purchase_history_result_truncated" });
+    ).rejects.toMatchObject({ code: "purchase_history_cursor_repeated" });
     await expect(
       executePurchaseHistoryChunk(appContext, await buildChunkInput(page, fakeTelemetry())),
-    ).rejects.toMatchObject({ code: "purchase_history_result_truncated" });
+    ).rejects.toMatchObject({ code: "purchase_history_cursor_repeated" });
 
-    expect(adapterSpy).toHaveBeenCalledTimes(1);
-    const checkpoint = await getCheckpoint(appContext.db, page.id, "purchase_history");
-    expect(checkpoint?.state).toMatchObject({
-      pendingTargets: [{ kind: "single", contentId: "media-100" }],
-    });
+    expect(adapterSpy).toHaveBeenCalledTimes(2);
+    const captures = await testDb.pool.query<{ before: string | null }>(
+      `select request_params ->> 'before' as before
+       from sync_raw_payloads
+       where endpoint = 'purchase_history'
+       order by id`,
+    );
+    expect(captures.rows).toEqual([{ before: null }, { before: "order-loop" }]);
   });
 
   it("reconciles valid and terminal captures but keeps a mixed blocked target", async (context) => {

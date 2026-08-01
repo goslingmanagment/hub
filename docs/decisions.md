@@ -207,6 +207,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 203 | Agent transaction summary | Existing operation #10 gains `summary: true` for `transactions`: one MVCC statement returns currency-grouped gross/net/fee/count over matching Hub rows plus a page-wide windowless transaction floor. No new route, table, cursor or completeness proof; `basis='matching_rows_in_hub'` is the wording boundary |
 | 204 | Coach situation preset | `coach-chat` accepts optional `preset:'situation'`: Core substitutes the pinned canonical question only when `chatterQuestion` is absent or whitespace-only, refuses preset plus a non-empty question and refuses presets on other features; the optional meta echo `presetQuestion` lets clients replay the real question, while `{presetInstructions}` stays in the uncached task block and is empty for byte-identical normal turns. The extension will route Help into this lane; `help-me` remains served for older clients and desktop |
 | 205 | Creator-post capture and Agent read | Creator posts use one default-paused ordinary `posts` sync stream: Fansly account timeline payloads are journaled before canonicalization and governed OFAPI `post_paginate` jobs commit exact response bytes before parsing; both then append projection-only `post.observed` events into the rebuildable `creator_posts` current-head projection. Existing Agent operation #10 and `hub dataset` expose verbatim post text under the existing `read:datasets` + `read:messages` rights; no new route, capability, command or FTS, and capture floors never prove vendor absence |
+| 206 | Fansly reverse evidence and fail-closed completeness | Executable reverse behavior may define pagination and observed response shapes, but every adopted path remains raw-first and refuses false completeness: purchase history follows `before=last orderId` to an empty page; transaction/DM totals and DM unique ids are mandatory; earnings rejects partial money aggregates and cursor jumps. Standalone Fansly onboarding requires a proxy at every boundary. New earnings/tracking/list reads remain adapter-only until an honest storage model exists. Agent transaction results serve active rows while their capture floor remains the physical oldest retained row |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6436,3 +6437,47 @@ and may report a before-floor gap, but by #197 that remains evidence about Hub
 holdings rather than proof that no older vendor posts exist. V1 has no backward
 post-history intent, so another incremental run is not advertised as a remedy
 for a window before that floor.
+
+**Decision #206 (2026-08-02, executable Fansly reverse evidence is a guard,
+not a fixture).** The archived reverse project is useful where it contains
+running client behavior, not merely guessed OpenAPI prose. Its purchase-history
+loop establishes the contract we adopt: request one media or bundle target,
+continue with `before` equal to the last row's `orderId`, and terminate only on
+an empty successful page. The Hub therefore stores a v4 cursor per target,
+journals every page before classifying it, reconstructs a chain after a crash,
+and blocks missing, repeated, cyclic or forked cursors. A short non-empty page
+is continuation, never completeness.
+
+The same evidence hardens the existing money and DM walks. A successful
+transaction page must carry a non-negative safe-integer `total`; the raw payload lands
+before total, overlap, empty-page or final-count guards run. A DM sweep likewise
+requires a stable valid total and a persisted set of unique group ids. Drift,
+overlap, or an unverifiable legacy checkpoint abandons that generation and
+starts from offset zero without hiding any conversation; destructive
+finalization is allowed only when the unique count equals the provider total.
+Fan earnings are captured one provider response at a time. A fan rejection
+stops the keyset at its contiguous successful prefix, and one malformed money
+breakdown poisons the whole `(fan, window)` aggregate instead of producing a
+plausible partial total or an invented zero.
+
+Fansly egress is required at every standalone verification/onboarding boundary,
+including the service and CLI, reaffirming #124. Proxy removal remains a
+separate explicit operator action. Four useful reverse-observed reads land only
+at the typed adapter boundary for now: earnings overview, tracking links,
+account-list membership and list items. They preserve raw responses and expose
+`contractAccepted`; none is advertised as captured or persisted until a real
+runtime consumer and storage model exist.
+
+Live Fansly response dumps are not test fixtures. The working tree keeps only a
+small explicitly synthetic corpus with privacy guards and non-zero synthetic
+money probes. Removing the old corpus from the current tree does NOT erase it
+from Git history; history rewriting, force-pushing and any credential/URL
+rotation are a separate destructive owner operation and are not authorized by
+this decision.
+
+The Agent API review closes two adjacent truthfulness gaps. Transaction rows
+and summaries serve active current heads only, while `captureFloor` remains the
+physical page-wide minimum across retained active and inactive rows. Dataset
+filter values are validated against registry field kinds before SQL, native
+timestamp/money comparisons preserve their types, and cursor v1 accepts only
+the single sort term it can actually encode.

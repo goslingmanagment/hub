@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   agentDatasetDefinition,
+  agentDatasetFilterIssue,
   agentDatasetFieldSortable,
   agentDatasetRequiredCapabilities,
   type AGENT_DATASETS,
@@ -468,6 +469,21 @@ export async function handleAgentDatasetQuery(
     // static 400 BEFORE any statement is built, and the value that reaches SQL is
     // the registry's own column constant, never the request's string.
     const filters: AgentDatasetFilter[] = rawFilters.map((filter) => {
+      const issue = agentDatasetFilterIssue(params.dataset, filter);
+      if (issue?.code === "unknown_field") {
+        throw new BadRequestError(`field is not part of the ${params.dataset} dataset`);
+      }
+      if (issue?.code === "operator_not_supported") {
+        throw new BadRequestError(
+          `operator is not supported for ${issue.kind} field on the ${params.dataset} dataset`,
+        );
+      }
+      if (issue?.code === "value_type_mismatch") {
+        throw new BadRequestError(
+          `value is not valid for ${issue.kind} field on the ${params.dataset} dataset`,
+        );
+      }
+
       const column = Object.hasOwn(mapping.fields, filter.field)
         ? mapping.fields[filter.field]
         : undefined;

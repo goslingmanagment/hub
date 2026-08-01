@@ -4,10 +4,11 @@ export interface ProviderResponse<TParsed, TRaw = unknown> {
 }
 
 export interface ProviderPageResponse<TItem, TRaw = unknown> {
-  total?: number;
+  total?: number | null;
   items: TItem[];
   offset: number;
   done: boolean;
+  contractAccepted?: boolean;
   raw: TRaw;
 }
 

@@ -373,6 +373,39 @@ describe("admin credential verification", () => {
     vi.clearAllMocks();
   });
 
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+  ])("returns 400 for a %s Fansly proxy before adapter dispatch", async (_label, proxy) => {
+    routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
+    const verifySession = vi.fn();
+    const server = await buildApiServer(createRouteTestContext({
+      adapter: { verifySession } as unknown as AppContext["adapter"],
+    }));
+
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/admin/credentials/verify",
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=owner-token`,
+        },
+        payload: {
+          platform: "fansly",
+          session: {
+            authorization: "fansly-token",
+          },
+          ...(proxy === undefined ? {} : { proxy }),
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(verifySession).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects private proxy targets before verifying credentials", async () => {
     routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
     const verifySession = vi.fn();

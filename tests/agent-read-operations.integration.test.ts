@@ -460,7 +460,16 @@ describe("[sync-critical] agent read plane operations", () => {
     const window = { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" };
     const transactions = await agentPost(
       "/api/v1/agent/pages/lora-2/datasets/transactions/query",
-      { ...window, filters: [{ field: "transactionType", op: "eq", value: "tip" }] },
+      {
+        ...window,
+        filters: [
+          { field: "transactionType", op: "eq", value: "tip" },
+          { field: "grossMills", op: "gte", value: 100_000 },
+          // Native timestamp comparison must normalize an equivalent offset;
+          // text-casting the DB value made this honest equality miss.
+          { field: "occurredAt", op: "eq", value: "2026-01-23T15:00:00+03:00" },
+        ],
+      },
     );
     expect(transactions.statusCode).toBe(200);
     const txBody = transactions.json();
@@ -625,16 +634,33 @@ describe("[sync-critical] agent read plane operations", () => {
   });
 
   it("#10 summarizes matching Hub transactions in one exhausted read", async () => {
-    // A different type outside the requested window proves the capture floor is
-    // page-wide and filter-independent, not the oldest row the summary matched.
+    // Active and inactive rows outside the requested window prove the capture
+    // floor is physical, page-wide and filter-independent, while only active
+    // current heads are eligible for row and summary results.
     await testDb!.pool.query(
       `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type,
          canonical_type, transaction_state, raw_status, gross_amount_mills,
          source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills,
-         occurred_at, source, currency)
-       select $1, f.id, 'tx-jan-sub', 'subscription', 'subscription', 'posted', 'ok',
-         5000, 5000, 4000, 1000, '2026-01-10T00:00:00Z', 'fansly:rest', 'USD'
-       from fans f where f.platform_user_id = $2`,
+         occurred_at, source, currency, is_active, inactive_reason, inactivated_at)
+       select $1, f.id, transaction_id, raw_type, canonical_type::transaction_type,
+         'posted', 'ok', gross_mills, net_mills, net_mills, fee_mills, occurred_at,
+         'fansly:rest', 'USD', is_active, inactive_reason::transaction_inactive_reason,
+         case when is_active then null else '2026-01-25T00:00:01Z'::timestamptz end
+       from fans f
+       cross join (values
+         ('tx-jan-inactive-floor', 'subscription', 'subscription', 2000::bigint,
+          1600::bigint, 400::bigint, '2026-01-05T00:00:00Z'::timestamptz, false,
+          'missing_from_sync_window'::text),
+         ('tx-jan-sub', 'subscription', 'subscription', 5000::bigint, 4000::bigint,
+          1000::bigint, '2026-01-10T00:00:00Z'::timestamptz, true, null::text),
+         ('tx-jan-null-fee', 'tip', 'tip', 30000::bigint, 24000::bigint,
+          null::bigint, '2026-01-24T00:00:00Z'::timestamptz, true, null::text),
+         ('tx-jan-inactive', 'tip', 'tip', 900000::bigint, 720000::bigint,
+          180000::bigint, '2026-01-25T00:00:00Z'::timestamptz, false,
+          'missing_from_sync_window'::text)
+       ) as seeded(transaction_id, raw_type, canonical_type, gross_mills, net_mills,
+         fee_mills, occurred_at, is_active, inactive_reason)
+       where f.platform_user_id = $2`,
       [pageId, FAN_PLATFORM_USER_ID],
     );
     const response = await agentPost(
@@ -651,13 +677,16 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(body.items).toEqual([]);
     expect(body.summary).toEqual({
       basis: "matching_rows_in_hub",
-      matchedRows: 1,
+      matchedRows: 2,
       groups: [{
         currency: "USD",
-        transactionCount: 1,
-        grossMills: 100_000,
-        netMills: 80_000,
-        feeMills: 20_000,
+        transactionCount: 2,
+        grossMills: 130_000,
+        netMills: 104_000,
+        // One active matching row has no captured fee. Gross/net/count remain
+        // complete, while the fee total stays unknown instead of becoming zero
+        // or a misleading partial sum.
+        feeMills: null,
       }],
     });
     expect(body.delivery).toMatchObject({
@@ -667,10 +696,26 @@ describe("[sync-critical] agent read plane operations", () => {
     });
     expect(body.capture.planes.find((plane: { plane: string }) =>
       plane.plane === "transactions").captureFloor).toEqual({
-      at: "2026-01-10T00:00:00.000Z",
+      at: "2026-01-05T00:00:00.000Z",
       kind: "oldest_stored_row",
     });
     expect(body.conclusion.blockers).toEqual([]);
+
+    const inactiveRows = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/transactions/query",
+      {
+        from: "2026-01-23T12:00:00Z",
+        to: "2026-02-01T00:00:00Z",
+        filters: [{ field: "transactionRef", op: "eq", value: "tx-jan-inactive" }],
+      },
+    );
+    expect(inactiveRows.statusCode).toBe(200);
+    expect(inactiveRows.json().items).toEqual([]);
+    expect(inactiveRows.json().capture.planes.find((plane: { plane: string }) =>
+      plane.plane === "transactions").captureFloor).toEqual({
+      at: "2026-01-05T00:00:00.000Z",
+      kind: "oldest_stored_row",
+    });
   });
 
   it("#10 refuses a field outside the dataset's allowlist, before any SQL", async () => {
@@ -683,6 +728,38 @@ describe("[sync-critical] agent read plane operations", () => {
       },
     );
     expect(response.statusCode).toBe(400);
+  });
+
+  it("#10 refuses filter values and operators incompatible with field kinds", async () => {
+    const numericString = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/transactions/query",
+      {
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-04-01T00:00:00Z",
+        filters: [{ field: "grossMills", op: "gte", value: "1000" }],
+      },
+    );
+    expect(numericString.statusCode).toBe(400);
+
+    const stringBoolean = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/follows/query",
+      {
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-04-01T00:00:00Z",
+        filters: [{ field: "followed", op: "eq", value: "true" }],
+      },
+    );
+    expect(stringBoolean.statusCode).toBe(400);
+
+    const orderedBoolean = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/follows/query",
+      {
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-04-01T00:00:00Z",
+        filters: [{ field: "followed", op: "gt", value: true }],
+      },
+    );
+    expect(orderedBoolean.statusCode).toBe(400);
   });
 
   it("#10 refuses a PLANNED dataset at the boundary", async () => {

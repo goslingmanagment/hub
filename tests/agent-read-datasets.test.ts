@@ -7,6 +7,7 @@ import {
   AGENT_DATASETS,
   AGENT_PLANNED_DATASET_NAMES,
   agentDatasetDefinition,
+  agentDatasetFilterIssue,
   agentDatasetFields,
   agentDatasetRequiredCapabilities,
   isAgentCapability,
@@ -166,6 +167,111 @@ describe("agent read dataset vocabulary", () => {
         }
       }
     }
+  });
+});
+
+describe("agent dataset filter kind boundary", () => {
+  it("accepts values that match each declared scalar kind", () => {
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "platform",
+      op: "in",
+      value: ["fansly", "onlyfans"],
+    })).toBeNull();
+    expect(agentDatasetFilterIssue("posts", {
+      field: "attachmentCount",
+      op: "gte",
+      value: 2,
+    })).toBeNull();
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "grossMills",
+      op: "gte",
+      value: 1_000,
+    })).toBeNull();
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "occurredAt",
+      op: "eq",
+      value: "2026-02-01T03:04:05.123+03:00",
+    })).toBeNull();
+    expect(agentDatasetFilterIssue("fan_spend_daily", {
+      field: "businessDate",
+      op: "in",
+      value: ["2026-01-31", "2026-02-01"],
+    })).toBeNull();
+    expect(agentDatasetFilterIssue("follows", {
+      field: "followed",
+      op: "eq",
+      value: true,
+    })).toBeNull();
+    expect(agentDatasetFilterIssue("follows", {
+      field: "unfollowedAt",
+      op: "is_null",
+    })).toBeNull();
+  });
+
+  it("rejects scalar lookalikes before they can be coerced by Postgres", () => {
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "platform",
+      op: "eq",
+      value: 1,
+    })).toEqual({ code: "value_type_mismatch", kind: "string" });
+    expect(agentDatasetFilterIssue("posts", {
+      field: "attachmentCount",
+      op: "eq",
+      value: 1.5,
+    })).toEqual({ code: "value_type_mismatch", kind: "int" });
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "grossMills",
+      op: "gte",
+      value: "1000",
+    })).toEqual({ code: "value_type_mismatch", kind: "mills" });
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "occurredAt",
+      op: "gte",
+      value: "2026-02-30T00:00:00Z",
+    })).toEqual({ code: "value_type_mismatch", kind: "timestamp" });
+    expect(agentDatasetFilterIssue("fan_spend_daily", {
+      field: "businessDate",
+      op: "eq",
+      value: "2026-02-30",
+    })).toEqual({ code: "value_type_mismatch", kind: "date" });
+    expect(agentDatasetFilterIssue("follows", {
+      field: "followed",
+      op: "eq",
+      value: "true",
+    })).toEqual({ code: "value_type_mismatch", kind: "bool" });
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "grossMills",
+      op: "eq",
+      value: null,
+    })).toEqual({ code: "value_type_mismatch", kind: "mills" });
+  });
+
+  it("rejects operators without honest semantics for the field kind", () => {
+    expect(agentDatasetFilterIssue("follows", {
+      field: "followed",
+      op: "gt",
+      value: true,
+    })).toEqual({ code: "operator_not_supported", kind: "bool" });
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "grossMills",
+      op: "in",
+      value: ["1000"],
+    })).toEqual({ code: "operator_not_supported", kind: "mills" });
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "occurredAt",
+      op: "in",
+      value: ["2026-02-01T00:00:00Z"],
+    })).toEqual({ code: "operator_not_supported", kind: "timestamp" });
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "occurredAt",
+      op: "is_null",
+      value: "2026-02-01T00:00:00Z",
+    })).toEqual({ code: "value_type_mismatch", kind: "timestamp" });
+    expect(agentDatasetFilterIssue("transactions", {
+      field: "secretColumn",
+      op: "eq",
+      value: "x",
+    })).toEqual({ code: "unknown_field" });
   });
 });
 

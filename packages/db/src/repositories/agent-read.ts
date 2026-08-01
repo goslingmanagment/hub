@@ -1752,9 +1752,9 @@ function datasetFilterSql(filter: AgentDatasetFilter): SQL {
       return sql`${column}::text in ${textList(values.map((value) => String(value)))}`;
     }
     case "eq":
-      return sql`${column}::text = ${String(filter.value)}`;
+      return sql`${column} = ${filter.value}`;
     case "neq":
-      return sql`${column}::text is distinct from ${String(filter.value)}`;
+      return sql`${column} is distinct from ${filter.value}`;
     case "lt":
       return sql`${column} < ${filter.value}`;
     case "lte":
@@ -1830,6 +1830,12 @@ export async function queryAgentDataset(
     sql`src.k_page_id = ${input.pageId}`,
     sql`(${windowColumn} is null or (${windowColumn} >= ${input.from} and ${windowColumn} < ${input.to}))`,
   ];
+  if (mapping.eligibilityColumn !== undefined) {
+    // Result eligibility is independent from capture evidence. In particular,
+    // superseded transaction rows stay out of row/summary answers while their
+    // physical occurrence can still establish when Hub's retained history starts.
+    clauses.push(sql`${sql.raw(`src.${mapping.eligibilityColumn}`)} is true`);
+  }
   for (const filter of input.filters) {
     clauses.push(datasetFilterSql(filter));
   }
@@ -1949,6 +1955,9 @@ export async function summarizeAgentTransactionDataset(
   const matchedClauses: SQL[] = [
     sql`(${windowColumn} is null or (${windowColumn} >= ${input.from} and ${windowColumn} < ${input.to}))`,
   ];
+  if (mapping.eligibilityColumn !== undefined) {
+    matchedClauses.push(sql`${sql.raw(`src.${mapping.eligibilityColumn}`)} is true`);
+  }
   for (const filter of input.filters) {
     matchedClauses.push(datasetFilterSql(filter));
   }
@@ -1999,6 +2008,6 @@ export async function summarizeAgentTransactionDataset(
     // fixed SQL reads. Only the temporal transaction store earns the page floor;
     // the identity join is an inventory store and honestly stays unknown.
     witnesses: mapping.readPlanes.map((plane) =>
-      witnessFor(plane, plane === "transactions" ? floorAt : null)),
+      witnessFor(plane, plane === mapping.captureFloorPlane ? floorAt : null)),
   };
 }

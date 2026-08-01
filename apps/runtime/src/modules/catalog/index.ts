@@ -338,7 +338,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
         modelSlug: body.modelSlug,
         label: body.label,
         session: body.session,
-        proxy: body.proxy ?? null,
+        proxy: body.proxy,
       });
       const syncQueueState = await queueInitialOnboardingSync(body.label, request.log);
       const page = await getPageSummary(appContext, body.label);
@@ -416,10 +416,8 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const body = request.body;
     try {
       if (body.platform === "fansly") {
-        const proxy = body.proxy ? normalizeProxyConfig(body.proxy) : null;
-        if (proxy) {
-          await assertAllowedProxyTarget(proxy);
-        }
+        const proxy = normalizeProxyConfig(body.proxy);
+        await assertAllowedProxyTarget(proxy);
         const egressKey = buildProxyEgressKey(proxy);
         const rateLimitWaiter = createSyncRateLimitWaiter(appContext, { egressKey });
         const result = await appContext.adapter.verifySession({

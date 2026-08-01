@@ -6419,6 +6419,36 @@ describe("api integration", () => {
     }
   });
 
+  it("rejects proxyless Fansly onboarding at the API boundary [sync-critical]", async (context) => {
+    if (!server) {
+      context.skip();
+      return;
+    }
+
+    const cookie = await loginOwnerCookie(server);
+    for (const [label, proxy] of [
+      ["missing", undefined],
+      ["null", null],
+    ] as const) {
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/v1/admin/pages",
+        headers: { cookie },
+        payload: {
+          platform: "fansly",
+          modelSlug: "lana-model",
+          label: `proxy-${label}-page`,
+          session: {
+            authorization: "token",
+          },
+          ...(proxy === undefined ? {} : { proxy }),
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+    }
+  });
+
   it("lists, updates, and deletes pages through admin CRUD", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
@@ -6687,6 +6717,9 @@ describe("api integration", () => {
         session: {
           authorization: "token",
         },
+        proxy: {
+          url: "socks5://proxy-duplicate.example:1080",
+        },
       },
     });
 
@@ -6724,6 +6757,9 @@ describe("api integration", () => {
         label: "ghost-page",
         session: {
           authorization: "token",
+        },
+        proxy: {
+          url: "socks5://proxy-missing-model.example:1080",
         },
       },
     });
@@ -6910,6 +6946,9 @@ describe("api integration", () => {
         session: {
           authorization: "token",
         },
+        proxy: {
+          url: "socks5://proxy-enqueue-fail.example:1080",
+        },
       },
     });
 
@@ -6953,6 +6992,9 @@ describe("api integration", () => {
         label: "enqueue-fail-page",
         session: {
           authorization: "token",
+        },
+        proxy: {
+          url: "socks5://proxy-enqueue-fail.example:1080",
         },
       },
     });
@@ -8146,7 +8188,7 @@ describe("api integration", () => {
     });
   });
 
-  it("removes a stored proxy when owners explicitly clear it via PATCH [sync-critical]", async (context) => {
+  it("rejects null proxy removal via credentials PATCH and preserves the stored route [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -8204,8 +8246,8 @@ describe("api integration", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(verifiedProxy).toBeNull();
+    expect(response.statusCode).toBe(400);
+    expect(verifiedProxy).toBeUndefined();
 
     const proxyRows = await activeTestDb.pool.query<{ count: number }>(`
       select count(*)::int as count
@@ -8213,7 +8255,7 @@ describe("api integration", () => {
       where platform_account_id = $1
     `, [fixture.lanaPage.id]);
 
-    expect(proxyRows.rows[0]?.count).toBe(0);
+    expect(proxyRows.rows[0]?.count).toBe(1);
   });
 
   it("serves follower and subscriber daily series plus protected swagger security schemes", async (context) => {

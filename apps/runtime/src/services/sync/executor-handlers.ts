@@ -140,7 +140,7 @@ import {
   fanslyPurchaseHistoryTargetKey,
   parseFanslyPurchaseHistoryCursorState,
   type FanslyPurchaseHistoryCaptureClassification,
-  type FanslyPurchaseHistoryCursorStateV3,
+  type FanslyPurchaseHistoryCursorStateV4,
 } from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
@@ -183,11 +183,25 @@ const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 function purchaseHistoryCaptureBlockError(
   capture: FanslyPurchaseHistoryCaptureClassification,
 ) {
-  if (capture.outcome === "result_truncated") {
+  if (capture.outcome === "cursor_missing") {
     return new FanslyPurchaseHistoryContractError({
-      code: "purchase_history_result_truncated",
+      code: "purchase_history_cursor_missing",
       message:
-        `Fansly purchase-history returned ${capture.orderRows} rows at the ${FANSLY_PURCHASE_HISTORY_RESULT_LIMIT}-row cap; refusing false completeness`,
+        `Fansly purchase-history returned ${capture.orderRows} non-empty rows without a last-row orderId; refusing false completeness`,
+    });
+  }
+  if (capture.outcome === "cursor_repeated") {
+    return new FanslyPurchaseHistoryContractError({
+      code: "purchase_history_cursor_repeated",
+      message:
+        `Fansly purchase-history cursor repeated at ${capture.nextBefore ?? capture.requestBefore ?? "page one"}; refusing an unbounded loop`,
+    });
+  }
+  if (capture.outcome === "cursor_conflict") {
+    return new FanslyPurchaseHistoryContractError({
+      code: "purchase_history_cursor_conflict",
+      message:
+        "Captured Fansly purchase-history pages disagree on target kind or next cursor; local resolution is required",
     });
   }
   if (capture.outcome === "http_rejected") {
@@ -2482,9 +2496,21 @@ export async function fanslyDmConversationsChunk(
   const pageAccountId = resolveFanslyPlatformAccountId(input.pageContext.page);
   const checkpointStateRecord = asRecord(checkpoint?.state);
   const existingState = parseDmConversationCursorState(checkpoint?.state);
-  let state: DmConversationCursorState;
+  type DmConversationSweepCursorState = DmConversationCursorState & {
+    observedCount: number;
+    snapshotConversationIds: string[];
+  };
+  const legacySnapshotMissing = Boolean(
+    existingState && existingState.snapshotConversationIds === undefined,
+  );
+  let state: DmConversationSweepCursorState;
   if (existingState) {
-    state = existingState;
+    const snapshotConversationIds = existingState.snapshotConversationIds ?? [];
+    state = {
+      ...existingState,
+      snapshotConversationIds,
+      observedCount: snapshotConversationIds.length,
+    };
   } else {
     const checkpointGeneration = asNumber(checkpointStateRecord?.generation) ?? 0;
     const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
@@ -2493,6 +2519,8 @@ export async function fanslyDmConversationsChunk(
       mode: "full_scan",
       generation: Math.max(checkpointGeneration, storedGeneration) + 1,
       offset: 0,
+      observedCount: 0,
+      snapshotConversationIds: [],
       pageCount: 0,
       providerReportedTotal: null,
       unchangedPageStreak: 0,
@@ -2510,6 +2538,47 @@ export async function fanslyDmConversationsChunk(
     );
   }
 
+  const restartSweepAfterCapturedContractDrift = async (guard: {
+    code: string;
+    message: string;
+    details: Record<string, unknown>;
+  }): Promise<never> => {
+    const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
+    const restartState: DmConversationSweepCursorState = {
+      version: 1,
+      mode: "full_scan",
+      generation: Math.max(state.generation, storedGeneration) + 1,
+      offset: 0,
+      observedCount: 0,
+      snapshotConversationIds: [],
+      pageCount: 0,
+      providerReportedTotal: null,
+      unchangedPageStreak: 0,
+      fullSweepStartedAt: new Date().toISOString(),
+      lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
+    };
+    const progressCheckpoint = await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "dm_conversations",
+      state: restartState,
+    });
+    await input.telemetry.recordCheckpointAdvanced(
+      "dm_conversations",
+      summarizeCheckpoint(progressCheckpoint),
+    );
+    await input.telemetry.addAnomaly({
+      code: guard.code,
+      severity: "error",
+      message: guard.message,
+      details: {
+        ...guard.details,
+        abandonedGeneration: state.generation,
+        restartGeneration: restartState.generation,
+      },
+    });
+    throw new Error(`${guard.message}; restarted the DM conversation sweep`);
+  };
+
   let processedConversations = 0;
   let repairedHeads = 0;
 
@@ -2521,11 +2590,9 @@ export async function fanslyDmConversationsChunk(
       sortOrder: 1,
       flags: 0,
     });
-    state = {
-      ...state,
-      pageCount: state.pageCount + 1,
-      providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
-    };
+    const frozenProviderReportedTotal = state.providerReportedTotal;
+    const currentProviderReportedTotal = page.total ?? null;
+    const nextPageCount = state.pageCount + 1;
 
     await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -2540,6 +2607,107 @@ export async function fanslyDmConversationsChunk(
       action: "inserting dm conversations raw payload",
       platform: "fansly",
     });
+
+    if (
+      currentProviderReportedTotal === null ||
+      !Number.isSafeInteger(currentProviderReportedTotal) ||
+      currentProviderReportedTotal < 0
+    ) {
+      await restartSweepAfterCapturedContractDrift({
+        code: "dm_conversations_provider_total_invalid",
+        message:
+          "DM conversation sync provider total was missing or invalid; refusing to apply the page",
+        details: {
+          currentProviderReportedTotal,
+          observedCount: state.snapshotConversationIds.length,
+          pageCount: nextPageCount,
+          offset: state.offset,
+        },
+      });
+      continue;
+    }
+
+    if (legacySnapshotMissing) {
+      await restartSweepAfterCapturedContractDrift({
+        code: "dm_conversations_legacy_snapshot_restart",
+        message:
+          "DM conversation sync resumed a legacy sweep without its unique-id snapshot; refusing to apply the page",
+        details: {
+          providerReportedTotal: currentProviderReportedTotal,
+          pageCount: nextPageCount,
+          offset: state.offset,
+        },
+      });
+    }
+
+    if (
+      frozenProviderReportedTotal !== null &&
+      currentProviderReportedTotal !== frozenProviderReportedTotal
+    ) {
+      await restartSweepAfterCapturedContractDrift({
+        code: "dm_conversations_provider_total_drift_guard",
+        message:
+          "DM conversation sync provider total changed during the sweep; refusing to apply the inconsistent page",
+        details: {
+          providerReportedTotal: frozenProviderReportedTotal,
+          currentProviderReportedTotal,
+          observedCount: state.observedCount,
+          pageCount: nextPageCount,
+          offset: state.offset,
+        },
+      });
+    }
+
+    const priorConversationIds = new Set(state.snapshotConversationIds);
+    const currentConversationIds = page.items.map((conversation) => conversation.groupId);
+    const uniqueCurrentConversationIds = new Set(currentConversationIds);
+    const overlappingConversationIds = [...uniqueCurrentConversationIds].filter((conversationId) =>
+      priorConversationIds.has(conversationId)
+    );
+    const duplicateIdsWithinPage = currentConversationIds.length - uniqueCurrentConversationIds.size;
+    if (overlappingConversationIds.length > 0 || duplicateIdsWithinPage > 0) {
+      await restartSweepAfterCapturedContractDrift({
+        code: "dm_conversations_snapshot_overlap_guard",
+        message:
+          "DM conversation sync returned duplicate or overlapping group ids; refusing to apply the page",
+        details: {
+          providerReportedTotal: currentProviderReportedTotal,
+          overlappingConversationIds: overlappingConversationIds.slice(0, 10),
+          overlapCount: overlappingConversationIds.length,
+          duplicateIdsWithinPage,
+          observedCount: priorConversationIds.size,
+          pageCount: nextPageCount,
+          offset: state.offset,
+        },
+      });
+    }
+
+    const snapshotConversationIds = [
+      ...state.snapshotConversationIds,
+      ...uniqueCurrentConversationIds,
+    ];
+    const finalObservedCount = snapshotConversationIds.length;
+    if (
+      finalObservedCount > currentProviderReportedTotal ||
+      (page.done && finalObservedCount !== currentProviderReportedTotal)
+    ) {
+      await restartSweepAfterCapturedContractDrift({
+        code: "dm_conversations_partial_page_guard",
+        message:
+          "DM conversation sync returned a unique-id count that differs from the provider-reported total; refusing destructive finalization",
+        details: {
+          providerReportedTotal: currentProviderReportedTotal,
+          observedCount: finalObservedCount,
+          pageCount: nextPageCount,
+        },
+      });
+    }
+
+    state = {
+      ...state,
+      pageCount: nextPageCount,
+      providerReportedTotal: frozenProviderReportedTotal ?? currentProviderReportedTotal,
+    };
 
     const accountsById = new Map(page.accounts.map((account) => [account.id, account]));
     const groupsById = new Map(page.groups.map((group) => [group.id, group]));
@@ -2814,6 +2982,8 @@ export async function fanslyDmConversationsChunk(
 
     const nextState = {
       ...state,
+      observedCount: finalObservedCount,
+      snapshotConversationIds,
       unchangedPageStreak: unchangedPage ? state.unchangedPageStreak + 1 : 0,
       offset: page.done ? state.offset : state.offset + 100,
     };
@@ -2870,6 +3040,8 @@ export async function fanslyDmConversationsChunk(
         const completedState = {
           version: 1,
           generation: state.generation,
+          observedCount: finalObservedCount,
+          providerReportedTotal: state.providerReportedTotal,
           lastFullSweepCompletedAt: new Date().toISOString(),
         };
         return {
@@ -2916,6 +3088,7 @@ export async function fanslyDmConversationsChunk(
           generation: state.generation,
           offset: state.offset,
           pageCount: state.pageCount,
+          observedCount: finalObservedCount,
           processedConversations,
           repairedHeads,
           providerReportedTotal: state.providerReportedTotal,
@@ -2934,6 +3107,7 @@ export async function fanslyDmConversationsChunk(
       generation: state.generation,
       offset: state.offset,
       pageCount: state.pageCount,
+      observedCount: state.observedCount,
       processedConversations,
       repairedHeads,
       providerReportedTotal: state.providerReportedTotal,
@@ -3606,24 +3780,46 @@ export async function executeFanEarningsChunk(
   // correlationAccountId returns [] (ramp-caught 2026-07-06; probe-confirmed
   // with a fan id → 21 rows). So the capture is a checkpointed keyset walk —
   // SPENDER-scoped (fans with page_fans net > 0; zero-spend fans have no
-  // earnings rows), two calls per fan (lifetime stats + monthly), one
-  // concatenated journal payload per chunk (the canonicalizer keys rows by
-  // correlationAccountId, so concatenation is shape-neutral).
+  // earnings rows), two calls per fan (lifetime stats + monthly). Each
+  // successful response is journaled independently before any later request
+  // or parsing so a partial per-fan failure cannot discard captured bytes.
   const window = { after: new Date(0), before: new Date() };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "fan_earnings");
   const state = checkpoint?.state as { cursorFanId?: number } | null;
   let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
-  // A43 (W8.2): the PERSISTED cursor advances only past successful fans —
-  // the purchase_history hold-back-on-skip discipline. The local cursor
-  // (`cursorFanId`) still moves past skipped fans so this run keeps walking,
-  // but a run that ends on skips resumes from its last success (and the
-  // mass-skip breaker can refire) instead of sealing the skips in.
+  // A43 (W8.2): the PERSISTED cursor advances only through one contiguous
+  // prefix of successful fans. A fan-scoped rejection stops the walk; it may
+  // never be crossed by a later success in the same keyset generation.
   let persistableCursorFanId = cursorFanId;
   let fansFetched = 0;
   let fansSkipped = 0;
   let walkCompleted = false;
-  const statsRows: unknown[] = [];
-  const monthlyRows: unknown[] = [];
+  let rejectedFanError: FanslyApiError | null = null;
+
+  const journalFanResponse = async (
+    endpoint: "fan_earnings_stats" | "fan_earnings_monthly",
+    fan: { fanId: number; platformUserId: string },
+    response: { items: unknown; raw?: unknown },
+  ) => {
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint,
+      requestParams: {
+        after: window.after.toISOString(),
+        before: window.before.toISOString(),
+        fanId: fan.fanId,
+        correlationAccountId: fan.platformUserId,
+        spendersOnly: true,
+      },
+      // Real adapters return raw. The fallback keeps older test doubles and
+      // replay tooling source-compatible without weakening production capture.
+      responsePayload: response.raw ?? response.items,
+      mapperVersion: FANSLY_MAPPER_VERSION,
+      payloadKind: "mapping_critical",
+      retainUntil: retentionDate(),
+    }, { action: `inserting ${endpoint} raw payload`, platform: "fansly" });
+  };
 
   // Each fan costs TWO provider calls (lifetime + monthly stats) — reserve
   // both up front so the chunk never overshoots its request budget by one.
@@ -3637,13 +3833,6 @@ export async function executeFanEarningsChunk(
     });
     const fan = fans[0];
     if (!fan) {
-      if (fansFetched === 0 && fansSkipped > 0) {
-        // Mass-skip circuit breaker (the purchase_history discipline): a walk
-        // that skipped every fan is a contract failure, not dead accounts.
-        throw new Error(
-          `fan_earnings walk skipped all ${fansSkipped} fans without one success`,
-        );
-      }
       walkCompleted = true;
       break;
     }
@@ -3653,20 +3842,26 @@ export async function executeFanEarningsChunk(
         correlationAccountId: fan.platformUserId,
         ...window,
       });
-      if (Array.isArray(stats.items)) {
-        statsRows.push(...stats.items);
+      // Capture each successful provider response before lease checks, parsing,
+      // or the second call. A monthly rejection must never erase stats bytes.
+      await journalFanResponse("fan_earnings_stats", fan, stats);
+      if (!Array.isArray(stats.items)) {
+        throw new Error("Fansly fan earnings stats response was not an array");
       }
       await assertOwnedPageSyncLease(app.db);
       const monthly = await app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, {
         correlationAccountId: fan.platformUserId,
         ...window,
       });
-      if (Array.isArray(monthly.items)) {
-        monthlyRows.push(...monthly.items);
+      await journalFanResponse("fan_earnings_monthly", fan, monthly);
+      if (!Array.isArray(monthly.items)) {
+        throw new Error("Fansly monthly fan earnings response was not an array");
       }
     } catch (error) {
-      // Per-fan isolation: fan-scoped rejections skip THAT fan and keep
-      // walking; page-scoped responses (auth, rate-limit) still propagate.
+      // A fan-scoped rejection cannot be skipped inside a keyset walk: doing
+      // so and later persisting a successful fan would jump the durable cursor
+      // over the rejected fan. Stop at the first rejection and persist only
+      // the contiguous successful prefix before surfacing the provider error.
       const fanScoped = error instanceof FanslyApiError &&
         typeof error.status === "number" &&
         [400, 404, 410].includes(error.status);
@@ -3676,7 +3871,7 @@ export async function executeFanEarningsChunk(
       await input.telemetry.addAnomaly({
         code: "fan_earnings_fan_rejected",
         severity: "warn",
-        message: `Skipped fan-earnings fan after HTTP ${error.status}`,
+        message: `Stopped fan-earnings walk after HTTP ${error.status} for one fan`,
         details: {
           fanId: fan.fanId,
           platformUserId: fan.platformUserId,
@@ -3685,9 +3880,8 @@ export async function executeFanEarningsChunk(
         },
       });
       fansSkipped += 1;
-      // LOCAL advance only (A43): the persisted cursor stays behind on skips.
-      cursorFanId = fan.fanId;
-      continue;
+      rejectedFanError = error;
+      break;
     }
 
     cursorFanId = fan.fanId;
@@ -3695,39 +3889,8 @@ export async function executeFanEarningsChunk(
     fansFetched += 1;
   }
 
-  if (fansFetched > 0) {
-    const journalParams = {
-      after: window.after.toISOString(),
-      before: window.before.toISOString(),
-      fansFetched,
-      spendersOnly: true,
-    };
-    await persistRawPayload(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      syncRunId: input.syncRunId,
-      endpoint: "fan_earnings_stats",
-      requestParams: journalParams,
-      responsePayload: statsRows,
-      mapperVersion: FANSLY_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, { action: "inserting fan_earnings_stats raw payload", platform: "fansly" });
-    await persistRawPayload(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      syncRunId: input.syncRunId,
-      endpoint: "fan_earnings_monthly",
-      requestParams: journalParams,
-      responsePayload: monthlyRows,
-      mapperVersion: FANSLY_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, { action: "inserting fan_earnings_monthly raw payload", platform: "fansly" });
-  }
-
-  // A43 (W8.2): persist only walk completion or real progress. A chunk that
-  // fetched nothing (every touched fan skipped, budget ran out) leaves the
-  // checkpoint UNTOUCHED — purchase_history's discipline — so the next run
-  // retries the same fans instead of stamping a zero-capture advance.
+  // Persist only completion or the contiguous successful prefix. If the first
+  // fan rejects, leave the checkpoint untouched so retry targets that fan.
   if (walkCompleted) {
     await upsertCheckpoint(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -3738,15 +3901,28 @@ export async function executeFanEarningsChunk(
       lastSuccessfulRunId: input.syncRunId,
     });
   } else if (fansFetched > 0) {
-    await upsertCheckpoint(app.db, {
-      platformAccountId: input.pageContext.page.id,
-      stream: "fan_earnings",
-      cursorTimestamp: new Date(),
-      // Hold-back on skips: resume from the last SUCCESSFUL fan, not from
-      // wherever the local walk skipped to.
-      state: { cursorFanId: persistableCursorFanId },
-      lastSuccessfulRunId: input.syncRunId,
-    });
+    const progressState = { cursorFanId: persistableCursorFanId };
+    if (rejectedFanError) {
+      // The prefix is durable progress, but this run is about to fail. Do not
+      // stamp it as the stream's last successful run/freshness marker.
+      await upsertCheckpointProgress(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        stream: "fan_earnings",
+        state: progressState,
+      });
+    } else {
+      await upsertCheckpoint(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        stream: "fan_earnings",
+        cursorTimestamp: new Date(),
+        state: progressState,
+        lastSuccessfulRunId: input.syncRunId,
+      });
+    }
+  }
+
+  if (rejectedFanError) {
+    throw rejectedFanError;
   }
 
   if (walkCompleted) {
@@ -3797,9 +3973,9 @@ export async function executePurchaseHistoryChunk(
   // use local keysets, while target-specific purchase_history captures are the
   // durable dedupe set.
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "purchase_history");
-  let state: FanslyPurchaseHistoryCursorStateV3 =
+  let state: FanslyPurchaseHistoryCursorStateV4 =
     parseFanslyPurchaseHistoryCursorState(checkpoint?.state) ?? {
-      version: 3,
+      version: 4,
       transactionCursorId: 0,
       rawPayloadCursorId: 0,
       pendingTargets: [],
@@ -3811,19 +3987,46 @@ export async function executePurchaseHistoryChunk(
   const capturedContentIds = new Set(captureIndex.capturedContentIds);
   const validatedCompleteTargetKeys = new Set(captureIndex.validatedCompleteTargetKeys);
   const validatedCompleteContentIds = new Set(captureIndex.validatedCompleteContentIds);
-  // A crash after raw capture but before checkpoint advance is reconciled
-  // locally: a VALID captured content id removes the stale pending item
-  // without another vendor request. A rejected/truncated capture remains
-  // pending and blocks locally. Content-level reconciliation also repairs
-  // legacy checkpoints where contradictory payload fields inferred both a
-  // bundle and a single-media target for the same Fansly content id.
-  const reconciledPendingTargets = state.pendingTargets.filter(
-    (target) =>
-      !validatedCompleteTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
-      !validatedCompleteContentIds.has(target.contentId),
-  );
-  if (reconciledPendingTargets.length !== state.pendingTargets.length) {
-    state = { ...state, pendingTargets: reconciledPendingTargets };
+  const resumableByTargetKey = new Map(captureIndex.resumableTargets.map((target) => [
+    fanslyPurchaseHistoryTargetKey(target),
+    target,
+  ]));
+  const resumableByContentId = new Map(captureIndex.resumableTargets.map((target) => [
+    target.contentId,
+    target,
+  ]));
+  const consumedResumableTargetKeys = new Set<string>();
+
+  // Rebuild the provider cursor from the durable page chain. This covers both
+  // ordinary crash windows (raw page committed, checkpoint not advanced) and
+  // v3 checkpoints that falsely dropped a target after one non-empty page.
+  const reconciledPendingTargets = state.pendingTargets.flatMap((target) => {
+    const targetKey = fanslyPurchaseHistoryTargetKey(target);
+    if (
+      validatedCompleteTargetKeys.has(targetKey) ||
+      validatedCompleteContentIds.has(target.contentId)
+    ) {
+      return [];
+    }
+    const exactResume = resumableByTargetKey.get(targetKey);
+    if (exactResume) {
+      consumedResumableTargetKeys.add(targetKey);
+      return [exactResume];
+    }
+    // A captured target with the same global content id but a stronger kind
+    // replaces stale alternate-kind checkpoint inference.
+    if (resumableByContentId.has(target.contentId)) {
+      return [];
+    }
+    return [target];
+  });
+  for (const resumable of captureIndex.resumableTargets) {
+    if (!consumedResumableTargetKeys.has(fanslyPurchaseHistoryTargetKey(resumable))) {
+      reconciledPendingTargets.push(resumable);
+    }
+  }
+  if (JSON.stringify(reconciledPendingTargets) !== JSON.stringify(state.pendingTargets)) {
+    state = { ...state, version: 4, pendingTargets: reconciledPendingTargets };
     const progressCheckpoint = await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "purchase_history",
@@ -3835,13 +4038,19 @@ export async function executePurchaseHistoryChunk(
     );
   }
 
-  // Raw capture is the sole truth. A historical capture that the local parser
-  // still cannot certify blocks every later run before egress, even if an old
-  // buggy checkpoint already dropped its pending target. Parser repairs can
-  // unlock the exact same bytes on the next run.
+  // Raw capture is the sole truth. A malformed page or cyclic cursor blocks
+  // every later run before egress; parser repairs can unlock the same bytes.
   const blockedCapture = captureIndex.blocked[0];
   if (blockedCapture) {
     throw purchaseHistoryCaptureBlockError(blockedCapture);
+  }
+
+  const capturedRequestCursorsByTargetKey = new Map<string, Set<string>>();
+  for (const chain of captureIndex.chains) {
+    capturedRequestCursorsByTargetKey.set(
+      chain.targetKey,
+      new Set(chain.requestCursors.map((cursor) => cursor ?? "")),
+    );
   }
 
   let transactionRowsScanned = 0;
@@ -3852,6 +4061,7 @@ export async function executePurchaseHistoryChunk(
   let scanBatches = 0;
   let targetsFetched = 0;
   let targetsSkipped = 0;
+  let pagesFetched = 0;
   let orderRowsCaptured = 0;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
@@ -3875,6 +4085,7 @@ export async function executePurchaseHistoryChunk(
               scanBatches,
               targetsFetched,
               targetsSkipped,
+              pagesFetched,
               orderRowsCaptured,
             },
           };
@@ -3904,9 +4115,9 @@ export async function executePurchaseHistoryChunk(
           transactionTargetsDiscovered += discovered.length;
           state = {
             ...state,
-            version: 3,
+            version: 4,
             transactionCursorId: transactionRows.at(-1)!.id,
-            pendingTargets: discovered,
+            pendingTargets: discovered.map((target) => ({ ...target, before: null })),
           };
           // Persist discovery BEFORE egress: a crash can only replay the safe
           // target GET, never advance the transaction cursor past lost work.
@@ -3943,6 +4154,7 @@ export async function executePurchaseHistoryChunk(
               scanBatches,
               targetsFetched,
               targetsSkipped,
+              pagesFetched,
               orderRowsCaptured,
             },
           };
@@ -3981,6 +4193,7 @@ export async function executePurchaseHistoryChunk(
               scanBatches,
               targetsFetched,
               targetsSkipped,
+              pagesFetched,
               orderRowsCaptured,
               walkCompleted: true,
             },
@@ -3990,15 +4203,19 @@ export async function executePurchaseHistoryChunk(
         const rawTargets = extractFanslyPurchaseHistoryTargets(
           rawPages.map((row) => row.responsePayload),
         );
+        assertFanslyPurchaseHistoryTargetKindsConsistent(
+          rawTargets,
+          capturedTargetKeys,
+        );
         const discovered = rawTargets.filter((target) =>
           !capturedTargetKeys.has(fanslyPurchaseHistoryTargetKey(target)) &&
           !capturedContentIds.has(target.contentId)
         );
         state = {
           ...state,
-          version: 3,
+          version: 4,
           rawPayloadCursorId: rawPages.at(-1)!.id,
-          pendingTargets: discovered,
+          pendingTargets: discovered.map((target) => ({ ...target, before: null })),
         };
         // Advance discovery and persist the whole pending batch BEFORE egress.
         // A worker crash can therefore only replay a safe GET, never lose a
@@ -4019,9 +4236,18 @@ export async function executePurchaseHistoryChunk(
     }
 
     const target = state.pendingTargets[0]!;
+    const targetKey = fanslyPurchaseHistoryTargetKey(target);
     const requestParams = target.kind === "single"
-      ? { accountMediaId: target.contentId, limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT }
-      : { accountMediaBundleId: target.contentId, limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT };
+      ? {
+        accountMediaId: target.contentId,
+        before: target.before,
+        limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
+      }
+      : {
+        accountMediaBundleId: target.contentId,
+        before: target.before,
+        limit: FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
+      };
     let page: Awaited<ReturnType<AppContext["adapter"]["getMediaOrderHistoryPage"]>>;
     try {
       page = await app.adapter.getMediaOrderHistoryPage(requestContext, requestParams);
@@ -4054,7 +4280,8 @@ export async function executePurchaseHistoryChunk(
       }, { action: "capturing rejected purchase_history target", platform: "fansly" });
       const capture = classifyFanslyPurchaseHistoryCapture({
         id: null,
-        targetKey: fanslyPurchaseHistoryTargetKey(target),
+        targetKey,
+        requestBefore: target.before,
         statusCode: error.status,
         responsePayload: {
           error: {
@@ -4063,7 +4290,7 @@ export async function executePurchaseHistoryChunk(
           },
         },
       });
-      if (!capture.validatedComplete) {
+      if (!capture.terminal || capture.blocked) {
         throw purchaseHistoryCaptureBlockError(capture);
       }
       await input.telemetry.addAnomaly({
@@ -4077,8 +4304,9 @@ export async function executePurchaseHistoryChunk(
           fanslyCode: error.code ?? null,
         },
       });
+      pagesFetched += 1;
       targetsSkipped += 1;
-      capturedTargetKeys.add(fanslyPurchaseHistoryTargetKey(target));
+      capturedTargetKeys.add(targetKey);
       capturedContentIds.add(target.contentId);
       state = { ...state, pendingTargets: state.pendingTargets.slice(1) };
       const progressCheckpoint = await upsertCheckpointProgress(app.db, {
@@ -4105,7 +4333,8 @@ export async function executePurchaseHistoryChunk(
 
     const capture = classifyFanslyPurchaseHistoryCapture({
       id: null,
-      targetKey: fanslyPurchaseHistoryTargetKey(target),
+      targetKey,
+      requestBefore: target.before,
       statusCode: null,
       responsePayload: page.raw,
     });
@@ -4117,9 +4346,33 @@ export async function executePurchaseHistoryChunk(
     }
 
     const orderRows = capture.orderRows!;
-    capturedTargetKeys.add(fanslyPurchaseHistoryTargetKey(target));
+    const capturedCursors = capturedRequestCursorsByTargetKey.get(targetKey) ?? new Set<string>();
+    capturedCursors.add(target.before ?? "");
+    capturedRequestCursorsByTargetKey.set(targetKey, capturedCursors);
+    if (
+      !capture.terminal &&
+      capture.nextBefore !== null &&
+      capturedCursors.has(capture.nextBefore)
+    ) {
+      // The response has already been captured. Leave the checkpoint on the
+      // current page so the next run reproduces this blocker locally.
+      throw new FanslyPurchaseHistoryContractError({
+        code: "purchase_history_cursor_repeated",
+        message:
+          `Fansly purchase-history cursor cycled back to ${capture.nextBefore}; refusing an unbounded loop`,
+      });
+    }
+    capturedTargetKeys.add(targetKey);
     capturedContentIds.add(target.contentId);
-    state = { ...state, pendingTargets: state.pendingTargets.slice(1) };
+    state = capture.terminal
+      ? { ...state, pendingTargets: state.pendingTargets.slice(1) }
+      : {
+        ...state,
+        pendingTargets: [
+          { ...target, before: capture.nextBefore! },
+          ...state.pendingTargets.slice(1),
+        ],
+      };
     const progressCheckpoint = await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "purchase_history",
@@ -4129,7 +4382,10 @@ export async function executePurchaseHistoryChunk(
       "purchase_history",
       summarizeCheckpoint(progressCheckpoint),
     );
-    targetsFetched += 1;
+    pagesFetched += 1;
+    if (capture.terminal) {
+      targetsFetched += 1;
+    }
     orderRowsCaptured += orderRows;
   }
 
@@ -4147,6 +4403,7 @@ export async function executePurchaseHistoryChunk(
       scanBatches,
       targetsFetched,
       targetsSkipped,
+      pagesFetched,
       orderRowsCaptured,
     },
   };

@@ -389,6 +389,33 @@ describe("db write safety", () => {
     });
   });
 
+  it("rejects proxyless Fansly onboarding before adapter verification", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await createModel(testDb.db, {
+      slug: "lora",
+      name: "Lora",
+    });
+    const verifySession = vi.fn(async () => {
+      throw new Error("adapter must not be reached");
+    });
+    const app = createOnboardingApp(verifySession);
+
+    await expect(onboardFanslyPage(app, {
+      modelSlug: "lora",
+      label: "lora-main",
+      session: { authorization: "token" },
+      proxy: null,
+    } as never)).rejects.toMatchObject({
+      statusCode: 400,
+      code: "bad_request",
+    });
+    expect(verifySession).not.toHaveBeenCalled();
+  });
+
   it("rejects onboarding a second Fansly page for the same upstream account", async (context) => {
     if (!testDb) {
       context.skip();
@@ -420,6 +447,7 @@ describe("db write safety", () => {
       session: {
         authorization: "token-1",
       },
+      proxy: { url: "http://proxy.example" },
     });
 
     await expect(
@@ -429,6 +457,7 @@ describe("db write safety", () => {
         session: {
           authorization: "token-2",
         },
+        proxy: { url: "http://proxy.example" },
       }),
     ).rejects.toThrow('Upstream account "fansly:acct-123" is already bound to page "lora-main"');
 

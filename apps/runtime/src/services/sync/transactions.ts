@@ -78,6 +78,7 @@ type FanslyTransactionProgressState =
 type FanslyTransactionPage = Awaited<ReturnType<AppContext["adapter"]["getTransactionsPage"]>>;
 type FanslyTransactionItem = FanslyTransactionPage["items"][number];
 type FanslyIncrementalInvalidationReason =
+  | "incremental_total_invalid"
   | "incremental_total_changed"
   | "incremental_offset_overlap"
   | "incremental_total_mismatch";
@@ -115,7 +116,11 @@ function asNullableIsoString(value: unknown) {
 }
 
 function asNonNegativeInt(value: unknown) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function asNullableNonNegativeInt(value: unknown) {
@@ -690,10 +695,46 @@ async function syncTransactionsIncremental(
         input.requestContext,
         { after, limit: 100, offset: requestOffset },
       );
+
+      await persistRawPayload(app.db, {
+        platformAccountId: input.platformAccountId,
+        syncRunId: input.syncRunId,
+        endpoint: "earnings_transactions",
+        requestParams: {
+          after: after?.toISOString() ?? null,
+          offset: requestOffset,
+          limit: 100,
+        },
+        responsePayload: page.raw,
+        mapperVersion: FANSLY_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, {
+        action: "inserting earnings_transactions raw payload",
+        platform: "fansly",
+      });
+
+      const pageTotal = page.total;
+      if (!isNonNegativeSafeInteger(pageTotal)) {
+        await input.telemetry.addAnomaly({
+          code: "incremental_total_invalid",
+          severity: "error",
+          message: "Fansly incremental transaction page omitted a valid non-negative safe-integer total",
+          details: {
+            currentTotal: pageTotal ?? null,
+            page: state.transactionPages,
+            offset: requestOffset,
+          },
+        });
+        throw new UnstableFanslyIncrementalScanError(
+          "Fansly incremental transaction page returned an invalid total",
+          "incremental_total_invalid",
+        );
+      }
+
       if (
         state.providerReportedTotal !== null &&
-        page.total !== null &&
-        page.total !== state.providerReportedTotal
+        pageTotal !== state.providerReportedTotal
       ) {
         await input.telemetry.addAnomaly({
           code: "incremental_total_changed",
@@ -701,7 +742,7 @@ async function syncTransactionsIncremental(
           message: "Fansly incremental transaction total changed during an offset scan",
           details: {
             previousTotal: state.providerReportedTotal,
-            currentTotal: page.total,
+            currentTotal: pageTotal,
             page: state.transactionPages,
             offset: requestOffset,
           },
@@ -729,24 +770,6 @@ async function syncTransactionsIncremental(
           "incremental_offset_overlap",
         );
       }
-
-      await persistRawPayload(app.db, {
-        platformAccountId: input.platformAccountId,
-        syncRunId: input.syncRunId,
-        endpoint: "earnings_transactions",
-        requestParams: {
-          after: after?.toISOString() ?? null,
-          offset: requestOffset,
-          limit: 100,
-        },
-        responsePayload: page.raw,
-        mapperVersion: FANSLY_MAPPER_VERSION,
-        payloadKind: "mapping_critical",
-        retainUntil: retentionDate(),
-      }, {
-        action: "inserting earnings_transactions raw payload",
-        platform: "fansly",
-      });
 
       const pageOldestSeenAt = page.items.reduce<Date | null>(
         (oldest, item) => minDate(oldest, new Date(item.createdAt)),
@@ -782,7 +805,7 @@ async function syncTransactionsIncremental(
         Boolean(after && consecutiveAllOlderPages >= 2);
       const nextState: FanslyTransactionIncrementalState = {
         ...state,
-        providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
+        providerReportedTotal: state.providerReportedTotal ?? pageTotal,
         offset: state.offset + page.items.length,
         transactionPages: nextPageCount,
         processedTransactions: state.processedTransactions + page.items.length,
@@ -1176,12 +1199,45 @@ async function syncTransactionsBackfill(
           offset: state.offset,
         },
       );
-      providerReportedTotal ??= page.total ?? null;
+
+      await persistRawPayload(app.db, {
+        platformAccountId: input.platformAccountId,
+        syncRunId: input.syncRunId,
+        endpoint: "earnings_transactions",
+        requestParams: {
+          after: null,
+          offset: state.offset,
+          limit: 100,
+        },
+        responsePayload: page.raw,
+        mapperVersion: FANSLY_MAPPER_VERSION,
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, {
+        action: "inserting earnings_transactions raw payload",
+        platform: "fansly",
+      });
+
+      const pageTotal = page.total;
+      if (!isNonNegativeSafeInteger(pageTotal)) {
+        await input.telemetry.addAnomaly({
+          code: "backfill_total_invalid",
+          severity: "error",
+          message: "Fansly transaction backfill page omitted a valid non-negative safe-integer total",
+          details: {
+            currentTotal: pageTotal ?? null,
+            offset: state.offset,
+            snapshotEnd: state.snapshotEnd,
+          },
+        });
+        throw new Error("Fansly transaction backfill page returned an invalid total");
+      }
+
+      providerReportedTotal ??= pageTotal;
 
       if (
         providerReportedTotal !== null &&
-        page.total !== null &&
-        page.total !== providerReportedTotal
+        pageTotal !== providerReportedTotal
       ) {
         await input.telemetry.addAnomaly({
           code: "backfill_total_changed",
@@ -1189,7 +1245,7 @@ async function syncTransactionsBackfill(
           message: "Fansly transaction backfill total changed during an offset scan",
           details: {
             initialTotal: providerReportedTotal,
-            currentTotal: page.total,
+            currentTotal: pageTotal,
             offset: state.offset,
             snapshotEnd: state.snapshotEnd,
           },
@@ -1203,7 +1259,7 @@ async function syncTransactionsBackfill(
           severity: "error",
           message: "Fansly transaction backfill returned an empty page before completion",
           details: {
-            total: page.total,
+            total: pageTotal,
             offset: state.offset,
             snapshotEnd: state.snapshotEnd,
           },
@@ -1215,14 +1271,14 @@ async function syncTransactionsBackfill(
         state.transactionPages === 0 &&
         state.offset === 0 &&
         page.items.length === 0 &&
-        (page.total ?? 0) > 0
+        pageTotal > 0
       ) {
         await input.telemetry.addAnomaly({
           code: "backfill_empty_head_page",
           severity: "error",
           message: "Fansly head-scan backfill returned an empty first page despite a non-zero total",
           details: {
-            total: page.total,
+            total: pageTotal,
             snapshotEnd: state.snapshotEnd,
           },
         });
@@ -1245,24 +1301,6 @@ async function syncTransactionsBackfill(
         throw new Error("Fansly transaction backfill saw overlapping rows between offset pages");
       }
 
-      await persistRawPayload(app.db, {
-        platformAccountId: input.platformAccountId,
-        syncRunId: input.syncRunId,
-        endpoint: "earnings_transactions",
-        requestParams: {
-          after: null,
-          offset: state.offset,
-          limit: 100,
-        },
-        responsePayload: page.raw,
-        mapperVersion: FANSLY_MAPPER_VERSION,
-        payloadKind: "mapping_critical",
-        retainUntil: retentionDate(),
-      }, {
-        action: "inserting earnings_transactions raw payload",
-        platform: "fansly",
-      });
-
       const pageOldestSeenAt = page.items.reduce<Date | null>(
         (oldest, item) => minDate(oldest, new Date(item.createdAt)),
         null,
@@ -1276,7 +1314,7 @@ async function syncTransactionsBackfill(
 
       const nextState: FanslyTransactionBackfillState = {
         ...state,
-        providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
+        providerReportedTotal: state.providerReportedTotal ?? pageTotal,
         offset: state.offset + page.items.length,
         transactionPages: state.transactionPages + 1,
         processedTransactions: state.processedTransactions + page.items.length,
@@ -1390,6 +1428,20 @@ async function syncTransactionsBackfill(
     state.dirtyFrom ? new Date(state.dirtyFrom) : null,
   );
 
+  if (providerReportedTotal !== null && state.processedTransactions !== providerReportedTotal) {
+    await input.telemetry.addAnomaly({
+      code: "backfill_total_mismatch",
+      severity: "error",
+      message: "Provider-reported transaction total differed from the fetched transaction rows",
+      details: {
+        providerReportedTotal,
+        fetchedRows: state.processedTransactions,
+        pageCount: state.transactionPages,
+      },
+    });
+    throw new Error("Fansly transaction backfill total differed from fetched rows");
+  }
+
   const checkpointAfter = await upsertCheckpoint(app.db, {
     platformAccountId: input.platformAccountId,
     stream: "transactions",
@@ -1410,19 +1462,6 @@ async function syncTransactionsBackfill(
     newestSeenAt: newestSeenAt?.toISOString() ?? null,
     snapshotEnd: snapshotEnd.toISOString(),
   });
-
-  if (providerReportedTotal !== null && state.processedTransactions !== providerReportedTotal) {
-    await input.telemetry.addAnomaly({
-      code: "transactions_total_mismatch",
-      severity: "warn",
-      message: "Provider-reported transaction total differed from the fetched transaction rows",
-      details: {
-        providerReportedTotal,
-        fetchedRows: state.processedTransactions,
-        pageCount: state.transactionPages,
-      },
-    });
-  }
 
   return {
     satisfied: true,
