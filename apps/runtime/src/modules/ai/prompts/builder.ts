@@ -92,6 +92,8 @@ export interface PromptBuildInput {
   replyTone?: ReplyTone | undefined;
   /** coach-chat: the chatter's current question (the {chatterQuestion} slot). */
   chatterQuestion?: string | undefined;
+  /** coach-chat: optional kernel-owned instructions for a canned turn. */
+  preset?: 'situation' | undefined;
   /** coach-chat: prior coach dialog, oldest-first; sheds oldest over budget. */
   coachHistory?: CoachHistoryEntry[] | undefined;
   /** coach-chat: dated recap slots for the {recapSection}. */
@@ -237,6 +239,19 @@ const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
   active: 'This fan is still active. This segment should not be used for ping generation.',
 };
 
+const PRESET_INSTRUCTIONS_BLOCK = `
+## Preset Turn
+
+The chatter pressed the Help button instead of typing a question. Structure the advice part of your answer as these four labeled blocks, in this order, each label starting its own line exactly as written:
+
+СИТУАЦИЯ: the fan's current mood and intent, how engaged they are, and the stage of the dialog, one or two lines.
+ЧТО УПУЩЕНО: the most costly things missed or gotten wrong in the visible window, each tied to a short quoted message, at most three; one line saying so if nothing meaningful was missed.
+СЛЕДУЮЩИЙ ХОД: one concrete move for the next 1-3 messages, grounded in the spending and subscription data.
+РИСК: one line: the most likely way to kill this conversation right now.
+
+Then provide EXACTLY two draft fences, both implementing СЛЕДУЮЩИЙ ХОД: the first conversational and warm (the safe version), the second warmer, more seductive, one step further (the escalated version). Both in the fan's language. If the fan's last message contains a direct question, both drafts must answer it.
+`;
+
 const SYSTEM_PERSONALITY_ANCHOR = '\n\n## Model Personality\n\n';
 const TRANSCRIPT_ANCHOR = '## Conversation Transcript';
 const DRAFT_ANCHOR = '## Current Draft';
@@ -376,7 +391,8 @@ const COACH_PROMPT_HISTORY_BUDGET_CHARS = 60_000;
  * persona, escaped max earnings/bio and escaped max 2k current question take
  * about 287.1k with the production template — while still reserving room for
  * the newest transcript. Optional context is shed below before that transcript
- * is tail-trimmed. This is separate from the 64k answer transport ceiling. */
+ * is tail-trimmed. The fixed preset instruction block is measured but never
+ * shed. This is separate from the 64k answer transport ceiling. */
 export const COACH_PROMPT_MAX_CHARS = 300_000;
 
 // The context compiler already hard-caps a stored dossier at 20k. Repeat the
@@ -719,6 +735,8 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     fanProfileSection: fanProfileSection(input.fanProfile),
     draftSection: draftSection(policy.requiresDraft ? input.draftText : undefined),
     coachDraftSection: coachDraftSection(policy.optionalDraft ? input.draftText : undefined),
+    presetInstructions:
+      input.preset === 'situation' ? PRESET_INSTRUCTIONS_BLOCK : '',
     splitReplyInstructions: splitReplyInstructions(policy, input.replyMode),
     toneInstructions: toneInstructions(policy, input.replyTone),
     segmentInstructions: segmentInstructions(policy, input.pingSegment),

@@ -55,6 +55,11 @@ describe("aiFeatureStream body — coach fields", () => {
     expect(schema.safeParse({ ...base, summaryMode: "full" }).success).toBe(false);
   });
 
+  it("accepts preset 'situation' only", () => {
+    expect(schema.safeParse({ ...base, preset: "situation" }).success).toBe(true);
+    expect(schema.safeParse({ ...base, preset: "other" }).success).toBe(false);
+  });
+
   it("bounds fanSilenceDays to a whole number from 0 through the shared maximum", () => {
     const clientContext = {
       transcript: "fan: hi",
@@ -103,6 +108,7 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     replyMode: "preferSplit",
     messageCount: 3000,
     isRegeneration: true,
+    preset: "situation",
     summaryMode: "short",
   } as const;
 

@@ -47,6 +47,8 @@ import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 // manifest check is the byte-diff proof for the migrated unit.
 
 const FAN = "777000777";
+const COACH_SITUATION_PRESET_QUESTION =
+  "Разбери текущую ситуацию в переписке: что происходит у фана, что я упускаю и какой следующий ход. Дай два готовых варианта следующего сообщения: первый спокойный и тёплый, второй более флиртовый и эскалирующий.";
 
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
@@ -1480,6 +1482,63 @@ describe("coach-chat gates", () => {
     expect(res.json().message).toMatch(/chatterQuestion/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("rejects a preset combined with a non-empty chatterQuestion", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const capture: { calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/coach-chat",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({
+        preset: "situation",
+        chatterQuestion: "разбери ситуацию",
+      }),
+    });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().message).toBe("coach-chat preset forbids chatterQuestion");
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("streams a situation preset with an absent or whitespace-only question", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    for (const questionFields of [{}, { chatterQuestion: "  \n " }]) {
+      const capture: { input?: AiGatewayProviderInput } = {};
+      appContext.aiGatewayProvider = capturingProvider(capture);
+      const res = await apiServer!.inject({
+        method: "POST",
+        url: "/api/v1/ai/features/coach-chat",
+        headers: { authorization: `Bearer ${chatterKey}` },
+        payload: coachPayload({
+          preset: "situation",
+          coachHistory: [{ question: "а до этого?", answer: "старый разбор" }],
+          ...questionFields,
+        }),
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const prompt = capture.input!.body.prompt.userBlocks
+        .map((block) => block.text)
+        .join("\n");
+      expect(prompt).toContain(COACH_SITUATION_PRESET_QUESTION);
+      expect(prompt).toContain("## Preset Turn");
+      expect(prompt).toContain("старый разбор");
+      const frames = aiFrames(res.body);
+      const meta = frames.find((frame) => frame.type === "meta");
+      expect(meta).toMatchObject({
+        type: "meta",
+        presetQuestion: COACH_SITUATION_PRESET_QUESTION,
+      });
+      expect(aiFeatureStreamFrameSchema.safeParse(meta).success).toBe(true);
+      expect(frames.at(-1)?.type).toBe("done");
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("requires fanRef for coach-chat on fansly (Blocker 2)", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1511,6 +1570,15 @@ describe("coach-chat gates", () => {
       payload: coachPayload({ chatterQuestion: "hm?" }),
     });
     expect(res.statusCode, res.body).toBe(400);
+
+    const presetRes = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: coachPayload({ preset: "situation" }),
+    });
+    expect(presetRes.statusCode, presetRes.body).toBe(400);
+    expect(presetRes.json().message).toBe("fast-reply does not accept coach fields");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects summaryMode outside fan-summary", async (context) => {
@@ -1638,7 +1706,10 @@ describe("coach-chat gates", () => {
     });
     expect(res.statusCode, res.body).toBe(200);
     const frames = aiFrames(res.body);
-    expect(frames.find((frame) => frame.type === "meta")?.feature).toBe("coach-chat");
+    const meta = frames.find((frame) => frame.type === "meta");
+    expect(meta?.feature).toBe("coach-chat");
+    expect(meta).not.toHaveProperty("presetQuestion");
+    expect(aiFeatureStreamFrameSchema.safeParse(meta).success).toBe(true);
     expect(frames.at(-1)?.type).toBe("done");
     // The capturing provider saw the assembled prompt with the question and the
     // coverage note (the extension's coach question rode client-side context).
@@ -1646,6 +1717,7 @@ describe("coach-chat gates", () => {
     expect(prompt).toContain("как продать ppv?");
     expect(prompt).toContain("нащупай боль");
     expect(prompt).toContain("most recent window only");
+    expect(prompt).not.toContain("## Preset Turn");
     // Decision #179 end-to-end pin: body.draftText survives the SERVICE layer
     // (features/index.ts forwards it unguarded — buildPrompt-level tests would
     // stay green if that line ever got feature-gated away) and lands escaped

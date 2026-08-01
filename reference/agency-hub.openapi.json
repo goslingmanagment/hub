@@ -48006,6 +48006,12 @@
                       "additionalProperties": false
                     }
                   },
+                  "preset": {
+                    "type": "string",
+                    "enum": [
+                      "situation"
+                    ]
+                  },
                   "summaryMode": {
                     "type": "string",
                     "enum": [

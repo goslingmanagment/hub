@@ -205,6 +205,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 201 | Help/Review prompts: Russian output, receipts required | `help-me` and `chat-review` templates rewritten: chatter-facing analysis pinned to Russian («ты»), fan-facing text pinned to the fan's language; fixed capped block structures (СИТУАЦИЯ/ЧТО УПУЩЕНО/СЛЕДУЮЩИЙ ХОД/РИСК; ВЕРДИКТ/ДЕНЬГИ/ПЕРСОНА/ОШИБКИ/ЧТО РАБОТАЕТ); every claim must quote a message fragment; rating bands anchored with a no-default-to-7-8 rule; both Help suggestions implement ONE recommended move; chat-review gains the shared paid-media glossary. XML wire format unchanged |
 | 202 | Hydration autopilot: delegated, budgeted approval | The owner may delegate to a VERSIONED in-kernel policy (`agentHydrationAutoApproveMode` off/shadow/enforce, default off) the authorization of one bounded Fansly `thread_backfill_before` attempt per request: ≤40 calls, mark-read always refused, inside `agentHydrationAutoDailyCallBudget` reserved calls per UTC day (default 0). Decisions carry `decision_source='auto_policy'` + `decision_policy_version` (0119) — never a fabricated owner id; over-budget/foreign-platform/over-cap requests stay `requested` for the owner. New platform, target kind or side effect requires a fresh numbered decision
 | 203 | Agent transaction summary | Existing operation #10 gains `summary: true` for `transactions`: one MVCC statement returns currency-grouped gross/net/fee/count over matching Hub rows plus a page-wide windowless transaction floor. No new route, table, cursor or completeness proof; `basis='matching_rows_in_hub'` is the wording boundary |
+| 204 | Coach situation preset | `coach-chat` accepts optional `preset:'situation'`: Core substitutes the pinned canonical question only when `chatterQuestion` is absent or whitespace-only, refuses preset plus a non-empty question and refuses presets on other features; the optional meta echo `presetQuestion` lets clients replay the real question, while `{presetInstructions}` stays in the uncached task block and is empty for byte-identical normal turns. The extension will route Help into this lane; `help-me` remains served for older clients and desktop |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6369,3 +6370,27 @@ wire-identical because the additive `summary` member is emitted only when asked.
 Thread hydration cannot repair transaction history, so a window before this
 floor carries `remedy: none`. The CLI spelling is the existing command plus one
 flag: `hub dataset ... --dataset transactions --summary`.
+
+**Decision #204 (2026-08-02, Help becomes a Coach preset turn):** this extends
+#167's stateless `coach-chat` lane and reuses #201's situational structure
+without putting prompt text back into a client. The strict feature request body
+accepts one optional literal, `preset:'situation'`. On Coach, Core substitutes a
+pinned Russian canonical question when `chatterQuestion` is absent or contains
+only whitespace. A preset combined with a non-empty chatter question is a 400,
+as is a preset on any non-Coach feature. `coachHistory` remains valid on a
+preset turn because Help may be requested again mid-session.
+
+The substituted text is echoed as optional `presetQuestion` on the shared SSE
+meta frame so the extension can store and replay the real kernel-owned question
+without duplicating it. The new `{presetInstructions}` template slot lives in
+the uncached `## Your Task` block: situation mode requires the four labeled
+advice blocks from #201 and exactly two tone-contrasted draft fences, while a
+normal Coach turn substitutes an empty string and keeps its prompt bytes
+unchanged. The raw gateway and other feature lanes omit the meta field.
+
+Per the cross-repo design in `goose/fansly-ext`
+`docs/superpowers/specs/2026-08-02-help-into-coach.md`, the extension follow-up
+routes the Help button and hotkey into this preset turn. Core continues serving
+`help-me` unchanged for older extension builds and the desktop app. Physical
+retirement of that feature is a separate later decision, gated on desktop
+usage.

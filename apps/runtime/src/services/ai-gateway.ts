@@ -225,6 +225,8 @@ export interface AiGatewayStreamInternalOptions {
   /** Coach-only recap provenance for the existing meta frame. Derived from the
    * finalized prompt attachments; absent for the raw gateway and other features. */
   attachedRecaps?: AiFeatureAttachedRecaps;
+  /** Coach-only echo of the canonical question substituted for a preset turn. */
+  presetQuestion?: string;
 }
 
 /** The feature service builds a stream input from the wire body plus optional
@@ -395,6 +397,9 @@ export async function prepareAiGatewayStream(
         : {}),
       ...(internal?.attachedRecaps !== undefined
         ? { attachedRecaps: internal.attachedRecaps }
+        : {}),
+      ...(internal?.presetQuestion !== undefined
+        ? { presetQuestion: internal.presetQuestion }
         : {}),
       quota: quotaFrame,
     },
