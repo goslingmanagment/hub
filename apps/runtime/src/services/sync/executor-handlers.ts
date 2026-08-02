@@ -2088,6 +2088,7 @@ export async function executeFollowersReconcileChunk(
   if (input.pageContext.platform !== "fansly") {
     throw new Error("Follower reconcile is only supported for Fansly pages");
   }
+  const pageContext = input.pageContext;
 
   await input.telemetry.recordPhaseStarted("followers_reconcile");
   const requestContext = {
@@ -2127,12 +2128,185 @@ export async function executeFollowersReconcileChunk(
       sourceFollowerCount: accountMe.parsed.account.followCount,
       snapshotRestartCount: previousSnapshotRestartCount,
       restartReason: previousIsSnapshotRestartMarker ? "snapshot_mismatch" : null,
+      verificationPending: false,
     };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "followers_reconcile",
       state,
     });
+  }
+
+  const verifyPendingGeneration = async (processedThisChunk: number) => {
+    if (!state.verificationPending) {
+      throw new Error("Follower reconcile terminal verification requires a pending generation");
+    }
+
+    if (!input.budget.hasRequestCapacity() || !input.budget.hasWallClockCapacity()) {
+      return {
+        satisfied: false,
+        yieldReason: input.budget.resolveYieldReason(),
+        stats: {
+          generation: state.generation,
+          pageCount: state.pageCount,
+          processedThisChunk,
+          verificationPending: true,
+        },
+      } satisfies StreamChunkResult;
+    }
+
+    await assertOwnedPageSyncLease(app.db);
+    const finalizationFollowerCount = (
+      await refreshPageMetadata(
+        app,
+        pageContext,
+        undefined,
+        input.telemetry,
+        requestContext.requestObserver,
+      )
+    ).parsed.account.followCount;
+    const verification = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      const generationObservedCount = asNumber(await countPageFollowsByGeneration(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        generation: state.generation,
+      })) ?? 0;
+      if (generationObservedCount !== finalizationFollowerCount) {
+        return {
+          kind: "blocked" as const,
+          generationObservedCount,
+          finalizationFollowerCount,
+        };
+      }
+
+      await deactivatePageFollowsByGeneration(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        generation: state.generation,
+      });
+      await refreshFanPageFollowerState(dbTx, input.pageContext.page.id);
+      await rebuildFollowerRollups(
+        dbTx,
+        input.pageContext.page.id,
+        finalizationFollowerCount,
+      );
+      await updatePageSyncTimestampCache(dbTx, {
+        pageId: input.pageContext.page.id,
+        syncType: "followers",
+      });
+      return {
+        kind: "complete" as const,
+        checkpoint: await upsertCheckpoint(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "followers_reconcile",
+          state: {
+            revision: state.revision,
+            generation: state.generation,
+            offset: state.offset,
+            observedCount: state.observedCount,
+            pageCount: state.pageCount,
+            sourceFollowerCount: finalizationFollowerCount,
+            snapshotRestartCount: 0,
+            verificationPending: false,
+          },
+          lastSuccessfulRunId: input.syncRunId,
+        }),
+        generationObservedCount,
+        finalizationFollowerCount,
+      };
+    });
+
+    if (verification.kind === "blocked") {
+      await input.telemetry.addAnomaly({
+        code: "followers_reconcile_generation_guard",
+        severity: "warn",
+        message: "Follower reconcile generation did not match the source follower count; refusing destructive finalization",
+        details: {
+          sourceFollowerCount: verification.finalizationFollowerCount,
+          ...(state.sourceFollowerCount !== verification.finalizationFollowerCount
+            ? { startingSourceFollowerCount: state.sourceFollowerCount }
+            : {}),
+          observedCount: state.observedCount,
+          generationObservedCount: verification.generationObservedCount,
+          pageCount: state.pageCount,
+        },
+      });
+      if (state.snapshotRestartCount < 1) {
+        await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "followers_reconcile",
+          state: {
+            revision: state.revision,
+            generation: state.generation,
+            snapshotRestartCount: state.snapshotRestartCount + 1,
+            restartReason: "snapshot_mismatch",
+            verificationPending: false,
+          },
+        });
+        throw new FollowersReconcileConsistencyError({
+          code: "followers_reconcile_snapshot_drift",
+          message:
+            `Follower reconcile moved during the scan (${verification.generationObservedCount} unique rows ` +
+            `for terminal count ${verification.finalizationFollowerCount}, ` +
+            `starting count ${state.sourceFollowerCount}); restarting one fresh generation`,
+          retryable: true,
+        });
+      }
+      throw new FollowersReconcileConsistencyError({
+        code: "followers_reconcile_inconsistent_snapshot",
+        message:
+          `Follower reconcile generation contained ${verification.generationObservedCount} unique rows ` +
+          `for terminal source count ${verification.finalizationFollowerCount} ` +
+          `(starting count ${state.sourceFollowerCount}); refusing destructive finalization`,
+      });
+    }
+
+    if (state.sourceFollowerCount !== verification.finalizationFollowerCount) {
+      await input.telemetry.addNote(
+        "Follower headline changed during reconcile; terminal exact-count guard passed",
+        {
+          code: "followers_reconcile_terminal_headline_changed",
+          startingSourceFollowerCount: state.sourceFollowerCount,
+          terminalSourceFollowerCount: verification.finalizationFollowerCount,
+          generationObservedCount: verification.generationObservedCount,
+          pageCount: state.pageCount,
+        },
+      );
+    }
+    if (state.observedCount !== verification.finalizationFollowerCount) {
+      await input.telemetry.addAnomaly({
+        code: "followers_reconcile_offset_drift_tolerated",
+        severity: "warn",
+        message: "Follower reconcile raw row count drifted while the unique generation count remained complete",
+        details: {
+          sourceFollowerCount: verification.finalizationFollowerCount,
+          ...(state.sourceFollowerCount !== verification.finalizationFollowerCount
+            ? { startingSourceFollowerCount: state.sourceFollowerCount }
+            : {}),
+          observedCount: state.observedCount,
+          generationObservedCount: verification.generationObservedCount,
+          pageCount: state.pageCount,
+        },
+      });
+    }
+    await input.telemetry.recordCheckpointAdvanced(
+      "followers_reconcile",
+      summarizeCheckpoint(verification.checkpoint),
+    );
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: {
+        generation: state.generation,
+        pageCount: state.pageCount,
+        processedThisChunk,
+        sourceFollowerCount: verification.finalizationFollowerCount,
+        startingSourceFollowerCount: state.sourceFollowerCount,
+        generationObservedCount: verification.generationObservedCount,
+      },
+    } satisfies StreamChunkResult;
+  };
+
+  if (state.verificationPending) {
+    return verifyPendingGeneration(0);
   }
 
   let processedThisChunk = 0;
@@ -2273,46 +2447,21 @@ export async function executeFollowersReconcileChunk(
         await upsertPageFollows(dbTx, followInputs);
         await upsertFanPages(dbTx, fanPageInputs);
         await upsertFanPageExternalPresences(dbTx, fanPagePresenceInputs);
-        const generationObservedCount = asNumber(await countPageFollowsByGeneration(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          generation: state.generation,
-        })) ?? 0;
-        if (generationObservedCount !== state.sourceFollowerCount) {
-          return {
-            kind: "blocked" as const,
-            reason: "snapshot_mismatch" as const,
-            finalObservedCount,
-            generationObservedCount,
-          };
-        }
-        await deactivatePageFollowsByGeneration(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          generation: state.generation,
-        });
-        await refreshFanPageFollowerState(dbTx, input.pageContext.page.id);
-        await rebuildFollowerRollups(dbTx, input.pageContext.page.id, state.sourceFollowerCount);
-        await updatePageSyncTimestampCache(dbTx, {
-          pageId: input.pageContext.page.id,
-          syncType: "followers",
-        });
+        const verificationState = {
+          ...state,
+          observedCount: finalObservedCount,
+          pageCount: state.pageCount,
+          verificationPending: true,
+        };
         return {
-          kind: "complete" as const,
-          checkpoint: await upsertCheckpoint(dbTx, {
+          kind: "verification_pending" as const,
+          checkpoint: await upsertCheckpointProgress(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "followers_reconcile",
-            state: {
-              revision: state.revision,
-              generation: state.generation,
-              offset: state.offset,
-              observedCount: finalObservedCount,
-              pageCount: state.pageCount,
-              sourceFollowerCount: state.sourceFollowerCount,
-              snapshotRestartCount: 0,
-            },
-            lastSuccessfulRunId: input.syncRunId,
+            state: verificationState,
           }),
           processedThisPage: followInputs.length,
-          generationObservedCount,
+          state: verificationState,
         };
       }
 
@@ -2330,98 +2479,29 @@ export async function executeFollowersReconcileChunk(
       };
     });
     if (pageWrite.kind === "blocked") {
-      if (pageWrite.reason === "unmapped") {
-        await recordFollowerMappingBlockedAnomaly(input.telemetry, {
-          stream: "followers_reconcile",
-          offset: state.offset,
-          unmappedFollowerIds: pageWrite.unmappedFollowerIds,
-        });
-        throw new FollowersReconcileConsistencyError({
-          code: "followers_reconcile_unmapped_rows",
-          message: "Follower reconcile left source follower rows unmapped; refusing destructive finalization",
-        });
-      }
-
-      await input.telemetry.addAnomaly({
-        code: "followers_reconcile_generation_guard",
-        severity: "warn",
-        message: "Follower reconcile generation did not match the source follower count; refusing destructive finalization",
-        details: {
-          sourceFollowerCount: state.sourceFollowerCount,
-          observedCount: pageWrite.finalObservedCount,
-          generationObservedCount: pageWrite.generationObservedCount,
-          pageCount: state.pageCount,
-        },
+      await recordFollowerMappingBlockedAnomaly(input.telemetry, {
+        stream: "followers_reconcile",
+        offset: state.offset,
+        unmappedFollowerIds: pageWrite.unmappedFollowerIds,
       });
-      if (state.snapshotRestartCount < 1) {
-        // A Fansly follower list is live, not a transactional snapshot. One
-        // follow/unfollow during a long paginated walk can make the starting
-        // headline count differ by one even though every returned page was
-        // valid. Restart the whole generation ONCE; a second mismatch blocks
-        // exactly as before, so provider drift can never create an endless
-        // paid/request loop.
-        await upsertCheckpointProgress(app.db, {
-          platformAccountId: input.pageContext.page.id,
-          stream: "followers_reconcile",
-          state: {
-            revision: state.revision,
-            generation: state.generation,
-            snapshotRestartCount: state.snapshotRestartCount + 1,
-            restartReason: "snapshot_mismatch",
-          },
-        });
-        throw new FollowersReconcileConsistencyError({
-          code: "followers_reconcile_snapshot_drift",
-          message:
-            `Follower reconcile moved during the scan (${pageWrite.generationObservedCount} unique rows ` +
-            `for starting count ${state.sourceFollowerCount}); restarting one fresh generation`,
-          retryable: true,
-        });
-      }
       throw new FollowersReconcileConsistencyError({
-        code: "followers_reconcile_inconsistent_snapshot",
-        message: `Follower reconcile generation contained ${pageWrite.generationObservedCount} unique rows for source count ${state.sourceFollowerCount}; refusing destructive finalization`,
+        code: "followers_reconcile_unmapped_rows",
+        message: "Follower reconcile left source follower rows unmapped; refusing destructive finalization",
       });
     }
 
     processedThisChunk += pageWrite.processedThisPage;
-
-    if (pageWrite.kind === "complete") {
-      if (finalObservedCount !== state.sourceFollowerCount) {
-        await input.telemetry.addAnomaly({
-          code: "followers_reconcile_offset_drift_tolerated",
-          severity: "warn",
-          message: "Follower reconcile raw row count drifted while the unique generation count remained complete",
-          details: {
-            sourceFollowerCount: state.sourceFollowerCount,
-            observedCount: finalObservedCount,
-            generationObservedCount: pageWrite.generationObservedCount,
-            pageCount: state.pageCount,
-          },
-        });
-      }
-      await input.telemetry.recordCheckpointAdvanced(
-        "followers_reconcile",
-        summarizeCheckpoint(pageWrite.checkpoint),
-      );
-      return {
-        satisfied: true,
-        yieldReason: null,
-        stats: {
-          generation: state.generation,
-          pageCount: state.pageCount,
-          processedThisChunk,
-          sourceFollowerCount: state.sourceFollowerCount,
-          generationObservedCount: pageWrite.generationObservedCount,
-        },
-      } satisfies StreamChunkResult;
-    }
-
-    state = nextState;
     await input.telemetry.recordCheckpointAdvanced(
       "followers_reconcile",
       summarizeCheckpoint(pageWrite.checkpoint),
     );
+
+    if (pageWrite.kind === "verification_pending") {
+      state = pageWrite.state;
+      return verifyPendingGeneration(processedThisChunk);
+    }
+
+    state = nextState;
 
     if (input.budget.shouldYield()) {
       return {
@@ -2522,6 +2602,7 @@ export async function fanslyDmConversationsChunk(
       observedCount: 0,
       snapshotConversationIds: [],
       pageCount: 0,
+      providerTotalMode: "unobserved",
       providerReportedTotal: null,
       unchangedPageStreak: 0,
       fullSweepStartedAt: new Date().toISOString(),
@@ -2552,6 +2633,7 @@ export async function fanslyDmConversationsChunk(
       observedCount: 0,
       snapshotConversationIds: [],
       pageCount: 0,
+      providerTotalMode: "unobserved",
       providerReportedTotal: null,
       unchangedPageStreak: 0,
       fullSweepStartedAt: new Date().toISOString(),
@@ -2591,7 +2673,15 @@ export async function fanslyDmConversationsChunk(
       flags: 0,
     });
     const frozenProviderReportedTotal = state.providerReportedTotal;
-    const currentProviderReportedTotal = page.total ?? null;
+    const frozenProviderTotalMode = state.providerTotalMode;
+    const providerTotalField = page.total as unknown;
+    const currentProviderTotalMode = providerTotalField == null
+      ? "absent" as const
+      : "present" as const;
+    const currentProviderReportedTotal = currentProviderTotalMode === "present" &&
+        Number.isSafeInteger(providerTotalField) && (providerTotalField as number) >= 0
+      ? providerTotalField as number
+      : null;
     const nextPageCount = state.pageCount + 1;
 
     await persistRawPayload(app.db, {
@@ -2608,17 +2698,13 @@ export async function fanslyDmConversationsChunk(
       platform: "fansly",
     });
 
-    if (
-      currentProviderReportedTotal === null ||
-      !Number.isSafeInteger(currentProviderReportedTotal) ||
-      currentProviderReportedTotal < 0
-    ) {
+    if (currentProviderTotalMode === "present" && currentProviderReportedTotal === null) {
       await restartSweepAfterCapturedContractDrift({
         code: "dm_conversations_provider_total_invalid",
         message:
-          "DM conversation sync provider total was missing or invalid; refusing to apply the page",
+          "DM conversation sync provider total was present but invalid; refusing to apply the page",
         details: {
-          currentProviderReportedTotal,
+          currentProviderReportedTotal: providerTotalField ?? null,
           observedCount: state.snapshotConversationIds.length,
           pageCount: nextPageCount,
           offset: state.offset,
@@ -2641,14 +2727,18 @@ export async function fanslyDmConversationsChunk(
     }
 
     if (
-      frozenProviderReportedTotal !== null &&
-      currentProviderReportedTotal !== frozenProviderReportedTotal
+      (frozenProviderTotalMode !== "unobserved" &&
+        currentProviderTotalMode !== frozenProviderTotalMode) ||
+      (frozenProviderTotalMode === "present" &&
+        currentProviderReportedTotal !== frozenProviderReportedTotal)
     ) {
       await restartSweepAfterCapturedContractDrift({
         code: "dm_conversations_provider_total_drift_guard",
         message:
-          "DM conversation sync provider total changed during the sweep; refusing to apply the inconsistent page",
+          "DM conversation sync provider total presence or value changed during the sweep; refusing to apply the inconsistent page",
         details: {
+          providerTotalMode: frozenProviderTotalMode,
+          currentProviderTotalMode,
           providerReportedTotal: frozenProviderReportedTotal,
           currentProviderReportedTotal,
           observedCount: state.observedCount,
@@ -2687,10 +2777,10 @@ export async function fanslyDmConversationsChunk(
       ...uniqueCurrentConversationIds,
     ];
     const finalObservedCount = snapshotConversationIds.length;
-    if (
+    if (currentProviderReportedTotal !== null && (
       finalObservedCount > currentProviderReportedTotal ||
       (page.done && finalObservedCount !== currentProviderReportedTotal)
-    ) {
+    )) {
       await restartSweepAfterCapturedContractDrift({
         code: "dm_conversations_partial_page_guard",
         message:
@@ -2706,6 +2796,9 @@ export async function fanslyDmConversationsChunk(
     state = {
       ...state,
       pageCount: nextPageCount,
+      providerTotalMode: frozenProviderTotalMode === "unobserved"
+        ? currentProviderTotalMode
+        : frozenProviderTotalMode,
       providerReportedTotal: frozenProviderReportedTotal ?? currentProviderReportedTotal,
     };
 
@@ -3033,19 +3126,25 @@ export async function fanslyDmConversationsChunk(
       }
 
       if (page.done) {
-        await markPageDmConversationsInvisibleByGeneration(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          generation: state.generation,
-        });
+        const destructiveFinalization = state.providerTotalMode === "present";
+        if (destructiveFinalization) {
+          await markPageDmConversationsInvisibleByGeneration(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+          });
+        }
         const completedState = {
           version: 1,
           generation: state.generation,
           observedCount: finalObservedCount,
+          providerTotalMode: state.providerTotalMode,
           providerReportedTotal: state.providerReportedTotal,
+          destructiveFinalization,
           lastFullSweepCompletedAt: new Date().toISOString(),
         };
         return {
           kind: "complete" as const,
+          destructiveFinalization,
           dmMessagesFollowupNeeded,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
@@ -3081,6 +3180,17 @@ export async function fanslyDmConversationsChunk(
     }
 
     if (pageWrite.kind === "complete") {
+      if (!pageWrite.destructiveFinalization) {
+        await input.telemetry.addNote(
+          "DM conversation sweep completed without a provider total; unseen conversations remain visible",
+          {
+            code: "dm_conversations_provider_total_absent_nondestructive",
+            observedCount: finalObservedCount,
+            pageCount: state.pageCount,
+            providerTotalMode: state.providerTotalMode,
+          },
+        );
+      }
       return {
         satisfied: true,
         yieldReason: null,
@@ -3091,7 +3201,9 @@ export async function fanslyDmConversationsChunk(
           observedCount: finalObservedCount,
           processedConversations,
           repairedHeads,
+          providerTotalMode: state.providerTotalMode,
           providerReportedTotal: state.providerReportedTotal,
+          destructiveFinalization: pageWrite.destructiveFinalization,
           fullSweepCompleted: true,
         },
       } satisfies StreamChunkResult;
@@ -3110,6 +3222,7 @@ export async function fanslyDmConversationsChunk(
       observedCount: state.observedCount,
       processedConversations,
       repairedHeads,
+      providerTotalMode: state.providerTotalMode,
       providerReportedTotal: state.providerReportedTotal,
       fullSweepCompleted: false,
     },

@@ -27,6 +27,7 @@ type FollowersReconcileCursorState = {
   sourceFollowerCount: number;
   snapshotRestartCount: number;
   restartReason: "snapshot_mismatch" | null;
+  verificationPending: boolean;
 };
 
 type DmConversationCursorState = {
@@ -35,6 +36,7 @@ type DmConversationCursorState = {
   generation: number;
   offset: number;
   pageCount: number;
+  providerTotalMode: "unobserved" | "absent" | "present";
   providerReportedTotal: number | null;
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
@@ -245,6 +247,7 @@ export function parseFollowersReconcileCursorState(
   const snapshotRestartCount = restartReason === "snapshot_mismatch"
     ? asNumber(state.snapshotRestartCount) ?? 0
     : 0;
+  const verificationPending = state.verificationPending === true;
   if (
     generation === null ||
     offset === null ||
@@ -265,6 +268,7 @@ export function parseFollowersReconcileCursorState(
     sourceFollowerCount,
     snapshotRestartCount,
     restartReason,
+    verificationPending,
   };
 }
 
@@ -294,12 +298,29 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     return null;
   }
 
+  const providerTotalMode = state.providerTotalMode === "unobserved" ||
+      state.providerTotalMode === "absent" || state.providerTotalMode === "present"
+    ? state.providerTotalMode
+    : providerReportedTotal !== null
+      ? "present"
+      : pageCount > 0
+        ? "absent"
+        : "unobserved";
+  if (
+    (providerTotalMode === "present" && providerReportedTotal === null) ||
+    (providerTotalMode !== "present" && providerReportedTotal !== null) ||
+    (providerTotalMode === "unobserved" && pageCount !== 0)
+  ) {
+    return null;
+  }
+
   return {
     version: 1,
     mode: "full_scan",
     generation,
     offset,
     pageCount,
+    providerTotalMode,
     providerReportedTotal,
     unchangedPageStreak,
     fullSweepStartedAt,
