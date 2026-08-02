@@ -14,6 +14,10 @@ import {
   createAccountSeqGuards,
   createDomainEventHub,
 } from "./domain-events-stream.ts";
+import {
+  projectionCheckpointHiddenCount,
+  validateV2DeliverableReplayBatch,
+} from "./sse-replay-buffer.ts";
 
 // Kernel Stage 21: the v2 conformance instrument. A permanent worker-side
 // subscriber tailing EVERY account's domain events through the same hub +
@@ -112,8 +116,24 @@ export function startDomainEventsSmokeConsumer(app: AppContext): DomainEventsSmo
     if (!state.guards) {
       return;
     }
+    // Unlike an owner-scoped SSE connection, the permanent smoke subscriber
+    // follows accounts created after its startup snapshot. Such an account has
+    // an exact ledger baseline of zero; seed it explicitly so a first
+    // projection checkpoint can prove the hidden seq range from that baseline.
+    if (!state.guards.watermarks().has(event.accountId)) {
+      const baselined = new Map(state.guards.watermarks());
+      baselined.set(event.accountId, 0);
+      state.guards = createAccountSeqGuards(baselined);
+    }
     const afterSeq = state.guards.watermarks().get(event.accountId) ?? 0;
-    const verdict = state.guards.advance(event.accountId, event.accountSeq);
+    const hiddenCount = projectionCheckpointHiddenCount(event);
+    const verdict = hiddenCount === null
+      ? state.guards.advance(event.accountId, event.accountSeq)
+      : state.guards.advanceProjectionCheckpoint(
+        event.accountId,
+        event.accountSeq,
+        hiddenCount,
+      );
     if (verdict.gap) {
       recordGap(event.accountId, afterSeq, event.accountSeq);
       return;
@@ -212,16 +232,25 @@ export function startDomainEventsSmokeConsumer(app: AppContext): DomainEventsSmo
         const rows = await listEventsSince(app.db, {
           accountId,
           afterSeq,
+          throughSeq: head,
+          limit: REPLAY_BATCH_SIZE,
+          excludeProjectionOnly: true,
+        });
+        const continuity = validateV2DeliverableReplayBatch({
+          rows,
+          afterSeq,
+          throughSeq: head,
           limit: REPLAY_BATCH_SIZE,
         });
+        if (!continuity.ok) {
+          recordGap(accountId, afterSeq, head);
+          break;
+        }
         for (const row of rows) {
           consume(row);
         }
-        const lastRow = rows.at(-1);
-        if (lastRow) {
-          afterSeq = lastRow.accountSeq;
-        }
-        if (rows.length < REPLAY_BATCH_SIZE) {
+        afterSeq = continuity.nextSeq;
+        if (continuity.done) {
           break;
         }
       }
