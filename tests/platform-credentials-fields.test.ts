@@ -42,8 +42,8 @@ describe("buildCredentialsBody", () => {
     }
   });
 
-  it("still sends null when a stored proxy is intentionally cleared", () => {
-    expect(buildCredentialsBody({
+  it("refuses to encode proxy removal as a credentials PATCH", () => {
+    expect(() => buildCredentialsBody({
       platform: "fansly",
       values: baseFanslyValues,
       hadStoredProxy: true,
@@ -52,9 +52,30 @@ describe("buildCredentialsBody", () => {
         hasAuth: true,
       },
       requireCredentials: false,
-    })).toMatchObject({
+    })).toThrow("Proxy removal is a separate operation");
+  });
+
+  it("requires a proxy for standalone Fansly verification/onboarding bodies", () => {
+    expect(() => buildCredentialsBody({
       platform: "fansly",
-      proxy: null,
+      values: baseFanslyValues,
+    })).toThrow("Proxy is required for Fansly");
+  });
+
+  it("keeps proxy omitted for a session-only credentials update", () => {
+    expect(buildCredentialsBody({
+      platform: "fansly",
+      values: baseFanslyValues,
+      requireCredentials: false,
+    })).toEqual({
+      platform: "fansly",
+      session: {
+        authorization: "fansly-token",
+        fanslyClientId: undefined,
+        fanslyClientCheck: undefined,
+        fanslySessionId: undefined,
+      },
+      proxy: undefined,
     });
   });
 });

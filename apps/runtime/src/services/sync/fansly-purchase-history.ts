@@ -7,6 +7,11 @@ export type FanslyPurchaseHistoryTarget = {
   contentId: string;
 };
 
+export type FanslyPurchaseHistoryPendingTarget = FanslyPurchaseHistoryTarget & {
+  /** Opaque order id passed back to Fansly as `before`. Null is page one. */
+  before: string | null;
+};
+
 export type FanslyPurchaseHistoryCursorStateV2 = {
   version: 2;
   rawPayloadCursorId: number;
@@ -20,13 +25,22 @@ export type FanslyPurchaseHistoryCursorStateV3 = {
   pendingTargets: FanslyPurchaseHistoryTarget[];
 };
 
+export type FanslyPurchaseHistoryCursorStateV4 = {
+  version: 4;
+  transactionCursorId: number;
+  rawPayloadCursorId: number;
+  pendingTargets: FanslyPurchaseHistoryPendingTarget[];
+};
+
 /**
- * The union keeps the executor source-compatible while it adopts v3. Parsed
- * state is always normalized to v3; v2 exists only as an on-read migration.
+ * Older cursor shapes remain readable so a deploy can resume in-flight work.
+ * Parsed state is always normalized to v4, which adds a per-target provider
+ * cursor and therefore never has to replay an already captured page.
  */
 export type FanslyPurchaseHistoryCursorState =
   | FanslyPurchaseHistoryCursorStateV2
-  | FanslyPurchaseHistoryCursorStateV3;
+  | FanslyPurchaseHistoryCursorStateV3
+  | FanslyPurchaseHistoryCursorStateV4;
 
 export type FanslyMessagePurchaseTargetSource = {
   rawType: string | number;
@@ -38,6 +52,8 @@ export const FANSLY_PURCHASE_HISTORY_RESULT_LIMIT = 100;
 export type FanslyPurchaseHistoryCapture = {
   id: number | null;
   targetKey: string;
+  /** The cursor used for this captured page. Null identifies page one. */
+  requestBefore: string | null;
   statusCode: number | null;
   responsePayload: unknown;
 };
@@ -47,16 +63,32 @@ export type FanslyPurchaseHistoryCaptureClassification =
   & {
     contentId: string;
     captured: true;
-    validatedComplete: boolean;
+    validatedPage: boolean;
+    terminal: boolean;
     blocked: boolean;
     orderRows: number | null;
+    nextBefore: string | null;
     outcome:
-      | "supported_shape"
+      | "continuation"
+      | "terminal_empty"
       | "terminal_missing"
       | "contract_rejected"
-      | "result_truncated"
+      | "cursor_missing"
+      | "cursor_repeated"
+      | "cursor_conflict"
       | "http_rejected";
   };
+
+export type FanslyPurchaseHistoryTargetChain = {
+  target: FanslyPurchaseHistoryTarget;
+  targetKey: string;
+  firstCaptureId: number | null;
+  orderRows: number;
+  requestCursors: Array<string | null>;
+  status: "complete" | "resumable" | "blocked";
+  nextBefore: string | null;
+  blockedCapture: FanslyPurchaseHistoryCaptureClassification | null;
+};
 
 export type FanslyPurchaseHistoryCaptureIndex = {
   captures: FanslyPurchaseHistoryCaptureClassification[];
@@ -64,6 +96,8 @@ export type FanslyPurchaseHistoryCaptureIndex = {
   capturedContentIds: string[];
   validatedCompleteTargetKeys: string[];
   validatedCompleteContentIds: string[];
+  resumableTargets: FanslyPurchaseHistoryPendingTarget[];
+  chains: FanslyPurchaseHistoryTargetChain[];
   blocked: FanslyPurchaseHistoryCaptureClassification[];
 };
 
@@ -354,20 +388,28 @@ export function extractFanslyPurchaseHistoryTargets(
 
 export function parseFanslyPurchaseHistoryCursorState(
   value: unknown,
-): FanslyPurchaseHistoryCursorStateV3 | null {
+): FanslyPurchaseHistoryCursorStateV4 | null {
   const state = asRecord(value);
   const version = asNumber(state?.version);
-  if (version !== 2 && version !== 3) {
+  if (version !== 2 && version !== 3 && version !== 4) {
     return null;
   }
   const rawPayloadCursorId = asNumber(state?.rawPayloadCursorId);
-  if (rawPayloadCursorId === null || rawPayloadCursorId < 0) {
+  if (
+    rawPayloadCursorId === null ||
+    !Number.isSafeInteger(rawPayloadCursorId) ||
+    rawPayloadCursorId < 0
+  ) {
     return null;
   }
   const transactionCursorId = version === 2
     ? 0
     : asNumber(state?.transactionCursorId);
-  if (transactionCursorId === null || transactionCursorId < 0) {
+  if (
+    transactionCursorId === null ||
+    !Number.isSafeInteger(transactionCursorId) ||
+    transactionCursorId < 0
+  ) {
     return null;
   }
 
@@ -375,42 +417,55 @@ export function parseFanslyPurchaseHistoryCursorState(
   if (!Array.isArray(rawPendingTargets)) {
     return null;
   }
-  const pendingTargets = rawPendingTargets.flatMap<FanslyPurchaseHistoryTarget>((item) => {
+  const pendingTargets = rawPendingTargets.flatMap<FanslyPurchaseHistoryPendingTarget>((item) => {
       const target = asRecord(item);
       const kind = target?.kind;
       const contentId = asString(target?.contentId);
-      return (kind === "single" || kind === "bundle") && contentId
-        ? [{ kind, contentId }]
+      const rawBefore = version === 4 ? target?.before : null;
+      const before = rawBefore === null ? null : asString(rawBefore);
+      return (kind === "single" || kind === "bundle") && contentId &&
+          (rawBefore === null || before !== null)
+        ? [{ kind, contentId, before }]
         : [];
     });
   if (pendingTargets.length !== rawPendingTargets.length) {
     return null;
   }
+  if (
+    new Set(pendingTargets.map(fanslyPurchaseHistoryTargetKey)).size !==
+      pendingTargets.length
+  ) {
+    return null;
+  }
 
   return {
-    version: 3,
+    version: 4,
     transactionCursorId,
     rawPayloadCursorId,
     pendingTargets,
   };
 }
 
-export function countFanslyPurchaseHistoryRows(payloadValue: unknown): number | null {
+function fanslyPurchaseHistoryRows(payloadValue: unknown): unknown[] | null {
   const payload = asRecord(payloadValue);
   if (!payload) {
     return null;
   }
   if (Array.isArray(payload.accountMediaOrderHistory)) {
-    return payload.accountMediaOrderHistory.length;
+    return payload.accountMediaOrderHistory;
   }
   if (Array.isArray(payload.accountMediaOrders)) {
-    return payload.accountMediaOrders.length;
+    return payload.accountMediaOrders;
   }
   const aggregation = asRecord(payload.aggregationData);
   if (Array.isArray(aggregation?.accountMediaOrders)) {
-    return aggregation.accountMediaOrders.length;
+    return aggregation.accountMediaOrders;
   }
   return null;
+}
+
+export function countFanslyPurchaseHistoryRows(payloadValue: unknown): number | null {
+  return fanslyPurchaseHistoryRows(payloadValue)?.length ?? null;
 }
 
 /**
@@ -427,9 +482,11 @@ export function classifyFanslyPurchaseHistoryCapture(
       ...capture,
       contentId,
       captured: true,
-      validatedComplete: true,
+      validatedPage: true,
+      terminal: true,
       blocked: false,
       orderRows: 0,
+      nextBefore: null,
       outcome: "terminal_missing",
     };
   }
@@ -442,34 +499,72 @@ export function classifyFanslyPurchaseHistoryCapture(
       ...capture,
       contentId,
       captured: true,
-      validatedComplete: false,
+      validatedPage: false,
+      terminal: false,
       blocked: true,
       orderRows: null,
+      nextBefore: null,
       outcome: "http_rejected",
     };
   }
 
-  const orderRows = countFanslyPurchaseHistoryRows(capture.responsePayload);
-  if (orderRows === null) {
+  const rawRows = fanslyPurchaseHistoryRows(capture.responsePayload);
+  if (rawRows === null || rawRows.some((row) => asRecord(row) === null)) {
     return {
       ...capture,
       contentId,
       captured: true,
-      validatedComplete: false,
+      validatedPage: false,
+      terminal: false,
       blocked: true,
       orderRows: null,
+      nextBefore: null,
       outcome: "contract_rejected",
     };
   }
-  if (orderRows >= FANSLY_PURCHASE_HISTORY_RESULT_LIMIT) {
+  if (rawRows.length === 0) {
     return {
       ...capture,
       contentId,
       captured: true,
-      validatedComplete: false,
+      validatedPage: true,
+      terminal: true,
+      blocked: false,
+      orderRows: 0,
+      nextBefore: null,
+      outcome: "terminal_empty",
+    };
+  }
+
+  // FBuddy's executable client walks to an EMPTY page, even after a short
+  // page. The opaque cursor is the last row's orderId; row count is not proof
+  // of exhaustion.
+  const lastRow = asRecord(rawRows.at(-1))!;
+  const nextBefore = asString(lastRow.orderId);
+  if (!nextBefore) {
+    return {
+      ...capture,
+      contentId,
+      captured: true,
+      validatedPage: false,
+      terminal: false,
       blocked: true,
-      orderRows,
-      outcome: "result_truncated",
+      orderRows: rawRows.length,
+      nextBefore: null,
+      outcome: "cursor_missing",
+    };
+  }
+  if (nextBefore === capture.requestBefore) {
+    return {
+      ...capture,
+      contentId,
+      captured: true,
+      validatedPage: false,
+      terminal: false,
+      blocked: true,
+      orderRows: rawRows.length,
+      nextBefore,
+      outcome: "cursor_repeated",
     };
   }
 
@@ -477,18 +572,132 @@ export function classifyFanslyPurchaseHistoryCapture(
     ...capture,
     contentId,
     captured: true,
-    validatedComplete: true,
+    validatedPage: true,
+    terminal: false,
     blocked: false,
-    orderRows,
-    outcome: "supported_shape",
+    orderRows: rawRows.length,
+    nextBefore,
+    outcome: "continuation",
   };
 }
 
+function blockedChainCapture(
+  capture: FanslyPurchaseHistoryCaptureClassification,
+  outcome: "cursor_repeated" | "cursor_conflict",
+): FanslyPurchaseHistoryCaptureClassification {
+  return {
+    ...capture,
+    validatedPage: false,
+    terminal: false,
+    blocked: true,
+    outcome,
+  };
+}
+
+function resolveFanslyPurchaseHistoryTargetChain(
+  targetKey: string,
+  captures: readonly FanslyPurchaseHistoryCaptureClassification[],
+): FanslyPurchaseHistoryTargetChain {
+  const target = purchaseHistoryTargetFromTargetKey(targetKey);
+  if (!target) {
+    throw new Error(`Invalid Fansly purchase-history target key ${targetKey}`);
+  }
+  const sorted = [...captures].sort((left, right) => (left.id ?? 0) - (right.id ?? 0));
+  const firstCaptureId = sorted[0]?.id ?? null;
+  const byCursor = new Map<string, FanslyPurchaseHistoryCaptureClassification[]>();
+  for (const capture of sorted) {
+    const key = capture.requestBefore ?? "";
+    const pages = byCursor.get(key) ?? [];
+    pages.push(capture);
+    byCursor.set(key, pages);
+  }
+
+  const visited = new Set<string>();
+  let before: string | null = null;
+  let orderRows = 0;
+  for (;;) {
+    const cursorKey = before ?? "";
+    const pages = byCursor.get(cursorKey);
+    if (!pages || pages.length === 0) {
+      return {
+        target,
+        targetKey,
+        firstCaptureId,
+        orderRows,
+        requestCursors: [...visited].map((cursor) => cursor || null),
+        status: "resumable",
+        nextBefore: before,
+        blockedCapture: null,
+      };
+    }
+
+    const validPages = pages.filter((page) => !page.blocked);
+    if (validPages.length === 0) {
+      return {
+        target,
+        targetKey,
+        firstCaptureId,
+        orderRows,
+        requestCursors: [...visited].map((cursor) => cursor || null),
+        status: "blocked",
+        nextBefore: before,
+        blockedCapture: pages.at(-1)!,
+      };
+    }
+
+    const semanticResults = new Set(validPages.map((page) =>
+      page.terminal ? "terminal" : `next:${page.nextBefore ?? ""}`
+    ));
+    if (semanticResults.size > 1) {
+      return {
+        target,
+        targetKey,
+        firstCaptureId,
+        orderRows,
+        requestCursors: [...visited].map((cursor) => cursor || null),
+        status: "blocked",
+        nextBefore: before,
+        blockedCapture: blockedChainCapture(validPages.at(-1)!, "cursor_conflict"),
+      };
+    }
+
+    const page = validPages.at(-1)!;
+    orderRows += page.orderRows ?? 0;
+    visited.add(cursorKey);
+    if (page.terminal) {
+      return {
+        target,
+        targetKey,
+        firstCaptureId,
+        orderRows,
+        requestCursors: [...visited].map((cursor) => cursor || null),
+        status: "complete",
+        nextBefore: null,
+        blockedCapture: null,
+      };
+    }
+
+    const nextBefore = page.nextBefore!;
+    if (visited.has(nextBefore)) {
+      return {
+        target,
+        targetKey,
+        firstCaptureId,
+        orderRows,
+        requestCursors: [...visited].map((cursor) => cursor || null),
+        status: "blocked",
+        nextBefore,
+        blockedCapture: blockedChainCapture(page, "cursor_repeated"),
+      };
+    }
+    before = nextBefore;
+  }
+}
+
 /**
- * Builds the local reconciliation view. Any capture suppresses egress, but a
- * target is complete only when at least one capture validates. Multiple raw
- * rows for the same content id are folded so an older rejected shape cannot
- * override a later locally-valid capture (or the reverse).
+ * Builds a contiguous page chain from `before=null` for every target. A target
+ * is complete only when that chain reaches an empty or terminal-missing page;
+ * otherwise it either exposes the next missing cursor or a durable blocker.
  */
 export function classifyFanslyPurchaseHistoryCaptures(
   captures: readonly FanslyPurchaseHistoryCapture[],
@@ -499,24 +708,69 @@ export function classifyFanslyPurchaseHistoryCaptures(
   const validatedCompleteTargetKeys = new Set<string>();
   const validatedCompleteContentIds = new Set<string>();
 
+  const capturesByTargetKey = new Map<string, FanslyPurchaseHistoryCaptureClassification[]>();
   for (const capture of classified) {
     capturedTargetKeys.add(capture.targetKey);
     capturedContentIds.add(capture.contentId);
-    if (capture.validatedComplete) {
-      validatedCompleteTargetKeys.add(capture.targetKey);
-      validatedCompleteContentIds.add(capture.contentId);
+    const targetCaptures = capturesByTargetKey.get(capture.targetKey) ?? [];
+    targetCaptures.push(capture);
+    capturesByTargetKey.set(capture.targetKey, targetCaptures);
+  }
+
+  const chains = [...capturesByTargetKey.entries()]
+    .map(([targetKey, targetCaptures]) =>
+      resolveFanslyPurchaseHistoryTargetChain(targetKey, targetCaptures)
+    )
+    .sort((left, right) =>
+      (left.firstCaptureId ?? Number.MAX_SAFE_INTEGER) -
+        (right.firstCaptureId ?? Number.MAX_SAFE_INTEGER)
+    );
+
+  // One Fansly content id cannot validly occupy both request namespaces. This
+  // is contract drift even when the conflicting captures arrived in separate
+  // runs, so turn every affected chain into a local blocker.
+  const targetKeysByContentId = new Map<string, string[]>();
+  for (const chain of chains) {
+    const keys = targetKeysByContentId.get(chain.target.contentId) ?? [];
+    keys.push(chain.targetKey);
+    targetKeysByContentId.set(chain.target.contentId, keys);
+  }
+  for (const [contentId, targetKeys] of targetKeysByContentId) {
+    if (targetKeys.length < 2) {
+      continue;
+    }
+    for (const targetKey of targetKeys) {
+      const chain = chains.find((candidate) => candidate.targetKey === targetKey)!;
+      const representative = capturesByTargetKey.get(targetKey)!.at(-1)!;
+      chain.status = "blocked";
+      chain.nextBefore = null;
+      chain.blockedCapture = blockedChainCapture(
+        {
+          ...representative,
+          contentId,
+        },
+        "cursor_conflict",
+      );
     }
   }
 
-  const blockedByContentId = new Map<string, FanslyPurchaseHistoryCaptureClassification>();
-  for (const capture of classified) {
-    if (
-      capture.blocked &&
-      !validatedCompleteContentIds.has(capture.contentId)
-    ) {
-      blockedByContentId.set(capture.contentId, capture);
+  for (const chain of chains) {
+    if (chain.status === "complete") {
+      validatedCompleteTargetKeys.add(chain.targetKey);
+      validatedCompleteContentIds.add(chain.target.contentId);
     }
   }
+
+  const blocked = chains.flatMap((chain) =>
+    chain.status === "blocked" && chain.blockedCapture
+      ? [chain.blockedCapture]
+      : []
+  );
+  const resumableTargets = chains.flatMap<FanslyPurchaseHistoryPendingTarget>((chain) =>
+    chain.status === "resumable"
+      ? [{ ...chain.target, before: chain.nextBefore }]
+      : []
+  );
 
   return {
     captures: classified,
@@ -524,6 +778,8 @@ export function classifyFanslyPurchaseHistoryCaptures(
     capturedContentIds: [...capturedContentIds],
     validatedCompleteTargetKeys: [...validatedCompleteTargetKeys],
     validatedCompleteContentIds: [...validatedCompleteContentIds],
-    blocked: [...blockedByContentId.values()],
+    resumableTargets,
+    chains,
+    blocked,
   };
 }

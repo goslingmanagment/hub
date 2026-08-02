@@ -2189,25 +2189,25 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     expect(result.yieldReason).toBe("request_budget");
   });
 
-  it("resumes dm_conversations from versioned checkpoint state regardless of desired revision", async () => {
+  it("captures then restarts a legacy dm_conversations sweep that has no unique-id snapshot", async () => {
     const telemetry = createTelemetry();
     const getMessagingGroupsPage = vi.fn(async (requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {
       await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
       return {
-      total: 200,
-      items: [],
-      accounts: [],
-      groups: [],
-      offset: 100,
-      raw: {
-        data: [],
-        aggregationData: {
-          total: 200,
-          accounts: [],
-          groups: [],
+        total: 200,
+        items: [],
+        accounts: [],
+        groups: [],
+        offset: 100,
+        raw: {
+          data: [],
+          aggregationData: {
+            total: 200,
+            accounts: [],
+            groups: [],
+          },
         },
-      },
-      done: true,
+        done: true,
       };
     });
     const db = {};
@@ -2235,6 +2235,311 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       },
     });
 
+    await expect(fanslyDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 42,
+      },
+      syncRunId: 900,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never)).rejects.toThrow("legacy sweep without its unique-id snapshot");
+
+    expect(getMessagingGroupsPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      offset: 100,
+      limit: 100,
+    }));
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledTimes(1);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "dm_conversations_legacy_snapshot_restart",
+      severity: "error",
+      details: expect.objectContaining({
+        providerReportedTotal: 200,
+        pageCount: 2,
+        offset: 100,
+        abandonedGeneration: 7,
+        restartGeneration: 8,
+      }),
+    }));
+    expect(dbMocks.listPageDmConversationsByPlatformConversationIds).not.toHaveBeenCalled();
+    expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.maxPageDmThreadGeneration).toHaveBeenCalledWith(db, 55);
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(db, {
+      platformAccountId: 55,
+      stream: "dm_conversations",
+      state: expect.objectContaining({
+        generation: 8,
+        offset: 0,
+        observedCount: 0,
+        snapshotConversationIds: [],
+        providerReportedTotal: null,
+      }),
+    });
+  });
+
+  it("rejects a dm_conversations page when provider total drifts during a sweep", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async (
+      requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+    ) => {
+      await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
+      return {
+        total: 199,
+        items: [],
+        accounts: [],
+        groups: [],
+        offset: 100,
+        raw: {
+          data: [],
+          aggregationData: {
+            total: 199,
+            accounts: [],
+            groups: [],
+          },
+        },
+        done: false,
+      };
+    });
+    const db = {};
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "full_scan",
+        generation: 7,
+        offset: 100,
+        observedCount: 100,
+        pageCount: 1,
+        providerReportedTotal: 200,
+        snapshotConversationIds: Array.from({ length: 100 }, (_, index) => `group-${index}`),
+        unchangedPageStreak: 0,
+        fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+        lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+      },
+    });
+
+    await expect(fanslyDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 42,
+      },
+      syncRunId: 900,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never)).rejects.toThrow("provider total changed during the sweep");
+
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledTimes(1);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "dm_conversations_provider_total_drift_guard",
+      severity: "error",
+      details: expect.objectContaining({
+        providerReportedTotal: 200,
+        currentProviderReportedTotal: 199,
+        observedCount: 100,
+        pageCount: 2,
+        offset: 100,
+        abandonedGeneration: 7,
+        restartGeneration: 8,
+      }),
+    }));
+    expect(dbMocks.listPageDmConversationsByPlatformConversationIds).not.toHaveBeenCalled();
+    expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(db, expect.objectContaining({
+      state: expect.objectContaining({
+        generation: 8,
+        offset: 0,
+        snapshotConversationIds: [],
+        providerReportedTotal: null,
+      }),
+    }));
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "missing provider total",
+      providerReportedTotal: null,
+      snapshotConversationIds: [] as string[],
+      page: { total: undefined, items: [], done: true },
+      anomalyCode: "dm_conversations_provider_total_invalid",
+    },
+    {
+      name: "an id overlapping a prior offset page",
+      providerReportedTotal: 2,
+      snapshotConversationIds: ["group-overlap"],
+      page: {
+        total: 2,
+        items: [{ groupId: "group-overlap" }],
+        done: true,
+      },
+      anomalyCode: "dm_conversations_snapshot_overlap_guard",
+    },
+    {
+      name: "a terminal unique-id count below provider total",
+      providerReportedTotal: 2,
+      snapshotConversationIds: ["group-seen"],
+      page: { total: 2, items: [], done: true },
+      anomalyCode: "dm_conversations_partial_page_guard",
+    },
+  ])("captures and restarts dm_conversations on $name", async ({
+    providerReportedTotal,
+    snapshotConversationIds,
+    page,
+    anomalyCode,
+  }) => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      ...page,
+      accounts: [],
+      groups: [],
+      offset: 100,
+      raw: {
+        data: page.items,
+        aggregationData: {
+          ...(page.total === undefined ? {} : { total: page.total }),
+          accounts: [],
+          groups: [],
+        },
+      },
+    }));
+    const db = {};
+    const app = {
+      db,
+      config: { syncSharedRateLimitEnabled: true },
+      adapter: { getMessagingGroupsPage },
+    } as never;
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "full_scan",
+        generation: 7,
+        offset: 100,
+        observedCount: snapshotConversationIds.length,
+        snapshotConversationIds,
+        pageCount: 1,
+        providerReportedTotal,
+        unchangedPageStreak: 0,
+        fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+        lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+      },
+    });
+
+    await expect(fanslyDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: { requestSeq: 42 },
+      syncRunId: 900,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never)).rejects.toThrow("restarted the DM conversation sweep");
+
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledTimes(1);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: anomalyCode,
+      severity: "error",
+    }));
+    expect(dbMocks.listPageDmConversationsByPlatformConversationIds).not.toHaveBeenCalled();
+    expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(db, expect.objectContaining({
+      state: expect.objectContaining({
+        generation: 8,
+        offset: 0,
+        observedCount: 0,
+        snapshotConversationIds: [],
+        providerReportedTotal: null,
+      }),
+    }));
+  });
+
+  it("completes a resumed dm_conversations sweep only when unique ids match provider total", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async (
+      requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+    ) => {
+      await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
+      return {
+        total: 100,
+        items: [],
+        accounts: [],
+        groups: [],
+        offset: 100,
+        raw: {
+          data: [],
+          aggregationData: {
+            total: 100,
+            accounts: [],
+            groups: [],
+          },
+        },
+        done: true,
+      };
+    });
+    const db = {};
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "full_scan",
+        generation: 7,
+        offset: 100,
+        pageCount: 1,
+        providerReportedTotal: 100,
+        snapshotConversationIds: Array.from({ length: 100 }, (_, index) => `group-${index}`),
+        unchangedPageStreak: 0,
+        fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+        lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+      },
+    });
+
     const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
         platform: "fansly",
@@ -2255,15 +2560,16 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       budget: new SyncChunkBudget(1),
     } as never);
 
-    expect(result.satisfied).toBe(true);
-    expect(getMessagingGroupsPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      offset: 100,
-      limit: 100,
-    }));
-    expect(dbMocks.listPageDmConversationsByPlatformConversationIds).toHaveBeenCalledWith(db, {
-      platformAccountId: 55,
-      platformConversationIds: [],
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: {
+        generation: 7,
+        observedCount: 100,
+        providerReportedTotal: 100,
+        fullSweepCompleted: true,
+      },
     });
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
     expect(dbMocks.markPageDmConversationsInvisibleByGeneration).toHaveBeenCalledWith(db, {
       platformAccountId: 55,
       generation: 7,
@@ -2275,9 +2581,14 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       state: expect.objectContaining({
         version: 1,
         generation: 7,
+        observedCount: 100,
+        providerReportedTotal: 100,
         lastFullSweepCompletedAt: expect.any(String),
       }),
     }));
+    expect(dbMocks.upsertCheckpoint.mock.calls.at(-1)?.[1]?.state).not.toHaveProperty(
+      "snapshotConversationIds",
+    );
     expect(dbMocks.maxPageDmThreadGeneration).not.toHaveBeenCalled();
   });
 
@@ -2713,6 +3024,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       stream: "dm_conversations",
       state: expect.objectContaining({
         offset: 100,
+        observedCount: 1,
+        snapshotConversationIds: ["group-1"],
       }),
     }));
   });

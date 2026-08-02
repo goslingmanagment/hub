@@ -10,6 +10,7 @@ import {
   createProxyRequestDispatcher,
   createRequestDispatcher,
   executeObservedRequest,
+  millsFromInteger,
   sanitizeError,
   redactSensitiveText,
   resolveRetryDelayMs,
@@ -20,11 +21,17 @@ import {
 import { FanslyApiError, FanslyProxyMissingError } from "./errors.ts";
 import type {
   FanslyAccount,
+  FanslyAccountList,
+  FanslyAccountListsResponse,
   FanslyAccountMeResponse,
   FanslyEarningsAccount,
   FanslyEarningsAccountsPageResponse,
+  FanslyEarningsOverview,
+  FanslyEarningsOverviewResponse,
   FanslyFollowersPage,
   FanslyGroupDetail,
+  FanslyListItem,
+  FanslyListItemsPageResponse,
   FanslyMessagesPage,
   FanslyMessagesPageResponse,
   FanslyMessagingGroupsPage,
@@ -33,6 +40,8 @@ import type {
   FanslyPostsPageResponse,
   FanslyRequestContext,
   FanslySubscribersPage,
+  FanslyTrackingLink,
+  FanslyTrackingLinksResponse,
   FanslyTransactionsPage,
 } from "./types.ts";
 
@@ -42,13 +51,14 @@ interface AdapterOptions {
 }
 
 type ApiEnvelope<T> = {
-  success: boolean;
+  success?: boolean;
   response?: T;
   error?: {
     code?: number;
     message?: string;
     details?: string;
-  };
+    [key: string]: unknown;
+  } | null;
 };
 
 type RequestResult<T> = {
@@ -59,6 +69,114 @@ type RequestResult<T> = {
 const REQUEST_TIMEOUT_MS = 30_000;
 const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
 const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown) {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isNullableSafeInteger(value: unknown) {
+  return value === undefined || value === null ||
+    (typeof value === "number" && Number.isSafeInteger(value));
+}
+
+function isFanslyEarningsOverview(value: unknown): value is FanslyEarningsOverview {
+  return isRecord(value) &&
+    typeof value.pendingBalance === "number" &&
+    Number.isSafeInteger(value.pendingBalance);
+}
+
+function isFanslyTrackingLink(value: unknown): value is FanslyTrackingLink {
+  if (!isRecord(value) || typeof value.id !== "string" || value.id.length === 0) {
+    return false;
+  }
+
+  return [
+    value.accountId,
+    value.internalId,
+    value.label,
+    value.description,
+    value.metadata,
+  ].every(isNullableString) && [
+    value.type,
+    value.status,
+    value.createdAt,
+    value.clicks,
+    value.claims,
+    value.follows,
+    value.subscriptions,
+    value.totalNet,
+    value.totalGross,
+  ].every(isNullableSafeInteger);
+}
+
+function isFanslyTrackingLinks(value: unknown): value is FanslyTrackingLink[] {
+  return Array.isArray(value) && value.every(isFanslyTrackingLink);
+}
+
+function isFanslyListItem(value: unknown): value is FanslyListItem {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    isNullableString(value.sortId) &&
+    isNullableString(value.listId) &&
+    isNullableSafeInteger(value.type) &&
+    isNullableString(value.metadata);
+}
+
+function isFanslyListItems(value: unknown): value is FanslyListItem[] {
+  return Array.isArray(value) && value.every(isFanslyListItem);
+}
+
+function isFanslyAccountList(value: unknown): value is FanslyAccountList {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    isNullableString(value.accountId) &&
+    isNullableSafeInteger(value.pos) &&
+    isNullableSafeInteger(value.type) &&
+    isNullableString(value.label) &&
+    isNullableSafeInteger(value.itemCount) &&
+    (value.items === undefined || isFanslyListItems(value.items));
+}
+
+function isFanslyAccountLists(value: unknown): value is FanslyAccountList[] {
+  return Array.isArray(value) && value.every(isFanslyAccountList);
+}
+
+function isApiError(value: unknown): value is NonNullable<ApiEnvelope<unknown>["error"]> {
+  return isRecord(value) &&
+    (value.code === undefined ||
+      (typeof value.code === "number" && Number.isFinite(value.code))) &&
+    (value.message === undefined || typeof value.message === "string") &&
+    (value.details === undefined || typeof value.details === "string");
+}
+
+function isApiEnvelope(value: unknown): value is ApiEnvelope<unknown> {
+  return isRecord(value) &&
+    (value.success === undefined || typeof value.success === "boolean") &&
+    (value.error === undefined || value.error === null || isApiError(value.error));
+}
+
+function parseFanslyTransactionsPage(value: unknown): FanslyTransactionsPage | null {
+  if (
+    !isRecord(value) ||
+    typeof value.total !== "number" ||
+    !Number.isSafeInteger(value.total) ||
+    value.total < 0 ||
+    !Array.isArray(value.data)
+  ) {
+    return null;
+  }
+
+  return {
+    total: value.total,
+    data: value.data as FanslyTransactionsPage["data"],
+  };
+}
 
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
@@ -94,6 +212,148 @@ export class FanslyAdapter {
         subscriberCount: response.account.subscriberCount,
       }),
     });
+  }
+
+  async getEarningsOverview(
+    context: FanslyRequestContext,
+  ): Promise<FanslyEarningsOverviewResponse> {
+    const response = await this.request<unknown>(
+      context,
+      "/account/wallets/earnings",
+      {
+        operation: "earnings_overview",
+        endpointTemplate: "/account/wallets/earnings",
+        category: "transactions",
+        requestShape: {},
+        summarizeResponse: (parsed) => ({
+          contractAccepted: isFanslyEarningsOverview(parsed),
+        }),
+      },
+    );
+    const parsed = isFanslyEarningsOverview(response.parsed) ? response.parsed : null;
+
+    return {
+      pendingBalanceMills: parsed === null
+        ? null
+        : millsFromInteger(parsed.pendingBalance),
+      contractAccepted: parsed !== null,
+      raw: response.raw,
+    };
+  }
+
+  async getTrackingLinks(
+    context: FanslyRequestContext,
+  ): Promise<FanslyTrackingLinksResponse> {
+    const response = await this.request<unknown>(context, "/trackinglinks", {
+      operation: "tracking_links",
+      endpointTemplate: "/trackinglinks",
+      category: "account",
+      requestShape: {},
+      summarizeResponse: (parsed) => ({
+        returnedItems: Array.isArray(parsed) ? parsed.length : null,
+        contractAccepted: isFanslyTrackingLinks(parsed),
+      }),
+    });
+    const parsed = isFanslyTrackingLinks(response.parsed) ? response.parsed : null;
+
+    return {
+      items: parsed ?? [],
+      contractAccepted: parsed !== null,
+      raw: response.raw,
+    };
+  }
+
+  async getListsAccount(
+    context: FanslyRequestContext,
+    itemId: string | null = null,
+  ): Promise<FanslyAccountListsResponse> {
+    const normalizedItemId = itemId?.trim() || null;
+    const response = await this.request<unknown>(context, "/lists/account", {
+      operation: "lists_account",
+      endpointTemplate: "/lists/account",
+      query: {
+        // Fansly uses the explicit empty value for the all-lists form.
+        itemId: normalizedItemId ?? "",
+      },
+      category: "account",
+      requestShape: {
+        itemIdPresent: normalizedItemId !== null,
+      },
+      summarizeResponse: (parsed) => ({
+        returnedItems: Array.isArray(parsed) ? parsed.length : null,
+        contractAccepted: isFanslyAccountLists(parsed),
+      }),
+    });
+    const parsed = isFanslyAccountLists(response.parsed) ? response.parsed : null;
+
+    return {
+      items: parsed ?? [],
+      itemId: normalizedItemId,
+      contractAccepted: parsed !== null,
+      raw: response.raw,
+    };
+  }
+
+  async getListItemsPage(
+    context: FanslyRequestContext,
+    params: {
+      listId: string;
+      limit?: number;
+      after?: string | null;
+      sortMode?: number;
+    },
+  ): Promise<FanslyListItemsPageResponse> {
+    const listId = params.listId.trim();
+    if (listId.length === 0) {
+      throw new Error("Fansly list items request requires a list id");
+    }
+    const limit = params.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("Fansly list items limit must be a safe integer between 1 and 100");
+    }
+    const sortMode = params.sortMode ?? 3;
+    if (!Number.isSafeInteger(sortMode) || sortMode < 0) {
+      throw new Error("Fansly list items sort mode must be a non-negative safe integer");
+    }
+    const after = params.after ?? null;
+    if (after !== null && after.trim().length === 0) {
+      throw new Error("Fansly list items cursor must be nonblank when supplied");
+    }
+
+    const response = await this.request<unknown>(context, "/lists/itemsnew", {
+      operation: "list_items",
+      endpointTemplate: "/lists/itemsnew",
+      query: {
+        listId,
+        limit: String(limit),
+        after: after ?? undefined,
+        sortMode: String(sortMode),
+      },
+      category: "account",
+      requestShape: {
+        listIdPresent: true,
+        limit,
+        cursorPresent: after !== null,
+        sortMode,
+      },
+      pagination: {
+        limit,
+        cursorPresent: after !== null,
+      },
+      summarizeResponse: (parsed) => ({
+        returnedItems: Array.isArray(parsed) ? parsed.length : null,
+        contractAccepted: isFanslyListItems(parsed),
+      }),
+    });
+    const parsed = isFanslyListItems(response.parsed) ? response.parsed : null;
+
+    return {
+      items: parsed ?? [],
+      listId,
+      after,
+      contractAccepted: parsed !== null,
+      raw: response.raw,
+    };
   }
 
   async getAccountsByIdsPage(context: FanslyRequestContext, ids: string[]) {
@@ -185,7 +445,8 @@ export class FanslyAdapter {
       offset?: number;
     },
   ) {
-    const response = await this.request<FanslyTransactionsPage>(
+    const limit = params.limit ?? 100;
+    const response = await this.request<unknown>(
       context,
       "/account/wallets/earnings/transactions",
       {
@@ -208,20 +469,25 @@ export class FanslyAdapter {
           offset: params.offset ?? 0,
           limit: params.limit ?? 100,
         },
-        summarizeResponse: (parsed) => ({
-          total: parsed.total,
-          returnedItems: parsed.data.length,
-          done: parsed.data.length < (params.limit ?? 100),
-        }),
+        summarizeResponse: (parsed) => {
+          const accepted = parseFanslyTransactionsPage(parsed);
+          return {
+            total: accepted?.total ?? null,
+            returnedItems: accepted?.data.length ?? null,
+            done: accepted ? accepted.data.length < limit : null,
+            contractAccepted: accepted !== null,
+          };
+        },
       },
     );
 
-    const limit = params.limit ?? 100;
+    const parsed = parseFanslyTransactionsPage(response.parsed);
     return {
-      total: response.parsed.total,
-      items: response.parsed.data,
+      total: parsed?.total ?? null,
+      items: parsed?.data ?? [],
       offset: params.offset ?? 0,
-      done: response.parsed.data.length < limit,
+      done: parsed ? parsed.data.length < limit : false,
+      contractAccepted: parsed !== null,
       raw: response.raw,
     };
   }
@@ -597,6 +863,7 @@ export class FanslyAdapter {
       accountIds?: string | null;
       accountMediaId?: string | null;
       accountMediaBundleId?: string | null;
+      before?: string | null;
       limit?: number;
     },
   ): Promise<{ items: unknown; raw: unknown }> {
@@ -607,6 +874,7 @@ export class FanslyAdapter {
         accountIds: params.accountIds ?? undefined,
         accountMediaId: params.accountMediaId ?? undefined,
         accountMediaBundleId: params.accountMediaBundleId ?? undefined,
+        before: params.before ?? undefined,
         limit: params.limit != null ? String(params.limit) : undefined,
       },
       category: "media",
@@ -614,7 +882,12 @@ export class FanslyAdapter {
         hasAccountIds: Boolean(params.accountIds),
         hasAccountMediaId: Boolean(params.accountMediaId),
         hasAccountMediaBundleId: Boolean(params.accountMediaBundleId),
+        cursorPresent: Boolean(params.before),
         limit: params.limit ?? 100,
+      },
+      pagination: {
+        limit: params.limit ?? 100,
+        cursorPresent: Boolean(params.before),
       },
       summarizeResponse: (parsed) => ({
         returnedItems: Array.isArray(parsed) ? parsed.length : null,
@@ -792,7 +1065,8 @@ export class FanslyAdapter {
 
   private safeParseEnvelope<T>(text: string): ApiEnvelope<T> | null {
     try {
-      return JSON.parse(text) as ApiEnvelope<T>;
+      const parsed: unknown = JSON.parse(text);
+      return isApiEnvelope(parsed) ? parsed as ApiEnvelope<T> : null;
     } catch {
       return null;
     }

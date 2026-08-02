@@ -1,0 +1,25 @@
+{
+  "data": {
+    "success": true,
+    "response": {
+      "followers": [
+        {
+          "id": "863308077229670400",
+          "followerId": "acct_fan_alpha",
+          "lastSeenAt": 1767323105
+        }
+      ],
+      "aggregationData": {
+        "accounts": [
+          {
+            "id": "acct_fan_alpha",
+            "username": "fixture_fan",
+            "displayName": "Fixture Fan",
+            "createdAt": 1767323045,
+            "lastSeenAt": 1767323105
+          }
+        ]
+      }
+    }
+  }
+}

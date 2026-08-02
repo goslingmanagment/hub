@@ -1,0 +1,43 @@
+{
+  "data": {
+    "success": true,
+    "response": {
+      "messages": [
+        {
+          "id": "message_head",
+          "type": 0,
+          "dataVersion": 1,
+          "content": "",
+          "groupId": "group_alpha",
+          "senderId": "acct_creator",
+          "correlationId": null,
+          "inReplyTo": null,
+          "inReplyToRoot": null,
+          "createdAt": 1767323105,
+          "attachments": [],
+          "embeds": [],
+          "interactions": [],
+          "likes": [],
+          "totalTipAmount": 0
+        },
+        {
+          "id": "message_reply",
+          "type": 0,
+          "dataVersion": 1,
+          "content": "",
+          "groupId": "group_alpha",
+          "senderId": "acct_fan_alpha",
+          "correlationId": null,
+          "inReplyTo": "message_head",
+          "inReplyToRoot": "message_head",
+          "createdAt": 1767323045,
+          "attachments": [],
+          "embeds": [],
+          "interactions": [],
+          "likes": [],
+          "totalTipAmount": 321
+        }
+      ]
+    }
+  }
+}

@@ -359,6 +359,10 @@ describe("syncTransactions", () => {
       code: "incremental_total_changed",
       severity: "error",
     }));
+    expect(sharedMocks.persistRawPayload.mock.calls.map((call) => call[1].responsePayload)).toEqual([
+      { page: 1 },
+      { page: 2 },
+    ]);
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
     const invalidatedProgress = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1];
@@ -406,6 +410,73 @@ describe("syncTransactions", () => {
       expect.anything(),
       expect.objectContaining({ offset: 0 }),
     );
+  });
+
+  it("captures and refuses an incremental Fansly page with a missing total", async () => {
+    const checkpoint = {
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    };
+    dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
+    const telemetry = createTelemetry();
+    const raw = { data: [buildTransaction("tx-1", "2026-03-15T00:00:00.000Z")] };
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi.fn().mockResolvedValueOnce({
+          items: [],
+          total: null,
+          done: false,
+          contractAccepted: false,
+          raw,
+        }),
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly incremental transaction page returned an invalid total");
+
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ responsePayload: raw }),
+      expect.anything(),
+    );
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "incremental_total_invalid",
+      severity: "error",
+    }));
+    expect(dbMocks.upsertTransaction).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
+      platformAccountId: 1,
+      stream: "transactions",
+      cursorTimestamp: checkpoint.cursorTimestamp,
+      state: {
+        invalidatedIncrementalScan: {
+          reason: "incremental_total_invalid",
+        },
+      },
+    });
   });
 
   it("invalidates incremental Fansly progress when offset pages overlap", async () => {
@@ -463,6 +534,10 @@ describe("syncTransactions", () => {
       code: "incremental_offset_overlap",
       severity: "error",
     }));
+    expect(sharedMocks.persistRawPayload.mock.calls.map((call) => call[1].responsePayload)).toEqual([
+      { page: 1 },
+      { page: 2 },
+    ]);
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
       platformAccountId: 1,
@@ -1265,8 +1340,132 @@ describe("syncTransactions", () => {
       code: "backfill_total_changed",
       severity: "error",
     }));
+    expect(sharedMocks.persistRawPayload.mock.calls.map((call) => call[1].responsePayload)).toEqual([
+      { page: 1 },
+      { page: 2 },
+    ]);
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
+  });
+
+  it("captures and refuses a Fansly backfill page with an unsafe total", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    const telemetry = createTelemetry();
+    const raw = {
+      total: Number.MAX_SAFE_INTEGER + 1,
+      data: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+    };
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi.fn().mockResolvedValueOnce({
+          items: [],
+          total: Number.MAX_SAFE_INTEGER + 1,
+          done: false,
+          contractAccepted: false,
+          raw,
+        }),
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly transaction backfill page returned an invalid total");
+
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ responsePayload: raw }),
+      expect.anything(),
+    );
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "backfill_total_invalid",
+      severity: "error",
+    }));
+    expect(dbMocks.upsertTransaction).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("refuses to finalize a Fansly backfill when a short last page contradicts a stable total", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    const telemetry = createTelemetry();
+    const getTransactionsPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+        total: 3,
+        done: false,
+        raw: { page: 1 },
+      })
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-2", "2026-03-09T00:00:00.000Z")],
+        total: 3,
+        done: true,
+        raw: { page: 2 },
+      });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly transaction backfill total differed from fetched rows");
+
+    expect(getTransactionsPage).toHaveBeenCalledTimes(2);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "backfill_total_mismatch",
+      severity: "error",
+      details: {
+        providerReportedTotal: 3,
+        fetchedRows: 2,
+        pageCount: 2,
+      },
+    }));
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual([
+      "tx-1",
+      "tx-2",
+    ]);
   });
 
   it("refuses to finalize a Fansly backfill when adjacent offset pages overlap", async () => {
@@ -1320,6 +1519,10 @@ describe("syncTransactions", () => {
       code: "backfill_offset_overlap",
       severity: "error",
     }));
+    expect(sharedMocks.persistRawPayload.mock.calls.map((call) => call[1].responsePayload)).toEqual([
+      { page: 1 },
+      { page: 2 },
+    ]);
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
   });

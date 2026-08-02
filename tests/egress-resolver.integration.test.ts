@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createModel } from "@agency_hub_core/db";
+import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createEgressPacer } from "../apps/runtime/src/services/egress/pacer.ts";
@@ -20,11 +20,14 @@ import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 
-async function seedFanslyPage(label: string, proxyUrl?: string) {
+async function seedFanslyPage(label: string, proxyUrl: string) {
   const model = await createModel(appContext.db, {
     slug: `model-${label}`,
     name: `Model ${label}`,
   });
+  if (!model) {
+    throw new Error(`Failed to seed model for ${label}`);
+  }
   const app = {
     db: appContext.db,
     config: appContext.config,
@@ -49,8 +52,11 @@ async function seedFanslyPage(label: string, proxyUrl?: string) {
     modelSlug: model.slug,
     label,
     session: { authorization: `token-${label}` },
-    ...(proxyUrl ? { proxy: { url: proxyUrl } } : {}),
+    proxy: { url: proxyUrl },
   });
+  if (!page) {
+    throw new Error(`Failed to seed Fansly page ${label}`);
+  }
   return page;
 }
 
@@ -89,7 +95,22 @@ describe("egress resolver (Stage 26)", () => {
 
     // W3.1 (decision #124, reversing the Stage-26 recorded direct fallback):
     // a Fansly page without a proxy is REFUSED, never direct-dispatched.
-    const direct = await seedFanslyPage("egress-direct");
+    // A proxyless page can only be legacy/corrupt stored state now. Seed that
+    // state directly instead of teaching the onboarding boundary to create it.
+    const directModel = await createModel(appContext.db, {
+      slug: "model-egress-direct",
+      name: "Model egress-direct",
+    });
+    if (!directModel) {
+      throw new Error("Failed to seed legacy proxyless model");
+    }
+    const direct = await createFanslyPage(appContext.db, {
+      modelId: directModel.id,
+      label: "egress-direct",
+    });
+    if (!direct) {
+      throw new Error("Failed to seed legacy proxyless Fansly page");
+    }
     await expect(resolveEgress(appContext, { kind: "page", pageId: direct.id }))
       .rejects.toThrow(/fail-closed/);
   }, INTEGRATION_TEST_TIMEOUT_MS);

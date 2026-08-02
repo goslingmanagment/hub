@@ -1,0 +1,70 @@
+{
+  "data": {
+    "success": true,
+    "response": {
+      "data": [
+        {
+          "account_id": "acct_creator",
+          "groupId": "group_alpha",
+          "partnerAccountId": "acct_fan_alpha",
+          "partnerUsername": "fixture_fan",
+          "flags": 0,
+          "unreadCount": 1,
+          "subscriptionTierId": "tier_fixture",
+          "lastMessageId": "message_head",
+          "lastUnreadMessageId": "message_head"
+        }
+      ],
+      "aggregationData": {
+        "total": 1,
+        "accounts": [
+          {
+            "id": "acct_fan_alpha",
+            "username": "fixture_fan",
+            "displayName": "Fixture Fan",
+            "createdAt": 1767323045
+          }
+        ],
+        "groups": [
+          {
+            "id": "group_alpha",
+            "type": 0,
+            "groupFlags": 0,
+            "createdBy": "acct_creator",
+            "users": [
+              {
+                "groupId": "group_alpha",
+                "userId": "acct_creator",
+                "type": 0,
+                "permissionFlags": 1
+              },
+              {
+                "groupId": "group_alpha",
+                "userId": "acct_fan_alpha",
+                "type": 0,
+                "permissionFlags": 1
+              }
+            ],
+            "lastMessage": {
+              "id": "message_head",
+              "type": 0,
+              "dataVersion": 1,
+              "content": "",
+              "groupId": "group_alpha",
+              "senderId": "acct_fan_alpha",
+              "correlationId": null,
+              "inReplyTo": null,
+              "inReplyToRoot": null,
+              "createdAt": 1767323105,
+              "attachments": [],
+              "embeds": [],
+              "interactions": [],
+              "likes": [],
+              "totalTipAmount": 0
+            }
+          }
+        ]
+      }
+    }
+  }
+}

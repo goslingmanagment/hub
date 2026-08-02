@@ -1,4 +1,9 @@
-import type { FanslySessionBundle, HttpRequestObserver, ProxyConfig } from "@agency_hub_core/shared";
+import type {
+  FanslySessionBundle,
+  HttpRequestObserver,
+  Mills,
+  ProxyConfig,
+} from "@agency_hub_core/shared";
 
 export interface FanslyRequestContext {
   session: FanslySessionBundle;
@@ -51,6 +56,87 @@ export interface FanslyAccountMeResponse {
     walls?: Array<Record<string, unknown>>;
     subscriptionTiers?: Array<Record<string, unknown>>;
   };
+}
+
+/**
+ * The earnings overview currently exposes only the pending balance in the
+ * observed Fansly corpus. Keep the raw provider object alongside the parsed
+ * value so a later additive contract can be captured before it is modeled.
+ */
+export interface FanslyEarningsOverview {
+  pendingBalance: number;
+  [key: string]: unknown;
+}
+
+export interface FanslyEarningsOverviewResponse {
+  pendingBalanceMills: Mills | null;
+  contractAccepted: boolean;
+  raw: unknown;
+}
+
+/** Stable fields observed on GET /trackinglinks. Additive provider fields are
+ * retained in each record and in the raw response. */
+export interface FanslyTrackingLink {
+  id: string;
+  accountId?: string | null;
+  internalId?: string | null;
+  type?: number | null;
+  status?: number | null;
+  label?: string | null;
+  description?: string | null;
+  metadata?: string | null;
+  createdAt?: number | null;
+  clicks?: number | null;
+  claims?: number | null;
+  follows?: number | null;
+  subscriptions?: number | null;
+  totalNet?: number | null;
+  totalGross?: number | null;
+  [key: string]: unknown;
+}
+
+/** Stable fields observed on GET /lists/itemsnew. */
+export interface FanslyListItem {
+  id: string;
+  sortId?: string | null;
+  listId?: string | null;
+  type?: number | null;
+  metadata?: string | null;
+  [key: string]: unknown;
+}
+
+/** Stable fields observed on GET /lists/account. An item-filtered response may
+ * include matching list items; the all-lists response need not. */
+export interface FanslyAccountList {
+  id: string;
+  accountId?: string | null;
+  pos?: number | null;
+  type?: number | null;
+  label?: string | null;
+  itemCount?: number | null;
+  items?: FanslyListItem[];
+  [key: string]: unknown;
+}
+
+export interface FanslyTrackingLinksResponse {
+  items: FanslyTrackingLink[];
+  contractAccepted: boolean;
+  raw: unknown;
+}
+
+export interface FanslyAccountListsResponse {
+  items: FanslyAccountList[];
+  itemId: string | null;
+  contractAccepted: boolean;
+  raw: unknown;
+}
+
+export interface FanslyListItemsPageResponse {
+  items: FanslyListItem[];
+  listId: string;
+  after: string | null;
+  contractAccepted: boolean;
+  raw: unknown;
 }
 
 export interface FanslyEarningsTransaction {

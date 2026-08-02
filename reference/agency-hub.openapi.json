@@ -2349,48 +2349,42 @@
                         ]
                       },
                       "proxy": {
-                        "anyOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "url": {
-                                "type": "string",
-                                "minLength": 1
+                        "type": "object",
+                        "properties": {
+                          "url": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "username": {
+                            "anyOf": [
+                              {
+                                "type": "string"
                               },
-                              "username": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "password": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
+                              {
+                                "type": "null"
                               }
-                            },
-                            "required": [
-                              "url"
                             ]
                           },
-                          {
-                            "type": "null"
+                          "password": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
+                        },
+                        "required": [
+                          "url"
                         ]
                       }
                     },
                     "required": [
                       "platform",
-                      "session"
+                      "session",
+                      "proxy"
                     ]
                   },
                   {
@@ -13305,42 +13299,35 @@
                         ]
                       },
                       "proxy": {
-                        "anyOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "url": {
-                                "type": "string",
-                                "minLength": 1
+                        "type": "object",
+                        "properties": {
+                          "url": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "username": {
+                            "anyOf": [
+                              {
+                                "type": "string"
                               },
-                              "username": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "password": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
+                              {
+                                "type": "null"
                               }
-                            },
-                            "required": [
-                              "url"
                             ]
                           },
-                          {
-                            "type": "null"
+                          "password": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
+                        },
+                        "required": [
+                          "url"
                         ]
                       },
                       "modelSlug": {
@@ -13355,6 +13342,7 @@
                     "required": [
                       "platform",
                       "session",
+                      "proxy",
                       "modelSlug",
                       "label"
                     ]
@@ -13642,6 +13630,35 @@
                     "syncQueued",
                     "syncWarning",
                     "syncRetry"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
                   ],
                   "additionalProperties": false
                 }
@@ -14263,42 +14280,35 @@
                         ]
                       },
                       "proxy": {
-                        "anyOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "url": {
-                                "type": "string",
-                                "minLength": 1
+                        "type": "object",
+                        "properties": {
+                          "url": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "username": {
+                            "anyOf": [
+                              {
+                                "type": "string"
                               },
-                              "username": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "password": {
-                                "anyOf": [
-                                  {
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
+                              {
+                                "type": "null"
                               }
-                            },
-                            "required": [
-                              "url"
                             ]
                           },
-                          {
-                            "type": "null"
+                          "password": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
+                        },
+                        "required": [
+                          "url"
                         ]
                       }
                     },
@@ -32164,7 +32174,7 @@
                   },
                   "sort": {
                     "default": [],
-                    "maxItems": 2,
+                    "maxItems": 1,
                     "type": "array",
                     "items": {
                       "type": "object",

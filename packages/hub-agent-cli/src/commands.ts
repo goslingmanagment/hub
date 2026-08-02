@@ -616,7 +616,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         describe: "Return one exact summary of matching Hub transaction rows instead of paginated rows (transactions only)",
       },
       filter: { kind: "list", describe: "field:op[:value] (repeatable, max 10)" },
-      sort: { kind: "list", describe: "field:asc | field:desc (repeatable, max 2)" },
+      sort: { kind: "list", describe: "field:asc | field:desc (max 1 in cursor v1)" },
       ...WINDOW_OPTIONS,
       ...PAGING_OPTIONS,
       ...CLAIM_OPTION,

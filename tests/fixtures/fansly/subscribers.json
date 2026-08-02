@@ -1,0 +1,33 @@
+{
+  "data": {
+    "success": true,
+    "response": {
+      "stats": {
+        "totalActive": 1,
+        "totalExpired": 0,
+        "total": 1
+      },
+      "subscriptions": [
+        {
+          "id": "subscription_alpha",
+          "historyId": "history_alpha",
+          "subscriberId": "acct_fan_alpha",
+          "subscriptionTierId": "tier_fixture",
+          "subscriptionTierName": "Fixture Tier",
+          "subscriptionTierColor": null,
+          "planId": "plan_fixture",
+          "status": 3,
+          "price": 1234,
+          "renewPrice": 1456,
+          "autoRenew": 1,
+          "billingCycle": 28,
+          "duration": 28,
+          "renewDate": 1769742245,
+          "createdAt": 1767323045,
+          "updatedAt": 1767323045,
+          "endsAt": 1769742245
+        }
+      ]
+    }
+  }
+}

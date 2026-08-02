@@ -48,6 +48,7 @@ describe("Fansly adapter Stage 6 replay-probe methods", () => {
     await adapter.getMediaOrderHistoryPage(context, {
       accountIds: "fan-9",
       accountMediaId: "media-3",
+      before: "order-100",
       limit: 100,
     });
     // Bare order-history call: optional query params must be omitted, call still fires.
@@ -68,12 +69,14 @@ describe("Fansly adapter Stage 6 replay-probe methods", () => {
     expect(urls[2]?.pathname).toBe("/media/orderhistory");
     expect(urls[2]?.searchParams.get("accountIds")).toBe("fan-9");
     expect(urls[2]?.searchParams.get("accountMediaId")).toBe("media-3");
+    expect(urls[2]?.searchParams.get("before")).toBe("order-100");
     expect(urls[2]?.searchParams.get("limit")).toBe("100");
 
     expect(urls[3]?.pathname).toBe("/media/orderhistory");
     expect(urls[3]?.searchParams.has("accountIds")).toBe(false);
     expect(urls[3]?.searchParams.has("accountMediaId")).toBe(false);
     expect(urls[3]?.searchParams.has("accountMediaBundleId")).toBe(false);
+    expect(urls[3]?.searchParams.has("before")).toBe(false);
 
     // Every probe call carries the single pasted check on the same header path.
     for (const header of headers) {

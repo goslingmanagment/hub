@@ -296,6 +296,17 @@ describe("agent read plane: the B2 window/cursor law", () => {
     }).success).toBe(false);
   });
 
+  it("dataset cursor v1 refuses a compound sort it cannot preserve", () => {
+    expect(agentDatasetQueryBodySchema.safeParse({
+      from: "2026-01-08T00:00:00Z",
+      to: "2026-01-20T00:00:00Z",
+      sort: [
+        { field: "occurredAt", dir: "desc" },
+        { field: "grossMills", dir: "desc" },
+      ],
+    }).success).toBe(false);
+  });
+
   it("dataset summary mode is terminal and has no row ordering", () => {
     const window = { from: "2026-01-08T00:00:00Z", to: "2026-01-20T00:00:00Z" };
     expect(agentDatasetQueryBodySchema.safeParse({ ...window, summary: true }).success).toBe(true);

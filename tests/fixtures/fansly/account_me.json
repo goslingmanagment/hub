@@ -1,0 +1,15 @@
+{
+  "data": {
+    "success": true,
+    "response": {
+      "account": {
+        "id": "acct_creator",
+        "username": "fixture_creator",
+        "displayName": "Fixture Creator",
+        "createdAt": 1767323045,
+        "followCount": 2,
+        "subscriberCount": 1
+      }
+    }
+  }
+}

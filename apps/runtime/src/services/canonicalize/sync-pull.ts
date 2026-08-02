@@ -265,6 +265,7 @@ function fanslyEarningsObserved(
   }
 
   const perKey = new Map<string, { fan: string; window: string; aggregate: EarningsAggregate }>();
+  const poisonedKeys = new Set<string>();
   for (const row of rows) {
     if (!isRecord(row)) {
       continue;
@@ -277,21 +278,56 @@ function fanslyEarningsObserved(
     if (monthly) {
       const year = asNumber(row.year);
       const month = asNumber(row.month);
-      if (year === null || month === null) {
+      if (
+        year === null ||
+        month === null ||
+        !Number.isInteger(year) ||
+        !Number.isInteger(month) ||
+        year < 2000 ||
+        year > 2200 ||
+        month < 1 ||
+        month > 12
+      ) {
         continue;
       }
       window = `${year}-${String(month).padStart(2, "0")}`;
     }
+    // A missing amount is provider-contract drift, not a real zero. The raw
+    // observation remains durable for replay after a parser repair, but it
+    // must not mint a plausible-looking zero snapshot into the money plane.
+    const gross = asNumber(row.totalGross);
+    const net = asNumber(row.totalNet);
     const key = `${fan}:${window}`;
+    if (poisonedKeys.has(key)) {
+      continue;
+    }
+    if (
+      gross === null ||
+      net === null ||
+      !Number.isSafeInteger(gross) ||
+      !Number.isSafeInteger(net)
+    ) {
+      // One malformed breakdown row invalidates the whole fan/window. Keeping
+      // the other rows would mint a plausible but understated money snapshot.
+      poisonedKeys.add(key);
+      continue;
+    }
     const entry = perKey.get(key) ?? {
       fan,
       window,
       aggregate: { grossMills: 0, netMills: 0, breakdown: [] },
     };
-    const gross = asNumber(row.totalGross) ?? 0;
-    const net = asNumber(row.totalNet) ?? 0;
-    entry.aggregate.grossMills += gross;
-    entry.aggregate.netMills += net;
+    const nextGrossMills = entry.aggregate.grossMills + gross;
+    const nextNetMills = entry.aggregate.netMills + net;
+    if (
+      !Number.isSafeInteger(nextGrossMills) ||
+      !Number.isSafeInteger(nextNetMills)
+    ) {
+      poisonedKeys.add(key);
+      continue;
+    }
+    entry.aggregate.grossMills = nextGrossMills;
+    entry.aggregate.netMills = nextNetMills;
     entry.aggregate.breakdown.push({
       type: asNumber(row.type),
       grossMills: gross,
@@ -301,15 +337,18 @@ function fanslyEarningsObserved(
   }
 
   const events: CanonicalEventDraft[] = [];
-  for (const { fan, window, aggregate } of perKey.values()) {
+  for (const [key, { fan, window, aggregate }] of perKey) {
+    if (poisonedKeys.has(key)) {
+      continue;
+    }
     events.push({
       type: "fan.earnings_observed",
       occurredAt: observation.observedAt ?? observation.receivedAt,
       fanIdentityRef: fan,
       data: {
         window,
-        grossMills: Math.trunc(aggregate.grossMills),
-        netMills: Math.trunc(aggregate.netMills),
+        grossMills: aggregate.grossMills,
+        netMills: aggregate.netMills,
         breakdown: aggregate.breakdown,
       },
       schemaVersion: 1,
@@ -320,9 +359,9 @@ function fanslyEarningsObserved(
   return events;
 }
 
-/** PPV order-history rows carry NO order id (extension-proven shape) — the
- *  dedup key is the composite (fan, media/bundle, createdAt); recorded
- *  deviation from the spec's `ppv:<order_id>` ideal. */
+/** Inline DM order rows may omit orderId, while paginated order-history rows
+ *  expose it as their cursor. Keep the historical composite dedup key for
+ *  replay compatibility across both shapes. */
 function fanslyPurchaseEvents(observation: CanonicalizableObservation): CanonicalEventDraft[] {
   if (!isRecord(observation.payload)) {
     return [];

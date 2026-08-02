@@ -3078,6 +3078,12 @@ export const notificationsReportHistoryResponseSchema = z.object({
   items: z.array(notificationsDeliveryAttemptItemSchema),
 });
 
+const credentialProxySchema = z.object({
+  url: z.string().min(1),
+  username: z.string().nullable().optional(),
+  password: z.string().nullable().optional(),
+});
+
 const fanslyCredentialsSchema = z.object({
   platform: z.literal("fansly"),
   session: z.object({
@@ -3086,11 +3092,10 @@ const fanslyCredentialsSchema = z.object({
     fanslyClientCheck: z.string().optional(),
     fanslySessionId: z.string().optional(),
   }),
-  proxy: z.object({
-    url: z.string().min(1),
-    username: z.string().nullable().optional(),
-    password: z.string().nullable().optional(),
-  }).nullable().optional(),
+  // Decision #124: every standalone Fansly verification/onboarding request
+  // must carry the egress route it will actually use. Missing/null may never
+  // reach the adapter's proxyless fail-closed belt as a generic runtime error.
+  proxy: credentialProxySchema,
 });
 
 const onlyfansCredentialsSchema = z.object({
@@ -3100,12 +3105,6 @@ const onlyfansCredentialsSchema = z.object({
   // pasted credentials, no per-page proxy (egress is vendor-side).
   username: z.string().min(1),
 });
-
-const credentialProxySchema = z.object({
-  url: z.string().min(1),
-  username: z.string().nullable().optional(),
-  password: z.string().nullable().optional(),
-}).nullable().optional();
 
 export const verifyCredentialsBodySchema = z.discriminatedUnion("platform", [
   fanslyCredentialsSchema,
@@ -3176,7 +3175,9 @@ export const updateCredentialsBodySchema = z.discriminatedUnion("platform", [
   z.object({
     platform: z.literal("fansly"),
     session: fanslyCredentialsSchema.shape.session.optional(),
-    proxy: credentialProxySchema,
+    // Omission preserves the stored route for a session-only update. Proxy
+    // removal is a separate explicit operation and is never encoded as null.
+    proxy: credentialProxySchema.optional(),
   }),
   z.object({
     // Stage 18: OnlyFans pages hold no pasted credentials (OFAPI vendor-side)
@@ -6916,6 +6917,7 @@ export const routeSchemas = {
     body: createPageBodySchema,
     response: {
       200: adminCreatePageResponseSchema,
+      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,

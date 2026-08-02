@@ -43,6 +43,12 @@ export interface AgentDatasetSqlMapping {
   /** The one temporal plane whose unbounded per-page minimum establishes this
    * dataset's capture floor. Inventory datasets omit it and stay `unknown`. */
   readonly captureFloorPlane?: string;
+  /**
+   * Optional boolean source column limiting rows that may be served or
+   * aggregated. It deliberately does NOT constrain `captureFloorPlane`: the
+   * floor describes every physical row Hub retains, not only current heads.
+   */
+  readonly eligibilityColumn?: string;
   /** Optional row-level lineage exposed by the source under fixed internal
    * columns. Request text can never select or rename these columns. */
   readonly provenanceColumns?: {
@@ -150,6 +156,7 @@ const TRANSACTIONS = `
          tr.id::text            as k_key,
          tr.occurred_at         as k_occurred_at,
          f.platform_user_id     as k_fan,
+         tr.is_active           as k_eligible,
          p.platform::text       as f_platform,
          f.platform_user_id     as f_platform_user_id,
          tr.transaction_id      as f_transaction_ref,
@@ -393,6 +400,8 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
     readPlanes: ["transactions", "fans"],
+    captureFloorPlane: "transactions",
+    eligibilityColumn: "k_eligible",
   },
   fan_spend_daily: {
     source: FAN_SPEND_DAILY,

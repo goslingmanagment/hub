@@ -1166,7 +1166,7 @@ export function buildProgram() {
     .requiredOption("--model <slug>")
     .requiredOption("--label <label>")
     .requiredOption("--session-file <file>")
-    .option("--proxy-url <url>")
+    .requiredOption("--proxy-url <url>")
     .option("--proxy-username <username>")
     .option("--proxy-password <password>")
     .option("--proxy-password-file <file>")
@@ -1176,6 +1176,9 @@ export function buildProgram() {
       try {
         const session = await loadFanslySessionBundleFromFile(options.sessionFile);
         const proxy = await buildProxyInput(options);
+        if (!proxy) {
+          throw new Error("Fansly onboarding requires --proxy-url");
+        }
         const { page: created } = await onboardFanslyPage(app, {
           modelSlug: options.model,
           label: options.label,

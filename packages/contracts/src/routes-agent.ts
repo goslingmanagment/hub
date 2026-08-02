@@ -57,9 +57,11 @@ import {
 } from "./agent-read-registry.ts";
 import { AGENT_CAPABILITIES } from "./agent-read-capabilities.ts";
 import {
+  AGENT_DATASET_FILTER_OPS,
   AGENT_DATASET_FIELD_KINDS,
   AGENT_DATASET_NAMES,
   AGENT_PLANNED_DATASET_NAMES,
+  AGENT_RFC3339_TIMESTAMP_PATTERN,
 } from "./agent-read-datasets.ts";
 import {
   errorResponseSchema,
@@ -87,7 +89,7 @@ import {
  * unverified; a regex gives the same guarantee on proven house mechanics.
  */
 export const agentIsoTimestamp = z.string().regex(
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/,
+  AGENT_RFC3339_TIMESTAMP_PATTERN,
   "RFC 3339 timestamp with explicit offset",
 );
 export const agentSha256Hex = z.string().length(64).regex(/^[0-9a-f]{64}$/);
@@ -1560,15 +1562,7 @@ export const agentPageDatasetParamsSchema = z.object({
 /** `contains` and `between` are excluded on purpose: `contains` is an
  *  unindexable ILIKE (the trap §6 exists to avoid), and `between` is `gte`+`lte`. */
 export const agentDatasetFilterOpEnum = z.enum([
-  "eq",
-  "neq",
-  "lt",
-  "lte",
-  "gt",
-  "gte",
-  "in",
-  "is_null",
-  "is_not_null",
+  ...AGENT_DATASET_FILTER_OPS,
 ]);
 
 export const agentDatasetQueryBodySchema = z.object({
@@ -1590,7 +1584,10 @@ export const agentDatasetQueryBodySchema = z.object({
   sort: z.array(z.object({
     field: z.string().min(1).max(64).regex(/^[a-z][a-zA-Z0-9]*$/),
     dir: sortDirEnum,
-  }).strict()).max(2).default([]),
+  // The v1 cursor carries one rendered sort value plus the stable row key.
+  // Accepting a second term would be dishonest: the repository cannot encode
+  // it in either ORDER BY/resume state and used to ignore it silently.
+  }).strict()).max(1).default([]),
   limit: z.number().int().min(1).max(200).default(50),
   cursor: agentCursorString.optional(),
   claim: agentClaimSchema.optional(),

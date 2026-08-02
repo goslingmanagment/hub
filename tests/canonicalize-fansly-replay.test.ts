@@ -26,7 +26,7 @@ const RECEIVED_AT = new Date("2026-03-15T08:00:05Z");
 /** The production response envelope: `_meta` + `data.response`; the adapter
  *  journals exactly `data.response` as the observation payload. */
 async function loadResponse<T>(name: string): Promise<T> {
-  const raw = await readFile(path.resolve("reference/responses", name), "utf8");
+  const raw = await readFile(path.resolve("tests/fixtures/fansly", name), "utf8");
   const parsed = JSON.parse(raw) as { data: { response: T } };
   return parsed.data.response;
 }
@@ -105,10 +105,10 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       expect(identities).toHaveLength(trimmed.aggregationData.accounts.length);
 
       const first = follows[0]!;
-      expect(first.dedupKey).toBe("follow:885754550978359296");
-      expect(first.fanIdentityRef).toBe("870585695649939456");
+      expect(first.dedupKey).toBe("follow:863308077229670400");
+      expect(first.fanIdentityRef).toBe("acct_fan_alpha");
       // The follow relation id IS the follow moment (snowflake).
-      expect(first.data.followedAt).toBe("2026-03-05T01:38:21.377Z");
+      expect(first.data.followedAt).toBe("2026-01-02T03:04:05.000Z");
       // Snapshot semantics: occurredAt is when we OBSERVED, never the domain
       // timestamp — so the driver's 2024-01-01 clamp can never rewrite it.
       expect(first.occurredAt).toEqual(OBSERVED_AT);
@@ -173,7 +173,7 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       const events = canonicalizeFanslyReplayObservation(observation("followers", {
         followers: [
           { id: "1", followerId: "fan-1" },
-          { id: "885754550978359296", followerId: "fan-2" },
+          { id: "863308077229670400", followerId: "fan-2" },
         ],
       }));
       const follows = byType(events, "follow.observed");
@@ -181,7 +181,7 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       // Follow id "1" decodes to the raw Fansly epoch — implausible, so the
       // date is refused and the projection will skip the dated row entirely.
       expect(follows[0]!.data.followedAt).toBeNull();
-      expect(follows[1]!.data.followedAt).toBe("2026-03-05T01:38:21.377Z");
+      expect(follows[1]!.data.followedAt).toBe("2026-01-02T03:04:05.000Z");
     });
 
     it("refuses a zero createdAt in an aggregated profile", () => {
@@ -203,14 +203,15 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       expect(subscriptions).toHaveLength(response.subscriptions.length);
 
       const first = subscriptions[0]!;
-      expect(first.fanIdentityRef).toBe("586780754529234944");
-      expect(first.dedupKey.startsWith("subscription:883584485138907136:")).toBe(true);
+      expect(first.fanIdentityRef).toBe("acct_fan_alpha");
+      expect(first.dedupKey.startsWith("subscription:subscription_alpha:")).toBe(true);
       expect(first.data.canonicalStatus).toBe("active");
       expect(first.data.autoRenew).toBe(true);
       // Fansly subscription prices are MILLS; carried through untouched.
-      expect(first.data.priceMills).toBe(20000);
-      expect(first.data.subscribedAt).toBe("2026-02-27T01:55:17.000Z");
-      expect(first.data.endsAt).toBe("2026-03-27T01:55:17.000Z");
+      expect(first.data.priceMills).toBe(1234);
+      expect(first.data.renewPriceMills).toBe(1456);
+      expect(first.data.subscribedAt).toBe("2026-01-02T03:04:05.000Z");
+      expect(first.data.endsAt).toBe("2026-01-30T03:04:05.000Z");
     });
 
     it("ignores a payload without a subscriptions array", () => {
@@ -225,7 +226,7 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       const trimmed = trimFanslyMessagingGroupsPayload(response);
       const events = canonicalizeFanslyReplayObservation(
         observation("dm_conversations", trimmed),
-        context("772956494390898689"),
+        context("acct_creator"),
       );
 
       const conversations = byType(events, "conversation.observed");
@@ -234,14 +235,14 @@ describe("Fansly replay canonicalizers (slice D)", () => {
         .toHaveLength(trimmed.aggregationData.accounts.length);
 
       const first = conversations[0]!;
-      expect(first.conversationRef).toBe("878739490577862656");
-      expect(first.fanIdentityRef).toBe("622205078341689346");
-      expect(first.data.partnerUsername).toBe("kev02364");
-      expect(first.messageRef).toBe("885512029928960000");
+      expect(first.conversationRef).toBe("group_alpha");
+      expect(first.fanIdentityRef).toBe("acct_fan_alpha");
+      expect(first.data.partnerUsername).toBe("fixture_fan");
+      expect(first.messageRef).toBe("message_head");
       // redactFanslyMessageLike drops content entirely; nothing here may
-      // resurrect it, and this fixture's groups carry no lastMessage at all.
+      // resurrect it while preserving the synthetic message head metadata.
       expect(JSON.stringify(first.data)).not.toContain("content");
-      expect(first.data.lastMessageAt).toBeNull();
+      expect(first.data.lastMessageAt).toBe("2026-01-02T03:05:05.000Z");
     });
 
     it("reads the redacted lastMessage head when the trimmer kept one", () => {
@@ -314,23 +315,30 @@ describe("Fansly replay canonicalizers (slice D)", () => {
     });
   });
 
-  describe("account_me (journaled RAW — carries live secrets)", () => {
+  describe("account_me (journaled RAW — sensitive fields stay excluded)", () => {
     it("mints the page identity snapshot and never copies email or checkToken", async () => {
       const response = await loadResponse<{ account: Record<string, unknown> }>("account_me.json");
-      expect(response.account.email).toBeDefined();
-      const events = canonicalizeFanslyReplayObservation(observation("account_me", response));
+      const payload = {
+        ...response,
+        account: {
+          ...response.account,
+          email: "fixture@example.invalid",
+        },
+        checkToken: "fixture-session-token",
+      };
+      const events = canonicalizeFanslyReplayObservation(observation("account_me", payload));
       expect(events).toHaveLength(1);
       const event = events[0]!;
       expect(event.type).toBe("page.identity_observed");
       expect(event.fanIdentityRef).toBeNull();
       expect(event.data).toEqual({
-        platformAccountRef: "772956494390898689",
+        platformAccountRef: "acct_creator",
         businessDate: "2026-03-15",
-        username: "lanavellor",
-        displayName: "Lana Vellor",
-        followCount: 474,
-        subscriberCount: 6,
-        createdAtExternal: "2025-04-27T19:19:09.000Z",
+        username: "fixture_creator",
+        displayName: "Fixture Creator",
+        followCount: 2,
+        subscriberCount: 1,
+        createdAtExternal: "2026-01-02T03:04:05.000Z",
       });
       const serialized = JSON.stringify(event.data);
       expect(serialized).not.toContain("checkToken");
@@ -411,7 +419,7 @@ describe("Fansly replay canonicalizers (slice D)", () => {
     for (const [kind, payload] of payloads) {
       const events = canonicalizeFanslyReplayObservation(
         observation(kind, payload),
-        context("772956494390898689"),
+        context("acct_creator"),
       );
       expect(events.length).toBeGreaterThan(0);
       for (const event of events) {

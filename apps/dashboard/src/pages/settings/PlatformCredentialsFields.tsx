@@ -86,6 +86,7 @@ export function PlatformCredentialsFields({
         value={values.proxyRaw}
         onChange={(value) => onChange("proxyRaw", value)}
         initialStoredProxy={initialStoredProxy ?? null}
+        required={platform === "fansly"}
       />
     </>
   );
@@ -124,6 +125,14 @@ export function buildCredentialsBody({
   }
 
   const proxyConfig = buildProxyConfig(values.proxyRaw);
+  if (platform === "fansly" && requireCredentials && !proxyConfig) {
+    throw new Error("Proxy is required for Fansly");
+  }
+  if (!requireCredentials && hadStoredProxy && values.proxyRaw.trim().length === 0) {
+    throw new Error(
+      "Proxy removal is a separate operation; credentials update cannot clear it",
+    );
+  }
   const preserveStoredProxyAuth = Boolean(
     initialStoredProxy?.hasAuth &&
       proxyConfig &&
@@ -133,11 +142,7 @@ export function buildCredentialsBody({
   );
   const proxy = preserveStoredProxyAuth
     ? undefined
-    : proxyConfig !== undefined
-    ? proxyConfig
-    : hadStoredProxy
-      ? null
-      : undefined;
+    : proxyConfig;
 
   if (platform === "fansly") {
     const session = {

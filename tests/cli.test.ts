@@ -367,12 +367,15 @@ describe("CLI parsing", () => {
     expect(help).toContain("also assign the user to this page");
   });
 
-  it("documents page add onlyfans and model revenue", () => {
+  it("documents page onboarding requirements and model revenue", () => {
     const helpProgram = buildProgram();
     const pageCommand = helpProgram.commands.find((command) => command.name() === "page");
     expect(pageCommand).toBeDefined();
     const addCommand = pageCommand?.commands.find((command) => command.name() === "add");
     expect(addCommand).toBeDefined();
+    const fanslyCommand = addCommand?.commands.find((command) => command.name() === "fansly");
+    expect(fanslyCommand).toBeDefined();
+    expect(fanslyCommand?.helpInformation()).toContain("--proxy-url <url>");
     const onlyFansCommand = addCommand?.commands.find((command) => command.name() === "onlyfans");
     expect(onlyFansCommand).toBeDefined();
     const onlyFansHelp = onlyFansCommand?.helpInformation();
@@ -478,6 +481,8 @@ describe("CLI parsing", () => {
       "lora-main",
       "--session-file",
       tempFile.filePath,
+      "--proxy-url",
+      "socks5://proxy.example:1080",
     ], { from: "user" });
 
     expect(cliMocks.onboardFanslyPage).toHaveBeenCalledWith(expect.anything(), {
@@ -486,7 +491,11 @@ describe("CLI parsing", () => {
       session: {
         authorization: "token",
       },
-      proxy: null,
+      proxy: {
+        url: "socks5://proxy.example:1080",
+        username: null,
+        password: null,
+      },
     });
 
     const boss = cliMocks.bossInstances[0];
@@ -500,6 +509,40 @@ describe("CLI parsing", () => {
     expect(boss.stop).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith("Created Fansly page lora-main (101)");
     expect(logSpy).toHaveBeenCalledWith("Queued initial full sync for lora-main");
+  });
+
+  it("refuses Fansly CLI onboarding without a proxy before opening the app", async () => {
+    const tempFile = await createTempJsonFile("fansly-session.json", {
+      authorization: "token",
+    });
+    cleanupDirectories.add(tempFile.directory);
+    const program = buildProgram();
+    const fanslyCommand = program.commands
+      .find((command) => command.name() === "page")?.commands
+      .find((command) => command.name() === "add")?.commands
+      .find((command) => command.name() === "fansly");
+    expect(fanslyCommand).toBeDefined();
+    fanslyCommand?.exitOverride();
+    fanslyCommand?.configureOutput({
+      writeOut: () => {},
+      writeErr: () => {},
+      outputError: () => {},
+    });
+
+    await expect(program.parseAsync([
+      "page",
+      "add",
+      "fansly",
+      "--model",
+      "lora",
+      "--label",
+      "lora-main",
+      "--session-file",
+      tempFile.filePath,
+    ], { from: "user" })).rejects.toThrow("required option '--proxy-url <url>' not specified");
+
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+    expect(cliMocks.onboardFanslyPage).not.toHaveBeenCalled();
   });
 
   it("queues an initial full sync after adding an OnlyFans page", async () => {
@@ -569,6 +612,8 @@ describe("CLI parsing", () => {
       "failed-page",
       "--session-file",
       tempFile.filePath,
+      "--proxy-url",
+      "socks5://proxy.example:1080",
     ], { from: "user" })).rejects.toThrow(
       'Page "failed-page" was created, but the automatic sync could not be queued: queue down',
     );

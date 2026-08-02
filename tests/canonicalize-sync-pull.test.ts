@@ -202,6 +202,51 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
     })]);
   });
 
+  it("poisons an entire Fansly fan/window on malformed money or aggregate overflow", () => {
+    const lifetime = canonicalizeSyncPullObservation(observation({
+      kind: "fan_earnings_stats",
+      payload: [
+        { correlationAccountId: "fan-valid", totalGross: 5_000, totalNet: 4_000, type: 2010 },
+        { correlationAccountId: "fan-valid", totalGross: 2_000, totalNet: 1_600, type: 2110 },
+        { correlationAccountId: "fan-poisoned", totalGross: 5_000, totalNet: 4_000, type: 2010 },
+        { correlationAccountId: "fan-poisoned", totalGross: 1_000, type: 2110 },
+        { correlationAccountId: "fan-fractional", totalGross: 1.5, totalNet: 1, type: 2010 },
+        {
+          correlationAccountId: "fan-overflow",
+          totalGross: Number.MAX_SAFE_INTEGER,
+          totalNet: Number.MAX_SAFE_INTEGER,
+          type: 2010,
+        },
+        { correlationAccountId: "fan-overflow", totalGross: 1, totalNet: 0, type: 2110 },
+        { correlationAccountId: "fan-wrong-money", totalGross: "5000", totalNet: 4_000 },
+      ],
+    }));
+
+    expect(lifetime).toHaveLength(1);
+    expect(lifetime[0]).toMatchObject({
+      type: "fan.earnings_observed",
+      fanIdentityRef: "fan-valid",
+      data: { window: "lifetime", grossMills: 7_000, netMills: 5_600 },
+    });
+
+    const monthly = canonicalizeSyncPullObservation(observation({
+      kind: "fan_earnings_monthly",
+      payload: [
+        { correlationAccountId: "fan-valid", year: 2026, month: 7, totalGross: 2_000, totalNet: 1_600 },
+        { correlationAccountId: "fan-poisoned", year: 2026, month: 7, totalGross: 2_000, totalNet: 1_600 },
+        { correlationAccountId: "fan-poisoned", year: 2026, month: 7, totalGross: 1_000, totalNet: null },
+        { correlationAccountId: "fan-month-zero", year: 2026, month: 0, totalGross: 2_000, totalNet: 1_600 },
+        { correlationAccountId: "fan-month-fraction", year: 2026, month: 7.5, totalGross: 2_000, totalNet: 1_600 },
+      ],
+    }));
+
+    expect(monthly).toHaveLength(1);
+    expect(monthly[0]).toMatchObject({
+      fanIdentityRef: "fan-valid",
+      data: { window: "2026-07", grossMills: 2_000, netMills: 1_600 },
+    });
+  });
+
   // W8.2 / A49 gate (cross-review): the proposed workboard-recompute fallback
   // (message.* with null fanIdentityRef → use conversationRef as the fan)
   // is only sound if a Fansly message.sent event's conversationRef IS the
