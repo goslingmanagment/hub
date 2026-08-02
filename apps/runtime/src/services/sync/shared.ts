@@ -9,7 +9,7 @@ import {
   updatePageMetadata,
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
-import { millsFromInteger } from "@agency_hub_core/shared";
+import { type HttpRequestObserver, millsFromInteger } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
@@ -326,6 +326,7 @@ export async function refreshPageMetadata(
   pageContext: ResolvedFanslyPageContext,
   syncType?: "light" | "followers",
   telemetry?: SyncRunTelemetry,
+  requestObserver?: HttpRequestObserver | null,
 ) {
   const rateLimitWaiter = createSyncRateLimitWaiter(app, {
     egressKey: pageContext.egressKey,
@@ -336,7 +337,7 @@ export async function refreshPageMetadata(
       session: pageContext.session,
       proxy: pageContext.proxy,
       egressKey: pageContext.egressKey,
-      requestObserver: telemetry?.getRequestObserver() ?? null,
+      requestObserver: requestObserver ?? telemetry?.getRequestObserver() ?? null,
       rateLimitWaiter,
     });
     await persistRawPayload(app.db, {

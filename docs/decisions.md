@@ -209,6 +209,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 205 | Creator-post capture and Agent read | Creator posts use one default-paused ordinary `posts` sync stream: Fansly account timeline payloads are journaled before canonicalization and governed OFAPI `post_paginate` jobs commit exact response bytes before parsing; both then append projection-only `post.observed` events into the rebuildable `creator_posts` current-head projection. Existing Agent operation #10 and `hub dataset` expose verbatim post text under the existing `read:datasets` + `read:messages` rights; no new route, capability, command or FTS, and capture floors never prove vendor absence |
 | 206 | Fansly reverse evidence and fail-closed completeness | Executable reverse behavior may define pagination and observed response shapes, but every adopted path remains raw-first and refuses false completeness: purchase history follows `before=last orderId` to an empty page; transaction/DM totals and DM unique ids are mandatory; earnings rejects partial money aggregates and cursor jumps. Standalone Fansly onboarding requires a proxy at every boundary. New earnings/tracking/list reads remain adapter-only until an honest storage model exists. Agent transaction results serve active rows while their capture floor remains the physical oldest retained row |
 | 207 | Smoke consumer projection checkpoints | The permanent v2 smoke consumer applies `stream.projection_checkpoint.hiddenCount` through the same monotonic guard as real v2 clients, so intentionally hidden projection-only rows advance its cursor without false GAP errors; malformed or mismatched checkpoints still fail closed, and the historical persisted counter is retained as an ops baseline rather than reset |
+| 208 | Live-list terminal verification and optional DM totals | Fansly follower reconcile compares its unique generation with a freshly captured terminal headline, checkpointing a budgeted verification-only continuation when necessary; one restart then durable block remains. PARTIALLY supersedes #206 only for DM totals: consistently absent/null totals allow a captured, unique-id-guarded but non-destructive completion, while a present total remains stable/exact and is the sole authority for hiding unseen conversations |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6501,3 +6502,49 @@ takes the existing fail-closed GAP path. The persisted historical `gap_count`
 is not rewritten: production verification compares its delta across the release
 window, preserving prior evidence while making future error logs a truthful
 signal.
+
+**Decision #208 (2026-08-02, live Fansly lists verify at the terminal boundary;
+an absent DM total can never authorize destructive finalization).** Production
+raw evidence closed two false assumptions without weakening either deletion
+guard.
+
+A follower reconcile walk is not a transaction. The three durable production
+blocks on `lilly-2`, `lora-2` and `lora-3` contained complete, successfully
+hydrated generations, but each was compared with `account_me.followCount`
+captured 6–15 minutes earlier. Retained pages prove real joins/leaves during
+both the original walk and its single retry; the unique raw ids equal the
+projected generation rows. The terminal page therefore persists the completed
+generation as `verificationPending`, then captures `account_me` again. If the
+chunk has no request capacity, the next chunk performs only that verification
+request and never refetches the list. Deactivation is still allowed only when
+the generation's exact unique count equals this fresh terminal headline. The
+starting headline remains diagnostic, offset duplicates remain a warning when
+the unique count is exact, and #166's one bounded restart followed by a durable
+block is unchanged.
+
+The live and archived `/messaging/groups` contract consistently returns
+`aggregationData.total` as null or omits it. Decision #206's unconditional DM
+total requirement contradicted that captured contract and made every Fansly DM
+conversation stream restart forever after deployment. This decision PARTIALLY
+supersedes #206 only for that field. Every page still lands raw-first and every
+generation persists its unique group-id set. Duplicate ids, cross-page overlap,
+an invalid non-null total, a present-to-absent transition, an absent-to-present
+transition, or a changed numeric total still abandons the generation before any
+terminal visibility write.
+
+When a numeric total is consistently present, destructive finalization keeps
+the #206 rule: the unique count must equal that stable total before unseen
+conversations may be marked invisible. When the total is consistently absent
+or null, a terminal short page may complete the capture walk and advance sync
+freshness, but completion is explicitly `destructiveFinalization:false` and
+unseen conversations remain visible. The outcome is recorded as a note and in
+run stats rather than as a health-degrading anomaly. This is the anti-deletion
+fallback: stale visibility is preferable to inventing completeness from a
+provider field that does not exist.
+
+No migration or public contract changes. After deployment, the three historical
+follower blocks require a targeted `followers_reconcile` reset/requeue so their
+abandoned cursors cannot resume; the generation high-water rule from #173 keeps
+the replacement generations monotonic. The five DM streams need only a fresh
+request: their failed terminal guards never hid data and their next total-less
+sweep completes under the new non-destructive mode.

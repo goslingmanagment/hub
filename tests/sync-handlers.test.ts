@@ -1193,7 +1193,7 @@ it("does not carry a restart marker into a newer follower revision", async () =>
       pageCount: 1,
     },
   }));
-  expect(db.transaction).toHaveBeenCalledTimes(1);
+  expect(db.transaction).toHaveBeenCalledTimes(2);
   expect(dbMocks.upsertPageFollows).toHaveBeenCalled();
   expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
   expect(dbMocks.refreshFanPageFollowerState).not.toHaveBeenCalled();
@@ -1207,6 +1207,7 @@ it("does not carry a restart marker into a newer follower revision", async () =>
       generation: 614,
       snapshotRestartCount: 1,
       restartReason: "snapshot_mismatch",
+      verificationPending: false,
     },
   });
 });
@@ -1254,6 +1255,13 @@ it("blocks a second follower mismatch inside the same restart scope", async () =
       restartReason: "snapshot_mismatch",
     },
   });
+  sharedMocks.refreshPageMetadata.mockResolvedValue({
+    parsed: {
+      account: {
+        followCount: 2,
+      },
+    },
+  });
   dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
   dbMocks.countPageFollowsByGeneration.mockResolvedValue(1);
 
@@ -1280,9 +1288,190 @@ it("blocks a second follower mismatch inside the same restart scope", async () =
     retryable: false,
   });
 
-  expect(sharedMocks.refreshPageMetadata).not.toHaveBeenCalled();
-  expect(dbMocks.upsertCheckpointProgress).not.toHaveBeenCalled();
+  expect(sharedMocks.refreshPageMetadata).toHaveBeenCalledTimes(1);
+  expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    platformAccountId: 13,
+    stream: "followers_reconcile",
+    state: expect.objectContaining({ verificationPending: true }),
+  }));
   expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
+});
+
+it("finalizes follower reconcile against a freshly captured terminal headline", async () => {
+  const telemetry = createTelemetry();
+  const tx = {};
+  const db = {
+    transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+  };
+  const app = {
+    db,
+    config: {
+      followerPageDelayMs: 0,
+      syncSharedRateLimitEnabled: false,
+    },
+    adapter: {
+      getFollowersPage: vi.fn(async () => ({
+        items: [{
+          id: "1002",
+          followerId: "fan-2",
+          lastSeenAt: 1_775_782_500_000,
+        }],
+        accounts: [{
+          id: "fan-2",
+          username: "fan_2",
+          displayName: "Fan 2",
+          createdAt: 1_770_000_000_000,
+          lastSeenAt: 1_775_782_500_000,
+        }],
+        done: true,
+        raw: {},
+      })),
+    },
+  } as never;
+
+  dbMocks.getCheckpoint.mockResolvedValue({
+    state: {
+      revision: 4,
+      generation: 613,
+      offset: 100,
+      observedCount: 1,
+      pageCount: 1,
+      sourceFollowerCount: 3,
+      snapshotRestartCount: 0,
+      restartReason: null,
+    },
+  });
+  sharedMocks.refreshPageMetadata.mockResolvedValue({
+    parsed: {
+      account: {
+        followCount: 2,
+      },
+    },
+  });
+  dbMocks.upsertFans.mockResolvedValue([{ id: 92, platformUserId: "fan-2" }]);
+  dbMocks.countPageFollowsByGeneration.mockResolvedValue(2);
+
+  const result = await executeFollowersReconcileChunk(app, {
+    pageContext: {
+      platform: "fansly",
+      page: {
+        id: 13,
+        label: "fansly-page",
+        platformAccountId: "acct-13",
+        metadata: {},
+      },
+      session: { authorization: "token" },
+      proxy: null,
+    },
+    streamState: {
+      requestSeq: 4,
+    },
+    syncRunId: 102,
+    telemetry: telemetry as never,
+    budget: new SyncChunkBudget(),
+  } as never);
+
+  expect(result).toMatchObject({
+    satisfied: true,
+    stats: {
+      sourceFollowerCount: 2,
+      startingSourceFollowerCount: 3,
+      generationObservedCount: 2,
+    },
+  });
+  expect(sharedMocks.refreshPageMetadata).toHaveBeenCalledTimes(1);
+  expect(dbMocks.deactivatePageFollowsByGeneration).toHaveBeenCalledWith(tx, {
+    platformAccountId: 13,
+    generation: 613,
+  });
+  expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 13, 2);
+  expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+    state: expect.objectContaining({
+      sourceFollowerCount: 2,
+      snapshotRestartCount: 0,
+    }),
+  }));
+  expect(telemetry.addNote).toHaveBeenCalledWith(
+    "Follower headline changed during reconcile; terminal exact-count guard passed",
+    {
+      code: "followers_reconcile_terminal_headline_changed",
+      startingSourceFollowerCount: 3,
+      terminalSourceFollowerCount: 2,
+      generationObservedCount: 2,
+      pageCount: 2,
+    },
+  );
+  expect(telemetry.addAnomaly).not.toHaveBeenCalledWith(expect.objectContaining({
+    code: "followers_reconcile_generation_guard",
+  }));
+});
+
+it("resumes terminal follower verification without refetching the list and charges its request", async () => {
+  const telemetry = createTelemetry();
+  const tx = {};
+  const db = {
+    transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+  };
+  const getFollowersPage = vi.fn();
+  const app = {
+    db,
+    config: {
+      followerPageDelayMs: 0,
+      syncSharedRateLimitEnabled: false,
+    },
+    adapter: { getFollowersPage },
+  } as never;
+  dbMocks.getCheckpoint.mockResolvedValue({
+    state: {
+      revision: 4,
+      generation: 613,
+      offset: 100,
+      observedCount: 1,
+      pageCount: 2,
+      sourceFollowerCount: 1,
+      snapshotRestartCount: 0,
+      restartReason: null,
+      verificationPending: true,
+    },
+  });
+  sharedMocks.refreshPageMetadata.mockImplementation(async (
+    _app: unknown,
+    _pageContext: unknown,
+    _syncType: unknown,
+    _telemetry: unknown,
+    requestObserver: { onRequestEvent(event: unknown): Promise<void> } | null,
+  ) => {
+    await recordStartedRequest(requestObserver, "account_me");
+    return { parsed: { account: { followCount: 1 } } };
+  });
+  dbMocks.countPageFollowsByGeneration.mockResolvedValue(1);
+  const budget = new SyncChunkBudget(1);
+
+  const result = await executeFollowersReconcileChunk(app, {
+    pageContext: {
+      platform: "fansly",
+      page: {
+        id: 13,
+        label: "fansly-page",
+        platformAccountId: "acct-13",
+        metadata: {},
+      },
+      session: { authorization: "token" },
+      proxy: null,
+    },
+    streamState: { requestSeq: 4 },
+    syncRunId: 102,
+    telemetry: telemetry as never,
+    budget,
+  } as never);
+
+  expect(result.satisfied).toBe(true);
+  expect(getFollowersPage).not.toHaveBeenCalled();
+  expect(budget.totalRequests).toBe(1);
+  expect(dbMocks.deactivatePageFollowsByGeneration).toHaveBeenCalledWith(tx, {
+    platformAccountId: 13,
+    generation: 613,
+  });
 });
 
 it("finalizes follower reconcile when offset drift duplicates raw rows but the unique generation is complete", async () => {
@@ -1327,6 +1516,13 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       sourceFollowerCount: 2,
       snapshotRestartCount: 1,
       restartReason: "snapshot_mismatch",
+    },
+  });
+  sharedMocks.refreshPageMetadata.mockResolvedValue({
+    parsed: {
+      account: {
+        followCount: 2,
+      },
     },
   });
   dbMocks.upsertFans.mockResolvedValue([{ id: 92, platformUserId: "fan-2" }]);
@@ -1701,7 +1897,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     } as never);
 
     expect(result.satisfied).toBe(true);
-    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(db.transaction).toHaveBeenCalledTimes(2);
     expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, []);
     expect(dbMocks.upsertFanPages).toHaveBeenCalledWith(tx, []);
     expect(dbMocks.upsertFanPageExternalPresences).toHaveBeenCalledWith(tx, []);
@@ -2356,7 +2552,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       syncRunId: 900,
       telemetry: telemetry as never,
       budget: new SyncChunkBudget(1),
-    } as never)).rejects.toThrow("provider total changed during the sweep");
+    } as never)).rejects.toThrow("provider total presence or value changed during the sweep");
 
     expect(sharedMocks.persistRawPayload).toHaveBeenCalledTimes(1);
     expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
@@ -2387,10 +2583,10 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
 
   it.each([
     {
-      name: "missing provider total",
+      name: "an invalid present provider total",
       providerReportedTotal: null,
       snapshotConversationIds: [] as string[],
-      page: { total: undefined, items: [], done: true },
+      page: { total: -1, items: [], done: true },
       anomalyCode: "dm_conversations_provider_total_invalid",
     },
     {
@@ -2403,6 +2599,20 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
         done: true,
       },
       anomalyCode: "dm_conversations_snapshot_overlap_guard",
+    },
+    {
+      name: "a provider total disappearing after a present page",
+      providerReportedTotal: 2,
+      snapshotConversationIds: ["group-seen"],
+      page: { total: undefined, items: [], done: true },
+      anomalyCode: "dm_conversations_provider_total_drift_guard",
+    },
+    {
+      name: "a provider total appearing after an absent page",
+      providerReportedTotal: null,
+      snapshotConversationIds: ["group-seen"],
+      page: { total: 2, items: [], done: true },
+      anomalyCode: "dm_conversations_provider_total_drift_guard",
     },
     {
       name: "a terminal unique-id count below provider total",
@@ -2489,6 +2699,97 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
         providerReportedTotal: null,
       }),
     }));
+  });
+
+  it("completes a consistently total-less dm_conversations sweep non-destructively", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      total: null,
+      items: [],
+      accounts: [],
+      groups: [],
+      offset: 100,
+      raw: {
+        data: [],
+        aggregationData: {
+          total: null,
+          accounts: [],
+          groups: [],
+        },
+      },
+      done: true,
+    }));
+    const db = {};
+    const app = {
+      db,
+      config: { syncSharedRateLimitEnabled: true },
+      adapter: { getMessagingGroupsPage },
+    } as never;
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        version: 1,
+        mode: "full_scan",
+        generation: 7,
+        offset: 100,
+        observedCount: 1,
+        snapshotConversationIds: ["group-seen"],
+        pageCount: 1,
+        providerReportedTotal: null,
+        unchangedPageStreak: 0,
+        fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+        lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+      },
+    });
+
+    const result = await fanslyDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: { requestSeq: 42 },
+      syncRunId: 900,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(1),
+    } as never);
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: {
+        observedCount: 1,
+        providerTotalMode: "absent",
+        providerReportedTotal: null,
+        destructiveFinalization: false,
+        fullSweepCompleted: true,
+      },
+    });
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledTimes(1);
+    expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(db, expect.objectContaining({
+      platformAccountId: 55,
+      stream: "dm_conversations",
+      lastSuccessfulRunId: 900,
+      state: expect.objectContaining({
+        providerTotalMode: "absent",
+        providerReportedTotal: null,
+        destructiveFinalization: false,
+      }),
+    }));
+    expect(telemetry.addNote).toHaveBeenCalledWith(
+      "DM conversation sweep completed without a provider total; unseen conversations remain visible",
+      {
+        code: "dm_conversations_provider_total_absent_nondestructive",
+        observedCount: 1,
+        pageCount: 2,
+        providerTotalMode: "absent",
+      },
+    );
   });
 
   it("completes a resumed dm_conversations sweep only when unique ids match provider total", async () => {
