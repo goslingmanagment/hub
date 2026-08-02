@@ -76,6 +76,28 @@ const MONEY_LANES: ReadonlySet<string> = new Set(["money", "subscriptions"]);
 const MESSAGE_LANES: ReadonlySet<string> = new Set(["messages"]);
 const ALL_LANES = ["messages", "money", "subscriptions", "follows", "presence"] as const;
 
+/** Vendor media metadata is captured verbatim and old rows can contain zero,
+ * negative, fractional or otherwise out-of-contract dimensions. Preserve the
+ * media item while withholding only the invalid scalar: one malformed vendor
+ * hint must never make the entire transcript unserializable. */
+function positiveIntegerOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0
+    ? value
+    : null;
+}
+
+function nonNegativeIntegerOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+function nonNegativeNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
 /** Derived from the registry (plus the subscription-price field, which rides
  *  the same capability) so a money field added there cannot skip this gate. */
 const MONEY_CLAIM_FIELDS: readonly string[] = [
@@ -897,10 +919,10 @@ export async function handleAgentThreadMessages(
           mediaRef: typeof media.id === "string" ? media.id : null,
           mediaType: typeof media.type === "string" ? media.type : null,
           mimeType: typeof media.mimetype === "string" ? media.mimetype : null,
-          width: typeof media.width === "number" ? media.width : null,
-          height: typeof media.height === "number" ? media.height : null,
-          durationSeconds: typeof media.duration === "number" ? media.duration : null,
-          sizeBytes: typeof media.size === "number" ? media.size : null,
+          width: positiveIntegerOrNull(media.width),
+          height: positiveIntegerOrNull(media.height),
+          durationSeconds: nonNegativeNumberOrNull(media.duration),
+          sizeBytes: nonNegativeIntegerOrNull(media.size),
           isLocked: typeof media.locked === "boolean" ? media.locked : null,
         })),
         mediaCount: row.mediaMetadata.length,

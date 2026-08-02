@@ -253,6 +253,7 @@ describe("hub CLI: request building", () => {
       "--dataset", "transactions",
       "--filter", 'type:in:["tip","message"]',
       "--filter", "amountMills:gte:1000",
+      "--filter", "platformUserId:eq:411013076163239936",
       "--filter", "refundedAt:is_null",
       "--sort", "occurredAt:desc",
     ], { calls });
@@ -260,6 +261,7 @@ describe("hub CLI: request building", () => {
     expect(body.filters).toEqual([
       { field: "type", op: "in", value: ["tip", "message"] },
       { field: "amountMills", op: "gte", value: 1000 },
+      { field: "platformUserId", op: "eq", value: "411013076163239936" },
       { field: "refundedAt", op: "is_null" },
     ]);
     expect(body.sort).toEqual([{ field: "occurredAt", dir: "desc" }]);

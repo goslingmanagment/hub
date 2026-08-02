@@ -237,6 +237,12 @@ function parseFilterValue(raw: string): HubDatasetScalar {
     // Not JSON: a bare word is a string, which is what a shell mostly types.
     return raw;
   }
+  // Platform user IDs are wire strings and can be longer than JavaScript's
+  // safe-integer range. JSON.parse would silently round a bare numeric ID and
+  // query the wrong person, so preserve unsafe integers exactly as typed.
+  if (typeof parsed === "number" && Number.isInteger(parsed) && !Number.isSafeInteger(parsed)) {
+    return raw;
+  }
   if (parsed === null || typeof parsed === "string" || typeof parsed === "number"
     || typeof parsed === "boolean") {
     return parsed;
