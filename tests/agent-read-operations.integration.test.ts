@@ -180,7 +180,9 @@ async function seedFixture() {
         'did you send the custom video yet', null, 0, '[]'::jsonb),
        ($1, 'fansly', $2, 'm-2', $3, 'model', true, '2026-03-01T11:00:00Z',
         'yes baby, sending the custom now', null, 0,
-        '[{"id":"med-1","mimetype":"video/mp4","width":1920,"height":1080}]'::jsonb),
+        '[{"id":"med-1","mimetype":"video/mp4","width":1920,"height":1080},
+          {"id":"med-zero","mimetype":"image/jpeg","width":0,"height":0,
+           "duration":-1,"size":-1}]'::jsonb),
        ($1, 'fansly', $2, 'm-3', $3, 'fan', false, '2026-03-02T09:00:00Z',
         'deleted later', null, 0, '[]'::jsonb)`,
     [pageId, CONVERSATION_REF, FAN_PLATFORM_USER_ID],
@@ -352,6 +354,13 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(deleted.deletedAt).not.toBeNull();
     const withMedia = body.items.find((item: { messageRef: string }) => item.messageRef === "m-2");
     expect(withMedia.mediaMetadata[0]).toMatchObject({ mediaRef: "med-1", width: 1920 });
+    expect(withMedia.mediaMetadata[1]).toMatchObject({
+      mediaRef: "med-zero",
+      width: null,
+      height: null,
+      durationSeconds: null,
+      sizeBytes: null,
+    });
     expect(withMedia.tipAmountMills).toBe(0);
     expect(body.delivery.caveats).toContain("mutable_sort_key");
   });
