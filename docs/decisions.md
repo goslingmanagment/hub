@@ -208,6 +208,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 204 | Coach situation preset | `coach-chat` accepts optional `preset:'situation'`: Core substitutes the pinned canonical question only when `chatterQuestion` is absent or whitespace-only, refuses preset plus a non-empty question and refuses presets on other features; the optional meta echo `presetQuestion` lets clients replay the real question, while `{presetInstructions}` stays in the uncached task block and is empty for byte-identical normal turns. The extension will route Help into this lane; `help-me` remains served for older clients and desktop |
 | 205 | Creator-post capture and Agent read | Creator posts use one default-paused ordinary `posts` sync stream: Fansly account timeline payloads are journaled before canonicalization and governed OFAPI `post_paginate` jobs commit exact response bytes before parsing; both then append projection-only `post.observed` events into the rebuildable `creator_posts` current-head projection. Existing Agent operation #10 and `hub dataset` expose verbatim post text under the existing `read:datasets` + `read:messages` rights; no new route, capability, command or FTS, and capture floors never prove vendor absence |
 | 206 | Fansly reverse evidence and fail-closed completeness | Executable reverse behavior may define pagination and observed response shapes, but every adopted path remains raw-first and refuses false completeness: purchase history follows `before=last orderId` to an empty page; transaction/DM totals and DM unique ids are mandatory; earnings rejects partial money aggregates and cursor jumps. Standalone Fansly onboarding requires a proxy at every boundary. New earnings/tracking/list reads remain adapter-only until an honest storage model exists. Agent transaction results serve active rows while their capture floor remains the physical oldest retained row |
+| 207 | Smoke consumer projection checkpoints | The permanent v2 smoke consumer applies `stream.projection_checkpoint.hiddenCount` through the same monotonic guard as real v2 clients, so intentionally hidden projection-only rows advance its cursor without false GAP errors; malformed or mismatched checkpoints still fail closed, and the historical persisted counter is retained as an ops baseline rather than reset |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6481,3 +6482,22 @@ physical page-wide minimum across retained active and inactive rows. Dataset
 filter values are validated against registry field kinds before SQL, native
 timestamp/money comparisons preserve their types, and cursor v1 accepts only
 the single sort term it can actually encode.
+
+**Decision #207 (2026-08-02, the permanent v2 smoke consumer follows the same
+projection-checkpoint protocol as real v2 clients).** Projection-only material
+is intentionally omitted from the live hub, while its immediately following
+`stream.projection_checkpoint` carries the exact `hiddenCount` that authorizes
+the sequence jump. The SSE route already advances its per-account guard through
+`advanceProjectionCheckpoint`; the smoke consumer incorrectly treated that
+checkpoint as an ordinary frame and logged a GAP for every valid hidden batch.
+
+The smoke consumer now parses the shared checkpoint shape and advances through
+that same guard. Because its subscription follows every account rather than a
+fixed grant set, an account created after startup is explicitly baselined at
+zero before its first frame. Restart catch-up also excludes projection-only rows and uses
+the same deliverable-replay batch validator as the SSE route before consuming a
+row. A malformed count, a mismatched range, or an ordinary ledger gap still
+takes the existing fail-closed GAP path. The persisted historical `gap_count`
+is not rewritten: production verification compares its delta across the release
+window, preserving prior evidence while making future error logs a truthful
+signal.

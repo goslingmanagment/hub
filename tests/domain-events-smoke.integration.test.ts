@@ -2,7 +2,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { appendDomainEvents, createFanslyPage, createModel } from "@agency_hub_core/db";
+import {
+  appendDomainEvents,
+  appendProjectionOnlyDomainEvents,
+  createFanslyPage,
+  createModel,
+} from "@agency_hub_core/db";
 
 import { startDomainEventsSmokeConsumer } from "../apps/runtime/src/services/domain-events-smoke.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -12,6 +17,7 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 // detects seq gaps and duplicates, survives restarts through its checkpoint.
 
 let testDb: StartedTestDatabase | null = null;
+let modelId = 0;
 let pageId = 0;
 let counter = 0;
 
@@ -42,7 +48,14 @@ beforeAll(async () => {
     return;
   }
   const model = await createModel(testDb.db, { slug: "smoke-model", name: "Smoke" });
+  if (!model) {
+    throw new Error("failed to create smoke test model");
+  }
+  modelId = model.id;
   const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "smoke" });
+  if (!page) {
+    throw new Error("failed to create smoke test page");
+  }
   pageId = page.id;
 }, 120_000);
 
@@ -51,7 +64,7 @@ afterAll(async () => {
 });
 
 describe("v2 smoke consumer", () => {
-  it("tails appends live, checkpoints on stop, and resumes without recount", async (context) => {
+  it("tails appends and projection checkpoints, then resumes without recount", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -65,24 +78,55 @@ describe("v2 smoke consumer", () => {
     const first = startDomainEventsSmokeConsumer(app);
     await sleep(500);
     await appendDomainEvents(testDb.db, pageId, [event("message.received"), event("tip.received")]);
+    const hidden = event("post.observed");
+    await appendProjectionOnlyDomainEvents(testDb.db, pageId, [hidden], {
+      occurredAt: hidden.occurredAt,
+      observationId: hidden.observationId,
+      dedupKey: `smoke:projection-checkpoint:${hidden.observationId}`,
+    });
+
+    // The all-account smoke subscription also sees pages created after its
+    // startup snapshot. Their exact initial watermark is zero, including when
+    // the first visible frame is a checkpoint hiding seq 1.
+    const latePage = await createFanslyPage(testDb.db, {
+      modelId,
+      label: `smoke-late-${counter}`,
+    });
+    if (!latePage) {
+      throw new Error("failed to create late smoke test page");
+    }
+    const lateHidden = event("post.observed");
+    await appendProjectionOnlyDomainEvents(testDb.db, latePage.id, [lateHidden], {
+      occurredAt: lateHidden.occurredAt,
+      observationId: lateHidden.observationId,
+      dedupKey: `smoke:projection-checkpoint:${lateHidden.observationId}`,
+    });
+    await appendDomainEvents(testDb.db, latePage.id, [event("message.received")]);
     await sleep(700);
     await first.stop();
 
     const afterFirst = await readCheckpoint();
     expect(afterFirst).toBeDefined();
-    expect(Number(afterFirst!.frames_seen)).toBe(2);
+    expect(Number(afterFirst!.frames_seen)).toBe(5);
     expect(Number(afterFirst!.gap_count)).toBe(0);
     expect(Number(afterFirst!.duplicate_count)).toBe(0);
 
-    // Appends while the consumer is DOWN are replayed from the checkpoint on
-    // the next start — nothing double-counted, nothing skipped.
+    // Both ordinary and projection-only appends while the consumer is DOWN are
+    // replayed through the same filtered/checkpointed path as the real v2 SSE
+    // route — nothing double-counted, nothing skipped.
+    const replayHidden = event("post.observed");
+    await appendProjectionOnlyDomainEvents(testDb.db, pageId, [replayHidden], {
+      occurredAt: replayHidden.occurredAt,
+      observationId: replayHidden.observationId,
+      dedupKey: `smoke:projection-checkpoint:${replayHidden.observationId}`,
+    });
     await appendDomainEvents(testDb.db, pageId, [event("message.received")]);
     const second = startDomainEventsSmokeConsumer(app);
     await sleep(700);
     await second.stop();
 
     const afterSecond = await readCheckpoint();
-    expect(Number(afterSecond!.frames_seen)).toBe(3);
+    expect(Number(afterSecond!.frames_seen)).toBe(7);
     expect(Number(afterSecond!.gap_count)).toBe(0);
     expect(Number(afterSecond!.duplicate_count)).toBe(0);
   });
