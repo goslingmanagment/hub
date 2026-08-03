@@ -211,6 +211,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 207 | Smoke consumer projection checkpoints | The permanent v2 smoke consumer applies `stream.projection_checkpoint.hiddenCount` through the same monotonic guard as real v2 clients, so intentionally hidden projection-only rows advance its cursor without false GAP errors; malformed or mismatched checkpoints still fail closed, and the historical persisted counter is retained as an ops baseline rather than reset |
 | 208 | Live-list terminal verification and optional DM totals | Fansly follower reconcile compares its unique generation with a freshly captured terminal headline, checkpointing a budgeted verification-only continuation when necessary; one restart then durable block remains. PARTIALLY supersedes #206 only for DM totals: consistently absent/null totals allow a captured, unique-id-guarded but non-destructive completion, while a present total remains stable/exact and is the sole authority for hiding unseen conversations |
 | 209 | Fansly post monetization | Fansly timeline money and linked-goal fields become a latest-observed `post_monetization` snapshot, while raw-first `/tips?targetIds` capture supplies donor-to-post rows with exact type-7100 goal attribution and verbatim tip notes in `post_tips`. The rendered post total is `tipAmount + attachmentTipAmount`, never `totalTipAmount`; `tip_goals` deduplicates shared goals. Companion drift cannot wedge posts, malformed tip items become explicit parse debt, and migration 0121/posts canonicalizer v4 preserve replay without claiming continuous refresh or tipped-reply-donor completeness |
+| 210 | Fansly live post-tip contract correction | Post-deploy acceptance supersedes #209 narrowly on the undocumented `/tips` item shape and null semantics: live items carry a flat `targetId` that proves donor-to-post attribution but no per-tip goal discriminator or transaction refs. Canonicalizer v5/schema v3 replays them with internal `tipGoalAttribution='unknown'`; a null `postTipGoalRef` means source-did-not-provide, never direct. Nested typed targets remain accepted when actually observed. No migration or inferred goal split |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6672,3 +6673,47 @@ reported and investigated, never filled by inference. A post-deploy live
 acceptance against the known birthday posts is the gate for both the
 newest-first walk assumption and how complete Fansly's target-filter semantics
 are in practice.
+
+**Decision #210 (2026-08-03, live Fansly post-tip shape corrects the
+unverified goal-attribution contract).** Production acceptance immediately
+after #209 found that `GET /tips?targetIds=<post ids>` does return an array, but
+its live items are flat: `id`, `senderId`, `receiverId`, `amount`, `message`,
+`createdAt`, and `targetId`. They do not carry `targets`, `tipGoalId`, or either
+transaction reference. Across the acceptance corpus every `receiverId` matched
+the scoped page and every `targetId` was one of that request's post ids. The
+returned rows exactly reproduced the known per-post tip counts and totals.
+This live evidence supersedes #209 only where #209 treated nested typed targets
+as the established provider contract.
+
+The flat `targetId` is exact donor-to-post evidence. It is not donor-to-goal
+evidence. Timeline attachments link a goal to a post, while one post can contain
+both goal-qualified and direct tips; copying the post's goal ref to every tip is
+therefore false. The matching earnings transaction is also insufficient: live
+tip ids join one-to-one to `transactions.correlation_id`, but those rows expose
+no goal or target discriminator. Subset-summing individual amounts against a
+goal counter is inference and can be non-unique, so Hub does not do it.
+
+The posts canonicalizer advances to v5 and accepts either the live flat shape
+or the previously supported nested typed-target shape. A flat item emits
+`post.tip_observed` schema v3 with internal
+`tipGoalAttribution = 'unknown'`; nested type-7100 evidence emits `goal`, and a
+nested target list with no type-7100 target emits `direct`. The immutable event
+keeps that epistemic distinction even though the current serving projection
+stores only an exact nullable goal ref. The capture-time scope guard now checks
+flat `targetId` as well as nested type-1000 targets. Retained v4-rejected arrays
+replay under v5; malformed siblings remain bounded item-level debt.
+
+Projection merge follows the same evidence law across repeated sightings of
+one immutable tip. Schema-v3 `unknown` and semantically unknown schema-v1
+material cannot erase a non-null exact goal ref captured earlier; a newer
+explicit `direct` or `goal` sighting remains last-writer-wins. Incremental
+projection and full rebuild apply the identical field merge.
+
+No schema migration is justified. The live source supplies no known/direct
+state to persist for any row, and adding a column would not create a new fact.
+Serving is deliberately conservative: a non-null `postTipGoalRef` is exact goal
+evidence, while null has row state `source_did_not_provide`, never
+`observed_empty`. Consequently live acceptance can prove individual post rows,
+counts, sums, sender, time, and note, but cannot require the known aggregate
+goal/direct split to appear on individual rows. `post_monetization` and
+`tip_goals` remain the honest goal-level snapshot surfaces.

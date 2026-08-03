@@ -5,8 +5,9 @@ undocumented `GET /tips?targetIds=...` call actually returns in production; it
 does not turn a captured sample into a provider completeness guarantee.
 
 All monetary values below are Fansly-native mills (`1000 = $1`). Run these
-checks only after migration 0121, canonicalizer v4 and the creator-post
-projection are deployed.
+checks only after migration 0121, canonicalizer v5 and the creator-post
+projection are deployed. Decision #210 records the live flat item contract:
+`targetId` proves a post, but the endpoint supplies no per-tip goal discriminator.
 
 ## 1. The one-time walk completed instead of restarting
 
@@ -49,12 +50,12 @@ remains a point-in-time snapshot and is not claimed continuously current.
 
 ## 2. Parser health is explicit
 
-Top-level response drift remains below v4 and is replayable:
+Top-level response drift remains below v5 and is replayable:
 
 ```sql
 select p.label,
        count(*) as captured_tip_payloads,
-       count(*) filter (where o.parse_version < 4) as top_level_parse_debt
+       count(*) filter (where o.parse_version < 5) as top_level_parse_debt
 from observations o
 join pages p on p.id = o.account_id
 where o.source = 'pull' and o.platform = 'fansly' and o.kind = 'post_tips'
@@ -93,7 +94,27 @@ observation is a request-context quarantine envelope left as visible parse debt,
 so none of its rows project under the requesting page.
 
 Verify the undocumented target filter itself from each raw request/response
-pair. This query must return zero rows:
+pair. The first query checks the live flat `targetId`; the second retains the
+nested typed-target guard for any provider variant. Both must return zero rows:
+
+```sql
+select p.label, r.id as raw_payload_id, tip.ordinality as tip_index,
+       tip.value ->> 'targetId' as returned_post_ref,
+       r.request_params -> 'targetIds' as requested_post_refs
+from sync_raw_payloads r
+join pages p on p.id = r.page_id
+cross join lateral jsonb_array_elements(
+  case when jsonb_typeof(r.response_payload) = 'array'
+    then r.response_payload else '[]'::jsonb end
+) with ordinality as tip(value, ordinality)
+where r.endpoint = 'post_tips'
+  and tip.value ? 'targetId'
+  and not exists (
+    select 1
+    from jsonb_array_elements_text(r.request_params -> 'targetIds') requested(id)
+    where requested.id = tip.value ->> 'targetId'
+  );
+```
 
 ```sql
 select p.label, r.id as raw_payload_id, tip.ordinality as tip_index,
@@ -136,9 +157,9 @@ select p.label,
        count(cpt.id) as captured_tip_rows,
        coalesce(sum(cpt.post_tip_amount_mills), 0) as captured_tip_mills,
        coalesce(sum(cpt.post_tip_amount_mills)
-         filter (where cpt.tip_goal_ref is not null), 0) as captured_goal_mills,
+         filter (where cpt.tip_goal_ref is not null), 0) as exact_goal_mills,
        coalesce(sum(cpt.post_tip_amount_mills)
-         filter (where cpt.tip_goal_ref is null), 0) as captured_direct_mills,
+         filter (where cpt.tip_goal_ref is null), 0) as unattributed_mills,
        cp.post_tip_total_mills
          - coalesce(sum(cpt.post_tip_amount_mills), 0) as snapshot_minus_rows_mills
 from creator_posts cp
@@ -160,8 +181,9 @@ Interpretation:
 - A positive difference can be legitimate: the snapshot includes
   `attachmentTipAmountMills`, while a tip targeting a reply/attachment may not
   be returned by `/tips?targetIds=<post>`. Keep and report the difference.
-- Goal/direct classification comes only from the captured type-7100 target:
-  non-null `creator_post_tips.tip_goal_ref` is goal-qualified; null is direct.
+- A non-null `creator_post_tips.tip_goal_ref` requires captured type-7100
+  evidence and is exact. A null ref is **unattributed**, not direct: the live
+  flat item supplied no per-tip goal discriminator.
 
 ## 4. Birthday ground truth
 
@@ -170,15 +192,17 @@ observations, then record actual results next to this table:
 
 | Page | Known live fact to reproduce |
 |---|---|
-| `lora-1`, laptop goal | `$1,000` goal-qualified total, `14` individual tips |
-| `lora-1`, party post | `$500` goal-qualified + `$20` direct under the post |
-| `lora-2`, birthday posts | known components `$455` and `$10.95` |
-| `lora-3`, birthday posts | known components `$205` and `$200` |
+| `lora-1`, laptop goal | post total `$1,000`, `14` individual tips; goal counter also `$1,000` |
+| `lora-1`, party post | post total `$520`; goal counter `$500`, leaving `$20` outside the goal only at aggregate level |
+| `lora-2`, birthday posts | captured post total `$465.95`; known aggregate components `$455` and `$10.95` |
+| `lora-3`, birthday posts | captured post total `$405`; known aggregate components `$205` and `$200` |
 
 The laptop post is the strongest acceptance for target-filter completeness:
-`captured_tip_rows = 14`, `captured_goal_mills = 1000000`, and every captured
-row points to the expected goal. The party post is the discriminator for exact
-goal attribution: `500000` with a goal ref plus `20000` with a null goal ref.
+`captured_tip_rows = 14` and `captured_tip_mills = 1000000`. The party post
+must yield six rows totalling `520000`. The timeline snapshots independently
+show the aggregate goal/direct components above; `/tips` cannot assign those
+components to individual donors, so per-tip goal/direct reproduction is not an
+acceptance criterion.
 
 ## 5. Agent read smoke
 
@@ -189,8 +213,9 @@ Use `hub capabilities` first and read blockers/floors on every result.
   on both `publishedAt` and `lastObservedAt` without treating the latter as tip
   time.
 - Money movements in a period: `post_tips`, whose window is
-  `postTipOccurredAt`. Verify `postTipGoalRef` and gated verbatim
-  `postTipMessageText`.
+  `postTipOccurredAt`. Verify gated verbatim `postTipMessageText`. For the live
+  flat shape, null `postTipGoalRef` must carry row state
+  `source_did_not_provide`, never `observed_empty`.
 - Cross-post goal totals: `tip_goals`; verify exactly one row per
   `tipGoalRef` and the expected `linkedPostCount`.
 - Person/timeline: verify post attribution appears in the separate `post_tips`

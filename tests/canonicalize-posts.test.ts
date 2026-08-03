@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { isProjectionOnlyDomainEventType } from "@agency_hub_core/db";
@@ -36,7 +38,7 @@ describe("creator-post canonicalizer", () => {
     const family = familyForObservation(observation({ posts: [] }));
     expect(family).toMatchObject({
       source: "pull",
-      version: 4,
+      version: 5,
       projectionOnly: true,
     });
     expect(family?.kinds).toEqual(["posts", "post_tips"]);
@@ -216,7 +218,7 @@ describe("creator-post canonicalizer", () => {
       postRef: "birthday-post",
       fanIdentityRef: "fan-22",
       transactionRef: "receiver-tx-1",
-      schemaVersion: 2,
+      schemaVersion: 3,
       data: {
         platform: "fansly",
         tipId: "tip-1",
@@ -225,12 +227,39 @@ describe("creator-post canonicalizer", () => {
         receiverTransactionRef: "receiver-tx-1",
         senderTransactionRef: "sender-tx-1",
         tipGoalRef: "goal-500",
+        tipGoalAttribution: "goal",
         tipMessageText: "happy birthday",
       },
     });
     expect(event!.dedupKey).toMatch(
-      /^post-tip:v2:fansly:tip-1:birthday-post:[0-9a-f]{64}:obs:71$/,
+      /^post-tip:v3:fansly:tip-1:birthday-post:[0-9a-f]{64}:obs:71$/,
     );
+  });
+
+  it("canonicalizes the observed flat Fansly fixture with unknown goal attribution", () => {
+    const liveFlatTips = JSON.parse(readFileSync(
+      "tests/fixtures/fansly-post-tips-flat.json",
+      "utf8",
+    )) as unknown;
+    const [event] = canonicalizePostsObservation(
+      observation(liveFlatTips, { kind: "post_tips" }),
+      { nativeAccountRefByAccountId: new Map([[9, "creator-live"]]) },
+    );
+
+    expect(event).toMatchObject({
+      type: "post.tip_observed",
+      postRef: "post-live-1",
+      fanIdentityRef: "fan-live-22",
+      transactionRef: null,
+      schemaVersion: 3,
+      data: {
+        receiverTransactionRef: null,
+        senderTransactionRef: null,
+        tipGoalRef: null,
+        tipGoalAttribution: "unknown",
+        tipMessageText: "For your level up",
+      },
+    });
   });
 
   it("refuses a tip whose receiver does not match the scoped Fansly page", () => {
@@ -298,7 +327,7 @@ describe("creator-post canonicalizer", () => {
           type: "post.tip_parse_rejected",
           schemaVersion: 1,
           data: expect.objectContaining({
-            parserVersion: 4,
+            parserVersion: 5,
             rejectedItemCount: 1,
           }),
         }),
@@ -321,6 +350,7 @@ describe("creator-post canonicalizer", () => {
     expect(canParsePostsObservation(targetOnly)).toBe(true);
     expect(canonicalizePostsObservation(targetOnly)[0]!.data).toMatchObject({
       tipGoalRef: "birthday-goal",
+      tipGoalAttribution: "goal",
       tipMessageText: "For your level up",
     });
 
@@ -355,6 +385,7 @@ describe("creator-post canonicalizer", () => {
     }], { kind: "post_tips" });
     expect(canonicalizePostsObservation(direct)[0]!.data).toMatchObject({
       tipGoalRef: null,
+      tipGoalAttribution: "direct",
       tipMessageText: "",
     });
     const badMessage = observation([{
@@ -479,6 +510,7 @@ describe("creator-post canonicalizer", () => {
       receiverTransactionRef: null,
       senderTransactionRef: null,
       tipGoalRef: null,
+      tipGoalAttribution: "direct",
       tipMessageText: null,
     });
     expect(directTip.data.amountMills).toBe(20_000);
@@ -494,9 +526,41 @@ describe("creator-post canonicalizer", () => {
       receiverTransactionRef: null,
       senderTransactionRef: null,
       tipGoalRef: null,
+      tipGoalAttribution: "direct",
       tipMessageText: "For your level up",
     });
     expect(withMessage.data.contentHash).not.toBe(directTip.data.contentHash);
     expect(withMessage.dedupKey).not.toBe(directTip.dedupKey);
+
+    const unknownGoal = buildPostTipObservedDraft({
+      observationId: 12,
+      tipId: "tip-direct",
+      postId: "money-change",
+      senderPlatformUserId: "fan-1",
+      amountMills: 20_000,
+      occurredAt: RECEIVED_AT,
+      observedAt: RECEIVED_AT,
+      receiverTransactionRef: null,
+      senderTransactionRef: null,
+      tipGoalRef: null,
+      tipGoalAttribution: "unknown",
+      tipMessageText: null,
+    });
+    expect(unknownGoal.data.contentHash).not.toBe(directTip.data.contentHash);
+    expect(unknownGoal.dedupKey).not.toBe(directTip.dedupKey);
+    expect(() => buildPostTipObservedDraft({
+      observationId: 13,
+      tipId: "tip-incoherent",
+      postId: "money-change",
+      senderPlatformUserId: "fan-1",
+      amountMills: 20_000,
+      occurredAt: RECEIVED_AT,
+      observedAt: RECEIVED_AT,
+      receiverTransactionRef: null,
+      senderTransactionRef: null,
+      tipGoalRef: "goal-without-evidence",
+      tipGoalAttribution: "unknown",
+      tipMessageText: null,
+    })).toThrow("post tip goal attribution is incoherent");
   });
 });

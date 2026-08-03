@@ -24,7 +24,7 @@ import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { persistRawPayload, retentionDate } from "./shared.ts";
 
 const FANSLY_POSTS_MAPPER_VERSION = "fansly-posts-v1";
-const FANSLY_POST_TIPS_MAPPER_VERSION = "fansly-post-tips-v1";
+const FANSLY_POST_TIPS_MAPPER_VERSION = "fansly-post-tips-v2";
 /** Every six-hour posts run refreshes at least this recent publication window.
  * One additional fully-old provider page may be captured to prove the bound. */
 export const FANSLY_RECENT_POST_REFRESH_LOOKBACK_DAYS = 14;
@@ -178,6 +178,15 @@ export function inspectFanslyPostTipsScope(
     if (receiverId !== null && receiverId !== input.receiverId) {
       rejectedItemIndexes.add(index);
       reasons.add("receiver_mismatch");
+    }
+    const flatPostRef = typeof tip.targetId === "string"
+      ? tip.targetId
+      : typeof tip.targetId === "number" && Number.isFinite(tip.targetId)
+        ? String(tip.targetId)
+        : null;
+    if (flatPostRef !== null && !requested.has(flatPostRef)) {
+      rejectedItemIndexes.add(index);
+      reasons.add("post_target_out_of_scope");
     }
     if (!Array.isArray(tip.targets)) continue;
     for (const candidate of tip.targets) {

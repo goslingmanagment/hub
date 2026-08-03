@@ -221,7 +221,7 @@ export async function runCreatorPostsProjection(
 
         if (event.type === "post.tip_observed") {
           if (
-            (event.schemaVersion !== 1 && event.schemaVersion !== 2)
+            (event.schemaVersion !== 1 && event.schemaVersion !== 2 && event.schemaVersion !== 3)
             || platform !== "fansly"
           ) {
             throw new Error(`post.tip_observed event ${event.id} has unsupported schema/platform`);
@@ -253,6 +253,34 @@ export async function runCreatorPostsProjection(
             requiredNullableFields(data, ["tipMessageText"], event.id);
             tipMessageText = nullableString(data.tipMessageText, "tipMessageText");
           }
+          const tipGoalRef = event.schemaVersion >= 2
+            ? nullableRef(data.tipGoalRef, "tipGoalRef")
+            : null;
+          let tipGoalAttribution: "goal" | "direct" | "unknown" = event.schemaVersion === 1
+            ? "unknown"
+            : tipGoalRef === null
+              ? "direct"
+              : "goal";
+          if (event.schemaVersion >= 3) {
+            const observedTipGoalAttribution = data.tipGoalAttribution;
+            if (
+              observedTipGoalAttribution !== "goal"
+              && observedTipGoalAttribution !== "direct"
+              && observedTipGoalAttribution !== "unknown"
+            ) {
+              throw new Error(
+                `post.tip_observed event ${event.id} has invalid tipGoalAttribution`,
+              );
+            }
+            if (
+              (observedTipGoalAttribution === "goal") !== (tipGoalRef !== null)
+            ) {
+              throw new Error(
+                `post.tip_observed event ${event.id} has incoherent goal attribution`,
+              );
+            }
+            tipGoalAttribution = observedTipGoalAttribution;
+          }
           const result = await upsertCreatorPostTip(app.db, {
             accountId,
             platform,
@@ -269,9 +297,13 @@ export async function runCreatorPostsProjection(
             // correlation into exact donor-to-goal evidence. V2 replays the
             // retained raw response and restores a goal only when its target
             // proves it.
-            tipGoalRef: event.schemaVersion >= 2
-              ? nullableRef(data.tipGoalRef, "tipGoalRef")
-              : null,
+            // Schema v3 records whether the source proved a goal, proved a
+            // direct tip, or supplied no per-tip goal discriminator. The
+            // current serving table deliberately stores only exact goal refs;
+            // an unknown sighting preserves older exact evidence, while a
+            // newer explicit direct/goal sighting remains last-writer-wins.
+            tipGoalRef,
+            tipGoalAttribution,
             tipMessageText,
             contentHash,
             sourceEventId: event.id,

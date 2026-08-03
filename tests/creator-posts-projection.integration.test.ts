@@ -528,21 +528,21 @@ describe("creator posts domain projection", () => {
         ],
         createdAt: Math.floor(new Date("2026-07-31T20:59:00Z").getTime() / 1000),
       }, {
-        id: "tip-20-direct",
+        // Exact production shape: the flat target proves the post but carries
+        // neither transaction refs nor a per-tip goal discriminator.
+        id: "tip-20-flat",
         senderId: "fan-33",
         receiverId: "creator-native",
         amount: 20_000,
         message: "I'm competitive haha",
-        senderTransactionId: "sender-tx-20",
-        receiverTransactionId: "receiver-tx-20",
-        targets: [{ id: "birthday-post", type: 1000 }],
+        targetId: "birthday-post",
         createdAt: Math.floor(new Date("2026-07-31T21:00:00Z").getTime() / 1000),
       }],
     });
     // Simulate raw captured and stamped by the previous parser generation.
-    // Family v3 must replay it, append v2 material and recover the messages.
+    // Family v5 must replay it, append v3 material and recover the live flat row.
     await testDb.pool.query(
-      "update observations set parse_version = 2 where id = $1",
+      "update observations set parse_version = 4 where id = $1",
       [tipObservation.observationId],
     );
     expect(await runCanonicalization(appStub())).toMatchObject({ appended: 3, stamped: 1 });
@@ -551,7 +551,7 @@ describe("creator posts domain projection", () => {
     const persistedTipEvent = await testDb.pool.query<{
       post_ref: string;
       fan_identity_ref: string;
-      transaction_ref: string;
+      transaction_ref: string | null;
       observation_id: string;
       data: Record<string, unknown>;
     }>(
@@ -564,12 +564,13 @@ describe("creator posts domain projection", () => {
       expect.objectContaining({
         post_ref: "birthday-post",
         fan_identity_ref: "fan-33",
-        transaction_ref: "receiver-tx-20",
+        transaction_ref: null,
         observation_id: String(tipObservation.observationId),
         data: expect.objectContaining({
-          tipId: "tip-20-direct",
+          tipId: "tip-20-flat",
           amountMills: 20_000,
           tipGoalRef: null,
+          tipGoalAttribution: "unknown",
           tipMessageText: "I'm competitive haha",
         }),
       }),
@@ -582,6 +583,7 @@ describe("creator posts domain projection", () => {
           tipId: "tip-250",
           amountMills: 250_000,
           tipGoalRef: "goal-birthday",
+          tipGoalAttribution: "goal",
           tipMessageText: "happy birthday",
         }),
       }),
@@ -592,8 +594,8 @@ describe("creator posts domain projection", () => {
       platform_post_id: string;
       tip_sender_platform_user_id: string;
       post_tip_amount_mills: string;
-      receiver_transaction_ref: string;
-      sender_transaction_ref: string;
+      receiver_transaction_ref: string | null;
+      sender_transaction_ref: string | null;
       tip_goal_ref: string | null;
       tip_message_text: string | null;
       occurred_at: Date;
@@ -610,12 +612,12 @@ describe("creator posts domain projection", () => {
     );
     expect(persistedTip.rows).toEqual([
       expect.objectContaining({
-        platform_tip_id: "tip-20-direct",
+        platform_tip_id: "tip-20-flat",
         platform_post_id: "birthday-post",
         tip_sender_platform_user_id: "fan-33",
         post_tip_amount_mills: "20000",
-        receiver_transaction_ref: "receiver-tx-20",
-        sender_transaction_ref: "sender-tx-20",
+        receiver_transaction_ref: null,
+        sender_transaction_ref: null,
         tip_goal_ref: null,
         tip_message_text: "I'm competitive haha",
         source_observation_id: String(tipObservation.observationId),
@@ -772,6 +774,200 @@ describe("creator posts domain projection", () => {
     );
     expect(afterRebuildPost.rows[0]).toEqual(beforeRebuildPost);
     expect(afterRebuildTip.rows).toEqual(beforeRebuildTips);
+  });
+
+  it("preserves exact tip-goal evidence across unknown sightings and rebuilds", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const model = await createModel(testDb.db, {
+      slug: "post-tip-attribution",
+      name: "Post Tip Attribution",
+    });
+    if (!model) throw new Error("model seed failed");
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: "post-tip-attribution-page",
+    });
+    if (!page) throw new Error("page seed failed");
+
+    const occurredAt = new Date("2026-07-31T20:59:00Z");
+    const exactSeen = new Date("2026-08-01T08:00:00Z");
+    const flatSeen = new Date("2026-08-02T08:00:00Z");
+    const directSeen = new Date("2026-08-03T08:00:00Z");
+    const correctedGoalSeen = new Date("2026-08-04T08:00:00Z");
+    const legacyUnknownSeen = new Date("2026-08-05T08:00:00Z");
+    const commonTip = {
+      id: "tip-attribution",
+      senderId: "fan-attribution",
+      receiverId: "creator-native",
+      amount: 250_000,
+      createdAt: Math.floor(occurredAt.getTime() / 1000),
+    };
+    const readProjectedTip = () => testDb!.pool.query<{
+      tip_goal_ref: string | null;
+      receiver_transaction_ref: string | null;
+      tip_message_text: string | null;
+      first_observed_at: Date;
+      last_observed_at: Date;
+      source_observation_id: string;
+      source_account_seq: string;
+    }>(
+      `select tip_goal_ref, receiver_transaction_ref, tip_message_text,
+              first_observed_at, last_observed_at,
+              source_observation_id::text, source_account_seq::text
+       from creator_post_tips
+       where account_id = $1 and platform_post_id = 'post-attribution'
+         and platform_tip_id = 'tip-attribution'`,
+      [page.id],
+    );
+
+    const exactObservation = await seedPostTipsObservation({
+      accountId: page.id,
+      key: "post-tip-attribution-exact",
+      receivedAt: exactSeen,
+      tips: [{
+        ...commonTip,
+        message: "typed goal evidence",
+        receiverTransactionId: "receiver-tx-exact",
+        senderTransactionId: "sender-tx-exact",
+        tipGoalId: "goal-exact",
+        targets: [
+          { id: "post-attribution", type: 1000 },
+          { id: "goal-exact", type: 7100 },
+        ],
+      }],
+    });
+    expect(await runCanonicalization(appStub())).toMatchObject({ appended: 2, stamped: 1 });
+    expect(await runCreatorPostsProjection(appStub())).toMatchObject({ upserted: 1 });
+    expect((await readProjectedTip()).rows[0]).toMatchObject({
+      tip_goal_ref: "goal-exact",
+      receiver_transaction_ref: "receiver-tx-exact",
+      tip_message_text: "typed goal evidence",
+      source_observation_id: String(exactObservation.observationId),
+    });
+
+    // The live flat shape is a newer sighting of the same immutable tip. Its
+    // missing discriminator is unknown, not evidence that retracts the exact
+    // typed target captured above. Other latest-observed material still wins.
+    const flatObservation = await seedPostTipsObservation({
+      accountId: page.id,
+      key: "post-tip-attribution-flat",
+      receivedAt: flatSeen,
+      tips: [{
+        ...commonTip,
+        message: "flat live shape",
+        targetId: "post-attribution",
+      }],
+    });
+    expect(await runCanonicalization(appStub())).toMatchObject({ appended: 2, stamped: 1 });
+    expect(await runCreatorPostsProjection(appStub())).toMatchObject({ upserted: 1 });
+    const afterFlat = (await readProjectedTip()).rows[0]!;
+    expect(afterFlat).toMatchObject({
+      tip_goal_ref: "goal-exact",
+      receiver_transaction_ref: null,
+      tip_message_text: "flat live shape",
+      source_observation_id: String(flatObservation.observationId),
+    });
+    expect(afterFlat.first_observed_at.toISOString()).toBe(exactSeen.toISOString());
+    expect(afterFlat.last_observed_at.toISOString()).toBe(flatSeen.toISOString());
+
+    // Rebuild consumes exact -> unknown in ledger order and must reproduce the
+    // same field-level evidence merge, not regress to the flat null.
+    expect(await rebuildCreatorPostsProjection(appStub(), { accountId: page.id }))
+      .toMatchObject({ upserted: 2 });
+    expect((await readProjectedTip()).rows[0]).toEqual(afterFlat);
+
+    // Unlike unknown, an explicitly target-complete direct sighting is newer
+    // contradictory evidence and remains ordinary last-writer-wins material.
+    const directObservation = await seedPostTipsObservation({
+      accountId: page.id,
+      key: "post-tip-attribution-direct",
+      receivedAt: directSeen,
+      tips: [{
+        ...commonTip,
+        message: "typed direct evidence",
+        receiverTransactionId: "receiver-tx-direct",
+        senderTransactionId: "sender-tx-direct",
+        targets: [{ id: "post-attribution", type: 1000 }],
+      }],
+    });
+    await runCanonicalization(appStub());
+    await runCreatorPostsProjection(appStub());
+    expect((await readProjectedTip()).rows[0]).toMatchObject({
+      tip_goal_ref: null,
+      receiver_transaction_ref: "receiver-tx-direct",
+      source_observation_id: String(directObservation.observationId),
+    });
+
+    const correctedGoalObservation = await seedPostTipsObservation({
+      accountId: page.id,
+      key: "post-tip-attribution-corrected-goal",
+      receivedAt: correctedGoalSeen,
+      tips: [{
+        ...commonTip,
+        message: "new typed goal evidence",
+        receiverTransactionId: "receiver-tx-corrected-goal",
+        senderTransactionId: "sender-tx-corrected-goal",
+        tipGoalId: "goal-corrected",
+        targets: [
+          { id: "post-attribution", type: 1000 },
+          { id: "goal-corrected", type: 7100 },
+        ],
+      }],
+    });
+    await runCanonicalization(appStub());
+    await runCreatorPostsProjection(appStub());
+    expect((await readProjectedTip()).rows[0]).toMatchObject({
+      tip_goal_ref: "goal-corrected",
+      receiver_transaction_ref: "receiver-tx-corrected-goal",
+      source_observation_id: String(correctedGoalObservation.observationId),
+    });
+
+    // Schema v1's optional top-level goal id was never exact. Projecting a
+    // later legacy event therefore has the same non-erasing semantics as v3
+    // unknown, while its other current material and lineage may advance.
+    expect(await appendProjectionOnlyDomainEvents(testDb.db, page.id, [{
+      type: "post.tip_observed",
+      occurredAt,
+      fanIdentityRef: commonTip.senderId,
+      transactionRef: "receiver-tx-legacy",
+      postRef: "post-attribution",
+      data: {
+        platform: "fansly",
+        tipId: commonTip.id,
+        senderPlatformUserId: commonTip.senderId,
+        amountMills: commonTip.amount,
+        occurredAt: occurredAt.toISOString(),
+        observedAt: legacyUnknownSeen.toISOString(),
+        receiverTransactionRef: "receiver-tx-legacy",
+        senderTransactionRef: "sender-tx-legacy",
+        tipGoalRef: "legacy-unverified-goal",
+        contentHash: "b".repeat(64),
+      },
+      schemaVersion: 1,
+      observationId: 9_901,
+      dedupKey: "post-tip:v1:fansly:tip-attribution:post-attribution:legacy:obs:9901",
+    }], {
+      occurredAt: legacyUnknownSeen,
+      observationId: 9_901,
+      dedupKey: "projection-checkpoint:post-tip-attribution:legacy:9901",
+    })).toMatchObject({ appended: 2 });
+    await runCreatorPostsProjection(appStub());
+    const afterLegacyUnknown = (await readProjectedTip()).rows[0]!;
+    expect(afterLegacyUnknown).toMatchObject({
+      tip_goal_ref: "goal-corrected",
+      receiver_transaction_ref: "receiver-tx-legacy",
+      tip_message_text: null,
+      source_observation_id: "9901",
+    });
+    expect(afterLegacyUnknown.last_observed_at.toISOString())
+      .toBe(legacyUnknownSeen.toISOString());
+
+    expect(await rebuildCreatorPostsProjection(appStub(), { accountId: page.id }))
+      .toMatchObject({ upserted: 5 });
+    expect((await readProjectedTip()).rows[0]).toEqual(afterLegacyUnknown);
   });
 
   it("keeps schema-v1 post-tip events projectable without upgrading legacy goal/message", async (context) => {

@@ -358,19 +358,33 @@ export interface FanslyTipTarget {
   [key: string]: unknown;
 }
 
-export interface FanslyPostTip {
+interface FanslyPostTipCommon {
   id: string;
   senderId: string;
   receiverId: string;
   amount: number;
   message?: string | null;
-  senderTransactionId: string;
-  receiverTransactionId: string;
-  targets: FanslyTipTarget[];
+  senderTransactionId?: string | null;
+  receiverTransactionId?: string | null;
   createdAt: number;
   tipGoalId?: string | null;
   [key: string]: unknown;
 }
+
+/** Shape observed live in August 2026. targetId is exact post attribution,
+ * but carries no evidence about whether the tip funded a linked goal. */
+export interface FanslyFlatPostTip extends FanslyPostTipCommon {
+  targetId: string;
+  targets?: never;
+}
+
+/** Older/richer shape where typed targets distinguish the post from a goal. */
+export interface FanslyNestedPostTip extends FanslyPostTipCommon {
+  targets: FanslyTipTarget[];
+  targetId?: string;
+}
+
+export type FanslyPostTip = FanslyFlatPostTip | FanslyNestedPostTip;
 
 export interface FanslyPostTipsResponse {
   items: FanslyPostTip[];

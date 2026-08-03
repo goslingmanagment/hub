@@ -421,11 +421,12 @@ than that horizon, use `lastObservedAt` to qualify the snapshot as point-in-time
 do not call its current counter or goal live without newer evidence.
 
 Individual captured tips use their own `postTipOccurredAt` window. A non-null
-`postTipGoalRef` is exact type-7100 target evidence; null is a captured direct
-post tip and its row `fieldStates.postTipGoalRef` is `observed_empty`, not
-`source_did_not_provide`. `postTipMessageText` is provider-verbatim fan copy, so this whole
-dataset needs `read:datasets` + `read:money` + `read:messages` and every
-successful read is audited:
+`postTipGoalRef` is exact type-7100 target evidence. A null ref is unattributed:
+Fansly's live flat `/tips` item proves the post but supplies no per-tip goal
+discriminator, so its row `fieldStates.postTipGoalRef` is
+`source_did_not_provide`, never `observed_empty`. `postTipMessageText` is
+provider-verbatim fan copy, so this whole dataset needs `read:datasets` +
+`read:money` + `read:messages` and every successful read is audited:
 
 ```
 hub dataset --page-label lora-1 --dataset post_tips \
