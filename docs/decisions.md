@@ -213,6 +213,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 209 | Fansly post monetization | Fansly timeline money and linked-goal fields become a latest-observed `post_monetization` snapshot, while raw-first `/tips?targetIds` capture supplies donor-to-post rows with exact type-7100 goal attribution and verbatim tip notes in `post_tips`. The rendered post total is `tipAmount + attachmentTipAmount`, never `totalTipAmount`; `tip_goals` deduplicates shared goals. Companion drift cannot wedge posts, malformed tip items become explicit parse debt, and migration 0121/posts canonicalizer v4 preserve replay without claiming continuous refresh or tipped-reply-donor completeness |
 | 210 | Fansly live post-tip contract correction | Post-deploy acceptance supersedes #209 narrowly on the undocumented `/tips` item shape and null semantics: live items carry a flat `targetId` that proves donor-to-post attribution but no per-tip goal discriminator or transaction refs. Canonicalizer v5/schema v3 replays them with internal `tipGoalAttribution='unknown'`; a null `postTipGoalRef` means source-did-not-provide, never direct. Nested typed targets remain accepted when actually observed. No migration or inferred goal split |
 | 211 | Exact transaction tip context | Fansly DM `tips[]` sidecars project exact, message-gated `tip_transactions` note/conversation context by provider tip id while `transactions` remains money-only. Mandatory sender/time facts, a Stage-28 material-time erasure fence, and field-specific raw lineage prevent false nulls, resurrection, and unverifiable verbatim text; OnlyFans stays visible as `not_captured` |
+| 212 | CI runner-minute budget | The required PR gate keeps static plus the complete sync-critical selection on one serial `Quality Gate` runner; pushes to main repeat only static/build validation, manual dispatch runs the complete gate, and nightly remains full-suite |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6793,3 +6794,31 @@ There is deliberately no `messageRef` in this version. A future point lookup
 may return one archived message plus bounded neighbours, but only after an
 exact provider-backed message identity is available; conversation membership
 or nearest timestamp is not silently upgraded into that claim.
+
+**Decision #212 (2026-08-03, runner minutes are a budgeted CI resource):** The
+August billing reset exposed a cost bug in #188's latency optimization. On
+August 1 the organization consumed 1,988 Linux runner-minutes; 1,936 (97.4%)
+came from core. A successful core workflow looked like roughly nine minutes of
+wall time but billed about 35 job-minutes because static checks, three database
+shards and the aggregator occupied five separately rounded runners. Fifty-six
+core workflows landed in that billing day, including repeated PR heads, the
+post-merge main gate, failures and manual retries. The billed amount was still
+zero because the plan allowance absorbed it, but the compute demand was real.
+
+#188 is PARTIALLY superseded on runner topology and main-push coverage. Its
+static/build/runtime/unit steps remain unchanged, but the literal required
+`Quality Gate` now owns them directly. On pull requests and manual dispatch the
+same runner then executes the complete `pnpm test:sync-critical` DB + API
+selection. Step ordering means a static failure starts no additional runner and
+never reaches the expensive Testcontainers-backed step. A push to `main` reruns
+static/build/Docker/runtime/unit validation on the merged commit but
+intentionally skips only that duplicate integration step. The nightly workflow
+remains the independent full Vitest suite.
+
+There is no matrix, dependency job or aggregator runner. Repository rules still
+see the exact `Quality Gate` context because it is attached directly to the
+single job. Existing cancellation of superseded PR heads, completed-main
+history, timeout and workflow dispatch survive. A structural unit test pins the
+single-runner, PR-required topology so a future wall-time optimization cannot
+silently reintroduce unbudgeted parallelism or move integration after merge. No
+product/runtime behavior, test selection or nightly coverage changes.
