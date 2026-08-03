@@ -1,4 +1,4 @@
-> Generated 2026-07-15 from docs/generated/REGENERATION-PROMPT.md at commit 7df9a45.
+> Generated 2026-08-03 from docs/generated/REGENERATION-PROMPT.md at commit ecb2aafa.
 > Machine-generated reference — regenerate by re-running that prompt in a
 > fresh session; do not hand-edit.
 
@@ -103,22 +103,20 @@ processes when one exits or the script receives a signal.
 
 `.github/workflows/ci.yml` runs for pull requests, pushes to `main`, and manual
 dispatch. Superseded pull-request runs are cancelled; `main` runs always finish.
-Three jobs install pinned pnpm/Node 22 dependencies and split the work:
+One job owns the exact required status context, `Quality Gate`. On its single
+runner it installs pinned pnpm/Node 22 dependencies, then sequentially runs the
+typecheck ratchet and ESLint; contract generation followed by a clean-diff
+assertion for OpenAPI, contract hash, SDK, and authorization-policy artifacts;
+the production build and production Docker image build; the Chromium runtime
+smoke; and the reliable unit-test selection. A failure in these steps prevents
+the expensive Testcontainers-backed step from starting.
 
-1. `Static checks` — the typecheck ratchet and ESLint; contract generation
-   followed by a clean-diff assertion for OpenAPI, contract hash, SDK, and
-   authorization policy artifacts; the production build and production Docker
-   image build; the Chromium runtime smoke; unit tests.
-2. `Integration N/3` — a three-way matrix over the sync-critical prerequisite
-   suite, sharded by resolved file (`test:sync-critical:db --shard`), with the
-   single-file API selection attached to shard 1. Each shard is its own runner,
-   so files stay serial within a shard and every test keeps its own throwaway
-   Postgres container.
-3. `Quality Gate` — the aggregator. Branch protection requires this exact check
-   name, and it fails unless both jobs above succeeded.
-
-Coverage is unchanged from the single-job layout: every step still runs on every
-pull request, only spread across runners.
+On pull requests and manual dispatch, the same runner then executes the complete
+sync-critical DB/schema/network/API selection through `pnpm test:sync-critical`.
+On pushes to `main`, that final integration step is intentionally skipped: the
+merged commit still receives static/build/Docker/runtime/unit validation without
+duplicating integration that the required pre-merge gate already proved. There
+is no integration matrix or aggregator runner.
 
 `.github/workflows/nightly.yml` runs daily at 02:20 UTC and on manual dispatch.
 Its 90-minute job runs the full Vitest suite, including Testcontainers-backed
