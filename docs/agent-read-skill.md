@@ -301,8 +301,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 |---|---|
 | `hub capabilities` | What this deployment serves, what YOUR key may read, today's budget, the dataset catalog. Start here. |
 | `hub resolve` | A URL, slug, username or native id, turned into fan identities. Try this before concluding a fan does not exist. |
-| `hub person` | One fan across every granted page: identity, memberships, threads, money, subscriptions. |
-| `hub timeline` | One fan's merged timeline across lanes (money, subscriptions, follows, message refs). |
+| `hub person` | One fan across every granted page: identity, memberships, threads, money, bounded post-tip attribution, subscriptions. |
+| `hub timeline` | One fan's merged timeline across lanes (money, separate post-tip attribution, subscriptions, follows, message refs). |
 | `hub threads` | Cross page DM thread inventory with per thread capture bounds. |
 | `hub transcript` | The full transcript of ONE thread. Needs `read:messages`; every call is audited. |
 | `hub search` | Bounded full text search over the message archive. It does not paginate, by design. |
@@ -399,14 +399,64 @@ hub dataset --page-label lora-2 --dataset posts \
   --filter postRef:eq:post-42 --claim-field postText
 ```
 
+Post monetization has two deliberately separate temporal axes. The current
+one-row-per-post snapshot keeps `publishedAt` as its window column. To answer
+"what does Hub currently hold under post X", use a broad publication window
+and the exact post ref; `publishedAt` and `lastObservedAt` are both filterable,
+but the latter is observation time, not money time:
+
+```
+hub dataset --page-label lora-1 --dataset post_monetization \
+  --from 2025-01-01T00:00:00Z --to 2027-01-01T00:00:00Z \
+  --filter postRef:eq:POST_REF \
+  --claim-field postTipTotalMills --claim-field tipGoalRef \
+  --claim-field lastObservedAt --pretty
+```
+
+Ordinary Fansly posts capture runs every six hours and revisits posts published
+inside a frozen 14-day horizon, continuing past the previous head and capturing
+one wholly older boundary page. This catches late tips during a normal campaign,
+but it is not permanent refresh for every historical post. For a post older
+than that horizon, use `lastObservedAt` to qualify the snapshot as point-in-time;
+do not call its current counter or goal live without newer evidence.
+
+Individual captured tips use their own `postTipOccurredAt` window. A non-null
+`postTipGoalRef` is exact type-7100 target evidence; null is a captured direct
+post tip and its row `fieldStates.postTipGoalRef` is `observed_empty`, not
+`source_did_not_provide`. `postTipMessageText` is provider-verbatim fan copy, so this whole
+dataset needs `read:datasets` + `read:money` + `read:messages` and every
+successful read is audited:
+
+```
+hub dataset --page-label lora-1 --dataset post_tips \
+  --from 2026-07-27T00:00:00Z --to 2026-08-02T00:00:00Z \
+  --filter postTipPostRef:eq:POST_REF \
+  --sort postTipOccurredAt:asc --limit 200 \
+  --claim-field postTipAmountMills --claim-field postTipGoalRef \
+  --claim-field postTipMessageText --pretty
+```
+
+`tip_goals` is the aggregation surface: it returns one deterministic latest
+row per shared `tipGoalRef` plus `linkedPostCount`. Do not sum repeated
+`tipGoalCurrentMills` values from `post_monetization`.
+
+The sum of `post_tips` rows is NOT required to equal `postTipTotalMills`.
+Fansly's snapshot total includes `attachmentTipAmountMills` (tips targeting
+replies/attachments), while `/tips?targetIds=<post>` may not return a row whose
+actual target was that reply. Report the captured rows and any difference;
+never fill it by inference. On every post-tip read, treat `parse_debt` or
+`rejected_rows` in `capture.gaps` as a blocker and follow the local-replay
+remedy. Person/timeline expose attribution separately from `money` so the same
+payment is never added twice; verbatim tip messages remain dataset-only.
+
 V1 has no post full-text search. Do not imitate one with `contains` or ILIKE;
 those operators are deliberately absent. `hub capabilities` reports the global
 posts capture state as `unknown` because collectors roll out per page. The
 page-scoped response's `creator_posts.captureFloor`, gaps and blockers are the
 evidence to use for that page. A `before_capture_floor` gap has remedy
-`none: journal_before_capture_start`: v1 collection is incremental from the
-stored head, so simply running it again cannot recover history from before the
-first capture.
+`none: journal_before_capture_start`: after the one-time retained-history walk,
+ordinary collection only revisits the rolling horizon, so simply running it
+again cannot prove history from before the recorded floor.
 
 For a page total, do NOT paginate and add row responses. Ask the same operation
 for one summary. It returns no `items`; `summary.groups[]` keeps currencies

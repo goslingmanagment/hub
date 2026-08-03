@@ -21012,8 +21012,8 @@
                       }
                     },
                     "planes": {
-                      "minItems": 21,
-                      "maxItems": 21,
+                      "minItems": 22,
+                      "maxItems": 22,
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -21041,7 +21041,8 @@
                               "fan_summaries",
                               "fan_profiles",
                               "fan_flags",
-                              "creator_posts"
+                              "creator_posts",
+                              "creator_post_tips"
                             ]
                           },
                           "enabled": {
@@ -21079,6 +21080,9 @@
                                   "fan_aliases",
                                   "fan_notes",
                                   "posts",
+                                  "post_monetization",
+                                  "post_tips",
+                                  "tip_goals",
                                   "sync_streams"
                                 ]
                               },
@@ -21292,7 +21296,25 @@
                           "publishedAt",
                           "firstObservedAt",
                           "lastObservedAt",
-                          "attachmentCount"
+                          "attachmentCount",
+                          "postTargetTipAmountMills",
+                          "attachmentTipAmountMills",
+                          "postTipTotalMills",
+                          "tipGoalLinked",
+                          "tipGoalRef",
+                          "tipGoalLabelText",
+                          "tipGoalTargetMills",
+                          "tipGoalCurrentMills",
+                          "tipGoalAmountsHidden",
+                          "postTipPostRef",
+                          "postTipRef",
+                          "tipSenderPlatformUserId",
+                          "postTipOccurredAt",
+                          "postTipAmountMills",
+                          "receiverTransactionRef",
+                          "postTipGoalRef",
+                          "postTipMessageText",
+                          "linkedPostCount"
                         ]
                       }
                     },
@@ -21385,8 +21407,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -21416,7 +21438,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -21487,7 +21510,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -21599,7 +21623,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -21820,7 +21845,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -21927,7 +21953,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -22463,7 +22507,25 @@
                   "publishedAt",
                   "firstObservedAt",
                   "lastObservedAt",
-                  "attachmentCount"
+                  "attachmentCount",
+                  "postTargetTipAmountMills",
+                  "attachmentTipAmountMills",
+                  "postTipTotalMills",
+                  "tipGoalLinked",
+                  "tipGoalRef",
+                  "tipGoalLabelText",
+                  "tipGoalTargetMills",
+                  "tipGoalCurrentMills",
+                  "tipGoalAmountsHidden",
+                  "postTipPostRef",
+                  "postTipRef",
+                  "tipSenderPlatformUserId",
+                  "postTipOccurredAt",
+                  "postTipAmountMills",
+                  "receiverTransactionRef",
+                  "postTipGoalRef",
+                  "postTipMessageText",
+                  "linkedPostCount"
                 ]
               }
             },
@@ -22551,8 +22613,8 @@
                             ]
                           },
                           "planes": {
-                            "minItems": 21,
-                            "maxItems": 21,
+                            "minItems": 22,
+                            "maxItems": 22,
                             "type": "array",
                             "items": {
                               "anyOf": [
@@ -22582,7 +22644,8 @@
                                         "fan_summaries",
                                         "fan_profiles",
                                         "fan_flags",
-                                        "creator_posts"
+                                        "creator_posts",
+                                        "creator_post_tips"
                                       ]
                                     },
                                     "state": {
@@ -22653,7 +22716,8 @@
                                         "fan_summaries",
                                         "fan_profiles",
                                         "fan_flags",
-                                        "creator_posts"
+                                        "creator_posts",
+                                        "creator_post_tips"
                                       ]
                                     },
                                     "state": {
@@ -22765,7 +22829,8 @@
                                     "fan_summaries",
                                     "fan_profiles",
                                     "fan_flags",
-                                    "creator_posts"
+                                    "creator_posts",
+                                    "creator_post_tips"
                                   ]
                                 },
                                 "remedy": {
@@ -23005,7 +23070,25 @@
                                 "publishedAt",
                                 "firstObservedAt",
                                 "lastObservedAt",
-                                "attachmentCount"
+                                "attachmentCount",
+                                "postTargetTipAmountMills",
+                                "attachmentTipAmountMills",
+                                "postTipTotalMills",
+                                "tipGoalLinked",
+                                "tipGoalRef",
+                                "tipGoalLabelText",
+                                "tipGoalTargetMills",
+                                "tipGoalCurrentMills",
+                                "tipGoalAmountsHidden",
+                                "postTipPostRef",
+                                "postTipRef",
+                                "tipSenderPlatformUserId",
+                                "postTipOccurredAt",
+                                "postTipAmountMills",
+                                "receiverTransactionRef",
+                                "postTipGoalRef",
+                                "postTipMessageText",
+                                "linkedPostCount"
                               ]
                             },
                             "additionalProperties": {
@@ -23362,8 +23445,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -23393,7 +23476,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -23464,7 +23548,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -23576,7 +23661,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -23797,7 +23883,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -23904,7 +23991,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -24850,8 +24955,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -24881,7 +24986,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -24952,7 +25058,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -25064,7 +25171,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -25285,7 +25393,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -25392,7 +25501,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -26313,8 +26440,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -26344,7 +26471,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -26415,7 +26543,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -26527,7 +26656,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -26748,7 +26878,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -26855,7 +26986,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -27887,8 +28036,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -27918,7 +28067,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -27989,7 +28139,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -28101,7 +28252,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -28322,7 +28474,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -28429,7 +28582,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -29931,8 +30102,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -29962,7 +30133,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -30033,7 +30205,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -30145,7 +30318,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -30366,7 +30540,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -30473,7 +30648,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -31107,8 +31300,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -31138,7 +31331,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -31209,7 +31403,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -31321,7 +31516,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -31542,7 +31738,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -31649,7 +31846,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -32266,7 +32481,25 @@
                             "publishedAt",
                             "firstObservedAt",
                             "lastObservedAt",
-                            "attachmentCount"
+                            "attachmentCount",
+                            "postTargetTipAmountMills",
+                            "attachmentTipAmountMills",
+                            "postTipTotalMills",
+                            "tipGoalLinked",
+                            "tipGoalRef",
+                            "tipGoalLabelText",
+                            "tipGoalTargetMills",
+                            "tipGoalCurrentMills",
+                            "tipGoalAmountsHidden",
+                            "postTipPostRef",
+                            "postTipRef",
+                            "tipSenderPlatformUserId",
+                            "postTipOccurredAt",
+                            "postTipAmountMills",
+                            "receiverTransactionRef",
+                            "postTipGoalRef",
+                            "postTipMessageText",
+                            "linkedPostCount"
                           ]
                         }
                       },
@@ -32313,6 +32546,9 @@
                 "fan_aliases",
                 "fan_notes",
                 "posts",
+                "post_monetization",
+                "post_tips",
+                "tip_goals",
                 "sync_streams"
               ]
             },
@@ -32347,6 +32583,9 @@
                         "fan_aliases",
                         "fan_notes",
                         "posts",
+                        "post_monetization",
+                        "post_tips",
+                        "tip_goals",
                         "sync_streams"
                       ]
                     },
@@ -32397,6 +32636,9 @@
                               "fan_aliases",
                               "fan_notes",
                               "posts",
+                              "post_monetization",
+                              "post_tips",
+                              "tip_goals",
                               "sync_streams"
                             ]
                           },
@@ -32506,7 +32748,25 @@
                                 "publishedAt",
                                 "firstObservedAt",
                                 "lastObservedAt",
-                                "attachmentCount"
+                                "attachmentCount",
+                                "postTargetTipAmountMills",
+                                "attachmentTipAmountMills",
+                                "postTipTotalMills",
+                                "tipGoalLinked",
+                                "tipGoalRef",
+                                "tipGoalLabelText",
+                                "tipGoalTargetMills",
+                                "tipGoalCurrentMills",
+                                "tipGoalAmountsHidden",
+                                "postTipPostRef",
+                                "postTipRef",
+                                "tipSenderPlatformUserId",
+                                "postTipOccurredAt",
+                                "postTipAmountMills",
+                                "receiverTransactionRef",
+                                "postTipGoalRef",
+                                "postTipMessageText",
+                                "linkedPostCount"
                               ]
                             },
                             "additionalProperties": {
@@ -32976,8 +33236,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -33007,7 +33267,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -33078,7 +33339,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -33190,7 +33452,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -33411,7 +33674,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -33518,7 +33782,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -34062,7 +34344,25 @@
                             "publishedAt",
                             "firstObservedAt",
                             "lastObservedAt",
-                            "attachmentCount"
+                            "attachmentCount",
+                            "postTargetTipAmountMills",
+                            "attachmentTipAmountMills",
+                            "postTipTotalMills",
+                            "tipGoalLinked",
+                            "tipGoalRef",
+                            "tipGoalLabelText",
+                            "tipGoalTargetMills",
+                            "tipGoalCurrentMills",
+                            "tipGoalAmountsHidden",
+                            "postTipPostRef",
+                            "postTipRef",
+                            "tipSenderPlatformUserId",
+                            "postTipOccurredAt",
+                            "postTipAmountMills",
+                            "receiverTransactionRef",
+                            "postTipGoalRef",
+                            "postTipMessageText",
+                            "linkedPostCount"
                           ]
                         }
                       },
@@ -34617,8 +34917,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -34648,7 +34948,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -34719,7 +35020,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -34831,7 +35133,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -35052,7 +35355,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -35159,7 +35463,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -35793,7 +36115,25 @@
                   "publishedAt",
                   "firstObservedAt",
                   "lastObservedAt",
-                  "attachmentCount"
+                  "attachmentCount",
+                  "postTargetTipAmountMills",
+                  "attachmentTipAmountMills",
+                  "postTipTotalMills",
+                  "tipGoalLinked",
+                  "tipGoalRef",
+                  "tipGoalLabelText",
+                  "tipGoalTargetMills",
+                  "tipGoalCurrentMills",
+                  "tipGoalAmountsHidden",
+                  "postTipPostRef",
+                  "postTipRef",
+                  "tipSenderPlatformUserId",
+                  "postTipOccurredAt",
+                  "postTipAmountMills",
+                  "receiverTransactionRef",
+                  "postTipGoalRef",
+                  "postTipMessageText",
+                  "linkedPostCount"
                 ]
               }
             },
@@ -36346,7 +36686,8 @@
                               "fan_summaries",
                               "fan_profiles",
                               "fan_flags",
-                              "creator_posts"
+                              "creator_posts",
+                              "creator_post_tips"
                             ]
                           },
                           "fieldStates": {
@@ -36398,7 +36739,25 @@
                                 "publishedAt",
                                 "firstObservedAt",
                                 "lastObservedAt",
-                                "attachmentCount"
+                                "attachmentCount",
+                                "postTargetTipAmountMills",
+                                "attachmentTipAmountMills",
+                                "postTipTotalMills",
+                                "tipGoalLinked",
+                                "tipGoalRef",
+                                "tipGoalLabelText",
+                                "tipGoalTargetMills",
+                                "tipGoalCurrentMills",
+                                "tipGoalAmountsHidden",
+                                "postTipPostRef",
+                                "postTipRef",
+                                "tipSenderPlatformUserId",
+                                "postTipOccurredAt",
+                                "postTipAmountMills",
+                                "receiverTransactionRef",
+                                "postTipGoalRef",
+                                "postTipMessageText",
+                                "linkedPostCount"
                               ]
                             },
                             "additionalProperties": {
@@ -36820,8 +37179,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -36851,7 +37210,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -36922,7 +37282,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -37034,7 +37395,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -37255,7 +37617,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -37362,7 +37725,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -37800,7 +38181,7 @@
     },
     "/api/v1/agent/people/{platform}/{platformUserId}": {
       "get": {
-        "summary": "One fan across every granted page: identity, memberships, threads, money, subscriptions. Never 404s: an out-of-grant fan answers 200-empty with scopeNarrowing (spec 5.6)",
+        "summary": "One fan across every granted page: identity, memberships, threads, money, post-tip attribution, subscriptions. Never 404s: an out-of-grant fan answers 200-empty with scopeNarrowing (spec 5.6)",
         "tags": [
           "agent"
         ],
@@ -37857,7 +38238,25 @@
                   "publishedAt",
                   "firstObservedAt",
                   "lastObservedAt",
-                  "attachmentCount"
+                  "attachmentCount",
+                  "postTargetTipAmountMills",
+                  "attachmentTipAmountMills",
+                  "postTipTotalMills",
+                  "tipGoalLinked",
+                  "tipGoalRef",
+                  "tipGoalLabelText",
+                  "tipGoalTargetMills",
+                  "tipGoalCurrentMills",
+                  "tipGoalAmountsHidden",
+                  "postTipPostRef",
+                  "postTipRef",
+                  "tipSenderPlatformUserId",
+                  "postTipOccurredAt",
+                  "postTipAmountMills",
+                  "receiverTransactionRef",
+                  "postTipGoalRef",
+                  "postTipMessageText",
+                  "linkedPostCount"
                 ]
               }
             },
@@ -38663,7 +39062,25 @@
                                     "publishedAt",
                                     "firstObservedAt",
                                     "lastObservedAt",
-                                    "attachmentCount"
+                                    "attachmentCount",
+                                    "postTargetTipAmountMills",
+                                    "attachmentTipAmountMills",
+                                    "postTipTotalMills",
+                                    "tipGoalLinked",
+                                    "tipGoalRef",
+                                    "tipGoalLabelText",
+                                    "tipGoalTargetMills",
+                                    "tipGoalCurrentMills",
+                                    "tipGoalAmountsHidden",
+                                    "postTipPostRef",
+                                    "postTipRef",
+                                    "tipSenderPlatformUserId",
+                                    "postTipOccurredAt",
+                                    "postTipAmountMills",
+                                    "receiverTransactionRef",
+                                    "postTipGoalRef",
+                                    "postTipMessageText",
+                                    "linkedPostCount"
                                   ]
                                 },
                                 "additionalProperties": {
@@ -39073,6 +39490,357 @@
                         }
                       ]
                     },
+                    "postTips": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "items": {
+                              "maxItems": 200,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string"
+                                  },
+                                  "platform": {
+                                    "type": "string",
+                                    "enum": [
+                                      "fansly",
+                                      "onlyfans"
+                                    ]
+                                  },
+                                  "postTipPostRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 500
+                                  },
+                                  "postTipRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 500
+                                  },
+                                  "postTipOccurredAt": {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                  },
+                                  "postTipAmountMills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "postTipGoalRef": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 500
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "fieldStates": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string",
+                                      "enum": [
+                                        "textPlain",
+                                        "textHtml",
+                                        "priceMills",
+                                        "isOpened",
+                                        "isNew",
+                                        "isTip",
+                                        "tipAmountMills",
+                                        "tipTextPlain",
+                                        "inReplyToRef",
+                                        "replyMetadata",
+                                        "mediaMetadata",
+                                        "deletedAt",
+                                        "conversationRef",
+                                        "messageCount",
+                                        "coverageStatus",
+                                        "purchaseState",
+                                        "grossMills",
+                                        "netMills",
+                                        "feeMills",
+                                        "amountMills",
+                                        "currency",
+                                        "transactionState",
+                                        "refundState",
+                                        "fanEarning",
+                                        "lifetimeSpendMills",
+                                        "platformUserId",
+                                        "username",
+                                        "displayName",
+                                        "membershipState",
+                                        "pageAlias",
+                                        "subscriptionState",
+                                        "subscriptionPriceMills",
+                                        "subscriptionExpiresAt",
+                                        "followed",
+                                        "presenceAt",
+                                        "noteText",
+                                        "summaryText",
+                                        "profileBody",
+                                        "fanFlag",
+                                        "postRef",
+                                        "postText",
+                                        "publishedAt",
+                                        "firstObservedAt",
+                                        "lastObservedAt",
+                                        "attachmentCount",
+                                        "postTargetTipAmountMills",
+                                        "attachmentTipAmountMills",
+                                        "postTipTotalMills",
+                                        "tipGoalLinked",
+                                        "tipGoalRef",
+                                        "tipGoalLabelText",
+                                        "tipGoalTargetMills",
+                                        "tipGoalCurrentMills",
+                                        "tipGoalAmountsHidden",
+                                        "postTipPostRef",
+                                        "postTipRef",
+                                        "tipSenderPlatformUserId",
+                                        "postTipOccurredAt",
+                                        "postTipAmountMills",
+                                        "receiverTransactionRef",
+                                        "postTipGoalRef",
+                                        "postTipMessageText",
+                                        "linkedPostCount"
+                                      ]
+                                    },
+                                    "additionalProperties": {
+                                      "type": "object",
+                                      "properties": {
+                                        "state": {
+                                          "type": "string",
+                                          "enum": [
+                                            "present",
+                                            "observed_empty",
+                                            "captured_unparsed",
+                                            "not_captured",
+                                            "source_did_not_provide",
+                                            "discarded_at_capture",
+                                            "unknown"
+                                          ]
+                                        },
+                                        "remedy": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "none"
+                                                  ]
+                                                },
+                                                "reason": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "no_remedy_exists",
+                                                    "capture_lane_unimplemented",
+                                                    "journal_before_capture_start",
+                                                    "partition_detached",
+                                                    "hydration_mode_off",
+                                                    "capability_not_granted",
+                                                    "discarded_at_capture",
+                                                    "projection_missing"
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "reason"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "local_replay"
+                                                  ]
+                                                },
+                                                "costClass": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "free"
+                                                  ]
+                                                },
+                                                "admissible": {
+                                                  "type": "boolean"
+                                                },
+                                                "reason": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "no_remedy_exists",
+                                                        "capture_lane_unimplemented",
+                                                        "journal_before_capture_start",
+                                                        "partition_detached",
+                                                        "hydration_mode_off",
+                                                        "capability_not_granted",
+                                                        "discarded_at_capture",
+                                                        "projection_missing"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "costClass",
+                                                "admissible",
+                                                "reason"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "hydration_request"
+                                                  ]
+                                                },
+                                                "costClass": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "vendor_paid_low",
+                                                    "vendor_paid_high"
+                                                  ]
+                                                },
+                                                "admissible": {
+                                                  "type": "boolean"
+                                                },
+                                                "reason": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "no_remedy_exists",
+                                                        "capture_lane_unimplemented",
+                                                        "journal_before_capture_start",
+                                                        "partition_detached",
+                                                        "hydration_mode_off",
+                                                        "capability_not_granted",
+                                                        "discarded_at_capture",
+                                                        "projection_missing"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "costClass",
+                                                "admissible",
+                                                "reason"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "recapture"
+                                                  ]
+                                                },
+                                                "costClass": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "free",
+                                                    "vendor_paid_low",
+                                                    "vendor_paid_high"
+                                                  ]
+                                                },
+                                                "admissible": {
+                                                  "type": "boolean"
+                                                },
+                                                "reason": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "no_remedy_exists",
+                                                        "capture_lane_unimplemented",
+                                                        "journal_before_capture_start",
+                                                        "partition_detached",
+                                                        "hydration_mode_off",
+                                                        "capability_not_granted",
+                                                        "discarded_at_capture",
+                                                        "projection_missing"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "costClass",
+                                                "admissible",
+                                                "reason"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "state",
+                                        "remedy"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "platform",
+                                  "postTipPostRef",
+                                  "postTipRef",
+                                  "postTipOccurredAt",
+                                  "postTipAmountMills",
+                                  "postTipGoalRef",
+                                  "fieldStates"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "capped": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "items",
+                            "capped"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "subscriptions": {
                       "anyOf": [
                         {
@@ -39355,7 +40123,25 @@
                           "publishedAt",
                           "firstObservedAt",
                           "lastObservedAt",
-                          "attachmentCount"
+                          "attachmentCount",
+                          "postTargetTipAmountMills",
+                          "attachmentTipAmountMills",
+                          "postTipTotalMills",
+                          "tipGoalLinked",
+                          "tipGoalRef",
+                          "tipGoalLabelText",
+                          "tipGoalTargetMills",
+                          "tipGoalCurrentMills",
+                          "tipGoalAmountsHidden",
+                          "postTipPostRef",
+                          "postTipRef",
+                          "tipSenderPlatformUserId",
+                          "postTipOccurredAt",
+                          "postTipAmountMills",
+                          "receiverTransactionRef",
+                          "postTipGoalRef",
+                          "postTipMessageText",
+                          "linkedPostCount"
                         ]
                       },
                       "additionalProperties": {
@@ -39699,8 +40485,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -39730,7 +40516,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -39801,7 +40588,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -39913,7 +40701,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -40134,7 +40923,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -40241,7 +41031,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -40491,6 +41299,7 @@
                     "memberships",
                     "threads",
                     "money",
+                    "postTips",
                     "subscriptions",
                     "crm",
                     "fieldStates",
@@ -40654,7 +41463,7 @@
     },
     "/api/v1/agent/people/{platform}/{platformUserId}/timeline": {
       "get": {
-        "summary": "Merged per-fan timeline across lanes (money, subscriptions, follows, message refs). Never 404s: an out-of-grant fan answers 200-empty with scopeNarrowing (spec 5.6)",
+        "summary": "Merged per-fan timeline across lanes (money, post-tip attribution, subscriptions, follows, message refs). Never 404s: an out-of-grant fan answers 200-empty with scopeNarrowing (spec 5.6)",
         "tags": [
           "agent"
         ],
@@ -40680,13 +41489,14 @@
           {
             "schema": {
               "minItems": 1,
-              "maxItems": 5,
+              "maxItems": 6,
               "type": "array",
               "items": {
                 "type": "string",
                 "enum": [
                   "messages",
                   "money",
+                  "post_tips",
                   "subscriptions",
                   "follows",
                   "presence"
@@ -40793,7 +41603,25 @@
                   "publishedAt",
                   "firstObservedAt",
                   "lastObservedAt",
-                  "attachmentCount"
+                  "attachmentCount",
+                  "postTargetTipAmountMills",
+                  "attachmentTipAmountMills",
+                  "postTipTotalMills",
+                  "tipGoalLinked",
+                  "tipGoalRef",
+                  "tipGoalLabelText",
+                  "tipGoalTargetMills",
+                  "tipGoalCurrentMills",
+                  "tipGoalAmountsHidden",
+                  "postTipPostRef",
+                  "postTipRef",
+                  "tipSenderPlatformUserId",
+                  "postTipOccurredAt",
+                  "postTipAmountMills",
+                  "receiverTransactionRef",
+                  "postTipGoalRef",
+                  "postTipMessageText",
+                  "linkedPostCount"
                 ]
               }
             },
@@ -40872,6 +41700,7 @@
                         "enum": [
                           "messages",
                           "money",
+                          "post_tips",
                           "subscriptions",
                           "follows",
                           "presence"
@@ -40885,6 +41714,7 @@
                         "enum": [
                           "messages",
                           "money",
+                          "post_tips",
                           "subscriptions",
                           "follows",
                           "presence"
@@ -40902,6 +41732,7 @@
                             "enum": [
                               "messages",
                               "money",
+                              "post_tips",
                               "subscriptions",
                               "follows",
                               "presence"
@@ -40916,6 +41747,7 @@
                               "transaction.posted",
                               "transaction.pending",
                               "tip.received",
+                              "post_tip.received",
                               "subscription.started",
                               "subscription.renewed",
                               "subscription.ended",
@@ -41121,6 +41953,65 @@
                               }
                             ]
                           },
+                          "postTipPostRef": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postTipRef": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postTipOccurredAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postTipAmountMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postTipGoalRef": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "fieldStates": {
                             "type": "object",
                             "propertyNames": {
@@ -41170,7 +42061,25 @@
                                 "publishedAt",
                                 "firstObservedAt",
                                 "lastObservedAt",
-                                "attachmentCount"
+                                "attachmentCount",
+                                "postTargetTipAmountMills",
+                                "attachmentTipAmountMills",
+                                "postTipTotalMills",
+                                "tipGoalLinked",
+                                "tipGoalRef",
+                                "tipGoalLabelText",
+                                "tipGoalTargetMills",
+                                "tipGoalCurrentMills",
+                                "tipGoalAmountsHidden",
+                                "postTipPostRef",
+                                "postTipRef",
+                                "tipSenderPlatformUserId",
+                                "postTipOccurredAt",
+                                "postTipAmountMills",
+                                "receiverTransactionRef",
+                                "postTipGoalRef",
+                                "postTipMessageText",
+                                "linkedPostCount"
                               ]
                             },
                             "additionalProperties": {
@@ -41447,6 +42356,11 @@
                           "textLength",
                           "hasMedia",
                           "isTip",
+                          "postTipPostRef",
+                          "postTipRef",
+                          "postTipOccurredAt",
+                          "postTipAmountMills",
+                          "postTipGoalRef",
                           "fieldStates",
                           "provenance"
                         ],
@@ -41579,8 +42493,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -41610,7 +42524,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -41681,7 +42596,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -41793,7 +42709,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -42014,7 +42931,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -42121,7 +43039,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -42642,7 +43578,25 @@
                             "publishedAt",
                             "firstObservedAt",
                             "lastObservedAt",
-                            "attachmentCount"
+                            "attachmentCount",
+                            "postTargetTipAmountMills",
+                            "attachmentTipAmountMills",
+                            "postTipTotalMills",
+                            "tipGoalLinked",
+                            "tipGoalRef",
+                            "tipGoalLabelText",
+                            "tipGoalTargetMills",
+                            "tipGoalCurrentMills",
+                            "tipGoalAmountsHidden",
+                            "postTipPostRef",
+                            "postTipRef",
+                            "tipSenderPlatformUserId",
+                            "postTipOccurredAt",
+                            "postTipAmountMills",
+                            "receiverTransactionRef",
+                            "postTipGoalRef",
+                            "postTipMessageText",
+                            "linkedPostCount"
                           ]
                         }
                       },
@@ -42906,7 +43860,25 @@
                                       "publishedAt",
                                       "firstObservedAt",
                                       "lastObservedAt",
-                                      "attachmentCount"
+                                      "attachmentCount",
+                                      "postTargetTipAmountMills",
+                                      "attachmentTipAmountMills",
+                                      "postTipTotalMills",
+                                      "tipGoalLinked",
+                                      "tipGoalRef",
+                                      "tipGoalLabelText",
+                                      "tipGoalTargetMills",
+                                      "tipGoalCurrentMills",
+                                      "tipGoalAmountsHidden",
+                                      "postTipPostRef",
+                                      "postTipRef",
+                                      "tipSenderPlatformUserId",
+                                      "postTipOccurredAt",
+                                      "postTipAmountMills",
+                                      "receiverTransactionRef",
+                                      "postTipGoalRef",
+                                      "postTipMessageText",
+                                      "linkedPostCount"
                                     ]
                                   },
                                   "additionalProperties": {
@@ -43281,8 +44253,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -43312,7 +44284,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -43383,7 +44356,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -43495,7 +44469,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -43716,7 +44691,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -43823,7 +44799,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -44382,7 +45376,25 @@
                             "publishedAt",
                             "firstObservedAt",
                             "lastObservedAt",
-                            "attachmentCount"
+                            "attachmentCount",
+                            "postTargetTipAmountMills",
+                            "attachmentTipAmountMills",
+                            "postTipTotalMills",
+                            "tipGoalLinked",
+                            "tipGoalRef",
+                            "tipGoalLabelText",
+                            "tipGoalTargetMills",
+                            "tipGoalCurrentMills",
+                            "tipGoalAmountsHidden",
+                            "postTipPostRef",
+                            "postTipRef",
+                            "tipSenderPlatformUserId",
+                            "postTipOccurredAt",
+                            "postTipAmountMills",
+                            "receiverTransactionRef",
+                            "postTipGoalRef",
+                            "postTipMessageText",
+                            "linkedPostCount"
                           ]
                         }
                       },
@@ -44569,7 +45581,25 @@
                                 "publishedAt",
                                 "firstObservedAt",
                                 "lastObservedAt",
-                                "attachmentCount"
+                                "attachmentCount",
+                                "postTargetTipAmountMills",
+                                "attachmentTipAmountMills",
+                                "postTipTotalMills",
+                                "tipGoalLinked",
+                                "tipGoalRef",
+                                "tipGoalLabelText",
+                                "tipGoalTargetMills",
+                                "tipGoalCurrentMills",
+                                "tipGoalAmountsHidden",
+                                "postTipPostRef",
+                                "postTipRef",
+                                "tipSenderPlatformUserId",
+                                "postTipOccurredAt",
+                                "postTipAmountMills",
+                                "receiverTransactionRef",
+                                "postTipGoalRef",
+                                "postTipMessageText",
+                                "linkedPostCount"
                               ]
                             },
                             "additionalProperties": {
@@ -44968,8 +45998,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -44999,7 +46029,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -45070,7 +46101,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -45182,7 +46214,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -45403,7 +46436,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -45510,7 +46544,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {
@@ -46108,7 +47160,25 @@
                   "publishedAt",
                   "firstObservedAt",
                   "lastObservedAt",
-                  "attachmentCount"
+                  "attachmentCount",
+                  "postTargetTipAmountMills",
+                  "attachmentTipAmountMills",
+                  "postTipTotalMills",
+                  "tipGoalLinked",
+                  "tipGoalRef",
+                  "tipGoalLabelText",
+                  "tipGoalTargetMills",
+                  "tipGoalCurrentMills",
+                  "tipGoalAmountsHidden",
+                  "postTipPostRef",
+                  "postTipRef",
+                  "tipSenderPlatformUserId",
+                  "postTipOccurredAt",
+                  "postTipAmountMills",
+                  "receiverTransactionRef",
+                  "postTipGoalRef",
+                  "postTipMessageText",
+                  "linkedPostCount"
                 ]
               }
             },
@@ -46570,7 +47640,25 @@
                                 "publishedAt",
                                 "firstObservedAt",
                                 "lastObservedAt",
-                                "attachmentCount"
+                                "attachmentCount",
+                                "postTargetTipAmountMills",
+                                "attachmentTipAmountMills",
+                                "postTipTotalMills",
+                                "tipGoalLinked",
+                                "tipGoalRef",
+                                "tipGoalLabelText",
+                                "tipGoalTargetMills",
+                                "tipGoalCurrentMills",
+                                "tipGoalAmountsHidden",
+                                "postTipPostRef",
+                                "postTipRef",
+                                "tipSenderPlatformUserId",
+                                "postTipOccurredAt",
+                                "postTipAmountMills",
+                                "receiverTransactionRef",
+                                "postTipGoalRef",
+                                "postTipMessageText",
+                                "linkedPostCount"
                               ]
                             },
                             "additionalProperties": {
@@ -46981,8 +48069,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 21,
-                          "maxItems": 21,
+                          "minItems": 22,
+                          "maxItems": 22,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -47012,7 +48100,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -47083,7 +48172,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   "state": {
@@ -47195,7 +48285,8 @@
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
-                                  "creator_posts"
+                                  "creator_posts",
+                                  "creator_post_tips"
                                 ]
                               },
                               "remedy": {
@@ -47416,7 +48507,8 @@
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
-                                      "creator_posts"
+                                      "creator_posts",
+                                      "creator_post_tips"
                                     ]
                                   },
                                   {
@@ -47523,7 +48615,25 @@
                               "publishedAt",
                               "firstObservedAt",
                               "lastObservedAt",
-                              "attachmentCount"
+                              "attachmentCount",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount"
                             ]
                           },
                           "additionalProperties": {

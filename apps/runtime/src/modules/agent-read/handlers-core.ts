@@ -26,16 +26,24 @@ import {
   loadAgentPersonCrm,
   loadAgentPersonIdentityExtras,
   loadAgentPersonMoney,
+  loadAgentPersonPostTips,
   loadAgentPersonSubscriptions,
+  readAgentPostTipParseDebt,
   resolveAgentFanCandidates,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
+import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.ts";
 import { toSafeNumber, toSafeNumberOr } from "./errors.ts";
 import { buildAgentEvidence } from "./epistemics.ts";
 import { IDENTITY_PLANES, MESSAGE_PLANES, MONEY_PLANES, CRM_PLANES, planesNotRead } from "./planes.ts";
+import {
+  AGENT_POST_TIP_VIEW_CLAIM_FIELDS,
+  postTipParseDebtGaps,
+  postTipViewFieldStates,
+} from "./post-tip-view.ts";
 import {
   AGENT_CONCURRENCY_LIMIT,
   AGENT_COUNT_PROBE_MAX,
@@ -71,6 +79,7 @@ import { agentConcurrencyInUse } from "./budget.ts";
  */
 
 const EMPTY_GAPS = [] as const;
+const AGENT_PERSON_POST_TIP_LIMIT = 200;
 
 /** Runtime catalog facts that are deliberately not part of the dataset wire
  * vocabulary. Posts are queryable on both platform implementations, but their
@@ -84,6 +93,18 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
 }>> = {
   posts: {
     platforms: ["fansly", "onlyfans"],
+    captureState: "unknown",
+  },
+  post_monetization: {
+    platforms: ["fansly"],
+    captureState: "unknown",
+  },
+  post_tips: {
+    platforms: ["fansly"],
+    captureState: "unknown",
+  },
+  tip_goals: {
+    platforms: ["fansly"],
     captureState: "unknown",
   },
 };
@@ -517,31 +538,55 @@ export async function handleAgentPerson(
         }), "agent_person_identity");
 
     const fanId = identity.row?.fanId ?? null;
-    const [extras, money, subscriptions, crm, threads] = fanId === null
-      ? [null, null, null, null, null]
+    const [extras, money, postTips, subscriptions, crm, threads] = fanId === null
+      ? [null, null, null, null, null, null]
       : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, async (tx) => Promise.all([
         loadAgentPersonIdentityExtras(tx, { pageIds, fanId }),
         mayReadMoney ? loadAgentPersonMoney(tx, { pageIds, fanId }) : null,
+        mayReadMoney
+          ? loadAgentPersonPostTips(tx, {
+            pageIds,
+            fanId,
+            limit: AGENT_PERSON_POST_TIP_LIMIT + 1,
+          })
+          : null,
         mayReadMoney ? loadAgentPersonSubscriptions(tx, { pageIds, fanId }) : null,
         mayReadMessages ? loadAgentPersonCrm(tx, { pageIds, fanId }) : null,
         mayReadMessages ? listAgentFanThreads(tx, { pageIds, fanIds: [fanId] }) : null,
       ]), "agent_person_bundle");
+    const postTipParseDebt = mayReadMoney
+      ? await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        readAgentPostTipParseDebt(tx, {
+          pageIds,
+          parserVersion: POSTS_CANONICALIZER_VERSION,
+        }), "agent_person_post_tip_parse_debt")
+      : { topLevel: false, rejectedItems: false };
 
     const witnesses = [
       ...identity.witnesses,
       ...(extras?.witnesses ?? []),
       ...(money?.witnesses ?? []),
+      ...(postTips?.witnesses ?? []),
       ...(subscriptions?.witnesses ?? []),
       ...(crm?.witnesses ?? []),
       ...(threads?.witnesses ?? []),
     ];
     const operationPlanes = operationPlanesFor(
-      [...IDENTITY_PLANES, ...MONEY_PLANES, "page_subscriptions", ...CRM_PLANES, "page_dm_threads"],
+      [
+        ...IDENTITY_PLANES,
+        ...MONEY_PLANES,
+        "creator_post_tips",
+        "page_subscriptions",
+        ...CRM_PLANES,
+        "page_dm_threads",
+      ],
       claimFields,
     );
 
     const ungrantedFields = [
-      ...(mayReadMoney ? [] : MONEY_CLAIM_FIELDS),
+      ...(mayReadMoney
+        ? []
+        : [...MONEY_CLAIM_FIELDS, ...AGENT_POST_TIP_VIEW_CLAIM_FIELDS]),
       ...(mayReadMessages ? [] : CRM_CLAIM_FIELDS),
     ];
     const scopeFieldStates = computeScopeFieldStates({
@@ -552,7 +597,7 @@ export async function handleAgentPerson(
 
     const overrides: Record<string, { state: "not_read"; reason: "capability_not_granted" }> = {};
     if (!mayReadMoney) {
-      for (const plane of [...MONEY_PLANES, "page_subscriptions"]) {
+      for (const plane of [...MONEY_PLANES, "creator_post_tips", "page_subscriptions"]) {
         overrides[plane] = { state: "not_read", reason: "capability_not_granted" };
       }
     }
@@ -573,7 +618,7 @@ export async function handleAgentPerson(
       cursorCapable: false,
       frozenSnapshot: true,
       requestWindow: null,
-      gaps: EMPTY_GAPS,
+      gaps: postTipParseDebtGaps(postTipParseDebt),
       scopeFieldStates,
       sourceErrors: [],
       // Mandatory even when `identity` is null: this is what makes 200-empty an
@@ -592,6 +637,7 @@ export async function handleAgentPerson(
       + (extras?.data.aliases.length ?? 0)
       + (extras?.data.flags.length ?? 0)
       + (money?.data.byType.length ?? 0)
+      + Math.min(postTips?.rows.length ?? 0, AGENT_PERSON_POST_TIP_LIMIT)
       + (subscriptions?.rows.length ?? 0)
       + (crm?.data.notes.length ?? 0)
       + (crm?.data.summaries.length ?? 0)
@@ -689,6 +735,29 @@ export async function handleAgentPerson(
           netMills: toSafeNumberOr(row.netMills, 0),
           transactionCount: row.transactionCount,
         })),
+      },
+      postTips: postTips === null ? null : {
+        items: postTips.rows.slice(0, AGENT_PERSON_POST_TIP_LIMIT).map((tip) => ({
+          pageLabel: tip.pageLabel,
+          platform: tip.platform as Platform,
+          postTipPostRef: tip.postTipPostRef,
+          postTipRef: tip.postTipRef,
+          postTipOccurredAt: iso(tip.postTipOccurredAt),
+          postTipAmountMills: toSafeNumberOr(tip.postTipAmountMills, 0),
+          postTipGoalRef: tip.postTipGoalRef,
+          fieldStates: postTipViewFieldStates({
+            claimFields,
+            scopeFieldStates,
+            values: {
+              postTipPostRef: tip.postTipPostRef,
+              postTipRef: tip.postTipRef,
+              postTipOccurredAt: tip.postTipOccurredAt,
+              postTipAmountMills: tip.postTipAmountMills,
+              postTipGoalRef: tip.postTipGoalRef,
+            },
+          }),
+        })),
+        capped: postTips.rows.length > AGENT_PERSON_POST_TIP_LIMIT,
       },
       subscriptions: subscriptions === null ? null : subscriptions.rows.map((subscription) => ({
         pageLabel: subscription.pageLabel,

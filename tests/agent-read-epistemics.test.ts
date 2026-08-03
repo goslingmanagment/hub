@@ -306,6 +306,72 @@ describe("agent read plane: scopeFieldStates are computed before any row", () =>
     expect(states.priceMills?.state).toBe("not_captured");
   });
 
+  it("post monetization and per-tip capture are Fansly-only without weakening posts", () => {
+    expect(computeScopeFieldStates({
+      fields: [
+        "postTipTotalMills",
+        "postTipPostRef",
+        "postTipAmountMills",
+        "postTipGoalRef",
+        "postTipMessageText",
+      ],
+      platforms: ["fansly"],
+    })).toMatchObject({
+      postTipTotalMills: { state: "present" },
+      postTipPostRef: { state: "present" },
+      postTipAmountMills: { state: "present" },
+      postTipGoalRef: { state: "present" },
+      postTipMessageText: { state: "present" },
+    });
+    expect(computeScopeFieldStates({
+      fields: [
+        "postTipTotalMills",
+        "postTipPostRef",
+        "postTipAmountMills",
+        "postTipGoalRef",
+        "postTipMessageText",
+      ],
+      platforms: ["onlyfans"],
+    })).toMatchObject({
+      postTipTotalMills: { state: "not_captured" },
+      postTipPostRef: { state: "not_captured" },
+      postTipAmountMills: { state: "not_captured" },
+      postTipGoalRef: { state: "not_captured" },
+      postTipMessageText: { state: "not_captured" },
+    });
+
+    // `postRef` is an overloaded wire name. Dataset context makes its
+    // Fansly-only meaning explicit without changing the established OnlyFans
+    // posts capability.
+    expect(computeScopeFieldStates({
+      fields: ["postTargetTipAmountMills", "postRef"],
+      platforms: ["onlyfans"],
+      dataset: "post_monetization",
+    })).toMatchObject({
+      postTargetTipAmountMills: { state: "not_captured" },
+      postRef: { state: "not_captured" },
+    });
+    expect(computeScopeFieldStates({
+      fields: ["postRef"],
+      platforms: ["onlyfans"],
+      dataset: "posts",
+    }).postRef?.state).toBe("present");
+    expect(computeScopeFieldStates({
+      fields: ["tipGoalRef", "lastObservedAt", "linkedPostCount"],
+      platforms: ["onlyfans"],
+      dataset: "tip_goals",
+    })).toMatchObject({
+      tipGoalRef: { state: "not_captured" },
+      lastObservedAt: { state: "not_captured" },
+      linkedPostCount: { state: "not_captured" },
+    });
+    expect(computeScopeFieldStates({
+      fields: ["grossMills"],
+      platforms: ["onlyfans"],
+      dataset: "post_monetization",
+    }).grossMills?.state).toBe("present");
+  });
+
   it("a missing capability yields unknown with its real reason, never a silent zero", () => {
     const states = computeScopeFieldStates({
       fields: ["grossMills"],

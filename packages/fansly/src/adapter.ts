@@ -38,6 +38,8 @@ import type {
   FanslyMessagingGroupsPageResponse,
   FanslyPostsPage,
   FanslyPostsPageResponse,
+  FanslyPostTip,
+  FanslyPostTipsResponse,
   FanslyRequestContext,
   FanslySubscribersPage,
   FanslyTrackingLink,
@@ -432,6 +434,44 @@ export class FanslyAdapter {
       nextBefore,
       done: items.length === 0,
       contractAccepted: Array.isArray(response.parsed?.posts),
+      raw: response.raw,
+    };
+  }
+
+  async getTipsByTargetIds(
+    context: FanslyRequestContext,
+    targetIds: string[],
+  ): Promise<FanslyPostTipsResponse> {
+    if (targetIds.length === 0) {
+      throw new Error("Fansly post tips request requires at least one target id");
+    }
+    if (targetIds.some((targetId) => targetId.trim().length === 0)) {
+      throw new Error("Fansly post tips target ids must be nonblank");
+    }
+
+    const response = await this.request<unknown>(context, "/tips", {
+      operation: "post_tips",
+      endpointTemplate: "/tips",
+      query: {
+        targetIds: targetIds.join(","),
+      },
+      category: "posts",
+      requestShape: {
+        targetIdsCount: targetIds.length,
+      },
+      summarizeResponse: (parsed) => ({
+        returnedItems: Array.isArray(parsed) ? parsed.length : null,
+        contractAccepted: Array.isArray(parsed),
+      }),
+    });
+    const items = Array.isArray(response.parsed)
+      ? response.parsed as FanslyPostTip[]
+      : [];
+
+    return {
+      items,
+      targetIds: [...targetIds],
+      contractAccepted: Array.isArray(response.parsed),
       raw: response.raw,
     };
   }

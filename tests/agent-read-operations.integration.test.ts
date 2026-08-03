@@ -226,15 +226,36 @@ async function seedFixture() {
   await pool.query(
     `insert into creator_posts (account_id, platform, platform_post_id, text_plain,
        published_at, first_observed_at, last_observed_at, content_hash,
-       attachment_count, source_event_id, source_observation_id, source_account_seq)
+       attachment_count, tip_amount_mills, attachment_tip_amount_mills,
+       post_tip_total_mills, tip_goal_linked, tip_goal_ref, tip_goal_label,
+       tip_goal_target_mills, tip_goal_current_mills, tip_goal_amounts_hidden,
+       source_event_id, source_observation_id, source_account_seq)
      values
        ($1, 'fansly', 'post-old', 'first captured creator post',
         '2026-02-10T09:00:00Z', '2026-03-01T00:00:00Z', '2026-03-02T00:00:00Z',
-        repeat('a', 64), 1, 9101, $2, 101),
+        repeat('a', 64), 1, null, null, null, null, null, null, null, null, null,
+        9101, $2, 101),
        ($1, 'fansly', 'post-new', 'newer creator post with two attachments',
         '2026-03-05T12:30:00Z', '2026-03-06T00:00:00Z', '2026-03-07T00:00:00Z',
-        repeat('b', 64), 2, 9102, $3, 102)`,
+        repeat('b', 64), 2, 520000, 0, 520000, true, 'goal-500',
+        'spoil the birthday girl', 1000000, 500000, false, 9102, $3, 102)`,
     [pageId, 9001, 9002],
+  );
+
+  // The physical row retains provider goal correlation and fan-written tip copy;
+  // both are public only through their uniquely named, capability-gated fields.
+  await pool.query(
+    `insert into creator_post_tips (account_id, platform, platform_post_id,
+       platform_tip_id, tip_sender_platform_user_id, post_tip_amount_mills,
+       occurred_at, receiver_transaction_ref, sender_transaction_ref, tip_goal_ref,
+       tip_message_text, first_observed_at, last_observed_at, content_hash, source_event_id,
+       source_observation_id, source_account_seq)
+     values ($1, 'fansly', 'post-new', 'post-tip-250', $2, 250000,
+       '2026-03-06T13:00:00Z', 'receiver-tx-250', 'sender-tx-250', 'goal-500',
+       'I''m competitive haha', '2026-03-06T13:01:00Z',
+       '2026-03-07T00:00:00Z', repeat('c', 64),
+       9201, 9003, 103)`,
+    [pageId, FAN_PLATFORM_USER_ID],
   );
 }
 
@@ -295,9 +316,116 @@ describe("[sync-critical] agent read plane operations", () => {
       transactionState: "posted",
       grossMills: 100_000,
     })]);
+    // Attribution is separate from the transaction ledger: the card can name
+    // the post and goal without adding the same payment to `money` twice.
+    expect(body.postTips).toEqual({
+      items: [{
+        pageLabel: "lora-2",
+        platform: "fansly",
+        postTipPostRef: "post-new",
+        postTipRef: "post-tip-250",
+        postTipOccurredAt: "2026-03-06T13:00:00.000Z",
+        postTipAmountMills: 250_000,
+        postTipGoalRef: "goal-500",
+        fieldStates: {},
+      }],
+      capped: false,
+    });
     expect(body.memberships[0].lifetimeSpendMills).toBe(100_000);
     expect(body.identity.aliases.map((alias: { value: string }) => alias.value))
       .toContain("rick_old_handle");
+  });
+
+  it("#3 marks the recent post-tip view when its 200-row card bound is hit", async () => {
+    await testDb!.pool.query(
+      `insert into creator_post_tips (account_id, platform, platform_post_id,
+         platform_tip_id, tip_sender_platform_user_id, post_tip_amount_mills,
+         occurred_at, first_observed_at, last_observed_at, content_hash,
+         source_event_id, source_observation_id, source_account_seq)
+       select $1, 'fansly', 'bulk-post-' || g::text, 'bulk-tip-' || g::text, $2,
+         g::bigint,
+         '2026-04-01T00:00:00Z'::timestamptz + g * interval '1 second',
+         '2026-04-02T00:00:00Z', '2026-04-03T00:00:00Z', repeat('f', 64),
+         10000 + g, 20000 + g, 30000 + g
+       from generate_series(1, 200) g`,
+      [pageId, FAN_PLATFORM_USER_ID],
+    );
+
+    const body = (await agentGet(
+      `/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}`,
+    )).json();
+    expect(body.postTips.items).toHaveLength(200);
+    expect(body.postTips.capped).toBe(true);
+    expect(body.postTips.items[0]).toMatchObject({
+      postTipPostRef: "bulk-post-200",
+      postTipRef: "bulk-tip-200",
+      postTipAmountMills: 200,
+    });
+  });
+
+  it("marks a captured direct post tip as observed_empty across every Agent surface", async () => {
+    await testDb!.pool.query(
+      `insert into creator_post_tips (account_id, platform, platform_post_id,
+         platform_tip_id, tip_sender_platform_user_id, post_tip_amount_mills,
+         occurred_at, receiver_transaction_ref, tip_goal_ref, tip_message_text,
+         first_observed_at, last_observed_at, content_hash,
+         source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', 'direct-post', 'direct-tip', $2, 20000,
+         '2026-03-08T13:00:00Z', 'receiver-tx-direct', null, null,
+         '2026-03-08T13:05:00Z', '2026-03-08T13:05:00Z', repeat('d', 64),
+         41001, 42001, 43001)`,
+      [pageId, FAN_PLATFORM_USER_ID],
+    );
+
+    const dataset = (await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/post_tips/query",
+      {
+        from: "2026-03-08T00:00:00Z",
+        to: "2026-03-09T00:00:00Z",
+        claim: {
+          fields: ["postTipGoalRef", "postTipMessageText"],
+          targets: "all_in_scope",
+        },
+      },
+    )).json();
+    expect(dataset.items).toHaveLength(1);
+    expect(dataset.items[0].fields).toMatchObject({
+      postTipRef: "direct-tip",
+      postTipGoalRef: null,
+      postTipMessageText: null,
+    });
+    expect(dataset.items[0].fieldStates).toMatchObject({
+      postTipGoalRef: {
+        state: "observed_empty",
+        remedy: { kind: "none", reason: "no_remedy_exists" },
+      },
+      postTipMessageText: {
+        state: "source_did_not_provide",
+        remedy: { kind: "none", reason: "no_remedy_exists" },
+      },
+    });
+
+    const person = (await agentGet(
+      `/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}`
+      + "?claimFields=postTipGoalRef&claimTargets=all_in_scope",
+    )).json();
+    expect(person.postTips.items.find(
+      (item: { postTipRef: string }) => item.postTipRef === "direct-tip",
+    )).toMatchObject({
+      postTipGoalRef: null,
+      fieldStates: { postTipGoalRef: { state: "observed_empty" } },
+    });
+
+    const timeline = (await agentGet(
+      `/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}/timeline`
+      + "?from=2026-03-08T00:00:00Z&to=2026-03-09T00:00:00Z"
+      + "&lanes=post_tips&claimFields=postTipGoalRef&claimTargets=all_in_scope",
+    )).json();
+    expect(timeline.items).toEqual([expect.objectContaining({
+      postTipRef: "direct-tip",
+      postTipGoalRef: null,
+      fieldStates: { postTipGoalRef: expect.objectContaining({ state: "observed_empty" }) },
+    })]);
   });
 
   it("#4 puts the January payment on the timeline", async () => {
@@ -317,6 +445,50 @@ describe("[sync-critical] agent read plane operations", () => {
     // The message lane is empty for January, and the conclusion says why.
     expect(body.items.filter((item: { lane: string }) => item.lane === "messages")).toEqual([]);
     expect(body.conclusion.blockers.length).toBeGreaterThan(0);
+  });
+
+  it("#4 exposes post attribution in a separate lane without double-count semantics", async () => {
+    const response = await agentGet(
+      `/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}/timeline`
+      + "?from=2026-03-01T00:00:00Z&to=2026-03-10T00:00:00Z"
+      + "&pageLabel=lora-2&lanes=post_tips"
+      + "&claimFields=postTipPostRef&claimFields=postTipRef"
+      + "&claimFields=postTipOccurredAt&claimFields=postTipAmountMills"
+      + "&claimFields=postTipGoalRef&claimTargets=all_in_scope",
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.lanesRequested).toEqual(["post_tips"]);
+    expect(body.lanesServed).toEqual(["post_tips"]);
+    expect(body.items).toEqual([expect.objectContaining({
+      lane: "post_tips",
+      kind: "post_tip.received",
+      pageLabel: "lora-2",
+      platform: "fansly",
+      transactionRef: "receiver-tx-250",
+      grossMills: null,
+      netMills: null,
+      postTipPostRef: "post-new",
+      postTipRef: "post-tip-250",
+      postTipOccurredAt: "2026-03-06T13:00:00.000Z",
+      postTipAmountMills: 250_000,
+      postTipGoalRef: "goal-500",
+      fieldStates: {
+        postTipPostRef: expect.objectContaining({ state: "present" }),
+        postTipRef: expect.objectContaining({ state: "present" }),
+        postTipOccurredAt: expect.objectContaining({ state: "present" }),
+        postTipAmountMills: expect.objectContaining({ state: "present" }),
+        postTipGoalRef: expect.objectContaining({ state: "present" }),
+      },
+    })]);
+    expect(body.capture.scopeFieldStates).toMatchObject({
+      postTipPostRef: { state: "present" },
+      postTipAmountMills: { state: "present" },
+      postTipGoalRef: { state: "present" },
+    });
+    expect(body.capture.planes.find(
+      (plane: { plane: string }) => plane.plane === "creator_post_tips",
+    )).toMatchObject({ state: "read" });
   });
 
   it("#5 lists the thread with its raw coverage status and retention limit", async () => {
@@ -640,6 +812,379 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(audits.rows).toHaveLength(2);
     expect(audits.rows.every((row) => row.verbatim_text)).toBe(true);
     expect(audits.rows.every((row) => row.request_summary.datasetRef === "posts")).toBe(true);
+  });
+
+  it("#10 serves donor goal/message attribution and deduplicates shared goal heads", async () => {
+    await testDb!.pool.query(
+      `insert into creator_posts (account_id, platform, platform_post_id, text_plain,
+         published_at, first_observed_at, last_observed_at, content_hash,
+         attachment_count, tip_amount_mills, attachment_tip_amount_mills,
+         post_tip_total_mills, tip_goal_linked, tip_goal_ref, tip_goal_label,
+         tip_goal_target_mills, tip_goal_current_mills, tip_goal_amounts_hidden,
+         source_event_id, source_observation_id, source_account_seq)
+       values
+         ($1, 'fansly', 'post-shared-low-seq', 'shared goal, earlier sequence',
+          '2026-03-06T12:30:00Z', '2026-03-07T00:00:00Z', '2026-03-08T00:00:00Z',
+          repeat('d', 64), 1, 600000, 0, 600000, true, 'goal-500',
+          'same goal before the tie break', 1000000, 600000, false, 9103, 9004, 103),
+         ($1, 'fansly', 'post-shared-high-seq', 'shared goal, winning sequence',
+          '2026-03-07T12:30:00Z', '2026-03-07T00:00:00Z', '2026-03-08T00:00:00Z',
+          repeat('e', 64), 1, 700000, 0, 700000, true, 'goal-500',
+          'latest shared goal snapshot', 1000000, 700000, false, 9104, 9005, 104)`,
+      [pageId],
+    );
+
+    const monetization = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/post_monetization/query",
+      {
+        from: "2026-02-10T09:00:00Z",
+        to: "2026-04-01T00:00:00Z",
+        filters: [
+          { field: "postRef", op: "eq", value: "post-new" },
+          { field: "publishedAt", op: "gte", value: "2026-03-05T00:00:00Z" },
+          { field: "lastObservedAt", op: "lte", value: "2026-03-07T00:00:00Z" },
+        ],
+        claim: {
+          fields: [
+            "postTargetTipAmountMills",
+            "attachmentTipAmountMills",
+            "postTipTotalMills",
+            "tipGoalLinked",
+            "tipGoalRef",
+            "tipGoalLabelText",
+            "tipGoalTargetMills",
+            "tipGoalCurrentMills",
+            "tipGoalAmountsHidden",
+          ],
+          targets: "all_in_scope",
+        },
+      },
+    );
+    expect(monetization.statusCode).toBe(200);
+    const monetizationBody = monetization.json();
+    expect(monetizationBody.items).toHaveLength(1);
+    expect(Object.keys(monetizationBody.items[0].fields).sort()).toEqual([
+      "attachmentTipAmountMills",
+      "lastObservedAt",
+      "platform",
+      "postRef",
+      "postTargetTipAmountMills",
+      "postTipTotalMills",
+      "publishedAt",
+      "tipGoalAmountsHidden",
+      "tipGoalCurrentMills",
+      "tipGoalLabelText",
+      "tipGoalLinked",
+      "tipGoalRef",
+      "tipGoalTargetMills",
+    ]);
+    expect(monetizationBody.items[0].fields).toEqual({
+      platform: "fansly",
+      postRef: "post-new",
+      publishedAt: "2026-03-05T12:30:00.000Z",
+      lastObservedAt: "2026-03-07T00:00:00.000Z",
+      postTargetTipAmountMills: 520_000,
+      attachmentTipAmountMills: 0,
+      postTipTotalMills: 520_000,
+      tipGoalLinked: true,
+      tipGoalRef: "goal-500",
+      tipGoalLabelText: "spoil the birthday girl",
+      tipGoalTargetMills: 1_000_000,
+      tipGoalCurrentMills: 500_000,
+      tipGoalAmountsHidden: false,
+    });
+    expect(monetizationBody.items[0].fieldStates).toMatchObject({
+      postTargetTipAmountMills: { state: "present" },
+      tipGoalCurrentMills: { state: "present" },
+      tipGoalLabelText: { state: "present" },
+    });
+    expect(monetizationBody.items[0].provenance).toMatchObject({
+      ingestPaths: ["fansly_pull"],
+      convergence: "converging",
+      observationRef: 9002,
+    });
+
+    const tips = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/post_tips/query",
+      {
+        from: "2026-03-06T13:00:00Z",
+        to: "2026-04-01T00:00:00Z",
+        claim: {
+          fields: [
+            "postTipPostRef",
+            "postTipRef",
+            "tipSenderPlatformUserId",
+            "postTipOccurredAt",
+            "postTipAmountMills",
+            "receiverTransactionRef",
+            "postTipGoalRef",
+            "postTipMessageText",
+          ],
+          targets: "all_in_scope",
+        },
+      },
+    );
+    expect(tips.statusCode).toBe(200);
+    const tipsBody = tips.json();
+    expect(tipsBody.items).toHaveLength(1);
+    expect(tipsBody.items[0].fields).toEqual({
+      platform: "fansly",
+      postTipPostRef: "post-new",
+      postTipRef: "post-tip-250",
+      tipSenderPlatformUserId: FAN_PLATFORM_USER_ID,
+      postTipOccurredAt: "2026-03-06T13:00:00.000Z",
+      postTipAmountMills: 250_000,
+      receiverTransactionRef: "receiver-tx-250",
+      postTipGoalRef: "goal-500",
+      postTipMessageText: "I'm competitive haha",
+    });
+    expect(tipsBody.items[0].fanPlatformUserId).toBe(FAN_PLATFORM_USER_ID);
+    expect(tipsBody.items[0].fieldStates).toMatchObject({
+      postTipAmountMills: { state: "present" },
+      tipSenderPlatformUserId: { state: "present" },
+      postTipGoalRef: { state: "present" },
+      postTipMessageText: { state: "present" },
+    });
+    expect(tipsBody.capture.planes.find(
+      (plane: { plane: string }) => plane.plane === "creator_post_tips",
+    )).toMatchObject({
+      state: "read",
+      captureFloor: {
+        at: "2026-03-06T13:00:00.000Z",
+        kind: "oldest_stored_row",
+      },
+    });
+
+    const goals = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/tip_goals/query",
+      {
+        from: "2026-03-01T00:00:00Z",
+        to: "2026-04-01T00:00:00Z",
+        filters: [{ field: "tipGoalRef", op: "eq", value: "goal-500" }],
+        claim: {
+          fields: [
+            "tipGoalRef",
+            "tipGoalLabelText",
+            "tipGoalTargetMills",
+            "tipGoalCurrentMills",
+            "tipGoalAmountsHidden",
+            "lastObservedAt",
+            "linkedPostCount",
+          ],
+          targets: "all_in_scope",
+        },
+      },
+    );
+    expect(goals.statusCode).toBe(200);
+    const goalsBody = goals.json();
+    // Three post heads carry the same goal, but the dataset has one row. The two
+    // freshest rows tie on lastObservedAt, so source_account_seq=104 must win.
+    expect(goalsBody.items).toHaveLength(1);
+    expect(goalsBody.items[0].fields).toEqual({
+      platform: "fansly",
+      tipGoalRef: "goal-500",
+      tipGoalLabelText: "latest shared goal snapshot",
+      tipGoalTargetMills: 1_000_000,
+      tipGoalCurrentMills: 700_000,
+      tipGoalAmountsHidden: false,
+      lastObservedAt: "2026-03-08T00:00:00.000Z",
+      linkedPostCount: 3,
+    });
+    expect(goalsBody.items[0].fieldStates).toMatchObject({
+      tipGoalRef: { state: "present" },
+      tipGoalCurrentMills: { state: "present" },
+      linkedPostCount: { state: "present" },
+    });
+    expect(goalsBody.items[0].provenance).toMatchObject({
+      ingestPaths: ["fansly_pull"],
+      convergence: "converging",
+      observationRef: 9005,
+    });
+    expect(goalsBody.capture.planes.find(
+      (plane: { plane: string }) => plane.plane === "creator_posts",
+    )).toMatchObject({
+      state: "read",
+      captureFloor: { at: null, kind: "unknown" },
+    });
+    expect(goalsBody.capture.gaps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "before_capture_floor" }),
+    ]));
+
+    const catalog = (await agentGet("/api/v1/agent/capabilities")).json();
+    expect(catalog.datasets.find(
+      (entry: { dataset: string }) => entry.dataset === "post_monetization",
+    )).toMatchObject({
+      availability: "available",
+      platforms: ["fansly"],
+      moneyBearing: true,
+      requiredCapabilities: ["read:datasets", "read:money", "read:messages"],
+      captureState: "unknown",
+      defaultSort: "publishedAt",
+    });
+    expect(catalog.datasets.find(
+      (entry: { dataset: string }) => entry.dataset === "post_tips",
+    )).toMatchObject({
+      availability: "available",
+      platforms: ["fansly"],
+      moneyBearing: true,
+      requiredCapabilities: ["read:datasets", "read:money", "read:messages"],
+      captureState: "unknown",
+      defaultSort: "postTipOccurredAt",
+    });
+    expect(catalog.datasets.find(
+      (entry: { dataset: string }) => entry.dataset === "tip_goals",
+    )).toMatchObject({
+      availability: "available",
+      platforms: ["fansly"],
+      moneyBearing: true,
+      requiredCapabilities: ["read:datasets", "read:money", "read:messages"],
+      captureState: "unknown",
+      defaultSort: "lastObservedAt",
+    });
+
+    // Goal copy and the sender's tip message are both verbatim reads.
+    const audits = await testDb!.pool.query<{
+      verbatim_text: boolean;
+      request_summary: Record<string, unknown>;
+    }>(
+      `select verbatim_text, request_summary from agent_read_audit
+       where operation = 'agentDatasetQuery' order by id`,
+    );
+    expect(audits.rows).toHaveLength(3);
+    expect(audits.rows.every((row) => row.verbatim_text)).toBe(true);
+    expect(audits.rows.map((row) => row.request_summary.datasetRef).sort()).toEqual([
+      "post_monetization",
+      "post_tips",
+      "tip_goals",
+    ]);
+  });
+
+  it("#10 exposes current post and post-tip parse debt as capture gaps", async () => {
+    const inserted = await testDb!.pool.query<{ id: string }>(
+      `insert into observations (source, producer, platform, account_id, kind,
+         payload, payload_hash, idempotency_key, received_at, parse_version)
+       values
+         ('pull', 'sync:fansly:posts', 'fansly', $1, 'post_tips',
+          '{"tips":[]}'::jsonb, decode(repeat('00', 32), 'hex'),
+          'post-tips-top-level-debt', '2026-03-06T13:01:00Z', 0),
+         ('pull', 'sync:fansly:posts', 'fansly', $1, 'post_tips',
+          '[]'::jsonb, decode(repeat('11', 32), 'hex'),
+          'post-tips-item-debt', '2026-03-06T13:02:00Z', 4),
+         ('pull', 'sync:fansly:posts', 'fansly', $1, 'posts',
+          '{"posts":"drifted"}'::jsonb, decode(repeat('22', 32), 'hex'),
+          'posts-top-level-debt', '2026-03-06T13:03:00Z', 0)
+       returning id::text`,
+      [pageId],
+    );
+    const [topLevelObservation, itemObservation, postObservation] = inserted.rows;
+    expect(topLevelObservation).toBeDefined();
+    expect(itemObservation).toBeDefined();
+    expect(postObservation).toBeDefined();
+    await testDb!.pool.query(
+      `insert into domain_events (account_id, account_seq, type, occurred_at,
+         data, schema_version, observation_id, dedup_key)
+       values ($1, 900001, 'post.tip_parse_rejected',
+         '2026-03-06T13:02:00Z',
+         '{"platform":"fansly","parserVersion":4,"rejectedItemCount":2,
+           "rejectedItems":[{"index":1,"reason":"post_target_count"},
+                            {"index":3,"reason":"invalid_core_fields"}]}'::jsonb,
+         1, $2, 'post-tip-parse-debt-test')`,
+      [pageId, Number(itemObservation!.id)],
+    );
+
+    const query = () => agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/post_tips/query",
+      {
+        from: "2026-03-06T13:00:00Z",
+        to: "2026-04-01T00:00:00Z",
+        claim: { fields: ["postTipAmountMills"], targets: "all_in_scope" },
+      },
+    );
+    const response = await query();
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.capture.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "parse_debt",
+        plane: "creator_post_tips",
+        remedy: { kind: "local_replay", costClass: "free", admissible: true, reason: null },
+      }),
+      expect.objectContaining({
+        kind: "rejected_rows",
+        plane: "creator_post_tips",
+        remedy: { kind: "local_replay", costClass: "free", admissible: true, reason: null },
+      }),
+    ]));
+    expect(body.conclusion.blockers).toContain("gaps_present");
+    const personWithDebt = (await agentGet(
+      `/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}`
+      + "?claimFields=postTipAmountMills&claimTargets=all_in_scope",
+    )).json();
+    expect(personWithDebt.capture.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "parse_debt", plane: "creator_post_tips" }),
+      expect.objectContaining({ kind: "rejected_rows", plane: "creator_post_tips" }),
+    ]));
+    const timelineWithDebt = (await agentGet(
+      `/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}/timeline`
+      + "?from=2026-03-01T00:00:00Z&to=2026-04-01T00:00:00Z"
+      + "&lanes=post_tips&claimFields=postTipAmountMills&claimTargets=all_in_scope",
+    )).json();
+    expect(timelineWithDebt.capture.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "parse_debt", plane: "creator_post_tips" }),
+      expect.objectContaining({ kind: "rejected_rows", plane: "creator_post_tips" }),
+    ]));
+
+    const snapshotQuery = (dataset: "post_monetization" | "tip_goals") => agentPost(
+      `/api/v1/agent/pages/lora-2/datasets/${dataset}/query`,
+      {
+        from: "2026-03-01T00:00:00Z",
+        to: "2026-04-01T00:00:00Z",
+        claim: {
+          fields: dataset === "post_monetization"
+            ? ["postTipTotalMills"]
+            : ["tipGoalCurrentMills"],
+          targets: "all_in_scope",
+        },
+      },
+    );
+    for (const dataset of ["post_monetization", "tip_goals"] as const) {
+      const snapshot = (await snapshotQuery(dataset)).json();
+      expect(snapshot.capture.gaps).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: "parse_debt",
+          plane: "creator_posts",
+          remedy: expect.objectContaining({
+            kind: "local_replay",
+            costClass: "free",
+            admissible: true,
+          }),
+        }),
+      ]));
+    }
+
+    // A later family replay advances the observation stamps. The old bounded
+    // diagnostic remains append-only evidence but is no longer current debt.
+    await testDb!.pool.query(
+      `update observations set parse_version = case id
+         when $1 then 4 when $2 then 5 when $3 then 4 else parse_version end
+       where id in ($1, $2, $3)`,
+      [
+        Number(topLevelObservation!.id),
+        Number(itemObservation!.id),
+        Number(postObservation!.id),
+      ],
+    );
+    const replayed = (await query()).json();
+    expect(replayed.capture.gaps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "parse_debt" }),
+    ]));
+    expect(replayed.capture.gaps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "rejected_rows" }),
+    ]));
+    const replayedSnapshot = (await snapshotQuery("post_monetization")).json();
+    expect(replayedSnapshot.capture.gaps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "parse_debt", plane: "creator_posts" }),
+    ]));
   });
 
   it("#10 summarizes matching Hub transactions in one exhausted read", async () => {
@@ -1113,6 +1658,7 @@ describe("[sync-critical] agent read plane: review round 3", () => {
       + served.identity.flags.length
       + served.memberships.length
       + served.money.byType.length
+      + served.postTips.items.length
       + served.subscriptions.length
       + served.crm.notes.length
       + served.crm.summaries.length

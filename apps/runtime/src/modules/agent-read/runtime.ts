@@ -5,6 +5,7 @@ import {
   agentClaimFieldClass,
   agentClassPlanes,
   type AgentCapability,
+  type AgentDataset,
   type AgentDelivery,
   type AgentFieldState,
   type AgentFieldStateName,
@@ -68,6 +69,10 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
   capturesMessagePrice: AgentFieldStateName;
   capturesPurchaseState: AgentFieldStateName;
   capturesRefunds: AgentFieldStateName;
+  /** Current post-level tip counters and linked goal snapshot. */
+  capturesPostMonetization: "present" | "not_captured";
+  /** Individually attributable post-tip events. */
+  capturesPostTips: "present" | "not_captured";
   depthCap: { default: number; lifetimeSpender: number } | null;
   dmMessagesCadenceSeconds: number | null;
 }>> = {
@@ -85,6 +90,8 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
     // transaction keeps its `posted` row forever, so "no refunds in the
     // store" can never support "no refunds happened".
     capturesRefunds: "not_captured",
+    capturesPostMonetization: "present",
+    capturesPostTips: "present",
     depthCap: { default: 200, lifetimeSpender: 1000 },
     dmMessagesCadenceSeconds: 86_400,
   },
@@ -96,6 +103,8 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
     // OF chargebacks ARE captured (`ofapi-chargebacks-sync`, migration 0107)
     // but live in their own table that no agent-readable projection carries.
     capturesRefunds: "captured_unparsed",
+    capturesPostMonetization: "not_captured",
+    capturesPostTips: "not_captured",
     depthCap: null,
     // The lane is retired: migration 0097 force-pauses it.
     dmMessagesCadenceSeconds: null,
@@ -119,8 +128,84 @@ const FIELD_STATE_STRENGTH: Readonly<Record<AgentFieldStateName, number>> = {
 
 const NO_REMEDY: AgentFieldState = { state: "unknown", remedy: { kind: "none", reason: "no_remedy_exists" } };
 
-function fieldStateFor(field: string, platform: Platform): AgentFieldState {
+const POST_MONETIZATION_CLAIM_FIELDS: ReadonlySet<string> = new Set([
+  "postTargetTipAmountMills",
+  "attachmentTipAmountMills",
+  "postTipTotalMills",
+  "tipGoalLinked",
+  "tipGoalRef",
+  "tipGoalLabelText",
+  "tipGoalTargetMills",
+  "tipGoalCurrentMills",
+  "tipGoalAmountsHidden",
+  "linkedPostCount",
+]);
+
+const POST_TIP_CLAIM_FIELDS: ReadonlySet<string> = new Set([
+  "postTipPostRef",
+  "postTipRef",
+  "tipSenderPlatformUserId",
+  "postTipOccurredAt",
+  "postTipAmountMills",
+  "receiverTransactionRef",
+  "postTipGoalRef",
+  "postTipMessageText",
+]);
+
+const POST_MONETIZATION_DATASET_CLAIM_FIELDS: ReadonlySet<string> = new Set([
+  ...POST_MONETIZATION_CLAIM_FIELDS,
+  "postRef",
+  "publishedAt",
+  "lastObservedAt",
+]);
+
+const POST_TIP_DATASET_CLAIM_FIELDS: ReadonlySet<string> = new Set([
+  ...POST_TIP_CLAIM_FIELDS,
+]);
+
+const TIP_GOAL_DATASET_CLAIM_FIELDS: ReadonlySet<string> = new Set([
+  "tipGoalRef",
+  "tipGoalLabelText",
+  "tipGoalTargetMills",
+  "tipGoalCurrentMills",
+  "tipGoalAmountsHidden",
+  "lastObservedAt",
+  "linkedPostCount",
+]);
+
+function postCaptureFieldState(state: "present" | "not_captured"): AgentFieldState {
+  return state === "present"
+    ? { state: "present", remedy: { kind: "none", reason: "no_remedy_exists" } }
+    : { state: "not_captured", remedy: { kind: "none", reason: "capture_lane_unimplemented" } };
+}
+
+function fieldStateFor(
+  field: string,
+  platform: Platform,
+  dataset?: AgentDataset,
+): AgentFieldState {
   const capabilities = AGENT_PLATFORM_CAPABILITIES[platform];
+  // Dataset context resolves overloaded wire names such as `postRef`: it is
+  // observable in the established posts plane on OnlyFans, but not in these
+  // Fansly-only monetization datasets.
+  if (
+    dataset === "post_monetization"
+    && POST_MONETIZATION_DATASET_CLAIM_FIELDS.has(field)
+  ) {
+    return postCaptureFieldState(capabilities.capturesPostMonetization);
+  }
+  if (dataset === "post_tips" && POST_TIP_DATASET_CLAIM_FIELDS.has(field)) {
+    return postCaptureFieldState(capabilities.capturesPostTips);
+  }
+  if (dataset === "tip_goals" && TIP_GOAL_DATASET_CLAIM_FIELDS.has(field)) {
+    return postCaptureFieldState(capabilities.capturesPostMonetization);
+  }
+  if (POST_MONETIZATION_CLAIM_FIELDS.has(field)) {
+    return postCaptureFieldState(capabilities.capturesPostMonetization);
+  }
+  if (POST_TIP_CLAIM_FIELDS.has(field)) {
+    return postCaptureFieldState(capabilities.capturesPostTips);
+  }
   if (field === "mediaMetadata") {
     return capabilities.capturesMediaMetadata === "captured_unparsed"
       ? { state: "captured_unparsed", remedy: { kind: "local_replay", costClass: "free", admissible: true, reason: null } }
@@ -162,6 +247,8 @@ function fieldStateFor(field: string, platform: Platform): AgentFieldState {
 export function computeScopeFieldStates(input: {
   fields: readonly string[];
   platforms: readonly Platform[];
+  /** Dataset context disambiguates wire field names shared by multiple planes. */
+  dataset?: AgentDataset;
   /** Fields whose class the key holds no capability for. */
   ungrantedFields?: readonly string[];
 }): Record<string, AgentFieldState> {
@@ -178,7 +265,7 @@ export function computeScopeFieldStates(input: {
     }
     let weakest: AgentFieldState | null = null;
     for (const platform of platforms) {
-      const candidate = fieldStateFor(field, platform);
+      const candidate = fieldStateFor(field, platform, input.dataset);
       if (
         weakest === null
         || FIELD_STATE_STRENGTH[candidate.state] < FIELD_STATE_STRENGTH[weakest.state]

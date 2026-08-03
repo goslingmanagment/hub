@@ -880,7 +880,15 @@ export const agentResolveResponseSchema = z.object({
 export const agentPersonQuerySchema = z.object({
   ...agentClaimQuerySchema.shape,
   pageLabel: z.string().min(1).optional(),
-}).strict().superRefine((value, ctx) => addAgentIssues(agentClaimQueryIssues(value), ctx));
+}).strict().superRefine((value, ctx) => addAgentIssues([
+  ...agentClaimQueryIssues(value),
+  ...(value.claimFields?.includes("postTipMessageText") === true
+    ? [{
+      path: ["claimFields"] as PropertyKey[],
+      message: "postTipMessageText is available only through the post_tips dataset",
+    }]
+    : []),
+], ctx));
 
 export const agentPersonResponseSchema = z.object({
   /** null = no row in the VISIBLE scope. It does NOT mean the fan does not exist,
@@ -944,6 +952,28 @@ export const agentPersonResponseSchema = z.object({
       transactionCount: z.number().int().nonnegative(),
     }).strict()),
   }).strict().nullable(),
+  /**
+   * Individually captured Fansly tips with exact donor-to-post attribution.
+   *
+   * This is deliberately separate from `money`: the same payment can also be
+   * present in `transactions`, so folding these rows into the lifetime totals
+   * would double-count it. `null` means the key holds no `read:money`; an empty
+   * `items` array means this serving projection has no matching captured rows.
+   */
+  postTips: z.object({
+    items: z.array(z.object({
+      pageLabel: z.string(),
+      platform: platformEnum,
+      postTipPostRef: z.string().min(1).max(500),
+      postTipRef: z.string().min(1).max(500),
+      postTipOccurredAt: agentIsoTimestamp,
+      postTipAmountMills: mills,
+      postTipGoalRef: z.string().min(1).max(500).nullable(),
+      fieldStates: z.partialRecord(agentClaimFieldEnum, agentFieldStateSchema),
+    }).strict()).max(200),
+    /** The card is a bounded recent view, not an unbounded export. */
+    capped: z.boolean(),
+  }).strict().nullable(),
   /** null without `read:money`: a subscription price is money. */
   subscriptions: z.array(z.object({
     pageLabel: z.string(),
@@ -994,6 +1024,9 @@ export const agentPersonResponseSchema = z.object({
 export const agentTimelineLaneEnum = z.enum([
   "messages",
   "money",
+  /** Attribution view. Amounts can describe the same payment as `money`, so it
+   *  remains a separate lane and must never be added to transaction totals. */
+  "post_tips",
   "subscriptions",
   "follows",
   "presence",
@@ -1009,6 +1042,7 @@ export const agentTimelineKindEnum = z.enum([
   "transaction.posted",
   "transaction.pending",
   "tip.received",
+  "post_tip.received",
   "subscription.started",
   "subscription.renewed",
   "subscription.ended",
@@ -1023,7 +1057,7 @@ export const agentPersonTimelineQuerySchema = z.object({
   to: agentIsoTimestamp.optional(),
   lanes: z.preprocess(
     (value) => (value === undefined ? undefined : Array.isArray(value) ? value : [value]),
-    z.array(agentTimelineLaneEnum).min(1).max(5).optional(),
+    z.array(agentTimelineLaneEnum).min(1).max(6).optional(),
   ),
   pageLabel: z.string().min(1).optional(),
   sortDir: sortDirEnum.default("desc"),
@@ -1034,6 +1068,12 @@ export const agentPersonTimelineQuerySchema = z.object({
   addAgentIssues([
     ...agentWindowIssues(value),
     ...agentClaimQueryIssues(value),
+    ...(value.claimFields?.includes("postTipMessageText") === true
+      ? [{
+        path: ["claimFields"] as PropertyKey[],
+        message: "postTipMessageText is available only through the post_tips dataset",
+      }]
+      : []),
     ...agentCursorScopeIssues(value, [
       ...WINDOW_SCOPE_FIELDS,
       "lanes",
@@ -1065,6 +1105,14 @@ export const agentTimelineItemSchema = z.object({
   textLength: z.number().int().nonnegative().nullable(),
   hasMedia: z.boolean().nullable(),
   isTip: z.boolean().nullable(),
+  /** Populated only for `lane:"post_tips"`. These names deliberately match the
+   *  claim registry and dataset contract so an agent does not have to translate
+   *  between three vocabularies for the same fact. */
+  postTipPostRef: z.string().min(1).max(500).nullable(),
+  postTipRef: z.string().min(1).max(500).nullable(),
+  postTipOccurredAt: agentIsoTimestamp.nullable(),
+  postTipAmountMills: mills.nullable(),
+  postTipGoalRef: z.string().min(1).max(500).nullable(),
   fieldStates: z.partialRecord(agentClaimFieldEnum, agentFieldStateSchema),
   provenance: agentProvenanceSchema,
 }).strict();
@@ -2007,7 +2055,7 @@ export const agentRouteSchemas = {
     // such fan" into "the fan is on a page outside this key's grant" — the exact
     // mistake this plane exists to prevent. Do not "fix" it as a bug.
     summary:
-      "One fan across every granted page: identity, memberships, threads, money, subscriptions."
+      "One fan across every granted page: identity, memberships, threads, money, post-tip attribution, subscriptions."
       + " Never 404s: an out-of-grant fan answers 200-empty with scopeNarrowing (spec 5.6)",
     params: fanLookupParamsSchema,
     querystring: agentPersonQuerySchema,
@@ -2024,7 +2072,7 @@ export const agentRouteSchemas = {
     auth: { kind: "agentKey" },
     tags: ["agent"],
     summary:
-      "Merged per-fan timeline across lanes (money, subscriptions, follows, message refs)."
+      "Merged per-fan timeline across lanes (money, post-tip attribution, subscriptions, follows, message refs)."
       + " Never 404s: an out-of-grant fan answers 200-empty with scopeNarrowing (spec 5.6)",
     params: fanLookupParamsSchema,
     querystring: agentPersonTimelineQuerySchema,

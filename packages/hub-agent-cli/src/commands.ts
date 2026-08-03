@@ -387,7 +387,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
   {
     name: "timeline",
     operation: "agentPersonTimeline",
-    summary: "One fan's merged timeline across lanes (money, subscriptions, follows, message refs).",
+    summary: "One fan's merged timeline across lanes (money, post-tip attribution, subscriptions, follows, message refs).",
     options: {
       platform: { kind: "string", describe: "fansly | onlyfans (required)" },
       user: { kind: "string", describe: "Native platform user id (required)" },

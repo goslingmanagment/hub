@@ -10,6 +10,7 @@ import type {
   FanslyMessagesPageResponse,
   FanslyMessagingGroupsPageResponse,
   FanslyPostsPageResponse,
+  FanslyPostTipsResponse,
   FanslyRequestContext,
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
@@ -80,6 +81,10 @@ export type AdapterLike = ProviderAdapter<
       pageIndex?: number;
     },
   ): Promise<FanslyPostsPageResponse>;
+  getTipsByTargetIds(
+    context: FanslyRequestContext,
+    targetIds: string[],
+  ): Promise<FanslyPostTipsResponse>;
   getEarningsAccountsPage(
     context: FanslyRequestContext,
     params: {

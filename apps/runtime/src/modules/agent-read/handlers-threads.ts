@@ -21,6 +21,7 @@ import {
   listAgentThreads,
   listAgentTimeline,
   listAgentTranscript,
+  readAgentPostTipParseDebt,
   readAgentJournalFloor,
   readAgentThreadArchiveFloor,
   readAgentThreadsHighWater,
@@ -31,6 +32,7 @@ import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
+import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.ts";
 import {
   buildAgentEvidence,
   gapBeforeCaptureFloor,
@@ -38,6 +40,11 @@ import {
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
 import { AgentPlaneDisabledError, staticNotFound, toSafeNumber } from "./errors.ts";
 import { MESSAGE_PLANES, MONEY_PLANES, planesNotRead } from "./planes.ts";
+import {
+  AGENT_POST_TIP_VIEW_CLAIM_FIELDS,
+  postTipParseDebtGaps,
+  postTipViewFieldStates,
+} from "./post-tip-view.ts";
 import {
   AGENT_COUNT_PROBE_MAX,
   AGENT_PLATFORM_CAPABILITIES,
@@ -72,9 +79,16 @@ import {
  */
 
 /** Money lanes on #4, and the capability that opens them. */
-const MONEY_LANES: ReadonlySet<string> = new Set(["money", "subscriptions"]);
+const MONEY_LANES: ReadonlySet<string> = new Set(["money", "post_tips", "subscriptions"]);
 const MESSAGE_LANES: ReadonlySet<string> = new Set(["messages"]);
-const ALL_LANES = ["messages", "money", "subscriptions", "follows", "presence"] as const;
+const ALL_LANES = [
+  "messages",
+  "money",
+  "post_tips",
+  "subscriptions",
+  "follows",
+  "presence",
+] as const;
 
 /** Vendor media metadata is captured verbatim and old rows can contain zero,
  * negative, fractional or otherwise out-of-contract dimensions. Preserve the
@@ -234,16 +248,31 @@ export async function handleAgentPersonTimeline(
               key: String(cursor.keyset.key ?? ""),
             },
         }), "agent_timeline");
+    const postTipParseDebt = lanesServed.includes("post_tips")
+      ? await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        readAgentPostTipParseDebt(tx, {
+          pageIds,
+          parserVersion: POSTS_CANONICALIZER_VERSION,
+        }), "agent_timeline_post_tip_parse_debt")
+      : { topLevel: false, rejectedItems: false };
 
     const witnesses = [...identity.witnesses, ...timeline.witnesses];
     const operationPlanes = operationPlanesFor(
-      [...MESSAGE_PLANES, ...MONEY_PLANES, "page_subscriptions", "page_follows", "page_fans", "fans"],
+      [
+        ...MESSAGE_PLANES,
+        ...MONEY_PLANES,
+        "creator_post_tips",
+        "page_subscriptions",
+        "page_follows",
+        "page_fans",
+        "fans",
+      ],
       claimFields,
     );
 
     const overrides = messagePlaneOverrides(platforms);
     if (!mayReadMoney) {
-      for (const plane of [...MONEY_PLANES, "page_subscriptions"]) {
+      for (const plane of [...MONEY_PLANES, "creator_post_tips", "page_subscriptions"]) {
         overrides[plane] = { state: "not_read", reason: "capability_not_granted" };
       }
     }
@@ -288,11 +317,13 @@ export async function handleAgentPersonTimeline(
       // A five-lane union over live tables has no single monotonic bound to freeze.
       frozenSnapshot,
       requestWindow: { from, to },
-      gaps: [],
+      gaps: postTipParseDebtGaps(postTipParseDebt),
       scopeFieldStates: computeScopeFieldStates({
         fields: claimFields ?? [],
         platforms,
-        ungrantedFields: mayReadMoney ? [] : [...MONEY_CLAIM_FIELDS],
+        ungrantedFields: mayReadMoney
+          ? []
+          : [...MONEY_CLAIM_FIELDS, ...AGENT_POST_TIP_VIEW_CLAIM_FIELDS],
       }),
       sourceErrors: [],
       scopeNarrowing: scope.scopeNarrowing,
@@ -308,7 +339,7 @@ export async function handleAgentPersonTimeline(
       lanesServed,
       items: timeline.rows.map((row) => ({
         lane: row.lane as (typeof ALL_LANES)[number],
-        kind: row.kind as "message.received",
+        kind: row.kind as AgentPersonTimelineResponse["items"][number]["kind"],
         occurredAt: iso(row.occurredAt),
         stableRef: row.stableRef,
         pageLabel: row.pageLabel,
@@ -327,7 +358,24 @@ export async function handleAgentPersonTimeline(
         textLength: row.textLength,
         hasMedia: row.hasMedia,
         isTip: row.isTip,
-        fieldStates: {},
+        postTipPostRef: row.postTipPostRef,
+        postTipRef: row.postTipRef,
+        postTipOccurredAt: isoOrNull(row.postTipOccurredAt),
+        postTipAmountMills: toSafeNumber(row.postTipAmountMills),
+        postTipGoalRef: row.postTipGoalRef,
+        fieldStates: row.lane === "post_tips"
+          ? postTipViewFieldStates({
+            claimFields,
+            scopeFieldStates: evidence.capture.scopeFieldStates,
+            values: {
+              postTipPostRef: row.postTipPostRef,
+              postTipRef: row.postTipRef,
+              postTipOccurredAt: row.postTipOccurredAt,
+              postTipAmountMills: row.postTipAmountMills,
+              postTipGoalRef: row.postTipGoalRef,
+            },
+          })
+          : {},
         provenance: {
           ingestPaths: ["unknown" as const],
           convergence: "no_material_lane" as const,

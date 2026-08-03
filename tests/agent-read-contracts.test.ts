@@ -19,9 +19,11 @@ import {
   agentClaimFieldEnum,
   agentDatasetEnum,
   agentDatasetFieldIsVerbatimText,
+  agentDatasetFields,
   agentDatasetQueryBodySchema,
   agentDatasetRequiredCapabilities,
   agentDeliverySchema,
+  agentPersonQuerySchema,
   agentPersonTimelineQuerySchema,
   agentPlaneNameEnum,
   agentRouteSchemas,
@@ -289,6 +291,24 @@ describe("agent read plane: the B2 window/cursor law", () => {
     expect(Object.keys(agentSearchMessagesBodySchema.shape)).not.toContain("cursor");
   });
 
+  it("routes fan-written post-tip notes only through the gated dataset", () => {
+    expect(agentPersonQuerySchema.safeParse({
+      claimFields: ["postTipMessageText"],
+      claimTargets: "all_in_scope",
+    }).success).toBe(false);
+    expect(agentPersonTimelineQuerySchema.safeParse({
+      from: "2026-01-08T00:00:00Z",
+      to: "2026-01-20T00:00:00Z",
+      claimFields: ["postTipMessageText"],
+      claimTargets: "all_in_scope",
+    }).success).toBe(false);
+
+    expect(agentPersonQuerySchema.safeParse({
+      claimFields: ["postTipPostRef", "postTipGoalRef", "postTipAmountMills"],
+      claimTargets: "all_in_scope",
+    }).success).toBe(true);
+  });
+
   it("a dataset cursor refuses re-sent filters and sorts", () => {
     expect(agentDatasetQueryBodySchema.safeParse({
       cursor: "abc123",
@@ -345,6 +365,9 @@ describe("agent read plane: the B2 window/cursor law", () => {
     expect(agentDatasetEnum.options).not.toContain("purchase_history");
     expect(agentDatasetEnum.options).not.toContain("fan_earnings");
     expect(agentDatasetEnum.options).toContain("posts");
+    expect(agentDatasetEnum.options).toContain("post_monetization");
+    expect(agentDatasetEnum.options).toContain("post_tips");
+    expect(agentDatasetEnum.options).toContain("tip_goals");
   });
 });
 
@@ -363,6 +386,19 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
 
   it("the SQL mapping declares no dataset the registry does not", () => {
     expect(Object.keys(AGENT_DATASET_SQL).sort()).toEqual([...AGENT_DATASET_NAMES].sort());
+  });
+
+  it("keeps post monetization windowed by publication while both timestamps stay queryable", () => {
+    const mapping = AGENT_DATASET_SQL.post_monetization!;
+    expect(mapping.windowColumn).toBe("k_occurred_at");
+    expect(mapping.source)
+      .toContain("cp.published_at        as k_occurred_at");
+    const fields = new Map(agentDatasetFields("post_monetization").map((field) => [
+      field.field,
+      field,
+    ]));
+    expect(fields.get("publishedAt")?.filterable).toBe(true);
+    expect(fields.get("lastObservedAt")?.filterable).toBe(true);
   });
 
   it("every mapped column is exposed by its own source projection", () => {
@@ -406,6 +442,12 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     }
     expect(agentDatasetRequiredCapabilities("fan_notes")).toContain("read:messages");
     expect(agentDatasetRequiredCapabilities("posts")).toEqual(["read:datasets", "read:messages"]);
+    expect(agentDatasetRequiredCapabilities("post_monetization"))
+      .toEqual(["read:datasets", "read:money", "read:messages"]);
+    expect(agentDatasetRequiredCapabilities("post_tips"))
+      .toEqual(["read:datasets", "read:money", "read:messages"]);
+    expect(agentDatasetRequiredCapabilities("tip_goals"))
+      .toEqual(["read:datasets", "read:money", "read:messages"]);
     expect(agentDatasetRequiredCapabilities("dm_threads")).not.toContain("read:messages");
   });
 });

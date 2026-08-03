@@ -736,6 +736,59 @@ export async function loadAgentPersonMoney(
   };
 }
 
+export interface AgentPersonPostTip {
+  pageLabel: string;
+  platform: string;
+  postTipPostRef: string;
+  postTipRef: string;
+  postTipOccurredAt: Date;
+  postTipAmountMills: bigint;
+  postTipGoalRef: string | null;
+}
+
+/**
+ * A bounded, newest-first attribution view for the person card.
+ *
+ * The caller asks for one row beyond its public limit and reports `capped`
+ * explicitly. The join through `fans` is intentional: creator_post_tips stores
+ * the provider sender id verbatim, while the public person operation resolves a
+ * canonical fan id. Both platform and native id must match.
+ */
+export async function loadAgentPersonPostTips(
+  db: Database,
+  input: { pageIds: readonly number[]; fanId: number; limit: number },
+): Promise<{ rows: AgentPersonPostTip[]; witnesses: PlaneReadWitness[] }> {
+  if (input.pageIds.length === 0) {
+    return { rows: [], witnesses: [] };
+  }
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select p.label, p.platform::text as platform,
+           cpt.platform_post_id, cpt.platform_tip_id, cpt.occurred_at,
+           cpt.post_tip_amount_mills::text as post_tip_amount_mills,
+           cpt.tip_goal_ref
+    from creator_post_tips cpt
+    join pages p on p.id = cpt.account_id
+    join fans f on f.id = ${input.fanId}
+      and f.platform::text = cpt.platform
+      and f.platform_user_id = cpt.tip_sender_platform_user_id
+    where cpt.account_id in ${pageIdList(input.pageIds)}
+    order by cpt.occurred_at desc, cpt.id desc
+    limit ${input.limit}
+  `);
+  return {
+    rows: result.rows.map((row) => ({
+      pageLabel: String(row.label),
+      platform: String(row.platform),
+      postTipPostRef: String(row.platform_post_id),
+      postTipRef: String(row.platform_tip_id),
+      postTipOccurredAt: new Date(row.occurred_at as string | Date),
+      postTipAmountMills: BigInt(String(row.post_tip_amount_mills)),
+      postTipGoalRef: row.tip_goal_ref == null ? null : String(row.tip_goal_ref),
+    })),
+    witnesses: witnessesFor(["creator_post_tips", "fans"]),
+  };
+}
+
 export interface AgentPersonSubscription {
   pageLabel: string;
   subscriptionRef: string;
@@ -879,6 +932,11 @@ export interface AgentTimelineRow {
   textLength: number | null;
   hasMedia: boolean | null;
   isTip: boolean | null;
+  postTipPostRef: string | null;
+  postTipRef: string | null;
+  postTipOccurredAt: Date | null;
+  postTipAmountMills: bigint | null;
+  postTipGoalRef: string | null;
 }
 
 /**
@@ -892,6 +950,7 @@ export interface AgentTimelineRow {
 const TIMELINE_LANE_PLANES: Readonly<Record<string, readonly string[]>> = {
   messages: ["message_archive"],
   money: ["transactions"],
+  post_tips: ["creator_post_tips", "fans"],
   subscriptions: ["page_subscriptions"],
   follows: ["page_follows"],
   presence: ["page_fans"],
@@ -945,7 +1004,11 @@ export async function listAgentTimeline(
              ma.sender_role::text as sender_role,
              length(ma.text_plain) as text_length,
              (jsonb_array_length(coalesce(ma.media_metadata, '[]'::jsonb)) > 0) as has_media,
-             ma.is_tip
+             ma.is_tip,
+             null::text as post_tip_post_ref, null::text as post_tip_ref,
+             null::timestamptz as post_tip_occurred_at,
+             null::bigint as post_tip_amount_mills,
+             null::text as post_tip_goal_ref
       from message_archive ma
       join pages p on p.id = ma.account_id
       join fans f on f.platform_user_id = ma.fan_native_id and f.platform::text = ma.platform
@@ -970,11 +1033,44 @@ export async function listAgentTimeline(
              tr.transaction_state::text as transaction_state,
              tr.currency::text as currency,
              null::text as direction, null::text as sender_role,
-             null::int as text_length, null::boolean as has_media, null::boolean as is_tip
+             null::int as text_length, null::boolean as has_media, null::boolean as is_tip,
+             null::text as post_tip_post_ref, null::text as post_tip_ref,
+             null::timestamptz as post_tip_occurred_at,
+             null::bigint as post_tip_amount_mills,
+             null::text as post_tip_goal_ref
       from transactions tr
       join pages p on p.id = tr.platform_account_id
       where tr.platform_account_id in ${pages} and tr.fan_id = ${input.fanId} and tr.is_active
         and tr.occurred_at >= ${input.from} and tr.occurred_at < ${input.to}
+    `);
+  }
+  if (wants("post_tips")) {
+    arms.push(sql`
+      select 'post_tips'::text as lane, 'post_tip.received'::text as kind,
+             cpt.occurred_at as occurred_at,
+             'post-tip:' || cpt.account_id::text || ':' || cpt.platform_tip_id
+               || ':' || cpt.platform_post_id as stable_ref,
+             p.label as page_label, p.platform::text as platform,
+             null::text as conversation_ref, null::text as message_ref,
+             cpt.receiver_transaction_ref as transaction_ref,
+             null::text as subscription_ref,
+             null::bigint as gross_mills, null::bigint as net_mills,
+             null::text as transaction_type, null::text as transaction_state,
+             null::text as currency,
+             null::text as direction, null::text as sender_role,
+             null::int as text_length, null::boolean as has_media, true as is_tip,
+             cpt.platform_post_id as post_tip_post_ref,
+             cpt.platform_tip_id as post_tip_ref,
+             cpt.occurred_at as post_tip_occurred_at,
+             cpt.post_tip_amount_mills,
+             cpt.tip_goal_ref as post_tip_goal_ref
+      from creator_post_tips cpt
+      join pages p on p.id = cpt.account_id
+      join fans f on f.id = ${input.fanId}
+        and f.platform::text = cpt.platform
+        and f.platform_user_id = cpt.tip_sender_platform_user_id
+      where cpt.account_id in ${pages}
+        and cpt.occurred_at >= ${input.from} and cpt.occurred_at < ${input.to}
     `);
   }
   if (wants("subscriptions")) {
@@ -993,7 +1089,11 @@ export async function listAgentTimeline(
              null::text as transaction_type, null::text as transaction_state,
              null::text as currency,
              null::text as direction, null::text as sender_role,
-             null::int as text_length, null::boolean as has_media, null::boolean as is_tip
+             null::int as text_length, null::boolean as has_media, null::boolean as is_tip,
+             null::text as post_tip_post_ref, null::text as post_tip_ref,
+             null::timestamptz as post_tip_occurred_at,
+             null::bigint as post_tip_amount_mills,
+             null::text as post_tip_goal_ref
       from page_subscriptions s
       join pages p on p.id = s.platform_account_id
       where s.platform_account_id in ${pages} and s.fan_id = ${input.fanId}
@@ -1014,7 +1114,11 @@ export async function listAgentTimeline(
              null::text as transaction_type, null::text as transaction_state,
              null::text as currency,
              null::text as direction, null::text as sender_role,
-             null::int as text_length, null::boolean as has_media, null::boolean as is_tip
+             null::int as text_length, null::boolean as has_media, null::boolean as is_tip,
+             null::text as post_tip_post_ref, null::text as post_tip_ref,
+             null::timestamptz as post_tip_occurred_at,
+             null::bigint as post_tip_amount_mills,
+             null::text as post_tip_goal_ref
       from page_follows fl
       join pages p on p.id = fl.platform_account_id
       where fl.platform_account_id in ${pages} and fl.fan_id = ${input.fanId}
@@ -1033,7 +1137,11 @@ export async function listAgentTimeline(
              null::text as transaction_type, null::text as transaction_state,
              null::text as currency,
              null::text as direction, null::text as sender_role,
-             null::int as text_length, null::boolean as has_media, null::boolean as is_tip
+             null::int as text_length, null::boolean as has_media, null::boolean as is_tip,
+             null::text as post_tip_post_ref, null::text as post_tip_ref,
+             null::timestamptz as post_tip_occurred_at,
+             null::bigint as post_tip_amount_mills,
+             null::text as post_tip_goal_ref
       from page_fans pf
       join pages p on p.id = pf.platform_account_id
       where pf.platform_account_id in ${pages} and pf.fan_id = ${input.fanId}
@@ -1060,7 +1168,10 @@ export async function listAgentTimeline(
            keyed.subscription_ref,
            keyed.gross_mills::text as gross_mills, keyed.net_mills::text as net_mills,
            keyed.transaction_type, keyed.transaction_state, keyed.currency,
-           keyed.direction, keyed.sender_role, keyed.text_length, keyed.has_media, keyed.is_tip
+           keyed.direction, keyed.sender_role, keyed.text_length, keyed.has_media, keyed.is_tip,
+           keyed.post_tip_post_ref, keyed.post_tip_ref, keyed.post_tip_occurred_at,
+           keyed.post_tip_amount_mills::text as post_tip_amount_mills,
+           keyed.post_tip_goal_ref
     from keyed
     where ${keysetPredicate(input.sortDir, input.after)}
     ${keysetOrderBy(input.sortDir)}
@@ -1090,6 +1201,13 @@ export async function listAgentTimeline(
       textLength: row.text_length == null ? null : Number(row.text_length),
       hasMedia: row.has_media == null ? null : row.has_media === true,
       isTip: row.is_tip == null ? null : row.is_tip === true,
+      postTipPostRef: row.post_tip_post_ref == null ? null : String(row.post_tip_post_ref),
+      postTipRef: row.post_tip_ref == null ? null : String(row.post_tip_ref),
+      postTipOccurredAt: date(row.post_tip_occurred_at),
+      postTipAmountMills: row.post_tip_amount_mills == null
+        ? null
+        : BigInt(String(row.post_tip_amount_mills)),
+      postTipGoalRef: row.post_tip_goal_ref == null ? null : String(row.post_tip_goal_ref),
     })),
     witnesses: witnessesFor(input.lanes.flatMap((lane) => TIMELINE_LANE_PLANES[lane] ?? [])),
   };
@@ -1732,6 +1850,96 @@ export interface AgentDatasetRowRaw {
   observationRef: number | null;
   ingestPath: string;
   convergence: "final" | "converging" | "no_material_lane";
+}
+
+export interface AgentPostTipParseDebt {
+  /** Non-array post_tips observations still below the current family floor. */
+  topLevel: boolean;
+  /** Array observations whose current parser version rejected at least one item. */
+  rejectedItems: boolean;
+}
+
+/** A fail-closed Fansly timeline page still awaiting the current post parser.
+ * It can make post heads, monetization snapshots and the derived goal view
+ * stale, so those datasets must expose the debt instead of returning a clean
+ * but incomplete snapshot. */
+export async function readAgentPostSnapshotParseDebt(
+  db: Database,
+  input: { pageIds: readonly number[]; parserVersion: number },
+): Promise<boolean> {
+  if (input.pageIds.length === 0) {
+    return false;
+  }
+  const result = await db.execute<{ parse_debt: boolean }>(sql`
+    select exists (
+      select 1
+      from observations o
+      where o.account_id in ${pageIdList(input.pageIds)}
+        and o.source = 'pull'
+        and o.platform = 'fansly'
+        and o.kind = 'posts'
+        and o.parse_version < ${input.parserVersion}
+    ) as parse_debt
+  `);
+  return result.rows[0]?.parse_debt === true;
+}
+
+/**
+ * Current, page-wide post-tip parse debt. It is deliberately not windowed:
+ * an item rejected before its `occurredAt` can be trusted cannot honestly be
+ * assigned outside the caller's window. Old rejection diagnostics stop
+ * counting automatically once a newer family version replays and advances the
+ * observation stamp without emitting the same-version diagnostic.
+ */
+export async function readAgentPostTipParseDebt(
+  db: Database,
+  input: { pageIds: readonly number[]; parserVersion: number },
+): Promise<AgentPostTipParseDebt> {
+  if (input.pageIds.length === 0) {
+    return { topLevel: false, rejectedItems: false };
+  }
+  const pages = pageIdList(input.pageIds);
+  const result = await db.execute<{
+    top_level: boolean;
+    rejected_items: boolean;
+  }>(sql`
+    select
+      exists (
+        select 1
+        from observations o
+        where o.account_id in ${pages}
+          and o.source = 'pull'
+          and o.platform = 'fansly'
+          and o.kind = 'post_tips'
+          and o.parse_version < ${input.parserVersion}
+      ) as top_level,
+      exists (
+        select 1
+        from domain_events e
+        join observations o
+          on o.id = e.observation_id
+         and o.account_id = e.account_id
+         and o.kind = 'post_tips'
+         -- Diagnostic occurred_at is the source observation's received_at. Keep
+         -- the partition key in the join so this read does not scan every retained
+         -- observation partition merely to resolve an id that is not globally
+         -- indexable on the partitioned table.
+         and o.received_at = e.occurred_at
+        where e.account_id in ${pages}
+          and e.type = 'post.tip_parse_rejected'
+          and e.data ->> 'rejectedItemCount' ~ '^[1-9][0-9]*$'
+          and o.parse_version = case
+            when e.data ->> 'parserVersion' ~ '^[0-9]+$'
+              then (e.data ->> 'parserVersion')::int
+            else null
+          end
+      ) as rejected_items
+  `);
+  const row = result.rows[0];
+  return {
+    topLevel: row?.top_level === true,
+    rejectedItems: row?.rejected_items === true,
+  };
 }
 
 function datasetFilterSql(filter: AgentDatasetFilter): SQL {

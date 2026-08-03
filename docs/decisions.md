@@ -210,6 +210,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 206 | Fansly reverse evidence and fail-closed completeness | Executable reverse behavior may define pagination and observed response shapes, but every adopted path remains raw-first and refuses false completeness: purchase history follows `before=last orderId` to an empty page; transaction/DM totals and DM unique ids are mandatory; earnings rejects partial money aggregates and cursor jumps. Standalone Fansly onboarding requires a proxy at every boundary. New earnings/tracking/list reads remain adapter-only until an honest storage model exists. Agent transaction results serve active rows while their capture floor remains the physical oldest retained row |
 | 207 | Smoke consumer projection checkpoints | The permanent v2 smoke consumer applies `stream.projection_checkpoint.hiddenCount` through the same monotonic guard as real v2 clients, so intentionally hidden projection-only rows advance its cursor without false GAP errors; malformed or mismatched checkpoints still fail closed, and the historical persisted counter is retained as an ops baseline rather than reset |
 | 208 | Live-list terminal verification and optional DM totals | Fansly follower reconcile compares its unique generation with a freshly captured terminal headline, checkpointing a budgeted verification-only continuation when necessary; one restart then durable block remains. PARTIALLY supersedes #206 only for DM totals: consistently absent/null totals allow a captured, unique-id-guarded but non-destructive completion, while a present total remains stable/exact and is the sole authority for hiding unseen conversations |
+| 209 | Fansly post monetization | Fansly timeline money and linked-goal fields become a latest-observed `post_monetization` snapshot, while raw-first `/tips?targetIds` capture supplies donor-to-post rows with exact type-7100 goal attribution and verbatim tip notes in `post_tips`. The rendered post total is `tipAmount + attachmentTipAmount`, never `totalTipAmount`; `tip_goals` deduplicates shared goals. Companion drift cannot wedge posts, malformed tip items become explicit parse debt, and migration 0121/posts canonicalizer v4 preserve replay without claiming continuous refresh or tipped-reply-donor completeness |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6548,3 +6549,126 @@ abandoned cursors cannot resume; the generation high-water rule from #173 keeps
 the replacement generations monotonic. The five DM streams need only a fresh
 request: their failed terminal guards never hid data and their next total-less
 sweep completes under the new non-destructive mode.
+
+**Decision #209 (2026-08-03, Fansly post monetization separates cumulative
+snapshots from individually attributable tips).** The Fansly timeline already
+returns the counters rendered on a creator post. Every supplied money value is
+Fansly-native mills and cumulative as of that observation. `tipAmount` is the
+post-target component, `attachmentTipAmount` is the tipped-reply component, and
+the bottom-of-post total is exactly their sum (with a missing component treated
+as zero only when the other component is present). The provider's separate
+`totalTipAmount` field is NOT that rendered total and is neither substituted nor
+added into it. If both component fields are absent, Hub records no counter fact,
+not an invented zero.
+
+Tip goals remain timeline snapshot material. A post's type-7100 attachment links
+to the top-level goal by id; target/current amounts are cumulative mills and the
+label is provider-verbatim creator text. One goal may be shared by several
+posts, so the per-post projection intentionally repeats its latest observed goal
+snapshot. Any cross-post or campaign aggregation MUST deduplicate by
+`tipGoalRef`; summing `tipGoalCurrentMills` across post rows double-counts a
+shared goal.
+
+Individual attribution comes from one companion
+`GET /tips?targetIds=<timeline post ids>` after each non-empty Fansly timeline
+page. The two requests are one checkpoint unit and reserve both request slots up
+front. Each successful provider response is journaled verbatim before contract
+rejection: timeline under `posts`, the array under `post_tips`. Accepted tip
+targets append projection-only `post.tip_observed` events and rebuild into one
+current row per `(page, native tip id, native post id)`, retaining the donor's
+platform user id, amount in mills, occurrence time, transaction refs, the
+provider-verbatim optional message and full source lineage. Exactly one
+type-1000 target establishes the post. Zero or multiple post targets are
+ambiguous. At most one type-7100 target establishes the goal; an optional
+top-level `tipGoalId` may corroborate that target but may neither replace nor
+contradict it. `post.tip_observed` schema v2 therefore makes a precise
+donor-to-post and, when the target exists, donor-to-goal claim. These remain
+facts about accepted rows in captured responses; an empty or partial capture
+is not proof that no other tips exist.
+
+Fault isolation is deliberately asymmetric. A non-array companion response is
+journaled and left below the parser floor, but records a sync anomaly and does
+NOT block the timeline checkpoint: optional attribution drift cannot wedge the
+creator-post lane or repeatedly refetch a valid timeline page. Inside a valid
+array, every item is parsed independently. Valid siblings still become
+`post.tip_observed`; rejected indexes and bounded reason codes become hidden
+projection-only `post.tip_parse_rejected` diagnostics under the same atomic
+checkpoint. A future family-version bump replays the retained raw response and
+can retire that parse debt without guessing today.
+
+The requested page scope is a second, independent boundary. At capture time an
+explicit receiver mismatch or any type-1000 target outside the requested
+`targetIds` quarantines the response: `sync_raw_payloads` keeps the provider
+body verbatim, while its `post_tips` observation carries a bounded
+request-context envelope that the current parser deliberately leaves as visible
+parse debt. A `fansly_post_tips_scope_drift` anomaly records only indexes and
+reason codes. The canonicalizer also compares each tip's `receiverId` with the
+page's native Fansly account ref, so legacy or manually re-journaled
+observations cannot silently cross accounts.
+
+The Agent plane exposes three Fansly-only datasets instead of widening the
+existing text-only `posts` dataset. `post_monetization` is money-bearing and
+contains a verbatim goal label, so it requires `read:datasets` + `read:money` +
+`read:messages`. `post_tips` is money-bearing and carries the fan-written
+verbatim tip note, so it has the same three-capability gate. `tip_goals` ranks
+the repeated current post heads deterministically and returns exactly one
+latest snapshot per native goal plus `linkedPostCount`; it is the aggregation
+surface that removes the shared-goal double-count footgun. Platform capture
+gates remain independent (`capturesPostMonetization` and `capturesPostTips`);
+OnlyFans reports `not_captured` rather than allowing row-level nulls to imply
+support. Fail-closed `posts` observations below canonicalizer v4 surface as a
+`creator_posts` parse-debt gap on `posts`, `post_monetization` and `tip_goals`;
+the current head must not look complete while a newer captured page awaits
+replay.
+
+The temporal contract stays split on purpose. `post_monetization.windowColumn`
+is `publishedAt`, the stable identity axis of its one-row-per-post snapshot;
+both `publishedAt` and `lastObservedAt` remain filterable, but observation time
+does not masquerade as money time. A known post is retrieved with a broad
+publication window plus exact `postRef` filter. `post_tips.windowColumn` is
+`postTipOccurredAt` and answers which individually attributable money movements
+were captured in a period.
+
+Migration 0121 additively extends `creator_posts` and creates
+`creator_post_tips`. The posts canonicalizer advances to v4, so retained v1
+timeline observations replay into the new cumulative fields while old
+`post.observed` and v1 `post.tip_observed` events remain projectable; new
+material hashes include the money/goal snapshot, exact goal target and tip
+message. Replay cannot invent historical individual tips from a `/tips`
+response Hub never captured.
+
+The first Fansly posts run after this feature sees the absent durable
+`fanslyPostTipsBackfilledAt` marker and deliberately ignores the legacy head
+anchor once. It resumes a checkpointed full walk until the terminal empty page,
+capturing monetization and `/tips` responses for older posts before stamping the
+marker. The upgrade backfill is bounded, resumable and never inferred from
+replay.
+
+Later six-hour revisions deliberately do NOT stop at the previous head. Each
+logical walk freezes a publication cutoff at its start (`now - 14 elapsed
+days`), pairs every visited timeline page with `/tips`, and completes only at
+the terminal empty page or after capturing one page whose every post is older
+than that cutoff. A mixed-age page and a post published exactly at the cutoff
+both force pagination to continue. The previous-head encounter is telemetry,
+not a termination condition. The frozen cutoff, `before` cursor, page index,
+captured head and anchor flag are durable; a chunk or request-generation
+boundary changes ownership only and inherits that exact walk instead of
+restarting at page zero. This relies on Fansly `/timelinenew` remaining
+newest-first; the conservative all-old-page boundary and post-deploy acceptance
+make that assumption observable without comparing opaque post ids.
+
+The serving boundary is deliberately narrower than the raw evidence. The
+monetization dataset is the latest observed current-head snapshot, not a
+time-series balance. Ordinary capture revisits the rolling 14-day publication
+horizon, so late tips on those posts refresh even after their post has moved
+below the prior-head page. A post older than the frozen horizon is still a
+point-in-time observation: its counter, goal and individual tip rows are not
+claimed continuously current, and `lastObservedAt` is the evidence for the last
+refresh. The aggregate `attachmentTipAmount` does not identify the donor of a
+tipped reply, and `/tips?targetIds=<post>` may omit a tip whose actual target is
+a reply/attachment rather than that post. Therefore the sum of captured
+`post_tips` rows is NOT required to equal `postTipTotalMills`; any shortfall is
+reported and investigated, never filled by inference. A post-deploy live
+acceptance against the known birthday posts is the gate for both the
+newest-first walk assumption and how complete Fansly's target-filter semantics
+are in practice.
