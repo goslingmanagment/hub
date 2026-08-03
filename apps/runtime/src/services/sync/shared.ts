@@ -90,8 +90,9 @@ export async function persistRawPayload(
     observationPayload?: unknown;
   },
 ) {
+  let rawPayload;
   try {
-    await insertRawPayload(db, input);
+    rawPayload = await insertRawPayload(db, input);
   } catch (error) {
     throw new SyncPayloadPersistenceError({
       endpoint: input.endpoint,
@@ -139,6 +140,8 @@ export async function persistRawPayload(
       cause: error,
     });
   }
+
+  return rawPayload;
 }
 
 export function trimFanslyFollowerPayload(raw: unknown) {

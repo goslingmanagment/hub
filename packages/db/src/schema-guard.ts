@@ -13,6 +13,7 @@ const REQUIRED_TABLE_NAMES = [
   "page_sync_cursors",
   "creator_posts",
   "creator_post_tips",
+  "transaction_tip_contexts",
 ] as const;
 const LEGACY_TABLE_NAMES = [
   ["platform", "accounts"].join("_"),
@@ -220,6 +221,136 @@ async function assertCreatorPostMonetizationSchema(pool: Pick<Pool, "query">) {
   }
 }
 
+async function assertTransactionTipContextsSchema(pool: Pick<Pool, "query">) {
+  // Migration 0122 is the exact join between retained Fansly DM tip sidecars
+  // and transaction correlation refs. Guard the whole serving contract: a
+  // migration-ledger marker alone cannot prove the nullable raw lineage or
+  // the one-row-per-account/tip invariant survived later schema edits.
+  const columns = await pool.query<{ ready: boolean }>(`
+    /* runtime_schema_guard_0122_columns */
+    with expected(
+      column_name, data_type, is_nullable, column_default,
+      is_identity, identity_generation
+    ) as (
+      values
+        ('id', 'bigint', 'NO', '', 'YES', 'ALWAYS'),
+        ('account_id', 'bigint', 'NO', '', 'NO', ''),
+        ('platform', 'text', 'NO', '', 'NO', ''),
+        ('platform_tip_id', 'text', 'NO', '', 'NO', ''),
+        ('captured_conversation_ref', 'text', 'NO', '', 'NO', ''),
+        ('tip_message_text', 'text', 'YES', '', 'NO', ''),
+        ('tip_message_source_raw_payload_id', 'bigint', 'YES', '', 'NO', ''),
+        ('tip_message_captured_at', 'timestamp with time zone', 'YES', '', 'NO', ''),
+        ('tip_amount_mills', 'bigint', 'YES', '', 'NO', ''),
+        ('occurred_at', 'timestamp with time zone', 'NO', '', 'NO', ''),
+        ('sender_platform_user_id', 'text', 'NO', '', 'NO', ''),
+        ('receiver_platform_user_id', 'text', 'YES', '', 'NO', ''),
+        ('source_raw_payload_id', 'bigint', 'YES', '', 'NO', ''),
+        ('captured_at', 'timestamp with time zone', 'NO', '', 'NO', ''),
+        ('provenance', 'text', 'NO', '', 'NO', ''),
+        ('created_at', 'timestamp with time zone', 'NO', 'now()', 'NO', ''),
+        ('updated_at', 'timestamp with time zone', 'NO', 'now()', 'NO', '')
+    )
+    select not exists (
+      select 1
+      from expected e
+      left join information_schema.columns c
+        on c.table_schema = 'public'
+       and c.table_name = 'transaction_tip_contexts'
+       and c.column_name = e.column_name
+      where c.column_name is null
+         or c.data_type <> e.data_type
+         or c.is_nullable <> e.is_nullable
+         or regexp_replace(lower(coalesce(c.column_default, '')), '\\s+', '', 'g')
+              <> e.column_default
+         or c.is_identity <> e.is_identity
+         or coalesce(c.identity_generation, '') <> e.identity_generation
+    ) as ready
+  `);
+  if (columns.rows[0]?.ready !== true) {
+    throw driftError("migration 0122 transaction-tip-context columns do not match the runtime contract");
+  }
+
+  const constraints = await pool.query<{ ready: boolean }>(`
+    /* runtime_schema_guard_0122_constraints */
+    with expected(constraint_name, constraint_type, definition) as (
+      values
+        ('transaction_tip_contexts_pkey', 'p', 'PRIMARY KEY (id)'),
+        ('transaction_tip_contexts_account_id_fkey', 'f',
+          'FOREIGN KEY (account_id) REFERENCES pages(id) ON DELETE RESTRICT'),
+        ('transaction_tip_contexts_platform_fkey', 'f',
+          'FOREIGN KEY (platform) REFERENCES platforms(key) ON DELETE RESTRICT'),
+        ('transaction_tip_contexts_source_raw_payload_id_fkey', 'f',
+          'FOREIGN KEY (source_raw_payload_id) REFERENCES sync_raw_payloads(id) ON DELETE SET NULL'),
+        ('transaction_tip_contexts_tip_message_source_raw_payload_id_fkey', 'f',
+          'FOREIGN KEY (tip_message_source_raw_payload_id) REFERENCES sync_raw_payloads(id) ON DELETE SET NULL'),
+        ('transaction_tip_contexts_account_tip_uniq', 'u',
+          'UNIQUE (account_id, platform_tip_id)'),
+        ('transaction_tip_contexts_refs_check', 'c',
+          'CHECK (length(platform_tip_id) > 0 AND length(captured_conversation_ref) > 0 AND length(sender_platform_user_id) > 0 AND (receiver_platform_user_id IS NULL OR length(receiver_platform_user_id) > 0))'),
+        ('transaction_tip_contexts_amount_check', 'c',
+          'CHECK (tip_amount_mills IS NULL OR tip_amount_mills >= 0)'),
+        ('transaction_tip_contexts_tip_message_lineage_check', 'c',
+          'CHECK (tip_message_text IS NULL AND tip_message_source_raw_payload_id IS NULL AND tip_message_captured_at IS NULL OR tip_message_text IS NOT NULL AND tip_message_captured_at IS NOT NULL)'),
+        ('transaction_tip_contexts_provenance_check', 'c',
+          'CHECK (platform = ''fansly''::text AND provenance = ''fansly_dm_tip_sidecar''::text)')
+    ), actual as (
+      select c.conname as constraint_name,
+             c.contype::text as constraint_type,
+             pg_get_constraintdef(c.oid, true) as definition
+      from pg_constraint c
+      join pg_class t on t.oid = c.conrelid
+      join pg_namespace n on n.oid = t.relnamespace
+      where n.nspname = 'public' and t.relname = 'transaction_tip_contexts'
+    )
+    select not exists (
+      select 1
+      from expected e
+      left join actual a on a.constraint_name = e.constraint_name
+      where a.constraint_name is null
+         or a.constraint_type <> e.constraint_type
+         or regexp_replace(lower(replace(a.definition, '"', '')), '\\s+', '', 'g')
+              <> regexp_replace(lower(replace(e.definition, '"', '')), '\\s+', '', 'g')
+    ) as ready
+  `);
+  if (constraints.rows[0]?.ready !== true) {
+    throw driftError("migration 0122 transaction-tip-context constraints do not match the runtime contract");
+  }
+
+  const indexes = await pool.query<{ ready: boolean }>(`
+    /* runtime_schema_guard_0122_indexes */
+    with expected(index_name, definition) as (
+      values
+        ('transaction_tip_contexts_account_occurred_idx',
+          'CREATE INDEX transaction_tip_contexts_account_occurred_idx ON public.transaction_tip_contexts USING btree (account_id, occurred_at DESC, id DESC)'),
+        ('transaction_tip_contexts_account_conversation_occurred_idx',
+          'CREATE INDEX transaction_tip_contexts_account_conversation_occurred_idx ON public.transaction_tip_contexts USING btree (account_id, captured_conversation_ref, occurred_at DESC, id DESC)'),
+        ('transaction_tip_contexts_source_raw_payload_idx',
+          'CREATE INDEX transaction_tip_contexts_source_raw_payload_idx ON public.transaction_tip_contexts USING btree (source_raw_payload_id)'),
+        ('transaction_tip_contexts_tip_message_source_raw_payload_idx',
+          'CREATE INDEX transaction_tip_contexts_tip_message_source_raw_payload_idx ON public.transaction_tip_contexts USING btree (tip_message_source_raw_payload_id)'),
+        ('sync_raw_payloads_dm_tip_context_backfill_idx',
+          'CREATE INDEX sync_raw_payloads_dm_tip_context_backfill_idx ON public.sync_raw_payloads USING btree (id) WHERE ((endpoint = ''dm_messages''::text) AND (payload_kind = ''dm_messages''::text))')
+    ), actual as (
+      select i.relname as index_name, pg_get_indexdef(i.oid) as definition
+      from pg_class i
+      join pg_namespace n on n.oid = i.relnamespace
+      where n.nspname = 'public' and i.relkind = 'i'
+    )
+    select not exists (
+      select 1
+      from expected e
+      left join actual a on a.index_name = e.index_name
+      where a.index_name is null
+         or regexp_replace(lower(replace(a.definition, '"', '')), '\\s+', '', 'g')
+              <> regexp_replace(lower(replace(e.definition, '"', '')), '\\s+', '', 'g')
+    ) as ready
+  `);
+  if (indexes.rows[0]?.ready !== true) {
+    throw driftError("migration 0122 transaction_tip_contexts indexes do not match the runtime contract");
+  }
+}
+
 export async function assertRuntimeSchemaReady(
   pool: Pick<Pool, "query">,
   input?: {
@@ -304,4 +435,5 @@ export async function assertRuntimeSchemaReady(
   }
 
   await assertCreatorPostMonetizationSchema(pool);
+  await assertTransactionTipContextsSchema(pool);
 }

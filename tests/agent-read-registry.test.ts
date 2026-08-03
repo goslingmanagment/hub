@@ -97,6 +97,13 @@ describe("agent read registry", () => {
     // A lifetime figure is not answered by a windowed transactions read.
     expect(requiredPlanesForClaimFields(["lifetimeSpendMills"])).toEqual(["fan_spend_lifetime"]);
     expect(requiredPlanesForClaimFields(["grossMills"])).toEqual(["transactions"]);
+    expect(requiredPlanesForClaimFields(["correlationRef"]))
+      .toEqual(["transactions"]);
+    expect(requiredPlanesForClaimFields([
+      "contextState",
+      "capturedConversationRef",
+      "tipMessageText",
+    ])).toEqual(["transactions", "transaction_tip_contexts"]);
     expect(requiredPlanesForClaimFields(["postRef", "postText", "publishedAt"]))
       .toEqual(["creator_posts"]);
     expect(requiredPlanesForClaimFields(["postTipTotalMills", "tipGoalTargetMills"]))

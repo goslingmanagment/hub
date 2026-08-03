@@ -1347,6 +1347,27 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     await seedNote(TARGET_GROUP);
     await seedNote(OTHER_GROUP);
 
+    // Exact Fansly tip notes are another sensitive, group-keyed materialization
+    // without a fan FK. Seed the target and a co-resident bystander so the fan
+    // predicate must use sender/group evidence without widening to page scope.
+    for (const [tipId, conversationRef, senderRef, note] of [
+      ["tip-context-target", TARGET_GROUP, TARGET_PARTNER, "erase this exact note"],
+      ["tip-context-other", OTHER_GROUP, OTHER_PARTNER, "keep this bystander note"],
+    ] as const) {
+      await testDb.pool.query(
+        `insert into transaction_tip_contexts (
+           account_id, platform, platform_tip_id, captured_conversation_ref,
+           tip_message_text, tip_message_captured_at, tip_amount_mills,
+           occurred_at, sender_platform_user_id, receiver_platform_user_id,
+           source_raw_payload_id, captured_at, provenance
+         ) values (
+           $1, 'fansly', $2, $3, $4, now(), 10000,
+           now(), $5, 'creator-fansly', null, now(), 'fansly_dm_tip_sidecar'
+         )`,
+        [page.id, tipId, conversationRef, note, senderRef],
+      );
+    }
+
     // Pre-fix and unresolved-fan generations can also be keyed only by the
     // Fansly GROUP id, with no separate fan_ref. Fan erasure must resolve the
     // same page_dm_threads linkage used for voice notes. Seed a bystander row
@@ -1373,9 +1394,19 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`ai_generation_content where page_id = ${page.id}`)).toBe(2);
     expect(await count(`ai_acceptance_events`)).toBe(2);
 
+    const fanScope = {
+      scopeType: "fan",
+      platform: "fansly",
+      fanRef: TARGET_PARTNER,
+    } as const;
+    const plan = await planErasure(appStub(), fanScope);
+    expect(plan.targets.find((target) =>
+      target.plane === "hot" && target.target === "transaction_tip_contexts"
+    )).toMatchObject({ action: "delete", rows: 1 });
+
     const result = await executeErasure(
       appStub(),
-      { scopeType: "fan", platform: "fansly", fanRef: TARGET_PARTNER },
+      fanScope,
       { initiatedBy: Number(operator.id) },
     );
     // The group-ref'd note for the target fan is erased via the resolved group id…
@@ -1388,6 +1419,94 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`ai_generation_content where generation_ref = 'gen-fansly-group-target'`)).toBe(0);
     expect(await count(`ai_generation_content where generation_ref = 'gen-fansly-group-other'`)).toBe(1);
     expect(await count(`ai_acceptance_events`)).toBe(1);
+    expect(
+      result.executedCounts["hot:transaction_tip_contexts:delete"],
+      "Fansly transaction tip context target",
+    ).toBe(1);
+    expect(await count(
+      `transaction_tip_contexts where platform_tip_id = 'tip-context-target'`,
+    )).toBe(0);
+    expect(await count(
+      `transaction_tip_contexts where platform_tip_id = 'tip-context-other'`,
+    )).toBe(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("page and model erasure purge transaction tip contexts by resolved page id", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const suffix = randomUUID();
+    const modelSlug = `erasure-tip-context-${suffix}`;
+    const model = await createModel(testDb.db, {
+      slug: modelSlug,
+      name: "Erasure Tip Context",
+    });
+    if (!model) {
+      throw new Error("Failed to seed tip-context erasure model");
+    }
+    const firstLabel = `erasure-tip-context-first-${suffix}`;
+    const secondLabel = `erasure-tip-context-second-${suffix}`;
+    const firstPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: firstLabel,
+    });
+    const secondPage = await createFanslyPage(testDb.db, {
+      modelId: model.id,
+      label: secondLabel,
+    });
+    if (!firstPage || !secondPage) {
+      throw new Error("Failed to seed tip-context erasure pages");
+    }
+    const operator = await one<{ id: string }>(
+      `insert into users (username, role) values ($1, 'owner') returning id::text as id`,
+      [`erasure-tip-context-owner-${suffix}`],
+    );
+    for (const [page, tipId] of [
+      [firstPage, `tip-context-page-${suffix}`],
+      [secondPage, `tip-context-model-${suffix}`],
+    ] as const) {
+      await testDb.pool.query(
+        `insert into transaction_tip_contexts (
+           account_id, platform, platform_tip_id, captured_conversation_ref,
+           tip_message_text, tip_message_captured_at, tip_amount_mills,
+           occurred_at, sender_platform_user_id, receiver_platform_user_id,
+           source_raw_payload_id, captured_at, provenance
+         ) values (
+           $1, 'fansly', $2, 'group-page-model', 'sensitive note', now(), 10000,
+           now(), 'fan-page-model', 'creator-page-model', null, now(),
+           'fansly_dm_tip_sidecar'
+         )`,
+        [page.id, tipId],
+      );
+    }
+
+    const pageScope = { scopeType: "page", pageLabel: firstLabel } as const;
+    const pagePlan = await planErasure(appStub(), pageScope);
+    expect(pagePlan.targets.find((target) =>
+      target.plane === "hot" && target.target === "transaction_tip_contexts"
+    )).toMatchObject({ action: "delete", rows: 1 });
+    const pageResult = await executeErasure(
+      appStub(),
+      pageScope,
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(pageResult.executedCounts["hot:transaction_tip_contexts:delete"]).toBe(1);
+    expect(await count(`transaction_tip_contexts where account_id = ${firstPage.id}`)).toBe(0);
+    expect(await count(`transaction_tip_contexts where account_id = ${secondPage.id}`)).toBe(1);
+
+    const modelScope = { scopeType: "model", modelSlug } as const;
+    const modelPlan = await planErasure(appStub(), modelScope);
+    expect(modelPlan.targets.find((target) =>
+      target.plane === "hot" && target.target === "transaction_tip_contexts"
+    )).toMatchObject({ action: "delete", rows: 1 });
+    const modelResult = await executeErasure(
+      appStub(),
+      modelScope,
+      { initiatedBy: Number(operator.id) },
+    );
+    expect(modelResult.executedCounts["hot:transaction_tip_contexts:delete"]).toBe(1);
+    expect(await count(`transaction_tip_contexts where account_id = ${secondPage.id}`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("a converged retry supersedes every unresolved attempt for only the same scope", async (context) => {

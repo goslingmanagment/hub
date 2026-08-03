@@ -1,0 +1,334 @@
+import {
+  FANSLY_DM_TIP_SIDECAR_PROVENANCE,
+  type Database,
+  upsertTransactionTipContext,
+} from "@agency_hub_core/db";
+import { millsFromInteger } from "@agency_hub_core/shared";
+
+import type { AppContext } from "../../bootstrap.ts";
+
+type TipItemRejectionReason =
+  | "not_object"
+  | "invalid_tip_id"
+  | "duplicate_tip_id"
+  | "missing_conversation_ref"
+  | "invalid_sender_id"
+  | "invalid_created_at"
+  | "invalid_message";
+
+export interface FanslyDmTipItemRejection {
+  index: number;
+  reason: TipItemRejectionReason;
+}
+
+export interface ParsedFanslyDmTipContext {
+  platformTipId: string;
+  capturedConversationRef: string;
+  tipMessageText: string | null;
+  tipAmountMills: bigint | null;
+  occurredAt: Date;
+  senderPlatformUserId: string;
+  receiverPlatformUserId: string | null;
+}
+
+export interface FanslyDmTipSidecarParseResult {
+  envelopeStatus: "absent" | "accepted" | "invalid";
+  tipItemsSeen: number;
+  contexts: ParsedFanslyDmTipContext[];
+  rejectedItems: FanslyDmTipItemRejection[];
+  /** Malformed optional values are isolated to their field and become null. */
+  droppedOptionalMemberCount: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nonemptyString(value: unknown) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function optionalNonemptyString(value: unknown) {
+  if (value === undefined || value === null) {
+    return { value: null, dropped: false } as const;
+  }
+  return typeof value === "string" && value.length > 0
+    ? { value, dropped: false } as const
+    : { value: null, dropped: true } as const;
+}
+
+function optionalMills(value: unknown) {
+  if (value === undefined || value === null) {
+    return { value: null, dropped: false } as const;
+  }
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? { value: millsFromInteger(value), dropped: false } as const
+    : { value: null, dropped: true } as const;
+}
+
+function optionalFanslyTimestamp(value: unknown) {
+  if (value === undefined || value === null) {
+    return { value: null, dropped: false } as const;
+  }
+  let parsed: Date | null = null;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    parsed = new Date(value >= 1_000_000_000_000 ? value : value * 1000);
+  } else if (typeof value === "string" && value.length > 0) {
+    parsed = new Date(value);
+  }
+  return parsed !== null && !Number.isNaN(parsed.getTime())
+    ? { value: parsed, dropped: false } as const
+    : { value: null, dropped: true } as const;
+}
+
+/**
+ * Pure, item-isolating parser for the optional `/message` `tips[]` sidecar.
+ * Only tip.id and the captured request group are identity facts. A valid
+ * sender and event time are mandatory because they are the immutable
+ * fan/material-time evidence used by the Stage-28 non-resurrection fence.
+ * Optional amount/receiver drift drops only that member. A present malformed
+ * note rejects its item rather than fabricating source_did_not_provide.
+ */
+export function parseFanslyDmTipSidecar(input: {
+  requestParams: unknown;
+  responsePayload: unknown;
+}): FanslyDmTipSidecarParseResult {
+  if (!isRecord(input.responsePayload)) {
+    return {
+      envelopeStatus: "invalid",
+      tipItemsSeen: 0,
+      contexts: [],
+      rejectedItems: [],
+      droppedOptionalMemberCount: 0,
+    };
+  }
+
+  const rawTips = input.responsePayload.tips;
+  if (rawTips === undefined || rawTips === null) {
+    return {
+      envelopeStatus: "absent",
+      tipItemsSeen: 0,
+      contexts: [],
+      rejectedItems: [],
+      droppedOptionalMemberCount: 0,
+    };
+  }
+  if (!Array.isArray(rawTips)) {
+    return {
+      envelopeStatus: "invalid",
+      tipItemsSeen: 0,
+      contexts: [],
+      rejectedItems: [],
+      droppedOptionalMemberCount: 0,
+    };
+  }
+
+  const requestParams = isRecord(input.requestParams) ? input.requestParams : {};
+  const capturedConversationRef = nonemptyString(requestParams.groupId);
+  const tipIdCounts = new Map<string, number>();
+  for (const item of rawTips) {
+    if (!isRecord(item)) continue;
+    const tipId = nonemptyString(item.id);
+    if (tipId !== null) {
+      tipIdCounts.set(tipId, (tipIdCounts.get(tipId) ?? 0) + 1);
+    }
+  }
+
+  const contexts: ParsedFanslyDmTipContext[] = [];
+  const rejectedItems: FanslyDmTipItemRejection[] = [];
+  let droppedOptionalMemberCount = 0;
+  for (const [index, item] of rawTips.entries()) {
+    if (!isRecord(item)) {
+      rejectedItems.push({ index, reason: "not_object" });
+      continue;
+    }
+    const platformTipId = nonemptyString(item.id);
+    if (platformTipId === null) {
+      rejectedItems.push({ index, reason: "invalid_tip_id" });
+      continue;
+    }
+    if ((tipIdCounts.get(platformTipId) ?? 0) > 1) {
+      rejectedItems.push({ index, reason: "duplicate_tip_id" });
+      continue;
+    }
+    if (capturedConversationRef === null) {
+      rejectedItems.push({ index, reason: "missing_conversation_ref" });
+      continue;
+    }
+
+    const occurredAt = optionalFanslyTimestamp(item.createdAt);
+    const senderPlatformUserId = optionalNonemptyString(item.senderId);
+    if (senderPlatformUserId.value === null) {
+      rejectedItems.push({ index, reason: "invalid_sender_id" });
+      continue;
+    }
+    if (occurredAt.value === null) {
+      rejectedItems.push({ index, reason: "invalid_created_at" });
+      continue;
+    }
+    if (
+      item.message !== undefined
+      && item.message !== null
+      && typeof item.message !== "string"
+    ) {
+      rejectedItems.push({ index, reason: "invalid_message" });
+      continue;
+    }
+
+    const tipMessageText = item.message === undefined || item.message === null
+      ? null
+      : item.message;
+    const tipAmountMills = optionalMills(item.amount);
+    const receiverPlatformUserId = optionalNonemptyString(item.receiverId);
+    droppedOptionalMemberCount += [
+      tipAmountMills,
+      receiverPlatformUserId,
+    ].filter((member) => member.dropped).length;
+
+    contexts.push({
+      platformTipId,
+      capturedConversationRef,
+      tipMessageText,
+      tipAmountMills: tipAmountMills.value,
+      occurredAt: occurredAt.value,
+      senderPlatformUserId: senderPlatformUserId.value,
+      receiverPlatformUserId: receiverPlatformUserId.value,
+    });
+  }
+
+  return {
+    envelopeStatus: "accepted",
+    tipItemsSeen: rawTips.length,
+    contexts,
+    rejectedItems,
+    droppedOptionalMemberCount,
+  };
+}
+
+export interface MaterializeFanslyDmTipContextsResult extends FanslyDmTipSidecarParseResult {
+  upserted: number;
+  unchanged: number;
+  conversationConflicts: number;
+  deferredWrites: number;
+  erasureFenced: number;
+}
+
+/** Throws on DB failure so the historical backfill can stop loudly. */
+export async function materializeFanslyDmTipContexts(
+  db: Database,
+  input: {
+    accountId: number;
+    requestParams: unknown;
+    responsePayload: unknown;
+    sourceRawPayloadId: number;
+    capturedAt: Date;
+  },
+): Promise<MaterializeFanslyDmTipContextsResult> {
+  const parsed = parseFanslyDmTipSidecar(input);
+  let upserted = 0;
+  let unchanged = 0;
+  let conversationConflicts = 0;
+  let deferredWrites = 0;
+  let erasureFenced = 0;
+  for (const context of parsed.contexts) {
+    const result = await upsertTransactionTipContext(db, {
+      accountId: input.accountId,
+      platform: "fansly",
+      ...context,
+      sourceRawPayloadId: input.sourceRawPayloadId,
+      capturedAt: input.capturedAt,
+      provenance: FANSLY_DM_TIP_SIDECAR_PROVENANCE,
+    });
+    if (result.status === "applied") {
+      upserted += 1;
+    } else if (result.status === "conversation_conflict") {
+      conversationConflicts += 1;
+    } else if (result.status === "deferred") {
+      deferredWrites += 1;
+    } else if (result.status === "erasure_fenced") {
+      erasureFenced += 1;
+    } else {
+      unchanged += 1;
+    }
+  }
+  return {
+    ...parsed,
+    upserted,
+    unchanged,
+    conversationConflicts,
+    deferredWrites,
+    erasureFenced,
+  };
+}
+
+function errorClass(error: unknown) {
+  if (error instanceof Error && error.name.length > 0) {
+    return error.name.slice(0, 80);
+  }
+  return typeof error;
+}
+
+/**
+ * Hot-path policy: raw+observation capture is already durable before this is
+ * called. Projection parse drift and write failures are bounded diagnostics,
+ * never a reason to wedge the authoritative DM sync lane; the raw backfill is
+ * the deterministic repair path.
+ */
+export async function materializeFanslyDmTipContextsBestEffort(
+  app: Pick<AppContext, "db" | "logger">,
+  input: {
+    accountId: number;
+    requestParams: unknown;
+    responsePayload: unknown;
+    sourceRawPayloadId: number;
+    capturedAt: Date;
+  },
+) {
+  try {
+    const result = await materializeFanslyDmTipContexts(app.db, input);
+    if (
+      result.envelopeStatus === "invalid" ||
+      result.rejectedItems.length > 0 ||
+      result.droppedOptionalMemberCount > 0 ||
+      result.conversationConflicts > 0 ||
+      result.deferredWrites > 0 ||
+      result.erasureFenced > 0
+    ) {
+      app.logger.warn({
+        accountId: input.accountId,
+        sourceRawPayloadId: input.sourceRawPayloadId,
+        envelopeStatus: result.envelopeStatus,
+        tipItemsSeen: result.tipItemsSeen,
+        rejectedItemCount: result.rejectedItems.length,
+        droppedOptionalMemberCount: result.droppedOptionalMemberCount,
+        conversationConflictCount: result.conversationConflicts,
+        deferredCount: result.deferredWrites,
+        erasureFencedCount: result.erasureFenced,
+      }, "Fansly DM tip sidecar materialized with bounded drift");
+    }
+    return {
+      ...result,
+      failed: result.deferredWrites > 0,
+      deferred: result.deferredWrites > 0,
+    };
+  } catch (error) {
+    const parsed = parseFanslyDmTipSidecar(input);
+    app.logger.warn({
+      accountId: input.accountId,
+      sourceRawPayloadId: input.sourceRawPayloadId,
+      tipItemsSeen: parsed.tipItemsSeen,
+      acceptedItemCount: parsed.contexts.length,
+      errorClass: errorClass(error),
+    }, "Fansly DM tip context materialization failed after durable raw capture");
+    return {
+      ...parsed,
+      upserted: 0,
+      unchanged: 0,
+      conversationConflicts: 0,
+      deferredWrites: 0,
+      deferred: false as const,
+      erasureFenced: 0,
+      failed: true as const,
+    };
+  }
+}

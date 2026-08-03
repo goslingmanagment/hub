@@ -212,6 +212,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 208 | Live-list terminal verification and optional DM totals | Fansly follower reconcile compares its unique generation with a freshly captured terminal headline, checkpointing a budgeted verification-only continuation when necessary; one restart then durable block remains. PARTIALLY supersedes #206 only for DM totals: consistently absent/null totals allow a captured, unique-id-guarded but non-destructive completion, while a present total remains stable/exact and is the sole authority for hiding unseen conversations |
 | 209 | Fansly post monetization | Fansly timeline money and linked-goal fields become a latest-observed `post_monetization` snapshot, while raw-first `/tips?targetIds` capture supplies donor-to-post rows with exact type-7100 goal attribution and verbatim tip notes in `post_tips`. The rendered post total is `tipAmount + attachmentTipAmount`, never `totalTipAmount`; `tip_goals` deduplicates shared goals. Companion drift cannot wedge posts, malformed tip items become explicit parse debt, and migration 0121/posts canonicalizer v4 preserve replay without claiming continuous refresh or tipped-reply-donor completeness |
 | 210 | Fansly live post-tip contract correction | Post-deploy acceptance supersedes #209 narrowly on the undocumented `/tips` item shape and null semantics: live items carry a flat `targetId` that proves donor-to-post attribution but no per-tip goal discriminator or transaction refs. Canonicalizer v5/schema v3 replays them with internal `tipGoalAttribution='unknown'`; a null `postTipGoalRef` means source-did-not-provide, never direct. Nested typed targets remain accepted when actually observed. No migration or inferred goal split |
+| 211 | Exact transaction tip context | Fansly DM `tips[]` sidecars project exact, message-gated `tip_transactions` note/conversation context by provider tip id while `transactions` remains money-only. Mandatory sender/time facts, a Stage-28 material-time erasure fence, and field-specific raw lineage prevent false nulls, resurrection, and unverifiable verbatim text; OnlyFans stays visible as `not_captured` |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6717,3 +6718,78 @@ evidence, while null has row state `source_did_not_provide`, never
 counts, sums, sender, time, and note, but cannot require the known aggregate
 goal/direct split to appear on individual rows. `post_monetization` and
 `tip_goals` remain the honest goal-level snapshot surfaces.
+
+**Decision #211 (2026-08-03, tip notes are an exact gated projection, not an
+inferred transaction-to-message join).** Fansly's retained `/message` response
+contains two independently useful structures. Its `tips[]` sidecar carries the
+provider tip id, amount, occurrence time, sender, receiver and optional
+fan-written `message`; the request envelope carries the exact `groupId` whose
+conversation was fetched. Production evidence establishes a one-to-one bridge
+from `tips[].id` to the existing tip transaction's `correlation_id`. It does
+not establish a bridge to one archived message: `messages[].correlationId`
+exists for only a subset, and target type 4000 ids do not join archived message
+refs. Time-and-amount proximity is useful diagnostics but is not identity.
+
+Hub therefore materializes `transaction_tip_contexts` directly from every
+successfully journaled Fansly `dm_messages` raw payload. One current row per
+`(account_id, platform_tip_id)` stores the exact request-scoped conversation,
+the sidecar note, provider money/time/party facts and raw-payload lineage. A
+materializable item MUST carry a valid provider tip id, sender id and occurrence
+time; an absent/null optional note is valid, an empty string is observed empty,
+and a present non-string note rejects that item instead of becoming a false
+source absence. The parser is item-level fail-open: one rejected sidecar item
+cannot wedge the DM lane or discard valid siblings, but it does create bounded
+parse debt. Raw journaling remains first.
+
+Projection upsert is idempotent and knowledge-monotonic, so a later sparse
+observation cannot erase a previously captured conversation or note. Identity
+lineage (`source_raw_payload_id`, `captured_at`) stays with the observation that
+established the row, while verbatim note lineage has its own
+`tip_message_source_raw_payload_id` and `tip_message_captured_at`. While that
+raw survives, the note FK names the observation that actually proved those
+bytes. Both raw FKs are nullable with `ON DELETE SET NULL`: normalized facts
+keep their capture times after ordinary raw retention expires, while lineage
+can never wedge journal cleanup.
+
+Every projection write takes the Stage-28 shared erasure fence lock and tests
+the same material-time boundary, using the earlier of provider occurrence time
+and Hub capture time. A matching executed/non-dry-run erasure tombstone is a
+terminal intentional `erasure_fenced` result, even if that erasure attempt died
+mid-flight; lock contention with an actively running erasure is `deferred` and
+MUST retry or fail without advancing replay progress. Fan erasure deletes
+contexts matching the captured sender, receiver or conversation scope, and
+page/model erasure deletes the whole account plane. Thus retained raw cannot
+resurrect a note or party identity after erasure.
+
+Retained raw payloads are recoverable through a bounded keyset historical
+backfill. Each run freezes its raw high-water before scanning, advances only
+after terminal outcomes, and emits only static sanitized boundary errors; live
+capture cannot extend the run indefinitely and a database error cannot print a
+bound note or provider identifier. Replay never uses a temporal or amount
+heuristic.
+
+The existing `transactions` dataset remains the money-only surface and keeps
+its capability boundary. It gains the honest alias `correlationRef`; the old
+`relatedMessageRef` is retained for compatibility but is explicitly legacy and
+MUST NOT be interpreted as a message id. Verbatim tip notes are served through
+the separate `tip_transactions` dataset, which starts from every active
+canonical tip transaction on every platform, left-joins exact context where it
+exists and requires `read:datasets` + `read:money` + `read:messages`. A row
+returns the usual transaction money fields plus `correlationRef`,
+`contextState`, `capturedConversationRef` and `tipMessageText`. OnlyFans rows
+remain visible with `contextState = 'not_captured'`; unsupported context must
+not turn into a false absence of tip transactions.
+
+Null semantics are structural. A transaction without an exact projected
+context reports both context fields as `not_captured`. A captured sidecar with
+no provider note reports `source_did_not_provide`; a supplied empty note is
+`observed_empty`; non-empty text is present. Dataset evidence independently
+checks for eligible Fansly tip transactions lacking a context row and exposes
+that as `internal_capture_gap`. A retained-raw backfill closes the replayable
+subset, but a remaining gap honestly recommends a fresh free recapture rather
+than promising that local replay can recover a DM page Hub never retained.
+Reading the money rows alone cannot prove that no notes exist while this gap remains.
+There is deliberately no `messageRef` in this version. A future point lookup
+may return one archived message plus bounded neighbours, but only after an
+exact provider-backed message identity is available; conversation membership
+or nearest timestamp is not silently upgraded into that claim.

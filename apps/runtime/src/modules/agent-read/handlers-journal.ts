@@ -7,6 +7,7 @@ import {
   agentDatasetRequiredCapabilities,
   type AGENT_DATASETS,
   type AgentCapability,
+  type AgentDataset,
   type AgentDatasetQueryBody,
   type AgentDatasetQueryResponse,
   type AgentFieldState,
@@ -636,6 +637,27 @@ export async function handleAgentDatasetQuery(
           },
         }]
       : [];
+    if (
+      params.dataset === "tip_transactions"
+      && result.internalCaptureGap
+      && mapping.internalCaptureGap !== undefined
+    ) {
+      gaps.push({
+        kind: "internal_capture_gap",
+        from,
+        to,
+        plane: mapping.internalCaptureGap.plane as AgentDatasetQueryResponse["capture"]["gaps"][number]["plane"],
+        remedy: {
+          // Retained-raw replay closes only the subset whose original DM page
+          // survived. Production contains tip ids with no retained candidate,
+          // so the honest next action is a fresh pull, not a replay promise.
+          kind: "recapture",
+          costClass: "free",
+          admissible: true,
+          reason: null,
+        },
+      });
+    }
     if (params.dataset === "post_tips") {
       const parseDebt = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
         readAgentPostTipParseDebt(tx, {
@@ -753,7 +775,7 @@ export async function handleAgentDatasetQuery(
             (definition.fields as Readonly<Record<string, string>>)[field],
           ),
         ])),
-        fieldStates: datasetRowFieldStates(row.fields, scopeFieldStates),
+        fieldStates: datasetRowFieldStates(params.dataset, row.fields, scopeFieldStates),
         provenance: {
           ingestPaths: [row.ingestPath as AgentIngestPath],
           convergence: row.convergence,
@@ -833,6 +855,7 @@ function serializeDatasetValue(
  * dataset appear on the row; an unrelated claim remains blocked by its unread
  * plane in the top-level evidence. */
 function datasetRowFieldStates(
+  dataset: AgentDataset,
   fields: Readonly<Record<string, unknown>>,
   scopeFieldStates: Readonly<Record<string, AgentFieldState>>,
 ): Record<string, AgentFieldState> {
@@ -842,6 +865,23 @@ function datasetRowFieldStates(
       continue;
     }
     const value = fields[field];
+    if (
+      state.state === "present"
+      && dataset === "tip_transactions"
+      && fields.contextState === "not_captured"
+      && (field === "capturedConversationRef" || field === "tipMessageText")
+    ) {
+      result[field] = {
+        state: "not_captured",
+        remedy: {
+          kind: "recapture",
+          costClass: "free",
+          admissible: true,
+          reason: null,
+        },
+      };
+      continue;
+    }
     // A row-level null can refine `present` into "this source did not provide a
     // value". It must never erase a structural scope truth such as not_captured
     // or captured_unparsed — that used to make an unsupported OnlyFans field

@@ -888,6 +888,12 @@ export const agentPersonQuerySchema = z.object({
       message: "postTipMessageText is available only through the post_tips dataset",
     }]
     : []),
+  ...(value.claimFields?.includes("tipMessageText") === true
+    ? [{
+      path: ["claimFields"] as PropertyKey[],
+      message: "tipMessageText is available only through the tip_transactions dataset",
+    }]
+    : []),
 ], ctx));
 
 export const agentPersonResponseSchema = z.object({
@@ -1072,6 +1078,12 @@ export const agentPersonTimelineQuerySchema = z.object({
       ? [{
         path: ["claimFields"] as PropertyKey[],
         message: "postTipMessageText is available only through the post_tips dataset",
+      }]
+      : []),
+    ...(value.claimFields?.includes("tipMessageText") === true
+      ? [{
+        path: ["claimFields"] as PropertyKey[],
+        message: "tipMessageText is available only through the tip_transactions dataset",
       }]
       : []),
     ...agentCursorScopeIssues(value, [

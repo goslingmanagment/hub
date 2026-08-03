@@ -20,6 +20,7 @@ import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/sha
 import type { AppContext } from "../../bootstrap.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import type { DmMessagesChunkSummary, SyncRunTelemetry } from "./observability.ts";
+import { materializeFanslyDmTipContextsBestEffort } from "./fansly-tip-contexts.ts";
 import { dmRetentionDate, normalizeDmTipAmountCents, normalizeFanslyTimestamp, persistRawPayload } from "./shared.ts";
 
 /** Vendor page size for every DM message fetch (executor and targeted run). */
@@ -223,15 +224,16 @@ export async function fetchAndJournalFanslyDmMessagePage(
 
   // Stage 1: DM message pages are captured raw (previously zero raw
   // persistence on this path); far-future retention via dmRetentionDate.
-  await persistRawPayload(app.db, {
+  const requestParams = {
+    groupId: input.conversation.platformConversationId,
+    limit,
+    before: input.before ?? null,
+  };
+  const rawPayload = await persistRawPayload(app.db, {
     platformAccountId: input.platformAccountId,
     syncRunId: input.syncRunId,
     endpoint: "dm_messages",
-    requestParams: {
-      groupId: input.conversation.platformConversationId,
-      limit,
-      before: input.before ?? null,
-    },
+    requestParams,
     responsePayload: page.raw,
     mapperVersion: FANSLY_MAPPER_VERSION,
     payloadKind: "dm_messages",
@@ -239,6 +241,13 @@ export async function fetchAndJournalFanslyDmMessagePage(
   }, {
     action: "inserting dm_messages raw payload",
     platform: "fansly",
+  });
+  await materializeFanslyDmTipContextsBestEffort(app, {
+    accountId: input.platformAccountId,
+    requestParams,
+    responsePayload: page.raw,
+    sourceRawPayloadId: rawPayload.id,
+    capturedAt: rawPayload.capturedAt,
   });
 
   const existingIds = await getExistingPageDmMessageIds(app.db, {

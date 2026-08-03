@@ -2010,6 +2010,7 @@ export async function queryAgentDataset(
   rows: AgentDatasetRowRaw[];
   witnesses: PlaneReadWitness[];
   captureFloorAt: Date | null;
+  internalCaptureGap: boolean;
 }> {
   const mapping = agentDatasetSqlMapping(input.dataset);
   if (!mapping) {
@@ -2034,7 +2035,7 @@ export async function queryAgentDataset(
     captureFloorAt = date(floorResult.rows[0]?.floor_at);
   }
 
-  const clauses: SQL[] = [
+  const scopeClauses: SQL[] = [
     sql`src.k_page_id = ${input.pageId}`,
     sql`(${windowColumn} is null or (${windowColumn} >= ${input.from} and ${windowColumn} < ${input.to}))`,
   ];
@@ -2042,8 +2043,32 @@ export async function queryAgentDataset(
     // Result eligibility is independent from capture evidence. In particular,
     // superseded transaction rows stay out of row/summary answers while their
     // physical occurrence can still establish when Hub's retained history starts.
-    clauses.push(sql`${sql.raw(`src.${mapping.eligibilityColumn}`)} is true`);
+    scopeClauses.push(sql`${sql.raw(`src.${mapping.eligibilityColumn}`)} is true`);
   }
+
+  // Context coverage is evidence about the requested scope, not about the rows
+  // that happen to survive a result filter. Evaluate it independently so a
+  // `tipMessageText:eq:...` filter cannot hide uncaptured tip contexts and turn
+  // an empty result into evidence that no other notes exist.
+  let internalCaptureGap = false;
+  if (mapping.internalCaptureGap !== undefined) {
+    const gapClauses = [...scopeClauses];
+    if (mapping.internalCaptureGap.platform !== undefined) {
+      gapClauses.push(sql`src.k_platform = ${mapping.internalCaptureGap.platform}`);
+    }
+    gapClauses.push(
+      sql`${sql.raw(`src.${mapping.internalCaptureGap.column}`)} is not true`,
+    );
+    const gapResult = await db.execute<Record<string, unknown>>(sql`
+      with src as (${source})
+      select exists (
+        select 1 from src where ${sql.join(gapClauses, sql` and `)}
+      ) as has_gap
+    `);
+    internalCaptureGap = gapResult.rows[0]?.has_gap === true;
+  }
+
+  const clauses = [...scopeClauses];
   for (const filter of input.filters) {
     clauses.push(datasetFilterSql(filter));
   }
@@ -2111,6 +2136,7 @@ export async function queryAgentDataset(
       plane === mapping.captureFloorPlane ? captureFloorAt : null,
     )),
     captureFloorAt,
+    internalCaptureGap,
   };
 }
 

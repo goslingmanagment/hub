@@ -73,6 +73,8 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
   capturesPostMonetization: "present" | "not_captured";
   /** Individually attributable post-tip events. */
   capturesPostTips: "present" | "not_captured";
+  /** Exact conversation/note context for transaction-ledger tips. */
+  capturesTipTransactionContexts: "present" | "not_captured";
   depthCap: { default: number; lifetimeSpender: number } | null;
   dmMessagesCadenceSeconds: number | null;
 }>> = {
@@ -92,6 +94,7 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
     capturesRefunds: "not_captured",
     capturesPostMonetization: "present",
     capturesPostTips: "present",
+    capturesTipTransactionContexts: "present",
     depthCap: { default: 200, lifetimeSpender: 1000 },
     dmMessagesCadenceSeconds: 86_400,
   },
@@ -105,6 +108,7 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
     capturesRefunds: "captured_unparsed",
     capturesPostMonetization: "not_captured",
     capturesPostTips: "not_captured",
+    capturesTipTransactionContexts: "not_captured",
     depthCap: null,
     // The lane is retired: migration 0097 force-pauses it.
     dmMessagesCadenceSeconds: null,
@@ -173,6 +177,16 @@ const TIP_GOAL_DATASET_CLAIM_FIELDS: ReadonlySet<string> = new Set([
   "linkedPostCount",
 ]);
 
+/** Fields whose truth depends on the exact transaction-tip context sidecar.
+ * `contextState` itself remains observable even when the sidecar is absent: its
+ * literal `not_captured` value is the diagnostic fact that prevents a missing
+ * join from masquerading as an empty note. */
+export const AGENT_TIP_TRANSACTION_CONTEXT_CLAIM_FIELDS: ReadonlySet<string> = new Set([
+  "contextState",
+  "capturedConversationRef",
+  "tipMessageText",
+]);
+
 function postCaptureFieldState(state: "present" | "not_captured"): AgentFieldState {
   return state === "present"
     ? { state: "present", remedy: { kind: "none", reason: "no_remedy_exists" } }
@@ -199,6 +213,14 @@ function fieldStateFor(
   }
   if (dataset === "tip_goals" && TIP_GOAL_DATASET_CLAIM_FIELDS.has(field)) {
     return postCaptureFieldState(capabilities.capturesPostMonetization);
+  }
+  if (
+    dataset === "tip_transactions"
+    && AGENT_TIP_TRANSACTION_CONTEXT_CLAIM_FIELDS.has(field)
+  ) {
+    return field === "contextState"
+      ? { state: "present", remedy: { kind: "none", reason: "no_remedy_exists" } }
+      : postCaptureFieldState(capabilities.capturesTipTransactionContexts);
   }
   if (POST_MONETIZATION_CLAIM_FIELDS.has(field)) {
     return postCaptureFieldState(capabilities.capturesPostMonetization);

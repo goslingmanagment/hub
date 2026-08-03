@@ -228,6 +228,16 @@ async function seedTwoFans() {
     [OF_FAN],
   );
   await pool.query(
+    `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type,
+       canonical_type, transaction_state, raw_status, gross_amount_mills,
+       source_destination_amount_mills, creator_net_amount_mills,
+       platform_fee_mills, occurred_at, source, currency, correlation_id)
+     values ($1, $2, 'of-tip-ledger', 'tip', 'tip', 'posted', 'ok', 7000,
+       7000, 5600, 1400, '2026-03-05T12:00:00Z', 'ofapi:rest', 'USD',
+       'of-correlation-not-a-message')`,
+    [onlyFansPageId, Number(rows[0]!.id)],
+  );
+  await pool.query(
     `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id,
        partner_platform_user_id, stored_message_count, message_coverage_status, last_message_at)
      values ($1, $2, $3, $4, 1, 'complete', '2026-03-03T00:00:00Z')`,
@@ -880,6 +890,22 @@ describe("[sync-critical] agent read plane: review round 2", () => {
       window,
     )).statusCode).toBe(200);
 
+    // Ledger tips with provider-verbatim context have the same combined gate.
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/tip_transactions/query",
+      window,
+      MESSAGES_TOKEN,
+    )).statusCode).toBe(403);
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/tip_transactions/query",
+      window,
+      MONEY_TOKEN,
+    )).statusCode).toBe(403);
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/tip_transactions/query",
+      window,
+    )).statusCode).toBe(200);
+
     // Deduplicated goals carry both their cumulative amounts and creator copy.
     expect((await post(
       "/api/v1/agent/pages/lora-2/datasets/tip_goals/query",
@@ -1004,6 +1030,63 @@ describe("[sync-critical] agent read plane: review round 2", () => {
       lastObservedAt: { state: "not_captured" },
       linkedPostCount: { state: "not_captured" },
     });
+  });
+
+  it("keeps OnlyFans ledger tips visible while context stays not_captured", async () => {
+    const body = (await post(
+      "/api/v1/agent/pages/lora-of/datasets/tip_transactions/query",
+      {
+        from: "2026-03-01T00:00:00Z",
+        to: "2026-03-10T00:00:00Z",
+        claim: {
+          fields: [
+            "grossMills",
+            "correlationRef",
+            "contextState",
+            "capturedConversationRef",
+            "tipMessageText",
+          ],
+          targets: "all_in_scope",
+        },
+      },
+    )).json();
+
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({
+      fields: {
+        platform: "onlyfans",
+        platformUserId: OF_FAN,
+        transactionRef: "of-tip-ledger",
+        grossMills: 7000,
+        correlationRef: "of-correlation-not-a-message",
+        contextState: "not_captured",
+        capturedConversationRef: null,
+        tipMessageText: null,
+      },
+      fieldStates: {
+        grossMills: { state: "present" },
+        correlationRef: { state: "present" },
+        contextState: { state: "present" },
+        capturedConversationRef: {
+          state: "not_captured",
+          remedy: { kind: "none", reason: "capture_lane_unimplemented" },
+        },
+        tipMessageText: {
+          state: "not_captured",
+          remedy: { kind: "none", reason: "capture_lane_unimplemented" },
+        },
+      },
+      provenance: {
+        ingestPaths: ["unknown"],
+        convergence: "no_material_lane",
+      },
+    });
+    expect(body.capture.gaps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "internal_capture_gap",
+        plane: "transaction_tip_contexts",
+      }),
+    ]));
   });
 
   it("P1-5 snapshotExhausted is only claimed where a snapshot was frozen", async () => {

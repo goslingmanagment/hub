@@ -50,6 +50,7 @@ import {
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
+import { runTransactionTipContextsBackfill } from "./services/transaction-tip-contexts-backfill.ts";
 import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage-intake.ts";
 import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import {
@@ -129,6 +130,14 @@ function parsePositiveInt(value: string) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Expected a positive integer, received "${value}"`);
+  }
+  return parsed;
+}
+
+function parseNonnegativeInt(value: string) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`Expected a non-negative safe integer, received "${value}"`);
   }
   return parsed;
 }
@@ -1572,6 +1581,38 @@ export function buildProgram() {
           `${options.dryRun ? "[dry-run] would fingerprint" : "fingerprinted"} ${result.fingerprinted} `
             + `(closed-in-ledger ${result.emittedClosed}, INITIAL DRAIN BOUND ${result.drainOpen} first `
             + `events, stubs skipped ${result.stubsSkipped}) of ${result.scanned} scanned`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("tip-contexts:backfill")
+    .description(
+      "Replay retained Fansly dm_messages raw payloads into exact transaction tip contexts",
+    )
+    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
+    .option("--after-id <id>", "start after this sync_raw_payloads id", parseNonnegativeInt, 0)
+    .option("--batch-size <n>", "raw keyset batch size, max 5000", parsePositiveInt, 500)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runTransactionTipContextsBackfill(app, {
+          afterRawPayloadId: options.afterId,
+          batchSize: options.batchSize,
+          ...(options.account === undefined ? {} : { accountId: options.account }),
+        });
+        console.log(JSON.stringify(result));
+        console.log(
+          `scanned ${result.rawPayloadsScanned} raw payloads in ${result.batches} batches; `
+            + `parsed ${result.contextsParsed}/${result.tipItemsSeen} tip items, `
+            + `upserted ${result.contextsUpserted}, unchanged ${result.contextsUnchanged}, `
+            + `conflicts ${result.conversationConflicts}, rejected ${result.rejectedItems}, `
+            + `erasure-fenced ${result.contextsErasureFenced}, `
+            + `invalid sidecars ${result.invalidSidecars}; `
+            + `last raw id ${result.lastRawPayloadId} `
+            + `(frozen high-water ${result.rawHighWaterId})`,
         );
       } finally {
         await app.close();

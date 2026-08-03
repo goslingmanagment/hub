@@ -372,6 +372,38 @@ describe("agent read plane: scopeFieldStates are computed before any row", () =>
     }).grossMills?.state).toBe("present");
   });
 
+  it("keeps tip-ledger money observable when OnlyFans context is unsupported", () => {
+    const fields = [
+      "grossMills",
+      "correlationRef",
+      "contextState",
+      "capturedConversationRef",
+      "tipMessageText",
+    ];
+    expect(computeScopeFieldStates({
+      fields,
+      platforms: ["fansly"],
+      dataset: "tip_transactions",
+    })).toMatchObject({
+      grossMills: { state: "present" },
+      correlationRef: { state: "present" },
+      contextState: { state: "present" },
+      capturedConversationRef: { state: "present" },
+      tipMessageText: { state: "present" },
+    });
+    expect(computeScopeFieldStates({
+      fields,
+      platforms: ["onlyfans"],
+      dataset: "tip_transactions",
+    })).toMatchObject({
+      grossMills: { state: "present" },
+      correlationRef: { state: "present" },
+      contextState: { state: "present" },
+      capturedConversationRef: { state: "not_captured" },
+      tipMessageText: { state: "not_captured" },
+    });
+  });
+
   it("a missing capability yields unknown with its real reason, never a silent zero", () => {
     const states = computeScopeFieldStates({
       fields: ["grossMills"],

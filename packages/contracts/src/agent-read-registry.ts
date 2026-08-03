@@ -86,6 +86,13 @@ export const AGENT_CLAIM_CLASSES = {
       messageCount: { required: ["message_archive", "dm_message_archive"] },
       coverageStatus: { required: ["message_archive", "dm_message_archive"] },
       purchaseState: { required: ["message_archive", "dm_message_archive"] },
+      // Context is served over the active transaction population. The sidecar
+      // alone can prove the bytes of one captured note, but it cannot prove
+      // which ledger tips are missing context; both planes are authoritative
+      // for an all-in-scope claim.
+      contextState: { required: ["transactions", "transaction_tip_contexts"] },
+      capturedConversationRef: { required: ["transactions", "transaction_tip_contexts"] },
+      tipMessageText: { required: ["transactions", "transaction_tip_contexts"] },
     },
   },
   money: {
@@ -97,6 +104,7 @@ export const AGENT_CLAIM_CLASSES = {
       amountMills: { required: ["transactions"] },
       currency: { required: ["transactions"] },
       transactionState: { required: ["transactions"] },
+      correlationRef: { required: ["transactions"] },
       // Refund/chargeback outcome of a transaction. Declared as its own field
       // because `transactionState` alone reads as observable while neither
       // platform's capture can actually answer "was this refunded": Fansly has

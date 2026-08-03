@@ -378,6 +378,36 @@ hub dataset --page-label lora-2 --dataset transactions \
   --sort occurredAt:desc --limit 100
 ```
 
+`transactions.relatedMessageRef` is a legacy, misnamed compatibility alias for
+the provider's generic correlation key. It is NOT proof of a related message;
+use `correlationRef` in new work.
+
+To read tip money and exact captured conversation/note context in one row, use
+`tip_transactions`. It starts from every active ledger tip on both platforms,
+then left-joins context by the exact provider tip id. It requires all three
+capabilities: `read:datasets`, `read:money`, and `read:messages`; successful
+reads are audited because `tipMessageText` is provider-verbatim fan copy:
+
+```
+hub dataset --page-label lora-1 --dataset tip_transactions \
+  --from 2026-07-01T00:00:00Z --to 2026-08-01T00:00:00Z \
+  --filter correlationRef:eq:TIP_ID \
+  --claim-field grossMills --claim-field contextState \
+  --claim-field capturedConversationRef --claim-field tipMessageText --pretty
+```
+
+`contextState=captured` means the exact sidecar exists. On a captured row, a
+null note is `source_did_not_provide`, while a supplied empty string is
+`observed_empty`. `contextState=not_captured` keeps the tip row visible and marks
+`capturedConversationRef` and `tipMessageText` as `not_captured`; OnlyFans uses
+this state because its context lane is not implemented. An eligible Fansly tip
+without context also emits `internal_capture_gap` even if filters remove that
+row, or no claim fields were declared, so an empty note-filter result cannot prove
+that no notes exist. Follow its `recapture` remedy. Retained-raw backfill may
+close some historical gaps, but cannot recover a DM page that was never retained.
+There is deliberately no message ref: conversation membership is not message
+identity.
+
 Creator posts use the same operation and command; there is no second posts API.
 The row carries `postRef`, verbatim `postText`, `publishedAt`, observation bounds
 and `attachmentCount`. Because the text is verbatim, the key needs BOTH

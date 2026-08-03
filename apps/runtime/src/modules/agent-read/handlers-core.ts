@@ -103,6 +103,12 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
     platforms: ["fansly"],
     captureState: "unknown",
   },
+  tip_transactions: {
+    // The ledger exists on both platforms. Exact tip context is Fansly-only;
+    // page-scoped field states disclose that asymmetry without hiding OF tips.
+    platforms: ["fansly", "onlyfans"],
+    captureState: "unknown",
+  },
   tip_goals: {
     platforms: ["fansly"],
     captureState: "unknown",

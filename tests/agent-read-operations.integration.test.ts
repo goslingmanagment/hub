@@ -428,6 +428,238 @@ describe("[sync-critical] agent read plane operations", () => {
     })]);
   });
 
+  it("serves exact tip context without letting filters hide missing capture", async () => {
+    const pool = testDb!.pool;
+    await pool.query(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type,
+         canonical_type, transaction_state, raw_status, gross_amount_mills,
+         source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills,
+         occurred_at, source, currency, correlation_id)
+       select $1, f.id, transaction_id, 'tip', 'tip', 'posted', 'ok', gross_mills,
+         gross_mills, net_mills, gross_mills - net_mills,
+         '2026-03-12T12:00:00Z', 'fansly:rest', 'USD', correlation_id
+       from fans f
+       cross join (values
+         ('tip-ledger-note', 'ctx-note', 1000::bigint, 800::bigint),
+         ('tip-ledger-null', 'ctx-null', 2000::bigint, 1600::bigint),
+         ('tip-ledger-empty', 'ctx-empty', 3000::bigint, 2400::bigint),
+         ('tip-ledger-gap', 'ctx-gap', 4000::bigint, 3200::bigint)
+       ) seeded(transaction_id, correlation_id, gross_mills, net_mills)
+       where f.platform_user_id = $2`,
+      [pageId, FAN_PLATFORM_USER_ID],
+    );
+    const { rows: rawRows } = await pool.query<{ id: string }>(
+      `insert into sync_raw_payloads
+         (page_id, stream, request_seq, source, endpoint, request_params,
+          response_payload, mapper_version, payload_kind, captured_at, retain_until)
+       values ($1, 'dm_messages', 1, 'scheduled', 'dm_messages',
+         '{"groupId":"810272281019305984"}'::jsonb, '{}'::jsonb,
+         'test-tip-context', 'mapping_critical', '2026-03-12T12:01:00Z',
+         '2126-03-12T12:01:00Z') returning id`,
+      [pageId],
+    );
+    await pool.query(
+      `insert into transaction_tip_contexts
+       (account_id, platform, platform_tip_id, captured_conversation_ref,
+          tip_message_text, tip_message_source_raw_payload_id,
+          tip_message_captured_at, tip_amount_mills, occurred_at,
+          sender_platform_user_id, receiver_platform_user_id,
+          source_raw_payload_id, captured_at, provenance)
+       values
+         ($1, 'fansly', 'ctx-note', $2, 'For your level up', $4,
+          '2026-03-12T12:01:00Z', 1000,
+          '2026-03-12T12:00:00Z', $3, 'creator-lora', $4,
+          '2026-03-12T12:01:00Z', 'fansly_dm_tip_sidecar'),
+         ($1, 'fansly', 'ctx-null', $2, null, null, null, 2000,
+          '2026-03-12T12:00:00Z', $3, 'creator-lora', $4,
+          '2026-03-12T12:01:00Z', 'fansly_dm_tip_sidecar'),
+         ($1, 'fansly', 'ctx-empty', $2, '', $4,
+          '2026-03-12T12:01:00Z', 3000,
+          '2026-03-12T12:00:00Z', $3, 'creator-lora', $4,
+          '2026-03-12T12:01:00Z', 'fansly_dm_tip_sidecar')`,
+      [pageId, CONVERSATION_REF, FAN_PLATFORM_USER_ID, Number(rawRows[0]!.id)],
+    );
+
+    const legacy = (await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/transactions/query",
+      {
+        from: "2026-03-12T00:00:00Z",
+        to: "2026-03-13T00:00:00Z",
+        filters: [{ field: "correlationRef", op: "eq", value: "ctx-note" }],
+        claim: { fields: ["correlationRef"], targets: "all_in_scope" },
+      },
+    )).json();
+    expect(legacy.items).toHaveLength(1);
+    expect(legacy.items[0].fields).toMatchObject({
+      transactionRef: "tip-ledger-note",
+      relatedMessageRef: "ctx-note",
+      correlationRef: "ctx-note",
+    });
+
+    const request = {
+      from: "2026-03-12T00:00:00Z",
+      to: "2026-03-13T00:00:00Z",
+      claim: {
+        fields: [
+          "correlationRef",
+          "grossMills",
+          "contextState",
+          "capturedConversationRef",
+          "tipMessageText",
+        ],
+        targets: "all_in_scope",
+      },
+    };
+    const response = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/tip_transactions/query",
+      request,
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.items).toHaveLength(4);
+    const byRef = new Map(body.items.map(
+      (item: { fields: { transactionRef: string } }) => [item.fields.transactionRef, item],
+    ));
+    expect(byRef.get("tip-ledger-note")).toMatchObject({
+      fields: {
+        correlationRef: "ctx-note",
+        grossMills: 1000,
+        contextState: "captured",
+        capturedConversationRef: CONVERSATION_REF,
+        tipMessageText: "For your level up",
+      },
+      fieldStates: {
+        contextState: { state: "present" },
+        capturedConversationRef: { state: "present" },
+        tipMessageText: { state: "present" },
+      },
+      provenance: { ingestPaths: ["fansly_pull"], convergence: "converging" },
+    });
+    expect(byRef.get("tip-ledger-null")).toMatchObject({
+      fields: { contextState: "captured", tipMessageText: null },
+      fieldStates: { tipMessageText: { state: "source_did_not_provide" } },
+    });
+    expect(byRef.get("tip-ledger-empty")).toMatchObject({
+      fields: { contextState: "captured", tipMessageText: "" },
+      fieldStates: { tipMessageText: { state: "observed_empty" } },
+    });
+    expect(byRef.get("tip-ledger-gap")).toMatchObject({
+      fields: {
+        contextState: "not_captured",
+        capturedConversationRef: null,
+        tipMessageText: null,
+      },
+      fieldStates: {
+        contextState: { state: "present" },
+        capturedConversationRef: {
+          state: "not_captured",
+          remedy: { kind: "recapture", costClass: "free", admissible: true },
+        },
+        tipMessageText: {
+          state: "not_captured",
+          remedy: { kind: "recapture", costClass: "free", admissible: true },
+        },
+      },
+    });
+    const contextGap = expect.objectContaining({
+      kind: "internal_capture_gap",
+      plane: "transaction_tip_contexts",
+      remedy: expect.objectContaining({ kind: "recapture", costClass: "free" }),
+    });
+    expect(body.capture.gaps).toEqual(expect.arrayContaining([contextGap]));
+    expect(body.conclusion.blockers).toContain("gaps_present");
+    expect(body.capture.planes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ plane: "transactions", state: "read" }),
+      expect.objectContaining({ plane: "transaction_tip_contexts", state: "read" }),
+    ]));
+
+    const tipAudits = await pool.query<{
+      verbatim_text: boolean;
+      request_summary: Record<string, unknown>;
+    }>(
+      `select verbatim_text, request_summary
+       from agent_read_audit
+       where operation = 'agentDatasetQuery'
+         and request_summary->>'datasetRef' = 'tip_transactions'
+       order by id`,
+    );
+    expect(tipAudits.rows).toHaveLength(1);
+    expect(tipAudits.rows[0]!.verbatim_text).toBe(true);
+    expect(Object.keys(tipAudits.rows[0]!.request_summary).sort()).toEqual([
+      "cursorConsumed",
+      "datasetRef",
+      "limit",
+      "planeMode",
+      "platform",
+      "returned",
+      "windowFrom",
+      "windowTo",
+    ]);
+    expect(tipAudits.rows[0]!.request_summary).toMatchObject({
+      datasetRef: "tip_transactions",
+      returned: 4,
+      cursorConsumed: false,
+      platform: "fansly",
+    });
+    const auditSummary = JSON.stringify(tipAudits.rows[0]!.request_summary);
+    expect(auditSummary).not.toContain("For your level up");
+    expect(auditSummary).not.toContain("ctx-note");
+
+    // Every seeded transaction has the same occurredAt. Walking one row at a
+    // time therefore exercises the stable transaction-id tiebreak directly.
+    const pagedRefs: string[] = [];
+    let cursor: string | null = null;
+    let traversalFinished = false;
+    for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+      const pageResponse = await agentPost(
+        "/api/v1/agent/pages/lora-2/datasets/tip_transactions/query",
+        pageIndex === 0 ? { ...request, limit: 1 } : { cursor },
+      );
+      expect(pageResponse.statusCode).toBe(200);
+      const pageBody = pageResponse.json();
+      pagedRefs.push(...pageBody.items.map(
+        (item: { fields: { transactionRef: string } }) => item.fields.transactionRef,
+      ));
+      expect(pageBody.capture.gaps).toEqual(expect.arrayContaining([contextGap]));
+      cursor = pageBody.delivery.nextCursor;
+      if (cursor === null) {
+        traversalFinished = true;
+        break;
+      }
+    }
+    expect(traversalFinished).toBe(true);
+    expect(pagedRefs).toHaveLength(4);
+    expect(new Set(pagedRefs).size).toBe(4);
+    expect([...pagedRefs].sort()).toEqual([
+      "tip-ledger-empty",
+      "tip-ledger-gap",
+      "tip-ledger-note",
+      "tip-ledger-null",
+    ]);
+
+    const filtered = (await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/tip_transactions/query",
+      {
+        ...request,
+        filters: [{ field: "tipMessageText", op: "eq", value: "For your level up" }],
+      },
+    )).json();
+    expect(filtered.items).toHaveLength(1);
+    expect(filtered.items[0].fields.transactionRef).toBe("tip-ledger-note");
+    expect(filtered.capture.gaps).toEqual(expect.arrayContaining([contextGap]));
+
+    const noClaim = (await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/tip_transactions/query",
+      {
+        from: request.from,
+        to: request.to,
+        filters: [{ field: "tipMessageText", op: "eq", value: "no such note" }],
+      },
+    )).json();
+    expect(noClaim.items).toEqual([]);
+    expect(noClaim.capture.gaps).toEqual(expect.arrayContaining([contextGap]));
+  });
+
   it("#4 puts the January payment on the timeline", async () => {
     // The payment landed on the 23rd, so the window is the whole month: the
     // point of the operation is that the money lane answers when the message
@@ -1030,6 +1262,16 @@ describe("[sync-critical] agent read plane operations", () => {
       requiredCapabilities: ["read:datasets", "read:money", "read:messages"],
       captureState: "unknown",
       defaultSort: "postTipOccurredAt",
+    });
+    expect(catalog.datasets.find(
+      (entry: { dataset: string }) => entry.dataset === "tip_transactions",
+    )).toMatchObject({
+      availability: "available",
+      platforms: ["fansly", "onlyfans"],
+      moneyBearing: true,
+      requiredCapabilities: ["read:datasets", "read:money", "read:messages"],
+      captureState: "unknown",
+      defaultSort: "occurredAt",
     });
     expect(catalog.datasets.find(
       (entry: { dataset: string }) => entry.dataset === "tip_goals",

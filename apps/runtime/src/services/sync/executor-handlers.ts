@@ -160,6 +160,7 @@ import {
   resolveDmConversationCoverageStatus,
   resolveDmSenderRole,
 } from "./fansly-dm-messages.ts";
+import { materializeFanslyDmTipContextsBestEffort } from "./fansly-tip-contexts.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage, type HydrationCaptureContext } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
 import {
@@ -2951,11 +2952,16 @@ export async function fanslyDmConversationsChunk(
           groupId: conversation.groupId,
           limit: 1,
         });
-        await persistRawPayload(app.db, {
+        const headRepairRequestParams = {
+          groupId: conversation.groupId,
+          limit: 1,
+          headRepair: true,
+        };
+        const rawPayload = await persistRawPayload(app.db, {
           platformAccountId: input.pageContext.page.id,
           syncRunId: input.syncRunId,
           endpoint: "dm_messages",
-          requestParams: { groupId: conversation.groupId, limit: 1, headRepair: true },
+          requestParams: headRepairRequestParams,
           responsePayload: headRepair.raw,
           mapperVersion: FANSLY_MAPPER_VERSION,
           payloadKind: "dm_messages",
@@ -2963,6 +2969,13 @@ export async function fanslyDmConversationsChunk(
         }, {
           action: "inserting dm_messages head-repair raw payload",
           platform: "fansly",
+        });
+        await materializeFanslyDmTipContextsBestEffort(app, {
+          accountId: input.pageContext.page.id,
+          requestParams: headRepairRequestParams,
+          responsePayload: headRepair.raw,
+          sourceRawPayloadId: rawPayload.id,
+          capturedAt: rawPayload.capturedAt,
         });
         const repairedHead = headRepair.items[0] ?? null;
         if (repairedHead) {

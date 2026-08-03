@@ -630,6 +630,30 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     run: (tx) => execCount(tx, sql`delete from dm_message_archive where ${dmArchivePred}`),
   });
 
+  // Exact Fansly tip notes are sensitive conversation material but carry no
+  // fan FK. Reach them through the mandatory sender ref and the resolved
+  // groupId linkage; receiver/conversation direct matches cover asymmetric
+  // provider shapes without broadening to every tip on the page.
+  const tipContextConversationPred = fanGroupIds.length > 0
+    ? sql`(captured_conversation_ref = ${ref}
+        or captured_conversation_ref in ${fanGroupIds})`
+    : sql`captured_conversation_ref = ${ref}`;
+  const tipContextPred = sql`account_id in ${scope.pageIds}
+    and (
+      sender_platform_user_id = ${ref}
+      or receiver_platform_user_id = ${ref}
+      or ${tipContextConversationPred}
+    )`;
+  targets.push({
+    plane: "hot",
+    target: "transaction_tip_contexts",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from transaction_tip_contexts where ${tipContextPred}`),
+    run: (tx) => execCount(tx, sql`
+      delete from transaction_tip_contexts where ${tipContextPred}`),
+  });
+
   // Sent-command payloads carry our side of the fan's conversation.
   const commandPred = sql`page_id in ${scope.pageIds} and conversation_id = ${ref}`;
   targets.push({
@@ -797,6 +821,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["page_dm_threads", "platform_account_id"], // messages ride the cascade
     ["message_archive", "account_id"],
     ["dm_message_archive", "platform_account_id"],
+    ["transaction_tip_contexts", "account_id"],
     ["dm_message_daily_aggregates", "platform_account_id"],
     ["ofapi_commands", "page_id"],
     ["fan_earnings_stats", "account_id"],
