@@ -1117,7 +1117,8 @@ describe("sync integration", () => {
       expect(subscribers.rows).toHaveLength(1);
       expect(followers.rows).toHaveLength(1);
 
-      const selectRunRows = () => testDb.db.select({
+      const syncRunDb = testDb.db;
+      const selectRunRows = () => syncRunDb.select({
         stream: syncRuns.stream,
         status: syncRuns.outcome,
         startedAt: syncRuns.startedAt,
