@@ -65,8 +65,9 @@ export function postSnapshotParseDebtGaps(parseDebt: boolean): AgentGap[] {
 }
 
 /** Row states refine structural scope observability. A null post-tip goal ref
- * is affirmative direct-tip evidence: the canonicalizer proved that the
- * captured target list contained zero type-7100 targets. */
+ * stays unknown: Fansly's live flat `/tips` shape attributes the payment to a
+ * post but supplies no per-tip goal discriminator. Older nested fixtures can
+ * prove a non-null goal, but null may not be upgraded into "direct". */
 export function postTipViewFieldStates(input: {
   claimFields: readonly string[] | null;
   scopeFieldStates: Readonly<Record<string, AgentFieldState>>;
@@ -84,7 +85,7 @@ export function postTipViewFieldStates(input: {
     }
     states[field] = scopeState.state === "present" && input.values[field] === null
       ? {
-        state: field === "postTipGoalRef" ? "observed_empty" : "source_did_not_provide",
+        state: "source_did_not_provide",
         remedy: { kind: "none", reason: "no_remedy_exists" },
       }
       : scopeState;

@@ -17,15 +17,16 @@ function newerWins(tableName: LatestObservedProjectionTable) {
   const lastObservedAt = sql.identifier("last_observed_at");
   const sourceAccountSeq = sql.identifier("source_account_seq");
 
-  return (columnName: string): SQL => {
+  return (columnName: string, newerValue?: SQL): SQL => {
     const column = sql.identifier(columnName);
+    const winningValue = newerValue ?? sql`${excluded}.${column}`;
     return sql`case
       when ${excluded}.${lastObservedAt} > ${currentTable}.${lastObservedAt}
         or (
           ${excluded}.${lastObservedAt} = ${currentTable}.${lastObservedAt}
           and ${excluded}.${sourceAccountSeq} > ${currentTable}.${sourceAccountSeq}
         )
-      then ${excluded}.${column}
+      then ${winningValue}
       else ${currentTable}.${column}
     end`;
   };
@@ -164,6 +165,9 @@ export interface UpsertCreatorPostTipInput {
   receiverTransactionRef: string | null;
   senderTransactionRef: string | null;
   tipGoalRef: string | null;
+  /** `unknown` is an omission, not contradictory evidence: it must not erase
+   * an exact goal ref captured by an earlier typed-target observation. */
+  tipGoalAttribution: "goal" | "direct" | "unknown";
   tipMessageText: string | null;
   contentHash: string;
   sourceEventId: number;
@@ -226,7 +230,15 @@ export async function upsertCreatorPostTip(
       occurred_at = ${newerCreatorPostTipValue("occurred_at")},
       receiver_transaction_ref = ${newerCreatorPostTipValue("receiver_transaction_ref")},
       sender_transaction_ref = ${newerCreatorPostTipValue("sender_transaction_ref")},
-      tip_goal_ref = ${newerCreatorPostTipValue("tip_goal_ref")},
+      tip_goal_ref = ${newerCreatorPostTipValue(
+        "tip_goal_ref",
+        sql`case
+          when ${input.tipGoalAttribution} = 'unknown'
+            and creator_post_tips.tip_goal_ref is not null
+          then creator_post_tips.tip_goal_ref
+          else excluded.tip_goal_ref
+        end`,
+      )},
       tip_message_text = ${newerCreatorPostTipValue("tip_message_text")},
       first_observed_at = least(
         creator_post_tips.first_observed_at,

@@ -848,17 +848,10 @@ function datasetRowFieldStates(
     // look like a provider-specific omission that another pull might repair.
     if (state.state !== "present") {
       result[field] = state;
-    } else if (field === "postTipGoalRef" && value === null) {
-      // The post-tip canonicalizer accepts a row only after inspecting every
-      // target. A null goal ref therefore means it observed zero type-7100
-      // targets: affirmative direct-tip evidence, not an omitted provider
-      // field. Keep message/null semantics separate below; Fansly may genuinely
-      // omit the optional note.
-      result[field] = {
-        state: "observed_empty",
-        remedy: { kind: "none", reason: "no_remedy_exists" },
-      };
     } else if (value === null) {
+      // In particular, a null postTipGoalRef is NOT direct-tip evidence.
+      // Fansly's live flat /tips items identify only the post; raw capture and
+      // replay retain the missing discriminator without inventing it.
       result[field] = {
         state: "source_did_not_provide",
         remedy: { kind: "none", reason: "no_remedy_exists" },

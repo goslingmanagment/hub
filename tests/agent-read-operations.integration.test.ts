@@ -363,7 +363,7 @@ describe("[sync-critical] agent read plane operations", () => {
     });
   });
 
-  it("marks a captured direct post tip as observed_empty across every Agent surface", async () => {
+  it("keeps a null post-tip goal unattributed across every Agent surface", async () => {
     await testDb!.pool.query(
       `insert into creator_post_tips (account_id, platform, platform_post_id,
          platform_tip_id, tip_sender_platform_user_id, post_tip_amount_mills,
@@ -396,7 +396,7 @@ describe("[sync-critical] agent read plane operations", () => {
     });
     expect(dataset.items[0].fieldStates).toMatchObject({
       postTipGoalRef: {
-        state: "observed_empty",
+        state: "source_did_not_provide",
         remedy: { kind: "none", reason: "no_remedy_exists" },
       },
       postTipMessageText: {
@@ -413,7 +413,7 @@ describe("[sync-critical] agent read plane operations", () => {
       (item: { postTipRef: string }) => item.postTipRef === "direct-tip",
     )).toMatchObject({
       postTipGoalRef: null,
-      fieldStates: { postTipGoalRef: { state: "observed_empty" } },
+      fieldStates: { postTipGoalRef: { state: "source_did_not_provide" } },
     });
 
     const timeline = (await agentGet(
@@ -424,7 +424,7 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(timeline.items).toEqual([expect.objectContaining({
       postTipRef: "direct-tip",
       postTipGoalRef: null,
-      fieldStates: { postTipGoalRef: expect.objectContaining({ state: "observed_empty" }) },
+      fieldStates: { postTipGoalRef: expect.objectContaining({ state: "source_did_not_provide" }) },
     })]);
   });
 
@@ -1069,7 +1069,7 @@ describe("[sync-critical] agent read plane operations", () => {
           'post-tips-top-level-debt', '2026-03-06T13:01:00Z', 0),
          ('pull', 'sync:fansly:posts', 'fansly', $1, 'post_tips',
           '[]'::jsonb, decode(repeat('11', 32), 'hex'),
-          'post-tips-item-debt', '2026-03-06T13:02:00Z', 4),
+          'post-tips-item-debt', '2026-03-06T13:02:00Z', 5),
          ('pull', 'sync:fansly:posts', 'fansly', $1, 'posts',
           '{"posts":"drifted"}'::jsonb, decode(repeat('22', 32), 'hex'),
           'posts-top-level-debt', '2026-03-06T13:03:00Z', 0)
@@ -1085,7 +1085,7 @@ describe("[sync-critical] agent read plane operations", () => {
          data, schema_version, observation_id, dedup_key)
        values ($1, 900001, 'post.tip_parse_rejected',
          '2026-03-06T13:02:00Z',
-         '{"platform":"fansly","parserVersion":4,"rejectedItemCount":2,
+         '{"platform":"fansly","parserVersion":5,"rejectedItemCount":2,
            "rejectedItems":[{"index":1,"reason":"post_target_count"},
                             {"index":3,"reason":"invalid_core_fields"}]}'::jsonb,
          1, $2, 'post-tip-parse-debt-test')`,
@@ -1166,7 +1166,7 @@ describe("[sync-critical] agent read plane operations", () => {
     // diagnostic remains append-only evidence but is no longer current debt.
     await testDb!.pool.query(
       `update observations set parse_version = case id
-         when $1 then 4 when $2 then 5 when $3 then 4 else parse_version end
+         when $1 then 5 when $2 then 6 when $3 then 5 else parse_version end
        where id in ($1, $2, $3)`,
       [
         Number(topLevelObservation!.id),

@@ -1,0 +1,11 @@
+[
+  {
+    "id": "tip-live-1",
+    "senderId": "fan-live-22",
+    "receiverId": "creator-live",
+    "amount": 250000,
+    "message": "For your level up",
+    "createdAt": 1754136123,
+    "targetId": "post-live-1"
+  }
+]

@@ -13,7 +13,7 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-export const POSTS_CANONICALIZER_VERSION = 4;
+export const POSTS_CANONICALIZER_VERSION = 5;
 export const POSTS_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "posts",
   "post_tips",
@@ -44,6 +44,8 @@ export interface CanonicalPostMaterial {
   tipGoalAmountsHidden?: boolean | null;
 }
 
+export type PostTipGoalAttribution = "goal" | "direct" | "unknown";
+
 export interface CanonicalPostTipMaterial {
   observationId: number;
   tipId: string;
@@ -55,6 +57,9 @@ export interface CanonicalPostTipMaterial {
   receiverTransactionRef: string | null;
   senderTransactionRef: string | null;
   tipGoalRef: string | null;
+  /** Goal evidence is independent of a nullable ref: flat live responses name
+   * the post exactly but cannot prove whether the tip funded its linked goal. */
+  tipGoalAttribution: PostTipGoalAttribution;
   /** Provider-verbatim Fansly tip message. Empty text remains an empty string;
    * only an absent/null provider field becomes null. */
   tipMessageText: string | null;
@@ -140,13 +145,14 @@ export function buildPostObservedDraft(input: CanonicalPostMaterial): CanonicalE
 function postTipContentHash(input: CanonicalPostTipMaterial): string {
   return createHash("sha256")
     .update(JSON.stringify([
-      "post-tip-material-v2",
+      "post-tip-material-v3",
       input.senderPlatformUserId,
       input.amountMills,
       input.occurredAt.toISOString(),
       input.receiverTransactionRef,
       input.senderTransactionRef,
       input.tipGoalRef,
+      input.tipGoalAttribution,
       input.tipMessageText,
     ]))
     .digest("hex");
@@ -155,6 +161,9 @@ function postTipContentHash(input: CanonicalPostTipMaterial): string {
 export function buildPostTipObservedDraft(
   input: CanonicalPostTipMaterial,
 ): CanonicalEventDraft {
+  if ((input.tipGoalAttribution === "goal") !== (input.tipGoalRef !== null)) {
+    throw new Error("post tip goal attribution is incoherent with tipGoalRef");
+  }
   const contentHash = postTipContentHash(input);
   return {
     type: "post.tip_observed",
@@ -172,11 +181,12 @@ export function buildPostTipObservedDraft(
       receiverTransactionRef: input.receiverTransactionRef,
       senderTransactionRef: input.senderTransactionRef,
       tipGoalRef: input.tipGoalRef,
+      tipGoalAttribution: input.tipGoalAttribution,
       tipMessageText: input.tipMessageText,
       contentHash,
     },
-    schemaVersion: 2,
-    dedupKey: `post-tip:v2:fansly:${input.tipId}:${input.postId}:${contentHash}:obs:${input.observationId}`,
+    schemaVersion: 3,
+    dedupKey: `post-tip:v3:fansly:${input.tipId}:${input.postId}:${contentHash}:obs:${input.observationId}`,
   };
 }
 
@@ -365,6 +375,7 @@ type FanslyPostTipRejectionReason =
   | "post_target_count"
   | "goal_target_count"
   | "goal_reference_mismatch"
+  | "post_reference_mismatch"
   | "receiver_mismatch";
 
 type FanslyPostTipRejection = {
@@ -411,6 +422,31 @@ function parseFanslyPostTip(
   ) {
     return { reason: "receiver_mismatch" };
   }
+
+  const flatPostRef = nullableNonemptyString(tip.targetId);
+  if (!flatPostRef.valid) return { reason: "invalid_targets" };
+  if (tip.targets === undefined) {
+    if (flatPostRef.value === null) return { reason: "post_target_count" };
+    // A top-level goal id cannot turn the flat shape into exact goal evidence;
+    // retain the same corroboration rule as nested targets and fail closed.
+    if (providerTipGoalRef.value !== null) {
+      return { reason: "goal_reference_mismatch" };
+    }
+    return {
+      tip: {
+        tipId,
+        postId: flatPostRef.value,
+        senderPlatformUserId,
+        amountMills: amount.value,
+        occurredAt,
+        receiverTransactionRef: receiverTransactionRef.value,
+        senderTransactionRef: senderTransactionRef.value,
+        tipGoalRef: null,
+        tipGoalAttribution: "unknown",
+        tipMessageText: tipMessageText.value,
+      },
+    };
+  }
   if (!Array.isArray(tip.targets)) return { reason: "invalid_targets" };
 
   let postTargetCount = 0;
@@ -434,6 +470,9 @@ function parseFanslyPostTip(
   if (postTargetCount !== 1 || postId === null) {
     return { reason: "post_target_count" };
   }
+  if (flatPostRef.value !== null && flatPostRef.value !== postId) {
+    return { reason: "post_reference_mismatch" };
+  }
   if (goalTargetCount > 1) {
     return { reason: "goal_target_count" };
   }
@@ -455,6 +494,7 @@ function parseFanslyPostTip(
       receiverTransactionRef: receiverTransactionRef.value,
       senderTransactionRef: senderTransactionRef.value,
       tipGoalRef: goalTargetRef,
+      tipGoalAttribution: goalTargetRef === null ? "direct" : "goal",
       tipMessageText: tipMessageText.value,
     },
   };

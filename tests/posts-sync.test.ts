@@ -245,7 +245,7 @@ describe("posts sync handlers", () => {
     const escaped = [{
       id: "tip-out-of-scope",
       receiverId: "fan-account-55",
-      targets: [{ id: "another-post", type: 1000 }],
+      targetId: "another-post",
     }];
     const getTipsByTargetIds = vi.fn(async () => ({
       items: escaped,
@@ -266,6 +266,7 @@ describe("posts sync handlers", () => {
       expect.anything(),
       expect.objectContaining({
         endpoint: "post_tips",
+        mapperVersion: "fansly-post-tips-v2",
         requestParams: { targetIds: ["post-12"] },
         responsePayload: escaped,
       }),

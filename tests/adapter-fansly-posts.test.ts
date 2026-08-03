@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -13,20 +15,10 @@ afterEach(() => {
 describe("Fansly posts adapter", () => {
   it("captures account timeline pages and post tips with fail-closed raw contracts", async () => {
     const { FanslyAdapter, fetchMock } = await loadAdapters();
-    const rawTips = [
-      {
-        id: "tip-1",
-        senderId: "fan-1",
-        receiverId: "creator-1",
-        amount: 25_000,
-        message: "happy birthday",
-        senderTransactionId: "sender-tx-1",
-        receiverTransactionId: "receiver-tx-1",
-        targets: [{ id: "post-1", type: 1_000 }],
-        createdAt: 1_775_000_000,
-        tipGoalId: "goal-1",
-      },
-    ];
+    const rawTips = JSON.parse(readFileSync(
+      "tests/fixtures/fansly-post-tips-flat.json",
+      "utf8",
+    )) as unknown[];
     fetchMock
       .mockResolvedValueOnce(toJsonResponse({
         success: true,
