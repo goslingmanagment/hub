@@ -49,6 +49,15 @@ export interface AgentDatasetSqlMapping {
    * floor describes every physical row Hub retains, not only current heads.
    */
   readonly eligibilityColumn?: string;
+  /** Optional context-coverage signal evaluated over the page/window and row
+   * eligibility, but deliberately outside result filters. Filters must never
+   * hide a capture gap and turn an empty result into false negative evidence. */
+  readonly internalCaptureGap?: {
+    readonly column: string;
+    readonly plane: string;
+    /** Only this platform currently promises the context capture lane. */
+    readonly platform?: string;
+  };
   /** Optional row-level lineage exposed by the source under fixed internal
    * columns. Request text can never select or rename these columns. */
   readonly provenanceColumns?: {
@@ -167,10 +176,49 @@ const TRANSACTIONS = `
          tr.creator_net_amount_mills as f_net_mills,
          tr.platform_fee_mills  as f_fee_mills,
          tr.currency::text      as f_currency,
-         tr.correlation_id      as f_related_message_ref
+         tr.correlation_id      as f_related_message_ref,
+         tr.correlation_id      as f_correlation_ref
   from transactions tr
   join pages p on p.id = tr.platform_account_id
   left join fans f on f.id = tr.fan_id
+`;
+
+const TIP_TRANSACTIONS = `
+  select tr.platform_account_id as k_page_id,
+         p.platform::text       as k_platform,
+         tr.id::text            as k_key,
+         tr.occurred_at         as k_occurred_at,
+         f.platform_user_id     as k_fan,
+         tr.is_active           as k_eligible,
+         (ttc.id is not null)   as k_context_captured,
+         null::bigint           as k_observation_ref,
+         case when p.platform::text = 'fansly'
+           then 'fansly_pull' else 'unknown' end as k_ingest_path,
+         case when p.platform::text = 'fansly'
+           then 'converging' else 'no_material_lane' end as k_convergence,
+         p.platform::text       as f_platform,
+         f.platform_user_id     as f_platform_user_id,
+         tr.transaction_id      as f_transaction_ref,
+         tr.canonical_type::text as f_transaction_type,
+         tr.transaction_state::text as f_transaction_state,
+         tr.occurred_at         as f_occurred_at,
+         tr.gross_amount_mills  as f_gross_mills,
+         tr.creator_net_amount_mills as f_net_mills,
+         tr.platform_fee_mills  as f_fee_mills,
+         tr.currency::text      as f_currency,
+         tr.correlation_id      as f_correlation_ref,
+         case when ttc.id is null then 'not_captured' else 'captured' end
+                                as f_context_state,
+         ttc.captured_conversation_ref as f_captured_conversation_ref,
+         ttc.tip_message_text   as f_tip_message_text
+  from transactions tr
+  join pages p on p.id = tr.platform_account_id
+  left join fans f on f.id = tr.fan_id
+  left join transaction_tip_contexts ttc
+    on ttc.account_id = tr.platform_account_id
+   and ttc.platform_tip_id = tr.correlation_id
+   and ttc.platform::text = p.platform::text
+  where tr.canonical_type::text = 'tip'
 `;
 
 const FAN_SPEND_DAILY = `
@@ -490,12 +538,47 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       feeMills: "f_fee_mills",
       currency: "f_currency",
       relatedMessageRef: "f_related_message_ref",
+      correlationRef: "f_correlation_ref",
     },
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
     readPlanes: ["transactions", "fans"],
     captureFloorPlane: "transactions",
     eligibilityColumn: "k_eligible",
+  },
+  tip_transactions: {
+    source: TIP_TRANSACTIONS,
+    fields: {
+      platform: "f_platform",
+      platformUserId: "f_platform_user_id",
+      transactionRef: "f_transaction_ref",
+      transactionType: "f_transaction_type",
+      transactionState: "f_transaction_state",
+      occurredAt: "f_occurred_at",
+      grossMills: "f_gross_mills",
+      netMills: "f_net_mills",
+      feeMills: "f_fee_mills",
+      currency: "f_currency",
+      correlationRef: "f_correlation_ref",
+      contextState: "f_context_state",
+      capturedConversationRef: "f_captured_conversation_ref",
+      tipMessageText: "f_tip_message_text",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["transactions", "transaction_tip_contexts", "fans"],
+    captureFloorPlane: "transactions",
+    eligibilityColumn: "k_eligible",
+    internalCaptureGap: {
+      column: "k_context_captured",
+      plane: "transaction_tip_contexts",
+      platform: "fansly",
+    },
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
   },
   fan_spend_daily: {
     source: FAN_SPEND_DAILY,

@@ -715,6 +715,104 @@ export const syncRawPayloads = pgTable(
   },
   (table) => ({
     retainIdx: index("sync_raw_payloads_retain_idx").on(table.retainUntil),
+    dmTipContextBackfillIdx: index("sync_raw_payloads_dm_tip_context_backfill_idx")
+      .on(table.id)
+      .where(sql`${table.endpoint} = 'dm_messages' and ${table.payloadKind} = 'dm_messages'`),
+  }),
+);
+
+// Exact Fansly tip context found in the optional `/message` response sidecar.
+// `platform_tip_id` joins to transactions.correlation_id inside one account;
+// it is not a message ref. Raw payloads are the retained authority and this
+// table is a replayable serving materialization.
+export const transactionTipContexts = pgTable(
+  "transaction_tip_contexts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    accountId: bigint("account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    platformTipId: text("platform_tip_id").notNull(),
+    capturedConversationRef: text("captured_conversation_ref").notNull(),
+    /** Provider-verbatim note; empty text is distinct from absent/null. */
+    tipMessageText: text("tip_message_text"),
+    /** Exact raw payload whose note won the material merge. Nullable after
+     * retained-raw expiry; tipMessageCapturedAt keeps the durable lineage time. */
+    tipMessageSourceRawPayloadId: bigint("tip_message_source_raw_payload_id", {
+      mode: "number",
+    }).references(() => syncRawPayloads.id, { onDelete: "set null" }),
+    tipMessageCapturedAt: timestamp("tip_message_captured_at", { withTimezone: true }),
+    /** Fansly-native mills, when the optional sidecar member is usable. */
+    tipAmountMills: bigint("tip_amount_mills", { mode: "bigint" }),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    senderPlatformUserId: text("sender_platform_user_id").notNull(),
+    receiverPlatformUserId: text("receiver_platform_user_id"),
+    /** Identity + captured-conversation source. Optional enrichment never
+     * advances it; a later identical capture may relink it after raw expiry. */
+    sourceRawPayloadId: bigint("source_raw_payload_id", { mode: "number" })
+      .references(() => syncRawPayloads.id, { onDelete: "set null" }),
+    /** DB capture time of source_raw_payload_id, not provider event time. */
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+    provenance: text("provenance")
+      .$type<"fansly_dm_tip_sidecar">()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    accountTipUniq: unique("transaction_tip_contexts_account_tip_uniq").on(
+      table.accountId,
+      table.platformTipId,
+    ),
+    refsCheck: check(
+      "transaction_tip_contexts_refs_check",
+      sql`length(${table.platformTipId}) > 0
+        and length(${table.capturedConversationRef}) > 0
+        and length(${table.senderPlatformUserId}) > 0
+        and (${table.receiverPlatformUserId} is null or length(${table.receiverPlatformUserId}) > 0)`,
+    ),
+    amountCheck: check(
+      "transaction_tip_contexts_amount_check",
+      sql`${table.tipAmountMills} is null or ${table.tipAmountMills} >= 0`,
+    ),
+    tipMessageLineageCheck: check(
+      "transaction_tip_contexts_tip_message_lineage_check",
+      sql`(
+          ${table.tipMessageText} is null
+          and ${table.tipMessageSourceRawPayloadId} is null
+          and ${table.tipMessageCapturedAt} is null
+        ) or (
+          ${table.tipMessageText} is not null
+          and ${table.tipMessageCapturedAt} is not null
+        )`,
+    ),
+    provenanceCheck: check(
+      "transaction_tip_contexts_provenance_check",
+      sql`${table.platform} = 'fansly'
+        and ${table.provenance} = 'fansly_dm_tip_sidecar'`,
+    ),
+    accountOccurredIdx: index("transaction_tip_contexts_account_occurred_idx").on(
+      table.accountId,
+      table.occurredAt.desc(),
+      table.id.desc(),
+    ),
+    accountConversationOccurredIdx: index(
+      "transaction_tip_contexts_account_conversation_occurred_idx",
+    ).on(
+      table.accountId,
+      table.capturedConversationRef,
+      table.occurredAt.desc(),
+      table.id.desc(),
+    ),
+    sourceRawPayloadIdx: index("transaction_tip_contexts_source_raw_payload_idx").on(
+      table.sourceRawPayloadId,
+    ),
+    tipMessageSourceRawPayloadIdx: index(
+      "transaction_tip_contexts_tip_message_source_raw_payload_idx",
+    ).on(table.tipMessageSourceRawPayloadId),
   }),
 );
 

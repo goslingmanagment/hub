@@ -302,6 +302,16 @@ describe("agent read plane: the B2 window/cursor law", () => {
       claimFields: ["postTipMessageText"],
       claimTargets: "all_in_scope",
     }).success).toBe(false);
+    expect(agentPersonQuerySchema.safeParse({
+      claimFields: ["tipMessageText"],
+      claimTargets: "all_in_scope",
+    }).success).toBe(false);
+    expect(agentPersonTimelineQuerySchema.safeParse({
+      from: "2026-01-08T00:00:00Z",
+      to: "2026-01-20T00:00:00Z",
+      claimFields: ["tipMessageText"],
+      claimTargets: "all_in_scope",
+    }).success).toBe(false);
 
     expect(agentPersonQuerySchema.safeParse({
       claimFields: ["postTipPostRef", "postTipGoalRef", "postTipAmountMills"],
@@ -367,6 +377,7 @@ describe("agent read plane: the B2 window/cursor law", () => {
     expect(agentDatasetEnum.options).toContain("posts");
     expect(agentDatasetEnum.options).toContain("post_monetization");
     expect(agentDatasetEnum.options).toContain("post_tips");
+    expect(agentDatasetEnum.options).toContain("tip_transactions");
     expect(agentDatasetEnum.options).toContain("tip_goals");
   });
 });
@@ -445,6 +456,8 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     expect(agentDatasetRequiredCapabilities("post_monetization"))
       .toEqual(["read:datasets", "read:money", "read:messages"]);
     expect(agentDatasetRequiredCapabilities("post_tips"))
+      .toEqual(["read:datasets", "read:money", "read:messages"]);
+    expect(agentDatasetRequiredCapabilities("tip_transactions"))
       .toEqual(["read:datasets", "read:money", "read:messages"]);
     expect(agentDatasetRequiredCapabilities("tip_goals"))
       .toEqual(["read:datasets", "read:money", "read:messages"]);

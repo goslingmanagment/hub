@@ -68,6 +68,10 @@ const sharedMocks = vi.hoisted(() => ({
   trimFanslyMessagingGroupsPayload: vi.fn((value: unknown) => value),
 }));
 
+const tipContextMocks = vi.hoisted(() => ({
+  materializeFanslyDmTipContextsBestEffort: vi.fn(),
+}));
+
 const fanHydrationMocks = vi.hoisted(() => ({
   hydrateFans: vi.fn(),
   lookupHydratedFans: vi.fn(),
@@ -86,6 +90,10 @@ vi.mock("@agency_hub_core/db", async () => {
   };
 });
 vi.mock("../apps/runtime/src/services/sync/shared.ts", () => sharedMocks);
+vi.mock(
+  "../apps/runtime/src/services/sync/fansly-tip-contexts.ts",
+  () => tipContextMocks,
+);
 vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
   const actual = await vi.importActual<typeof FanHydrationModule>(
     "../apps/runtime/src/services/sync/fan-hydration.ts",
@@ -198,6 +206,7 @@ describe("sync executor handlers", () => {
       }
     }
     sharedMocks.persistRawPayload.mockReset();
+    tipContextMocks.materializeFanslyDmTipContextsBestEffort.mockReset();
     sharedMocks.refreshPageMetadata.mockReset();
     fanHydrationMocks.hydrateFans.mockReset();
     fanHydrationMocks.lookupHydratedFans.mockReset();
@@ -256,7 +265,21 @@ describe("sync executor handlers", () => {
     );
     sharedMocks.normalizeFanslyTimestamp.mockReset();
     sharedMocks.normalizeFanslyTimestamp.mockImplementation((value: number) => new Date(value >= 1_000_000_000_000 ? value : value * 1000));
-    sharedMocks.persistRawPayload.mockResolvedValue(undefined);
+    sharedMocks.persistRawPayload.mockResolvedValue({
+      id: 444,
+      capturedAt: new Date("2026-09-01T00:00:00.000Z"),
+    });
+    tipContextMocks.materializeFanslyDmTipContextsBestEffort.mockResolvedValue({
+      envelopeStatus: "absent",
+      tipItemsSeen: 0,
+      contexts: [],
+      rejectedItems: [],
+      droppedOptionalMemberCount: 0,
+      upserted: 0,
+      unchanged: 0,
+      conversationConflicts: 0,
+      failed: false,
+    });
     sharedMocks.trimFanslyMessagingGroupsPayload.mockReset();
     sharedMocks.trimFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
     fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
@@ -2938,8 +2961,35 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     });
   });
 
-  it("requests a dm_messages follow-up when conversation heads advance", async () => {
+  it("repairs an incomplete conversation head, captures its tips, and requests follow-up", async () => {
     const telemetry = createTelemetry();
+    const headRepairRaw = {
+      messages: [],
+      tips: [{ id: "tip-head-repair", message: "captured from repair" }],
+    };
+    const getMessagesPage = vi.fn(async () => ({
+      items: [{
+        id: "msg-80",
+        type: 1,
+        dataVersion: 1,
+        content: "repaired head",
+        groupId: "group-1",
+        senderId: "fan-1",
+        correlationId: null,
+        inReplyTo: null,
+        inReplyToRoot: null,
+        createdAt: 1_770_000_000,
+        attachments: [],
+        embeds: [],
+        interactions: [],
+        likes: [],
+        totalTipAmount: 0,
+      }],
+      groupId: "group-1",
+      before: null,
+      done: true,
+      raw: headRepairRaw,
+    }));
     const getMessagingGroupsPage = vi.fn(async () => ({
       total: 1,
       items: [{
@@ -2970,7 +3020,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
           dataVersion: 1,
           content: "new head",
           groupId: "group-1",
-          senderId: "fan-1",
+          senderId: null,
           correlationId: null,
           inReplyTo: null,
           inReplyToRoot: null,
@@ -3001,6 +3051,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       },
       adapter: {
         getMessagingGroupsPage,
+        getMessagesPage,
       },
     } as never;
 
@@ -3050,6 +3101,29 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     } as never);
 
     expect(result.satisfied).toBe(true);
+    expect(getMessagesPage).toHaveBeenCalledWith(expect.anything(), {
+      groupId: "group-1",
+      limit: 1,
+    });
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledWith(db, expect.objectContaining({
+      endpoint: "dm_messages",
+      requestParams: { groupId: "group-1", limit: 1, headRepair: true },
+      responsePayload: headRepairRaw,
+      payloadKind: "dm_messages",
+    }), expect.objectContaining({
+      action: "inserting dm_messages head-repair raw payload",
+      platform: "fansly",
+    }));
+    expect(tipContextMocks.materializeFanslyDmTipContextsBestEffort).toHaveBeenCalledWith(
+      app,
+      {
+        accountId: 55,
+        requestParams: { groupId: "group-1", limit: 1, headRepair: true },
+        responsePayload: headRepairRaw,
+        sourceRawPayloadId: 444,
+        capturedAt: new Date("2026-09-01T00:00:00.000Z"),
+      },
+    );
     expect(dbMocks.requestPageSync).toHaveBeenCalledWith(db, {
       pageId: 55,
       streams: ["dm_messages"],
@@ -3182,6 +3256,16 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       before: "msg-65",
       limit: 25,
     }));
+    expect(tipContextMocks.materializeFanslyDmTipContextsBestEffort).toHaveBeenCalledWith(
+      app,
+      {
+        accountId: 55,
+        requestParams: { groupId: "group-1", limit: 25, before: "msg-65" },
+        responsePayload: { messages: [] },
+        sourceRawPayloadId: 444,
+        capturedAt: new Date("2026-09-01T00:00:00.000Z"),
+      },
+    );
     expect(dbMocks.upsertPageDmMessages).toHaveBeenCalledWith({}, expect.arrayContaining([
       expect.objectContaining({
         conversationId: 777,

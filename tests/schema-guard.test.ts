@@ -48,6 +48,7 @@ describe("runtime schema guard", () => {
               { name: "page_sync_cursors" },
               { name: "creator_posts" },
               { name: "creator_post_tips" },
+              { name: "transaction_tip_contexts" },
             ],
           };
         }
@@ -62,7 +63,10 @@ describe("runtime schema guard", () => {
           };
         }
 
-        if (text.includes("runtime_schema_guard_0121_")) {
+        if (
+          text.includes("runtime_schema_guard_0121_") ||
+          text.includes("runtime_schema_guard_0122_")
+        ) {
           return { rows: [{ ready: true }] };
         }
 
@@ -185,6 +189,33 @@ describe("runtime schema guard", () => {
 
       await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
         "migration 0121 creator_post_tips indexes do not match the runtime contract",
+      );
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("fails when a migration 0122 index keeps its name but loses its definition", async () => {
+    const testDb = await acquireTestPrerequisite(
+      () => startTestDatabase(),
+      {
+        prerequisite: "Docker-backed Postgres for schema guard tests",
+        reason: "This test proves migration 0122 index definitions are runtime-guarded.",
+      },
+    );
+    if (!testDb) {
+      return;
+    }
+
+    try {
+      await testDb.pool.query("drop index transaction_tip_contexts_source_raw_payload_idx");
+      await testDb.pool.query(
+        `create index transaction_tip_contexts_source_raw_payload_idx
+           on transaction_tip_contexts (source_raw_payload_id, account_id)`,
+      );
+
+      await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
+        "migration 0122 transaction_tip_contexts indexes do not match the runtime contract",
       );
     } finally {
       await testDb.stop();

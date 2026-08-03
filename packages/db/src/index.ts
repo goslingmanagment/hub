@@ -55,6 +55,7 @@ export * from "./repositories/sync-context.ts";
 export * from "./repositories/sync.ts";
 export * from "./repositories/top-spenders.ts";
 export * from "./repositories/transactions.ts";
+export * from "./repositories/transaction-tip-contexts.ts";
 export * from "./repositories/voice-notes.ts";
 export * from "./repositories/voice-profiles.ts";
 export * from "./repositories/workboard-v2.ts";

@@ -786,7 +786,7 @@ export async function insertRawPayload(
   },
 ) {
   const executionContext = getPageSyncExecutionContext();
-  await db.insert(syncRawPayloads).values({
+  const [inserted] = await db.insert(syncRawPayloads).values({
     pageId: input.platformAccountId,
     syncRunId: input.syncRunId ?? null,
     stream: executionContext?.stream ?? null,
@@ -800,7 +800,14 @@ export async function insertRawPayload(
     statusCode: input.statusCode ?? null,
     errorMessage: input.errorMessage ?? null,
     retainUntil: input.retainUntil,
+  }).returning({
+    id: syncRawPayloads.id,
+    capturedAt: syncRawPayloads.capturedAt,
   });
+  if (!inserted) {
+    throw new Error("Raw payload insert returned no receipt");
+  }
+  return inserted;
 }
 
 export async function insertSyncRequestAttempt(

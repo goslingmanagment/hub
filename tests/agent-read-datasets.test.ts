@@ -23,12 +23,13 @@ import {
  * to prevent.
  */
 describe("agent read dataset vocabulary", () => {
-  it("names exactly the fourteen available datasets", () => {
+  it("names exactly the fifteen available datasets", () => {
     expect([...AGENT_DATASET_NAMES]).toEqual([
       "fan_memberships",
       "dm_threads",
       "subscriptions",
       "transactions",
+      "tip_transactions",
       "fan_spend_daily",
       "follows",
       "followers_daily",
@@ -108,6 +109,31 @@ describe("agent read dataset vocabulary", () => {
     expect(monetizationFields.get("lastObservedAt")?.filterable).toBe(true);
   });
 
+  it("keeps transaction correlation separate from exact captured tip context", () => {
+    expect(AGENT_DATASETS.transactions.fields).toMatchObject({
+      relatedMessageRef: "string",
+      correlationRef: "string",
+    });
+    expect(AGENT_DATASETS.tip_transactions.fields).toEqual({
+      platform: "string",
+      platformUserId: "string",
+      transactionRef: "string",
+      transactionType: "string",
+      transactionState: "string",
+      occurredAt: "timestamp",
+      grossMills: "mills",
+      netMills: "mills",
+      feeMills: "mills",
+      currency: "string",
+      correlationRef: "string",
+      contextState: "string",
+      capturedConversationRef: "string",
+      tipMessageText: "string",
+    });
+    expect(agentDatasetRequiredCapabilities("tip_transactions"))
+      .toEqual(["read:datasets", "read:money", "read:messages"]);
+  });
+
   it("uses wire field names the query schema will accept", () => {
     // The query body validates `field` against /^[a-z][a-zA-Z0-9]*$/ with a 64-char
     // cap BEFORE any lookup. A registry field that cannot pass that regex would be
@@ -154,6 +180,7 @@ describe("agent read dataset vocabulary", () => {
       "fan_memberships",
       "subscriptions",
       "transactions",
+      "tip_transactions",
       "fan_spend_daily",
       "post_monetization",
       "post_tips",
@@ -179,6 +206,8 @@ describe("agent read dataset vocabulary", () => {
     expect(agentDatasetDefinition("post_monetization"))
       .toBe(AGENT_DATASETS.post_monetization);
     expect(agentDatasetDefinition("post_tips")).toBe(AGENT_DATASETS.post_tips);
+    expect(agentDatasetDefinition("tip_transactions"))
+      .toBe(AGENT_DATASETS.tip_transactions);
     expect(agentDatasetDefinition("tip_goals")).toBe(AGENT_DATASETS.tip_goals);
     expect(agentDatasetDefinition("page_dm_threads")).toBeUndefined();
     expect(agentDatasetDefinition("")).toBeUndefined();

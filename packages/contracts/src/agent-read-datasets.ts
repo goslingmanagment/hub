@@ -187,7 +187,35 @@ export const AGENT_DATASETS = {
       netMills: "mills",
       feeMills: "mills",
       currency: "string",
+      /** Backward-compatible legacy name. The provider value is a generic
+       * correlation key and is not guaranteed to identify a message. */
       relatedMessageRef: "string",
+      correlationRef: "string",
+    },
+    defaultSort: { field: "occurredAt", dir: "desc", nullsLast: false },
+    stableKey: ["transactionId"],
+  },
+  tip_transactions: {
+    moneyBearing: true,
+    // Fan-written tip copy is transcript-grade verbatim material. One query
+    // intentionally returns ledger money and captured context together, so all
+    // three dataset/money/messages capabilities are mandatory.
+    verbatimText: true,
+    fields: {
+      platform: "string",
+      platformUserId: "string",
+      transactionRef: "string",
+      transactionType: "string",
+      transactionState: "string",
+      occurredAt: "timestamp",
+      grossMills: "mills",
+      netMills: "mills",
+      feeMills: "mills",
+      currency: "string",
+      correlationRef: "string",
+      contextState: "string",
+      capturedConversationRef: "string",
+      tipMessageText: "string",
     },
     defaultSort: { field: "occurredAt", dir: "desc", nullsLast: false },
     stableKey: ["transactionId"],
