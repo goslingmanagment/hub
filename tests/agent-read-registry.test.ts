@@ -99,6 +99,20 @@ describe("agent read registry", () => {
     expect(requiredPlanesForClaimFields(["grossMills"])).toEqual(["transactions"]);
     expect(requiredPlanesForClaimFields(["postRef", "postText", "publishedAt"]))
       .toEqual(["creator_posts"]);
+    expect(requiredPlanesForClaimFields(["postTipTotalMills", "tipGoalTargetMills"]))
+      .toEqual(["creator_posts"]);
+    expect(requiredPlanesForClaimFields([
+      "postTipPostRef",
+      "postTipRef",
+      "postTipAmountMills",
+      "postTipGoalRef",
+      "postTipMessageText",
+    ]))
+      .toEqual(["creator_post_tips"]);
+    expect(requiredPlanesForClaimFields(["tipGoalRef"]))
+      .toEqual(["creator_posts"]);
+    expect(requiredPlanesForClaimFields(["linkedPostCount"]))
+      .toEqual(["creator_posts"]);
     // Union across fields of different classes.
     expect(requiredPlanesForClaimFields(["profileBody", "grossMills"]))
       .toEqual(["fan_profiles", "transactions"]);

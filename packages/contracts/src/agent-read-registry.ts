@@ -152,7 +152,8 @@ export const AGENT_CLAIM_CLASSES = {
     },
   },
   content: {
-    // The projection is authoritative for the current creator-post material;
+    // The current-head projections are authoritative for creator-post material
+    // and monetization snapshots. Per-tip rows have their own immutable plane;
     // journal rows remain lineage evidence and are not re-read by dataset #10.
     evidentiary: ["observations", "sync_raw_payloads"],
     fields: {
@@ -162,6 +163,24 @@ export const AGENT_CLAIM_CLASSES = {
       firstObservedAt: { required: ["creator_posts"] },
       lastObservedAt: { required: ["creator_posts"] },
       attachmentCount: { required: ["creator_posts"] },
+      postTargetTipAmountMills: { required: ["creator_posts"] },
+      attachmentTipAmountMills: { required: ["creator_posts"] },
+      postTipTotalMills: { required: ["creator_posts"] },
+      tipGoalLinked: { required: ["creator_posts"] },
+      tipGoalRef: { required: ["creator_posts"] },
+      tipGoalLabelText: { required: ["creator_posts"] },
+      tipGoalTargetMills: { required: ["creator_posts"] },
+      tipGoalCurrentMills: { required: ["creator_posts"] },
+      tipGoalAmountsHidden: { required: ["creator_posts"] },
+      postTipPostRef: { required: ["creator_post_tips"] },
+      postTipRef: { required: ["creator_post_tips"] },
+      tipSenderPlatformUserId: { required: ["creator_post_tips"] },
+      postTipOccurredAt: { required: ["creator_post_tips"] },
+      postTipAmountMills: { required: ["creator_post_tips"] },
+      receiverTransactionRef: { required: ["creator_post_tips"] },
+      postTipGoalRef: { required: ["creator_post_tips"] },
+      postTipMessageText: { required: ["creator_post_tips"] },
+      linkedPostCount: { required: ["creator_posts"] },
     },
   },
 } as const satisfies Record<string, AgentClaimClassDefinition>;

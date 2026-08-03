@@ -349,6 +349,38 @@ export interface FanslyPostsPageResponse {
   raw: FanslyPostsPage | unknown;
 }
 
+/** Stable fields observed on GET /tips?targetIds=... . The endpoint may add
+ * fields (including tipGoalId), so accepted items and targets retain additive
+ * provider properties for capture-first consumers. */
+export interface FanslyTipTarget {
+  id: string;
+  type: number;
+  [key: string]: unknown;
+}
+
+export interface FanslyPostTip {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  amount: number;
+  message?: string | null;
+  senderTransactionId: string;
+  receiverTransactionId: string;
+  targets: FanslyTipTarget[];
+  createdAt: number;
+  tipGoalId?: string | null;
+  [key: string]: unknown;
+}
+
+export interface FanslyPostTipsResponse {
+  items: FanslyPostTip[];
+  targetIds: string[];
+  /** False means the successful provider envelope drifted away from an array.
+   * Callers must capture raw before rejecting the response. */
+  contractAccepted: boolean;
+  raw: FanslyPostTip[] | unknown;
+}
+
 export interface FanslyEarningsAccountsPageResponse {
   items: FanslyEarningsAccount[];
   after: Date | null;

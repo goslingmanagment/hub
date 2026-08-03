@@ -20,6 +20,8 @@ import {
   findAgentObservationPayload,
   listAgentObservations,
   queryAgentDataset,
+  readAgentPostSnapshotParseDebt,
+  readAgentPostTipParseDebt,
   readAgentJournalFloor,
   readAgentObservationsHighWater,
   summarizeAgentTransactionDataset,
@@ -31,6 +33,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError } from "../../services/errors.ts";
+import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.ts";
 import { buildAgentEvidence, gapBeforeCaptureFloor } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
 import { AgentPlaneDisabledError, staticNotFound, toSafeNumber, toSafeNumberOr } from "./errors.ts";
@@ -55,6 +58,7 @@ import {
   withAgentTimeout,
   writeAgentAudit,
 } from "./runtime.ts";
+import { postSnapshotParseDebtGaps, postTipParseDebtGaps } from "./post-tip-view.ts";
 
 /**
  * Operations #9a (observation envelopes), #9b (owner-only payload) and #10
@@ -614,7 +618,7 @@ export async function handleAgentDatasetQuery(
     const operationPlanes = operationPlanesFor(mapping.readPlanes, claimFields);
 
     const floorAt = isoOrNull(result.captureFloorAt);
-    const gaps = floorAt !== null
+    const gaps: AgentDatasetQueryResponse["capture"]["gaps"] = floorAt !== null
       && mapping.captureFloorPlane !== undefined
       && Date.parse(from) < Date.parse(floorAt)
       ? [{
@@ -632,9 +636,26 @@ export async function handleAgentDatasetQuery(
           },
         }]
       : [];
+    if (params.dataset === "post_tips") {
+      const parseDebt = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        readAgentPostTipParseDebt(tx, {
+          pageIds: [page.id],
+          parserVersion: POSTS_CANONICALIZER_VERSION,
+        }), "agent_post_tip_parse_debt");
+      gaps.push(...postTipParseDebtGaps(parseDebt));
+    }
+    if (["posts", "post_monetization", "tip_goals"].includes(params.dataset)) {
+      const parseDebt = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+        readAgentPostSnapshotParseDebt(tx, {
+          pageIds: [page.id],
+          parserVersion: POSTS_CANONICALIZER_VERSION,
+        }), "agent_post_snapshot_parse_debt");
+      gaps.push(...postSnapshotParseDebtGaps(parseDebt));
+    }
     const scopeFieldStates = computeScopeFieldStates({
       fields: claimFields ?? [],
       platforms: [page.platform as Platform],
+      dataset: params.dataset,
     });
 
     const hasMore = result.rows.length === limit;
@@ -821,7 +842,23 @@ function datasetRowFieldStates(
       continue;
     }
     const value = fields[field];
-    if (value === null) {
+    // A row-level null can refine `present` into "this source did not provide a
+    // value". It must never erase a structural scope truth such as not_captured
+    // or captured_unparsed — that used to make an unsupported OnlyFans field
+    // look like a provider-specific omission that another pull might repair.
+    if (state.state !== "present") {
+      result[field] = state;
+    } else if (field === "postTipGoalRef" && value === null) {
+      // The post-tip canonicalizer accepts a row only after inspecting every
+      // target. A null goal ref therefore means it observed zero type-7100
+      // targets: affirmative direct-tip evidence, not an omitted provider
+      // field. Keep message/null semantics separate below; Fansly may genuinely
+      // omit the optional note.
+      result[field] = {
+        state: "observed_empty",
+        remedy: { kind: "none", reason: "no_remedy_exists" },
+      };
+    } else if (value === null) {
       result[field] = {
         state: "source_did_not_provide",
         remedy: { kind: "none", reason: "no_remedy_exists" },

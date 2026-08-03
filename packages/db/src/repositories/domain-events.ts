@@ -55,6 +55,8 @@ export interface ProjectionCheckpointInput {
 const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "message.material_observed",
   "post.observed",
+  "post.tip_observed",
+  "post.tip_parse_rejected",
   "capture.coverage_observed",
   "capture.coverage_revoked",
   // Fansly replay (slice D). These describe facts that are up to a year old

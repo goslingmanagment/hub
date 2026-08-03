@@ -317,6 +317,100 @@ const CREATOR_POSTS = `
   from creator_posts cp
 `;
 
+const POST_MONETIZATION = `
+  select cp.account_id          as k_page_id,
+         cp.platform::text      as k_platform,
+         cp.id::text            as k_key,
+         cp.published_at        as k_occurred_at,
+         null::text             as k_fan,
+         cp.source_observation_id as k_observation_ref,
+         case cp.platform::text
+           when 'fansly' then 'fansly_pull'
+           else 'unknown'
+         end                    as k_ingest_path,
+         'converging'::text     as k_convergence,
+         cp.platform::text      as f_platform,
+         cp.platform_post_id    as f_post_ref,
+         cp.published_at        as f_published_at,
+         cp.last_observed_at    as f_last_observed_at,
+         cp.tip_amount_mills    as f_post_target_tip_amount_mills,
+         cp.attachment_tip_amount_mills as f_attachment_tip_amount_mills,
+         cp.post_tip_total_mills as f_post_tip_total_mills,
+         cp.tip_goal_linked     as f_tip_goal_linked,
+         cp.tip_goal_ref        as f_tip_goal_ref,
+         cp.tip_goal_label      as f_tip_goal_label_text,
+         cp.tip_goal_target_mills as f_tip_goal_target_mills,
+         cp.tip_goal_current_mills as f_tip_goal_current_mills,
+         cp.tip_goal_amounts_hidden as f_tip_goal_amounts_hidden
+  from creator_posts cp
+  where cp.platform::text = 'fansly'
+`;
+
+const CREATOR_POST_TIPS = `
+  select cpt.account_id         as k_page_id,
+         cpt.platform::text     as k_platform,
+         cpt.id::text           as k_key,
+         cpt.occurred_at        as k_occurred_at,
+         cpt.tip_sender_platform_user_id as k_fan,
+         cpt.source_observation_id as k_observation_ref,
+         case cpt.platform::text
+           when 'fansly' then 'fansly_pull'
+           else 'unknown'
+         end                    as k_ingest_path,
+         'converging'::text     as k_convergence,
+         cpt.platform::text     as f_platform,
+         cpt.platform_post_id   as f_post_tip_post_ref,
+         cpt.platform_tip_id    as f_post_tip_ref,
+         cpt.tip_sender_platform_user_id as f_tip_sender_platform_user_id,
+         cpt.occurred_at        as f_post_tip_occurred_at,
+         cpt.post_tip_amount_mills as f_post_tip_amount_mills,
+         cpt.receiver_transaction_ref as f_receiver_transaction_ref,
+         cpt.tip_goal_ref       as f_post_tip_goal_ref,
+         cpt.tip_message_text   as f_post_tip_message_text
+  from creator_post_tips cpt
+  where cpt.platform::text = 'fansly'
+`;
+
+/**
+ * Shared Fansly goals repeat on every linked creator-post head. Rank inside the
+ * source projection so the public dataset has exactly one row per native goal
+ * ref, while retaining how many current post heads link to it. The provider
+ * snapshot winner uses the same temporal/account-sequence ordering as the
+ * projection; id is only the final total-order guard for malformed legacy data.
+ */
+const TIP_GOALS = `
+  select ranked.account_id       as k_page_id,
+         ranked.platform::text   as k_platform,
+         ranked.tip_goal_ref     as k_key,
+         ranked.last_observed_at as k_occurred_at,
+         null::text              as k_fan,
+         ranked.source_observation_id as k_observation_ref,
+         'fansly_pull'::text     as k_ingest_path,
+         'converging'::text      as k_convergence,
+         ranked.platform::text   as f_platform,
+         ranked.tip_goal_ref     as f_tip_goal_ref,
+         ranked.tip_goal_label   as f_tip_goal_label_text,
+         ranked.tip_goal_target_mills as f_tip_goal_target_mills,
+         ranked.tip_goal_current_mills as f_tip_goal_current_mills,
+         ranked.tip_goal_amounts_hidden as f_tip_goal_amounts_hidden,
+         ranked.last_observed_at as f_last_observed_at,
+         ranked.linked_post_count as f_linked_post_count
+  from (
+    select cp.*,
+           count(*) over (
+             partition by cp.account_id, cp.platform, cp.tip_goal_ref
+           ) as linked_post_count,
+           row_number() over (
+             partition by cp.account_id, cp.platform, cp.tip_goal_ref
+             order by cp.last_observed_at desc, cp.source_account_seq desc, cp.id desc
+           ) as goal_rank
+    from creator_posts cp
+    where cp.platform::text = 'fansly'
+      and cp.tip_goal_ref is not null
+  ) ranked
+  where ranked.goal_rank = 1
+`;
+
 const SYNC_STREAMS = `
   select ss.page_id       as k_page_id,
          p.platform::text as k_platform,
@@ -485,6 +579,81 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     stableKeyColumns: ["k_key"],
     readPlanes: ["creator_posts"],
     captureFloorPlane: "creator_posts",
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
+  },
+  post_monetization: {
+    source: POST_MONETIZATION,
+    fields: {
+      platform: "f_platform",
+      postRef: "f_post_ref",
+      publishedAt: "f_published_at",
+      lastObservedAt: "f_last_observed_at",
+      postTargetTipAmountMills: "f_post_target_tip_amount_mills",
+      attachmentTipAmountMills: "f_attachment_tip_amount_mills",
+      postTipTotalMills: "f_post_tip_total_mills",
+      tipGoalLinked: "f_tip_goal_linked",
+      tipGoalRef: "f_tip_goal_ref",
+      tipGoalLabelText: "f_tip_goal_label_text",
+      tipGoalTargetMills: "f_tip_goal_target_mills",
+      tipGoalCurrentMills: "f_tip_goal_current_mills",
+      tipGoalAmountsHidden: "f_tip_goal_amounts_hidden",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["creator_posts"],
+    captureFloorPlane: "creator_posts",
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
+  },
+  post_tips: {
+    source: CREATOR_POST_TIPS,
+    fields: {
+      platform: "f_platform",
+      postTipPostRef: "f_post_tip_post_ref",
+      postTipRef: "f_post_tip_ref",
+      tipSenderPlatformUserId: "f_tip_sender_platform_user_id",
+      postTipOccurredAt: "f_post_tip_occurred_at",
+      postTipAmountMills: "f_post_tip_amount_mills",
+      receiverTransactionRef: "f_receiver_transaction_ref",
+      postTipGoalRef: "f_post_tip_goal_ref",
+      postTipMessageText: "f_post_tip_message_text",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["creator_post_tips"],
+    captureFloorPlane: "creator_post_tips",
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
+  },
+  tip_goals: {
+    source: TIP_GOALS,
+    fields: {
+      platform: "f_platform",
+      tipGoalRef: "f_tip_goal_ref",
+      tipGoalLabelText: "f_tip_goal_label_text",
+      tipGoalTargetMills: "f_tip_goal_target_mills",
+      tipGoalCurrentMills: "f_tip_goal_current_mills",
+      tipGoalAmountsHidden: "f_tip_goal_amounts_hidden",
+      lastObservedAt: "f_last_observed_at",
+      linkedPostCount: "f_linked_post_count",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["creator_posts"],
+    // This source is ranked and goal-only: min(k_occurred_at) would be the
+    // oldest WINNING goal snapshot, not the physical creator_posts floor.
+    // Keep the named plane's floor unknown instead of manufacturing a later
+    // floor (and a false before_capture_floor gap) from a derived view.
     provenanceColumns: {
       observationRef: "k_observation_ref",
       ingestPath: "k_ingest_path",

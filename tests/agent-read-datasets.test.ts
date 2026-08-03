@@ -23,7 +23,7 @@ import {
  * to prevent.
  */
 describe("agent read dataset vocabulary", () => {
-  it("names exactly the eleven available datasets", () => {
+  it("names exactly the fourteen available datasets", () => {
     expect([...AGENT_DATASET_NAMES]).toEqual([
       "fan_memberships",
       "dm_threads",
@@ -35,6 +35,9 @@ describe("agent read dataset vocabulary", () => {
       "fan_aliases",
       "fan_notes",
       "posts",
+      "post_monetization",
+      "post_tips",
+      "tip_goals",
       "sync_streams",
     ]);
   });
@@ -79,6 +82,30 @@ describe("agent read dataset vocabulary", () => {
         expect(kinds.has(field.kind), `${dataset}.${field.field} kind ${field.kind}`).toBe(true);
       }
     }
+  });
+
+  it("keeps post target totals distinct from donor-tip attribution", () => {
+    expect(AGENT_DATASETS.post_monetization.fields).toHaveProperty(
+      "postTargetTipAmountMills",
+      "mills",
+    );
+    expect(AGENT_DATASETS.post_monetization.fields).not.toHaveProperty("tipAmountMills");
+    expect(AGENT_DATASETS.post_tips.fields).toHaveProperty("postTipPostRef", "string");
+    expect(AGENT_DATASETS.post_tips.fields).not.toHaveProperty("postRef");
+    expect(AGENT_DATASETS.post_tips.fields).toMatchObject({
+      postTipGoalRef: "string",
+      postTipMessageText: "string",
+    });
+    expect(AGENT_DATASETS.tip_goals.fields).toMatchObject({
+      tipGoalRef: "string",
+      tipGoalCurrentMills: "mills",
+      linkedPostCount: "int",
+    });
+    const monetizationFields = new Map(
+      agentDatasetFields("post_monetization").map((field) => [field.field, field]),
+    );
+    expect(monetizationFields.get("publishedAt")?.filterable).toBe(true);
+    expect(monetizationFields.get("lastObservedAt")?.filterable).toBe(true);
   });
 
   it("uses wire field names the query schema will accept", () => {
@@ -128,6 +155,9 @@ describe("agent read dataset vocabulary", () => {
       "subscriptions",
       "transactions",
       "fan_spend_daily",
+      "post_monetization",
+      "post_tips",
+      "tip_goals",
     ]);
 
     for (const dataset of AGENT_DATASET_NAMES) {
@@ -146,6 +176,10 @@ describe("agent read dataset vocabulary", () => {
     // enum is built from the available names only, so this must stay undefined.
     expect(agentDatasetDefinition("purchase_history")).toBeUndefined();
     expect(agentDatasetDefinition("posts")).toBe(AGENT_DATASETS.posts);
+    expect(agentDatasetDefinition("post_monetization"))
+      .toBe(AGENT_DATASETS.post_monetization);
+    expect(agentDatasetDefinition("post_tips")).toBe(AGENT_DATASETS.post_tips);
+    expect(agentDatasetDefinition("tip_goals")).toBe(AGENT_DATASETS.tip_goals);
     expect(agentDatasetDefinition("page_dm_threads")).toBeUndefined();
     expect(agentDatasetDefinition("")).toBeUndefined();
     // Prototype keys are not datasets — the lookup must not inherit them.

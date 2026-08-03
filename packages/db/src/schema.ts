@@ -3342,6 +3342,19 @@ export const creatorPosts = pgTable(
     lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
     contentHash: char("content_hash", { length: 64 }).notNull(),
     attachmentCount: integer("attachment_count").default(0).notNull(),
+    /** Fansly-native mills. `tipAmount` includes direct and goal-qualified
+     * post targets; attachmentTipAmount is the tipped-reply component. */
+    tipAmountMills: bigint("tip_amount_mills", { mode: "bigint" }),
+    attachmentTipAmountMills: bigint("attachment_tip_amount_mills", { mode: "bigint" }),
+    /** The exact counter rendered by Fansly: tipAmount + attachmentTipAmount. */
+    postTipTotalMills: bigint("post_tip_total_mills", { mode: "bigint" }),
+    /** Tri-state: Fansly true/false with attachment evidence, null otherwise. */
+    tipGoalLinked: boolean("tip_goal_linked"),
+    tipGoalRef: text("tip_goal_ref"),
+    tipGoalLabel: text("tip_goal_label"),
+    tipGoalTargetMills: bigint("tip_goal_target_mills", { mode: "bigint" }),
+    tipGoalCurrentMills: bigint("tip_goal_current_mills", { mode: "bigint" }),
+    tipGoalAmountsHidden: boolean("tip_goal_amounts_hidden"),
     sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
     sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
     sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
@@ -3365,6 +3378,45 @@ export const creatorPosts = pgTable(
       "creator_posts_attachment_count_check",
       sql`${table.attachmentCount} >= 0`,
     ),
+    tipAmountCheck: check(
+      "creator_posts_tip_amount_check",
+      sql`${table.tipAmountMills} is null or ${table.tipAmountMills} >= 0`,
+    ),
+    attachmentTipAmountCheck: check(
+      "creator_posts_attachment_tip_amount_check",
+      sql`${table.attachmentTipAmountMills} is null or ${table.attachmentTipAmountMills} >= 0`,
+    ),
+    tipTotalCheck: check(
+      "creator_posts_tip_total_check",
+      sql`${table.postTipTotalMills} is null or ${table.postTipTotalMills} >= 0`,
+    ),
+    tipTotalConsistencyCheck: check(
+      "creator_posts_tip_total_consistency_check",
+      sql`${table.postTipTotalMills} is not distinct from case
+        when ${table.tipAmountMills} is null and ${table.attachmentTipAmountMills} is null then null
+        else coalesce(${table.tipAmountMills}, 0) + coalesce(${table.attachmentTipAmountMills}, 0)
+      end`,
+    ),
+    tipGoalRefCheck: check(
+      "creator_posts_tip_goal_ref_check",
+      sql`${table.tipGoalRef} is null or length(${table.tipGoalRef}) > 0`,
+    ),
+    tipGoalAmountCheck: check(
+      "creator_posts_tip_goal_amount_check",
+      sql`(${table.tipGoalTargetMills} is null or ${table.tipGoalTargetMills} >= 0)
+        and (${table.tipGoalCurrentMills} is null or ${table.tipGoalCurrentMills} >= 0)`,
+    ),
+    tipGoalLinkCheck: check(
+      "creator_posts_tip_goal_link_check",
+      sql`case
+        when ${table.tipGoalLinked} is true then ${table.tipGoalRef} is not null
+        else ${table.tipGoalRef} is null
+          and ${table.tipGoalLabel} is null
+          and ${table.tipGoalTargetMills} is null
+          and ${table.tipGoalCurrentMills} is null
+          and ${table.tipGoalAmountsHidden} is null
+      end`,
+    ),
     sourceAccountSeqCheck: check(
       "creator_posts_source_account_seq_check",
       sql`${table.sourceAccountSeq} > 0`,
@@ -3383,6 +3435,93 @@ export const creatorPosts = pgTable(
       table.lastObservedAt.desc(),
       table.id.desc(),
     ),
+  }),
+);
+
+// Fansly individual tips returned by /tips?targetIds=<post ids>. Canonical
+// acceptance requires one explicit post target; the key still includes both
+// native ids so later provider evidence cannot create an accidental collision.
+// Raw responses and every material version remain upstream in the journal and
+// domain ledger; this table is rebuildable serving state.
+export const creatorPostTips = pgTable(
+  "creator_post_tips",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    accountId: bigint("account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    platformPostId: text("platform_post_id").notNull(),
+    platformTipId: text("platform_tip_id").notNull(),
+    tipSenderPlatformUserId: text("tip_sender_platform_user_id").notNull(),
+    postTipAmountMills: bigint("post_tip_amount_mills", { mode: "bigint" }).notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    receiverTransactionRef: text("receiver_transaction_ref"),
+    senderTransactionRef: text("sender_transaction_ref"),
+    tipGoalRef: text("tip_goal_ref"),
+    /** Provider-verbatim Fansly tip message; empty text is distinct from null. */
+    tipMessageText: text("tip_message_text"),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    accountTipPostUniq: unique("creator_post_tips_account_tip_post_uniq").on(
+      table.accountId,
+      table.platformTipId,
+      table.platformPostId,
+    ),
+    refsCheck: check(
+      "creator_post_tips_refs_check",
+      sql`length(${table.platformPostId}) > 0
+        and length(${table.platformTipId}) > 0
+        and length(${table.tipSenderPlatformUserId}) > 0
+        and (${table.receiverTransactionRef} is null or length(${table.receiverTransactionRef}) > 0)
+        and (${table.senderTransactionRef} is null or length(${table.senderTransactionRef}) > 0)
+        and (${table.tipGoalRef} is null or length(${table.tipGoalRef}) > 0)`,
+    ),
+    amountCheck: check(
+      "creator_post_tips_amount_check",
+      sql`${table.postTipAmountMills} >= 0`,
+    ),
+    contentHashCheck: check(
+      "creator_post_tips_content_hash_check",
+      sql`${table.contentHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    sourceAccountSeqCheck: check(
+      "creator_post_tips_source_account_seq_check",
+      sql`${table.sourceAccountSeq} > 0`,
+    ),
+    observedOrderCheck: check(
+      "creator_post_tips_observed_order_check",
+      sql`${table.lastObservedAt} >= ${table.firstObservedAt}`,
+    ),
+    accountOccurredIdx: index("creator_post_tips_account_occurred_idx").on(
+      table.accountId,
+      table.occurredAt.desc(),
+      table.id.desc(),
+    ),
+    accountPostIdx: index("creator_post_tips_account_post_idx").on(
+      table.accountId,
+      table.platformPostId,
+      table.occurredAt.desc(),
+    ),
+    accountSenderOccurredIdx: index("creator_post_tips_account_sender_occurred_idx").on(
+      table.accountId,
+      table.tipSenderPlatformUserId,
+      table.occurredAt.desc(),
+      table.id.desc(),
+    ),
+    receiverTransactionIdx: index("creator_post_tips_receiver_transaction_idx")
+      .on(table.accountId, table.receiverTransactionRef)
+      .where(sql`${table.receiverTransactionRef} is not null`),
   }),
 );
 

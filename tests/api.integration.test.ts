@@ -396,6 +396,14 @@ function createAutoSyncFanslyAdapter(input: {
         raw: { posts: [] },
       };
     },
+    async getTipsByTargetIds(_context: unknown, targetIds: string[]) {
+      return {
+        items: [],
+        targetIds,
+        contractAccepted: true,
+        raw: [],
+      };
+    },
     async getEarningsAccountsPage(_context: unknown, params: { after?: Date | null; before?: Date | null }) {
       return {
         items: [],

@@ -84,6 +84,10 @@ export async function persistRawPayload(
     action?: string;
     /** Producer platform for the observation (Stage 7); callers know theirs. */
     platform?: "fansly" | "onlyfans";
+    /** Optional contextual observation envelope. The raw table still stores
+     * `responsePayload` verbatim; this is reserved for a quarantined response
+     * that a future parser needs request context to replay safely. */
+    observationPayload?: unknown;
   },
 ) {
   try {
@@ -108,7 +112,10 @@ export async function persistRawPayload(
   const platform = options?.platform ?? null;
   // Normalized so an adapter (or test stub) handing back undefined still
   // hashes and journals deterministically as JSON null.
-  const observedPayload = input.responsePayload ?? null;
+  const observedPayload = options !== undefined
+      && Object.hasOwn(options, "observationPayload")
+    ? options.observationPayload ?? null
+    : input.responsePayload ?? null;
   try {
     await insertObservation(db, {
       source: "pull",

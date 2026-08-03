@@ -34,6 +34,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const FULL_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-full-key-token`;
 const NARROW_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-narrow-key-token`;
 const MESSAGES_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-messages-only-token`;
+const MONEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-money-only-token`;
 
 let testDb: StartedTestDatabase | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
@@ -116,6 +117,15 @@ beforeEach(async (context) => {
     keyDigest: sha256Hex(MESSAGES_TOKEN),
     capabilities: ["read:messages", "read:datasets"],
   });
+  // Money WITHOUT messages: distinguishes a genuinely money-only dataset from
+  // one whose creator-written goal label also requires the text capability.
+  await insertAgentKey(testDb.db, {
+    ...common,
+    name: "money-only",
+    keyPrefix: MONEY_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+    keyDigest: sha256Hex(MONEY_TOKEN),
+    capabilities: ["read:money", "read:datasets"],
+  });
 
   await setConfigOverride(testDb.db, {
     key: "agentReadPlaneMode",
@@ -164,6 +174,28 @@ async function seedTwoFans() {
          '2026-01-23T12:00:00Z', 'fansly:rest', 'USD')`,
       [pageId, fanId, `tx-${username}`],
     );
+    await pool.query(
+      `insert into creator_post_tips (account_id, platform, platform_post_id,
+         platform_tip_id, tip_sender_platform_user_id, post_tip_amount_mills,
+         occurred_at, receiver_transaction_ref, tip_goal_ref, tip_message_text,
+         first_observed_at, last_observed_at, content_hash, source_event_id,
+         source_observation_id, source_account_seq)
+       values ($1, 'fansly', $2, $3, $4, 25000,
+         '2026-03-06T13:00:00Z', $5, $6, 'private fan note must not cross this view',
+         '2026-03-06T13:01:00Z', '2026-03-07T00:00:00Z', repeat('e', 64),
+         $7, $8, $9)`,
+      [
+        pageId,
+        `post-${username}`,
+        `post-tip-${username}`,
+        platformUserId,
+        `receiver-${username}`,
+        username === "rick" ? "goal-rick" : null,
+        fanId + 10_000,
+        fanId + 20_000,
+        fanId + 30_000,
+      ],
+    );
     // The Fansly retention TIER is derived from lifetime spend, which is what
     // makes it a payment oracle for a key without read:money.
     await pool.query(
@@ -201,6 +233,18 @@ async function seedTwoFans() {
      values ($1, $2, $3, $4, 1, 'complete', '2026-03-03T00:00:00Z')`,
     [onlyFansPageId, Number(rows[0]!.id), OF_THREAD, OF_FAN],
   );
+
+  // An actual OnlyFans post with null monetization columns pins the distinction
+  // between a provider omission and a structurally unsupported capture lane.
+  await pool.query(
+    `insert into creator_posts (account_id, platform, platform_post_id, text_plain,
+       published_at, first_observed_at, last_observed_at, content_hash,
+       attachment_count, source_event_id, source_observation_id, source_account_seq)
+     values ($1, 'onlyfans', 'of-post-no-monetization', 'ordinary OF post',
+       '2026-03-04T12:00:00Z', '2026-03-04T12:01:00Z', '2026-03-05T00:00:00Z',
+       repeat('d', 64), 1, 9301, 9302, 201)`,
+    [onlyFansPageId],
+  );
 }
 
 function get(url: string, token = FULL_TOKEN) {
@@ -226,6 +270,7 @@ describe("[sync-critical] agent read plane: capability gates", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.money).toBeNull();
+    expect(body.postTips).toBeNull();
     expect(body.subscriptions).toBeNull();
     expect(body.memberships[0].lifetimeSpendMills).toBeNull();
     // The TIMESTAMP is withheld too: when a payment happened discloses that one did.
@@ -233,7 +278,47 @@ describe("[sync-critical] agent read plane: capability gates", () => {
 
     const granted = await get(`/api/v1/agent/people/fansly/${RICK}`);
     expect(granted.json().money.lifetime.grossMills).toBe(50_000);
+    expect(granted.json().postTips.items).toEqual([expect.objectContaining({
+      postTipPostRef: "post-rick",
+      postTipRef: "post-tip-rick",
+      postTipAmountMills: 25_000,
+      postTipGoalRef: "goal-rick",
+    })]);
+    expect(granted.json().postTips.items[0]).not.toHaveProperty("postTipMessageText");
     expect(granted.json().memberships[0].lastTransactionAt).not.toBeNull();
+  });
+
+  it("#3 serves attribution to read:money without leaking the fan-written note", async () => {
+    const moneyOnly = (await get(
+      `/api/v1/agent/people/fansly/${RICK}`,
+      MONEY_TOKEN,
+    )).json();
+    expect(moneyOnly.postTips.items).toEqual([expect.objectContaining({
+      postTipPostRef: "post-rick",
+      postTipGoalRef: "goal-rick",
+      postTipAmountMills: 25_000,
+    })]);
+    expect(moneyOnly.postTips.items[0]).not.toHaveProperty("postTipMessageText");
+
+    const messagesOnly = (await get(
+      `/api/v1/agent/people/fansly/${RICK}`,
+      MESSAGES_TOKEN,
+    )).json();
+    expect(messagesOnly.postTips).toBeNull();
+  });
+
+  it("#3/#4 fail closed when a claim asks these non-verbatim views for the tip note", async () => {
+    const person = await get(
+      `/api/v1/agent/people/fansly/${RICK}`
+      + "?claimFields=postTipMessageText&claimTargets=all_in_scope",
+    );
+    expect(person.statusCode).toBe(400);
+
+    const timeline = await get(
+      `/api/v1/agent/people/fansly/${RICK}/timeline?${WINDOW}`
+      + "&claimFields=postTipMessageText&claimTargets=all_in_scope",
+    );
+    expect(timeline.statusCode).toBe(400);
   });
 
   it("#3 withholds threads and CRM as NULL without read:messages", async () => {
@@ -258,24 +343,50 @@ describe("[sync-critical] agent read plane: capability gates", () => {
       state: "not_read",
       reason: "capability_not_granted",
     });
+    expect(body.capture.planes.find(
+      (plane: { plane: string }) => plane.plane === "creator_post_tips",
+    )).toMatchObject({
+      state: "not_read",
+      reason: "capability_not_granted",
+    });
   });
 
   it("#4 drops the money lane without read:money and SAYS it dropped it", async () => {
     const response = await get(
-      `/api/v1/agent/people/fansly/${RICK}/timeline?${WINDOW}`,
+      `/api/v1/agent/people/fansly/${RICK}/timeline?${WINDOW}`
+      + "&claimFields=postTipPostRef&claimFields=postTipAmountMills"
+      + "&claimFields=postTipGoalRef&claimTargets=all_in_scope",
       NARROW_TOKEN,
     );
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.lanesRequested).toContain("money");
+    expect(body.lanesRequested).toContain("post_tips");
     expect(body.lanesServed).not.toContain("money");
+    expect(body.lanesServed).not.toContain("post_tips");
     expect(body.lanesServed).not.toContain("subscriptions");
     expect(body.lanesServed).not.toContain("messages");
     expect(body.items).toEqual([]);
+    expect(body.capture.scopeFieldStates).toMatchObject({
+      postTipPostRef: {
+        state: "unknown",
+        remedy: { reason: "capability_not_granted" },
+      },
+      postTipAmountMills: {
+        state: "unknown",
+        remedy: { reason: "capability_not_granted" },
+      },
+      postTipGoalRef: {
+        state: "unknown",
+        remedy: { reason: "capability_not_granted" },
+      },
+    });
 
     const granted = (await get(`/api/v1/agent/people/fansly/${RICK}/timeline?${WINDOW}`)).json();
     expect(granted.lanesServed).toContain("money");
+    expect(granted.lanesServed).toContain("post_tips");
     expect(granted.items.some((item: { lane: string }) => item.lane === "money")).toBe(true);
+    expect(granted.items.some((item: { lane: string }) => item.lane === "post_tips")).toBe(true);
   });
 
   it("#2 withholds thread inventory without read:messages", async () => {
@@ -702,7 +813,7 @@ describe("[sync-critical] agent read plane: review round 2", () => {
     expect(granted.state).toBe("read");
   });
 
-  it("P1-4 verbatim datasets require read:messages", async () => {
+  it("P1-4 dataset money/text gates compose without a side door", async () => {
     const window = { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" };
     // `read:datasets` alone used to read note bodies verbatim through this route,
     // while the very same material sat behind `read:messages` on #3.
@@ -734,12 +845,165 @@ describe("[sync-critical] agent read plane: review round 2", () => {
       window,
       MESSAGES_TOKEN,
     )).statusCode).toBe(200);
+
+    // Post monetization carries both money and creator-written goal copy: a key
+    // holding only either one of those capabilities is still refused.
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/post_monetization/query",
+      window,
+      MESSAGES_TOKEN,
+    )).statusCode).toBe(403);
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/post_monetization/query",
+      window,
+      MONEY_TOKEN,
+    )).statusCode).toBe(403);
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/post_monetization/query",
+      window,
+    )).statusCode).toBe(200);
+
+    // Individual tips carry money plus fan-written tip copy, so either partial
+    // grant is insufficient even when a particular row's message is null.
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/post_tips/query",
+      window,
+      MESSAGES_TOKEN,
+    )).statusCode).toBe(403);
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/post_tips/query",
+      window,
+      MONEY_TOKEN,
+    )).statusCode).toBe(403);
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/post_tips/query",
+      window,
+    )).statusCode).toBe(200);
+
+    // Deduplicated goals carry both their cumulative amounts and creator copy.
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/tip_goals/query",
+      window,
+      MESSAGES_TOKEN,
+    )).statusCode).toBe(403);
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/tip_goals/query",
+      window,
+      MONEY_TOKEN,
+    )).statusCode).toBe(403);
+    expect((await post(
+      "/api/v1/agent/pages/lora-2/datasets/tip_goals/query",
+      window,
+    )).statusCode).toBe(200);
+
     // A dataset with no text body is unaffected.
     expect((await post(
       "/api/v1/agent/pages/lora-2/datasets/dm_threads/query",
       window,
       NARROW_TOKEN,
     )).statusCode).toBe(200);
+  });
+
+  it("Fansly-only post money fields stay structurally not_captured on OnlyFans", async () => {
+    const monetizationRequest = {
+      from: "2026-01-01T00:00:00Z",
+      to: "2026-04-01T00:00:00Z",
+      claim: {
+        fields: ["postRef", "postTargetTipAmountMills", "tipGoalCurrentMills"],
+        targets: "all_in_scope",
+      },
+    };
+    const fansly = (await post(
+      "/api/v1/agent/pages/lora-2/datasets/post_monetization/query",
+      monetizationRequest,
+    )).json();
+    expect(fansly.capture.scopeFieldStates).toMatchObject({
+      postRef: { state: "present" },
+      postTargetTipAmountMills: { state: "present" },
+      tipGoalCurrentMills: { state: "present" },
+    });
+
+    const onlyFans = (await post(
+      "/api/v1/agent/pages/lora-of/datasets/post_monetization/query",
+      monetizationRequest,
+    )).json();
+    // The source is explicitly Fansly-only: an ordinary OF creator_posts row
+    // cannot leak into this dataset or establish a misleading capture floor.
+    expect(onlyFans.items).toEqual([]);
+    expect(onlyFans.capture.planes.find(
+      (plane: { plane: string }) => plane.plane === "creator_posts",
+    )).toMatchObject({
+      state: "read",
+      captureFloor: { at: null, kind: "unknown" },
+    });
+    expect(onlyFans.capture.scopeFieldStates).toMatchObject({
+      postRef: { state: "not_captured" },
+      postTargetTipAmountMills: { state: "not_captured" },
+      tipGoalCurrentMills: { state: "not_captured" },
+    });
+
+    const tipsRequest = {
+      from: "2026-01-01T00:00:00Z",
+      to: "2026-04-01T00:00:00Z",
+      claim: {
+        fields: [
+          "postTipPostRef",
+          "postTipAmountMills",
+          "postTipGoalRef",
+          "postTipMessageText",
+        ],
+        targets: "all_in_scope",
+      },
+    };
+    const fanslyTips = (await post(
+      "/api/v1/agent/pages/lora-2/datasets/post_tips/query",
+      tipsRequest,
+    )).json();
+    expect(fanslyTips.capture.scopeFieldStates).toMatchObject({
+      postTipPostRef: { state: "present" },
+      postTipAmountMills: { state: "present" },
+      postTipGoalRef: { state: "present" },
+      postTipMessageText: { state: "present" },
+    });
+    const onlyFansTips = (await post(
+      "/api/v1/agent/pages/lora-of/datasets/post_tips/query",
+      tipsRequest,
+    )).json();
+    expect(onlyFansTips.items).toEqual([]);
+    expect(onlyFansTips.capture.scopeFieldStates).toMatchObject({
+      postTipPostRef: { state: "not_captured" },
+      postTipAmountMills: { state: "not_captured" },
+      postTipGoalRef: { state: "not_captured" },
+      postTipMessageText: { state: "not_captured" },
+    });
+
+    const goalsRequest = {
+      from: "2026-01-01T00:00:00Z",
+      to: "2026-04-01T00:00:00Z",
+      claim: {
+        fields: ["tipGoalRef", "lastObservedAt", "linkedPostCount"],
+        targets: "all_in_scope",
+      },
+    };
+    const fanslyGoals = (await post(
+      "/api/v1/agent/pages/lora-2/datasets/tip_goals/query",
+      goalsRequest,
+    )).json();
+    expect(fanslyGoals.capture.scopeFieldStates).toMatchObject({
+      tipGoalRef: { state: "present" },
+      lastObservedAt: { state: "present" },
+      linkedPostCount: { state: "present" },
+    });
+    const onlyFansGoals = (await post(
+      "/api/v1/agent/pages/lora-of/datasets/tip_goals/query",
+      goalsRequest,
+    )).json();
+    expect(onlyFansGoals.items).toEqual([]);
+    expect(onlyFansGoals.capture.scopeFieldStates).toMatchObject({
+      tipGoalRef: { state: "not_captured" },
+      lastObservedAt: { state: "not_captured" },
+      linkedPostCount: { state: "not_captured" },
+    });
   });
 
   it("P1-5 snapshotExhausted is only claimed where a snapshot was frozen", async () => {
@@ -791,7 +1055,8 @@ describe("[sync-critical] agent read plane: review round 2", () => {
       capabilities: ["read:messages", "read:money", "read:datasets"],
       pageIds: [pageId],
       dailyRequestBudget: 100,
-      // Room for exactly ONE card (identity + membership + money row + thread) and
+      // Room for exactly ONE card (identity + membership + money row + post-tip
+      // attribution + thread) and
       // not two: the second request has allowance left but not enough for a whole
       // bundle, which is the case that used to be served anyway.
       dailyRowBudget: 5,
@@ -812,7 +1077,7 @@ describe("[sync-critical] agent read plane: review round 2", () => {
        from agent_key_usage_daily u join agent_keys k on k.id = u.agent_key_id
        where k.name = 'rows'`,
     );
-    expect(Number(rows[0]!.rows_returned)).toBe(4);
+    expect(Number(rows[0]!.rows_returned)).toBe(5);
   });
 
   it("P2c matchedInScope is inexact on any resumed or truncated read", async () => {

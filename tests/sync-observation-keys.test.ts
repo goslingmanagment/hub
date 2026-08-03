@@ -8,7 +8,7 @@ import type * as DbModule from "@agency_hub_core/db";
 // key must be unique per fetch within a chunk.
 
 const captured = vi.hoisted(() => ({
-  observations: [] as Array<{ idempotencyKey: string }>,
+  observations: [] as Array<{ idempotencyKey: string; kind: string; payload: unknown }>,
 }));
 
 vi.mock("@agency_hub_core/db", async (importOriginal) => {
@@ -16,7 +16,10 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
   return {
     ...actual,
     insertRawPayload: vi.fn(async () => {}),
-    insertObservation: vi.fn(async (_db: unknown, input: { idempotencyKey: string }) => {
+    insertObservation: vi.fn(async (
+      _db: unknown,
+      input: { idempotencyKey: string; kind: string; payload: unknown },
+    ) => {
       captured.observations.push(input);
       return { inserted: true };
     }),
@@ -61,5 +64,21 @@ describe("persistRawPayload observation keys", () => {
     await persistRawPayload({} as never, payload("fan_earnings_stats"), { platform: "fansly" });
     const keys = captured.observations.map((o) => o.idempotencyKey);
     expect(new Set(keys).size).toBe(2);
+  });
+
+  it("keeps the endpoint kind while journaling an explicit quarantine envelope", async () => {
+    captured.observations.length = 0;
+    const envelope = {
+      quarantine: "fansly_post_tips_scope_v1",
+      requestedTargetIds: ["post-1"],
+      response: [{ id: "tip-1" }],
+    };
+    await persistRawPayload({} as never, payload("post_tips"), {
+      platform: "fansly",
+      observationPayload: envelope,
+    });
+    expect(captured.observations).toEqual([
+      expect.objectContaining({ kind: "post_tips", payload: envelope }),
+    ]);
   });
 });

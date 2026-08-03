@@ -1117,11 +1117,24 @@ describe("sync integration", () => {
       expect(subscribers.rows).toHaveLength(1);
       expect(followers.rows).toHaveLength(1);
 
-      const runRows = await testDb.db.select({
+      const syncRunDb = testDb.db;
+      const selectRunRows = () => syncRunDb.select({
         stream: syncRuns.stream,
         status: syncRuns.outcome,
         startedAt: syncRuns.startedAt,
       }).from(syncRuns).orderBy(syncRuns.startedAt);
+      let runRows = await selectRunRows();
+      // appliedSeq is committed inside the stream handler; the executor stamps
+      // sync_runs.outcome immediately afterward. On a loaded CI runner the
+      // final recovery stream can be observable in that narrow terminalization
+      // gap, so wait for the run ledger rather than asserting across the race.
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        if (runRows.length === 10 && runRows.every((row) => row.status !== "running")) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        runRows = await selectRunRows();
+      }
       expect(runRows).toHaveLength(10);
       expect(runRows.map((row) => row.stream)).toEqual([
         "light",

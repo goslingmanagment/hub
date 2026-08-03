@@ -277,6 +277,68 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "publishedAt", dir: "desc", nullsLast: false },
     stableKey: ["postId"],
   },
+  post_monetization: {
+    moneyBearing: true,
+    // Fansly's tip-goal label is creator-written verbatim copy. Keep the whole
+    // dataset behind the same read:messages disclosure gate as creator posts so
+    // the label cannot become a side door around the text capability.
+    verbatimText: true,
+    fields: {
+      platform: "string",
+      postRef: "string",
+      publishedAt: "timestamp",
+      lastObservedAt: "timestamp",
+      postTargetTipAmountMills: "mills",
+      attachmentTipAmountMills: "mills",
+      postTipTotalMills: "mills",
+      tipGoalLinked: "bool",
+      tipGoalRef: "string",
+      tipGoalLabelText: "string",
+      tipGoalTargetMills: "mills",
+      tipGoalCurrentMills: "mills",
+      tipGoalAmountsHidden: "bool",
+    },
+    defaultSort: { field: "publishedAt", dir: "desc", nullsLast: false },
+    stableKey: ["postId"],
+  },
+  post_tips: {
+    moneyBearing: true,
+    // Fansly permits the sender to attach a free-form note to a tip. The note
+    // is fan-written transcript-grade material, so the whole dataset stays
+    // behind read:messages in addition to its money gate.
+    verbatimText: true,
+    fields: {
+      platform: "string",
+      postTipPostRef: "string",
+      postTipRef: "string",
+      tipSenderPlatformUserId: "string",
+      postTipOccurredAt: "timestamp",
+      postTipAmountMills: "mills",
+      receiverTransactionRef: "string",
+      postTipGoalRef: "string",
+      postTipMessageText: "string",
+    },
+    defaultSort: { field: "postTipOccurredAt", dir: "desc", nullsLast: false },
+    stableKey: ["postTipId"],
+  },
+  tip_goals: {
+    moneyBearing: true,
+    // The goal label is creator-written verbatim copy. This remains true even
+    // though the dataset deduplicates shared goals to one latest snapshot.
+    verbatimText: true,
+    fields: {
+      platform: "string",
+      tipGoalRef: "string",
+      tipGoalLabelText: "string",
+      tipGoalTargetMills: "mills",
+      tipGoalCurrentMills: "mills",
+      tipGoalAmountsHidden: "bool",
+      lastObservedAt: "timestamp",
+      linkedPostCount: "int",
+    },
+    defaultSort: { field: "lastObservedAt", dir: "desc", nullsLast: false },
+    stableKey: ["tipGoalRef"],
+  },
   sync_streams: {
     moneyBearing: false,
     verbatimText: false,

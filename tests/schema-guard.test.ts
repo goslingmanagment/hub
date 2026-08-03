@@ -42,7 +42,13 @@ describe("runtime schema guard", () => {
           text.includes("page_sync_cursors")
         ) {
           return {
-            rows: [{ name: "pages" }, { name: "page_sync_states" }, { name: "page_sync_cursors" }],
+            rows: [
+              { name: "pages" },
+              { name: "page_sync_states" },
+              { name: "page_sync_cursors" },
+              { name: "creator_posts" },
+              { name: "creator_post_tips" },
+            ],
           };
         }
 
@@ -54,6 +60,10 @@ describe("runtime schema guard", () => {
           return {
             rows: [],
           };
+        }
+
+        if (text.includes("runtime_schema_guard_0121_")) {
+          return { rows: [{ ready: true }] };
         }
 
         return {
@@ -148,6 +158,33 @@ describe("runtime schema guard", () => {
 
       await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
         "sync_runs.stats must be jsonb NOT NULL DEFAULT '{}'::jsonb",
+      );
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("fails when a migration 0121 index keeps its name but loses its definition", async () => {
+    const testDb = await acquireTestPrerequisite(
+      () => startTestDatabase(),
+      {
+        prerequisite: "Docker-backed Postgres for schema guard tests",
+        reason: "This test proves migration 0121 index definitions are runtime-guarded.",
+      },
+    );
+    if (!testDb) {
+      return;
+    }
+
+    try {
+      await testDb.pool.query("drop index creator_post_tips_account_sender_occurred_idx");
+      await testDb.pool.query(
+        `create index creator_post_tips_account_sender_occurred_idx
+           on creator_post_tips (account_id, tip_sender_platform_user_id)`,
+      );
+
+      await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
+        "migration 0121 creator_post_tips indexes do not match the runtime contract",
       );
     } finally {
       await testDb.stop();
