@@ -5,6 +5,9 @@ import {
   appendProjectionOnlyDomainEvents,
   createFanslyPage,
   createModel,
+  DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
+  getProjectionWatermark,
+  insertErasureLog,
   insertObservation,
   upsertCreatorPost,
 } from "@agency_hub_core/db";
@@ -1042,6 +1045,141 @@ describe("creator posts domain projection", () => {
       [page.id],
     );
     expect(afterRebuild.rows).toEqual(beforeRebuild.rows);
+  });
+
+  it("does not project pre-erasure Fansly post-tip material but still admits newer tips", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const model = await createModel(testDb.db, {
+      slug: "post-tip-erasure-fence",
+      name: "Post Tip Erasure Fence",
+    });
+    const page = model
+      ? await createFanslyPage(testDb.db, {
+          modelId: model.id,
+          label: "post-tip-erasure-fence-page",
+        })
+      : undefined;
+    if (!page) throw new Error("post-tip erasure-fence page seed failed");
+    const owner = await testDb.pool.query<{ id: string }>(
+      `insert into users (username, role)
+       values ('post-tip-erasure-fence-owner', 'owner') returning id::text`,
+    );
+
+    const oldOccurredAt = new Date(Date.now() - 60_000);
+    const oldObservedAt = new Date(Date.now() - 30_000);
+    const oldTip = {
+      id: "post-tip-before-erasure",
+      senderId: "post-tip-erased-fan",
+      receiverId: "creator-native",
+      amount: 25_000,
+      message: "must not survive erasure",
+      createdAt: oldOccurredAt.toISOString(),
+      targetId: "post-before-erasure",
+    };
+    await seedPostTipsObservation({
+      accountId: page.id,
+      key: "post-tip-before-erasure",
+      receivedAt: oldObservedAt,
+      tips: [oldTip],
+    });
+    await runCanonicalization(appStub());
+    const erasure = await insertErasureLog(testDb.db, {
+      scopeType: "fan",
+      scopeRef: "fan:fansly:post-tip-erased-fan",
+      initiatedBy: Number(owner.rows[0]!.id),
+      dryRun: false,
+      plan: { resolvedPageIds: [page.id] },
+    });
+
+    expect(await runCreatorPostsProjection(appStub())).toMatchObject({ upserted: 0 });
+    expect(await testDb.pool.query(
+      `select 1 from creator_post_tips
+       where account_id = $1 and platform_tip_id = 'post-tip-before-erasure'`,
+      [page.id],
+    ).then((result) => result.rowCount)).toBe(0);
+
+    const freshOccurredAt = new Date(erasure.startedAt.getTime() + 1_000);
+    const freshObservedAt = new Date(erasure.startedAt.getTime() + 2_000);
+    await seedPostTipsObservation({
+      accountId: page.id,
+      key: "post-tip-after-erasure",
+      receivedAt: freshObservedAt,
+      tips: [{
+        ...oldTip,
+        id: "post-tip-after-erasure",
+        message: "genuinely new material",
+        createdAt: freshOccurredAt.toISOString(),
+        targetId: "post-after-erasure",
+      }],
+    });
+    await runCanonicalization(appStub());
+    expect(await runCreatorPostsProjection(appStub())).toMatchObject({ upserted: 1 });
+    expect(await testDb.pool.query(
+      `select tip_message_text from creator_post_tips
+       where account_id = $1 and platform_tip_id = 'post-tip-after-erasure'`,
+      [page.id],
+    ).then((result) => result.rows)).toEqual([{ tip_message_text: "genuinely new material" }]);
+  });
+
+  it("parks the post-tip projection watermark while an erasure owns the page fence", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const model = await createModel(testDb.db, {
+      slug: "post-tip-erasure-lock",
+      name: "Post Tip Erasure Lock",
+    });
+    const page = model
+      ? await createFanslyPage(testDb.db, {
+          modelId: model.id,
+          label: "post-tip-erasure-lock-page",
+        })
+      : undefined;
+    if (!page) throw new Error("post-tip erasure-lock page seed failed");
+    await seedPostTipsObservation({
+      accountId: page.id,
+      key: "post-tip-erasure-lock",
+      receivedAt: new Date("2026-08-04T08:00:00.000Z"),
+      tips: [{
+        id: "post-tip-erasure-lock",
+        senderId: "post-tip-lock-fan",
+        receiverId: "creator-native",
+        amount: 10_000,
+        message: "retry after erasure",
+        createdAt: "2026-08-04T07:59:00.000Z",
+        targetId: "post-tip-erasure-lock-post",
+      }],
+    });
+    await runCanonicalization(appStub());
+
+    const lockClient = await testDb.pool.connect();
+    try {
+      await lockClient.query("begin");
+      await lockClient.query(
+        "select pg_advisory_xact_lock($1, $2)",
+        [DM_ARCHIVE_ERASURE_FENCE_LOCK_NS, page.id],
+      );
+      expect(await runCreatorPostsProjection(appStub())).toMatchObject({ upserted: 0 });
+      expect(await getProjectionWatermark(testDb.db, "creator_posts", page.id)).toBe(0);
+      expect(await testDb.pool.query(
+        "select 1 from creator_post_tips where account_id = $1",
+        [page.id],
+      ).then((result) => result.rowCount)).toBe(0);
+    } finally {
+      await lockClient.query("rollback").catch(() => undefined);
+      lockClient.release();
+    }
+
+    expect(await runCreatorPostsProjection(appStub())).toMatchObject({ upserted: 1 });
+    expect(await getProjectionWatermark(testDb.db, "creator_posts", page.id)).toBeGreaterThan(0);
+    expect(await testDb.pool.query(
+      "select 1 from creator_post_tips where account_id = $1",
+      [page.id],
+    ).then((result) => result.rowCount)).toBe(1);
   });
 
   it("migration registers both collection lanes", async (context) => {

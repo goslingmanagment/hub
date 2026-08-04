@@ -205,6 +205,7 @@ export async function runCreatorPostsProjection(
       });
       if (events.length === 0) break;
       totals.eventsSeen += events.length;
+      let deferredBehindErasure = false;
 
       for (const event of events) {
         if (event.type !== "post.observed" && event.type !== "post.tip_observed") continue;
@@ -310,6 +311,17 @@ export async function runCreatorPostsProjection(
             sourceObservationId: event.observationId,
             sourceAccountSeq: event.accountSeq,
           });
+          if (result.status === "deferred") {
+            // Do not cross this event with the durable watermark. The next
+            // minutely sweep retries after the erasure releases its exclusive
+            // page lock; earlier idempotent writes in this batch may replay.
+            deferredBehindErasure = true;
+            app.logger.info(
+              { accountId, eventId: event.id },
+              "Creator post-tip projection deferred behind erasure fence",
+            );
+            break;
+          }
           if (result.applied) totals.upserted += 1;
           continue;
         }
@@ -345,6 +357,7 @@ export async function runCreatorPostsProjection(
         if (result.applied) totals.upserted += 1;
       }
 
+      if (deferredBehindErasure) break;
       watermark = events[events.length - 1]!.accountSeq;
       await setProjectionWatermark(app.db, CREATOR_POSTS_PROJECTION, accountId, watermark);
       if (events.length < EVENT_PAGE_SIZE) break;
