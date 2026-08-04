@@ -8,6 +8,10 @@ import type { Platform } from "@agency_hub_core/shared";
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import {
+  isDmArchiveScopeFenced,
+  tryAcquireDmArchiveWriterFenceLock,
+} from "./erasure-fence.ts";
 
 type LatestObservedProjectionTable = "creator_posts" | "creator_post_tips";
 
@@ -175,10 +179,43 @@ export interface UpsertCreatorPostTipInput {
   sourceAccountSeq: number;
 }
 
+export type UpsertCreatorPostTipResult =
+  | { status: "applied"; applied: true; id: number }
+  | { status: "unchanged" | "deferred" | "erasure_fenced"; applied: false; id: null };
+
 export async function upsertCreatorPostTip(
   db: Database,
   input: UpsertCreatorPostTipInput,
-): Promise<UpsertCreatorPostResult> {
+): Promise<UpsertCreatorPostTipResult> {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    // This projection is replayable from retained post-tip events. Serialize
+    // its check+write with governed erasure so an event loaded before deletion
+    // cannot restore the fan id or verbatim note after that deletion commits.
+    if (!(await tryAcquireDmArchiveWriterFenceLock(database, input.accountId))) {
+      return { status: "deferred", applied: false, id: null } as const;
+    }
+    const materialAt = input.occurredAt < input.observedAt
+      ? input.occurredAt
+      : input.observedAt;
+    if (
+      await isDmArchiveScopeFenced(database, {
+        pageId: input.accountId,
+        platform: input.platform,
+        refs: [input.tipSenderPlatformUserId],
+        materialAt,
+      })
+    ) {
+      return { status: "erasure_fenced", applied: false, id: null } as const;
+    }
+    return upsertCreatorPostTipUnfenced(database, input);
+  });
+}
+
+async function upsertCreatorPostTipUnfenced(
+  db: Database,
+  input: UpsertCreatorPostTipInput,
+): Promise<UpsertCreatorPostTipResult> {
   const result = await db.execute<{ id: string }>(sql`
     insert into creator_post_tips (
       account_id,
@@ -262,8 +299,7 @@ export async function upsertCreatorPostTip(
     returning id::text as id
   `);
   const row = result.rows[0];
-  return {
-    applied: row !== undefined,
-    id: row === undefined ? null : Number(row.id),
-  };
+  return row === undefined
+    ? { status: "unchanged", applied: false, id: null }
+    : { status: "applied", applied: true, id: Number(row.id) };
 }

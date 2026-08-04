@@ -654,6 +654,21 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       delete from transaction_tip_contexts where ${tipContextPred}`),
   });
 
+  // Fansly post-tip attribution carries the fan's native id and verbatim note
+  // without a fan FK. The canonical event pins sender identity, so the same
+  // immutable fan ref is the narrow deletion boundary; co-resident tips stay.
+  const creatorPostTipPred = sql`account_id in ${scope.pageIds}
+    and tip_sender_platform_user_id = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "creator_post_tips",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from creator_post_tips where ${creatorPostTipPred}`),
+    run: (tx) => execCount(tx, sql`
+      delete from creator_post_tips where ${creatorPostTipPred}`),
+  });
+
   // Sent-command payloads carry our side of the fan's conversation.
   const commandPred = sql`page_id in ${scope.pageIds} and conversation_id = ${ref}`;
   targets.push({
@@ -822,6 +837,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["message_archive", "account_id"],
     ["dm_message_archive", "platform_account_id"],
     ["transaction_tip_contexts", "account_id"],
+    ["creator_post_tips", "account_id"],
     ["dm_message_daily_aggregates", "platform_account_id"],
     ["ofapi_commands", "page_id"],
     ["fan_earnings_stats", "account_id"],

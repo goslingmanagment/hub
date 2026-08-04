@@ -1367,6 +1367,24 @@ describe("erasure drill (Stage 28 Task 4)", () => {
         [page.id, tipId, conversationRef, note, senderRef],
       );
     }
+    for (const [tipId, postId, senderRef, note, sourceId] of [
+      ["post-tip-target", "post-target", TARGET_PARTNER, "erase this post tip note", 91],
+      ["post-tip-other", "post-other", OTHER_PARTNER, "keep this post tip note", 92],
+    ] as const) {
+      await testDb.pool.query(
+        `insert into creator_post_tips (
+           account_id, platform, platform_post_id, platform_tip_id,
+           tip_sender_platform_user_id, post_tip_amount_mills, occurred_at,
+           receiver_transaction_ref, sender_transaction_ref, tip_goal_ref,
+           tip_message_text, first_observed_at, last_observed_at, content_hash,
+           source_event_id, source_observation_id, source_account_seq
+         ) values (
+           $1, 'fansly', $2, $3, $4, 10000, now(), null, null, null,
+           $5, now(), now(), $6, $7, $7, $7
+         )`,
+        [page.id, postId, tipId, senderRef, note, "d".repeat(64), sourceId],
+      );
+    }
 
     // Pre-fix and unresolved-fan generations can also be keyed only by the
     // Fansly GROUP id, with no separate fan_ref. Fan erasure must resolve the
@@ -1403,6 +1421,9 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(plan.targets.find((target) =>
       target.plane === "hot" && target.target === "transaction_tip_contexts"
     )).toMatchObject({ action: "delete", rows: 1 });
+    expect(plan.targets.find((target) =>
+      target.plane === "hot" && target.target === "creator_post_tips"
+    )).toMatchObject({ action: "delete", rows: 1 });
 
     const result = await executeErasure(
       appStub(),
@@ -1429,9 +1450,12 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(
       `transaction_tip_contexts where platform_tip_id = 'tip-context-other'`,
     )).toBe(1);
+    expect(result.executedCounts["hot:creator_post_tips:delete"]).toBe(1);
+    expect(await count(`creator_post_tips where platform_tip_id = 'post-tip-target'`)).toBe(0);
+    expect(await count(`creator_post_tips where platform_tip_id = 'post-tip-other'`)).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("page and model erasure purge transaction tip contexts by resolved page id", async (context) => {
+  it("page and model erasure purge sensitive tip projections by resolved page id", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1479,6 +1503,20 @@ describe("erasure drill (Stage 28 Task 4)", () => {
          )`,
         [page.id, tipId],
       );
+      await testDb.pool.query(
+        `insert into creator_post_tips (
+           account_id, platform, platform_post_id, platform_tip_id,
+           tip_sender_platform_user_id, post_tip_amount_mills, occurred_at,
+           receiver_transaction_ref, sender_transaction_ref, tip_goal_ref,
+           tip_message_text, first_observed_at, last_observed_at, content_hash,
+           source_event_id, source_observation_id, source_account_seq
+         ) values (
+           $1, 'fansly', 'post-' || $2, 'post-' || $2, 'fan-page-model',
+           10000, now(), null, null, null, 'sensitive post tip note',
+           now(), now(), $3, $1, $1, $1
+         )`,
+        [page.id, tipId, "e".repeat(64)],
+      );
     }
 
     const pageScope = { scopeType: "page", pageLabel: firstLabel } as const;
@@ -1486,19 +1524,28 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(pagePlan.targets.find((target) =>
       target.plane === "hot" && target.target === "transaction_tip_contexts"
     )).toMatchObject({ action: "delete", rows: 1 });
+    expect(pagePlan.targets.find((target) =>
+      target.plane === "hot" && target.target === "creator_post_tips"
+    )).toMatchObject({ action: "delete", rows: 1 });
     const pageResult = await executeErasure(
       appStub(),
       pageScope,
       { initiatedBy: Number(operator.id) },
     );
     expect(pageResult.executedCounts["hot:transaction_tip_contexts:delete"]).toBe(1);
+    expect(pageResult.executedCounts["hot:creator_post_tips:delete"]).toBe(1);
     expect(await count(`transaction_tip_contexts where account_id = ${firstPage.id}`)).toBe(0);
     expect(await count(`transaction_tip_contexts where account_id = ${secondPage.id}`)).toBe(1);
+    expect(await count(`creator_post_tips where account_id = ${firstPage.id}`)).toBe(0);
+    expect(await count(`creator_post_tips where account_id = ${secondPage.id}`)).toBe(1);
 
     const modelScope = { scopeType: "model", modelSlug } as const;
     const modelPlan = await planErasure(appStub(), modelScope);
     expect(modelPlan.targets.find((target) =>
       target.plane === "hot" && target.target === "transaction_tip_contexts"
+    )).toMatchObject({ action: "delete", rows: 1 });
+    expect(modelPlan.targets.find((target) =>
+      target.plane === "hot" && target.target === "creator_post_tips"
     )).toMatchObject({ action: "delete", rows: 1 });
     const modelResult = await executeErasure(
       appStub(),
@@ -1506,7 +1553,9 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       { initiatedBy: Number(operator.id) },
     );
     expect(modelResult.executedCounts["hot:transaction_tip_contexts:delete"]).toBe(1);
+    expect(modelResult.executedCounts["hot:creator_post_tips:delete"]).toBe(1);
     expect(await count(`transaction_tip_contexts where account_id = ${secondPage.id}`)).toBe(0);
+    expect(await count(`creator_post_tips where account_id = ${secondPage.id}`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("a converged retry supersedes every unresolved attempt for only the same scope", async (context) => {
