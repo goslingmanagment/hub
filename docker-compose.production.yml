@@ -8,6 +8,9 @@ services:
   postgres:
     image: postgres:16
     logging: *production-logging
+    # Give Postgres time for a fast shutdown at recreate; Docker's default 10s
+    # can SIGKILL a checkpointing 55 GB cluster into crash recovery.
+    stop_grace_period: 60s
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-agency_hub_core}

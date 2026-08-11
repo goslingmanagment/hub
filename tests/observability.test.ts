@@ -571,7 +571,7 @@ describe("sync observability", () => {
     expect(stats.checkpoint.advanced.dm_conversations).toBe(true);
   });
 
-  it("reports a loaded-but-never-advanced checkpoint as unchanged", async () => {
+  it("keeps the pre-G1 diff semantics for a loaded-but-never-advanced checkpoint", async () => {
     mockStdoutWrite([]);
     vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
 
@@ -581,7 +581,12 @@ describe("sync observability", () => {
       state: { pagesProcessed: 3 },
     }));
 
+    // Parity with the original before/after JSON diff: a label that was loaded
+    // but never advanced diffs against the absent after-summary and reads as
+    // advanced=true. Some handlers persist checkpoints without calling
+    // recordCheckpointAdvanced, so the diff leg keeps them truthful — changing
+    // this reading is out of scope for the telemetry-size change.
     const stats = telemetry.buildStats("success");
-    expect(stats.checkpoint.advanced.dm_conversations).toBe(false);
+    expect(stats.checkpoint.advanced.dm_conversations).toBe(true);
   });
 });

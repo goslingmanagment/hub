@@ -694,7 +694,14 @@ export class SyncRunTelemetry {
             ...Object.keys(this.checkpointAfter),
           ])).map((label) => [
             label,
-            this.checkpointAdvancedLabels.has(label),
+            // Write-time record OR summary diff: some handlers (transactions
+            // progress writes, several OFAPI paths) persist checkpoints without
+            // calling recordCheckpointAdvanced, and one calls it with a null
+            // write — the diff over the now-bounded summaries keeps those sites
+            // truthful, the Set keeps progress-only advances (which may leave
+            // the summary byte-identical) reading as advanced.
+            this.checkpointAdvancedLabels.has(label) ||
+              JSON.stringify(this.checkpointAfter[label] ?? null) !== JSON.stringify(this.checkpointBefore[label] ?? null),
           ]),
         ),
       },

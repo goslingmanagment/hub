@@ -213,6 +213,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 209 | Fansly post monetization | Fansly timeline money and linked-goal fields become a latest-observed `post_monetization` snapshot, while raw-first `/tips?targetIds` capture supplies donor-to-post rows with exact type-7100 goal attribution and verbatim tip notes in `post_tips`. The rendered post total is `tipAmount + attachmentTipAmount`, never `totalTipAmount`; `tip_goals` deduplicates shared goals. Companion drift cannot wedge posts, malformed tip items become explicit parse debt, and migration 0121/posts canonicalizer v4 preserve replay without claiming continuous refresh or tipped-reply-donor completeness |
 | 210 | Fansly live post-tip contract correction | Post-deploy acceptance supersedes #209 narrowly on the undocumented `/tips` item shape and null semantics: live items carry a flat `targetId` that proves donor-to-post attribution but no per-tip goal discriminator or transaction refs. Canonicalizer v5/schema v3 replays them with internal `tipGoalAttribution='unknown'`; a null `postTipGoalRef` means source-did-not-provide, never direct. Nested typed targets remain accepted when actually observed. No migration or inferred goal split |
 | 211 | Exact transaction tip context | Fansly DM `tips[]` sidecars project exact, message-gated `tip_transactions` note/conversation context by provider tip id while `transactions` remains money-only. Mandatory sender/time facts, a Stage-28 material-time erasure fence, and field-specific raw lineage prevent false nulls, resurrection, and unverifiable verbatim text; OnlyFans stays visible as `not_captured` |
+| 212 | G1 storage stop-loss: telemetry is bounded, capture is not | Sync telemetry stops re-copying unbounded checkpoint state (bounded scalar projection + write-time-or-diff `advanced`), per-attempt success stdout traces default off behind `SYNC_HTTP_ATTEMPT_TRACE_STDOUT` with a DB-failure stdout fallback, production container logs get the bounded `local` driver (20m×5, contract-tested), hourly disk gauges land in `ops_metric_samples` (deadman ignores `disk_*`), and deploy gains an EXIT-trap dist-context sweep plus an opt-in (#176-compatible, default-off) allowlist image GC. No captured fact, retention window, or deleter changes |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6793,3 +6794,53 @@ There is deliberately no `messageRef` in this version. A future point lookup
 may return one archived message plus bounded neighbours, but only after an
 exact provider-backed message identity is available; conversation membership
 or nearest timestamp is not silently upgraded into that claim.
+
+**Decision #212 (2026-08-12, G1 storage stop-loss: telemetry is bounded,
+capture is not):** The 2026-08-11 disk census (88% full, ~2 GB/day of DB
+values) attributed the dominant daily growth not to captured facts but to
+telemetry re-copying them: `summarizeCheckpoint` embedded the full
+`page_sync_cursors.state` — including the cumulative `snapshotConversationIds`
+array, O(N²) across a Fansly `dm_conversations` sweep — into every
+`checkpoint_loaded`/`checkpoint_advanced` event and `sync_runs.stats`
+(~1.34 GB/day), and the worker printed a stdout trace line per upstream HTTP
+attempt (~83% of its log volume) into an unbounded `json-file` Docker log.
+
+G1 bounds the representations without touching capture, retention windows, or
+any deleter:
+
+- Checkpoint telemetry stores a bounded generic projection (scalars verbatim,
+  strings truncated at 120 chars, arrays as `${key}Count`, objects as
+  `${key}Keys`, 32-key cap). The authoritative state stays in
+  `page_sync_cursors`. `stats.checkpoint.advanced` is recorded at write time
+  OR derived from a diff of the bounded summaries — some handlers persist
+  checkpoints without calling the telemetry method, so neither signal alone is
+  truthful.
+- Per-attempt success stdout traces are suppressed by default behind
+  `SYNC_HTTP_ATTEMPT_TRACE_STDOUT` (EDITABLE, `runtimeApply: "none"`).
+  Retries, failures, and any attempt whose `sync_http_attempts` row failed to
+  persist still reach stdout — stdout remains the surviving record of an
+  attempt the DB could not keep (the pinned best-effort invariant). The
+  optional NDJSON file sink stays full-fidelity.
+- Production Compose applies the bounded `local` log driver (20m × 5) to every
+  service, pinned by a derive-from-file contract test; Postgres gains
+  `stop_grace_period: 60s` so a recreate cannot SIGKILL a checkpointing
+  cluster.
+- The hourly disk check persists `disk_free_bytes` / `disk_used_bytes` /
+  `disk_used_percent_bp` gauges into `ops_metric_samples` for a later
+  days-to-full slope; the ops sampler deadman excludes `disk_*` so an hourly
+  writer can never mask the minutely sampler's death.
+- The deploy script sweeps its remote dist-only build context via the EXIT
+  trap (previously leaked on failed builds) and gains an allowlist image GC
+  (full-ID keep-set including running containers, candidate/rollback tags
+  only, abort on a degraded keep-set). Per #176's owner-gated image-deletion
+  rule the GC is DEFAULT OFF and runs only with `--image-gc` /
+  `DEPLOY_IMAGE_GC=1` on an explicit owner say-so.
+
+Deliberately NOT in G1: no retention value changes (`SYNC_OBSERVABILITY_
+RETENTION_DAYS` stays 30 — lowering it drives the sanctioned sweep through
+unbatched `sync_runs` deletes whose `ON DELETE SET NULL` seq-scans the
+unindexed 19.5 GB `sync_raw_payloads.sync_run_id` column and severs the
+raw→observation idempotency-key lineage the #133 rejournal repair depends on;
+a leaf/parent retention split plus that index are prerequisites), no schema
+changes, no new deleters. Follow-ups tracked in
+`investigations/storage-unified-execution-plan-2026-08-11.md`.

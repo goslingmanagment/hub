@@ -35,9 +35,11 @@ Options:
                         Private Desktop legacy-persona export for first enable
   --desktop-diagnostics-receipt <path>
                         Private Desktop diagnostics receipt for first enable
-  --no-image-gc          Skip the post-health-gate cleanup of superseded
-                        production-candidate-* / production-rollback-* image
-                        tags and the builder cache prune.
+  --image-gc             Enable the post-health-gate cleanup of superseded
+                        candidate/rollback image tags and the builder cache
+                        prune. OFF by default: Decision #176 keeps image/tag
+                        deletion owner-gated, so GC runs only when asked.
+  --no-image-gc          Explicitly disable image GC (the default).
   -h, --help             Show this help text
 
 Environment variable equivalents:
@@ -55,6 +57,7 @@ Environment variable equivalents:
   DEPLOY_EXTENSION_PERSONA_RECEIPT
   DEPLOY_DESKTOP_PERSONA_RECEIPT
   DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT
+  DEPLOY_IMAGE_GC
   DEPLOY_SKIP_IMAGE_GC
 EOF
 }
@@ -105,7 +108,20 @@ if [[ -n "${DEPLOY_NODE_BASE_CACHE_IMAGE+x}" ]]; then
   warn_deprecated_node_base_cache
 fi
 ALLOW_UNLABELED_DIST_BASE="${DEPLOY_ALLOW_UNLABELED_DIST_BASE:-0}"
-IMAGE_GC_ENABLED=1
+# Default OFF: Decision #176 pins image/tag deletion as an explicit owner
+# action — deploys must not delete candidate tags automatically. Opt in per
+# run with --image-gc / DEPLOY_IMAGE_GC=1.
+IMAGE_GC_ENABLED=0
+case "${DEPLOY_IMAGE_GC:-0}" in
+  0|false|no|"")
+    ;;
+  1|true|yes)
+    IMAGE_GC_ENABLED=1
+    ;;
+  *)
+    fail "Invalid DEPLOY_IMAGE_GC value: ${DEPLOY_IMAGE_GC}"
+    ;;
+esac
 case "${DEPLOY_SKIP_IMAGE_GC:-0}" in
   0|false|no|"")
     ;;
@@ -154,6 +170,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-unlabeled-dist-base)
       ALLOW_UNLABELED_DIST_BASE=1
+      shift
+      ;;
+    --image-gc)
+      IMAGE_GC_ENABLED=1
       shift
       ;;
     --no-image-gc)
@@ -1153,9 +1173,12 @@ build_dist_only_candidate_image() {
   require_command pnpm
   validate_dist_only_base
 
+  # This function is invoked as `build_dist_only_candidate_image || fail …`,
+  # which disables errexit inside it — every step needs explicit propagation
+  # or a failed local build would upload a stale dist overlay.
   log "Building production JS/CSS artifacts locally"
-  (cd "$ROOT_DIR" && pnpm build:production)
-  create_dist_overlay_context
+  (cd "$ROOT_DIR" && pnpm build:production) || return 1
+  create_dist_overlay_context || return 1
 
   # Owned by the EXIT trap from here on: cleanup_deploy is the single code path
   # that removes this remote directory, on success and on failure alike.
@@ -1166,10 +1189,12 @@ build_dist_only_candidate_image() {
   log "Uploading dist-only build context to ${REMOTE}:${REMOTE_DIST_CONTEXT_DIR}"
   tar -C "$DIST_CONTEXT_DIR" -cf - . | ssh "${SSH_ARGS[@]}" "$REMOTE" \
     "bash -lc $(printf '%q' "set -euo pipefail; rm -rf ${remote_context_escaped}; mkdir -p ${remote_context_escaped}; tar -xf - -C ${remote_context_escaped}")" \
-    >/dev/null
+    >/dev/null || return 1
+  # The pipeline's exit status is ssh's; a mid-stream local tar failure closes
+  # ssh's stdin early and the remote `tar -xf -` (under pipefail) fails with it.
 
   log "Building ${IMAGE_CANDIDATE_TAG} on ${REMOTE} from pinned clean full image ${CLEAN_FULL_BASE_TAG}"
-  run_remote "set -euo pipefail; docker build --platform=$(printf '%q' "$BUILD_PLATFORM") --build-arg APP_DEPENDENCY_CHECKSUM=$(printf '%q' "$APP_DEPENDENCY_CHECKSUM") --build-arg APP_SOURCE_REVISION=$(printf '%q' "$APP_SOURCE_REVISION") -t $(printf '%q' "$IMAGE_CANDIDATE_TAG") ${remote_context_escaped}"
+  run_remote "set -euo pipefail; docker build --platform=$(printf '%q' "$BUILD_PLATFORM") --build-arg APP_DEPENDENCY_CHECKSUM=$(printf '%q' "$APP_DEPENDENCY_CHECKSUM") --build-arg APP_SOURCE_REVISION=$(printf '%q' "$APP_SOURCE_REVISION") -t $(printf '%q' "$IMAGE_CANDIDATE_TAG") ${remote_context_escaped}" || return 1
 }
 
 publish_remote_clean_full_base_image() {
@@ -1183,7 +1208,7 @@ publish_remote_clean_full_base_image() {
 
 gc_remote_deploy_images() {
   if [[ "${IMAGE_GC_ENABLED:-1}" != "1" ]]; then
-    log "Skipping remote image GC because --no-image-gc / DEPLOY_SKIP_IMAGE_GC was set"
+    log "Skipping remote image GC (default; enable per run with --image-gc / DEPLOY_IMAGE_GC=1)"
     return 0
   fi
 
