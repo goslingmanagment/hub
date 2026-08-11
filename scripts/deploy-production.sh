@@ -35,6 +35,9 @@ Options:
                         Private Desktop legacy-persona export for first enable
   --desktop-diagnostics-receipt <path>
                         Private Desktop diagnostics receipt for first enable
+  --no-image-gc          Skip the post-health-gate cleanup of superseded
+                        production-candidate-* / production-rollback-* image
+                        tags and the builder cache prune.
   -h, --help             Show this help text
 
 Environment variable equivalents:
@@ -52,6 +55,7 @@ Environment variable equivalents:
   DEPLOY_EXTENSION_PERSONA_RECEIPT
   DEPLOY_DESKTOP_PERSONA_RECEIPT
   DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT
+  DEPLOY_SKIP_IMAGE_GC
 EOF
 }
 
@@ -101,6 +105,17 @@ if [[ -n "${DEPLOY_NODE_BASE_CACHE_IMAGE+x}" ]]; then
   warn_deprecated_node_base_cache
 fi
 ALLOW_UNLABELED_DIST_BASE="${DEPLOY_ALLOW_UNLABELED_DIST_BASE:-0}"
+IMAGE_GC_ENABLED=1
+case "${DEPLOY_SKIP_IMAGE_GC:-0}" in
+  0|false|no|"")
+    ;;
+  1|true|yes)
+    IMAGE_GC_ENABLED=0
+    ;;
+  *)
+    fail "Invalid DEPLOY_SKIP_IMAGE_GC value: ${DEPLOY_SKIP_IMAGE_GC}"
+    ;;
+esac
 HTTP_PORT="${DEPLOY_HTTP_PORT:-3000}"
 VERIFY_URL="${DEPLOY_VERIFY_URL:-}"
 IDENTITY_FILE="${DEPLOY_IDENTITY_FILE:-}"
@@ -139,6 +154,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-unlabeled-dist-base)
       ALLOW_UNLABELED_DIST_BASE=1
+      shift
+      ;;
+    --no-image-gc)
+      IMAGE_GC_ENABLED=0
       shift
       ;;
     --port)
@@ -254,6 +273,7 @@ DEPLOY_RUN_ID=""
 ROLLBACK_IMAGE_TAG=""
 IMAGE_CANDIDATE_TAG=""
 CLEAN_FULL_BASE_TAG=""
+REMOTE_DIST_CONTEXT_DIR=""
 CANDIDATE_IS_FULL_BUILD=0
 ROLLBACK_IMAGE_AVAILABLE=0
 ROLLBACK_RELEASE_FILES_CAPTURED=0
@@ -403,6 +423,10 @@ cleanup_deploy() {
       || log "Unable to restart quiesced sync services during deploy cleanup"
   fi
 
+  if [[ -n "${REMOTE_DIST_CONTEXT_DIR:-}" ]]; then
+    remove_remote_dist_context || log "Unable to remove remote dist context ${REMOTE_DIST_CONTEXT_DIR}"
+  fi
+
   if [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]]; then
     release_remote_deploy_lock || log "Unable to release remote deploy lock ${REMOTE_DEPLOY_LOCK_DIR}"
   fi
@@ -533,6 +557,21 @@ capture_remote_rollback_image() {
     ROLLBACK_IMAGE_AVAILABLE=0
     log "No previous remote image found for rollback"
   fi
+}
+
+remove_remote_dist_context() {
+  [[ -n "${REMOTE_DIST_CONTEXT_DIR:-}" ]] || return 0
+  case "$REMOTE_DIST_CONTEXT_DIR" in
+    /tmp/agency-hub-dist-overlay-*[!/])
+      ;;
+    *)
+      log "Refusing to remove unexpected remote dist context ${REMOTE_DIST_CONTEXT_DIR}"
+      return 1
+      ;;
+  esac
+
+  run_remote "set -euo pipefail; rm -rf $(printf '%q' "$REMOTE_DIST_CONTEXT_DIR")" || return 1
+  REMOTE_DIST_CONTEXT_DIR=""
 }
 
 capture_remote_release_files() {
@@ -1118,17 +1157,19 @@ build_dist_only_candidate_image() {
   (cd "$ROOT_DIR" && pnpm build:production)
   create_dist_overlay_context
 
-  local remote_context="/tmp/agency-hub-dist-overlay-${DEPLOY_RUN_ID}"
+  # Owned by the EXIT trap from here on: cleanup_deploy is the single code path
+  # that removes this remote directory, on success and on failure alike.
+  REMOTE_DIST_CONTEXT_DIR="/tmp/agency-hub-dist-overlay-${DEPLOY_RUN_ID}"
   local remote_context_escaped
-  remote_context_escaped="$(printf '%q' "$remote_context")"
+  remote_context_escaped="$(printf '%q' "$REMOTE_DIST_CONTEXT_DIR")"
 
-  log "Uploading dist-only build context to ${REMOTE}:${remote_context}"
+  log "Uploading dist-only build context to ${REMOTE}:${REMOTE_DIST_CONTEXT_DIR}"
   tar -C "$DIST_CONTEXT_DIR" -cf - . | ssh "${SSH_ARGS[@]}" "$REMOTE" \
     "bash -lc $(printf '%q' "set -euo pipefail; rm -rf ${remote_context_escaped}; mkdir -p ${remote_context_escaped}; tar -xf - -C ${remote_context_escaped}")" \
     >/dev/null
 
   log "Building ${IMAGE_CANDIDATE_TAG} on ${REMOTE} from pinned clean full image ${CLEAN_FULL_BASE_TAG}"
-  run_remote "set -euo pipefail; docker build --platform=$(printf '%q' "$BUILD_PLATFORM") --build-arg APP_DEPENDENCY_CHECKSUM=$(printf '%q' "$APP_DEPENDENCY_CHECKSUM") --build-arg APP_SOURCE_REVISION=$(printf '%q' "$APP_SOURCE_REVISION") -t $(printf '%q' "$IMAGE_CANDIDATE_TAG") ${remote_context_escaped}; rm -rf ${remote_context_escaped}"
+  run_remote "set -euo pipefail; docker build --platform=$(printf '%q' "$BUILD_PLATFORM") --build-arg APP_DEPENDENCY_CHECKSUM=$(printf '%q' "$APP_DEPENDENCY_CHECKSUM") --build-arg APP_SOURCE_REVISION=$(printf '%q' "$APP_SOURCE_REVISION") -t $(printf '%q' "$IMAGE_CANDIDATE_TAG") ${remote_context_escaped}"
 }
 
 publish_remote_clean_full_base_image() {
@@ -1138,6 +1179,83 @@ publish_remote_clean_full_base_image() {
 
   log "Publishing clean full image base ${CLEAN_FULL_BASE_TAG}"
   run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$CLEAN_FULL_BASE_TAG")"
+}
+
+gc_remote_deploy_images() {
+  if [[ "${IMAGE_GC_ENABLED:-1}" != "1" ]]; then
+    log "Skipping remote image GC because --no-image-gc / DEPLOY_SKIP_IMAGE_GC was set"
+    return 0
+  fi
+
+  # %:* (last colon) keeps a registry port intact: registry:5000/team/runtime:tag
+  # must reduce to registry:5000/team/runtime, not to "registry".
+  local runtime_repo="${IMAGE_TAG%:*}"
+  # Candidate/rollback tags are minted as "${IMAGE_TAG}-candidate-..." — derive
+  # the prefix from the configured release tag instead of hard-coding it, or a
+  # non-default --image tag would make the GC skip everything it just created.
+  local release_tag_prefix="${IMAGE_TAG##*:}"
+  local remote_command
+  remote_command=$(cat <<EOF
+set -euo pipefail
+cd ${REMOTE_APP_DIR_ESCAPED}
+
+# Keyed by FULL sha256 image id. Short ids from 'docker images --format
+# {{.ID}}' never compare equal to the inspect form, so every tag would look
+# unprotected; the set is keyed so repeated ids cannot inflate its size.
+declare -A keep_ids=()
+
+for protected_tag in $(printf '%q' "$IMAGE_TAG") $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$CLEAN_FULL_BASE_TAG"); do
+  [[ -n "\$protected_tag" ]] || continue
+  protected_id="\$(docker image inspect -f '{{.Id}}' "\$protected_tag" 2>/dev/null || true)"
+  [[ -n "\$protected_id" ]] || continue
+  keep_ids["\$protected_id"]=1
+done
+
+while IFS= read -r container_id; do
+  [[ -n "\$container_id" ]] || continue
+  container_image_id="\$(docker inspect -f '{{.Image}}' "\$container_id" 2>/dev/null || true)"
+  [[ -n "\$container_image_id" ]] || continue
+  keep_ids["\$container_image_id"]=1
+done < <(${REMOTE_COMPOSE} ps -q 2>/dev/null || true)
+
+# A partially resolved keep set means inspects failed, not that the host is
+# clean. Deleting on that evidence would be mass deletion, so stop instead.
+if (( \${#keep_ids[@]} < 2 )); then
+  printf '[deploy] image GC aborted: resolved only %s protected image id(s)\n' "\${#keep_ids[@]}" >&2
+  exit 0
+fi
+
+removed=0
+while IFS= read -r image_ref; do
+  release_tag="\${image_ref##*:}"
+  case "\$release_tag" in
+    $(printf '%q' "$release_tag_prefix")-candidate-*|$(printf '%q' "$release_tag_prefix")-rollback-*)
+      ;;
+    *)
+      continue
+      ;;
+  esac
+
+  image_id="\$(docker image inspect -f '{{.Id}}' "\$image_ref" 2>/dev/null || true)"
+  [[ -n "\$image_id" ]] || continue
+  [[ -z "\${keep_ids[\$image_id]:-}" ]] || continue
+
+  if docker rmi "\$image_ref" >/dev/null 2>&1; then
+    removed=\$(( removed + 1 ))
+    printf '[deploy] removed superseded deploy image tag %s\n' "\$image_ref" >&2
+  else
+    printf '[deploy] unable to remove image tag %s; leaving it in place\n' "\$image_ref" >&2
+  fi
+done < <(docker images --format '{{.Repository}}:{{.Tag}}' $(printf '%q' "$runtime_repo") 2>/dev/null || true)
+
+printf '[deploy] image GC removed %s superseded deploy image tag(s)\n' "\$removed" >&2
+docker builder prune --force --filter until=168h >/dev/null 2>&1 \
+  || printf '[deploy] builder cache prune failed; continuing\n' >&2
+EOF
+)
+
+  log "Garbage collecting superseded ${runtime_repo} deploy image tags on ${REMOTE}"
+  run_remote "$remote_command"
 }
 
 build_candidate_image() {
@@ -1404,6 +1522,10 @@ grep -q 'id="root"' "$DASHBOARD_FILE" || fail "Dashboard HTML is missing the roo
 
 publish_remote_clean_full_base_image \
   || fail "Deployment is healthy but the pinned clean full image tag could not be published"
+
+# Disk hygiene only, and it runs after every health gate has passed. A healthy
+# deploy is never failed by cleanup.
+gc_remote_deploy_images || log "Image GC step failed; continuing"
 
 log "Deployment verified successfully"
 log "API health: ${VERIFY_URL%/}/api/v1/health"

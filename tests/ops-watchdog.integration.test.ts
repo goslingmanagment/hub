@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { insertOpsMetricSamples } from "@agency_hub_core/db";
+import { getLatestOpsMetricSampleAt, insertOpsMetricSamples } from "@agency_hub_core/db";
 
 import {
   OPS_WATCHDOG_SILENCE_MS,
@@ -94,6 +94,39 @@ describe("ops watchdog (W5.2 / A53)", () => {
     );
     const recovered = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
     expect(recovered.schedulerFresh).toBe(true);
+    expect(await openIncidents()).toEqual([]);
+  });
+
+  it("an hourly disk_* gauge is never sampler liveness", async () => {
+    // The disk check writes capacity gauges into the same table once an HOUR.
+    // If the deadman counted them, a dead minutely sampler would look alive
+    // for an hour after each disk row and ops_sampler_silent would flap.
+    await harness.pool.query(
+      `insert into runtime_instances (role, instance_id, started_at, last_seen_at, running)
+       values ('scheduler', 'wd-test-1', now(), now(), '{}'::jsonb)
+       on conflict (role, instance_id) do update set last_seen_at = excluded.last_seen_at`,
+    );
+    // Age out every real sample, then leave only fresh disk gauges behind.
+    await harness.pool.query("update ops_metric_samples set sampled_at = now() - interval '1 day'");
+    await insertOpsMetricSamples(harness.db, [
+      { metric: "capture", quantile: "p95", valueMs: 1, sampledAt: new Date(Date.now() - 86_400_000) },
+      { metric: "disk_free_bytes", quantile: "p50", valueMs: 40_265_318_400 },
+      { metric: "disk_used_bytes", quantile: "p50", valueMs: 67_108_864_000 },
+      { metric: "disk_used_percent_bp", quantile: "p50", valueMs: 6250 },
+    ]);
+
+    const latest = await getLatestOpsMetricSampleAt(harness.db);
+    expect(latest).not.toBeNull();
+    expect(Date.now() - latest!.getTime()).toBeGreaterThan(OPS_WATCHDOG_SILENCE_MS);
+
+    const silent = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
+    expect(silent.samplerFresh).toBe(false);
+    expect(await openIncidents()).toEqual(["ops_sampler_silent"]);
+
+    // A real minutely sample — and only that — resolves the silence.
+    await insertOpsMetricSamples(harness.db, [{ metric: "capture", quantile: "p95", valueMs: 1 }]);
+    const recovered = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
+    expect(recovered.samplerFresh).toBe(true);
     expect(await openIncidents()).toEqual([]);
   });
 });

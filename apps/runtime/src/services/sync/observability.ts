@@ -45,10 +45,14 @@ export interface SyncAnomalyRecord {
 }
 
 export interface CheckpointSummary {
+  /** Read by view.ts:232 (CLI `checkpoint` column, `Checkpoint:` detail line). */
   cursorText?: string | null;
+  /** Read by view.ts:233. */
   cursorTimestamp?: string | null;
   lastSuccessfulRunId?: number | null;
-  state?: Record<string, unknown>;
+  /** Bounded scalar projection of page_sync_cursors.state. Authoritative state
+   *  stays in page_sync_cursors; nothing here is ever read back as sync input. */
+  stateScalars?: Record<string, string | number | boolean | null>;
 }
 
 interface OperationSummary {
@@ -345,6 +349,57 @@ class RequestSummaryCollector implements HttpRequestObserver {
   }
 }
 
+/** Checkpoint state is unbounded and cumulative (a `dm_conversations` sweep
+ *  keeps every conversation id it has seen), so copying it verbatim made every
+ *  sync_run_events row and every sync_runs.stats row grow O(N²) across a sweep
+ *  — ~1.34 GB/day of telemetry values. Telemetry only ever needs to answer
+ *  "roughly where is this checkpoint", so the state is projected to bounded
+ *  scalars here; `page_sync_cursors.state` remains the authoritative copy. */
+const CHECKPOINT_STATE_MAX_KEYS = 32;
+const CHECKPOINT_STATE_MAX_STRING_LENGTH = 120;
+
+function truncateCheckpointString(value: string) {
+  return value.length <= CHECKPOINT_STATE_MAX_STRING_LENGTH
+    ? value
+    : `${value.slice(0, CHECKPOINT_STATE_MAX_STRING_LENGTH)}…`;
+}
+
+/** Generic, stream-agnostic projection: scalars survive verbatim (strings
+ *  truncated), arrays collapse to `${key}Count`, nested objects to
+ *  `${key}Keys`. Deliberately not a hand-written per-stream field list —
+ *  summarizeCheckpoint serves 8 stream states and a new state key should keep
+ *  showing up without touching this file. */
+function projectCheckpointState(
+  state: Record<string, unknown> | null | undefined,
+): Record<string, string | number | boolean | null> {
+  const scalars: Record<string, string | number | boolean | null> = {};
+  if (!state) {
+    return scalars;
+  }
+
+  for (const [key, value] of Object.entries(state)) {
+    if (Object.keys(scalars).length >= CHECKPOINT_STATE_MAX_KEYS) {
+      break;
+    }
+
+    if (value === null) {
+      scalars[key] = null;
+    } else if (typeof value === "string") {
+      scalars[key] = truncateCheckpointString(value);
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      scalars[key] = value;
+    } else if (Array.isArray(value)) {
+      scalars[`${key}Count`] = value.length;
+    } else if (typeof value === "object") {
+      scalars[`${key}Keys`] = Object.keys(value as Record<string, unknown>).length;
+    }
+    // Anything else (undefined, bigint, function, symbol) is dropped: it is
+    // either absent from JSON anyway or would break the telemetry write.
+  }
+
+  return scalars;
+}
+
 export function summarizeCheckpoint(
   checkpoint: {
     cursorText?: string | null;
@@ -361,7 +416,7 @@ export function summarizeCheckpoint(
     cursorText: checkpoint.cursorText ?? null,
     cursorTimestamp: iso(checkpoint.cursorTimestamp ?? null),
     lastSuccessfulRunId: checkpoint.lastSuccessfulRunId ?? null,
-    state: checkpoint.state ?? {},
+    stateScalars: projectCheckpointState(checkpoint.state),
   };
 }
 
@@ -371,10 +426,24 @@ export class SyncRunTelemetry {
   private readonly telemetryWarnings: string[] = [];
   private readonly checkpointBefore: Record<string, CheckpointSummary | null> = {};
   private readonly checkpointAfter: Record<string, CheckpointSummary | null> = {};
+  /** Labels the run actually advanced, recorded at write time. Not derivable
+   *  from before/after any more: the summaries are bounded projections, and a
+   *  progress-only write (upsertCheckpointProgress, touchSuccessMetadata:false)
+   *  moves only state fields — comparing summaries would call every
+   *  dm_conversations sweep page "unchanged". */
+  private readonly checkpointAdvancedLabels = new Set<string>();
   private readonly phaseNames: string[] = [];
   private readonly requestAttemptIds = new Map<string, number>();
+  /** Attempt keys whose sync_http_attempts row failed to persist. Populated by the
+   *  DB sink, consumed by the stdout sink: stdout is the surviving record of an
+   *  attempt the DB could not keep (pinned in tests/observability.test.ts). */
+  private readonly requestAttemptPersistenceFailures = new Set<string>();
+  /** "started" lines held back by the stdout filter until the attempt turns out to
+   *  be worth printing (retry / failure / lost DB row); dropped otherwise. */
+  private readonly pendingStdoutStartedRecords = new Map<string, Record<string, unknown>>();
   private readonly requestSummaryCollector = new RequestSummaryCollector();
   private readonly requestTraceWriters: RequestTraceWriter[];
+  private readonly verboseAttemptTraceStdout: boolean;
   private readonly requestObserver: HttpRequestObserver;
   private readonly runStartedAt: Date;
 
@@ -402,6 +471,9 @@ export class SyncRunTelemetry {
       createStdoutWriter(),
       ...(this.app.config.syncHttpTraceFile ? [createFileWriter(this.app.config.syncHttpTraceFile)] : []),
     ];
+    // Boot config on purpose (registry: runtimeApply "none") — telemetry is built
+    // per run from the process config, so a DB overlay flip would never reach it.
+    this.verboseAttemptTraceStdout = this.app.config.syncHttpAttemptTraceStdout === true;
     this.requestObserver = this.createCompositeRequestObserver();
   }
 
@@ -456,6 +528,7 @@ export class SyncRunTelemetry {
     checkpoint: CheckpointSummary | null,
   ) {
     this.checkpointAfter[label] = checkpoint;
+    this.checkpointAdvancedLabels.add(label);
     await this.recordEvent("checkpoint_advanced", `Advanced ${label} checkpoint`, {
       checkpointLabel: label,
       checkpoint: checkpoint ?? {},
@@ -621,7 +694,7 @@ export class SyncRunTelemetry {
             ...Object.keys(this.checkpointAfter),
           ])).map((label) => [
             label,
-            JSON.stringify(this.checkpointAfter[label] ?? null) !== JSON.stringify(this.checkpointBefore[label] ?? null),
+            this.checkpointAdvancedLabels.has(label),
           ]),
         ),
       },
@@ -643,7 +716,8 @@ export class SyncRunTelemetry {
   }
 
   private createCompositeRequestObserver(): HttpRequestObserver {
-    const sinks: Array<{ name: string; observer: HttpRequestObserver }> = [
+    // Phase 1: aggregate counters + the durable sync_http_attempts row.
+    const persistenceSinks: Array<{ name: string; observer: HttpRequestObserver }> = [
       {
         name: "request_summary_collector",
         observer: this.requestSummaryCollector,
@@ -652,21 +726,37 @@ export class SyncRunTelemetry {
         name: "sync_request_db",
         observer: this.createDbRequestObserver(),
       },
-      ...this.requestTraceWriters.map((writer, index) => ({
-        name: index === 0 ? "sync_request_stdout" : `sync_request_file_${index}`,
-        observer: this.createTraceObserver(writer),
-      })),
     ];
+    // Phase 2: trace writers. Writer 0 is stdout and is filtered by default; any
+    // further writer is the optional debug NDJSON file and stays full-fidelity.
+    const traceSinks: Array<{ name: string; observer: HttpRequestObserver }> = this.requestTraceWriters
+      .map((writer, index) => ({
+        name: index === 0 ? "sync_request_stdout" : `sync_request_file_${index}`,
+        observer: index === 0
+          ? this.createStdoutTraceObserver(writer)
+          : this.createTraceObserver(writer),
+      }));
+
+    const runSinks = async (
+      sinks: Array<{ name: string; observer: HttpRequestObserver }>,
+      event: HttpRequestEvent,
+    ) => {
+      await Promise.all(sinks.map(async ({ name, observer }) => {
+        try {
+          await observer.onRequestEvent(event);
+        } catch (error) {
+          this.recordTraceWarning(name, error);
+        }
+      }));
+    };
 
     return {
       onRequestEvent: async (event) => {
-        await Promise.all(sinks.map(async ({ name, observer }) => {
-          try {
-            await observer.onRequestEvent(event);
-          } catch (error) {
-            this.recordTraceWarning(name, error);
-          }
-        }));
+        // The two phases are sequenced, not raced: the stdout filter decides whether
+        // an attempt survives on stdout from whether its DB row persisted, so the DB
+        // sink must have settled for THIS event before the stdout sink looks.
+        await runSinks(persistenceSinks, event);
+        await runSinks(traceSinks, event);
       },
     };
   }
@@ -695,28 +785,39 @@ export class SyncRunTelemetry {
           );
           if (createdAttemptId !== null) {
             this.requestAttemptIds.set(attemptKey(event), createdAttemptId);
+          } else {
+            this.requestAttemptPersistenceFailures.add(attemptKey(event));
           }
           return;
         }
 
         const createdAttemptId = this.requestAttemptIds.get(attemptKey(event)) ?? null;
         if (createdAttemptId === null) {
+          this.requestAttemptPersistenceFailures.add(attemptKey(event));
           return;
         }
 
-        await this.safeTelemetryOp(
+        const finished = await this.safeTelemetryOp(
           "finishSyncRequestAttempt",
-          () => finishSyncRequestAttempt(this.app.db, createdAttemptId, {
-            state: event.state,
-            failureKind: event.state === "success" ? null : event.failureKind ?? null,
-            httpStatus: "httpStatus" in event ? event.httpStatus ?? null : null,
-            retryDelayMs: event.state === "retry" ? event.retryDelayMs : null,
-            durationMs: event.durationMs,
-            responseShape: "responseMetadata" in event ? event.responseMetadata ?? {} : {},
-            errorMessage: event.state === "success" ? null : event.errorMessage ?? null,
-            finishedAt: event.timestamp,
-          }),
+          async () => {
+            await finishSyncRequestAttempt(this.app.db, createdAttemptId, {
+              state: event.state,
+              failureKind: event.state === "success" ? null : event.failureKind ?? null,
+              httpStatus: "httpStatus" in event ? event.httpStatus ?? null : null,
+              retryDelayMs: event.state === "retry" ? event.retryDelayMs : null,
+              durationMs: event.durationMs,
+              responseShape: "responseMetadata" in event ? event.responseMetadata ?? {} : {},
+              errorMessage: event.state === "success" ? null : event.errorMessage ?? null,
+              finishedAt: event.timestamp,
+            });
+            return true;
+          },
+          false,
         );
+
+        if (!finished) {
+          this.requestAttemptPersistenceFailures.add(attemptKey(event));
+        }
 
         this.requestAttemptIds.delete(attemptKey(event));
       },
@@ -726,29 +827,76 @@ export class SyncRunTelemetry {
   private createTraceObserver(writer: RequestTraceWriter): HttpRequestObserver {
     return {
       onRequestEvent: async (event) => {
-        await writer.write(compactRecord({
-          timestamp: event.timestamp.toISOString(),
-          component: "sync_http",
-          provider: this.metadata.provider,
-          runId: this.metadata.runId,
-          pageLabel: this.metadata.pageLabel,
-          stream: this.metadata.stream,
-          requestId: event.requestId,
-          operation: event.operation,
-          endpointTemplate: event.endpointTemplate,
-          method: event.method,
-          attemptNumber: event.attemptNumber,
-          state: event.state,
-          rateLimitWaitMs: event.rateLimitWaitMs ?? undefined,
-          httpStatus: "httpStatus" in event ? event.httpStatus ?? undefined : undefined,
-          durationMs: "durationMs" in event ? event.durationMs : undefined,
-          retryDelayMs: event.state === "retry" ? event.retryDelayMs : undefined,
-          failureKind: "failureKind" in event ? event.failureKind ?? undefined : undefined,
-          ...flattenPagination(event),
-          ...(event.requestMetadata ?? {}),
-        }));
+        await writer.write(this.buildTraceRecord(event));
       },
     };
+  }
+
+  /** stdout sink only. Per-attempt success traces were ~83% of worker log lines
+   *  (~400 MB/day), so by default only attempts that went wrong reach stdout:
+   *  a retry, a failure, or an attempt whose sync_http_attempts row did not
+   *  persist (there stdout is the only surviving record, so its "started" line is
+   *  flushed too). SYNC_HTTP_ATTEMPT_TRACE_STDOUT=true restores the verbose feed;
+   *  the optional file sink is never filtered. */
+  private createStdoutTraceObserver(writer: RequestTraceWriter): HttpRequestObserver {
+    return {
+      onRequestEvent: async (event) => {
+        const key = attemptKey(event);
+
+        if (event.state === "started") {
+          const record = this.buildTraceRecord(event);
+          if (this.verboseAttemptTraceStdout || this.requestAttemptPersistenceFailures.has(key)) {
+            await writer.write(record);
+            return;
+          }
+
+          this.pendingStdoutStartedRecords.set(key, record);
+          return;
+        }
+
+        // Terminal event: the attempt is decided, so release or drop its buffer.
+        const persistenceFailed = this.requestAttemptPersistenceFailures.delete(key);
+        const bufferedStarted = this.pendingStdoutStartedRecords.get(key);
+        this.pendingStdoutStartedRecords.delete(key);
+
+        const worthPrinting = this.verboseAttemptTraceStdout ||
+          persistenceFailed ||
+          event.state === "retry" ||
+          event.state === "failed";
+        if (!worthPrinting) {
+          return;
+        }
+
+        if (bufferedStarted) {
+          await writer.write(bufferedStarted);
+        }
+        await writer.write(this.buildTraceRecord(event));
+      },
+    };
+  }
+
+  private buildTraceRecord(event: HttpRequestEvent) {
+    return compactRecord({
+      timestamp: event.timestamp.toISOString(),
+      component: "sync_http",
+      provider: this.metadata.provider,
+      runId: this.metadata.runId,
+      pageLabel: this.metadata.pageLabel,
+      stream: this.metadata.stream,
+      requestId: event.requestId,
+      operation: event.operation,
+      endpointTemplate: event.endpointTemplate,
+      method: event.method,
+      attemptNumber: event.attemptNumber,
+      state: event.state,
+      rateLimitWaitMs: event.rateLimitWaitMs ?? undefined,
+      httpStatus: "httpStatus" in event ? event.httpStatus ?? undefined : undefined,
+      durationMs: "durationMs" in event ? event.durationMs : undefined,
+      retryDelayMs: event.state === "retry" ? event.retryDelayMs : undefined,
+      failureKind: "failureKind" in event ? event.failureKind ?? undefined : undefined,
+      ...flattenPagination(event),
+      ...(event.requestMetadata ?? {}),
+    });
   }
 
   private buildRequestShape(event: HttpRequestEvent) {

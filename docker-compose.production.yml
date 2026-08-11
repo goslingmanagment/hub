@@ -1,6 +1,13 @@
+x-production-logging: &production-logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16
+    logging: *production-logging
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-agency_hub_core}
@@ -18,6 +25,7 @@ services:
   api:
     build: .
     image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
+    logging: *production-logging
     restart: unless-stopped
     env_file:
       - .env.production
@@ -53,6 +61,7 @@ services:
   # idles on the lock and never heartbeats, so the check would flag it).
   scheduler:
     image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
+    logging: *production-logging
     restart: unless-stopped
     env_file:
       - .env.production
@@ -85,6 +94,7 @@ services:
   # config changes needed.
   worker:
     image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
+    logging: *production-logging
     restart: unless-stopped
     env_file:
       - .env.production

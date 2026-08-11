@@ -92,6 +92,7 @@ const envSchema = z.object({
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
   ONLYFANS_DM_POLLING_ENABLED: booleanSchema.default(false),
   SYNC_HTTP_TRACE_FILE: optionalTrimmedStringSchema,
+  SYNC_HTTP_ATTEMPT_TRACE_STDOUT: booleanSchema.default(false),
   FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
   FANSLY_GLOBAL_DELAY_MS: optionalPositiveIntSchema,
   FANSLY_ACCOUNT_LOOKUP_DELAY_MS: optionalPositiveIntSchema,
@@ -330,6 +331,9 @@ export interface AppConfig {
   fanslyBaseUrl: string;
   onlyFansDmPollingEnabled?: boolean;
   syncHttpTraceFile: string | null;
+  /** Verbose per-attempt sync HTTP traces on stdout. Off by default: only retries,
+   *  failures, and attempts whose DB telemetry row was lost are printed. */
+  syncHttpAttemptTraceStdout?: boolean;
   fanslyDefaultDelayMs: number;
   followerPageDelayMs: number;
   fanslyDmConversationsDelayMs: number;
@@ -598,6 +602,7 @@ export function loadConfig(
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,
     onlyFansDmPollingEnabled: parsed.ONLYFANS_DM_POLLING_ENABLED,
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
+    syncHttpAttemptTraceStdout: parsed.SYNC_HTTP_ATTEMPT_TRACE_STDOUT,
     fanslyDefaultDelayMs,
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
     fanslyDmConversationsDelayMs: enforceFanslyDmDelayFloor(parsed.FANSLY_DM_CONVERSATIONS_DELAY_MS),

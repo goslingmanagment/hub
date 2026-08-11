@@ -5,8 +5,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as dbRepo from "@agency_hub_core/db";
+import type { HttpRequestEvent } from "@agency_hub_core/shared";
 
-import { SyncRunTelemetry } from "../apps/runtime/src/services/sync/observability.ts";
+import { summarizeCheckpoint, SyncRunTelemetry } from "../apps/runtime/src/services/sync/observability.ts";
 
 function mockStdoutWrite(lines: string[]) {
   return vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown, cb?: unknown) => {
@@ -18,11 +19,73 @@ function mockStdoutWrite(lines: string[]) {
   }) as typeof process.stdout.write);
 }
 
-function buildTelemetry(overrides: Partial<ConstructorParameters<typeof SyncRunTelemetry>[1]> = {}) {
+const STARTED_EVENT: HttpRequestEvent = {
+  state: "started",
+  requestId: "account_me:test",
+  operation: "account_me",
+  endpointTemplate: "/account/me",
+  method: "GET",
+  attemptNumber: 1,
+  timestamp: new Date("2026-03-10T12:00:00.000Z"),
+  requestMetadata: {},
+};
+
+const SUCCESS_EVENT: HttpRequestEvent = {
+  state: "success",
+  requestId: "account_me:test",
+  operation: "account_me",
+  endpointTemplate: "/account/me",
+  method: "GET",
+  attemptNumber: 1,
+  timestamp: new Date("2026-03-10T12:00:00.120Z"),
+  durationMs: 120,
+  httpStatus: 200,
+  requestMetadata: {},
+  responseMetadata: {
+    returnedItems: 1,
+  },
+};
+
+const RETRY_EVENT: HttpRequestEvent = {
+  state: "retry",
+  requestId: "account_me:test",
+  operation: "account_me",
+  endpointTemplate: "/account/me",
+  method: "GET",
+  attemptNumber: 1,
+  timestamp: new Date("2026-03-10T12:00:00.120Z"),
+  durationMs: 120,
+  httpStatus: 429,
+  failureKind: "http",
+  retryDelayMs: 2_000,
+  errorMessage: "rate limited",
+  requestMetadata: {},
+};
+
+const FAILED_EVENT: HttpRequestEvent = {
+  state: "failed",
+  requestId: "account_me:test",
+  operation: "account_me",
+  endpointTemplate: "/account/me",
+  method: "GET",
+  attemptNumber: 2,
+  timestamp: new Date("2026-03-10T12:00:02.120Z"),
+  durationMs: 120,
+  httpStatus: 500,
+  failureKind: "http",
+  errorMessage: "upstream exploded",
+  requestMetadata: {},
+};
+
+function buildTelemetry(
+  overrides: Partial<ConstructorParameters<typeof SyncRunTelemetry>[1]> = {},
+  configOverrides: Record<string, unknown> = {},
+) {
   return new SyncRunTelemetry(
     {
       config: {
         syncHttpTraceFile: null,
+        ...configOverrides,
       },
       db: {} as never,
       logger: {
@@ -50,6 +113,73 @@ describe("sync observability", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps a persisted successful attempt off stdout", async () => {
+    const stdoutLines: string[] = [];
+    mockStdoutWrite(stdoutLines);
+    vi.spyOn(dbRepo, "insertSyncRequestAttempt").mockResolvedValue({ id: 21 } as never);
+    vi.spyOn(dbRepo, "finishSyncRequestAttempt").mockResolvedValue({ id: 21 } as never);
+    vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+
+    const requestObserver = buildTelemetry().getRequestObserver();
+    await requestObserver.onRequestEvent(STARTED_EVENT);
+    await requestObserver.onRequestEvent(SUCCESS_EVENT);
+
+    expect(stdoutLines).toEqual([]);
+  });
+
+  it("still traces retried and failed attempts on stdout, with their started line", async () => {
+    const stdoutLines: string[] = [];
+    mockStdoutWrite(stdoutLines);
+    vi.spyOn(dbRepo, "insertSyncRequestAttempt").mockResolvedValue({ id: 22 } as never);
+    vi.spyOn(dbRepo, "finishSyncRequestAttempt").mockResolvedValue({ id: 22 } as never);
+    vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+
+    const requestObserver = buildTelemetry().getRequestObserver();
+    await requestObserver.onRequestEvent(STARTED_EVENT);
+    await requestObserver.onRequestEvent(RETRY_EVENT);
+    await requestObserver.onRequestEvent({ ...STARTED_EVENT, attemptNumber: 2 });
+    await requestObserver.onRequestEvent(FAILED_EVENT);
+
+    expect(stdoutLines).toHaveLength(4);
+    const states = stdoutLines.map((line) => (JSON.parse(line) as { state: string }).state);
+    expect(states).toEqual(["started", "retry", "started", "failed"]);
+  });
+
+  it("restores the verbose per-attempt stdout feed when the flag is on", async () => {
+    const stdoutLines: string[] = [];
+    mockStdoutWrite(stdoutLines);
+    vi.spyOn(dbRepo, "insertSyncRequestAttempt").mockResolvedValue({ id: 23 } as never);
+    vi.spyOn(dbRepo, "finishSyncRequestAttempt").mockResolvedValue({ id: 23 } as never);
+    vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+
+    const requestObserver = buildTelemetry({}, { syncHttpAttemptTraceStdout: true }).getRequestObserver();
+    await requestObserver.onRequestEvent(STARTED_EVENT);
+    await requestObserver.onRequestEvent(SUCCESS_EVENT);
+
+    expect(stdoutLines).toHaveLength(2);
+    expect(stdoutLines.join("")).toContain("\"component\":\"sync_http\"");
+  });
+
+  it("falls back to stdout when finishing the attempt row fails", async () => {
+    const stdoutLines: string[] = [];
+    mockStdoutWrite(stdoutLines);
+    vi.spyOn(dbRepo, "insertSyncRequestAttempt").mockResolvedValue({ id: 24 } as never);
+    vi.spyOn(dbRepo, "finishSyncRequestAttempt").mockRejectedValueOnce(new Error("telemetry down"));
+    vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+
+    const requestObserver = buildTelemetry().getRequestObserver();
+    await requestObserver.onRequestEvent(STARTED_EVENT);
+    await requestObserver.onRequestEvent(SUCCESS_EVENT);
+
+    // The DB lost the terminal state of this attempt, so stdout keeps the whole
+    // attempt (both lines) instead of silently dropping a success nobody stored.
+    expect(stdoutLines).toHaveLength(2);
+    const states = stdoutLines.map((line) => (JSON.parse(line) as { state: string }).state);
+    expect(states).toEqual(["started", "success"]);
+  });
+
+  // Pinned invariant: when the DB write for an attempt fails, stdout must remain the
+  // surviving record of that attempt — the default stdout filter must not swallow it.
   it("treats DB request telemetry persistence as best-effort while keeping stdout tracing alive", async () => {
     const stdoutLines: string[] = [];
     mockStdoutWrite(stdoutLines);
@@ -152,6 +282,12 @@ describe("sync observability", () => {
     }));
     expect(stdoutLines).toHaveLength(2);
     expect(stdoutLines.join("")).toContain("\"component\":\"sync_http\"");
+    // Both lines survive through the persistence-failure fallback: the "started" line
+    // is emitted as soon as its insert is known to have failed, the terminal one after.
+    expect(stdoutLines.map((line) => (JSON.parse(line) as { state: string }).state)).toEqual([
+      "started",
+      "success",
+    ]);
     expect(telemetry.getRequestTotalsSnapshot()).toMatchObject({
       totalAttempts: 1,
       logicalRequests: 1,
@@ -352,5 +488,100 @@ describe("sync observability", () => {
         yieldReason: "request_budget",
       },
     });
+  });
+
+  it("projects unbounded checkpoint state to bounded scalars", () => {
+    const summary = summarizeCheckpoint({
+      cursorText: "cursor-9",
+      cursorTimestamp: new Date("2026-03-10T12:00:00.000Z"),
+      lastSuccessfulRunId: 41,
+      state: {
+        // The cumulative array that made telemetry grow O(N²) per sweep.
+        snapshotConversationIds: Array.from({ length: 10_000 }, (_, index) => `conv-${index}`),
+        currentConversationId: "conv-9999",
+        pagesProcessed: 12,
+        bootstrapComplete: false,
+        lastError: null,
+        pendingByStream: { dm: 1, tips: 2, posts: 3 },
+      },
+    });
+
+    expect(summary?.cursorText).toBe("cursor-9");
+    expect(summary?.cursorTimestamp).toBe("2026-03-10T12:00:00.000Z");
+    expect(summary?.lastSuccessfulRunId).toBe(41);
+    expect(summary?.stateScalars).toEqual({
+      snapshotConversationIdsCount: 10_000,
+      currentConversationId: "conv-9999",
+      pagesProcessed: 12,
+      bootstrapComplete: false,
+      lastError: null,
+      pendingByStreamKeys: 3,
+    });
+    // No copy of the array survives anywhere in the emitted summary.
+    const encoded = JSON.stringify(summary);
+    expect(encoded).not.toContain("conv-0");
+    expect(encoded.length).toBeLessThan(1024);
+  });
+
+  it("truncates long checkpoint state strings at 120 characters", () => {
+    const summary = summarizeCheckpoint({
+      state: {
+        resumeToken: "x".repeat(500),
+        shortToken: "y".repeat(120),
+      },
+    });
+
+    const resumeToken = summary?.stateScalars?.resumeToken as string;
+    expect(resumeToken).toBe(`${"x".repeat(120)}…`);
+    expect(resumeToken.length).toBe(121);
+    expect(summary?.stateScalars?.shortToken).toBe("y".repeat(120));
+  });
+
+  it("caps the checkpoint state projection at 32 keys", () => {
+    const state = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [`key${index}`, index]),
+    );
+
+    const scalars = summarizeCheckpoint({ state })?.stateScalars ?? {};
+    expect(Object.keys(scalars)).toHaveLength(32);
+    expect(scalars.key0).toBe(0);
+    expect(scalars.key31).toBe(31);
+    expect(scalars.key32).toBeUndefined();
+  });
+
+  it("reports a progress-only checkpoint write as advanced", async () => {
+    mockStdoutWrite([]);
+    vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+
+    const telemetry = buildTelemetry();
+    // upsertCheckpointProgress (touchSuccessMetadata: false) moves neither the
+    // cursor nor lastSuccessfulRunId, and the projected state scalars can be
+    // identical too — only the write itself proves the sweep moved.
+    const identical = {
+      cursorText: null,
+      cursorTimestamp: null,
+      lastSuccessfulRunId: 7,
+      state: { snapshotConversationIds: ["a", "b"] },
+    };
+    await telemetry.recordCheckpointLoaded("dm_conversations", summarizeCheckpoint(identical));
+    await telemetry.recordCheckpointAdvanced("dm_conversations", summarizeCheckpoint(identical));
+
+    const stats = telemetry.buildStats("partial");
+    expect(JSON.stringify(stats.checkpoint.after)).toEqual(JSON.stringify(stats.checkpoint.before));
+    expect(stats.checkpoint.advanced.dm_conversations).toBe(true);
+  });
+
+  it("reports a loaded-but-never-advanced checkpoint as unchanged", async () => {
+    mockStdoutWrite([]);
+    vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+
+    const telemetry = buildTelemetry();
+    await telemetry.recordCheckpointLoaded("dm_conversations", summarizeCheckpoint({
+      cursorText: "cursor-1",
+      state: { pagesProcessed: 3 },
+    }));
+
+    const stats = telemetry.buildStats("success");
+    expect(stats.checkpoint.advanced.dm_conversations).toBe(false);
   });
 });
