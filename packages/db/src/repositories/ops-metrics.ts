@@ -68,6 +68,33 @@ export interface OpsMetricSampleRow {
   sampledAt: Date;
 }
 
+/** G1.5: one series' history since a cutoff, OLDEST first — the shape a
+ * least-squares days-to-full fit consumes (db-disk-alert.ts). Served by
+ * ops_metric_samples_metric_time_idx (metric, sampled_at DESC); the DESC index
+ * scans an ascending range just as well. `since` is exclusive of nothing —
+ * the boundary sample is included so a 24h window keeps its oldest point. */
+export async function listOpsMetricSamplesSince(
+  db: Database,
+  input: { metric: string; quantile: "p50" | "p95"; since: Date },
+): Promise<OpsMetricSampleRow[]> {
+  const result = await db.execute<
+    { metric: string; quantile: string; value_ms: string; sampled_at: Date }
+  >(sql`
+    select metric, quantile, value_ms::text, sampled_at
+    from ops_metric_samples
+    where metric = ${input.metric}
+      and quantile = ${input.quantile}
+      and sampled_at >= ${input.since}
+    order by sampled_at asc
+  `);
+  return result.rows.map((row) => ({
+    metric: row.metric,
+    quantile: row.quantile,
+    valueMs: Number(row.value_ms),
+    sampledAt: new Date(row.sampled_at),
+  }));
+}
+
 /** Latest N samples per (metric, quantile), newest first. */
 export async function listRecentOpsMetricSamples(
   db: Database,

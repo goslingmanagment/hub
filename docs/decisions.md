@@ -214,6 +214,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 210 | Fansly live post-tip contract correction | Post-deploy acceptance supersedes #209 narrowly on the undocumented `/tips` item shape and null semantics: live items carry a flat `targetId` that proves donor-to-post attribution but no per-tip goal discriminator or transaction refs. Canonicalizer v5/schema v3 replays them with internal `tipGoalAttribution='unknown'`; a null `postTipGoalRef` means source-did-not-provide, never direct. Nested typed targets remain accepted when actually observed. No migration or inferred goal split |
 | 211 | Exact transaction tip context | Fansly DM `tips[]` sidecars project exact, message-gated `tip_transactions` note/conversation context by provider tip id while `transactions` remains money-only. Mandatory sender/time facts, a Stage-28 material-time erasure fence, and field-specific raw lineage prevent false nulls, resurrection, and unverifiable verbatim text; OnlyFans stays visible as `not_captured` |
 | 212 | G1 storage stop-loss: telemetry is bounded, capture is not | Sync telemetry stops re-copying unbounded checkpoint state (bounded scalar projection + write-time-or-diff `advanced`), per-attempt success stdout traces default off behind `SYNC_HTTP_ATTEMPT_TRACE_STDOUT` with a DB-failure stdout fallback, production container logs get the bounded `local` driver (20m×5, contract-tested), hourly disk gauges land in `ops_metric_samples` (deadman ignores `disk_*`), and deploy gains an EXIT-trap dist-context sweep plus an opt-in (#176-compatible, default-off) allowlist image GC. No captured fact, retention window, or deleter changes |
+| 213 | Disk runway latches | Hourly least-squares fit of `disk_free_bytes` gauges (24h window, ≥6h span) drives two independent `db_disk_usage` subKey-латча: `runway_warning` <30д и `runway_critical` <7д. Unknown history is not a state (ничего не открывает и не резолвит); measured recovery или flat slope резолвит per-latch; resolve-тексты subKey-специфичны, чтобы не читались как общий all-clear |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6844,3 +6845,27 @@ raw→observation idempotency-key lineage the #133 rejournal repair depends on;
 a leaf/parent retention split plus that index are prerequisites), no schema
 changes, no new deleters. Follow-ups tracked in
 `investigations/storage-unified-execution-plan-2026-08-11.md`.
+
+
+**Decision #213 (2026-08-12, disk runway latches — days-to-full pages before
+percent does):** The 80% `db_disk_usage` latch fires when the disk is already
+nearly gone and, being latched, never re-pages while it stands open — during
+the August storage incident the owner received at most one page as the disk
+went 80→90%. G1's hourly `disk_free_bytes` gauges now feed a least-squares
+24h fit (7d as a secondary readout); the fitted days-to-full drives two NEW
+independent latches, `db_disk_usage:global:runway_warning` (<30 days) and
+`:runway_critical` (<7 days), with thresholds as in-file constants — they are
+containment, not tuning surface.
+
+Semantics: a series spanning under 6 hours is UNKNOWN — it neither opens nor
+resolves a runway latch (ignorance must never clear a latch a real measurement
+opened, e.g. after a restart onto a pruned series). A measured value resolves
+per latch on recovery above that latch's threshold, and a measured flat or
+positive slope resolves both. Warning and critical are independent latches, so
+an escalation pages exactly once more — deliberate, since a single latch
+cannot re-page on severity without losing the anti-flap property. Resolve
+texts are subKey-specific ("Disk runway back above …; usage latches
+unaffected"): resolving a runway latch while the percent latch or the other
+runway latch stands open must not read as a disk-wide all-clear. The
+error-handling canon's incident table gains both `db_disk_usage` rows in this
+same change per #185.
