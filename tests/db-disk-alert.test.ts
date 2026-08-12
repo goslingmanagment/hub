@@ -14,6 +14,45 @@ import {
 
 const GIB = 1024 ** 3;
 
+/** Drizzle SQL introspection (same shape as tests/page-dm.repository.test.ts):
+ * the db stub never renders SQL, so read the template's chunks directly. */
+function extractSqlText(query: { queryChunks?: Array<{ value?: string[] }> }): string {
+  const chunks = query.queryChunks ?? [];
+  return chunks.flatMap((chunk) => {
+    if (typeof chunk === "object" && chunk !== null) {
+      if ("queryChunks" in chunk && Array.isArray(chunk.queryChunks)) {
+        return extractSqlText(chunk as { queryChunks?: Array<{ value?: string[] }> });
+      }
+      if ("value" in chunk && Array.isArray(chunk.value)) {
+        return chunk.value;
+      }
+    }
+    return [];
+  }).join("");
+}
+
+function extractQueryParams(query: { queryChunks?: unknown[] }): unknown[] {
+  const chunks = query.queryChunks ?? [];
+  const values: unknown[] = [];
+  for (const chunk of chunks) {
+    if (typeof chunk === "object" && chunk !== null) {
+      if ("queryChunks" in chunk && Array.isArray(chunk.queryChunks)) {
+        values.push(...extractQueryParams(chunk as { queryChunks?: unknown[] }));
+        continue;
+      }
+      if ("value" in chunk) {
+        continue;
+      }
+    }
+    values.push(chunk);
+  }
+  return values;
+}
+
+function executeMock(app: unknown) {
+  return (app as { db: { execute: ReturnType<typeof vi.fn> } }).db.execute;
+}
+
 function statsFor(input: { totalGib: number; availableGib: number }) {
   const bsize = 4096;
   return {
@@ -64,7 +103,8 @@ describe("runDbDiskUsageCheck", () => {
 
     expect(result).toMatchObject({ breached: true, thresholdPercent: 80, databaseBytes: 2 * GIB });
     expect(result).toMatchObject({ healthy: false, usedBytes: 90 * GIB, availableBytes: 10 * GIB });
-    expect((app as { db: { execute: ReturnType<typeof vi.fn> } }).db.execute).toHaveBeenCalledTimes(2);
+    // health upsert + capacity gauges + pg_database_size
+    expect(executeMock(app)).toHaveBeenCalledTimes(3);
     expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
     expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
     const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
@@ -90,9 +130,10 @@ describe("runDbDiskUsageCheck", () => {
 
   it("still alerts when pg_database_size is unavailable", async () => {
     const app = appStub();
-    (app as { db: { execute: ReturnType<typeof vi.fn> } }).db.execute
-      .mockResolvedValueOnce({ rows: [] })
-      .mockRejectedValueOnce(new Error("db down"));
+    executeMock(app)
+      .mockResolvedValueOnce({ rows: [] }) // health upsert
+      .mockResolvedValueOnce({ rows: [] }) // capacity gauges
+      .mockRejectedValueOnce(new Error("db down")); // pg_database_size
     await runDbDiskUsageCheck(app, {
       statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 5 }),
     });
@@ -100,6 +141,50 @@ describe("runDbDiskUsageCheck", () => {
     expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
     const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
     expect(input.errorSummary).not.toContain("Postgres");
+  });
+
+  it("records the three capacity gauges as integers stamped with the check time", async () => {
+    const app = appStub();
+    const now = new Date("2026-07-05T12:15:00.000Z");
+    await runDbDiskUsageCheck(app, {
+      now,
+      // 62.5% used — a percent that is NOT a whole number in basis points
+      // terms would round away without the ×100 scaling.
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 37.5 }),
+    });
+
+    const gaugeQuery = executeMock(app).mock.calls[1]![0] as { queryChunks?: unknown[] };
+    const sqlText = extractSqlText(gaugeQuery as { queryChunks?: Array<{ value?: string[] }> });
+    expect(sqlText).toContain("insert into ops_metric_samples");
+    expect(sqlText).toContain("(metric, value_ms, quantile, sampled_at)");
+
+    // One row per gauge: (metric, value, quantile, sampled_at).
+    expect(extractQueryParams(gaugeQuery)).toEqual([
+      "disk_free_bytes", 37.5 * GIB, "p50", now,
+      "disk_used_bytes", 62.5 * GIB, "p50", now,
+      "disk_used_percent_bp", 6250, "p50", now,
+    ]);
+    for (const value of [37.5 * GIB, 62.5 * GIB, 6250]) {
+      expect(Number.isInteger(value)).toBe(true);
+    }
+    // Sampling only: no incident is raised or resolved by the gauges.
+    expect(incidentMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+  });
+
+  it("keeps the disk alert working when the capacity-gauge insert fails", async () => {
+    const app = appStub();
+    executeMock(app)
+      .mockResolvedValueOnce({ rows: [] }) // health upsert
+      .mockRejectedValueOnce(new Error("ops_metric_samples unavailable")); // gauges
+
+    const result = await runDbDiskUsageCheck(app, {
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 5 }),
+    });
+
+    expect(result).toMatchObject({ breached: true, healthy: false });
+    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
+    expect((app as { logger: { warn: ReturnType<typeof vi.fn> } }).logger.warn)
+      .toHaveBeenCalledTimes(1);
   });
 
   it("persists and alerts an unhealthy sample when the filesystem cannot be statted", async () => {
@@ -120,7 +205,9 @@ describe("runDbDiskUsageCheck", () => {
       availableBytes: null,
       error: "statfs failed",
     });
-    expect((app as { db: { execute: ReturnType<typeof vi.fn> } }).db.execute).toHaveBeenCalledTimes(1);
+    // Only the unhealthy health row — no capacity gauges when there is nothing
+    // to measure (a fabricated 0 would poison the days-to-full history).
+    expect(executeMock(app)).toHaveBeenCalledTimes(1);
     expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledWith(app, {
       kind: "db_disk_usage",
       errorSummary: "Disk health unavailable: statfs failed",

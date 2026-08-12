@@ -224,8 +224,9 @@ The script assumes the remote server already has `/opt/agency-hub/.env.productio
 The development and local-test `postgres` services deliberately have no restart
 policy. Start the development DB with `pnpm dev:db` (or as part of `pnpm dev`)
 and stop local stacks when they are not needed so Docker Desktop can enter
-Resource Saver. Local Compose logs use Docker's rotating `local` driver (`10m`
-× 3 files per container).
+Resource Saver. Container logs are bounded everywhere with Docker's rotating
+`local` driver: local Compose keeps `10m` × 3 files per container, production
+Compose keeps `20m` × 5.
 
 ## Backups
 

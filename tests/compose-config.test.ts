@@ -120,6 +120,23 @@ describe("compose config", () => {
     expect(worker).toContain("stale worker health file");
   });
 
+  it("docker-compose.production.yml bounds every service's container logs", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    expect(text).toContain("x-production-logging: &production-logging");
+    expect(text).toContain("driver: local");
+    expect(text).toContain('max-size: "20m"');
+    expect(text).toContain('max-file: "5"');
+    const servicesBlock = text.match(/^services:\n([\s\S]*?)(?=^volumes:|(?![\s\S]))/m)?.[1] ?? "";
+    const serviceNames = [...servicesBlock.matchAll(/^ {2}([a-z0-9][a-z0-9_-]*):$/gm)]
+      .map((m) => m[1])
+      .filter((name): name is string => typeof name === "string");
+    expect(serviceNames).toContain("worker");
+    expect(serviceNames.length).toBeGreaterThanOrEqual(4);
+    for (const service of serviceNames) {
+      expect(getServiceBlock(text, service), `${service} must declare bounded logging`).toContain("logging: *production-logging");
+    }
+  });
+
   it("requires one explicit host directory for read-only OFAPI export artifacts", async () => {
     const compose = await readComposeFile("docker-compose.production.yml");
     const productionEnv = await readComposeFile(".env.production.example");

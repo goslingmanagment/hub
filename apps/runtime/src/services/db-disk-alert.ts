@@ -2,6 +2,8 @@ import { statfs } from "node:fs/promises";
 
 import { sql } from "drizzle-orm";
 
+import { insertOpsMetricSamples } from "@agency_hub_core/db";
+
 import type { AppContext } from "../bootstrap.ts";
 import {
   notifyOfapiGlobalIncident,
@@ -102,6 +104,55 @@ async function persistStorageHealthSample(
   `);
 }
 
+/** Basis points (percent × 100) so the gauge stays an integer: value_ms is
+ * BIGINT and insertOpsMetricSamples rounds, so a fractional percent would be
+ * silently truncated to whole percents — too coarse for a days-to-full slope. */
+function toBasisPoints(percent: number) {
+  return Math.round(percent * 100);
+}
+
+/** Capacity history for a later days-to-full slope. Three point gauges per
+ * hourly check, all under quantile 'p50' (these are single readings, not
+ * distributions). Deliberately alert-free: none of these metrics appears in
+ * GOLDEN_SIGNAL_THRESHOLDS_MS, so nothing evaluates or pages on them here.
+ * The sampler deadman skips `disk_*` rows (getLatestOpsMetricSampleAt) — an
+ * hourly writer must never stand in for the minutely sampler.
+ * Best-effort: a failed insert must not cost us the disk alert itself. */
+async function persistDiskCapacityGauges(
+  app: Pick<AppContext, "db" | "logger">,
+  input: {
+    checkedAt: Date;
+    usedBytes: number;
+    availableBytes: number;
+    usedPercent: number;
+  },
+) {
+  try {
+    await insertOpsMetricSamples(app.db, [
+      {
+        metric: "disk_free_bytes",
+        quantile: "p50",
+        valueMs: Math.round(input.availableBytes),
+        sampledAt: input.checkedAt,
+      },
+      {
+        metric: "disk_used_bytes",
+        quantile: "p50",
+        valueMs: Math.round(input.usedBytes),
+        sampledAt: input.checkedAt,
+      },
+      {
+        metric: "disk_used_percent_bp",
+        quantile: "p50",
+        valueMs: toBasisPoints(input.usedPercent),
+        sampledAt: input.checkedAt,
+      },
+    ]);
+  } catch (error) {
+    app.logger.warn({ err: error }, "Disk usage check failed to record capacity gauges; continuing");
+  }
+}
+
 export async function runDbDiskUsageCheck(
   app: Pick<AppContext, "config" | "db" | "logger">,
   options?: {
@@ -156,6 +207,12 @@ export async function runDbDiskUsageCheck(
     freeBytes: usage.availableBytes,
     totalBytes: usage.totalBytes,
     error: null,
+  });
+  await persistDiskCapacityGauges(app, {
+    checkedAt,
+    usedBytes: usage.usedBytes,
+    availableBytes: usage.availableBytes,
+    usedPercent: usage.usedPercent,
   });
 
   // Postgres size is context for the alert text only; best-effort.
