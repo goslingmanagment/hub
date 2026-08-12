@@ -161,6 +161,24 @@ const headAdvanceCondition = sql`(
   )
 )`;
 
+// G2 (checkpoint cutover prerequisite): last_seen_generation only ever moves
+// forward. Four writers share this upsert, and the OFAPI ones write back a
+// stamp they read OUTSIDE the write (ofapi-dm-projection, ofapi-dm-sync) — an
+// unconditional `excluded` assignment let a stale reader regress or blank a
+// newer stamp, and a regressed stamp makes the next destructive finalization
+// (markPageDmConversationsInvisibleByGeneration) hide a LIVE thread. The guard
+// is platform-neutral by construction, so it takes no platform argument:
+// Fansly generations only grow (max(checkpoint, stored) + 1), and the
+// OnlyFans paths write back what they just read, so greatest() is a no-op for
+// them except in exactly the race it exists to lose safely. A null `excluded`
+// keeps the current stamp — the writers that pass null never intended to
+// change it.
+const monotonicGenerationSet = sql`case
+  when excluded.last_seen_generation is null then ${pageDmConversations.lastSeenGeneration}
+  when ${pageDmConversations.lastSeenGeneration} is null then excluded.last_seen_generation
+  else greatest(${pageDmConversations.lastSeenGeneration}, excluded.last_seen_generation)
+end`;
+
 export async function upsertPageDmConversation(
   db: Database,
   input: UpsertPageDmConversationInput,
@@ -219,7 +237,7 @@ export async function upsertPageDmConversation(
     })
     .onConflictDoUpdate({
       target: [pageDmConversations.platformAccountId, pageDmConversations.platformConversationId],
-      set: { ...patch, ...headGuardedSet },
+      set: { ...patch, ...headGuardedSet, lastSeenGeneration: monotonicGenerationSet },
     })
     .returning();
 
@@ -247,7 +265,7 @@ export async function markPageDmConversationsInvisibleByGeneration(
 
 export async function maxPageDmThreadGeneration(db: Database, platformAccountId: number) {
   const result = await db.execute(sql`
-    select coalesce(max(last_seen_generation), 0)::int as generation
+    select coalesce(max(last_seen_generation), 0)::bigint as generation
     from page_dm_threads
     where platform_account_id = ${platformAccountId}
   `);
