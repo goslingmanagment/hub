@@ -8,11 +8,13 @@ const incidentMocks = vi.hoisted(() => ({
 vi.mock("../apps/runtime/src/services/notification-incidents.ts", () => incidentMocks);
 
 import {
+  computeRunwayDays,
   evaluateDiskUsage,
   runDbDiskUsageCheck,
 } from "../apps/runtime/src/services/db-disk-alert.ts";
 
 const GIB = 1024 ** 3;
+const HOUR_MS = 60 * 60 * 1000;
 
 /** Drizzle SQL introspection (same shape as tests/page-dm.repository.test.ts):
  * the db stub never renders SQL, so read the template's chunks directly. */
@@ -62,16 +64,72 @@ function statsFor(input: { totalGib: number; availableGib: number }) {
   };
 }
 
-function appStub(overrides?: { diskUsageAlertPercent?: number; executeRows?: unknown[] }) {
+interface FreeSample {
+  sampledAt: Date;
+  freeBytes: number;
+}
+
+/** Hourly `disk_free_bytes` gauges on a straight line: `hours + 1` points
+ * ending exactly at `endingAt`, so `freeBytesAtEnd` is the reading "now". */
+function hourlyFreeSamples(input: {
+  endingAt: Date;
+  hours: number;
+  freeBytesAtEnd: number;
+  bytesPerDay: number;
+}): FreeSample[] {
+  return Array.from({ length: input.hours + 1 }, (_, index) => {
+    const hoursBeforeEnd = input.hours - index;
+    return {
+      sampledAt: new Date(input.endingAt.getTime() - hoursBeforeEnd * HOUR_MS),
+      freeBytes: input.freeBytesAtEnd - (input.bytesPerDay * hoursBeforeEnd) / 24,
+    };
+  });
+}
+
+function toRunwaySamples(samples: FreeSample[]) {
+  return samples.map((sample) => ({ valueMs: sample.freeBytes, sampledAt: sample.sampledAt }));
+}
+
+/** The db stub answers by SQL shape rather than call order, so a test can add
+ * capacity history without renumbering every other query. */
+function appStub(overrides?: {
+  diskUsageAlertPercent?: number;
+  databaseBytes?: number;
+  history?: FreeSample[];
+}) {
+  const historyRows = (overrides?.history ?? []).map((sample) => ({
+    metric: "disk_free_bytes",
+    quantile: "p50",
+    value_ms: String(sample.freeBytes),
+    sampled_at: sample.sampledAt,
+  }));
   return {
     config: { diskUsageAlertPercent: overrides?.diskUsageAlertPercent ?? 80 },
     db: {
-      execute: vi.fn().mockResolvedValue({
-        rows: overrides?.executeRows ?? [{ bytes: String(2 * GIB) }],
+      execute: vi.fn(async (query: unknown) => {
+        const text = extractSqlText(query as { queryChunks?: Array<{ value?: string[] }> });
+        if (text.includes("pg_database_size")) {
+          return { rows: [{ bytes: String(overrides?.databaseBytes ?? 2 * GIB) }] };
+        }
+        if (text.includes("from ops_metric_samples")) {
+          return { rows: historyRows };
+        }
+        return { rows: [] };
       }),
     },
     logger: { warn: vi.fn(), info: vi.fn() },
   } as never;
+}
+
+function latchCalls(mock: { mock: { calls: unknown[][] } }, subKey: string) {
+  return mock.mock.calls
+    .map((call) => call[1] as { subKey?: string | null; errorSummary?: string })
+    .filter((input) => input.subKey === subKey);
+}
+
+function subKeyedCallCount(mock: { mock: { calls: unknown[][] } }) {
+  return mock.mock.calls
+    .filter((call) => (call[1] as { subKey?: string | null }).subKey != null).length;
 }
 
 beforeEach(() => {
@@ -103,8 +161,8 @@ describe("runDbDiskUsageCheck", () => {
 
     expect(result).toMatchObject({ breached: true, thresholdPercent: 80, databaseBytes: 2 * GIB });
     expect(result).toMatchObject({ healthy: false, usedBytes: 90 * GIB, availableBytes: 10 * GIB });
-    // health upsert + capacity gauges + pg_database_size
-    expect(executeMock(app)).toHaveBeenCalledTimes(3);
+    // health upsert + capacity gauges + pg_database_size + runway history
+    expect(executeMock(app)).toHaveBeenCalledTimes(4);
     expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
     expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
     const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
@@ -214,5 +272,241 @@ describe("runDbDiskUsageCheck", () => {
       occurredAt: now,
     });
     expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
+  });
+});
+
+describe("computeRunwayDays", () => {
+  const now = new Date("2026-08-12T12:15:00.000Z");
+
+  it("fits a straight decline exactly", () => {
+    const runway = computeRunwayDays(
+      toRunwaySamples(hourlyFreeSamples({
+        endingAt: now,
+        hours: 24,
+        freeBytesAtEnd: 48 * GIB,
+        bytesPerDay: -2 * GIB,
+      })),
+      now,
+    );
+
+    expect(runway).not.toBeNull();
+    // 48 GiB left, shrinking 2 GiB/day => 24 days.
+    expect(runway!.days).toBeCloseTo(24, 4);
+    expect(runway!.bytesPerDay / GIB).toBeCloseTo(-2, 6);
+  });
+
+  it("projects from `now`, not from the newest sample", () => {
+    // Series stops 3h short of `now`; the fitted line keeps falling.
+    const stale = new Date(now.getTime() - 3 * HOUR_MS);
+    const runway = computeRunwayDays(
+      toRunwaySamples(hourlyFreeSamples({
+        endingAt: stale,
+        hours: 24,
+        freeBytesAtEnd: 24 * GIB,
+        bytesPerDay: -1 * GIB,
+      })),
+      now,
+    );
+
+    expect(runway!.days).toBeCloseTo(24 - 3 / 24, 4);
+  });
+
+  it("returns null until the series spans six hours", () => {
+    const shortSeries = hourlyFreeSamples({
+      endingAt: now,
+      hours: 5,
+      freeBytesAtEnd: 10 * GIB,
+      bytesPerDay: -1 * GIB,
+    });
+    expect(computeRunwayDays(toRunwaySamples(shortSeries), now)).toBeNull();
+    expect(computeRunwayDays([], now)).toBeNull();
+    expect(computeRunwayDays(toRunwaySamples(shortSeries.slice(0, 1)), now)).toBeNull();
+
+    // Six hours exactly is enough — the boundary is inclusive.
+    const boundary = hourlyFreeSamples({
+      endingAt: now,
+      hours: 6,
+      freeBytesAtEnd: 10 * GIB,
+      bytesPerDay: -1 * GIB,
+    });
+    expect(computeRunwayDays(toRunwaySamples(boundary), now)!.days).toBeCloseTo(10, 4);
+  });
+
+  it("returns null when free space is flat or growing", () => {
+    for (const bytesPerDay of [0, 1 * GIB, 5 * GIB]) {
+      const samples = hourlyFreeSamples({
+        endingAt: now,
+        hours: 24,
+        freeBytesAtEnd: 10 * GIB,
+        bytesPerDay,
+      });
+      expect(computeRunwayDays(toRunwaySamples(samples), now)).toBeNull();
+    }
+  });
+});
+
+describe("runDbDiskUsageCheck runway latches", () => {
+  const now = new Date("2026-08-12T12:15:00.000Z");
+
+  it("opens runway_warning under 30 days and leaves runway_critical resolved", async () => {
+    const app = appStub({
+      history: hourlyFreeSamples({
+        endingAt: now,
+        hours: 24,
+        freeBytesAtEnd: 50 * GIB,
+        bytesPerDay: -2.5 * GIB,
+      }),
+    });
+    const result = await runDbDiskUsageCheck(app, {
+      now,
+      // 50% used: the percent latch is quiet, only the slope pages.
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 50 }),
+    });
+
+    expect(result).toMatchObject({ breached: false });
+    expect((result as { runwayDays: number }).runwayDays).toBeCloseTo(20, 4);
+
+    const warnings = latchCalls(incidentMocks.notifyOfapiGlobalIncident, "runway_warning");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.errorSummary).toContain("Disk fills in ~20.0 days");
+    expect(warnings[0]!.errorSummary).toContain("threshold 30 days");
+    expect(warnings[0]!.errorSummary).toContain("24h slope -2.50 GiB/day");
+    expect(warnings[0]!.errorSummary).toContain("free 50.0 GiB of 100.0 GiB");
+    expect(incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]![1]).toMatchObject({
+      kind: "db_disk_usage",
+      occurredAt: now,
+    });
+    // Nothing else paged: no percent breach, and critical is still far off.
+    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
+    expect(latchCalls(incidentMocks.resolveOfapiGlobalIncident, "runway_critical"))
+      .toHaveLength(1);
+    // The percent latch keeps resolving on its own key, untouched by runway.
+    expect(subKeyedCallCount(incidentMocks.resolveOfapiGlobalIncident)).toBe(1);
+    expect(incidentMocks.resolveOfapiGlobalIncident).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves both runway latches once the slope flattens", async () => {
+    const app = appStub({
+      history: hourlyFreeSamples({
+        endingAt: now,
+        hours: 24,
+        freeBytesAtEnd: 50 * GIB,
+        bytesPerDay: 0,
+      }),
+    });
+    const result = await runDbDiskUsageCheck(app, {
+      now,
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 50 }),
+    });
+
+    expect((result as { runwayDays: number | null }).runwayDays).toBeNull();
+    expect(incidentMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+    // A measured non-shrinking disk clears BOTH latches — symmetry, so an open
+    // runway_critical cannot outlive the burn that opened it.
+    expect(latchCalls(incidentMocks.resolveOfapiGlobalIncident, "runway_warning"))
+      .toHaveLength(1);
+    expect(latchCalls(incidentMocks.resolveOfapiGlobalIncident, "runway_critical"))
+      .toHaveLength(1);
+  });
+
+  it("resolves runway_warning when the runway recovers above 30 days", async () => {
+    const app = appStub({
+      history: hourlyFreeSamples({
+        endingAt: now,
+        hours: 24,
+        freeBytesAtEnd: 50 * GIB,
+        bytesPerDay: -1 * GIB, // 50 days
+      }),
+    });
+    await runDbDiskUsageCheck(app, {
+      now,
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 50 }),
+    });
+
+    expect(incidentMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+    expect(latchCalls(incidentMocks.resolveOfapiGlobalIncident, "runway_warning"))
+      .toHaveLength(1);
+  });
+
+  it("opens runway_critical under 7 days (and warning with it: one extra page)", async () => {
+    const app = appStub({
+      history: hourlyFreeSamples({
+        endingAt: now,
+        hours: 24,
+        freeBytesAtEnd: 5 * GIB,
+        bytesPerDay: -2.5 * GIB,
+      }),
+    });
+    await runDbDiskUsageCheck(app, {
+      now,
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 5 }),
+    });
+
+    const critical = latchCalls(incidentMocks.notifyOfapiGlobalIncident, "runway_critical");
+    expect(critical).toHaveLength(1);
+    expect(critical[0]!.errorSummary).toContain("Disk fills in ~2.0 days");
+    expect(critical[0]!.errorSummary).toContain("threshold 7 days");
+    // Escalation pages twice on purpose: warning stays open beside critical.
+    expect(latchCalls(incidentMocks.notifyOfapiGlobalIncident, "runway_warning"))
+      .toHaveLength(1);
+    expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
+
+    // The 95% percent alert carries the runway as context on its own latch.
+    const [percentAlert] = incidentMocks.notifyOfapiGlobalIncident.mock.calls
+      .map((call) => call[1] as { subKey?: string | null; errorSummary: string })
+      .filter((input) => input.subKey == null);
+    expect(percentAlert!.errorSummary).toContain("95.0% used");
+    expect(percentAlert!.errorSummary).toContain("runway ~2.0 days");
+    expect(percentAlert!.errorSummary).toContain("24h slope -2.50 GiB/day");
+    expect(percentAlert!.errorSummary).toContain("7d ~2.0 days");
+  });
+
+  it("touches no runway latch when history is too short to fit", async () => {
+    const app = appStub({
+      history: hourlyFreeSamples({
+        endingAt: now,
+        hours: 2,
+        freeBytesAtEnd: 1 * GIB,
+        bytesPerDay: -10 * GIB, // would be a screaming critical with real history
+      }),
+    });
+    const result = await runDbDiskUsageCheck(app, {
+      now,
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 5 }),
+    });
+
+    expect((result as { runwayDays: number | null }).runwayDays).toBeNull();
+    // Unknown is not a state: it neither opens nor resolves a runway latch, so
+    // a pruned/restarted series cannot silently clear an open critical.
+    expect(subKeyedCallCount(incidentMocks.notifyOfapiGlobalIncident)).toBe(0);
+    expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
+    // The pre-existing percent alert is unchanged apart from its context text.
+    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
+    const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
+    expect(input.errorSummary).toContain("95.0% used");
+    expect(input.errorSummary).toContain("runway insufficient history");
+  });
+
+  it("keeps the disk alert working when the history read fails", async () => {
+    const app = appStub();
+    executeMock(app).mockImplementation(async (query: unknown) => {
+      const text = extractSqlText(query as { queryChunks?: Array<{ value?: string[] }> });
+      if (text.includes("from ops_metric_samples")) {
+        throw new Error("ops_metric_samples unavailable");
+      }
+      return { rows: text.includes("pg_database_size") ? [{ bytes: String(2 * GIB) }] : [] };
+    });
+
+    const result = await runDbDiskUsageCheck(app, {
+      now,
+      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 5 }),
+    });
+
+    expect(result).toMatchObject({ breached: true });
+    expect(subKeyedCallCount(incidentMocks.notifyOfapiGlobalIncident)).toBe(0);
+    expect(incidentMocks.resolveOfapiGlobalIncident).not.toHaveBeenCalled();
+    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
+    expect((app as { logger: { warn: ReturnType<typeof vi.fn> } }).logger.warn)
+      .toHaveBeenCalledTimes(1);
   });
 });

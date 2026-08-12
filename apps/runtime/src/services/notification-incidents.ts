@@ -127,7 +127,7 @@ function openMessageForIncident(
  * error, not a fallthrough into another kind's text (review R2-7: the old
  * ternary resolved golden_signal_lag as "OFAPI webhooks delivering again"). */
 function resolveDetailForIncident(
-  input: { kind: NotificationIncidentKind; stream?: SyncStream | null },
+  input: { kind: NotificationIncidentKind; stream?: SyncStream | null; subKey?: string | null },
 ): string {
   switch (input.kind) {
     case "auth_blocked":
@@ -145,6 +145,15 @@ function resolveDetailForIncident(
     case "ofapi_burn_rate":
       return "OFAPI credit burn rate back to normal";
     case "db_disk_usage":
+      // The runway latches share the kind but not the condition: resolving a
+      // runway subKey while the 80% latch (or the other runway latch) is still
+      // open must not read as a disk-wide all-clear.
+      if (input.subKey === "runway_critical") {
+        return "Disk runway back above the critical threshold (7 days); usage latches unaffected";
+      }
+      if (input.subKey === "runway_warning") {
+        return "Disk runway back above the warning threshold (30 days); usage latches unaffected";
+      }
       return "Server disk usage back under the threshold";
     case "observations_partitions":
       return "Observations partition lead restored";
@@ -178,6 +187,7 @@ export function resolveMessageForIncident(
     pageLabel: string | null;
     platform: "fansly" | "onlyfans" | null;
     stream?: SyncStream | null;
+    subKey?: string | null;
   },
 ) {
   const detail = resolveDetailForIncident(input);

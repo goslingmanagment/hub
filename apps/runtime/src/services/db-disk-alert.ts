@@ -2,7 +2,7 @@ import { statfs } from "node:fs/promises";
 
 import { sql } from "drizzle-orm";
 
-import { insertOpsMetricSamples } from "@agency_hub_core/db";
+import { insertOpsMetricSamples, listOpsMetricSamplesSince } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
@@ -22,6 +22,107 @@ export const DB_DISK_USAGE_CHECK_QUEUE = "db.disk-usage.check";
 const DISK_USAGE_CHECK_PATH = "/";
 
 const DEFAULT_DISK_USAGE_ALERT_PERCENT = 80;
+
+// G1.5 days-to-full. The 80% gauge only fires once the disk is nearly gone;
+// the slope of `disk_free_bytes` says WHEN it will be gone, which is the number
+// that decides whether a purge can wait for a maintenance window. No config
+// knobs: these are containment thresholds, not tuning surface.
+const RUNWAY_WARNING_DAYS = 30;
+const RUNWAY_CRITICAL_DAYS = 7;
+/** Below this arc an hourly gauge series is noise — one restart-sized blip
+ * dominates the fit and invents a slope. Under it, runway is UNKNOWN (never a
+ * breach, never a resolve). */
+const RUNWAY_MIN_SPAN_MS = 6 * 60 * 60 * 1000;
+/** The fit window that drives the latches; the 7d pull is a secondary readout
+ * printed alongside it (a slow trend that a 24h dip would otherwise hide). */
+const RUNWAY_FIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RUNWAY_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const BYTES_PER_GIB = 1024 ** 3;
+
+export interface RunwaySample {
+  valueMs: number;
+  sampledAt: Date;
+}
+
+export interface RunwayEstimate {
+  /** Days until free bytes reach zero at the fitted rate. */
+  days: number;
+  /** Fitted slope of free bytes, always negative here (a shrinking disk). */
+  bytesPerDay: number;
+}
+
+function validRunwaySamples(samples: readonly RunwaySample[]) {
+  return samples.filter((sample) =>
+    Number.isFinite(sample.valueMs) && Number.isFinite(sample.sampledAt.getTime())
+  );
+}
+
+/** Whether the series covers enough time for a slope to mean anything. The
+ * caller needs this SEPARATELY from computeRunwayDays: a null estimate means
+ * either "no history" (skip the latches entirely) or "not shrinking" (resolve
+ * them) — only the span tells the two apart. */
+export function hasRunwayHistory(samples: readonly RunwaySample[]): boolean {
+  const valid = validRunwaySamples(samples);
+  if (valid.length < 2) {
+    return false;
+  }
+  let earliest = Number.POSITIVE_INFINITY;
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const sample of valid) {
+    const time = sample.sampledAt.getTime();
+    earliest = Math.min(earliest, time);
+    latest = Math.max(latest, time);
+  }
+  return latest - earliest >= RUNWAY_MIN_SPAN_MS;
+}
+
+/**
+ * Least-squares fit of free bytes over time; days until the fitted line hits
+ * zero, measured from `now` (never Date.now() — the check passes its own
+ * clock so a replayed history is deterministic).
+ *
+ * null means "no runway to report": too short a span, a degenerate fit, or a
+ * non-negative slope (a disk that is flat or growing free space has no
+ * days-to-full). Time is carried in DAYS so the products stay small — bytes
+ * are ~1e11 and a ms-scaled x would push the sums toward the float-precision
+ * cliff.
+ */
+export function computeRunwayDays(
+  samples: readonly RunwaySample[],
+  now: Date,
+): RunwayEstimate | null {
+  if (!hasRunwayHistory(samples)) {
+    return null;
+  }
+  const nowMs = now.getTime();
+  const points = validRunwaySamples(samples).map((sample) => ({
+    x: (sample.sampledAt.getTime() - nowMs) / MS_PER_DAY,
+    y: sample.valueMs,
+  }));
+  const count = points.length;
+  const meanX = points.reduce((sum, point) => sum + point.x, 0) / count;
+  const meanY = points.reduce((sum, point) => sum + point.y, 0) / count;
+  let covariance = 0;
+  let varianceX = 0;
+  for (const point of points) {
+    const dx = point.x - meanX;
+    covariance += dx * (point.y - meanY);
+    varianceX += dx * dx;
+  }
+  if (varianceX <= 0) {
+    return null; // every sample landed on the same instant
+  }
+  const bytesPerDay = covariance / varianceX;
+  if (!Number.isFinite(bytesPerDay) || bytesPerDay >= 0) {
+    return null; // disk not shrinking
+  }
+  // Fitted free bytes at x = 0, i.e. at `now` — steadier than the last raw
+  // reading, which a single checkpoint burst can spike.
+  const freeBytesAtNow = meanY - bytesPerDay * meanX;
+  const days = Math.max(0, freeBytesAtNow / -bytesPerDay);
+  return Number.isFinite(days) ? { days, bytesPerDay } : null;
+}
 
 export function resolveDiskUsageAlertPercent(
   config?: Pick<AppContext["config"], "diskUsageAlertPercent">,
@@ -153,6 +254,86 @@ async function persistDiskCapacityGauges(
   }
 }
 
+/** Best-effort: a history read that fails leaves runway UNKNOWN (empty series
+ * ⇒ no latch is opened and none is resolved), never breaks the disk alert. */
+async function loadDiskFreeHistory(
+  app: Pick<AppContext, "db" | "logger">,
+  checkedAt: Date,
+): Promise<RunwaySample[]> {
+  try {
+    return await listOpsMetricSamplesSince(app.db, {
+      metric: "disk_free_bytes",
+      quantile: "p50",
+      since: new Date(checkedAt.getTime() - RUNWAY_HISTORY_WINDOW_MS),
+    });
+  } catch (error) {
+    app.logger.warn({ err: error }, "Disk usage check failed to read capacity history; runway unknown");
+    return [];
+  }
+}
+
+function formatGibPerDay(bytesPerDay: number) {
+  return (bytesPerDay / BYTES_PER_GIB).toFixed(2);
+}
+
+function describeRunway(input: {
+  hasHistory: boolean;
+  runway: RunwayEstimate | null;
+  runway7d: RunwayEstimate | null;
+}) {
+  if (!input.hasHistory) {
+    return "runway insufficient history";
+  }
+  if (!input.runway) {
+    return "runway n/a (24h slope flat or free space growing)";
+  }
+  const secondary = input.runway7d ? `; 7d ~${input.runway7d.days.toFixed(1)} days` : "";
+  return `runway ~${input.runway.days.toFixed(1)} days`
+    + ` (24h slope ${formatGibPerDay(input.runway.bytesPerDay)} GiB/day${secondary})`;
+}
+
+/**
+ * One runway threshold = one latch of its own (`db_disk_usage:global:<subKey>`).
+ * The plain `db_disk_usage` latch cannot carry these: it is already open at 88%
+ * and the incident layer returns 'existing' without re-paging, so runway text
+ * appended to that alert reaches nobody.
+ *
+ * Symmetry: this is called ONLY when the series has enough span, so `runway ===
+ * null` here means "measured, and the disk is not shrinking" — which resolves.
+ * An open runway_critical therefore clears once the slope flattens instead of
+ * standing open forever. Callers skip this entirely on unknown history.
+ */
+async function driveRunwayLatch(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  input: {
+    subKey: "runway_warning" | "runway_critical";
+    thresholdDays: number;
+    runway: RunwayEstimate | null;
+    context: readonly string[];
+    checkedAt: Date;
+  },
+) {
+  if (input.runway && input.runway.days < input.thresholdDays) {
+    await notifyOfapiGlobalIncident(app, {
+      kind: "db_disk_usage",
+      subKey: input.subKey,
+      errorSummary: [
+        `Disk fills in ~${input.runway.days.toFixed(1)} days`
+        + ` (threshold ${input.thresholdDays} days,`
+        + ` 24h slope ${formatGibPerDay(input.runway.bytesPerDay)} GiB/day)`,
+        ...input.context,
+      ].join("; "),
+      occurredAt: input.checkedAt,
+    });
+    return;
+  }
+  await resolveOfapiGlobalIncident(app, {
+    kind: "db_disk_usage",
+    subKey: input.subKey,
+    recoveredAt: input.checkedAt,
+  });
+}
+
 export async function runDbDiskUsageCheck(
   app: Pick<AppContext, "config" | "db" | "logger">,
   options?: {
@@ -194,6 +375,9 @@ export async function runDbDiskUsageCheck(
       usedPercent: null,
       thresholdPercent,
       databaseBytes: null,
+      // No reading this pass ⇒ no runway and no latch traffic: the runway
+      // latches are driven only from a measured series (see below).
+      runwayDays: null,
       error: errorSummary,
     };
   }
@@ -227,13 +411,27 @@ export async function runDbDiskUsageCheck(
     app.logger.warn({ err: error }, "Disk usage check failed to read pg_database_size; continuing");
   }
 
+  // G1.5: the gauges this check just wrote plus the last 7 days of them.
+  const history = await loadDiskFreeHistory(app, checkedAt);
+  const fitWindow = history.filter((sample) =>
+    sample.sampledAt.getTime() >= checkedAt.getTime() - RUNWAY_FIT_WINDOW_MS
+  );
+  const hasHistory = hasRunwayHistory(fitWindow);
+  const runway = computeRunwayDays(fitWindow, checkedAt);
+  const capacityContext = [
+    `free ${formatGib(usage.availableBytes)} GiB of ${formatGib(usage.totalBytes)} GiB`,
+    ...(databaseBytes !== null ? [`Postgres ${formatGib(databaseBytes)} GiB`] : []),
+  ];
+
   if (usage.breached) {
     await notifyOfapiGlobalIncident(app, {
       kind: "db_disk_usage",
       errorSummary: [
         `Disk ${usage.usedPercent.toFixed(1)}% used (threshold ${thresholdPercent}%)`,
-        `free ${formatGib(usage.availableBytes)} GiB of ${formatGib(usage.totalBytes)} GiB`,
-        ...(databaseBytes !== null ? [`Postgres ${formatGib(databaseBytes)} GiB`] : []),
+        ...capacityContext,
+        // Context only: this latch is already open at this point on most
+        // passes, so nothing here pages by itself — the subKey latches below do.
+        describeRunway({ hasHistory, runway, runway7d: computeRunwayDays(history, checkedAt) }),
       ].join("; "),
       occurredAt: checkedAt,
     });
@@ -244,12 +442,37 @@ export async function runDbDiskUsageCheck(
     });
   }
 
+  // Unknown runway is not a state: with too little history neither latch is
+  // touched, so a measurement that opened one is never resolved by ignorance
+  // (a restarted worker with a pruned series must not silently clear a
+  // critical). Warning and critical are independent latches, which costs
+  // exactly ONE extra page when a warning escalates to critical (both end up
+  // open) — deliberate: a single latch cannot re-page on severity without
+  // dropping the latch that keeps it from paging hourly.
+  if (hasHistory) {
+    await driveRunwayLatch(app, {
+      subKey: "runway_warning",
+      thresholdDays: RUNWAY_WARNING_DAYS,
+      runway,
+      context: capacityContext,
+      checkedAt,
+    });
+    await driveRunwayLatch(app, {
+      subKey: "runway_critical",
+      thresholdDays: RUNWAY_CRITICAL_DAYS,
+      runway,
+      context: capacityContext,
+      checkedAt,
+    });
+  }
+
   return {
     healthy: !usage.breached,
     ...usage,
     checkedAt,
     thresholdPercent,
     databaseBytes,
+    runwayDays: runway?.days ?? null,
     error: null,
   };
 }
