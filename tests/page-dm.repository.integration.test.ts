@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -10,12 +12,15 @@ import {
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
+  markPageDmConversationsInvisibleByGeneration,
+  maxPageDmThreadGeneration,
   refreshPageDmConversationWindow,
   selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
   upsertFans,
   upsertPageDmConversation,
   upsertPageDmMessages,
+  type Database,
 } from "@agency_hub_core/db";
 import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
@@ -38,6 +43,63 @@ async function createTestPage(testDb: StartedTestDatabase, label: string) {
     modelId: model.id,
     label,
   });
+}
+
+async function createGenerationPage(testDb: StartedTestDatabase, label: string) {
+  const page = await createTestPage(testDb, label);
+  if (!page) {
+    throw new Error("test setup: page creation failed");
+  }
+  return page;
+}
+
+function generationThreadInput(
+  platformAccountId: number,
+  platformConversationId: string,
+  lastSeenGeneration: number | null,
+) {
+  return {
+    platformAccountId,
+    fanId: null,
+    platformConversationId,
+    partnerPlatformUserId: `partner-${platformConversationId}`,
+    partnerUsername: null,
+    partnerDisplayName: null,
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: null,
+    lastUnreadMessageId: null,
+    lastMessageAt: null,
+    lastMessageSenderId: null,
+    lastMessageSenderRole: "unknown" as const,
+    lastMessagePreview: null,
+    isVisible: true,
+    lastSeenGeneration,
+    metadata: {},
+  };
+}
+
+async function readThreadState(testDb: StartedTestDatabase, platformAccountId: number) {
+  const { rows } = await testDb.pool.query<{
+    platform_conversation_id: string;
+    last_seen_generation: string | null;
+    is_visible: boolean;
+  }>(
+    `select platform_conversation_id, last_seen_generation, is_visible
+     from page_dm_threads
+     where platform_account_id = $1
+     order by platform_conversation_id`,
+    [platformAccountId],
+  );
+
+  return Object.fromEntries(rows.map((row) => [
+    row.platform_conversation_id,
+    {
+      generation: row.last_seen_generation === null ? null : Number(row.last_seen_generation),
+      isVisible: row.is_visible,
+    },
+  ]));
 }
 
 describe("page DM repository integration", () => {
@@ -1022,5 +1084,178 @@ describe("page DM repository integration", () => {
     expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
     expect(storedMessages.rows[0]?.oldest).toBe(oldestRetainedMessageId);
     expect(storedMessages.rows[0]?.newest).toBe(latestMessageId);
+  });
+
+  // G2: last_seen_generation is the sweep-membership set the destructive
+  // finalization reads, so a regressed stamp hides a LIVE thread. The upsert is
+  // shared by four writers, two of which write back a stamp they read outside
+  // the write — the conflict update has to be monotonic on its own.
+  describe("last_seen_generation monotonicity", () => {
+    it("never regresses a stored stamp on a sequential upsert", async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+
+      const page = await createGenerationPage(testDb, "generation-monotonic");
+
+      // (i) an older generation does not regress a newer stored stamp.
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "older-loses", 7));
+      const regressed = await upsertPageDmConversation(
+        testDb.db,
+        generationThreadInput(page.id, "older-loses", 3),
+      );
+      expect(regressed?.lastSeenGeneration).toBe(7);
+
+      // (ii) a null incoming stamp keeps the current one. This is a DELIBERATE
+      // semantic change: the pre-G2 conflict set let any writer blank the stamp
+      // with the null it had read before the sweep stamped the row.
+      const blanked = await upsertPageDmConversation(
+        testDb.db,
+        generationThreadInput(page.id, "older-loses", null),
+      );
+      expect(blanked?.lastSeenGeneration).toBe(7);
+
+      // (iii) a null stored stamp accepts the incoming value.
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "null-current", null));
+      const adopted = await upsertPageDmConversation(
+        testDb.db,
+        generationThreadInput(page.id, "null-current", 4),
+      );
+      expect(adopted?.lastSeenGeneration).toBe(4);
+
+      // A genuinely newer stamp still advances.
+      const advanced = await upsertPageDmConversation(
+        testDb.db,
+        generationThreadInput(page.id, "older-loses", 9),
+      );
+      expect(advanced?.lastSeenGeneration).toBe(9);
+
+      expect(await readThreadState(testDb, page.id)).toEqual({
+        "older-loses": { generation: 9, isVisible: true },
+        "null-current": { generation: 4, isVisible: true },
+      });
+    });
+
+    it("converges on the max when two writers race the same thread", async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+
+      const page = await createGenerationPage(testDb, "generation-race");
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "newer-first", 1));
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "older-first", 1));
+
+      // Both orderings of the same race: whoever commits second re-evaluates
+      // the conflict set against the freshly committed row, so the guard — not
+      // the commit order — decides the stamp.
+      for (const race of [
+        { conversationId: "newer-first", holder: 12, contender: 9 },
+        { conversationId: "older-first", holder: 9, contender: 12 },
+      ]) {
+        let releaseHolder = () => {};
+        const holderGate = new Promise<void>((resolve) => {
+          releaseHolder = resolve;
+        });
+        let holderLocked = () => {};
+        const holderLockAcquired = new Promise<void>((resolve) => {
+          holderLocked = resolve;
+        });
+
+        // The holder locks the row inside an open transaction (a slow sweep
+        // batch); the contender's conflict update must wait behind it. The
+        // contender starts only after the holder's upsert has COMPLETED (row
+        // lock provably held) — a timing sleep here was flaky on slow runners
+        // and, on assertion failure before the gate release, hung pool.end().
+        const holderTransaction = testDb.db.transaction(async (tx) => {
+          await upsertPageDmConversation(
+            tx as unknown as Database,
+            generationThreadInput(page.id, race.conversationId, race.holder),
+          );
+          holderLocked();
+          await holderGate;
+        });
+
+        let contender: ReturnType<typeof upsertPageDmConversation> | undefined;
+        try {
+          await holderLockAcquired;
+          contender = upsertPageDmConversation(
+            testDb.db,
+            generationThreadInput(page.id, race.conversationId, race.contender),
+          );
+          const racedBeforeCommit = await Promise.race([
+            contender.then(() => "written" as const),
+            sleep(300).then(() => "blocked" as const),
+          ]);
+          expect(racedBeforeCommit).toBe("blocked");
+        } finally {
+          // Release the gate no matter what, or a failed assertion leaves the
+          // holder transaction (and the pool) waiting until the suite timeout.
+          releaseHolder();
+          await holderTransaction;
+        }
+        const contended = await contender;
+        expect(contended?.lastSeenGeneration).toBe(Math.max(race.holder, race.contender));
+      }
+
+      expect(await readThreadState(testDb, page.id)).toEqual({
+        "newer-first": { generation: 12, isVisible: true },
+        "older-first": { generation: 12, isVisible: true },
+      });
+    });
+
+    it("keeps a guard-protected thread visible through a destructive finalization", async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+
+      const page = await createGenerationPage(testDb, "generation-sweep");
+      const generation = 5;
+
+      // The sweep stamps two live threads at the current generation, and a
+      // third thread was last seen a generation ago (genuinely gone).
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "live-raced", generation));
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "live-plain", generation));
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "gone", generation - 1));
+
+      // A concurrent writer holding a pre-sweep read writes the thread back
+      // with the stale stamp it saw (pre-G2 this regressed the row to 2 — and
+      // the finalization below then hid a live thread).
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "live-raced", 2));
+      // …and another writes it back with the null it had read.
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "live-raced", null));
+
+      await markPageDmConversationsInvisibleByGeneration(testDb.db, {
+        platformAccountId: page.id,
+        generation,
+      });
+
+      expect(await readThreadState(testDb, page.id)).toEqual({
+        "live-raced": { generation, isVisible: true },
+        "live-plain": { generation, isVisible: true },
+        gone: { generation: generation - 1, isVisible: false },
+      });
+    });
+
+    it("reads a generation high-water above the int4 ceiling", async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+
+      // last_seen_generation is a bigint column and the stamp is now
+      // load-bearing, so the high-water read must not narrow it to int4.
+      const page = await createGenerationPage(testDb, "generation-bigint");
+      await testDb.pool.query(
+        `insert into page_dm_threads (
+           platform_account_id, platform_conversation_id, is_visible, last_seen_generation
+         ) values ($1, 'bigint-thread', true, 3000000000)`,
+        [page.id],
+      );
+
+      expect(await maxPageDmThreadGeneration(testDb.db, page.id)).toBe(3_000_000_000);
+    });
   });
 });
