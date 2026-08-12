@@ -1177,7 +1177,7 @@ describe("page DM repository integration", () => {
           await holderGate;
         });
 
-        let contender: ReturnType<typeof upsertPageDmConversation> | null = null;
+        let contender: ReturnType<typeof upsertPageDmConversation> | undefined;
         try {
           await holderLockAcquired;
           contender = upsertPageDmConversation(
