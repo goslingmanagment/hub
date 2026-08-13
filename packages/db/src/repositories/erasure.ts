@@ -114,6 +114,51 @@ export async function completeErasureLogAndSupersedeScope(
   });
 }
 
+/**
+ * G2 slice 2 (dual proof): did a Stage-28 erasure legitimately delete
+ * page_dm_threads rows for this page while a DM sweep was running? An erasure
+ * removes rows the sweep already stamped, so the generation set can be
+ * legitimately SMALLER than the sweep's cumulative id array — that delta is
+ * evidence of erasure, not of a broken stamp.
+ *
+ * The tombstone commits BEFORE the delete transaction (see executeErasure), so
+ * any reader that can see the missing rows can also see this row. Dry runs
+ * delete nothing and are excluded.
+ *
+ * A row's activity window ends at `coalesce(completed_at, resolved_at)`:
+ * completed rows end when they completed, and a SUPERSEDED row (completed_at
+ * null, resolved_at set — see completeErasureLogAndSupersedeScope) ended when
+ * it was resolved. Only a row with both null is genuinely in flight and falls
+ * back to now(). Treating a superseded row as still running would make it
+ * overlap every future sweep forever and permanently excuse real shortfalls on
+ * that page as erasure deltas.
+ */
+export async function findErasureLogTouchingPageSince(
+  db: Database,
+  input: { pageId: number; since: Date },
+) {
+  const [row] = await db.select({
+    id: erasureLog.id,
+    scopeType: erasureLog.scopeType,
+    scopeRef: erasureLog.scopeRef,
+    startedAt: erasureLog.startedAt,
+    completedAt: erasureLog.completedAt,
+  })
+    .from(erasureLog)
+    .where(and(
+      eq(erasureLog.dryRun, false),
+      // Mutable labels are selectors, not identity: match on the immutable
+      // resolved page ids the plan recorded.
+      sql`jsonb_typeof(${erasureLog.plan} -> 'resolvedPageIds') = 'array'
+        and (${erasureLog.plan} -> 'resolvedPageIds') @> ${JSON.stringify(input.pageId)}::jsonb`,
+      sql`coalesce(${erasureLog.completedAt}, ${erasureLog.resolvedAt}, now()) >= ${input.since}::timestamptz`,
+    ))
+    .orderBy(desc(erasureLog.startedAt))
+    .limit(1);
+
+  return row ?? null;
+}
+
 export async function listErasureLog(db: Database, input?: { limit?: number }) {
   return db.select().from(erasureLog)
     .orderBy(desc(erasureLog.startedAt))
