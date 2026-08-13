@@ -11,6 +11,11 @@ export async function runWorkerRuntime() {
     connectionString: app.config.databaseUrl,
     // Stage 25: cron registration + firing belong to the scheduler role.
     schedule: false,
+    // S7: job deletion only happens on a maintenance pass, so the effective
+    // cadence is deleteAfterSeconds PLUS up to one interval. pg-boss defaults
+    // this to 24h, which would double the 24h heartbeat retention pinned in
+    // services/queue-retention.ts. Must match the api and scheduler roles.
+    maintenanceIntervalSeconds: 3600,
   });
   // PgBoss extends EventEmitter: without a listener an 'error' event throws.
   // The worker is nothing without its queue, so fail fast and let Docker's

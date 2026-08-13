@@ -101,6 +101,7 @@ import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
   ensureSyncQueues,
   ensureWorkboardQueues,
+  reconcileQueueRetention,
   RAW_PAYLOAD_CLEANUP_QUEUE,
   SYNC_PLANNER_QUEUE,
   TELEGRAM_DAILY_REPORT_QUEUE,
@@ -212,6 +213,13 @@ export async function startWorkerServices(
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureTargetedThreadBackfillQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
+  // Hoisted out of the worker-startup section below (it used to sit next to
+  // startTieringWorker): every queue this role creates must exist before the
+  // retention reconcile, and creation is idempotent wherever it runs.
+  await ensureTieringQueue(boss, createdQueues);
+  // S7: LAST, after every queue above exists — updateQueue on a queue that has
+  // not been created yet matches zero rows.
+  await reconcileQueueRetention(boss);
   // Stage 25: cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
 
@@ -418,7 +426,6 @@ export async function startWorkerServices(
   const workboardEventRecompute = startWorkboardEventRecompute(app, boss);
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);
-  await ensureTieringQueue(boss);
   await startTieringWorker(app, boss);
 
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);

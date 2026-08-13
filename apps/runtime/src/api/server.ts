@@ -67,6 +67,7 @@ import { registerWorkboardRoutes } from "../modules/workboard/index.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
   ensureSyncQueues,
+  reconcileQueueRetention,
 } from "../services/sync-queue.ts";
 import { recordClientVersionObservation } from "../services/client-versions.ts";
 import { ensureOfapiCommandQueues } from "../services/ofapi-command-executor.ts";
@@ -425,6 +426,11 @@ export async function buildApiServer(appContext: AppContext) {
       connectionString: appContext.config.databaseUrl,
       // Stage 25: the api enqueues only; cron belongs to the scheduler role.
       schedule: false,
+      // S7: job deletion only happens on a maintenance pass, so the effective
+      // cadence is deleteAfterSeconds PLUS up to one interval. pg-boss defaults
+      // this to 24h, which would double the 24h heartbeat retention pinned in
+      // services/queue-retention.ts. Must match the worker and scheduler roles.
+      maintenanceIntervalSeconds: 3600,
     });
     // Without a listener an EventEmitter 'error' throws and takes the API
     // down on a transient Postgres blip (audit B8). Log only: this instance
@@ -436,6 +442,9 @@ export async function buildApiServer(appContext: AppContext) {
     await ensureSyncQueues(boss, createdQueues);
     await ensureOfapiQueues(boss, createdQueues);
     await ensureOfapiCommandQueues(boss, createdQueues);
+    // S7: LAST, after every queue this role creates exists — updateQueue on a
+    // queue that has not been created yet matches zero rows.
+    await reconcileQueueRetention(boss);
     server.addHook("onClose", async () => {
       await boss!.stop();
     });

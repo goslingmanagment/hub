@@ -27,6 +27,7 @@ import {
   ensureTelegramDailyReportSchedule,
   ensureWorkboardQueues,
   ensureWorkboardRecomputeSchedule,
+  reconcileQueueRetention,
 } from "./sync-queue.ts";
 
 // Kernel Stage 25: the ONE place cron registrations live. Called from the
@@ -59,6 +60,9 @@ export async function registerAllSchedules(
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureTieringQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
+  // S7: LAST, after every queue above exists — updateQueue on a queue that has
+  // not been created yet matches zero rows.
+  await reconcileQueueRetention(boss);
   await Promise.all([
     ensurePlannerSchedule(boss),
     boss.schedule(RAW_PAYLOAD_CLEANUP_QUEUE, "0 2 * * *"),
