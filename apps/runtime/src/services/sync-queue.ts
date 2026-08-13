@@ -1,6 +1,12 @@
 import type { Db as PgBossDb, PgBoss, Queue } from "pg-boss";
 import { buildSyncPageExecuteGroupId } from "@agency_hub_core/shared";
 
+import {
+  QUEUE_RETENTION_SETTINGS,
+  queueRetentionUpdate,
+  type QueueRetentionSetting,
+} from "./queue-retention.ts";
+
 export const SYNC_PLANNER_QUEUE = "sync.planner";
 export const SYNC_PLANNER_DLQ_QUEUE = "sync.planner.dlq";
 export const SYNC_PAGE_EXECUTE_QUEUE = "sync.page.execute";
@@ -125,6 +131,64 @@ export async function ensureQueueCreated(
 
   await boss.createQueue(queueName, options);
   createdQueues?.add(queueName);
+}
+
+function queueRetentionDrifted(queue: Queue, setting: QueueRetentionSetting) {
+  return queue.retentionSeconds !== setting.retentionSeconds
+    || (setting.deleteAfterSeconds !== undefined
+      && queue.deleteAfterSeconds !== setting.deleteAfterSeconds);
+}
+
+async function writeQueueRetention(
+  boss: SyncQueueLifecycleClient,
+  setting: QueueRetentionSetting,
+) {
+  // The payload is exactly the retention whitelist: pg-boss THROWS if `policy`
+  // or `partition` reach updateQueue, so a queue's creation options must never
+  // be spread in here.
+  await boss.updateQueue(setting.queue, queueRetentionUpdate(setting));
+  return boss.getQueue(setting.queue);
+}
+
+/**
+ * Rewrite job-history retention for every queue in the table.
+ *
+ * MUST be called after a role has finished creating ALL of its queues —
+ * `updateQueue` on a queue that does not exist yet matches zero rows, so
+ * reconciling first would leave anything created afterwards on library
+ * defaults. See the call sites in api/server.ts, worker-services.ts and
+ * services/schedules.ts, pinned by tests/queue-retention.test.ts.
+ *
+ * `createQueue` cannot do this job — it is `INSERT ... ON CONFLICT DO NOTHING`,
+ * so a queue that already exists keeps whatever it was born with, and every
+ * production queue was born before this pin existed. Same reconcile-then-verify
+ * shape as the page-execute and delivery-outbox queues.
+ */
+export async function reconcileQueueRetention(boss: SyncQueueLifecycleClient) {
+  await Promise.all(QUEUE_RETENTION_SETTINGS.map(async (setting) => {
+    let queue = await writeQueueRetention(boss, setting);
+
+    // A queue absent here belongs to a role that does not create it; there is
+    // nothing to fix, so the skip is silent.
+    if (queue && queueRetentionDrifted(queue, setting)) {
+      // Roles boot concurrently against one database, so another role can
+      // CREATE this queue — with library defaults — in the window between our
+      // UPDATE (which matched zero rows) and our read. That is a race, not
+      // drift: the queue exists now, so a second write lands. Only a value
+      // that survives the retry is a real failure.
+      queue = await writeQueueRetention(boss, setting);
+    }
+
+    if (queue && queueRetentionDrifted(queue, setting)) {
+      throw new Error(
+        `Queue ${setting.queue} retention drift: expected ` +
+        `retentionSeconds=${setting.retentionSeconds}, ` +
+        `deleteAfterSeconds=${setting.deleteAfterSeconds ?? "unset"}; read ` +
+        `retentionSeconds=${queue.retentionSeconds}, ` +
+        `deleteAfterSeconds=${queue.deleteAfterSeconds}`,
+      );
+    }
+  }));
 }
 
 export async function ensureSyncQueues(

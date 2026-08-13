@@ -35,6 +35,11 @@ export async function runSchedulerRuntime() {
     connectionString: app.config.databaseUrl,
     // Leader-only timekeeper: this is THE instance that fires cron.
     schedule: true,
+    // S7: job deletion only happens on a maintenance pass, so the effective
+    // cadence is deleteAfterSeconds PLUS up to one interval. pg-boss defaults
+    // this to 24h, which would double the 24h heartbeat retention pinned in
+    // services/queue-retention.ts. Must match the api and worker roles.
+    maintenanceIntervalSeconds: 3600,
   });
   boss.on("error", (error) => {
     app.logger.error({ err: error }, "pg-boss scheduler error; exiting for restart");

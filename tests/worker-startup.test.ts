@@ -26,6 +26,7 @@ const telegramReportMocks = vi.hoisted(() => ({
 const queueMocks = vi.hoisted(() => ({
   ensurePlannerSchedule: vi.fn(),
   ensureSyncQueues: vi.fn(),
+  reconcileQueueRetention: vi.fn(),
   ensureTelegramDailyReportSchedule: vi.fn(),
   ensureWorkboardQueues: vi.fn(),
   ensureWorkboardRecomputeSchedule: vi.fn(),
@@ -156,6 +157,7 @@ vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureTelegramDailyReportSchedule: queueMocks.ensureTelegramDailyReportSchedule,
   ensurePlannerSchedule: queueMocks.ensurePlannerSchedule,
   ensureSyncQueues: queueMocks.ensureSyncQueues,
+  reconcileQueueRetention: queueMocks.reconcileQueueRetention,
   ensureWorkboardQueues: queueMocks.ensureWorkboardQueues,
   ensureWorkboardRecomputeSchedule: queueMocks.ensureWorkboardRecomputeSchedule,
   RAW_PAYLOAD_CLEANUP_QUEUE: "raw-payload-cleanup",

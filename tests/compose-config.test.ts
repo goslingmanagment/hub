@@ -711,4 +711,24 @@ describe("compose config", () => {
       }
     }
   });
+
+  it("every long-lived role runs pg-boss maintenance hourly (S7 retention pin)", async () => {
+    // Deletion happens on a maintenance pass, so the effective cadence is
+    // deleteAfterSeconds PLUS up to one interval. pg-boss defaults the interval
+    // to 24h: leaving it there would stretch the 24h heartbeat retention in
+    // services/queue-retention.ts to as much as 48h. All three roles share one
+    // pgboss schema, so all three must agree.
+    for (const file of [
+      "apps/runtime/src/api/server.ts",
+      "apps/runtime/src/worker-runtime.ts",
+      "apps/runtime/src/scheduler-runtime.ts",
+    ]) {
+      const source = await readComposeFile(file);
+      const instantiations = source.split(/new PgBoss\(\{/).slice(1);
+
+      expect(instantiations).toHaveLength(1);
+      const constructorArgs = instantiations[0]!.split("});")[0]!;
+      expect(constructorArgs).toContain("maintenanceIntervalSeconds: 3600");
+    }
+  });
 });
