@@ -16,15 +16,18 @@ const dbMocks = vi.hoisted(() => ({
   getConfigOverrides: vi.fn(async () => new Map()),
   countRecentTerminalDmMessageConversationFailureStreak: vi.fn(),
   countActivePageFollows: vi.fn(),
+  countPageDmThreadsByGeneration: vi.fn(),
   countPageFollowsByGeneration: vi.fn(),
   deactivatePageFollowsByGeneration: vi.fn(),
   deactivatePageSubscriptionsByGeneration: vi.fn(),
   finalizePageDmConversationMessageSync: vi.fn(),
+  findErasureLogTouchingPageSince: vi.fn(),
   getCheckpoint: vi.fn(),
   getCurrentSubscribers: vi.fn(),
   getExistingPageDmMessageIds: vi.fn(),
   getPageDmConversationById: vi.fn(),
   listPageDmConversationsByPlatformConversationIds: vi.fn(),
+  listPageDmThreadIdsByGeneration: vi.fn(),
   markPageDmConversationsInvisibleByGeneration: vi.fn(),
   maxPageDmThreadGeneration: vi.fn(),
   maxPageFollowGeneration: vi.fn(),
@@ -133,6 +136,14 @@ function createTelemetry() {
   };
 }
 
+/** Declares the row-side half of the G2 dual proof: what
+ *  `page_dm_threads.last_seen_generation` would report for the sweep's
+ *  generation once this page's upserts land. */
+function stubDualProof(conversationIds: string[]) {
+  dbMocks.countPageDmThreadsByGeneration.mockResolvedValue(conversationIds.length);
+  dbMocks.listPageDmThreadIdsByGeneration.mockResolvedValue([...conversationIds].sort());
+}
+
 async function recordStartedRequest(requestObserver: { onRequestEvent(event: unknown): Promise<void> } | null | undefined, operation: string) {
   await requestObserver?.onRequestEvent({
     requestId: `${operation}-request`,
@@ -229,6 +240,12 @@ describe("sync executor handlers", () => {
     dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
     dbMocks.getPageDmConversationById.mockResolvedValue(null);
     dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([]);
+    // G2 slice 2 dual proof (shadow): tests that reach a checkpoint write
+    // declare the row-side generation set with stubDualProof(); the default is
+    // "no rows stamped", which is only ever read by tests that never write.
+    dbMocks.countPageDmThreadsByGeneration.mockResolvedValue(0);
+    dbMocks.listPageDmThreadIdsByGeneration.mockResolvedValue([]);
+    dbMocks.findErasureLogTouchingPageSince.mockResolvedValue(null);
     dbMocks.markPageDmConversationsInvisibleByGeneration.mockResolvedValue(undefined);
     dbMocks.maxPageDmThreadGeneration.mockResolvedValue(0);
     dbMocks.maxPageFollowGeneration.mockResolvedValue(0);
@@ -2763,6 +2780,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
         lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
       },
     });
+    stubDualProof(["group-seen"]);
 
     const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
@@ -2863,6 +2881,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
         lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
       },
     });
+    stubDualProof(Array.from({ length: 100 }, (_, index) => `group-${index}`));
 
     const result = await fanslyDmConversationsChunk(app, {
       pageContext: {
@@ -2913,7 +2932,251 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     expect(dbMocks.upsertCheckpoint.mock.calls.at(-1)?.[1]?.state).not.toHaveProperty(
       "snapshotConversationIds",
     );
+    expect(dbMocks.upsertCheckpoint.mock.calls.at(-1)?.[1]?.state).toMatchObject({
+      dualProofOk: true,
+      dualProofSetCount: 100,
+    });
+    expect(dbMocks.upsertCheckpoint.mock.calls.at(-1)?.[1]?.state).not.toHaveProperty(
+      "dualProofErasureDelta",
+    );
     expect(dbMocks.maxPageDmThreadGeneration).not.toHaveBeenCalled();
+  });
+
+  describe("dm_conversations dual proof (G2 slice 2, shadow)", () => {
+    const SNAPSHOT_IDS = Array.from({ length: 4 }, (_, index) => `group-${index}`);
+
+    function terminalPageApp() {
+      const getMessagingGroupsPage = vi.fn(async () => ({
+        total: 4,
+        items: [],
+        accounts: [],
+        groups: [],
+        offset: 100,
+        raw: { data: [], aggregationData: { total: 4, accounts: [], groups: [] } },
+        done: true,
+      }));
+      const db = {};
+      return {
+        db,
+        app: {
+          db,
+          config: { syncSharedRateLimitEnabled: true },
+          adapter: { getMessagingGroupsPage },
+        } as never,
+      };
+    }
+
+    function seedResumedSweepCheckpoint() {
+      dbMocks.getCheckpoint.mockResolvedValue({
+        state: {
+          version: 1,
+          mode: "full_scan",
+          generation: 7,
+          offset: 100,
+          observedCount: SNAPSHOT_IDS.length,
+          snapshotConversationIds: SNAPSHOT_IDS,
+          pageCount: 1,
+          providerReportedTotal: 4,
+          unchangedPageStreak: 0,
+          fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+          lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+        },
+      });
+    }
+
+    function chunkInput(telemetry: ReturnType<typeof createTelemetry>, maxRequests = 1) {
+      return {
+        pageContext: {
+          platform: "fansly",
+          page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
+          session: { authorization: "token" },
+          proxy: null,
+        },
+        streamState: { requestSeq: 42 },
+        syncRunId: 900,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(maxRequests),
+      } as never;
+    }
+
+    it("raises a bounded anomaly when the generation set loses a thread the snapshot saw", async () => {
+      const telemetry = createTelemetry();
+      const { db, app } = terminalPageApp();
+      seedResumedSweepCheckpoint();
+      // "group-2" never got stamped at generation 7 — the exact regression the
+      // monotonic guard exists to prevent, seen from the outside.
+      stubDualProof(SNAPSHOT_IDS.filter((id) => id !== "group-2"));
+
+      const result = await fanslyDmConversationsChunk(app, chunkInput(telemetry));
+
+      expect(result).toMatchObject({ satisfied: true, stats: { fullSweepCompleted: true } });
+      expect(dbMocks.countPageDmThreadsByGeneration).toHaveBeenCalledWith(db, {
+        platformAccountId: 55,
+        generation: 7,
+      });
+      expect(dbMocks.listPageDmThreadIdsByGeneration).toHaveBeenCalledTimes(1);
+      expect(telemetry.addAnomaly).toHaveBeenCalledWith({
+        code: "dm_conversations_dual_proof_mismatch",
+        severity: "warn",
+        message: "DM conversation sweep generation set did not reproduce its cumulative id snapshot",
+        details: {
+          generation: 7,
+          pageCount: 2,
+          snapshotCount: 4,
+          generationSetCount: 3,
+          snapshotDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          generationSetDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          missingFromGenerationSetCount: 1,
+          missingFromSnapshotCount: 0,
+          missingFromGenerationSet: ["group-2"],
+          missingFromSnapshot: [],
+        },
+      });
+      expect(dbMocks.upsertCheckpoint.mock.calls.at(-1)?.[1]?.state).toMatchObject({
+        dualProofOk: false,
+        dualProofSetCount: 3,
+      });
+      expect(dbMocks.upsertCheckpoint.mock.calls.at(-1)?.[1]?.state).not.toHaveProperty(
+        "dualProofErasureDelta",
+      );
+      // Behavior is unchanged: the cumulative array still finalizes the sweep.
+      expect(dbMocks.markPageDmConversationsInvisibleByGeneration).toHaveBeenCalledWith(db, {
+        platformAccountId: 55,
+        generation: 7,
+      });
+    });
+
+    it("records an erasure delta note instead of an anomaly when an erasure overlapped the sweep", async () => {
+      const telemetry = createTelemetry();
+      const { db, app } = terminalPageApp();
+      seedResumedSweepCheckpoint();
+      stubDualProof(SNAPSHOT_IDS.filter((id) => id !== "group-2"));
+      dbMocks.findErasureLogTouchingPageSince.mockResolvedValue({
+        id: 12,
+        scopeType: "fan",
+        scopeRef: "fan-9",
+        startedAt: new Date("2026-03-10T04:00:00.000Z"),
+        completedAt: new Date("2026-03-10T04:00:05.000Z"),
+      });
+
+      await fanslyDmConversationsChunk(app, chunkInput(telemetry));
+
+      expect(dbMocks.findErasureLogTouchingPageSince).toHaveBeenCalledWith(db, {
+        pageId: 55,
+        since: new Date("2026-03-10T00:00:00.000Z"),
+      });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      expect(telemetry.addNote).toHaveBeenCalledWith(
+        "DM conversation sweep generation set trails its id snapshot by rows an erasure removed inside the sweep window",
+        {
+          code: "dm_conversations_dual_proof_erasure_delta",
+          generation: 7,
+          observedCount: 4,
+          generationSetCount: 3,
+          dualProofErasureDelta: 1,
+        },
+      );
+      expect(dbMocks.upsertCheckpoint.mock.calls.at(-1)?.[1]?.state).toMatchObject({
+        dualProofOk: false,
+        dualProofSetCount: 3,
+        dualProofErasureDelta: 1,
+      });
+    });
+
+    it("never consults the erasure log when the generation set holds ids the snapshot never saw", async () => {
+      const telemetry = createTelemetry();
+      const { app } = terminalPageApp();
+      seedResumedSweepCheckpoint();
+      // An extra stamped id cannot be explained by a deleter.
+      stubDualProof([...SNAPSHOT_IDS, "group-stowaway"]);
+
+      await fanslyDmConversationsChunk(app, chunkInput(telemetry));
+
+      expect(dbMocks.findErasureLogTouchingPageSince).not.toHaveBeenCalled();
+      expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+        code: "dm_conversations_dual_proof_mismatch",
+        details: expect.objectContaining({
+          missingFromSnapshot: ["group-stowaway"],
+          missingFromSnapshotCount: 1,
+        }),
+      }));
+    });
+
+    it("latches the per-page divergence note to one per run", async () => {
+      const telemetry = createTelemetry();
+      const pages = [
+        { groupId: "group-a", offset: 0 },
+        { groupId: "group-b", offset: 100 },
+      ];
+      let call = 0;
+      const getMessagingGroupsPage = vi.fn(async (
+        requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+      ) => {
+        await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
+        const current = pages[call]!;
+        call += 1;
+        return {
+          total: 300,
+          items: [{
+            groupId: current.groupId,
+            flags: 0,
+            unreadCount: 0,
+            partnerAccountId: "fan-1",
+            lastMessageId: "msg-1",
+          }],
+          accounts: [],
+          groups: [{
+            id: current.groupId,
+            users: [{ groupId: current.groupId, userId: "acct-dm" }, { groupId: current.groupId, userId: "fan-1" }],
+            lastMessage: {
+              id: "msg-1",
+              senderId: "fan-1",
+              content: "hi",
+              createdAt: 1_773_000_000_000,
+            },
+          }],
+          offset: current.offset,
+          raw: { data: [], aggregationData: { total: 300, accounts: [], groups: [] } },
+          done: false,
+        };
+      });
+      const db = {};
+      const app = {
+        db,
+        config: { syncSharedRateLimitEnabled: true },
+        adapter: { getMessagingGroupsPage },
+      } as never;
+      dbMocks.getCheckpoint.mockResolvedValue(null);
+      dbMocks.upsertPageDmConversation.mockResolvedValue(null);
+      fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map([["fan-1", 101]]));
+      // The row-side set never catches up — both pages diverge, one note lands.
+      stubDualProof([]);
+
+      const result = await fanslyDmConversationsChunk(app, chunkInput(telemetry, 2));
+
+      expect(result).toMatchObject({ satisfied: false });
+      expect(getMessagingGroupsPage).toHaveBeenCalledTimes(2);
+      expect(dbMocks.countPageDmThreadsByGeneration).toHaveBeenCalledTimes(2);
+      // Once per completed sweep, never per page — this run never completed.
+      expect(dbMocks.listPageDmThreadIdsByGeneration).not.toHaveBeenCalled();
+      const noteCalls = telemetry.addNote.mock.calls as unknown as Array<
+        [string, { code?: string } | undefined]
+      >;
+      const divergenceNotes = noteCalls.filter(
+        (call) => call[1]?.code === "dm_conversations_dual_proof_page_divergence",
+      );
+      expect(divergenceNotes).toHaveLength(1);
+      expect(divergenceNotes[0]?.[1]).toMatchObject({
+        generation: 1,
+        pageCount: 1,
+        observedCount: 1,
+        generationSetCount: 0,
+      });
+      expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]?.state).toMatchObject({
+        generationSetCount: 0,
+        observedCount: 2,
+      });
+    });
   });
 
   it("starts a fresh dm_conversations sweep above the persisted thread high-water", async () => {

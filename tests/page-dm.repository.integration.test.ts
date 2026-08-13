@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
   PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT,
+  countPageDmThreadsByGeneration,
   createFanslyPage,
   createModel,
   deletePageDmMessageByPlatformMessageId,
@@ -12,6 +13,7 @@ import {
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
+  listPageDmThreadIdsByGeneration,
   markPageDmConversationsInvisibleByGeneration,
   maxPageDmThreadGeneration,
   refreshPageDmConversationWindow,
@@ -1237,6 +1239,42 @@ describe("page DM repository integration", () => {
         "live-plain": { generation, isVisible: true },
         gone: { generation: generation - 1, isVisible: false },
       });
+    });
+
+    it("reads the generation set as a count and as an ordered id list", async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+
+      // G2 slice 2: the second representation of a sweep's membership. Scoped
+      // to (account, generation) and ordered by the qualified id column so the
+      // digest built on top of it is reproducible.
+      const page = await createGenerationPage(testDb, "generation-set");
+      const other = await createGenerationPage(testDb, "generation-set-other");
+      for (const conversationId of ["c-30", "c-10", "c-20"]) {
+        await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, conversationId, 5));
+      }
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "c-old", 4));
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "c-null", null));
+      await upsertPageDmConversation(testDb.db, generationThreadInput(other.id, "c-10", 5));
+
+      expect(await countPageDmThreadsByGeneration(testDb.db, {
+        platformAccountId: page.id,
+        generation: 5,
+      })).toBe(3);
+      expect(await listPageDmThreadIdsByGeneration(testDb.db, {
+        platformAccountId: page.id,
+        generation: 5,
+      })).toEqual(["c-10", "c-20", "c-30"]);
+      expect(await countPageDmThreadsByGeneration(testDb.db, {
+        platformAccountId: page.id,
+        generation: 6,
+      })).toBe(0);
+      expect(await listPageDmThreadIdsByGeneration(testDb.db, {
+        platformAccountId: page.id,
+        generation: 6,
+      })).toEqual([]);
     });
 
     it("reads a generation high-water above the int4 ceiling", async (context) => {

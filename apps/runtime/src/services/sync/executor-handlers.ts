@@ -3,15 +3,18 @@ import {
   assertOwnedPageSyncLease,
   countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
+  countPageDmThreadsByGeneration,
   countPageFollowsByGeneration,
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
   finalizePageDmConversationMessageSync,
+  findErasureLogTouchingPageSince,
   getEarliestSpenderTransactionAt,
   getPageDmConversationById,
   getCheckpoint,
   getCurrentSubscribers,
   listPageDmConversationsByPlatformConversationIds,
+  listPageDmThreadIdsByGeneration,
   listFanslyPurchaseHistoryCaptures,
   listFanslyDmRawPayloadsAfterId,
   listFanslyMessagePurchaseTargetsAfterId,
@@ -94,6 +97,14 @@ import {
   type SyncRunTelemetry,
 } from "./observability.ts";
 import { composeRequestObservers, type SyncChunkYieldReason, type SyncChunkBudget } from "./chunk-budget.ts";
+import {
+  buildDmSweepDualProofAnomalyDetails,
+  compareDmSweepMembership,
+  isDmSweepErasureShapedShortfall,
+  DM_SWEEP_DUAL_PROOF_ANOMALY_CODE,
+  DM_SWEEP_DUAL_PROOF_ERASURE_NOTE_CODE,
+  DM_SWEEP_DUAL_PROOF_PAGE_NOTE_CODE,
+} from "./dm-sweep-dual-proof.ts";
 import {
   emptyDmMessagesCursorState,
   parseDmConversationCursorState,
@@ -2664,6 +2675,11 @@ export async function fanslyDmConversationsChunk(
 
   let processedConversations = 0;
   let repairedHeads = 0;
+  // G2 slice 2 (dual proof): the per-page count compare is cheap enough to run
+  // on every page, but its note is latched to ONE per run — a sweep that
+  // diverges on page 3 diverges on every page after it, and telemetry rows are
+  // the thing G1 just finished bounding.
+  let dualProofPageDivergenceNoted = false;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
@@ -3138,7 +3154,42 @@ export async function fanslyDmConversationsChunk(
         }
       }
 
+      // G2 slice 2 (dual proof, shadow): one indexed count of the rows this
+      // sweep has stamped, read INSIDE the write transaction so it is exactly
+      // the membership the checkpoint about to be written describes. The
+      // cumulative array stays the authority for every decision below.
+      const generationSetCount = await countPageDmThreadsByGeneration(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        generation: state.generation,
+      });
+
       if (page.done) {
+        // Once per completed sweep: the full second representation, digested.
+        const generationSetConversationIds = await listPageDmThreadIdsByGeneration(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          generation: state.generation,
+        });
+        const dualProof = compareDmSweepMembership({
+          snapshotConversationIds,
+          generationSetConversationIds,
+        });
+        // Erasure tolerance: the Stage-28 module deletes stamped rows, so a
+        // shortfall (and only a shortfall) inside the sweep window is evidence
+        // of a legitimate erasure rather than of a lost stamp.
+        let dualProofErasureDelta: number | null = null;
+        if (isDmSweepErasureShapedShortfall(dualProof)) {
+          const sweepStartedAt = new Date(state.fullSweepStartedAt);
+          const erasure = Number.isNaN(sweepStartedAt.getTime())
+            ? null
+            : await findErasureLogTouchingPageSince(dbTx, {
+              pageId: input.pageContext.page.id,
+              since: sweepStartedAt,
+            });
+          if (erasure) {
+            dualProofErasureDelta = dualProof.snapshotCount - dualProof.generationSetCount;
+          }
+        }
+
         const destructiveFinalization = state.providerTotalMode === "present";
         if (destructiveFinalization) {
           await markPageDmConversationsInvisibleByGeneration(dbTx, {
@@ -3154,11 +3205,17 @@ export async function fanslyDmConversationsChunk(
           providerReportedTotal: state.providerReportedTotal,
           destructiveFinalization,
           lastFullSweepCompletedAt: new Date().toISOString(),
+          dualProofOk: dualProof.ok,
+          dualProofSetCount: dualProof.generationSetCount,
+          ...(dualProofErasureDelta === null ? {} : { dualProofErasureDelta }),
         };
         return {
           kind: "complete" as const,
           destructiveFinalization,
           dmMessagesFollowupNeeded,
+          generationSetCount,
+          dualProof,
+          dualProofErasureDelta,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "dm_conversations",
@@ -3171,10 +3228,15 @@ export async function fanslyDmConversationsChunk(
       return {
         kind: "progress" as const,
         dmMessagesFollowupNeeded,
+        generationSetCount,
         checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "dm_conversations",
-          state: nextState,
+          // `generationSetCount` is a shadow scalar, not cursor state: the
+          // parser drops it on resume and every page recomputes it. It rides
+          // the checkpoint purely so summarizeCheckpoint carries it into the
+          // bounded telemetry projection.
+          state: { ...nextState, generationSetCount },
         }),
       };
     });
@@ -3192,7 +3254,57 @@ export async function fanslyDmConversationsChunk(
       });
     }
 
+    // Shadow evidence only: a divergence here changes nothing this run. The
+    // last page reports through the richer completion verdict below instead.
+    if (
+      pageWrite.kind === "progress" &&
+      !dualProofPageDivergenceNoted &&
+      pageWrite.generationSetCount !== finalObservedCount
+    ) {
+      dualProofPageDivergenceNoted = true;
+      await input.telemetry.addNote(
+        "DM conversation sweep generation set diverged from its cumulative id snapshot",
+        {
+          code: DM_SWEEP_DUAL_PROOF_PAGE_NOTE_CODE,
+          generation: state.generation,
+          pageCount: nextPageCount,
+          observedCount: finalObservedCount,
+          generationSetCount: pageWrite.generationSetCount,
+        },
+      );
+    }
+
     if (pageWrite.kind === "complete") {
+      if (!pageWrite.dualProof.ok) {
+        if (pageWrite.dualProofErasureDelta !== null) {
+          await input.telemetry.addNote(
+            "DM conversation sweep generation set trails its id snapshot by rows an erasure removed inside the sweep window",
+            {
+              code: DM_SWEEP_DUAL_PROOF_ERASURE_NOTE_CODE,
+              generation: state.generation,
+              observedCount: pageWrite.dualProof.snapshotCount,
+              generationSetCount: pageWrite.dualProof.generationSetCount,
+              dualProofErasureDelta: pageWrite.dualProofErasureDelta,
+            },
+          );
+        } else {
+          await input.telemetry.addAnomaly({
+            code: DM_SWEEP_DUAL_PROOF_ANOMALY_CODE,
+            // warn, not error: the array decided this sweep exactly as it did
+            // before the shadow existed. The anomaly is the G3 gate, not an
+            // incident.
+            severity: "warn",
+            message:
+              "DM conversation sweep generation set did not reproduce its cumulative id snapshot",
+            details: buildDmSweepDualProofAnomalyDetails({
+              verdict: pageWrite.dualProof,
+              generation: state.generation,
+              pageCount: nextPageCount,
+            }),
+          });
+        }
+      }
+
       if (!pageWrite.destructiveFinalization) {
         await input.telemetry.addNote(
           "DM conversation sweep completed without a provider total; unseen conversations remain visible",

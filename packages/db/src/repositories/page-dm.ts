@@ -276,6 +276,57 @@ export async function maxPageDmThreadGeneration(db: Database, platformAccountId:
   return generation;
 }
 
+// G2 slice 2 (dual proof, shadow): the second representation of a Fansly
+// dm_conversations sweep's membership. The sweep's authority today is the
+// cumulative `snapshotConversationIds` array inside page_sync_cursors.state,
+// which grows O(N²) across a sweep; the rows the sweep just stamped are the
+// same set, readable off page_dm_threads_generation_idx
+// (platform_account_id, last_seen_generation) in constant state. Both readers
+// below exist to MEASURE that equivalence in production before G3 makes the
+// index the authority — nothing here decides anything.
+
+export async function countPageDmThreadsByGeneration(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+  },
+) {
+  const result = await db.execute<{ count: string | number }>(sql`
+    select count(*)::bigint as count
+    from page_dm_threads
+    where platform_account_id = ${input.platformAccountId}
+      and last_seen_generation = ${input.generation}
+  `);
+
+  const count = Number(result.rows[0]?.count ?? 0);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("Expected page_dm_threads generation-set count to be a non-negative safe integer");
+  }
+  return count;
+}
+
+/** Once per completed sweep, never per page: the id list backing the digest.
+ *  Ordered by the qualified column so the ORDER BY cannot bind to a select
+ *  alias (the trap that shipped twice here). */
+export async function listPageDmThreadIdsByGeneration(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+  },
+) {
+  const result = await db.execute<{ platform_conversation_id: string }>(sql`
+    select t.platform_conversation_id
+    from page_dm_threads t
+    where t.platform_account_id = ${input.platformAccountId}
+      and t.last_seen_generation = ${input.generation}
+    order by t.platform_conversation_id asc
+  `);
+
+  return result.rows.map((row) => String(row.platform_conversation_id));
+}
+
 export interface PageDmConversationRow {
   id: number;
   platformAccountId: number;
