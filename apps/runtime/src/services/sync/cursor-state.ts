@@ -30,18 +30,27 @@ type FollowersReconcileCursorState = {
   verificationPending: boolean;
 };
 
+/**
+ * G3 (checkpoint cutover): scalars only. Version 1 carried
+ * `snapshotConversationIds` — every group id the sweep had seen, rewritten in
+ * full on every page (O(N²) bytes across a sweep, the top storage writer
+ * measured on 2026-08-11). Membership now lives row-side in
+ * `page_dm_threads.last_seen_generation`, which G2 slice 1 made monotonic and
+ * G2 slice 2 proved equal to the array in production; `observedCount` is the
+ * persisted count the sweep maintains against it.
+ */
 type DmConversationCursorState = {
-  version: 1;
+  version: 2;
   mode: "full_scan";
   generation: number;
   offset: number;
+  observedCount: number;
   pageCount: number;
   providerTotalMode: "unobserved" | "absent" | "present";
   providerReportedTotal: number | null;
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
   lastFullSweepCompletedAt: string | null;
-  snapshotConversationIds?: string[];
 };
 
 type DmMessagesCursorState = {
@@ -272,9 +281,24 @@ export function parseFollowersReconcileCursorState(
   };
 }
 
+/**
+ * Accepts BOTH stored shapes and always returns the v2 one.
+ *
+ * v1 → v2 migration on load: the sweep read its observed count back out of
+ * `snapshotConversationIds.length` on every resume, so adopting that length
+ * makes a migrated cursor resume with exactly the count the pre-G3 binary
+ * would have computed. The array is then dropped and never written again.
+ *
+ * A v1 state that carries NEITHER the array NOR a persisted `observedCount`
+ * parses with a zero count, which is a lie about a sweep already in flight —
+ * isUnresumableLegacyDmConversationCursorState flags exactly that record and
+ * the handler restarts the sweep before the zero can reach a decision, which
+ * is what the retired legacy-snapshot guard did with the missing array.
+ */
 export function parseDmConversationCursorState(value: unknown): DmConversationCursorState | null {
   const state = asRecord(value);
-  if (!state || asNumber(state.version) !== 1 || state.mode !== "full_scan") {
+  const version = asNumber(state?.version);
+  if (!state || (version !== 1 && version !== 2) || state.mode !== "full_scan") {
     return null;
   }
 
@@ -285,7 +309,14 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
   const unchangedPageStreak = asNumber(state.unchangedPageStreak);
   const fullSweepStartedAt = asNullableString(state.fullSweepStartedAt);
   const lastFullSweepCompletedAt = asNullableString(state.lastFullSweepCompletedAt);
-  const snapshotConversationIds = asOptionalStringArray(state.snapshotConversationIds);
+  const snapshotConversationIds = version === 1
+    ? asOptionalStringArray(state.snapshotConversationIds)
+    : undefined;
+  // v2 must carry the count — it is the whole reason the array could go. v1 may
+  // fall back to zero because the handler refuses such a cursor outright.
+  const observedCount = version === 1
+    ? snapshotConversationIds?.length ?? asNumber(state.observedCount) ?? 0
+    : asNumber(state.observedCount);
   if (
     generation === null ||
     offset === null ||
@@ -293,7 +324,9 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     providerReportedTotal === undefined ||
     unchangedPageStreak === null ||
     !fullSweepStartedAt ||
-    snapshotConversationIds === null
+    snapshotConversationIds === null ||
+    observedCount === null ||
+    observedCount < 0
   ) {
     return null;
   }
@@ -315,18 +348,37 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
   }
 
   return {
-    version: 1,
+    version: 2,
     mode: "full_scan",
     generation,
     offset,
+    observedCount,
     pageCount,
     providerTotalMode,
     providerReportedTotal,
     unchangedPageStreak,
     fullSweepStartedAt,
     lastFullSweepCompletedAt,
-    ...(snapshotConversationIds ? { snapshotConversationIds } : {}),
   };
+}
+
+/**
+ * A stored in-progress sweep from before either count representation existed:
+ * version 1, no id array, no `observedCount`. Resuming it would restart the
+ * count at zero mid-sweep, so the sweep restarts from offset 0 under a fresh
+ * generation instead (loudly — the anomaly is the operator's signal), which is
+ * what the retired legacy-snapshot guard did. Deliberately narrow: every OTHER
+ * reason the parser refuses a record already meant a silent fresh sweep before
+ * G3, and still does.
+ */
+export function isUnresumableLegacyDmConversationCursorState(value: unknown) {
+  const state = asRecord(value);
+  if (!state || state.mode !== "full_scan" || asNumber(state.version) !== 1) {
+    return false;
+  }
+
+  return asOptionalStringArray(state.snapshotConversationIds) === undefined &&
+    asNumber(state.observedCount) === null;
 }
 
 export function parseOfapiDmConversationCursorState(value: unknown): OfapiDmConversationCursorState | null {

@@ -14,6 +14,7 @@ import {
   getPageConversationPreview,
   getPageConversationMessages,
   listPageDmThreadIdsByGeneration,
+  listPageDmThreadIdsStampedWithGeneration,
   markPageDmConversationsInvisibleByGeneration,
   maxPageDmThreadGeneration,
   refreshPageDmConversationWindow,
@@ -1274,6 +1275,42 @@ describe("page DM repository integration", () => {
       expect(await listPageDmThreadIdsByGeneration(testDb.db, {
         platformAccountId: page.id,
         generation: 6,
+      })).toEqual([]);
+    });
+
+    it("reads back only the incoming ids a sweep has already stamped", async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+
+      // G3: the per-page overlap check. Scoped three ways at once — the
+      // account, the generation, and the ids on THIS provider page — because
+      // an id stamped by an earlier generation, or by another page's sweep, is
+      // not an overlap.
+      const page = await createGenerationPage(testDb, "generation-stamped");
+      const other = await createGenerationPage(testDb, "generation-stamped-other");
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "c-seen", 5));
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "c-earlier", 4));
+      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "c-null", null));
+      await upsertPageDmConversation(testDb.db, generationThreadInput(other.id, "c-fresh", 5));
+
+      expect(await listPageDmThreadIdsStampedWithGeneration(testDb.db, {
+        platformAccountId: page.id,
+        generation: 5,
+        platformConversationIds: ["c-fresh", "c-seen", "c-earlier", "c-null"],
+      })).toEqual(["c-seen"]);
+      // An empty page asks the database nothing.
+      expect(await listPageDmThreadIdsStampedWithGeneration(testDb.db, {
+        platformAccountId: page.id,
+        generation: 5,
+        platformConversationIds: [],
+      })).toEqual([]);
+      // The next sweep's generation has stamped nothing yet.
+      expect(await listPageDmThreadIdsStampedWithGeneration(testDb.db, {
+        platformAccountId: page.id,
+        generation: 6,
+        platformConversationIds: ["c-seen"],
       })).toEqual([]);
     });
 

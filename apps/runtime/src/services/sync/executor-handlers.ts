@@ -14,7 +14,7 @@ import {
   getCheckpoint,
   getCurrentSubscribers,
   listPageDmConversationsByPlatformConversationIds,
-  listPageDmThreadIdsByGeneration,
+  listPageDmThreadIdsStampedWithGeneration,
   listFanslyPurchaseHistoryCaptures,
   listFanslyDmRawPayloadsAfterId,
   listFanslyMessagePurchaseTargetsAfterId,
@@ -31,6 +31,7 @@ import {
   rebuildSubscriberRollups,
   selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
+  tryAcquireDmArchiveWriterFenceLock,
   updatePageSyncTimestampCache,
   upsertArchivedPageSubscriptions,
   upsertPageTopSpenders,
@@ -98,15 +99,13 @@ import {
 } from "./observability.ts";
 import { composeRequestObservers, type SyncChunkYieldReason, type SyncChunkBudget } from "./chunk-budget.ts";
 import {
-  buildDmSweepDualProofAnomalyDetails,
-  compareDmSweepMembership,
-  isDmSweepErasureShapedShortfall,
-  DM_SWEEP_DUAL_PROOF_ANOMALY_CODE,
+  isDmSweepErasureShapedCountShortfall,
   DM_SWEEP_DUAL_PROOF_ERASURE_NOTE_CODE,
   DM_SWEEP_DUAL_PROOF_PAGE_NOTE_CODE,
 } from "./dm-sweep-dual-proof.ts";
 import {
   emptyDmMessagesCursorState,
+  isUnresumableLegacyDmConversationCursorState,
   parseDmConversationCursorState,
   parseDmMessagesCursorState,
   parseFollowersCursorState,
@@ -186,6 +185,20 @@ export type ExecutorRequestContext = {
 };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
+/** G3: the Fansly dm_conversations sweep's own membership verdict — the row-
+ *  side generation set did not reproduce the count the sweep observed, and no
+ *  erasure explains the gap, so the destructive finalization was withheld. */
+const DM_SWEEP_GENERATION_MEMBERSHIP_ANOMALY_CODE = "dm_conversations_generation_membership_guard";
+const DM_CONVERSATIONS_ERASURE_FENCE_DEFERRED_NOTE_CODE = "dm_conversations_erasure_fence_deferred";
+/** An erasure's delete transaction is seconds-to-minutes work, not an hour's:
+ *  park the stream long enough to let it finish, short enough that a page's
+ *  DM freshness barely notices. */
+const DM_CONVERSATIONS_ERASURE_FENCE_RETRY_DELAY_MS = 60_000;
+/** A withheld finalization re-sweeps the whole page from offset 0, so the
+ *  retry must not be immediate: an uncertified membership tends to repeat, and
+ *  an unthrottled loop would spend the page's whole DM request budget proving
+ *  the same thing against the provider over and over. */
+const DM_CONVERSATIONS_MEMBERSHIP_RETRY_DELAY_MS = 15 * 60_000;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
 const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
@@ -2587,32 +2600,38 @@ export async function fanslyDmConversationsChunk(
 
   const pageAccountId = resolveFanslyPlatformAccountId(input.pageContext.page);
   const checkpointStateRecord = asRecord(checkpoint?.state);
+  // G3: the parser migrates a stored v1 state (with its cumulative id array) to
+  // the v2 scalar shape on load — `observedCount` comes across as the array's
+  // length, and the array is never written again.
+  //
+  // ROLLBACK (verified against main @ 61f7c1dd, the binary production would
+  // roll back to): that parser rejects anything whose `version` is not exactly
+  // 1, so a v2 state parses as null there and the pre-G3 handler falls into
+  // this same fresh-sweep branch — it reads `generation` straight off the
+  // stored record, takes max(that, the row-side high-water) + 1, and re-walks
+  // from offset 0. A rolled-back sweep therefore loses its PROGRESS and never
+  // its correctness: the new generation is above every stamp on the page, so
+  // its finalization cannot hide a thread the interrupted sweep had seen.
+  // `lastFullSweepCompletedAt` is read off the raw record too, so the UX
+  // timestamp survives the round trip.
   const existingState = parseDmConversationCursorState(checkpoint?.state);
-  type DmConversationSweepCursorState = DmConversationCursorState & {
-    observedCount: number;
-    snapshotConversationIds: string[];
-  };
-  const legacySnapshotMissing = Boolean(
-    existingState && existingState.snapshotConversationIds === undefined,
-  );
-  let state: DmConversationSweepCursorState;
+  // Only meaningful for a cursor that DID resume: a record the parser rejected
+  // outright already restarts as a fresh sweep below, and restarting it twice
+  // would burn a generation and re-fetch a page for nothing.
+  const legacyCountEvidenceMissing = existingState !== null &&
+    isUnresumableLegacyDmConversationCursorState(checkpoint?.state);
+  let state: DmConversationCursorState;
   if (existingState) {
-    const snapshotConversationIds = existingState.snapshotConversationIds ?? [];
-    state = {
-      ...existingState,
-      snapshotConversationIds,
-      observedCount: snapshotConversationIds.length,
-    };
+    state = existingState;
   } else {
     const checkpointGeneration = asNumber(checkpointStateRecord?.generation) ?? 0;
     const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
     state = {
-      version: 1,
+      version: 2,
       mode: "full_scan",
       generation: Math.max(checkpointGeneration, storedGeneration) + 1,
       offset: 0,
       observedCount: 0,
-      snapshotConversationIds: [],
       pageCount: 0,
       providerTotalMode: "unobserved",
       providerReportedTotal: null,
@@ -2637,13 +2656,12 @@ export async function fanslyDmConversationsChunk(
     details: Record<string, unknown>;
   }): Promise<never> => {
     const storedGeneration = await maxPageDmThreadGeneration(app.db, input.pageContext.page.id);
-    const restartState: DmConversationSweepCursorState = {
-      version: 1,
+    const restartState: DmConversationCursorState = {
+      version: 2,
       mode: "full_scan",
       generation: Math.max(state.generation, storedGeneration) + 1,
       offset: 0,
       observedCount: 0,
-      snapshotConversationIds: [],
       pageCount: 0,
       providerTotalMode: "unobserved",
       providerReportedTotal: null,
@@ -2675,11 +2693,12 @@ export async function fanslyDmConversationsChunk(
 
   let processedConversations = 0;
   let repairedHeads = 0;
-  // G2 slice 2 (dual proof): the per-page count compare is cheap enough to run
-  // on every page, but its note is latched to ONE per run — a sweep that
-  // diverges on page 3 diverges on every page after it, and telemetry rows are
-  // the thing G1 just finished bounding.
-  let dualProofPageDivergenceNoted = false;
+  // The per-page count compare is cheap enough to run on every page, but its
+  // note is latched to ONE per run — a sweep that diverges on page 3 diverges
+  // on every page after it, and telemetry rows are the thing G1 just finished
+  // bounding. Since G3 this is an early warning for the completion check that
+  // now gates the destructive finalization, not a shadow reading.
+  let generationSetDivergenceNoted = false;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
@@ -2722,7 +2741,7 @@ export async function fanslyDmConversationsChunk(
           "DM conversation sync provider total was present but invalid; refusing to apply the page",
         details: {
           currentProviderReportedTotal: providerTotalField ?? null,
-          observedCount: state.snapshotConversationIds.length,
+          observedCount: state.observedCount,
           pageCount: nextPageCount,
           offset: state.offset,
         },
@@ -2730,7 +2749,7 @@ export async function fanslyDmConversationsChunk(
       continue;
     }
 
-    if (legacySnapshotMissing) {
+    if (legacyCountEvidenceMissing) {
       await restartSweepAfterCapturedContractDrift({
         code: "dm_conversations_legacy_snapshot_restart",
         message:
@@ -2765,35 +2784,37 @@ export async function fanslyDmConversationsChunk(
       });
     }
 
-    const priorConversationIds = new Set(state.snapshotConversationIds);
     const currentConversationIds = page.items.map((conversation) => conversation.groupId);
     const uniqueCurrentConversationIds = new Set(currentConversationIds);
-    const overlappingConversationIds = [...uniqueCurrentConversationIds].filter((conversationId) =>
-      priorConversationIds.has(conversationId)
-    );
+    // Within a single page the ids are compared in memory — no stored state can
+    // tell you a page repeated an id against itself. Only the CROSS-page
+    // overlap check needs the database, and it waits for the page transaction
+    // below; everything decidable without I/O stays HERE, before the hydration
+    // loop, so a malformed page cannot spend group-detail and head-repair
+    // requests against Fansly before being rejected.
     const duplicateIdsWithinPage = currentConversationIds.length - uniqueCurrentConversationIds.size;
-    if (overlappingConversationIds.length > 0 || duplicateIdsWithinPage > 0) {
+    if (duplicateIdsWithinPage > 0) {
       await restartSweepAfterCapturedContractDrift({
         code: "dm_conversations_snapshot_overlap_guard",
         message:
           "DM conversation sync returned duplicate or overlapping group ids; refusing to apply the page",
         details: {
           providerReportedTotal: currentProviderReportedTotal,
-          overlappingConversationIds: overlappingConversationIds.slice(0, 10),
-          overlapCount: overlappingConversationIds.length,
+          overlappingConversationIds: [],
+          overlapCount: 0,
           duplicateIdsWithinPage,
-          observedCount: priorConversationIds.size,
+          observedCount: state.observedCount,
           pageCount: nextPageCount,
           offset: state.offset,
         },
       });
     }
 
-    const snapshotConversationIds = [
-      ...state.snapshotConversationIds,
-      ...uniqueCurrentConversationIds,
-    ];
-    const finalObservedCount = snapshotConversationIds.length;
+    // No overlap is tolerated, so a page that survives the guards here and in
+    // the transaction contributes exactly its unique ids — the same arithmetic
+    // the cumulative array performed by concatenating them and taking its
+    // length.
+    const finalObservedCount = state.observedCount + uniqueCurrentConversationIds.size;
     if (currentProviderReportedTotal !== null && (
       finalObservedCount > currentProviderReportedTotal ||
       (page.done && finalObservedCount !== currentProviderReportedTotal)
@@ -3102,14 +3123,43 @@ export async function fanslyDmConversationsChunk(
     }
     processedConversations += conversationWrites.length;
 
-    const nextState = {
+    const nextState: DmConversationCursorState = {
       ...state,
       observedCount: finalObservedCount,
-      snapshotConversationIds,
       unchangedPageStreak: unchangedPage ? state.unchangedPageStreak + 1 : 0,
       offset: page.done ? state.offset : state.offset + 100,
     };
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      // G3 erasure fence (Stage 28 / PR4): with the cumulative array gone, the
+      // rows carrying this generation ARE the sweep's membership record, and a
+      // running erasure legitimately deletes some of them. Take the shared
+      // page fence so the check-stamp-count-finalize sequence below cannot
+      // interleave with an erasure's delete transaction; when the erasure
+      // holds the exclusive lock, DEFER the whole chunk — no writes, no
+      // checkpoint, nothing consumed. The page re-fetches from the same offset
+      // on the next dispatch (its response is already journaled, DP-7 intact).
+      if (!(await tryAcquireDmArchiveWriterFenceLock(dbTx, input.pageContext.page.id))) {
+        return { kind: "deferred" as const };
+      }
+
+      // The cross-page overlap check, row-side and pre-upsert: an id whose row
+      // already carries THIS generation was applied by an earlier offset page
+      // of this same sweep. Only this sweep ever writes this generation (the
+      // page/stream lease is exclusive, the generation starts above every
+      // stored stamp, and the monotonic conflict-update lets no other writer
+      // introduce it), so the stamp is as authoritative as the array was —
+      // and, unlike the array, it is read at the same isolation as the write
+      // that follows it. It has to be read BEFORE the upserts: afterwards
+      // every id on the page would carry the generation.
+      const overlappingConversationIds = await listPageDmThreadIdsStampedWithGeneration(dbTx, {
+        platformAccountId: input.pageContext.page.id,
+        generation: state.generation,
+        platformConversationIds: [...uniqueCurrentConversationIds],
+      });
+      if (overlappingConversationIds.length > 0) {
+        return { kind: "overlap" as const, overlappingConversationIds };
+      }
+
       let dmMessagesFollowupNeeded = false;
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
@@ -3154,30 +3204,32 @@ export async function fanslyDmConversationsChunk(
         }
       }
 
-      // G2 slice 2 (dual proof, shadow): one indexed count of the rows this
-      // sweep has stamped, read INSIDE the write transaction so it is exactly
-      // the membership the checkpoint about to be written describes. The
-      // cumulative array stays the authority for every decision below.
+      // One indexed count of the rows this sweep has stamped, read INSIDE the
+      // write transaction so it is exactly the membership the checkpoint about
+      // to be written describes. Since G3 this IS the sweep's second opinion on
+      // its own `observedCount` — and the last page's copy of it gates the
+      // destructive finalization below.
       const generationSetCount = await countPageDmThreadsByGeneration(dbTx, {
         platformAccountId: input.pageContext.page.id,
         generation: state.generation,
       });
 
       if (page.done) {
-        // Once per completed sweep: the full second representation, digested.
-        const generationSetConversationIds = await listPageDmThreadIdsByGeneration(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          generation: state.generation,
-        });
-        const dualProof = compareDmSweepMembership({
-          snapshotConversationIds,
-          generationSetConversationIds,
-        });
-        // Erasure tolerance: the Stage-28 module deletes stamped rows, so a
-        // shortfall (and only a shortfall) inside the sweep window is evidence
-        // of a legitimate erasure rather than of a lost stamp.
-        let dualProofErasureDelta: number | null = null;
-        if (isDmSweepErasureShapedShortfall(dualProof)) {
+        // Erasure PLAUSIBILITY — not permission. The Stage-28 module deletes
+        // stamped rows, so a shortfall (and only a shortfall) can have a benign
+        // cause when an erasure touched this page inside the sweep window. But
+        // findErasureLogTouchingPageSince proves only that SOME erasure ran; it
+        // does not prove it deleted THESE missing rows. An abandoned erasure
+        // plus one genuinely lost stamp looks identical, and acting on that
+        // would hide a live thread — so this only chooses the calm note over
+        // the anomaly. It never certifies membership.
+        let erasureDelta: number | null = null;
+        if (
+          isDmSweepErasureShapedCountShortfall({
+            observedCount: finalObservedCount,
+            generationSetCount,
+          })
+        ) {
           const sweepStartedAt = new Date(state.fullSweepStartedAt);
           const erasure = Number.isNaN(sweepStartedAt.getTime())
             ? null
@@ -3186,11 +3238,25 @@ export async function fanslyDmConversationsChunk(
               since: sweepStartedAt,
             });
           if (erasure) {
-            dualProofErasureDelta = dualProof.snapshotCount - dualProof.generationSetCount;
+            erasureDelta = finalObservedCount - generationSetCount;
           }
         }
 
-        const destructiveFinalization = state.providerTotalMode === "present";
+        // The whole point of G3: invisibility only after the row-side set
+        // reproduces the count the sweep claims to have observed — EXACTLY,
+        // with no excuse accepted. Any gap, in either direction and however
+        // plausible, means the membership record cannot be trusted, and hiding
+        // threads on an untrustworthy record is the failure mode (a live thread
+        // disappearing from every chatter's list) this refuses to risk.
+        // Decision #208 prefers stale visibility to that, and the re-sweep
+        // under a fresh generation converges on its own.
+        const membershipCertified = generationSetCount === finalObservedCount;
+        const destructiveFinalization = state.providerTotalMode === "present" &&
+          membershipCertified;
+        // Independent of the total mode: a total-less sweep runs no destructive
+        // pass, but it must not stamp itself successful — or advance the
+        // coverage timestamp — on a membership it could not certify either.
+        const finalizationWithheld = !membershipCertified;
         if (destructiveFinalization) {
           await markPageDmConversationsInvisibleByGeneration(dbTx, {
             platformAccountId: input.pageContext.page.id,
@@ -3198,30 +3264,48 @@ export async function fanslyDmConversationsChunk(
           });
         }
         const completedState = {
-          version: 1,
+          version: 2,
           generation: state.generation,
           observedCount: finalObservedCount,
+          generationSetCount,
           providerTotalMode: state.providerTotalMode,
           providerReportedTotal: state.providerReportedTotal,
           destructiveFinalization,
-          lastFullSweepCompletedAt: new Date().toISOString(),
-          dualProofOk: dualProof.ok,
-          dualProofSetCount: dualProof.generationSetCount,
-          ...(dualProofErasureDelta === null ? {} : { dualProofErasureDelta }),
+          membershipCertified,
+          // A withheld finalization did walk every page, but it is not a full
+          // sweep the coverage UX may advertise — the previous timestamp
+          // stands until a sweep certifies itself.
+          lastFullSweepCompletedAt: finalizationWithheld
+            ? state.lastFullSweepCompletedAt
+            : new Date().toISOString(),
+          ...(erasureDelta === null ? {} : { erasureDelta }),
         };
+        // Note the completed state carries no `mode`, so the parser refuses it
+        // as a resumable cursor and the next chunk opens a fresh sweep under a
+        // higher generation. That is also what makes a withheld finalization
+        // self-healing rather than a wedge: the retry re-walks from offset 0.
         return {
           kind: "complete" as const,
           destructiveFinalization,
+          finalizationWithheld,
+          membershipCertified,
           dmMessagesFollowupNeeded,
           generationSetCount,
-          dualProof,
-          dualProofErasureDelta,
-          checkpoint: await upsertCheckpoint(dbTx, {
-            platformAccountId: input.pageContext.page.id,
-            stream: "dm_conversations",
-            state: completedState,
-            lastSuccessfulRunId: input.syncRunId,
-          }),
+          erasureDelta,
+          checkpoint: finalizationWithheld
+            // Progress write: a run that refused to finalize must not stamp
+            // itself as the stream's last successful run.
+            ? await upsertCheckpointProgress(dbTx, {
+              platformAccountId: input.pageContext.page.id,
+              stream: "dm_conversations",
+              state: completedState,
+            })
+            : await upsertCheckpoint(dbTx, {
+              platformAccountId: input.pageContext.page.id,
+              stream: "dm_conversations",
+              state: completedState,
+              lastSuccessfulRunId: input.syncRunId,
+            }),
         };
       }
 
@@ -3232,14 +3316,64 @@ export async function fanslyDmConversationsChunk(
         checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "dm_conversations",
-          // `generationSetCount` is a shadow scalar, not cursor state: the
-          // parser drops it on resume and every page recomputes it. It rides
-          // the checkpoint purely so summarizeCheckpoint carries it into the
-          // bounded telemetry projection.
+          // `generationSetCount` is telemetry, not cursor state: the parser
+          // drops it on resume and every page recomputes it. It rides the
+          // checkpoint purely so summarizeCheckpoint carries it into the
+          // bounded projection — the per-page membership signal that replaced
+          // the array's digest.
           state: { ...nextState, generationSetCount },
         }),
       };
     });
+
+    if (pageWrite.kind === "deferred") {
+      await input.telemetry.addNote(
+        "DM conversation sweep deferred a page while an erasure held the page fence",
+        {
+          code: DM_CONVERSATIONS_ERASURE_FENCE_DEFERRED_NOTE_CODE,
+          generation: state.generation,
+          pageCount: nextPageCount,
+          offset: state.offset,
+        },
+      );
+      return {
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt: new Date(Date.now() + DM_CONVERSATIONS_ERASURE_FENCE_RETRY_DELAY_MS),
+        continuationRequestSource: "scheduled",
+        stats: {
+          generation: state.generation,
+          offset: state.offset,
+          pageCount: state.pageCount,
+          observedCount: state.observedCount,
+          processedConversations,
+          repairedHeads,
+          providerTotalMode: state.providerTotalMode,
+          providerReportedTotal: state.providerReportedTotal,
+          fullSweepCompleted: false,
+          erasureFenceDeferred: true,
+        },
+      } satisfies StreamChunkResult;
+    }
+
+    if (pageWrite.kind === "overlap") {
+      await restartSweepAfterCapturedContractDrift({
+        code: "dm_conversations_snapshot_overlap_guard",
+        message:
+          "DM conversation sync returned duplicate or overlapping group ids; refusing to apply the page",
+        details: {
+          providerReportedTotal: currentProviderReportedTotal,
+          overlappingConversationIds: pageWrite.overlappingConversationIds.slice(0, 10),
+          overlapCount: pageWrite.overlappingConversationIds.length,
+          duplicateIdsWithinPage,
+          observedCount: state.observedCount,
+          pageCount: nextPageCount,
+          offset: state.offset,
+        },
+      });
+      continue;
+    }
+
     await input.telemetry.recordCheckpointAdvanced(
       "dm_conversations",
       summarizeCheckpoint(pageWrite.checkpoint),
@@ -3254,16 +3388,17 @@ export async function fanslyDmConversationsChunk(
       });
     }
 
-    // Shadow evidence only: a divergence here changes nothing this run. The
-    // last page reports through the richer completion verdict below instead.
+    // Early warning: a mid-sweep divergence is what the completion check will
+    // fail on, several pages before it does. It changes nothing on its own —
+    // the last page decides — but it dates the divergence to a page.
     if (
       pageWrite.kind === "progress" &&
-      !dualProofPageDivergenceNoted &&
+      !generationSetDivergenceNoted &&
       pageWrite.generationSetCount !== finalObservedCount
     ) {
-      dualProofPageDivergenceNoted = true;
+      generationSetDivergenceNoted = true;
       await input.telemetry.addNote(
-        "DM conversation sweep generation set diverged from its cumulative id snapshot",
+        "DM conversation sweep generation set diverged from its observed count",
         {
           code: DM_SWEEP_DUAL_PROOF_PAGE_NOTE_CODE,
           generation: state.generation,
@@ -3275,37 +3410,44 @@ export async function fanslyDmConversationsChunk(
     }
 
     if (pageWrite.kind === "complete") {
-      if (!pageWrite.dualProof.ok) {
-        if (pageWrite.dualProofErasureDelta !== null) {
-          await input.telemetry.addNote(
-            "DM conversation sweep generation set trails its id snapshot by rows an erasure removed inside the sweep window",
-            {
-              code: DM_SWEEP_DUAL_PROOF_ERASURE_NOTE_CODE,
-              generation: state.generation,
-              observedCount: pageWrite.dualProof.snapshotCount,
-              generationSetCount: pageWrite.dualProof.generationSetCount,
-              dualProofErasureDelta: pageWrite.dualProofErasureDelta,
-            },
-          );
-        } else {
-          await input.telemetry.addAnomaly({
-            code: DM_SWEEP_DUAL_PROOF_ANOMALY_CODE,
-            // warn, not error: the array decided this sweep exactly as it did
-            // before the shadow existed. The anomaly is the G3 gate, not an
-            // incident.
-            severity: "warn",
-            message:
-              "DM conversation sweep generation set did not reproduce its cumulative id snapshot",
-            details: buildDmSweepDualProofAnomalyDetails({
-              verdict: pageWrite.dualProof,
-              generation: state.generation,
-              pageCount: nextPageCount,
-            }),
-          });
-        }
+      if (pageWrite.erasureDelta !== null) {
+        // Same withheld outcome as any other uncertified sweep — only the
+        // volume differs. A shortfall an erasure could plausibly have caused
+        // is not an incident, so it reports as a note; the sweep still refuses
+        // to finalize on it.
+        await input.telemetry.addNote(
+          "DM conversation sweep generation set trails its observed count by rows an erasure could have removed inside the sweep window; finalization withheld",
+          {
+            code: DM_SWEEP_DUAL_PROOF_ERASURE_NOTE_CODE,
+            generation: state.generation,
+            observedCount: finalObservedCount,
+            generationSetCount: pageWrite.generationSetCount,
+            erasureDelta: pageWrite.erasureDelta,
+            finalizationWithheld: pageWrite.finalizationWithheld,
+          },
+        );
+      } else if (!pageWrite.membershipCertified) {
+        await input.telemetry.addAnomaly({
+          code: DM_SWEEP_GENERATION_MEMBERSHIP_ANOMALY_CODE,
+          // error, not warn: unlike the G2 shadow this verdict WITHHELD the
+          // sweep's completion, and no deletion on this page can even explain
+          // the gap.
+          severity: "error",
+          message:
+            "DM conversation sweep generation set did not reproduce its observed count; refusing destructive finalization",
+          details: {
+            generation: state.generation,
+            pageCount: nextPageCount,
+            observedCount: finalObservedCount,
+            generationSetCount: pageWrite.generationSetCount,
+            providerTotalMode: state.providerTotalMode,
+            providerReportedTotal: state.providerReportedTotal,
+            finalizationWithheld: pageWrite.finalizationWithheld,
+          },
+        });
       }
 
-      if (!pageWrite.destructiveFinalization) {
+      if (state.providerTotalMode !== "present" && !pageWrite.finalizationWithheld) {
         await input.telemetry.addNote(
           "DM conversation sweep completed without a provider total; unseen conversations remain visible",
           {
@@ -3317,19 +3459,31 @@ export async function fanslyDmConversationsChunk(
         );
       }
       return {
-        satisfied: true,
+        // A withheld finalization is not a success: the walk finished, the
+        // certification did not. Yielding re-queues the stream, and the
+        // completed checkpoint it wrote makes the retry a fresh sweep.
+        satisfied: !pageWrite.finalizationWithheld,
         yieldReason: null,
+        ...(pageWrite.finalizationWithheld
+          ? {
+            continuationRetryAt: new Date(Date.now() + DM_CONVERSATIONS_MEMBERSHIP_RETRY_DELAY_MS),
+            continuationRequestSource: "scheduled" as const,
+          }
+          : {}),
         stats: {
           generation: state.generation,
           offset: state.offset,
           pageCount: state.pageCount,
           observedCount: finalObservedCount,
+          generationSetCount: pageWrite.generationSetCount,
           processedConversations,
           repairedHeads,
           providerTotalMode: state.providerTotalMode,
           providerReportedTotal: state.providerReportedTotal,
           destructiveFinalization: pageWrite.destructiveFinalization,
-          fullSweepCompleted: true,
+          membershipCertified: pageWrite.membershipCertified,
+          finalizationWithheld: pageWrite.finalizationWithheld,
+          fullSweepCompleted: !pageWrite.finalizationWithheld,
         },
       } satisfies StreamChunkResult;
     }
