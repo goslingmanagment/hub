@@ -14,6 +14,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   unique,
@@ -4292,6 +4293,153 @@ export const agentHydrationEvents = pgTable(
     kindCheck: check("agent_hydration_events_kind_check", sql`
       ${table.kind} in ('created', 'approved', 'rejected', 'dispatched',
                         'settled', 'expired', 'failed')
+    `),
+  }),
+);
+
+// ── Content-addressed capture payloads (G5 slice 0, migration 0123) ──────────
+// The identity catalog plus its hot bodies. ADDITIVE and EMPTY today: no
+// envelope table references these yet and no production writer exists — the
+// repository (repositories/capture-payloads.ts) and the read seam
+// (apps/runtime/src/services/payload-reader.ts) ship ahead of their call sites
+// so the dual-write slice is a pure call-site change.
+//
+// All four tables are PARTITION BY RANGE (bucket_month) with monthly children
+// plus a `*_future` catch-all, following the observations precedent (0054) and
+// its far-future backstop (0082). The month is part of the identity on
+// purpose: a closed capture month is a ref-closed cohort, so the same content
+// in a new month is a NEW object and no cold segment ever holds a cross-month
+// reference.
+
+// The access-class / erasure-domain / representation vocabularies live in ONE
+// place: repositories/capture-payloads.ts (mirrored by 0123's CHECKs below).
+export const capturePayloadObjects = pgTable(
+  "capture_payload_objects",
+  {
+    bucketMonth: date("bucket_month", { mode: "string" }).notNull(),
+    // GENERATED ALWAYS AS IDENTITY in the migration; the repository lets
+    // Postgres assign it and reads it back from RETURNING.
+    objectId: bigint("object_id", { mode: "number" }).notNull(),
+    // NULLABLE, and the identity unique below is NULLS NOT DISTINCT: unmapped
+    // capture (ingest before the account is known, auth audit) is real, and
+    // ordinary null semantics would give every such row its own object.
+    platformAccountId: bigint("platform_account_id", { mode: "number" }),
+    accessClass: text("access_class").notNull(),
+    erasureDomain: text("erasure_domain").notNull(),
+    representation: text("representation").notNull(),
+    codecVersion: smallint("codec_version").notNull(),
+    contentSha256: bytea("content_sha256").notNull(),
+    // A digest is not proof of equality: a differing body under the same digest
+    // takes the next ordinal and keeps its own body row.
+    collisionOrdinal: integer("collision_ordinal").default(0).notNull(),
+    logicalBytes: bigint("logical_bytes", { mode: "number" }).notNull(),
+    contentType: text("content_type"),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.bucketMonth, table.objectId] }),
+    identityUniq: unique("capture_payload_objects_identity_uniq")
+      .on(
+        table.bucketMonth, table.platformAccountId, table.accessClass, table.erasureDomain,
+        table.representation, table.codecVersion, table.contentSha256, table.logicalBytes,
+        table.collisionOrdinal,
+      )
+      .nullsNotDistinct(),
+    bucketMonthCheck: check("capture_payload_objects_bucket_month_check", sql`
+      extract(day from ${table.bucketMonth}) = 1
+    `),
+    accessClassCheck: check("capture_payload_objects_access_class_check", sql`
+      ${table.accessClass} in ('ordinary_capture', 'restricted_ai', 'operator_audit')
+    `),
+    erasureDomainCheck: check("capture_payload_objects_erasure_domain_check", sql`
+      ${table.erasureDomain} in ('platform_account', 'fan_subject', 'system')
+    `),
+    representationCheck: check("capture_payload_objects_representation_check", sql`
+      ${table.representation} in ('canonical_json', 'exact_bytes')
+    `),
+    contentSha256Check: check("capture_payload_objects_content_sha256_check", sql`
+      octet_length(${table.contentSha256}) = 32
+    `),
+    collisionOrdinalCheck: check("capture_payload_objects_collision_ordinal_check", sql`
+      ${table.collisionOrdinal} >= 0
+    `),
+    logicalBytesCheck: check("capture_payload_objects_logical_bytes_check", sql`
+      ${table.logicalBytes} >= 0
+    `),
+    codecVersionCheck: check("capture_payload_objects_codec_version_check", sql`
+      ${table.codecVersion} >= 0
+    `),
+  }),
+);
+
+/** Semantic JSON bodies. Stays queryable `jsonb` in the hot tier; the canonical
+ *  octets are deliberately NOT stored beside it — that would be a second copy
+ *  of every body, which is the thing this whole model exists to remove. */
+export const captureJsonHotBodies = pgTable(
+  "capture_json_hot_bodies",
+  {
+    bucketMonth: date("bucket_month", { mode: "string" }).notNull(),
+    objectId: bigint("object_id", { mode: "number" }).notNull(),
+    body: jsonb("body").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.bucketMonth, table.objectId] }),
+    objectFk: foreignKey({
+      name: "capture_json_hot_bodies_object_fkey",
+      columns: [table.bucketMonth, table.objectId],
+      foreignColumns: [capturePayloadObjects.bucketMonth, capturePayloadObjects.objectId],
+    }).onDelete("restrict"),
+  }),
+);
+
+/** Exact wire octets (webhook raw bodies). Never JSON-reserialized, never
+ *  mixed with the canonical-JSON representation. */
+export const captureByteHotBodies = pgTable(
+  "capture_byte_hot_bodies",
+  {
+    bucketMonth: date("bucket_month", { mode: "string" }).notNull(),
+    objectId: bigint("object_id", { mode: "number" }).notNull(),
+    body: bytea("body").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.bucketMonth, table.objectId] }),
+    objectFk: foreignKey({
+      name: "capture_byte_hot_bodies_object_fkey",
+      columns: [table.bucketMonth, table.objectId],
+      foreignColumns: [capturePayloadObjects.bucketMonth, capturePayloadObjects.objectId],
+    }).onDelete("restrict"),
+  }),
+);
+
+/** Where the body physically lives. `hot` means the matching *_hot_bodies row;
+ *  `cold` means an S6 segment, and then the locator pair says which row of
+ *  which segment. The locator CHECK is two-directional: a `cold` row with no
+ *  locators is a body the system thinks it moved and cannot find, and a `hot`
+ *  row with locators is two contradictory answers to "where is this body". */
+export const capturePayloadLocations = pgTable(
+  "capture_payload_locations",
+  {
+    bucketMonth: date("bucket_month", { mode: "string" }).notNull(),
+    objectId: bigint("object_id", { mode: "number" }).notNull(),
+    storageTier: text("storage_tier").notNull(),
+    segmentId: bigint("segment_id", { mode: "number" }),
+    rowLocator: bigint("row_locator", { mode: "number" }),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.bucketMonth, table.objectId] }),
+    objectFk: foreignKey({
+      name: "capture_payload_locations_object_fkey",
+      columns: [table.bucketMonth, table.objectId],
+      foreignColumns: [capturePayloadObjects.bucketMonth, capturePayloadObjects.objectId],
+    }).onDelete("restrict"),
+    storageTierCheck: check("capture_payload_locations_storage_tier_check", sql`
+      ${table.storageTier} in ('hot', 'cold')
+    `),
+    locatorCheck: check("capture_payload_locations_locator_check", sql`
+      (${table.storageTier} = 'hot'
+        and ${table.segmentId} is null and ${table.rowLocator} is null)
+      or (${table.storageTier} = 'cold'
+        and ${table.segmentId} is not null and ${table.rowLocator} is not null)
     `),
   }),
 );

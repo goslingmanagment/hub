@@ -1,6 +1,39 @@
 export * from "./client.ts";
 export * from "./schema.ts";
 export * from "./schema-guard.ts";
+export * from "./capture-payload-codec.ts";
+// Capture payload catalog: the WRITER and the METADATA, never the body reader.
+// `loadPayloadBody` takes a bare (bucket_month, object_id) — an address that
+// carries none of the authorization the envelope carries, and one object may be
+// shared by several envelopes. On the barrel it would be a public, unauthorized
+// read of any body, restricted_ai included, straight past the envelope seam in
+// apps/runtime/src/services/payload-reader.ts. It stays repository-internal
+// (same law as the agent-read witness mint helpers above); the pointer slice
+// reaches it from inside packages/db, not from a runtime caller.
+// `tests/capture-payload-barrel.test.ts` pins this export list.
+export {
+  CAPTURE_PAYLOAD_ACCESS_CLASSES,
+  CAPTURE_PAYLOAD_ERASURE_DOMAINS,
+  CAPTURE_PAYLOAD_LANES,
+  CAPTURE_PAYLOAD_STORAGE_TIERS,
+  capturePayloadBucketMonth,
+  classifyCapturePayloadScope,
+  getPayloadObject,
+  putPayloadObject,
+} from "./repositories/capture-payloads.ts";
+export type {
+  CapturePayloadAccessClass,
+  CapturePayloadBody,
+  CapturePayloadErasureDomain,
+  CapturePayloadLane,
+  CapturePayloadObjectRow,
+  CapturePayloadRef,
+  CapturePayloadScope,
+  CapturePayloadStorageTier,
+  PutPayloadObjectContent,
+  PutPayloadObjectInput,
+  PutPayloadObjectResult,
+} from "./repositories/capture-payloads.ts";
 export * from "./repositories/agent-keys.ts";
 export * from "./repositories/agent-read-audit.ts";
 // Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay
