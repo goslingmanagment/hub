@@ -1,8 +1,15 @@
-// G2 slice 2 — the dual proof runs against a real Postgres because the thing
-// under test IS the database: the cumulative `snapshotConversationIds` array in
-// page_sync_cursors.state versus the rows the sweep stamped, read off
-// page_dm_threads_generation_idx. Nothing here changes behavior; the array is
-// still the authority, and these tests pin that alongside the new evidence.
+// G3 (checkpoint cutover) — the Fansly dm_conversations sweep's membership is
+// now the row-side generation set (page_dm_threads.last_seen_generation) plus
+// one persisted count, and the cumulative `snapshotConversationIds` array is
+// gone from page_sync_cursors.state. These run against a real Postgres because
+// the thing under test IS the database: which rows carry the generation, what
+// the page transaction sees when it counts them, and whether the destructive
+// finalization is allowed to run at all.
+//
+// The two-page baseline below is the behavior recorded from the pre-G3 code at
+// main @ 61f7c1dd (tests/fansly-dm-dual-proof.integration.test.ts, "proves a
+// two-page sweep against the generation set", green on that checkout): the
+// same three threads visible at the same generation. G3 must reproduce it.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +17,7 @@ import {
   completeErasureLog,
   createFanslyPage,
   createModel,
+  DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
   ensurePageSyncStates,
   findPageById,
   getCheckpoint,
@@ -31,7 +39,7 @@ import {
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
-const PAGE_ACCOUNT_ID = "acct-dual-proof";
+const PAGE_ACCOUNT_ID = "acct-generation-membership";
 const SWEEP_GENERATION = 7;
 /** Far enough back that an erasure recorded during the test lands inside it. */
 const SWEEP_STARTED_AT = new Date(Date.now() - 60_000).toISOString();
@@ -147,7 +155,7 @@ function seedThreadInput(
   };
 }
 
-describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
+describe("Fansly dm_conversations generation membership (G3)", () => {
   let appContext: AppContext;
 
   beforeAll(async () => {
@@ -227,18 +235,17 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
   }
 
   /** Resumes a sweep whose first page already landed, so the terminal page can
-   *  drive the completion verdict directly. */
-  async function seedResumedCheckpoint(pageId: number, snapshotConversationIds: string[]) {
+   *  drive the completion verdict directly. v2: a count, no id array. */
+  async function seedResumedCheckpoint(pageId: number, observedCount: number) {
     await upsertCheckpointProgress(appContext.db, {
       platformAccountId: pageId,
       stream: "dm_conversations",
       state: {
-        version: 1,
+        version: 2,
         mode: "full_scan",
         generation: SWEEP_GENERATION,
         offset: 100,
-        observedCount: snapshotConversationIds.length,
-        snapshotConversationIds,
+        observedCount,
         pageCount: 1,
         providerTotalMode: "present",
         providerReportedTotal: 3,
@@ -249,14 +256,24 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
     });
   }
 
-  it("proves a two-page sweep against the generation set", async (context) => {
+  async function seedOwner(username: string) {
+    const owner = await createUserAccount(
+      appContext,
+      { username, role: "owner", password: "owner-secret" },
+      { source: "cli" },
+    );
+    if (!owner) throw new Error("owner seed failed");
+    return owner;
+  }
+
+  it("walks a two-page sweep and finalizes exactly as the pre-G3 array did", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
     const telemetry = fakeTelemetry();
-    const { stored } = await seedPage("dual-proof-agree", [
+    const { stored } = await seedPage("membership-agree", [
       groupsPage({ groupIds: ["grp-1", "grp-2"], total: 3, offset: 0, done: false }),
       groupsPage({ groupIds: ["grp-3"], total: 3, offset: 100, done: true }),
     ]);
@@ -265,18 +282,28 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
 
     expect(result).toMatchObject({
       satisfied: true,
-      stats: { observedCount: 3, destructiveFinalization: true, fullSweepCompleted: true },
+      stats: {
+        observedCount: 3,
+        generationSetCount: 3,
+        membershipCertified: true,
+        destructiveFinalization: true,
+        fullSweepCompleted: true,
+      },
     });
     const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
     expect(checkpoint?.state).toMatchObject({
+      version: 2,
       generation: 1,
       observedCount: 3,
-      dualProofOk: true,
-      dualProofSetCount: 3,
+      generationSetCount: 3,
+      membershipCertified: true,
+      destructiveFinalization: true,
     });
-    expect(checkpoint?.state).not.toHaveProperty("dualProofErasureDelta");
+    expect(checkpoint?.state).not.toHaveProperty("snapshotConversationIds");
+    expect(checkpoint?.state).not.toHaveProperty("erasureDelta");
     expect(telemetry.addAnomaly).not.toHaveBeenCalled();
     expect(telemetry.addNote).not.toHaveBeenCalled();
+    // Byte-for-byte the pre-G3 outcome.
     expect(await readThreads(stored.page.id)).toEqual({
       "grp-1": { generation: 1, isVisible: true },
       "grp-2": { generation: 1, isVisible: true },
@@ -284,88 +311,144 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("raises an anomaly when a stamp regressed behind the sweep, and finalizes per the legacy array", async (context) => {
+  it("resumes a v2 checkpoint, keeps its observed count, and hides only the threads it did not see", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
     const telemetry = fakeTelemetry();
-    const { stored } = await seedPage("dual-proof-regressed", [
+    const { stored } = await seedPage("membership-resume", [
       groupsPage({ groupIds: ["grp-3"], total: 3, offset: 100, done: true }),
     ]);
-    // The sweep's first page stamped both threads; a racing writer then left
-    // "ghost-1" behind at the previous generation (pre-G2 this was possible,
-    // and the destructive finalization below then hid a LIVE thread).
+    // What the interrupted first page left behind: two stamped rows and the
+    // count that says so. Nothing in the checkpoint names them any more.
+    for (const conversationId of ["grp-1", "grp-2"]) {
+      await upsertPageDmConversation(
+        appContext.db,
+        seedThreadInput(stored.page.id, conversationId, SWEEP_GENERATION),
+      );
+    }
     await upsertPageDmConversation(
       appContext.db,
-      seedThreadInput(stored.page.id, "grp-1", SWEEP_GENERATION),
+      seedThreadInput(stored.page.id, "grp-gone", SWEEP_GENERATION - 1),
     );
-    await upsertPageDmConversation(
-      appContext.db,
-      seedThreadInput(stored.page.id, "ghost-1", SWEEP_GENERATION - 1),
-    );
-    await seedResumedCheckpoint(stored.page.id, ["ghost-1", "grp-1"]);
+    await seedResumedCheckpoint(stored.page.id, 2);
 
     const result = await runChunk(stored, telemetry, 5);
 
-    expect(result).toMatchObject({ satisfied: true, stats: { fullSweepCompleted: true } });
-    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
-      code: "dm_conversations_dual_proof_mismatch",
-      severity: "warn",
-      details: expect.objectContaining({
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: {
         generation: SWEEP_GENERATION,
-        snapshotCount: 3,
-        generationSetCount: 2,
-        missingFromGenerationSet: ["ghost-1"],
-        missingFromGenerationSetCount: 1,
-        missingFromSnapshot: [],
-        missingFromSnapshotCount: 0,
-      }),
-    }));
-    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
-    expect(checkpoint?.state).toMatchObject({
-      dualProofOk: false,
-      dualProofSetCount: 2,
-      observedCount: 3,
+        // 2 carried across the resume + 1 from the terminal page.
+        observedCount: 3,
+        generationSetCount: 3,
+        membershipCertified: true,
+        destructiveFinalization: true,
+        fullSweepCompleted: true,
+      },
     });
-    expect(checkpoint?.state).not.toHaveProperty("dualProofErasureDelta");
-    // Behavior unchanged: the array still decided, so the trailing thread is
-    // hidden exactly as it was before the shadow existed.
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
     expect(await readThreads(stored.page.id)).toEqual({
-      "ghost-1": { generation: SWEEP_GENERATION - 1, isVisible: false },
       "grp-1": { generation: SWEEP_GENERATION, isVisible: true },
+      "grp-2": { generation: SWEEP_GENERATION, isVisible: true },
       "grp-3": { generation: SWEEP_GENERATION, isVisible: true },
+      "grp-gone": { generation: SWEEP_GENERATION - 1, isVisible: false },
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("records an erasure delta note instead of an anomaly when an erasure ran inside the sweep window", async (context) => {
+  it("withholds the destructive finalization when a stamped row is missing for no reason", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
     const telemetry = fakeTelemetry();
-    const { stored } = await seedPage("dual-proof-erasure", [
+    const { stored } = await seedPage("membership-shortfall", [
+      groupsPage({ groupIds: ["grp-3"], total: 3, offset: 100, done: true }),
+    ]);
+    // The checkpoint says the first page saw two conversations; only one of
+    // them carries the generation. Pre-G3 the array decided alone and the
+    // finalization hid "grp-live" — a LIVE thread — anyway.
+    await upsertPageDmConversation(
+      appContext.db,
+      seedThreadInput(stored.page.id, "grp-1", SWEEP_GENERATION),
+    );
+    await upsertPageDmConversation(
+      appContext.db,
+      seedThreadInput(stored.page.id, "grp-live", SWEEP_GENERATION - 1),
+    );
+    await seedResumedCheckpoint(stored.page.id, 2);
+
+    const result = await runChunk(stored, telemetry, 5);
+
+    expect(result).toMatchObject({
+      satisfied: false,
+      stats: {
+        observedCount: 3,
+        generationSetCount: 2,
+        membershipCertified: false,
+        finalizationWithheld: true,
+        destructiveFinalization: false,
+        fullSweepCompleted: false,
+      },
+    });
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "dm_conversations_generation_membership_guard",
+      severity: "error",
+      details: expect.objectContaining({
+        generation: SWEEP_GENERATION,
+        observedCount: 3,
+        generationSetCount: 2,
+        finalizationWithheld: true,
+      }),
+    }));
+    // Nothing was hidden — including the thread the pre-G3 sweep would have
+    // hidden on the same evidence.
+    expect(await readThreads(stored.page.id)).toEqual({
+      "grp-1": { generation: SWEEP_GENERATION, isVisible: true },
+      "grp-3": { generation: SWEEP_GENERATION, isVisible: true },
+      "grp-live": { generation: SWEEP_GENERATION - 1, isVisible: true },
+    });
+    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+    expect(checkpoint?.state).toMatchObject({
+      membershipCertified: false,
+      destructiveFinalization: false,
+      lastFullSweepCompletedAt: null,
+    });
+    // A refused finalization is not this stream's last successful run.
+    expect(checkpoint?.cursorLastSucceededRunId ?? null).toBeNull();
+    expect(checkpoint?.cursorLastSucceededAt ?? null).toBeNull();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("still withholds when an erasure inside the sweep window could explain the shortfall", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const telemetry = fakeTelemetry();
+    const { stored } = await seedPage("membership-erasure", [
       groupsPage({ groupIds: ["grp-3"], total: 3, offset: 100, done: true }),
     ]);
     await upsertPageDmConversation(
       appContext.db,
       seedThreadInput(stored.page.id, "grp-1", SWEEP_GENERATION),
     );
-    // "erased-1" was stamped by page 1 and then legitimately deleted by the
-    // Stage-28 module — the row is gone, the cumulative array still names it.
-    await seedResumedCheckpoint(stored.page.id, ["erased-1", "grp-1"]);
-
-    const owner = await createUserAccount(
-      appContext,
-      { username: "erasure-owner", role: "owner", password: "owner-secret" },
-      { source: "cli" },
+    await upsertPageDmConversation(
+      appContext.db,
+      seedThreadInput(stored.page.id, "grp-gone", SWEEP_GENERATION - 1),
     );
+    // The second thread page 1 stamped was legitimately deleted by the Stage-28
+    // module mid-sweep: the row is gone, the count still counts it.
+    await seedResumedCheckpoint(stored.page.id, 2);
+
+    const owner = await seedOwner("erasure-owner");
     const erasure = await insertErasureLog(appContext.db, {
       scopeType: "fan",
       scopeRef: "fan-erased-1",
-      initiatedBy: owner!.id,
+      initiatedBy: owner.id,
       dryRun: false,
       plan: { scopeType: "fan", scopeRef: "fan-erased-1", resolvedPageIds: [stored.page.id] },
     });
@@ -376,61 +459,41 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
 
     const result = await runChunk(stored, telemetry, 5);
 
-    expect(result).toMatchObject({ satisfied: true, stats: { fullSweepCompleted: true } });
+    // The erasure log says an erasure touched this page — not that it deleted
+    // the row that is missing. A lost stamp beside an abandoned erasure looks
+    // exactly like this, so the sweep refuses to hide anything on it and lets
+    // the next sweep, under a fresh generation, settle the question.
+    expect(result).toMatchObject({
+      satisfied: false,
+      stats: {
+        membershipCertified: false,
+        finalizationWithheld: true,
+        destructiveFinalization: false,
+        fullSweepCompleted: false,
+      },
+    });
+    // Calm, not an incident: the shortfall has a plausible benign cause.
     expect(telemetry.addAnomaly).not.toHaveBeenCalled();
     expect(telemetry.addNote).toHaveBeenCalledWith(
-      expect.stringContaining("an erasure removed inside the sweep window"),
+      expect.stringContaining("an erasure could have removed inside the sweep window"),
       expect.objectContaining({
         code: "dm_conversations_dual_proof_erasure_delta",
-        dualProofErasureDelta: 1,
+        erasureDelta: 1,
         observedCount: 3,
         generationSetCount: 2,
+        finalizationWithheld: true,
       }),
     );
     const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
-    expect(checkpoint?.state).toMatchObject({
-      dualProofOk: false,
-      dualProofSetCount: 2,
-      dualProofErasureDelta: 1,
+    expect(checkpoint?.state).toMatchObject({ membershipCertified: false, erasureDelta: 1 });
+    expect(checkpoint?.cursorLastSucceededRunId ?? null).toBeNull();
+    // Decision #208: stale visibility beats a thread vanishing from every
+    // chatter's list. "grp-gone" is genuinely gone and STAYS VISIBLE here.
+    expect(await readThreads(stored.page.id)).toEqual({
+      "grp-1": { generation: SWEEP_GENERATION, isVisible: true },
+      "grp-3": { generation: SWEEP_GENERATION, isVisible: true },
+      "grp-gone": { generation: SWEEP_GENERATION - 1, isVisible: true },
     });
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("accepts a genuinely in-flight erasure as an explanation", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const telemetry = fakeTelemetry();
-    const { stored } = await seedPage("dual-proof-erasure-inflight", [
-      groupsPage({ groupIds: ["grp-3"], total: 3, offset: 100, done: true }),
-    ]);
-    await upsertPageDmConversation(
-      appContext.db,
-      seedThreadInput(stored.page.id, "grp-1", SWEEP_GENERATION),
-    );
-    await seedResumedCheckpoint(stored.page.id, ["erased-1", "grp-1"]);
-
-    const owner = await createUserAccount(
-      appContext,
-      { username: "erasure-owner", role: "owner", password: "owner-secret" },
-      { source: "cli" },
-    );
-    // Neither completed nor resolved: the tombstone commits before the delete
-    // transaction, so this is exactly what a sweep racing a live erasure sees.
-    await insertErasureLog(appContext.db, {
-      scopeType: "fan",
-      scopeRef: "fan-erased-1",
-      initiatedBy: owner!.id,
-      dryRun: false,
-      plan: { resolvedPageIds: [stored.page.id] },
-    });
-
-    await runChunk(stored, telemetry, 5);
-
-    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
-    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
-    expect(checkpoint?.state).toMatchObject({ dualProofOk: false, dualProofErasureDelta: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("ignores a dry-run erasure, a stale completed one, and a superseded one", async (context) => {
@@ -440,25 +503,21 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
     }
 
     const telemetry = fakeTelemetry();
-    const { stored } = await seedPage("dual-proof-erasure-noise", [
+    const { stored } = await seedPage("membership-erasure-noise", [
       groupsPage({ groupIds: ["grp-3"], total: 3, offset: 100, done: true }),
     ]);
     await upsertPageDmConversation(
       appContext.db,
       seedThreadInput(stored.page.id, "grp-1", SWEEP_GENERATION),
     );
-    await seedResumedCheckpoint(stored.page.id, ["erased-1", "grp-1"]);
+    await seedResumedCheckpoint(stored.page.id, 2);
 
-    const owner = await createUserAccount(
-      appContext,
-      { username: "erasure-owner", role: "owner", password: "owner-secret" },
-      { source: "cli" },
-    );
+    const owner = await seedOwner("erasure-owner");
     // A dry run deletes nothing…
     await insertErasureLog(appContext.db, {
       scopeType: "page",
-      scopeRef: "dual-proof-erasure-noise",
-      initiatedBy: owner!.id,
+      scopeRef: "membership-erasure-noise",
+      initiatedBy: owner.id,
       dryRun: true,
       plan: { resolvedPageIds: [stored.page.id] },
     });
@@ -466,8 +525,8 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
     // rows the sweep itself stamped.
     const stale = await insertErasureLog(appContext.db, {
       scopeType: "page",
-      scopeRef: "dual-proof-erasure-noise",
-      initiatedBy: owner!.id,
+      scopeRef: "membership-erasure-noise",
+      initiatedBy: owner.id,
       dryRun: false,
       plan: { resolvedPageIds: [stored.page.id] },
     });
@@ -486,8 +545,8 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
     // future shortfall on this page.
     const superseder = await insertErasureLog(appContext.db, {
       scopeType: "page",
-      scopeRef: "dual-proof-erasure-noise-other",
-      initiatedBy: owner!.id,
+      scopeRef: "membership-erasure-noise-other",
+      initiatedBy: owner.id,
       dryRun: false,
       // Deliberately does NOT touch this page, so only the superseded row
       // below is under test here.
@@ -495,8 +554,8 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
     });
     const superseded = await insertErasureLog(appContext.db, {
       scopeType: "page",
-      scopeRef: "dual-proof-erasure-noise",
-      initiatedBy: owner!.id,
+      scopeRef: "membership-erasure-noise",
+      initiatedBy: owner.id,
       dryRun: false,
       plan: { resolvedPageIds: [stored.page.id] },
     });
@@ -510,12 +569,104 @@ describe("Fansly dm_conversations dual proof (G2 slice 2)", () => {
       [superseded.id, SWEEP_STARTED_AT, superseder.id],
     );
 
-    await runChunk(stored, telemetry, 5);
+    const result = await runChunk(stored, telemetry, 5);
 
+    expect(result).toMatchObject({ satisfied: false, stats: { finalizationWithheld: true } });
     expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
-      code: "dm_conversations_dual_proof_mismatch",
+      code: "dm_conversations_generation_membership_guard",
     }));
     const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
-    expect(checkpoint?.state).not.toHaveProperty("dualProofErasureDelta");
+    expect(checkpoint?.state).not.toHaveProperty("erasureDelta");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("defers the chunk while an erasure holds the page fence, and writes nothing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const telemetry = fakeTelemetry();
+    const { stored } = await seedPage("membership-fence", [
+      groupsPage({ groupIds: ["grp-3"], total: 3, offset: 100, done: true }),
+    ]);
+    await upsertPageDmConversation(
+      appContext.db,
+      seedThreadInput(stored.page.id, "grp-1", SWEEP_GENERATION),
+    );
+    await seedResumedCheckpoint(stored.page.id, 2);
+    const before = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+
+    // Exactly what executeErasure holds while it deletes: the EXCLUSIVE
+    // transaction-scoped lock on (namespace, page id), from another session.
+    const erasureSession = await testDb.pool.connect();
+    let result: Awaited<ReturnType<typeof runChunk>>;
+    try {
+      await erasureSession.query("begin");
+      await erasureSession.query("select pg_advisory_xact_lock($1, $2)", [
+        DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
+        stored.page.id,
+      ]);
+      // No throw: a fenced chunk yields, it does not fail.
+      result = await runChunk(stored, telemetry, 5);
+    } finally {
+      await erasureSession.query("rollback");
+      erasureSession.release();
+    }
+
+    expect(result).toMatchObject({
+      satisfied: false,
+      yieldReason: null,
+      continuationRequestSource: "scheduled",
+      stats: { erasureFenceDeferred: true, observedCount: 2, fullSweepCompleted: false },
+    });
+    expect(result.continuationRetryAt).toBeInstanceOf(Date);
+    expect(telemetry.addNote).toHaveBeenCalledWith(
+      expect.stringContaining("erasure held the page fence"),
+      expect.objectContaining({ code: "dm_conversations_erasure_fence_deferred", offset: 100 }),
+    );
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+    // The page it fetched was journaled (DP-7) and nothing else moved: no new
+    // thread, no stamp, no checkpoint advance.
+    expect(await readThreads(stored.page.id)).toEqual({
+      "grp-1": { generation: SWEEP_GENERATION, isVisible: true },
+    });
+    const after = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+    expect(after?.state).toEqual(before?.state);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("restarts the sweep when the provider repeats a conversation id across offset pages", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const telemetry = fakeTelemetry();
+    const { stored } = await seedPage("membership-overlap", [
+      groupsPage({ groupIds: ["grp-1"], total: 2, offset: 0, done: false }),
+      // The same id again on the next offset page — pagination drift.
+      groupsPage({ groupIds: ["grp-1"], total: 2, offset: 100, done: true }),
+    ]);
+
+    await expect(runChunk(stored, telemetry, 5))
+      .rejects.toThrow("restarted the DM conversation sweep");
+
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "dm_conversations_snapshot_overlap_guard",
+      severity: "error",
+      details: expect.objectContaining({
+        overlappingConversationIds: ["grp-1"],
+        overlapCount: 1,
+        observedCount: 1,
+        abandonedGeneration: 1,
+        restartGeneration: 2,
+      }),
+    }));
+    // The first page stands (it was applied and committed); the second was
+    // refused, and the next sweep starts above the stamp the first one left.
+    expect(await readThreads(stored.page.id)).toEqual({
+      "grp-1": { generation: 1, isVisible: true },
+    });
+    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+    expect(checkpoint?.state).toMatchObject({ version: 2, generation: 2, offset: 0, observedCount: 0 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -276,14 +276,14 @@ export async function maxPageDmThreadGeneration(db: Database, platformAccountId:
   return generation;
 }
 
-// G2 slice 2 (dual proof, shadow): the second representation of a Fansly
-// dm_conversations sweep's membership. The sweep's authority today is the
-// cumulative `snapshotConversationIds` array inside page_sync_cursors.state,
-// which grows O(N²) across a sweep; the rows the sweep just stamped are the
-// same set, readable off page_dm_threads_generation_idx
-// (platform_account_id, last_seen_generation) in constant state. Both readers
-// below exist to MEASURE that equivalence in production before G3 makes the
-// index the authority — nothing here decides anything.
+// G3 (checkpoint cutover): these readers ARE the Fansly dm_conversations
+// sweep's membership record. The cumulative `snapshotConversationIds` array
+// that used to hold it inside page_sync_cursors.state (O(N²) bytes across a
+// sweep) is gone; the rows the sweep stamped are the same set, readable off
+// page_dm_threads_generation_idx (platform_account_id, last_seen_generation)
+// in constant state. G2 slice 1 made the stamp monotonic under races and G2
+// slice 2 proved the two representations equal in production before the
+// authority moved here.
 
 export async function countPageDmThreadsByGeneration(
   db: Database,
@@ -306,9 +306,49 @@ export async function countPageDmThreadsByGeneration(
   return count;
 }
 
-/** Once per completed sweep, never per page: the id list backing the digest.
- *  Ordered by the qualified column so the ORDER BY cannot bind to a select
- *  alias (the trap that shipped twice here). */
+/**
+ * G3 per-page overlap check: which of THESE conversation ids are already
+ * stamped with the running sweep's generation. A non-empty result means the
+ * provider handed the sweep an id it already applied on an earlier offset page
+ * — the condition the retired cumulative array used to detect in memory.
+ *
+ * Called inside the page's write transaction and BEFORE its upserts: after
+ * them every id would trivially carry the generation. Bounded by the provider
+ * page size (100 ids) and served by the unique (platform_account_id,
+ * platform_conversation_id) index.
+ */
+export async function listPageDmThreadIdsStampedWithGeneration(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+    platformConversationIds: readonly string[];
+  },
+) {
+  const platformConversationIds = [...new Set(input.platformConversationIds)];
+  if (platformConversationIds.length === 0) {
+    return [] as string[];
+  }
+
+  const result = await db.execute<{ platform_conversation_id: string }>(sql`
+    select t.platform_conversation_id
+    from page_dm_threads t
+    where t.platform_account_id = ${input.platformAccountId}
+      and t.last_seen_generation = ${input.generation}
+      and t.platform_conversation_id in (${
+    sql.join(platformConversationIds.map((id) => sql`${id}`), sql`, `)
+  })
+    order by t.platform_conversation_id asc
+  `);
+
+  return result.rows.map((row) => String(row.platform_conversation_id));
+}
+
+/** The whole generation set as ids. G2 slice 2 read it once per completed
+ *  sweep to digest against the array; with the array gone the live sweep needs
+ *  only the count, and this stays as the ops/replay reader for asking WHICH
+ *  threads a generation holds. Ordered by the qualified column so the ORDER BY
+ *  cannot bind to a select alias (the trap that shipped twice here). */
 export async function listPageDmThreadIdsByGeneration(
   db: Database,
   input: {

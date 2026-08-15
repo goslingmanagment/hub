@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
 
 /**
- * G2 slice 2 — the dual proof for the Fansly dm_conversations sweep, SHADOW
- * ONLY.
+ * G2 slice 2 — the dual proof for the Fansly dm_conversations sweep.
  *
- * The sweep's authority is `snapshotConversationIds`: every group id it has
+ * The sweep's authority WAS `snapshotConversationIds`: every group id it had
  * seen, accumulated in `page_sync_cursors.state` and rewritten on every page
- * (O(N²) bytes across a sweep). The same membership is already recorded row-
- * side by `page_dm_threads.last_seen_generation`, which G2 slice 1 made
- * monotonic under races. G3 will drop the array and read the index instead;
- * this module produces the production evidence that the two agree, and NOTHING
- * here feeds a decision — the array remains the authority for overlap guards
- * and destructive finalization.
+ * (O(N²) bytes across a sweep). This module produced the production evidence
+ * that the row-side generation set reproduces that array exactly; G3 acted on
+ * the evidence and removed the array, so the id-set comparison below no longer
+ * runs inside the sweep. It is RETAINED for replaying archived v1 states (the
+ * checkpoints and telemetry that recorded the array are still on disk), and
+ * because the count-shaped erasure predicate the live sweep does use is
+ * derived from it — one definition of "only a shortfall can be an erasure",
+ * not two.
  */
 
 /** Differing-id samples are capped: an anomaly payload must stay bounded even
@@ -106,15 +107,38 @@ export function compareDmSweepMembership(input: {
 }
 
 /**
- * Only a shortfall an erasure could actually have produced qualifies: the
- * Stage-28 module DELETES stamped rows, so every missing row must show up as
- * an id the array holds and the generation set does not (no extras the other
- * way), and the whole count gap must be accounted for by exactly those ids —
- * a gap wider than the missing set means something else (a duplicated id in
- * the array) is also in play, and that is not an erasure.
+ * The count-shaped form, and the one the live (v2) sweep uses: an erasure can
+ * only ever REMOVE stamped rows, so the generation set may trail the count of
+ * ids the sweep observed and never exceed it. A surplus is never erasure-
+ * shaped — it means the sweep's own count is wrong — and equality is not a
+ * shortfall at all.
+ *
+ * Being count-only, this is a necessary condition, not a sufficient one: the
+ * caller still has to find an erasure that actually touched the page inside
+ * the sweep window before it may tolerate the gap.
+ */
+export function isDmSweepErasureShapedCountShortfall(input: {
+  observedCount: number;
+  generationSetCount: number;
+}) {
+  return input.generationSetCount < input.observedCount;
+}
+
+/**
+ * The id-set form (v1 replay). Only a shortfall an erasure could actually have
+ * produced qualifies: the Stage-28 module DELETES stamped rows, so every
+ * missing row must show up as an id the array holds and the generation set
+ * does not (no extras the other way), and the whole count gap must be
+ * accounted for by exactly those ids — a gap wider than the missing set means
+ * something else (a duplicated id in the array) is also in play, and that is
+ * not an erasure.
  */
 export function isDmSweepErasureShapedShortfall(verdict: DmSweepDualProofVerdict) {
   return !verdict.ok &&
+    isDmSweepErasureShapedCountShortfall({
+      observedCount: verdict.snapshotCount,
+      generationSetCount: verdict.generationSetCount,
+    }) &&
     verdict.missingFromSnapshotCount === 0 &&
     verdict.missingFromGenerationSetCount > 0 &&
     verdict.snapshotCount - verdict.generationSetCount === verdict.missingFromGenerationSetCount;

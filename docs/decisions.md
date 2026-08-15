@@ -215,6 +215,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 211 | Exact transaction tip context | Fansly DM `tips[]` sidecars project exact, message-gated `tip_transactions` note/conversation context by provider tip id while `transactions` remains money-only. Mandatory sender/time facts, a Stage-28 material-time erasure fence, and field-specific raw lineage prevent false nulls, resurrection, and unverifiable verbatim text; OnlyFans stays visible as `not_captured` |
 | 212 | G1 storage stop-loss: telemetry is bounded, capture is not | Sync telemetry stops re-copying unbounded checkpoint state (bounded scalar projection + write-time-or-diff `advanced`), per-attempt success stdout traces default off behind `SYNC_HTTP_ATTEMPT_TRACE_STDOUT` with a DB-failure stdout fallback, production container logs get the bounded `local` driver (20m×5, contract-tested), hourly disk gauges land in `ops_metric_samples` (deadman ignores `disk_*`), and deploy gains an EXIT-trap dist-context sweep plus an opt-in (#176-compatible, default-off) allowlist image GC. No captured fact, retention window, or deleter changes |
 | 213 | Disk runway latches | Hourly least-squares fit of `disk_free_bytes` gauges (24h window, ≥6h span) drives two independent `db_disk_usage` subKey-латча: `runway_warning` <30д и `runway_critical` <7д. Unknown history is not a state (ничего не открывает и не резолвит); measured recovery или flat slope резолвит per-latch; resolve-тексты subKey-специфичны, чтобы не читались как общий all-clear |
+| 214 | G3 checkpoint cutover: the generation set is the membership authority | The Fansly `dm_conversations` sweep drops its cumulative `snapshotConversationIds` array (O(N²) checkpoint bytes) for a v2 scalar state with a persisted `observedCount`; membership lives row-side in `page_dm_threads.last_seen_generation`. Cross-page overlap is a pre-upsert row read inside the page transaction, which also takes the shared erasure fence and defers the chunk (+60s) rather than racing a delete. The destructive visibility pass runs ONLY on an exact `count(generation) == observedCount`; any gap — including one an erasure could plausibly explain — withholds finalization AND the success stamp, notes or alerts, and retries as a fresh sweep (+15min). Rollback-safe by version: the pre-G3 parser rejects a v2 state and re-walks from offset 0 under a higher generation, losing progress and never correctness |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6869,3 +6870,79 @@ unaffected"): resolving a runway latch while the percent latch or the other
 runway latch stands open must not read as a disk-wide all-clear. The
 error-handling canon's incident table gains both `db_disk_usage` rows in this
 same change per #185.
+
+
+**Decision #214 (2026-08-15, G3 checkpoint cutover: the generation set is the
+membership authority):** The Fansly `dm_conversations` sweep carried its own
+membership in `page_sync_cursors.state.snapshotConversationIds` — every group
+id it had seen, rewritten in full on every page. That array was the top storage
+writer measured on 2026-08-11 (O(N²) bytes per sweep, amplified through
+checkpoint telemetry until #212 bounded the projection). The same membership is
+already recorded row-side by `page_dm_threads.last_seen_generation`, which G2
+slice 1 made monotonic under concurrent writers and G2 slice 2 proved equal to
+the array in production. G3 removes the array and makes the rows the authority.
+
+**State v2** is scalars only: `{version, mode, generation, offset,
+observedCount, pageCount, providerTotalMode, providerReportedTotal,
+unchangedPageStreak, fullSweepStartedAt, lastFullSweepCompletedAt}`.
+`observedCount` is PERSISTED, not derived — it was previously read back out of
+the array's length, so dropping the array without persisting the count would
+have silently restarted every resumed sweep's count at zero. The parser accepts
+both stored shapes and migrates v1 on load by adopting the array's length; a v1
+state carrying neither the array nor a count is refused loudly and its sweep
+restarts, as the retired legacy-snapshot guard did.
+
+**Rollback is by version, not by hope.** The pre-G3 parser tests `version !== 1`
+exactly, so a v2 state reads there as no cursor at all and the old handler falls
+into its fresh-sweep branch: generation = max(stored generation, row-side
+high-water) + 1, offset 0. A rolled-back sweep loses PROGRESS and never
+correctness, because the new generation is above every stamp its finalization
+compares against; `generation` and `lastFullSweepCompletedAt` are read off the
+raw record and survive the round trip. Pinned by a test holding a verbatim copy
+of the old parser.
+
+**Certification.** Cross-page overlap — the provider handing back an id an
+earlier offset page already applied — is now a pre-upsert read of the rows
+carrying this generation, inside the page write transaction, which is where the
+stamp and the count that follow it are also decided. Within-page duplicate ids
+and the provider-total mismatch stay in memory and stay BEFORE the hydration
+loop, so a malformed page cannot spend group-detail or head-repair requests
+against Fansly before being rejected. The destructive visibility pass
+(`markPageDmConversationsInvisibleByGeneration`) runs only when
+`count(last_seen_generation = generation) == observedCount` EXACTLY.
+
+Two strictness rules make that gate meaningful rather than decorative:
+
+1. **An erasure never authorizes destruction.** A shortfall can have a benign
+   cause — the Stage-28 module deletes stamped rows mid-sweep — but
+   `findErasureLogTouchingPageSince` proves only that SOME erasure touched the
+   page, never that it deleted the specific missing rows. An abandoned erasure
+   beside one genuinely lost stamp is indistinguishable, and acting on it would
+   hide a live thread from every chatter's list. A plausible erasure therefore
+   downgrades the report from an error anomaly
+   (`dm_conversations_generation_membership_guard`) to a calm note
+   (`dm_conversations_dual_proof_erasure_delta`) and changes nothing else. Per
+   #208, stale visibility is explicitly preferred to a vanished thread.
+2. **Uncertified membership always withholds the completion**, not merely the
+   destructive pass. A total-less sweep runs no visibility pass either way, but
+   it must not stamp itself the stream's last successful run or advance
+   `lastFullSweepCompletedAt` on a membership it could not certify; the
+   completed state is written progress-only. The withheld state carries no
+   `mode`, so the retry is a fresh sweep under a higher generation, which
+   converges on its own.
+
+**Two new automatic retry dispositions**, both in the error-handling canon per
+#185 and both using the existing yield/defer machinery rather than an
+exception: a page fenced by a running erasure defers the chunk with a +60s
+`continuationRetryAt` (nothing read past the lock, nothing written, same offset
+re-fetched); a withheld finalization yields with +15min, because an uncertified
+membership tends to repeat and an unthrottled retry would re-walk the whole
+page against the provider on a loop.
+
+The G2 dual-proof module and its unit tests are retained for replaying archived
+v1 states, and its count-shaped erasure predicate is the one the live sweep
+uses — one definition of "only a shortfall can be an erasure", not two. The
+per-page `generationSetCount` scalar keeps riding the checkpoint as the bounded
+membership telemetry that replaced the array's digest. No migration:
+`page_sync_cursors.state` stays jsonb, just smaller. No OnlyFans path changed
+and no platform branch added.
