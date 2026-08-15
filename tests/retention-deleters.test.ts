@@ -39,7 +39,9 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/dm-message-archive.ts",
   "packages/db/src/repositories/fan-metadata.ts",
   "packages/db/src/repositories/message-archive.ts",
-  "packages/db/src/repositories/observations.ts",
+  // observations.ts left this list when the insert protocol became atomic:
+  // its only delete was the compensating release of a failed key claim, and
+  // a claim that never commits without its journal row needs no compensation.
   "packages/db/src/repositories/ofapi-commands.ts",
   "packages/db/src/repositories/ofapi-message-coverage.ts",
   "packages/db/src/repositories/ofapi.ts",

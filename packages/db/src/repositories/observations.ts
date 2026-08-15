@@ -3,11 +3,18 @@
 // decision #64): pre-allocate the identity id, claim (source, idempotency_key)
 // in the unpartitioned companion via ON CONFLICT DO NOTHING, and only then
 // write the journal row with OVERRIDING SYSTEM VALUE. A lost claim is the
-// duplicate signal — no journal write, no rollback, composable inside a
-// caller's transaction (the webhook receiver runs this inside its own tx).
-// Identity-sequence gaps from duplicates are harmless.
+// duplicate signal. Identity-sequence gaps from duplicates are harmless.
+//
+// The claim and the journal write are ONE transaction (DP 7). Split across two
+// autocommit statements — which is what every bare-pool producer used to do —
+// a crash in between left the key claimed with no journal row, and since every
+// retry reads that claim as "already journaled, skip", the captured fact was
+// lost permanently and silently. Callers that already hold a transaction
+// (the webhook receiver, the OFAPI capture writers) compose as before: their
+// transaction is the atomicity boundary and no nested savepoint is opened.
 
-import { sql } from "drizzle-orm";
+import { is, sql } from "drizzle-orm";
+import { PgTransaction } from "drizzle-orm/pg-core";
 
 import type { Database } from "../client.ts";
 import type { ObservationSource } from "../schema.ts";
@@ -45,15 +52,45 @@ export async function insertObservation(
   db: Database,
   input: ObservationInsertInput,
 ): Promise<ObservationInsertResult> {
+  // Outside the transaction on purpose: sequences are non-transactional, so
+  // allocating here keeps the write transaction to two statements.
   const allocated = await db.execute<{ id: string }>(sql`
     select nextval(pg_get_serial_sequence('observations', 'id'))::text as id
   `);
   const observationId = Number(allocated.rows[0]!.id);
   // Stamped once here so the key row and the journal row always agree —
-  // the key's received_at is how lookups reach the right partition, and the
-  // caller may or may not have wrapped us in a transaction.
+  // the key's received_at is how lookups reach the right partition.
   const receivedAt = input.receivedAt ?? new Date();
 
+  const transaction = (
+    db as Database & {
+      transaction?: (
+        callback: (tx: unknown) => Promise<ObservationInsertResult>,
+      ) => Promise<ObservationInsertResult>;
+    }
+  ).transaction;
+
+  // Already inside a caller's transaction: it owns the atomicity boundary
+  // (and a nested savepoint would only add round trips). A handle with no
+  // .transaction is a unit-test stub with no database behind it.
+  if (is(db, PgTransaction) || typeof transaction !== "function") {
+    return claimAndJournal(db, input, observationId, receivedAt);
+  }
+
+  // Bare-pool handle (every sync/webhook/capture producer in production):
+  // BEGIN … claim … journal … COMMIT on ONE checked-out connection.
+  return transaction.call(
+    db,
+    (tx) => claimAndJournal(tx as Database, input, observationId, receivedAt),
+  );
+}
+
+async function claimAndJournal(
+  db: Database,
+  input: ObservationInsertInput,
+  observationId: number,
+  receivedAt: Date,
+): Promise<ObservationInsertResult> {
   const claimed = await db.execute<{ observation_id: string }>(sql`
     insert into observation_keys (source, idempotency_key, observation_id, received_at)
     values (${input.source}, ${input.idempotencyKey}, ${observationId}, ${receivedAt})
@@ -74,49 +111,33 @@ export async function insertObservation(
     };
   }
 
-  try {
-    await db.execute(sql`
-      insert into observations (
-        id, source, producer, platform, account_id, native_account_ref, kind,
-        payload, payload_hash, idempotency_key, observed_at, received_at,
-        actor_principal_id
-      ) overriding system value values (
-        ${observationId},
-        ${input.source},
-        ${input.producer},
-        ${input.platform ?? null},
-        ${input.accountId ?? null},
-        ${input.nativeAccountRef ?? null},
-        ${input.kind},
-        ${JSON.stringify(input.payload)}::jsonb,
-        ${input.payloadHash},
-        ${input.idempotencyKey},
-        ${input.observedAt ?? null},
-        ${receivedAt},
-        ${input.actorPrincipalId ?? null}
-      )
-    `);
-  } catch (error) {
-    // If the journal insert fails (e.g. missing partition) while running in
-    // autocommit, the key claim above has already committed — an orphaned
-    // claim would make the producer's retry look like a duplicate and lose
-    // the fact. Release exactly OUR claim (scoped by observation_id, so a
-    // concurrent duplicate's claim is never touched), then fail loudly with
-    // the ORIGINAL error. Inside a caller transaction the delete itself fails
-    // ("transaction is aborted") — swallowed: the caller's rollback removes
-    // the claim there anyway.
-    try {
-      await db.execute(sql`
-        delete from observation_keys
-        where source = ${input.source}
-          and idempotency_key = ${input.idempotencyKey}
-          and observation_id = ${observationId}
-      `);
-    } catch {
-      // Aborted-transaction path; the rollback owns cleanup.
-    }
-    throw error;
-  }
+  // No cleanup path guards this insert any more: a failure (missing
+  // partition, dead connection, crash) rolls back the claim with it — either
+  // our own transaction's ROLLBACK, the caller's, or the server's when a
+  // connection dies mid-transaction. The previous compensating DELETE could
+  // only ever run when the process survived the error, which is exactly the
+  // case the rollback now covers.
+  await db.execute(sql`
+    insert into observations (
+      id, source, producer, platform, account_id, native_account_ref, kind,
+      payload, payload_hash, idempotency_key, observed_at, received_at,
+      actor_principal_id
+    ) overriding system value values (
+      ${observationId},
+      ${input.source},
+      ${input.producer},
+      ${input.platform ?? null},
+      ${input.accountId ?? null},
+      ${input.nativeAccountRef ?? null},
+      ${input.kind},
+      ${JSON.stringify(input.payload)}::jsonb,
+      ${input.payloadHash},
+      ${input.idempotencyKey},
+      ${input.observedAt ?? null},
+      ${receivedAt},
+      ${input.actorPrincipalId ?? null}
+    )
+  `);
 
   return { inserted: true, observationId, receivedAt };
 }
