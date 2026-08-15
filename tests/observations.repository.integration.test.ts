@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  createDb,
+  createPool,
   ensureObservationPartitions,
   findObservationByKey,
   getObservationPartitionLeadMonths,
@@ -46,6 +49,98 @@ function webhookObservation(idempotencyKey: string, payload: Record<string, unkn
     payloadHash: sha256(payload),
     idempotencyKey,
   };
+}
+
+/** Distinct application_name so the crash drill terminates ONLY its own
+ * backend and never the suite's control connections. */
+const CRASH_APP_NAME = "obs_crash_sim";
+
+/** The SQL text of a drizzle statement, string chunks only (parameters are
+ * skipped, so payload bytes can never look like a statement). */
+function statementText(query: unknown): string {
+  const chunks = (query as { queryChunks?: readonly unknown[] }).queryChunks;
+  if (!Array.isArray(chunks)) {
+    return "";
+  }
+  return chunks
+    .map((chunk) => {
+      const value = chunk == null ? null : (chunk as { value?: unknown }).value;
+      return Array.isArray(value) ? value.join("") : "";
+    })
+    .join("");
+}
+
+/**
+ * Wraps a database handle so `onJournalInsert` fires immediately BEFORE the
+ * `insert into observations` statement — the exact window between the key
+ * claim and the journal write. Transactions are wrapped too, so the hook
+ * still fires when the insert protocol runs inside its own transaction.
+ *
+ * With `crashAfter`, the handle also stops serving statements once the hook
+ * has run: that models the PROCESS dying (SIGKILL/OOM/container stop), the
+ * only faithful simulation of the window — a merely dropped connection is
+ * survivable, because a pool-backed handle just reconnects and compensates.
+ */
+function interceptJournalInsert<T extends object>(
+  handle: T,
+  onJournalInsert: () => Promise<void>,
+  options?: { crashAfter?: boolean },
+): T {
+  const state = { crashed: false };
+  const wrap = <H extends object>(target_: H): H => new Proxy(target_, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (property === "execute" && typeof value === "function") {
+        const execute = value as (query: unknown) => Promise<unknown>;
+        return async (query: unknown) => {
+          if (state.crashed) {
+            throw new Error("simulated process crash: no further statements");
+          }
+          if (/insert\s+into\s+observations\s/i.test(statementText(query))) {
+            await onJournalInsert();
+            if (options?.crashAfter === true) {
+              state.crashed = true;
+              throw new Error("simulated process crash: no further statements");
+            }
+          }
+          return execute.call(target, query);
+        };
+      }
+      if (property === "transaction" && typeof value === "function") {
+        const transaction = value as (run: (tx: object) => Promise<unknown>) => Promise<unknown>;
+        return (run: (tx: object) => Promise<unknown>) =>
+          transaction.call(target, (tx: object) => run(wrap(tx)));
+      }
+      return value;
+    },
+  });
+  return wrap(handle);
+}
+
+/** Hard-kills the crash drill's backend from another connection and waits for
+ * the server to finish reaping it — a real crash, not a thrown error, so no
+ * in-process cleanup can compensate. */
+async function crashSimulatedBackend(control: StartedTestDatabase["pool"]) {
+  await control.query(
+    `select pg_terminate_backend(pid)
+     from pg_stat_activity
+     where application_name = $1 and pid <> pg_backend_pid()`,
+    [CRASH_APP_NAME],
+  );
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const alive = await control.query<{ n: string }>(
+      `select count(*)::text as n
+       from pg_stat_activity
+       where application_name = $1 and pid <> pg_backend_pid()`,
+      [CRASH_APP_NAME],
+    );
+    if (alive.rows[0]!.n === "0") {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error("crash-simulation backend did not terminate");
 }
 
 describe("observations insert protocol", () => {
@@ -110,6 +205,146 @@ describe("observations insert protocol", () => {
 
     const count = await testDb.pool.query<{ n: string }>("select count(*)::text as n from observations");
     expect(count.rows[0]!.n).toBe("1");
+  });
+
+  it("survives a crash between the key claim and the journal write (the fact is never lost)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // DP 7: an idempotency claim that outlives its journal row is a
+    // PERMANENT silent loss — every retry reads the orphan claim as "already
+    // journaled" and skips. The claim and the journal write must therefore
+    // commit together or not at all. The drill kills the backend mid-protocol
+    // (no thrown error to catch, no cleanup statement possible).
+    const crashPool = createPool(`${testDb.connectionString}?application_name=${CRASH_APP_NAME}`);
+    // A terminated backend raises an asynchronous error on its client — on the
+    // pool when idle, on the checked-out client when it is mid-transaction.
+    // Both need a listener or Node aborts the whole run.
+    crashPool.on("error", () => undefined);
+    crashPool.on("connect", (client) => {
+      client.on("error", () => undefined);
+    });
+
+    try {
+      const crashDb = interceptJournalInsert(
+        createDb(crashPool),
+        () => crashSimulatedBackend(testDb!.pool),
+        { crashAfter: true },
+      );
+
+      await expect(
+        insertObservation(crashDb, webhookObservation("evt-crash")),
+      ).rejects.toThrow();
+
+      // Nothing survives the crash: no journal row AND no key claim.
+      const stranded = await testDb.pool.query<{ n: string }>(
+        "select count(*)::text as n from observation_keys where idempotency_key = 'evt-crash'",
+      );
+      expect(stranded.rows[0]!.n).toBe("0");
+      const journaled = await testDb.pool.query<{ n: string }>(
+        "select count(*)::text as n from observations where idempotency_key = 'evt-crash'",
+      );
+      expect(journaled.rows[0]!.n).toBe("0");
+
+      // So the producer's retry still captures the fact.
+      const retried = await insertObservation(testDb.db, webhookObservation("evt-crash"));
+      expect(retried.inserted).toBe(true);
+      const found = await findObservationByKey(testDb.db, "webhook", "evt-crash");
+      expect(found).toMatchObject({ id: retried.observationId, kind: "messages.received" });
+    } finally {
+      await crashPool.end().catch(() => undefined);
+    }
+  });
+
+  it("never publishes a key claim before its journal row exists", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // The same property, asserted without a crash: mid-protocol (claim
+    // written, journal row not yet) no other session may see the claim. If it
+    // can, the claim is already durable on its own and a crash right here
+    // strands it forever.
+    let claimVisibleMidProtocol: boolean | null = null;
+    const probed = interceptJournalInsert(testDb.db, async () => {
+      const seen = await testDb!.pool.query(
+        "select 1 from observation_keys where idempotency_key = 'evt-midflight'",
+      );
+      claimVisibleMidProtocol = (seen.rowCount ?? 0) > 0;
+    });
+
+    const result = await insertObservation(probed, webhookObservation("evt-midflight"));
+
+    expect(result.inserted).toBe(true);
+    expect(claimVisibleMidProtocol).toBe(false);
+    // …and both rows are visible once the protocol returns.
+    const settled = await testDb.pool.query<{ n: string }>(
+      `select count(*)::text as n
+       from observation_keys k
+       join observations o on o.id = k.observation_id and o.received_at = k.received_at
+       where k.idempotency_key = 'evt-midflight'`,
+    );
+    expect(settled.rows[0]!.n).toBe("1");
+  });
+
+  it("joins a caller's transaction: their rollback takes the claim with it", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // The composition contract (the webhook receiver, the OFAPI capture
+    // writers): the protocol must run ON the caller's connection, so their
+    // rollback releases the claim. A private connection or a committed claim
+    // here would strand the key and lose the fact on retry.
+    await expect(
+      testDb.db.transaction(async (tx) => {
+        const database = tx as unknown as StartedTestDatabase["db"];
+        const result = await insertObservation(database, webhookObservation("evt-caller-tx"));
+        expect(result.inserted).toBe(true);
+        throw new Error("caller aborts after capture");
+      }),
+    ).rejects.toThrow("caller aborts after capture");
+
+    const stranded = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observation_keys where idempotency_key = 'evt-caller-tx'",
+    );
+    expect(stranded.rows[0]!.n).toBe("0");
+
+    const retried = await insertObservation(testDb.db, webhookObservation("evt-caller-tx"));
+    expect(retried.inserted).toBe(true);
+  });
+
+  it("keeps concurrent duplicate inserts at exactly one journal row and one claim", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Two racers on the same key: the loser's ON CONFLICT DO NOTHING blocks on
+    // the winner's uncommitted claim, then reads it back — one fact, one id.
+    const [first, second] = await Promise.all([
+      insertObservation(testDb.db, webhookObservation("evt-race", { event: "a" })),
+      insertObservation(testDb.db, webhookObservation("evt-race", { event: "b" })),
+    ]);
+
+    expect([first.inserted, second.inserted].sort()).toEqual([false, true]);
+    expect(second.observationId).toBe(first.observationId);
+    expect(second.receivedAt.getTime()).toBe(first.receivedAt.getTime());
+
+    const journaled = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observations where idempotency_key = 'evt-race'",
+    );
+    expect(journaled.rows[0]!.n).toBe("1");
+    const claims = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observation_keys where idempotency_key = 'evt-race'",
+    );
+    expect(claims.rows[0]!.n).toBe("1");
+    const found = await findObservationByKey(testDb.db, "webhook", "evt-race");
+    expect(found).toMatchObject({ id: first.observationId });
   });
 
   it("scopes dedup by source: the same key under another source is a new fact", async (context) => {
