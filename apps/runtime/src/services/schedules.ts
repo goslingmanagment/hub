@@ -6,6 +6,7 @@ import { ensureOpsMetricsQueue, ensureOpsMetricsSchedule } from "./golden-signal
 import { ensureTieringQueue, ensureTieringSchedule } from "./tiering/index.ts";
 import { ensureDbDiskUsageQueue, ensureDbDiskUsageSchedule } from "./db-disk-alert.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
+import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
 import { ensureOfapiLinkStatsQueue, ensureOfapiLinkStatsSchedule } from "./ofapi-link-stats-sync.ts";
 import { ensureOfapiCommandQueues, ensureOfapiCommandSchedules } from "./ofapi-command-executor.ts";
@@ -52,6 +53,7 @@ export async function registerAllSchedules(
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
+  await ensureCapturePayloadParityQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureProjectionDebtQueue(boss, createdQueues);
@@ -77,6 +79,7 @@ export async function registerAllSchedules(
     ensureOfapiDmAnalyticsSchedules(boss),
     ensureDbDiskUsageSchedule(boss),
     ensureObservationsPartitionSchedule(boss),
+    ensureCapturePayloadParitySchedule(boss),
     ensureCanonicalizeSchedule(boss),
     ensureMessageArchiveSchedule(boss),
     ensureProjectionDebtSchedule(boss),

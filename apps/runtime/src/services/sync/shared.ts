@@ -17,6 +17,7 @@ import {
   type ResolvedPageContext,
 } from "../page-context.ts";
 import { buildFanslyMetadata } from "../fansly.ts";
+import { putCaptureCasPayloads } from "../capture-cas-dual-write.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
@@ -90,9 +91,31 @@ export async function persistRawPayload(
     observationPayload?: unknown;
   },
 ) {
+  // G5 slice 1 (§7 step 1): ONE capture instant for this response, fixed before
+  // anything is written, so the raw envelope and its observation can never land
+  // in different content-addressed months across a UTC boundary. The observation
+  // keeps deriving its own received_at as before — this instant addresses the
+  // payload object, it does not restamp the journal.
+  const captureInstant = new Date();
+  const observedPayload = options !== undefined
+      && Object.hasOwn(options, "observationPayload")
+    ? options.observationPayload ?? null
+    : input.responsePayload ?? null;
+  // Content-addressed copy FIRST, in its own transaction, and it can never
+  // throw: on any failure it returns null references and the two inline writes
+  // below proceed byte-identically to the pre-slice code. Default-off; a page
+  // outside the canary does no work here at all. See capture-cas-dual-write.ts
+  // for why this is not folded into the inline transactions.
+  const casRefs = await putCaptureCasPayloads(db, {
+    pageId: input.platformAccountId,
+    captureInstant,
+    responsePayload: input.responsePayload,
+    observationPayload: observedPayload,
+  });
+
   let rawPayload;
   try {
-    rawPayload = await insertRawPayload(db, input);
+    rawPayload = await insertRawPayload(db, { ...input, payloadRef: casRefs.raw });
   } catch (error) {
     throw new SyncPayloadPersistenceError({
       endpoint: input.endpoint,
@@ -111,12 +134,10 @@ export async function persistRawPayload(
   const context = getPageSyncExecutionContext();
   const stream = context?.stream ?? null;
   const platform = options?.platform ?? null;
-  // Normalized so an adapter (or test stub) handing back undefined still
-  // hashes and journals deterministically as JSON null.
-  const observedPayload = options !== undefined
-      && Object.hasOwn(options, "observationPayload")
-    ? options.observationPayload ?? null
-    : input.responsePayload ?? null;
+  // `observedPayload` is hoisted above the CAS write — normalized there so an
+  // adapter (or test stub) handing back undefined still hashes and journals
+  // deterministically as JSON null, and so the catalog stores exactly the value
+  // this insert stores inline.
   try {
     await insertObservation(db, {
       source: "pull",
@@ -132,6 +153,7 @@ export async function persistRawPayload(
         input.syncRunId ?? "norun",
         nextPageSyncObservationSeq() ?? randomUUID(),
       ].join(":"),
+      payloadRef: casRefs.observation,
     });
   } catch (error) {
     throw new SyncPayloadPersistenceError({

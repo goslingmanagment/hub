@@ -39,6 +39,23 @@ export interface ObservationInsertInput {
    * later bounded backfill stages, which must date rows honestly.
    */
   receivedAt?: Date;
+  /**
+   * G5 slice 1: the composite reference into the content-addressed payload
+   * catalog, when the capture seam already stored this body there. Written with
+   * the row rather than UPDATEd onto it afterwards — an UPDATE on this table
+   * would mint a second row version (WAL + heap bloat) on the largest fact
+   * store in the system for a column nothing reads yet.
+   *
+   * `payload` above remains the AUTHORITY. Null means "no catalog copy", which
+   * is the normal state and must stay a legal state forever: a caller whose CAS
+   * write failed still journals its fact.
+   *
+   * On the DUPLICATE path (the idempotency claim was already taken) this is
+   * ignored, because no row is written — and the pre-existing row must keep its
+   * own references. Stamping it with ours would assert that its inline payload
+   * equals the body we just stored, which nothing has proven.
+   */
+  payloadRef?: { bucketMonth: string; objectId: number } | null;
 }
 
 export type ObservationInsertResult =
@@ -121,7 +138,7 @@ async function claimAndJournal(
     insert into observations (
       id, source, producer, platform, account_id, native_account_ref, kind,
       payload, payload_hash, idempotency_key, observed_at, received_at,
-      actor_principal_id
+      actor_principal_id, payload_bucket_month, payload_object_id
     ) overriding system value values (
       ${observationId},
       ${input.source},
@@ -135,7 +152,9 @@ async function claimAndJournal(
       ${input.idempotencyKey},
       ${input.observedAt ?? null},
       ${receivedAt},
-      ${input.actorPrincipalId ?? null}
+      ${input.actorPrincipalId ?? null},
+      ${input.payloadRef?.bucketMonth ?? null}::date,
+      ${input.payloadRef?.objectId ?? null}
     )
   `);
 

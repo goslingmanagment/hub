@@ -34,6 +34,10 @@ export type {
   PutPayloadObjectInput,
   PutPayloadObjectResult,
 } from "./repositories/capture-payloads.ts";
+// The parity verifier is barrel-safe: it takes no object id from a caller and
+// returns COUNTS and reference ids, never a body. Its own read of the body
+// stays inside packages/db, which is exactly the boundary the note above draws.
+export * from "./repositories/capture-payload-parity.ts";
 export * from "./repositories/agent-keys.ts";
 export * from "./repositories/agent-read-audit.ts";
 // Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay

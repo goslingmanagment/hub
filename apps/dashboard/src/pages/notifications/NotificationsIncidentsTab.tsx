@@ -29,6 +29,7 @@ const INCIDENT_KIND_LABELS = {
   ofapi_link_stats_reconcile_failed: "OFAPI Link Stats Reconcile",
   ai_provider_billing: "AI Provider Billing",
   ai_provider_failed: "AI Provider Failed",
+  capture_payload_parity: "Capture Payload Parity",
 } satisfies Record<IncidentKind, string>;
 
 function deliveryState(item: NotificationsIncidentItem): {

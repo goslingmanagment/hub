@@ -33,7 +33,8 @@ export type NotificationIncidentKind =
   | "ofapi_chargebacks_reconcile_failed"
   | "ofapi_link_stats_reconcile_failed"
   | "ai_provider_billing"
-  | "ai_provider_failed";
+  | "ai_provider_failed"
+  | "capture_payload_parity";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";
