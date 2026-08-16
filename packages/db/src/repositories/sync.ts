@@ -783,6 +783,14 @@ export async function insertRawPayload(
     statusCode?: number | null;
     errorMessage?: string | null;
     retainUntil: Date;
+    /**
+     * G5 slice 1: composite reference into the content-addressed payload
+     * catalog, written WITH the row (never UPDATEd on afterwards — this table
+     * carries ~19 GB of TOAST and a second row version per capture is exactly
+     * the amplification the project is trying to remove). `responsePayload`
+     * stays the authority; null is the normal state.
+     */
+    payloadRef?: { bucketMonth: string; objectId: number } | null;
   },
 ) {
   const executionContext = getPageSyncExecutionContext();
@@ -800,6 +808,8 @@ export async function insertRawPayload(
     statusCode: input.statusCode ?? null,
     errorMessage: input.errorMessage ?? null,
     retainUntil: input.retainUntil,
+    payloadBucketMonth: input.payloadRef?.bucketMonth ?? null,
+    payloadObjectId: input.payloadRef?.objectId ?? null,
   }).returning({
     id: syncRawPayloads.id,
     capturedAt: syncRawPayloads.capturedAt,

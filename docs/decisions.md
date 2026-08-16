@@ -216,6 +216,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 212 | G1 storage stop-loss: telemetry is bounded, capture is not | Sync telemetry stops re-copying unbounded checkpoint state (bounded scalar projection + write-time-or-diff `advanced`), per-attempt success stdout traces default off behind `SYNC_HTTP_ATTEMPT_TRACE_STDOUT` with a DB-failure stdout fallback, production container logs get the bounded `local` driver (20m×5, contract-tested), hourly disk gauges land in `ops_metric_samples` (deadman ignores `disk_*`), and deploy gains an EXIT-trap dist-context sweep plus an opt-in (#176-compatible, default-off) allowlist image GC. No captured fact, retention window, or deleter changes |
 | 213 | Disk runway latches | Hourly least-squares fit of `disk_free_bytes` gauges (24h window, ≥6h span) drives two independent `db_disk_usage` subKey-латча: `runway_warning` <30д и `runway_critical` <7д. Unknown history is not a state (ничего не открывает и не резолвит); measured recovery или flat slope резолвит per-latch; resolve-тексты subKey-специфичны, чтобы не читались как общий all-clear |
 | 214 | G3 checkpoint cutover: the generation set is the membership authority | The Fansly `dm_conversations` sweep drops its cumulative `snapshotConversationIds` array (O(N²) checkpoint bytes) for a v2 scalar state with a persisted `observedCount`; membership lives row-side in `page_dm_threads.last_seen_generation`. Cross-page overlap is a pre-upsert row read inside the page transaction, which also takes the shared erasure fence and defers the chunk (+60s) rather than racing a delete. The destructive visibility pass runs ONLY on an exact `count(generation) == observedCount`; any gap — including one an erasure could plausibly explain — withholds finalization AND the success stamp, notes or alerts, and retries as a fresh sweep (+15min). Rollback-safe by version: the pre-G3 parser rejects a v2 state and re-walks from offset 0 under a higher generation, losing progress and never correctness |
+| 215 | G5 slice 1: the CAS copy is written before the fact, and proved after it | Pull capture on a canary page stores its body in the content-addressed catalog in a SEPARATE transaction that runs BEFORE the inline inserts, and the resulting `(payload_bucket_month, payload_object_id)` pair is carried INTO those inserts as ordinary column values. Same-transaction was rejected because a failed CAS statement aborts the whole transaction (25P02) and would take the capture with it; a post-commit UPDATE was rejected because it mints a second row version per capture on the two biggest tables. Failure of any CAS step is swallowed and leaves null references — never an orphaned fact, only an orphaned object. The envelope reference deliberately carries NO foreign key (an FK to a partitioned catalog taxes the hottest write path and locks its future partition maintenance); a two-directional CHECK, added NOT VALID because both columns start null for all history, is the enforced invariant, and a bounded hourly parity verifier is what actually looks for a dangling or divergent reference. One setting, `capture_cas_dual_write_pages` (CSV of page ids or `*`), is both the switch and the bound and FAILS CLOSED at empty; it reaches each process on the runtime heartbeat that already reads the live overlay, so the canary adds no query in either state. The verifier compares full canonical bodies (never digests alone), never repairs, and pages under the new `capture_payload_parity` incident kind |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -6946,3 +6947,102 @@ per-page `generationSetCount` scalar keeps riding the checkpoint as the bounded
 membership telemetry that replaced the array's digest. No migration:
 `page_sync_cursors.state` stays jsonb, just smaller. No OnlyFans path changed
 and no platform branch added.
+
+
+**Decision #215 (2026-08-16, G5 slice 1: the CAS copy is written before the
+fact, and proved after it):** Slice 0 (#c64bdc27) landed the content-addressed
+payload catalog with no writer. This slice turns on the first one, for pull
+capture only, behind a bounded canary that is off by default. The inline bodies
+— `observations.payload` and `sync_raw_payloads.response_payload` — remain the
+authority for every reader; nothing in this slice resolves a payload through
+the new references.
+
+**Ordering: the object first, in its own transaction, and its address travels
+into the inline INSERT.** `persistRawPayload` fixes ONE `captureInstant` (§7
+step 1, so raw and observation can never address different months across a UTC
+boundary), stores the body in the catalog, and passes the resulting
+`(payload_bucket_month, payload_object_id)` pair to `insertRawPayload` and
+`insertObservation` as ordinary column values.
+
+Both alternatives were rejected for concrete reasons, not taste:
+
+- **Same transaction as the inline insert** would have destroyed capture-first.
+  A failed statement aborts the entire PostgreSQL transaction (25P02), so no
+  `try`/`catch` around the CAS branch could have saved the capture; a codec
+  refusal, a jsonb rejection or a missing catalog partition would have cost the
+  provider response itself. DP 7 does not bend for referential tidiness.
+- **A post-commit UPDATE of the references** would have minted a second heap
+  tuple and its WAL for every capture, on the two largest tables in the system
+  (~19 GB of TOAST between them). Paying for a fresh row version per capture in
+  order to record a deduplication is self-defeating in a project whose entire
+  purpose is removing physical duplication.
+
+The only cost of this ordering is an ORPHANED OBJECT when the capture fails
+after the CAS commit: harmless, unreachable by any reader, invisible to the
+verifier (which only examines rows that HAVE references), and collapsed onto by
+the next identical capture. §7 puts the object ahead of the envelope for the
+same reason. Every CAS failure is swallowed and yields null references, which
+is and must remain a permanently legal state.
+
+**No foreign key on the envelope side, deliberately.** PostgreSQL 16 would
+accept an FK to the catalog's composite partitioned primary key, so this is a
+choice: an FK would tax the hottest write path in the system with a partition
+lookup plus an index probe per capture, and would put the catalog's future
+partition maintenance (the cold tier's detach/attach) in the way of live
+capture. What IS enforced in the database is a two-directional CHECK — both
+reference columns set or both null — because a half-set reference is an address
+that cannot be resolved, silent unreachability wearing the shape of a valid row
+(the same law as `capture_payload_locations`' locator CHECK). It is added NOT
+VALID and never validated: both columns are null for every pre-existing row, so
+the constraint is vacuously true for all of history, while PostgreSQL still
+enforces it on every INSERT and UPDATE from that moment on. Validating it would
+scan ~35 GB for zero information on a box whose free space is why G5 exists.
+The dangling reference an FK would have prevented is instead what the parity
+verifier looks for — and a dangling reference must never cost us a captured
+fact. Slice 0 made the same call in the other direction: the body tables DO
+carry an FK to the catalog, because they are small, low-rate, and a body
+without its identity row is unreadable by construction. Same reasoning, applied
+per write rate.
+
+**No index on the reference columns.** This is a write-only stage; the verifier
+samples by scanning a bounded window of the most recent rows in primary-key
+order, so nothing needs one. An index is earned by a query plan in the pointer
+slice.
+
+**One setting is both the switch and the bound.**
+`capture_cas_dual_write_pages` is a CSV of platform page ids (numeric — the ids
+are what the capture seam holds without an extra lookup) or `*`. It FAILS
+CLOSED: empty means no pages, the opposite of `fanslyNewStreamPageAllowlist`
+and the same direction as `voiceNotesPageAllowlist`, because an unset setting
+must never read as "dual-write the entire fleet". A second `enabled` flag was
+not added: it would only make it possible to be on with no bound. The value
+reaches each process on the runtime heartbeat, which already loads the effective
+config once a minute in every role — so the slice adds NO query in either
+state, and off is byte-identical to the pre-slice capture path. The price is
+that a flip lands within one heartbeat interval rather than instantly, which is
+the right latency for a canary whose ramp is measured in days.
+
+**Restricted material stays out.** This seam carries pull capture only, so the
+lane is `platform_capture` (`ordinary_capture` / `fan_subject`). Stage 29
+verbatim prompts and completions never pass through `persistRawPayload` and
+must never be added to it: they would then share an identity scope with
+ordinary capture, and a coalesce could hand a restricted body to an ordinary
+reader. A restricted writer gets its own seam and the `ai_generation` lane,
+which is a structurally different object.
+
+**The proof, and its refusal to fix anything.** An hourly job
+(`capture.payload.parity.verify`, :35 UTC) samples up to 50 referenced
+envelopes across both tables, loads each catalog body, and compares the FULL
+canonical octets — never the digests, which travel in the report only as a
+fingerprint (#214's dual-proof discipline, and slice 0's "hash is not proof of
+equality"). It NEVER repairs, deletes or touches inline data: a job that
+reconciled a captured fact with a derived copy of itself is precisely what DP 7
+forbids. With the canary off it returns without touching the database and
+without touching the incident latch, because "not measured" is not "measured
+and clean" — turning the canary off after a real mismatch must not clear the
+alarm (#213's asymmetry). A mismatch pages under a NEW incident kind,
+`capture_payload_parity`: reusing `db_disk_usage` or `observations_partitions`
+would have told the owner a false story about which subsystem is broken, and
+this is also the kind the slice-0 collision path (a sha256 collision inside one
+scope and month) will use when it is wired. Per #185 the kind is added to the
+error-handling canon's incident table in this same change.

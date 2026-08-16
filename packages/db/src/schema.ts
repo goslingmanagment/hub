@@ -183,6 +183,9 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "ofapi_link_stats_reconcile_failed",
   "ai_provider_billing",
   "ai_provider_failed",
+  // G5 slice 1 (0124): the content-addressed capture copy disagrees with the
+  // inline authority, or points at an object that is not there.
+  "capture_payload_parity",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -713,6 +716,11 @@ export const syncRawPayloads = pgTable(
     errorMessage: text("error_message"),
     capturedAt: timestamp("captured_at", { withTimezone: true }).defaultNow().notNull(),
     retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
+    // G5 slice 1 (0124): composite reference into capture_payload_objects.
+    // Nullable and NOT an FK by design — see the migration's comment. Both set
+    // or both null (CHECK); responsePayload above stays the authority.
+    payloadBucketMonth: date("payload_bucket_month"),
+    payloadObjectId: bigint("payload_object_id", { mode: "number" }),
   },
   (table) => ({
     retainIdx: index("sync_raw_payloads_retain_idx").on(table.retainUntil),
@@ -3269,6 +3277,11 @@ export const observations = pgTable(
     receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
     actorPrincipalId: bigint("actor_principal_id", { mode: "number" }),
     parseVersion: integer("parse_version").default(0).notNull(),
+    // G5 slice 1 (0124): composite reference into capture_payload_objects.
+    // Nullable and NOT an FK by design — see the migration's comment. Both set
+    // or both null (CHECK); `payload` above stays the authority.
+    payloadBucketMonth: date("payload_bucket_month"),
+    payloadObjectId: bigint("payload_object_id", { mode: "number" }),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.id, table.receivedAt] }),

@@ -100,6 +100,8 @@ function openTitleForIncident(kind: NotificationIncidentKind) {
       return "🚨 AI provider billing needs attention";
     case "ai_provider_failed":
       return "🚨 AI provider generation failed";
+    case "capture_payload_parity":
+      return "🚨 Capture payload copy disagrees with the inline fact";
   }
 }
 
@@ -177,6 +179,8 @@ function resolveDetailForIncident(
       return "AI provider billing recovered";
     case "ai_provider_failed":
       return "AI provider generation recovered";
+    case "capture_payload_parity":
+      return "Capture payload copies match the inline facts again";
   }
 }
 
@@ -708,7 +712,8 @@ type GlobalIncidentKind =
   | "scheduler_silent"
   | "ops_sampler_silent"
   | "ofapi_chargebacks_reconcile_failed"
-  | "ofapi_link_stats_reconcile_failed";
+  | "ofapi_link_stats_reconcile_failed"
+  | "capture_payload_parity";
 
 /** Process-global conditions (low credit balance, webhook silence, burn rate,
  * disk usage, partition lead, watchdog deadmen). W5.1 (A25): `subKey` splits

@@ -63,6 +63,11 @@ export const TIERED_TABLES: TieredTableSpec[] = [
       received_at: "TIMESTAMPTZ",
       actor_principal_id: "BIGINT",
       parse_version: "INTEGER",
+      // G5 slice 1 (0124): the content-addressed catalog reference. Exported
+      // as plain values — the ref is part of the envelope's history even
+      // though the catalog itself is not a tiered table.
+      payload_bucket_month: "DATE",
+      payload_object_id: "BIGINT",
     },
   },
   {

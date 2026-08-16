@@ -10,6 +10,7 @@ import {
 import { buildRunningSnapshot } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { publishCaptureCasDualWritePages } from "./capture-cas-dual-write.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
 export type RuntimeRole = "api" | "worker" | "scheduler";
@@ -98,6 +99,16 @@ export function startRuntimeHeartbeat(
       // non-live keys are untouched, so they keep reporting boot env (pendingApply stays
       // true for them until a real restart) — which is the honest answer.
       const effectiveConfig = await loadEffectiveConfig(app.db, app.config);
+      // G5 slice 1: publish the CAS dual-write canary bound to this process.
+      // The capture seam (services/sync/shared.ts persistRawPayload) is the
+      // hottest write path in the system and must not pay a config read per
+      // capture; this beat already loads the effective config once a minute in
+      // every role, so the flag rides along for free. A flip therefore lands
+      // within one heartbeat interval, which is the right latency for a canary
+      // whose ramp is measured in days. Published BEFORE the `stopped` check on
+      // purpose: the value is only ever consumed by capture, and a process that
+      // is still capturing must act on the freshest bound it has read.
+      publishCaptureCasDualWritePages(effectiveConfig.captureCasDualWritePages);
       // If stop() ran while we were reading, do NOT upsert: that would resurrect the row
       // removeInstance is about to delete, leaving a zombie "active" instance until the TTL.
       if (stopped) return;

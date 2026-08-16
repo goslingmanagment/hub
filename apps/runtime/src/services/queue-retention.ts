@@ -104,6 +104,7 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "ofapi.events.cleanup", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.dm-analytics.rebuild", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "db.disk-usage.check", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+  { queue: "capture.payload.parity.verify", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
 
   // ---- Class D: dead letters (14d retention, no deletion clock) ----------
   { queue: "sync.planner.dlq", retentionClass: "dead-letter", retentionSeconds: DEFAULT_RETENTION_SECONDS },

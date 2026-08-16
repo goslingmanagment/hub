@@ -308,6 +308,14 @@ const envSchema = z.object({
   // owner's decision never opens. The owner CLI manual run (`tiering:run`) stays
   // UNGATED — it is an explicit act, not a schedule.
   RETENTION_TIERING_ENABLED: booleanSchema.default(false),
+  // G5 slice 1: the content-addressed capture dual-write canary. CSV of
+  // platform page ids (`platform_accounts.id`, the numeric id the capture seam
+  // already holds), or "*" for every page. EMPTY = FULLY OFF, and off means
+  // byte-identical behavior to before the slice: no catalog write, no extra
+  // query, no new column value. The one setting is both the switch and the
+  // bound — a second "enabled" flag would only make it possible to be on with
+  // no bound.
+  CAPTURE_CAS_DUAL_WRITE_PAGES: z.string().default(""),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -477,6 +485,8 @@ export interface AppConfig {
   fanslyReplayMode?: "off" | "shadow" | "on";
   /** Scheduled retention tiering; default false. The manual CLI run is ungated. */
   retentionTieringEnabled?: boolean;
+  /** G5 CAS dual-write canary: CSV of page ids, "*" for all, "" = fully off. */
+  captureCasDualWritePages?: string;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -719,6 +729,7 @@ export function loadConfig(
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
     fanslyReplayMode: parsed.FANSLY_REPLAY_MODE,
     retentionTieringEnabled: parsed.RETENTION_TIERING_ENABLED,
+    captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
   };
 }
 

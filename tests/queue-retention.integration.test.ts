@@ -4,6 +4,7 @@ import { PgBoss } from "pg-boss";
 
 import { ensureAgentHydrationQueue } from "../apps/runtime/src/services/agent-hydration.ts";
 import { ensureCanonicalizeQueues } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { ensureCapturePayloadParityQueue } from "../apps/runtime/src/services/capture-payload-parity.ts";
 import { ensureDbDiskUsageQueue } from "../apps/runtime/src/services/db-disk-alert.ts";
 import { ensureOpsMetricsQueue } from "../apps/runtime/src/services/golden-signals.ts";
 import { ensureNotificationDeliveryOutboxQueue } from "../apps/runtime/src/services/notification-delivery-outbox.ts";
@@ -57,6 +58,7 @@ async function createAllQueues(boss: PgBoss) {
   await ensureOfapiDmAnalyticsQueues(boss);
   await ensureDbDiskUsageQueue(boss);
   await ensureObservationsPartitionQueue(boss);
+  await ensureCapturePayloadParityQueue(boss);
   await ensureCanonicalizeQueues(boss);
   await ensureMessageArchiveQueues(boss);
   await ensureProjectionDebtQueue(boss);

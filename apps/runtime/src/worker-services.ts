@@ -22,6 +22,11 @@ import {
   runObservationsPartitionCheck,
 } from "./services/observations-partitions.ts";
 import {
+  CAPTURE_PAYLOAD_PARITY_QUEUE,
+  ensureCapturePayloadParityQueue,
+  runCapturePayloadParityCheck,
+} from "./services/capture-payload-parity.ts";
+import {
   CANONICALIZE_SWEEP_QUEUE,
   ensureCanonicalizeQueues,
   runCanonicalization,
@@ -205,6 +210,7 @@ export async function startWorkerServices(
   await ensureOfapiDmAnalyticsQueues(boss, createdQueues);
   await ensureDbDiskUsageQueue(boss, createdQueues);
   await ensureObservationsPartitionQueue(boss, createdQueues);
+  await ensureCapturePayloadParityQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureProjectionDebtQueue(boss, createdQueues);
@@ -318,6 +324,12 @@ export async function startWorkerServices(
   await boss.work(OBSERVATIONS_PARTITIONS_QUEUE, { batchSize: 1 }, async () => {
     const result = await runObservationsPartitionCheck(app);
     app.logger.info(result, "Observations partition check complete");
+  });
+
+  // G5 slice 1: the CAS dual-write parity proof. Logs its own telemetry line
+  // (and skips entirely when the canary is off), so nothing is logged here.
+  await boss.work(CAPTURE_PAYLOAD_PARITY_QUEUE, { batchSize: 1 }, async () => {
+    await runCapturePayloadParityCheck(app);
   });
 
   await boss.work(CANONICALIZE_SWEEP_QUEUE, { batchSize: 1 }, async () => {

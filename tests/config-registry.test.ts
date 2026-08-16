@@ -113,6 +113,9 @@ describe("config registry", () => {
     "agentExportPolicyValue",
     "fanslyReplayMode",
     "retentionTieringEnabled",
+    // G5 slice 1: the CAS dual-write canary bound. Live so the ramp needs no
+    // restart; rests at "" (fully off).
+    "captureCasDualWritePages",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",
