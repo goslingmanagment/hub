@@ -7,12 +7,16 @@ import {
   ConfigOverrideVersionConflictError,
   createUser,
   getConfigOverrides,
+  listAllInstances,
   listConfigAudit,
   setConfigOverride,
   setConfigOverridesAtomic,
+  upsertInstanceHeartbeat,
 } from "@agency_hub_core/db";
+import type { AppConfig, RunningSnapshot } from "@agency_hub_core/shared";
 
 import { buildConfigView } from "../apps/runtime/src/services/app-config-service.ts";
+import { applyEffectiveOverrides } from "../apps/runtime/src/services/effective-config.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -320,5 +324,145 @@ describe("config_settings repository (Stage B0)", () => {
     const overrides = await getConfigOverrides(testDb.db);
     expect(overrides.get("ofapiDmDailyCreditBudget")).toEqual({ value: 500, version: 1 });
     expect(overrides.get("ofapiCreditFloor")).toEqual({ value: 200, version: 1 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // ── jsonb reads are SINGLE-parse (decision #216) ───────────────────────────
+  // drizzle 0.45.2's builtin jsonb ran JSON.parse on a value node-postgres had
+  // ALREADY parsed. An override stored as the string "4" therefore read back as
+  // the NUMBER 4, validateConfigOverride rejected it ("expects a string"), the
+  // live overlay silently dropped it, and the G5 CAS canary never turned on in
+  // production on 2026-08-16 — with no error logged anywhere. These pins run the
+  // real repository writes and the real overlay, so they fail if the schema ever
+  // goes back to the builtin type.
+
+  /** A minimal AppConfig carrying only the fields the overlay writes below. */
+  function overlayBase(): AppConfig {
+    return {
+      captureCasDualWritePages: "",
+      fanslyReplayMode: "off",
+      retentionTieringEnabled: false,
+      transactionLookbackDays: 7,
+    } as unknown as AppConfig;
+  }
+
+  it("keeps a numeric-looking string override a STRING end to end", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // The exact production value that broke: a CSV of canary page ids, one page.
+    await setConfigOverride(testDb.db, {
+      key: "captureCasDualWritePages",
+      value: "4",
+      userId,
+      groupId: randomUUID(),
+    });
+
+    const overrides = await getConfigOverrides(testDb.db);
+    const stored = overrides.get("captureCasDualWritePages")!.value;
+    // The bug handed back the NUMBER 4 here.
+    expect(stored).toBe("4");
+    expect(typeof stored).toBe("string");
+
+    // ...so the override survives re-validation and actually reaches the merged
+    // config instead of being dropped as "expects a string".
+    expect(applyEffectiveOverrides(overlayBase(), overrides).captureCasDualWritePages).toBe("4");
+
+    // The audit trail records the same string, not a coerced number.
+    const audit = await listConfigAudit(testDb.db, { key: "captureCasDualWritePages" });
+    expect(audit[0]!.newValue).toBe("4");
+    expect(typeof audit[0]!.newValue).toBe("string");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("round-trips string, number and boolean overrides verbatim", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await setConfigOverridesAtomic(testDb.db, {
+      patches: [
+        { key: "fanslyReplayMode", value: "shadow" },
+        { key: "transactionLookbackDays", value: 14 },
+        { key: "retentionTieringEnabled", value: true },
+      ],
+      userId,
+      groupId: randomUUID(),
+    });
+
+    const overrides = await getConfigOverrides(testDb.db);
+    expect(overrides.get("fanslyReplayMode")!.value).toBe("shadow");
+    expect(overrides.get("transactionLookbackDays")!.value).toBe(14);
+    expect(overrides.get("retentionTieringEnabled")!.value).toBe(true);
+
+    const merged = applyEffectiveOverrides(overlayBase(), overrides);
+    expect(merged.fanslyReplayMode).toBe("shadow");
+    expect(merged.transactionLookbackDays).toBe(14);
+    expect(merged.retentionTieringEnabled).toBe(true);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps strings that are themselves valid JSON as strings", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Every one of these re-parses into a DIFFERENT type (or value) under a
+    // second JSON.parse. captureCasDualWritePages is a free-form CSV string with
+    // no enum, so the repository must hand each one back unchanged.
+    const traps = ["4", "007", "true", "false", "null", "1,2", "[1,2]", '{"a":1}', "1e3", "-0"];
+
+    for (const trap of traps) {
+      await setConfigOverride(testDb.db, {
+        key: "captureCasDualWritePages",
+        value: trap,
+        userId,
+        groupId: randomUUID(),
+      });
+
+      const overrides = await getConfigOverrides(testDb.db);
+      const stored = overrides.get("captureCasDualWritePages")!.value;
+      expect(stored).toBe(trap);
+      expect(typeof stored).toBe("string");
+      expect(applyEffectiveOverrides(overlayBase(), overrides).captureCasDualWritePages).toBe(trap);
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("returns an object-payload jsonb column as an object, nested scalars intact", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // runtime_instances.running is one of the object-only jsonb columns switched
+    // to the safe type for uniformity: this pins that the switch changed nothing
+    // for them. It also reads through the relational query builder, a different
+    // mapping path than the plain selects above.
+    const snapshot: RunningSnapshot = {
+      schemaVersion: 2,
+      values: {
+        // A NESTED string that looks like a number: safe even before the fix
+        // (drizzle only re-parsed the top level), and it must stay safe now.
+        captureCasDualWritePages: { value: "4" },
+        transactionLookbackDays: { value: 14 },
+        retentionTieringEnabled: { value: false },
+        encryptionKey: { value: null, masked: true, state: "set" },
+      },
+      skippedOverrides: [{ key: "logLevel", reason: "not a boot key" }],
+    };
+
+    await upsertInstanceHeartbeat(testDb.db, {
+      role: "api",
+      instanceId: "instance-1",
+      startedAt: new Date(),
+      imageTag: "test-image",
+      running: snapshot,
+    });
+
+    const rows = await listAllInstances(testDb.db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.running).toEqual(snapshot);
+    expect(rows[0]!.running.values.captureCasDualWritePages!.value).toBe("4");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

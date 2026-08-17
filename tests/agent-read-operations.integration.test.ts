@@ -1754,7 +1754,9 @@ describe("[sync-critical] agent read plane: review round 3", () => {
     await insertObservation(pageId, "2026-03-04T00:00:00Z", "granted-march");
     await setConfigOverride(testDb!.db, {
       key: "agentObservationsEnabled",
-      value: "true",
+      // Typed boolean (decision #216): "true" only passed while the jsonb
+      // double-parse coerced it on read.
+      value: true,
       userId: null,
       groupId: randomUUID(),
     });

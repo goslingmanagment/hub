@@ -217,6 +217,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 213 | Disk runway latches | Hourly least-squares fit of `disk_free_bytes` gauges (24h window, ≥6h span) drives two independent `db_disk_usage` subKey-латча: `runway_warning` <30д и `runway_critical` <7д. Unknown history is not a state (ничего не открывает и не резолвит); measured recovery или flat slope резолвит per-latch; resolve-тексты subKey-специфичны, чтобы не читались как общий all-clear |
 | 214 | G3 checkpoint cutover: the generation set is the membership authority | The Fansly `dm_conversations` sweep drops its cumulative `snapshotConversationIds` array (O(N²) checkpoint bytes) for a v2 scalar state with a persisted `observedCount`; membership lives row-side in `page_dm_threads.last_seen_generation`. Cross-page overlap is a pre-upsert row read inside the page transaction, which also takes the shared erasure fence and defers the chunk (+60s) rather than racing a delete. The destructive visibility pass runs ONLY on an exact `count(generation) == observedCount`; any gap — including one an erasure could plausibly explain — withholds finalization AND the success stamp, notes or alerts, and retries as a fresh sweep (+15min). Rollback-safe by version: the pre-G3 parser rejects a v2 state and re-walks from offset 0 under a higher generation, losing progress and never correctness |
 | 215 | G5 slice 1: the CAS copy is written before the fact, and proved after it | Pull capture on a canary page stores its body in the content-addressed catalog in a SEPARATE transaction that runs BEFORE the inline inserts, and the resulting `(payload_bucket_month, payload_object_id)` pair is carried INTO those inserts as ordinary column values. Same-transaction was rejected because a failed CAS statement aborts the whole transaction (25P02) and would take the capture with it; a post-commit UPDATE was rejected because it mints a second row version per capture on the two biggest tables. Failure of any CAS step is swallowed and leaves null references — never an orphaned fact, only an orphaned object. The envelope reference deliberately carries NO foreign key (an FK to a partitioned catalog taxes the hottest write path and locks its future partition maintenance); a two-directional CHECK, added NOT VALID because both columns start null for all history, is the enforced invariant, and a bounded hourly parity verifier is what actually looks for a dangling or divergent reference. One setting, `capture_cas_dual_write_pages` (CSV of page ids or `*`), is both the switch and the bound and FAILS CLOSED at empty; it reaches each process on the runtime heartbeat that already reads the live overlay, so the canary adds no query in either state. The verifier compares full canonical bodies (never digests alone), never repairs, and pages under the new `capture_payload_parity` incident kind |
+| 216 | jsonb reads are single-parse | drizzle 0.45.2's builtin `jsonb` column runs `JSON.parse` on a value node-postgres has ALREADY parsed, so any jsonb value that IS a JSON string is decoded TWICE: stored `"4"` reads back as the NUMBER 4, `"true"` as a boolean, `"{\"a\":1}"` as an object; bare words like `enforce` survive only because their second parse throws. It disarmed the G5 canary in production on 2026-08-16 — `captureCasDualWritePages = "4"` read back as 4, `validateConfigOverride` rejected it as "expects a string", the live overlay silently dropped the override, and nothing logged an error. Fixed at the root by a `jsonbSafe` `customType` in `packages/db/src/schema.ts` whose read is IDENTITY and whose write stays `JSON.stringify` — the wire format is byte-identical, the change is READ-SIDE ONLY, and no migration exists because the stored data was always correct. All 55 jsonb columns switched, not only the three that hold scalars: the object-only ones were safe by accident of what they happen to store, not by construction. The builtin `jsonb` import is lint-banned repo-wide so the trap cannot be re-imported |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -7046,3 +7047,79 @@ would have told the owner a false story about which subsystem is broken, and
 this is also the kind the slice-0 collision path (a sha256 collision inside one
 scope and month) will use when it is wired. Per #185 the kind is added to the
 error-handling canon's incident table in this same change.
+
+**Decision #216 (2026-08-17, jsonb reads are single-parse):** drizzle-orm
+0.45.2's builtin `jsonb` column maps a driver value like this:
+
+```
+mapFromDriverValue(value) {
+  if (typeof value === "string") {
+    try { return JSON.parse(value); } catch { return value; }
+  }
+  return value;
+}
+```
+
+node-postgres has already run `JSON.parse` on the jsonb wire value before
+drizzle ever sees it. So the branch is not a fallback for an unparsed string —
+it is a SECOND parse, and it fires exactly when the stored jsonb value IS a JSON
+string. Stored `"4"` comes back as the number 4, `"true"` as the boolean true,
+`"null"` as null, `"{\"a\":1}"` as an object. A stored `"enforce"` survives
+only by accident: its second `JSON.parse` throws and the `catch` hands the
+string back. The corruption is silent, type-dependent, and invisible to every
+type annotation in the codebase, because `$type<string>()` describes what we
+believe the column holds, not what the mapper returns.
+
+**How it surfaced.** On 2026-08-16 the G5 CAS dual-write canary was armed by
+setting `config_settings.captureCasDualWritePages` to `"4"` — the CSV of canary
+page ids, one page. The row was written correctly. On read it became the number
+4; `validateConfigOverride` saw `kind: "string"` and a number, returned
+`expects a string`; `applyEffectiveOverrides` skips any override that fails
+re-validation (`if (!validated.ok) continue`), so the overlay dropped it. The
+canary never turned on, the setting read back as its env default, and NOTHING
+logged an error — the drop is a `continue`, by design, because an invalid stored
+override must not take a process down. Production is currently running the
+workaround value `"4,"`, whose trailing comma makes the second parse throw.
+
+**The fix is a column type, not a validator patch.** Hardening
+`validateConfigOverride` to coerce a number back into a string would have made
+this one key work and left the trap armed for every other jsonb read, while
+teaching the validator to accept values the write path can never produce.
+Instead `packages/db/src/schema.ts` declares a `jsonbSafe` `customType`:
+`dataType()` returns `jsonb`, `fromDriver` returns the driver value AS-IS, and
+`toDriver` is `JSON.stringify(value)` — character-for-character what the builtin
+`mapToDriverValue` sends. **The write/wire format is unchanged**, verified
+against the drizzle 0.45.2 source in `node_modules`; this is a READ-SIDE fix
+only. There is NO migration and there must not be one: every byte already in
+Postgres is correct, and always was — only the read lied.
+
+**All 55 jsonb columns switched, not just the three that can hold a scalar.**
+`config_settings.value` and `config_audit_log.old_value`/`new_value` are the
+only columns TYPED as scalars (`ConfigOverrideValue = string | number |
+boolean`), and they are the only ones the bug can bite today. The rest hold
+objects and arrays, which the driver returns as JS objects and which both
+mappers pass through untouched. But "safe because of what we happen to store" is
+not an invariant — it is one refactor away from a silent data bug in the capture
+spine, and the four structurally untyped columns (`observations.payload`,
+`domain_events.data`, `capture_json_hot_bodies.body`,
+`sync_raw_payloads.response_payload`) are precisely the ones a future change is
+most likely to hand a bare JSON string. A uniform type also removes the standing
+question "is THIS column one of the safe ones?" from every future review. An
+audit of every read-site found nothing depending on the double-parse: no code
+writes a pre-stringified JSON string into a jsonb column (the ~45 sites that
+look like it are raw `sql` templates with an explicit `::jsonb` cast, where
+Postgres parses once and drizzle's mapper is never invoked), and no code
+`JSON.parse`s a drizzle-read jsonb column.
+
+**The guard.** The builtin is now lint-banned repo-wide — `no-restricted-imports`
+blocks the single name `jsonb` from `drizzle-orm/pg-core` (every other export
+there stays available), so re-introducing the trap fails `pnpm lint` with a
+pointer to `jsonbSafe`. The regression pins live in
+`tests/config-settings.integration.test.ts` and go through the real repository
+writes and the real overlay: the production value `"4"` must survive as the
+STRING `"4"` all the way into the merged config, a batch of strings that are
+themselves valid JSON (`007`, `true`, `null`, `[1,2]`, `{"a":1}`, `1e3`, `-0`)
+must each round-trip verbatim, number and boolean settings must stay their own
+types, and an object-payload column (`runtime_instances.running`, read through
+the relational query builder — a different mapping path than a plain select)
+must still come back an object with its nested scalars intact.

@@ -397,7 +397,9 @@ describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (
     expect(off.statusCode).toBe(503);
     await setConfigOverride(testDb!.db, {
       key: "agentObservationsEnabled",
-      value: "true",
+      // Typed boolean (decision #216): "true" only passed while the jsonb
+      // double-parse coerced it on read.
+      value: true,
       userId: null,
       groupId: randomUUID(),
     });
