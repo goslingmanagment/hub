@@ -9,7 +9,6 @@ import {
   foreignKey,
   index,
   integer,
-  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -36,6 +35,54 @@ import type {
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType() {
     return "bytea";
+  },
+});
+
+// ── jsonb reads are SINGLE-parse (decision #216) ─────────────────────────────
+// drizzle-orm 0.45.2's BUILTIN `jsonb` column double-parses on READ:
+//
+//   mapFromDriverValue(value) {
+//     if (typeof value === "string") {
+//       try { return JSON.parse(value); } catch { return value; }
+//     }
+//     return value;
+//   }
+//
+// node-postgres has ALREADY run JSON.parse on the jsonb wire value by the time
+// drizzle sees it. So a jsonb value that IS a JSON string arrives as a JS
+// string and is parsed a SECOND time: stored `"4"` reads back as the NUMBER 4,
+// stored `"true"` as the BOOLEAN true, stored `"{\"a\":1}"` as an OBJECT. Bare
+// words like `"enforce"` survive only by accident — their second JSON.parse
+// throws and the catch hands back the string. The corruption is silent and
+// type-dependent, which is what makes it nasty.
+//
+// This bit production on 2026-08-16. The `config_settings` row
+// `captureCasDualWritePages` was set to the string "4" (a CSV of canary page
+// ids). It read back as the number 4; `validateConfigOverride` rejected it
+// ("expects a string"); the live overlay silently dropped the override; the G5
+// CAS dual-write canary never turned on — and nothing logged an error anywhere.
+//
+// `jsonbSafe` returns the driver value AS-IS on read and serializes exactly
+// once on write — `JSON.stringify(value)`, byte-identical to what the builtin
+// sends. THE WIRE/WRITE FORMAT IS UNCHANGED: this is a read-side fix only, and
+// already-stored data is already correct (no migration).
+//
+// EVERY jsonb column in this schema uses it, not only the scalar-valued ones.
+// Object/array columns are unaffected today (the driver hands drizzle an
+// object, which both implementations pass through untouched) — but they sit one
+// refactor away from the trap the moment a payload can be a bare JSON string,
+// and "safe only because of what we happen to store" is not an invariant. So
+// the safe type is the uniform default here and the builtin `jsonb` import is
+// lint-banned repo-wide (eslint.config.mjs) to keep it that way.
+const jsonbSafe = customType<{ data: unknown; driverData: unknown }>({
+  dataType() {
+    return "jsonb";
+  },
+  toDriver(value) {
+    return JSON.stringify(value);
+  },
+  fromDriver(value) {
+    return value;
   },
 });
 
@@ -246,7 +293,7 @@ export const pages = pgTable(
     earningsBalanceMills: bigint("earnings_balance_mills", {
       mode: "bigint",
     }).default(sql`0`).notNull(),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
     lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
     lastLightSyncAt: timestamp("last_light_sync_at", { withTimezone: true }),
     lastFollowerSyncAt: timestamp("last_follower_sync_at", { withTimezone: true }),
@@ -318,7 +365,7 @@ export const notificationIncidents = pgTable(
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     errorCode: text("error_code"),
     errorSummary: text("error_summary"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -336,7 +383,7 @@ export const notificationIncidents = pgTable(
 export const notificationIncidentRecoveries = pgTable("notification_incident_recoveries", {
   incidentKey: text("incident_key").primaryKey(),
   recoveredAt: timestamp("recovered_at", { withTimezone: true }).notNull(),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+  metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -461,7 +508,7 @@ export const syncRuns = pgTable(
     stream: syncStreamEnum("stream").notNull(),
     outcome: syncRunOutcomeEnum("outcome").notNull(),
     errorSummary: text("error_summary"),
-    stats: jsonb("stats").$type<Record<string, unknown>>().default({}).notNull(),
+    stats: jsonbSafe("stats").$type<Record<string, unknown>>().default({}).notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
@@ -500,8 +547,8 @@ export const syncHttpAttempts = pgTable("sync_http_attempts",
     httpStatus: integer("http_status"),
     retryDelayMs: integer("retry_delay_ms"),
     durationMs: integer("duration_ms"),
-    requestShape: jsonb("request_shape").$type<Record<string, unknown>>().default({}).notNull(),
-    responseShape: jsonb("response_shape").$type<Record<string, unknown>>().default({}).notNull(),
+    requestShape: jsonbSafe("request_shape").$type<Record<string, unknown>>().default({}).notNull(),
+    responseShape: jsonbSafe("response_shape").$type<Record<string, unknown>>().default({}).notNull(),
     errorMessage: text("error_message"),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -543,7 +590,7 @@ export const syncRunEvents = pgTable(
     eventType: text("event_type").notNull(),
     severity: syncEventSeverityEnum("severity").notNull(),
     message: text("message").notNull(),
-    details: jsonb("details").$type<Record<string, unknown>>().default({}).notNull(),
+    details: jsonbSafe("details").$type<Record<string, unknown>>().default({}).notNull(),
     emittedAt: timestamp("emitted_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -569,7 +616,7 @@ export const pageSyncStates = pgTable("page_sync_states",
     appliedSeq: bigint("applied_seq", { mode: "number" }).default(0).notNull(),
     requestSource: syncRequestSourceEnum("request_source"),
     dispatchSource: syncRequestSourceEnum("dispatch_source").default("scheduled").notNull(),
-    requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().default({}).notNull(),
+    requestPayload: jsonbSafe("request_payload").$type<Record<string, unknown>>().default({}).notNull(),
     requestedAt: timestamp("requested_at", { withTimezone: true }),
     enqueuedAt: timestamp("enqueued_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -585,7 +632,7 @@ export const pageSyncStates = pgTable("page_sync_states",
     blockedAt: timestamp("blocked_at", { withTimezone: true }),
     phase: text("phase"),
     workClass: syncWorkClassEnum("work_class"),
-    progress: jsonb("progress").$type<Record<string, unknown>>().default({}).notNull(),
+    progress: jsonbSafe("progress").$type<Record<string, unknown>>().default({}).notNull(),
     cadenceSeconds: integer("cadence_seconds").notNull(),
     slotOffsetSeconds: integer("slot_offset_seconds").notNull(),
     lastScheduledSlot: bigint("last_scheduled_slot", { mode: "number" }).default(-1).notNull(),
@@ -631,7 +678,7 @@ export const pageSyncCursors = pgTable(
     cursorText: text("cursor_text"),
     cursorTimestamp: timestamp("cursor_timestamp", { withTimezone: true }),
     cursorSeq: bigint("cursor_seq", { mode: "number" }),
-    state: jsonb("state").$type<Record<string, unknown>>().default({}).notNull(),
+    state: jsonbSafe("state").$type<Record<string, unknown>>().default({}).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     cursorLastSucceededRunId: bigint("last_succeeded_run_id", { mode: "number" }).references(
       () => syncRuns.id,
@@ -708,8 +755,8 @@ export const syncRawPayloads = pgTable(
     requestSeq: bigint("request_seq", { mode: "number" }),
     source: syncRequestSourceEnum("source"),
     endpoint: text("endpoint").notNull(),
-    requestParams: jsonb("request_params").$type<Record<string, unknown>>().default({}).notNull(),
-    responsePayload: jsonb("response_payload").$type<unknown>().notNull(),
+    requestParams: jsonbSafe("request_params").$type<Record<string, unknown>>().default({}).notNull(),
+    responsePayload: jsonbSafe("response_payload").$type<unknown>().notNull(),
     mapperVersion: text("mapper_version").notNull(),
     payloadKind: text("payload_kind").notNull(),
     statusCode: integer("status_code"),
@@ -834,7 +881,7 @@ export const fans = pgTable(
     username: text("username"),
     displayName: text("display_name"),
     createdAtExternal: timestamp("created_at_external", { withTimezone: true }),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
     deletedDetectedAt: timestamp("deleted_detected_at", { withTimezone: true }),
@@ -963,7 +1010,7 @@ export const pageFanExternalNotes = pgTable(
     isActive: boolean("is_active").default(true).notNull(),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
-    raw: jsonb("raw").$type<Record<string, unknown>>().default({}).notNull(),
+    raw: jsonbSafe("raw").$type<Record<string, unknown>>().default({}).notNull(),
   },
   (table) => ({
     uniq: unique("page_fan_external_notes_account_provider_external_note_uniq").on(
@@ -1138,7 +1185,7 @@ export const pageDmThreads = pgTable(
     lastSeenGeneration: bigint("last_seen_generation", { mode: "number" }),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow().notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -1285,7 +1332,7 @@ export const dmMessageArchive = pgTable(
     emittedFingerprint: bytea("emitted_fingerprint"),
     emittedEventId: bigint("emitted_event_id", { mode: "number" }),
     revisionNo: integer("revision_no").default(1).notNull(),
-    materialFieldProvenance: jsonb("material_field_provenance")
+    materialFieldProvenance: jsonbSafe("material_field_provenance")
       .$type<Record<string, string>>()
       .default({})
       .notNull(),
@@ -1293,7 +1340,7 @@ export const dmMessageArchive = pgTable(
     // future platform-change ordering input; never observation time.
     restPlatformChangedAt: timestamp("rest_platform_changed_at", { withTimezone: true }),
     rawShapeVersion: text("raw_shape_version").default("ofapi-message-v1").notNull(),
-    mediaMetadata: jsonb("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
+    mediaMetadata: jsonbSafe("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
     retentionPolicy: text("retention_policy").default("default").notNull(),
     retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
     archivedAt: timestamp("archived_at", { withTimezone: true }).defaultNow().notNull(),
@@ -1388,7 +1435,7 @@ export const ofapiCommands = pgTable(
     ofapiAccountId: text("ofapi_account_id").notNull(),
     conversationId: text("conversation_id").notNull(),
     kind: text("kind").$type<OfapiCommandKind>().notNull(),
-    payload: jsonb("payload").$type<OfapiCommandPayload>().notNull(),
+    payload: jsonbSafe("payload").$type<OfapiCommandPayload>().notNull(),
     payloadHash: text("payload_hash").notNull(),
     retryOfCommandId: uuid("retry_of_command_id"),
     state: text("state").$type<
@@ -1403,7 +1450,7 @@ export const ofapiCommands = pgTable(
     attemptCount: integer("attempt_count").default(0).notNull(),
     lastErrorCode: text("last_error_code"),
     lastErrorClass: text("last_error_class"),
-    verifierResult: jsonb("verifier_result").$type<Record<string, unknown>>(),
+    verifierResult: jsonbSafe("verifier_result").$type<Record<string, unknown>>(),
     platformMessageId: text("platform_message_id"),
     attemptStartedAt: timestamp("attempt_started_at", { withTimezone: true }),
     attemptFinishedAt: timestamp("attempt_finished_at", { withTimezone: true }),
@@ -2120,7 +2167,7 @@ export const auditEvents = pgTable(
     ),
     source: text("source").notNull(),
     eventType: text("event_type").notNull(),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -2318,7 +2365,7 @@ export const workboardState = pgTable(
     isPurchaseFollowup: boolean("is_purchase_followup").default(false).notNull(),
     whyNowCode: text("why_now_code"),
     whyNowValue: numeric("why_now_value", { precision: 10, scale: 2, mode: "number" }),
-    reasonChips: jsonb("reason_chips").$type<string[]>().default([]).notNull(),
+    reasonChips: jsonbSafe("reason_chips").$type<string[]>().default([]).notNull(),
     followupDueAt: timestamp("followup_due_at", { withTimezone: true }),
     // Stage 1+ conversation-quality / freeloader fields (nullable/defaulted for now).
     qScore: numeric("q_score", { precision: 4, scale: 3, mode: "number" }),
@@ -2331,7 +2378,7 @@ export const workboardState = pgTable(
     freeloaderStatus: workboardFreeloaderStatusEnum("freeloader_status")
       .default("none")
       .notNull(),
-    freeloaderEpisodes: jsonb("freeloader_episodes").$type<string[]>().default([]).notNull(),
+    freeloaderEpisodes: jsonbSafe("freeloader_episodes").$type<string[]>().default([]).notNull(),
     lifetimeFreeEpisodes: integer("lifetime_free_episodes").default(0).notNull(),
     reactivationAttemptedAt: timestamp("reactivation_attempted_at", { withTimezone: true }),
     serviceReason: text("service_reason"),
@@ -2519,11 +2566,11 @@ export const ofapiWebhookConfig = pgTable("ofapi_webhook_config", {
   externalWebhookId: text("external_webhook_id"),
   endpointUrl: text("endpoint_url").notNull(),
   accountScope: text("account_scope").default("global").notNull(),
-  events: jsonb("events").$type<string[]>().default([]).notNull(),
+  events: jsonbSafe("events").$type<string[]>().default([]).notNull(),
   encryptedSigningSecret: text("encrypted_signing_secret").notNull(),
   previousEncryptedSigningSecret: text("previous_encrypted_signing_secret"),
   registrationState: text("registration_state").default("stable").notNull(),
-  pendingRegistration: jsonb("pending_registration")
+  pendingRegistration: jsonbSafe("pending_registration")
     .$type<OfapiWebhookPendingRegistration>(),
   pendingEncryptedSigningSecret: text("pending_encrypted_signing_secret"),
   registrationError: text("registration_error"),
@@ -2602,11 +2649,11 @@ export const ofapiCaptureJobs = pgTable(
     goal: text("goal").$type<OfapiCaptureJobGoal>(),
     state: text("state").$type<OfapiCaptureJobState>().default("ready").notNull(),
     activeSlotKey: text("active_slot_key").notNull(),
-    target: jsonb("target").$type<Record<string, unknown>>().notNull(),
+    target: jsonbSafe("target").$type<Record<string, unknown>>().notNull(),
     targetHash: char("target_hash", { length: 64 }).notNull(),
     targetGeneration: integer("target_generation").default(0).notNull(),
-    manifest: jsonb("manifest").$type<Record<string, unknown>>(),
-    cursor: jsonb("cursor").$type<Record<string, unknown>>(),
+    manifest: jsonbSafe("manifest").$type<Record<string, unknown>>(),
+    cursor: jsonbSafe("cursor").$type<Record<string, unknown>>(),
     cursorHash: char("cursor_hash", { length: 64 }),
     rowVersion: bigint("row_version", { mode: "number" }).default(0).notNull(),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
@@ -2624,7 +2671,7 @@ export const ofapiCaptureJobs = pgTable(
     terminalObservationReceivedAt: timestamp("terminal_observation_received_at", { withTimezone: true }),
     reasonCode: text("reason_code"),
     reasonMessage: text("reason_message"),
-    result: jsonb("result").$type<Record<string, unknown>>(),
+    result: jsonbSafe("result").$type<Record<string, unknown>>(),
     maxCalls: integer("max_calls"),
     maxCredits: integer("max_credits"),
     maxPages: integer("max_pages"),
@@ -2696,7 +2743,7 @@ export const ofapiInteractiveRequests = pgTable(
       .notNull(),
     operation: text("operation").notNull(),
     surface: text("surface").notNull(),
-    target: jsonb("target").$type<Record<string, unknown>>().notNull(),
+    target: jsonbSafe("target").$type<Record<string, unknown>>().notNull(),
     requestFingerprint: char("request_fingerprint", { length: 64 }).notNull(),
     state: text("state").$type<
       "created" | "attempt_reserved" | "response_captured" | "served" | "failed" | "indeterminate"
@@ -2740,7 +2787,7 @@ export const ofapiRequestAttempts = pgTable(
     budgetScope: text("budget_scope").$type<OfapiBudgetScope>().notNull(),
     reservationDay: date("reservation_day").notNull(),
     deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
-    admissionSnapshot: jsonb("admission_snapshot").$type<Record<string, unknown>>().notNull(),
+    admissionSnapshot: jsonbSafe("admission_snapshot").$type<Record<string, unknown>>().notNull(),
     operation: text("operation").notNull(),
     endpointClass: text("endpoint_class").notNull(),
     egressKey: text("egress_key").notNull(),
@@ -2917,8 +2964,8 @@ export const ofapiCaptureOperatorActions = pgTable(
     targetType: text("target_type").notNull(),
     targetRef: text("target_ref").notNull(),
     expectedState: text("expected_state"),
-    previousState: jsonb("previous_state").$type<Record<string, unknown>>(),
-    resultingState: jsonb("resulting_state").$type<Record<string, unknown>>(),
+    previousState: jsonbSafe("previous_state").$type<Record<string, unknown>>(),
+    resultingState: jsonbSafe("resulting_state").$type<Record<string, unknown>>(),
     dryRun: boolean("dry_run").notNull(),
     actorUserId: bigint("actor_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "restrict" }),
@@ -2957,7 +3004,7 @@ export const ofapiCreditLedger = pgTable(
     balanceAfter: integer("balance_after"),
     requestId: text("request_id"),
     accrualDay: date("accrual_day"),
-    details: jsonb("details").$type<Record<string, unknown>>(),
+    details: jsonbSafe("details").$type<Record<string, unknown>>(),
     // Stage 9: acting principal for gateway reads; NULL = system spend.
     actorUserId: bigint("actor_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "set null" }),
@@ -3073,15 +3120,15 @@ export const ofapiWebhookEvents = pgTable(
     ofapiAccountId: text("ofapi_account_id"),
     platformAccountId: bigint("platform_account_id", { mode: "number" })
       .references(() => pages.id, { onDelete: "set null" }),
-    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    payload: jsonbSafe("payload").$type<Record<string, unknown>>().notNull(),
     rawBody: bytea("raw_body"),
     payloadHash: bytea("payload_hash"),
-    captureHeaders: jsonb("capture_headers")
+    captureHeaders: jsonbSafe("capture_headers")
       .$type<Record<string, string>>()
       .default({})
       .notNull(),
     captureState: text("capture_state").default("accepted").notNull(),
-    syncEvent: jsonb("sync_event").$type<Record<string, unknown>>(),
+    syncEvent: jsonbSafe("sync_event").$type<Record<string, unknown>>(),
     fanoutSeq: bigint("fanout_seq", { mode: "number" }),
     status: text("status").default("pending").notNull(),
     error: text("error"),
@@ -3168,7 +3215,7 @@ export const runtimeInstances = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
     imageTag: text("image_tag"),
-    running: jsonb("running").$type<RunningSnapshot>().notNull(),
+    running: jsonbSafe("running").$type<RunningSnapshot>().notNull(),
   },
   (table) => ({
     pk: primaryKey({
@@ -3192,7 +3239,7 @@ export const configSettings = pgTable(
     scopeType: text("scope_type").notNull().default("global"),
     scopeId: bigint("scope_id", { mode: "number" }).notNull().default(0),
     key: text("key").notNull(),
-    value: jsonb("value").$type<ConfigOverrideValue>().notNull(),
+    value: jsonbSafe("value").$type<ConfigOverrideValue>().notNull(),
     version: integer("version").notNull().default(1),
     updatedByUserId: bigint("updated_by_user_id", { mode: "number" }).references(
       () => users.id,
@@ -3225,8 +3272,8 @@ export const configAuditLog = pgTable(
     scopeType: text("scope_type").notNull(),
     scopeId: bigint("scope_id", { mode: "number" }).notNull(),
     key: text("key").notNull(),
-    oldValue: jsonb("old_value").$type<ConfigOverrideValue>(),
-    newValue: jsonb("new_value").$type<ConfigOverrideValue>(),
+    oldValue: jsonbSafe("old_value").$type<ConfigOverrideValue>(),
+    newValue: jsonbSafe("new_value").$type<ConfigOverrideValue>(),
     oldVersion: integer("old_version"),
     newVersion: integer("new_version"),
     note: text("note"),
@@ -3270,7 +3317,7 @@ export const observations = pgTable(
     accountId: bigint("account_id", { mode: "number" }),
     nativeAccountRef: text("native_account_ref"),
     kind: text("kind").notNull(),
-    payload: jsonb("payload").notNull(),
+    payload: jsonbSafe("payload").notNull(),
     payloadHash: bytea("payload_hash").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     observedAt: timestamp("observed_at", { withTimezone: true }),
@@ -3327,7 +3374,7 @@ export const domainEvents = pgTable(
     messageRef: text("message_ref"),
     transactionRef: text("transaction_ref"),
     postRef: text("post_ref"),
-    data: jsonb("data").notNull(),
+    data: jsonbSafe("data").notNull(),
     schemaVersion: integer("schema_version").notNull(),
     observationId: bigint("observation_id", { mode: "number" }).notNull(),
     dedupKey: text("dedup_key").notNull(),
@@ -3388,8 +3435,8 @@ export const messageArchive = pgTable(
     tipAmountMills: bigint("tip_amount_mills", { mode: "bigint" }).default(0n).notNull(),
     tipTextPlain: text("tip_text_plain"),
     inReplyToRef: text("in_reply_to_ref"),
-    replyMetadata: jsonb("reply_metadata").$type<Record<string, unknown>>(),
-    mediaMetadata: jsonb("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
+    replyMetadata: jsonbSafe("reply_metadata").$type<Record<string, unknown>>(),
+    mediaMetadata: jsonbSafe("media_metadata").$type<Array<Record<string, unknown>>>().default([]).notNull(),
     originClass: text("origin_class"),
     materialObservedAt: timestamp("material_observed_at", { withTimezone: true }),
     vendorChangedAt: timestamp("vendor_changed_at", { withTimezone: true }),
@@ -3650,7 +3697,7 @@ export const ofapiMessageCoverage = pgTable(
     source: text("source").notNull(),
     frozenHeadId: text("frozen_head_id").notNull(),
     oldestMessageId: text("oldest_message_id"),
-    target: jsonb("target").$type<Record<string, unknown>>().notNull(),
+    target: jsonbSafe("target").$type<Record<string, unknown>>().notNull(),
     targetHash: char("target_hash", { length: 64 }).notNull(),
     pageChainHash: char("page_chain_hash", { length: 64 }).notNull(),
     rawCount: integer("raw_count").notNull(),
@@ -3701,7 +3748,7 @@ export const aiPersonas = pgTable(
     key: text("key").notNull().unique(),
     displayName: text("display_name").notNull(),
     systemBlock: text("system_block").notNull(),
-    featureOverrides: jsonb("feature_overrides")
+    featureOverrides: jsonbSafe("feature_overrides")
       .$type<Record<string, unknown>>()
       .default({})
       .notNull(),
@@ -3735,9 +3782,9 @@ export const aiGenerationContent = pgTable(
     // canonical conversation_ref (groupId) + separate fan_ref, so fan-scope
     // erasure matches on either. NULL for legacy/raw-gateway rows.
     fanRef: text("fan_ref"),
-    promptBlocks: jsonb("prompt_blocks").$type<unknown[]>().notNull(),
+    promptBlocks: jsonbSafe("prompt_blocks").$type<unknown[]>().notNull(),
     completion: text("completion").notNull(),
-    params: jsonb("params").$type<Record<string, unknown>>().notNull(),
+    params: jsonbSafe("params").$type<Record<string, unknown>>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -3791,8 +3838,8 @@ export const erasureLog = pgTable(
       .references(() => users.id)
       .notNull(),
     dryRun: boolean("dry_run").notNull(),
-    plan: jsonb("plan").$type<Record<string, unknown>>().notNull(),
-    executedCounts: jsonb("executed_counts").$type<Record<string, unknown>>(),
+    plan: jsonbSafe("plan").$type<Record<string, unknown>>().notNull(),
+    executedCounts: jsonbSafe("executed_counts").$type<Record<string, unknown>>(),
     startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     resolutionKind: text("resolution_kind").$type<"completed" | "superseded">(),
@@ -3888,7 +3935,7 @@ export const pageVoiceProfiles = pgTable("page_voice_profiles", {
     .references(() => pages.id, { onDelete: "cascade" }),
   voiceId: text("voice_id").notNull(),
   model: text("model").default("eleven_v3").notNull(),
-  settings: jsonb("settings").$type<VoiceProfileSettings>().default({}).notNull(),
+  settings: jsonbSafe("settings").$type<VoiceProfileSettings>().default({}).notNull(),
   outputFormat: text("output_format").default("mp3_44100_128").notNull(),
   version: integer("version").default(1).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3917,7 +3964,7 @@ export const voiceNotes = pgTable(
     scriptEdited: boolean("script_edited").notNull(),
     profileVoiceId: text("profile_voice_id").notNull(),
     profileModel: text("profile_model").notNull(),
-    profileSettings: jsonb("profile_settings").$type<VoiceProfileSettings>().notNull(),
+    profileSettings: jsonbSafe("profile_settings").$type<VoiceProfileSettings>().notNull(),
     profileOutputFormat: text("profile_output_format").notNull(),
     profileVersion: integer("profile_version").notNull(),
     state: text("state").$type<VoiceNoteState>().default("queued").notNull(),
@@ -4090,7 +4137,7 @@ export const agentReadAudit = pgTable(
     pageIds: bigint("page_ids", { mode: "number" }).array().default([]).notNull(),
     /** True when the response carried verbatim fan/model text. */
     verbatimText: boolean("verbatim_text").default(false).notNull(),
-    requestSummary: jsonb("request_summary")
+    requestSummary: jsonbSafe("request_summary")
       .$type<Record<string, string | number | boolean | null>>()
       .default({})
       .notNull(),
@@ -4289,7 +4336,7 @@ export const agentHydrationEvents = pgTable(
     sessionUserId: bigint("session_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "restrict" }),
     /** Bounded structured facts only, same law as agent_read_audit. */
-    detail: jsonb("detail")
+    detail: jsonbSafe("detail")
       .$type<Record<string, string | number | boolean | null>>()
       .default({})
       .notNull(),
@@ -4393,7 +4440,7 @@ export const captureJsonHotBodies = pgTable(
   {
     bucketMonth: date("bucket_month", { mode: "string" }).notNull(),
     objectId: bigint("object_id", { mode: "number" }).notNull(),
-    body: jsonb("body").notNull(),
+    body: jsonbSafe("body").notNull(),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.bucketMonth, table.objectId] }),

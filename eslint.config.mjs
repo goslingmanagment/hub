@@ -101,6 +101,15 @@ export default tseslint.config(
           // bypassed. The exemption block below carves out the gateway.
           name: "@anthropic-ai/sdk",
           message: "Vendor AI SDK imports are gateway-only (Stage 29): call the gateway (prepareAiGatewayStream / runGatewayCompletion).",
+        }, {
+          // Decision #216: drizzle's builtin `jsonb` JSON.parses a value that
+          // node-postgres already parsed, so a stored JSON string comes back as
+          // whatever it re-parses to ("4" → 4). Use the `jsonbSafe` custom type
+          // in packages/db/src/schema.ts instead — every other export here is
+          // fine, so only this one name is blocked.
+          name: "drizzle-orm/pg-core",
+          importNames: ["jsonb"],
+          message: "drizzle's builtin jsonb double-parses on read (decision #216): declare the column with the jsonbSafe custom type in packages/db/src/schema.ts.",
         }],
         patterns: [
           {
