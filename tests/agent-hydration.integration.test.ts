@@ -152,7 +152,10 @@ afterEach(async () => {
   server = null;
 });
 
-async function setFlag(key: string, value: string) {
+// Typed value, matching what the validated admin write path stores. Before
+// decision #216 the number budget was written here as String(budget) and only
+// worked because drizzle's jsonb double-parse coerced it back on read.
+async function setFlag(key: string, value: string | number | boolean) {
   await setConfigOverride(testDb!.db, { key, value, userId: null, groupId: randomUUID() });
 }
 
@@ -1047,7 +1050,7 @@ describe("[sync-critical] hydration autopilot (decision #202)", () => {
   async function autopilot(mode: "shadow" | "enforce", budget: number) {
     await setFlag("agentHydrationMode", "dispatch");
     await setFlag("agentHydrationAutoApproveMode", mode);
-    await setFlag("agentHydrationAutoDailyCallBudget", String(budget));
+    await setFlag("agentHydrationAutoDailyCallBudget", budget);
   }
 
   it("shadow decides NOTHING: it reports what it would do and leaves the row alone", async () => {
