@@ -303,6 +303,11 @@ export async function revokeOfapiMessageCoverage(
     const current = currentResult.rows[0];
     if (!current) return null;
 
+    // CAS-READ-BACKLOG(§6.4): an idempotency proof — the prior operator
+    // observation's body is read to compare two scalars (pageId, chatId) and
+    // never leaves this function. It runs inside packages/db, inside this
+    // write transaction, with no logger and no reach to the runtime read seam;
+    // routing it would mean lifting the whole revoke into apps/runtime.
     const existing = await database.execute<{
       payload: unknown;
     }>(sql`

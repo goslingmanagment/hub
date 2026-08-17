@@ -6,6 +6,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { resolveCapturePayloadRow } from "../payload-reader.ts";
 
 // Stage 29 Task 4 — the acceptance feed over the Stage 11 lane.
 // desktop.ai_acceptance observations that carry a generation ref project
@@ -55,7 +56,9 @@ export async function runAiAcceptanceProjection(
     }
     for (const row of rows) {
       totals.scanned += 1;
-      const payload = isRecord(row.payload) ? row.payload : {};
+      // G5 slice 2: the acceptance body comes through the read seam.
+      const observation = await resolveCapturePayloadRow(app, "observation", row.id, row);
+      const payload = isRecord(observation.payload) ? observation.payload : {};
       // Tolerant field mapping — the desktop's lane predates this consumer.
       const generationRef = asString(payload.generationRef)
         ?? asString(payload.generation_ref)

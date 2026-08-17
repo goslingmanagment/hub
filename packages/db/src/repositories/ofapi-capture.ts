@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { capturePayloadRefFromColumns } from "./capture-payloads.ts";
 import type {
   OfapiBudgetScope,
   OfapiCaptureCreatedBy,
@@ -620,6 +621,8 @@ export async function loadOfapiCaptureObservation(
     producer: string;
     account_id: unknown;
     payload: unknown;
+    payload_bucket_month: string | null;
+    payload_object_id: string | null;
     attempt_id: string | null;
   }>(sql`
     select observation.id::text as id,
@@ -628,6 +631,8 @@ export async function loadOfapiCaptureObservation(
            observation.producer,
            observation.account_id,
            observation.payload,
+           to_char(observation.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+           observation.payload_object_id::text as payload_object_id,
            attempt.id::text as attempt_id
     from observations observation
     left join ofapi_request_attempts attempt
@@ -646,6 +651,9 @@ export async function loadOfapiCaptureObservation(
       producer: row.producer,
       accountId: asNullableNumber(row.account_id, "observation.account_id"),
       payload: row.payload,
+      // G5 slice 2: the catalog reference the #158 replay path routes through
+      // the read seam before parsing the captured envelope.
+      payloadRef: capturePayloadRefFromColumns(row.payload_bucket_month, row.payload_object_id),
       attemptId: row.attempt_id,
     }
     : null;

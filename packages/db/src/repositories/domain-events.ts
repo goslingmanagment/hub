@@ -11,6 +11,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
 
 export interface DomainEventInput {
   type: string;
@@ -766,6 +767,10 @@ export interface ReplayObservationRow {
   observedAt: Date | null;
   receivedAt: Date;
   parseVersion: number;
+  /** G5 slice 2: the catalog reference this envelope carries, or null. The
+   *  replay drivers route `payload` through the read seam
+   *  (apps/runtime/src/services/payload-reader.ts) before canonicalizing. */
+  payloadRef: CapturePayloadRef | null;
 }
 
 /**
@@ -827,7 +832,9 @@ export async function listObservationsForReplay(
   const result = await db.execute<Record<string, unknown>>(sql`
     select o.id::text as id, o.source, o.producer, o.platform, o.account_id,
            o.native_account_ref, o.kind, o.payload, o.observed_at,
-           o.received_at, o.parse_version
+           o.received_at, o.parse_version,
+           to_char(o.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+           o.payload_object_id::text as payload_object_id
     from observations o
     where ${sql.join(conditions, sql` and `)}
     order by o.id asc
@@ -845,6 +852,10 @@ export async function listObservationsForReplay(
     observedAt: row.observed_at == null ? null : new Date(row.observed_at as string | Date),
     receivedAt: new Date(row.received_at as string | Date),
     parseVersion: Number(row.parse_version),
+    payloadRef: capturePayloadRefFromColumns(
+      row.payload_bucket_month as string | null,
+      row.payload_object_id as string | null,
+    ),
   }));
 }
 

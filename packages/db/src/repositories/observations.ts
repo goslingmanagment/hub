@@ -18,6 +18,7 @@ import { PgTransaction } from "drizzle-orm/pg-core";
 
 import type { Database } from "../client.ts";
 import type { ObservationSource } from "../schema.ts";
+import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
 
 export interface ObservationInsertInput {
   source: ObservationSource;
@@ -179,6 +180,10 @@ export async function insertObservations(
  * <machine>:<clientEventId>. The expression index in migration 0090 keeps this
  * lookup bounded without rewriting or deleting immutable captured facts.
  */
+// CAS-READ-BACKLOG(§6.4): a query-critical `payload->>'machineId'` predicate,
+// backed by the expression index in migration 0090/0096. It never returns the
+// body, so it cannot go through the read seam; it must first move to a narrow
+// typed locator column before the inline JSON can go away.
 export async function hasHarvestObservationClientEvent(
   db: Database,
   input: { machineId: string; clientEventId: string },
@@ -201,6 +206,10 @@ export async function hasHarvestObservationClientEvent(
  * The harvest payload carries machineId top-level (spec §2), and the lane
  * stamps producer='desktop-harvest@<version>'.
  */
+// CAS-READ-BACKLOG(§6.4): a query-critical `payload->>'machineId'` predicate,
+// backed by the expression index in migration 0090/0096. It never returns the
+// body, so it cannot go through the read seam; it must first move to a narrow
+// typed locator column before the inline JSON can go away.
 export async function countHarvestObservations(
   db: Database,
   input: { machineId: string; kind: string },
@@ -229,6 +238,11 @@ export interface HarvestTransactionResidueRow {
  * by design — nothing here is ever ingested into money truth. NULL-account
  * rows (unmappable OFAPI account) always count as residue.
  */
+// CAS-READ-BACKLOG(§6.4): `payload->>'machineId'` in the predicate AND
+// `payload->'row'->>'tx_id' / 'amount' / 'created_at'` in the SELECT list.
+// Postgres digs inside the body and no whole body is ever returned, so the read
+// seam has nothing to route; these fields become typed columns in the §6.4
+// slice.
 export async function listHarvestTransactionResidue(
   db: Database,
   input: { machineId: string; limit: number },
@@ -304,6 +318,15 @@ export async function findObservationByKey(
   };
 }
 
+export interface ObservationEnvelopeRow {
+  kind: string;
+  source: string;
+  payload: unknown;
+  /** G5 slice 2: the catalog reference this envelope carries, or null. The
+   *  caller resolves it through apps/runtime/src/services/payload-reader.ts. */
+  payloadRef: CapturePayloadRef | null;
+}
+
 /**
  * Envelope fetch for serve-time frame enrichment (kernel Stage 24): the v2
  * event stream attaches the source observation's verbatim payload to
@@ -314,18 +337,35 @@ export async function findObservationByKey(
 export async function findObservationEnvelopesByIds(
   db: Database,
   ids: readonly number[],
-): Promise<Map<number, { kind: string; source: string; payload: unknown }>> {
+): Promise<Map<number, ObservationEnvelopeRow>> {
   if (ids.length === 0) {
     return new Map();
   }
-  const result = await db.execute<{ id: string; kind: string; source: string; payload: unknown }>(sql`
-    select id::text as id, kind, source, payload
+  // G5 slice 2: the two reference columns ride along so the caller can route
+  // the body through the read seam. They cost two small scalars per row and
+  // are null for everything captured outside the dual-write canary.
+  const result = await db.execute<{
+    id: string;
+    kind: string;
+    source: string;
+    payload: unknown;
+    payload_bucket_month: string | null;
+    payload_object_id: string | null;
+  }>(sql`
+    select id::text as id, kind, source, payload,
+           to_char(payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+           payload_object_id::text as payload_object_id
     from observations
     where id = any(${sql.raw(`array[${ids.map((id) => Number(id)).join(",")}]::bigint[]`)})
   `);
-  const map = new Map<number, { kind: string; source: string; payload: unknown }>();
+  const map = new Map<number, ObservationEnvelopeRow>();
   for (const row of result.rows) {
-    map.set(Number(row.id), { kind: row.kind, source: row.source, payload: row.payload });
+    map.set(Number(row.id), {
+      kind: row.kind,
+      source: row.source,
+      payload: row.payload,
+      payloadRef: capturePayloadRefFromColumns(row.payload_bucket_month, row.payload_object_id),
+    });
   }
   return map;
 }
@@ -414,6 +454,8 @@ export interface ObservationByKindRow {
   actorPrincipalId: number | null;
   observedAt: Date | null;
   receivedAt: Date;
+  /** G5 slice 2: the catalog reference this envelope carries, or null. */
+  payloadRef: CapturePayloadRef | null;
 }
 
 export async function listObservationsByKindAfterId(
@@ -424,7 +466,9 @@ export async function listObservationsByKindAfterId(
   // output alias and sorts lexicographically ('10' < '5') — the recorded
   // Stage 8 trap, re-caught here by the Stage 31 idempotency test.
   const result = await db.execute<Record<string, unknown>>(sql`
-    select o.id::text as id, o.payload, o.actor_principal_id, o.observed_at, o.received_at
+    select o.id::text as id, o.payload, o.actor_principal_id, o.observed_at, o.received_at,
+           to_char(o.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+           o.payload_object_id::text as payload_object_id
     from observations o
     where o.kind = ${input.kind} and o.id > ${input.afterId}
     order by o.id asc
@@ -436,5 +480,9 @@ export async function listObservationsByKindAfterId(
     actorPrincipalId: row.actor_principal_id == null ? null : Number(row.actor_principal_id),
     observedAt: row.observed_at == null ? null : new Date(row.observed_at as string | Date),
     receivedAt: new Date(row.received_at as string | Date),
+    payloadRef: capturePayloadRefFromColumns(
+      row.payload_bucket_month as string | null,
+      row.payload_object_id as string | null,
+    ),
   }));
 }

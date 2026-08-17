@@ -10,6 +10,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   capturePayloadResponse,
   parseOfapiJsonBytes,
@@ -177,7 +178,9 @@ export async function runOfapiCaptureMaterialization(
     for (const row of rows) {
       totals.scanned += 1;
       try {
-        const result = await materializeOfapiCaptureObservation(app, row, {
+        // G5 slice 2: the captured body comes through the read seam.
+        const observation = await resolveCapturePayloadRow(app, "observation", row.id, row);
+        const result = await materializeOfapiCaptureObservation(app, observation, {
           maxItems: budget.itemsLeft,
         });
         if (result.kind === "deferred") {

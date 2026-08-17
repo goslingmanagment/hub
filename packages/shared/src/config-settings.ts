@@ -109,6 +109,35 @@ export function validateAiTranscriptFreshUnionModeTransition(
   return null;
 }
 
+/** G5 slice 2: the captureCasReadMode transition rule — the SAME shape as the
+ *  union-mode rule above, for the same reason. Upward moves are stepwise only
+ *  (inline→shadow→serve, one step at a time), so a mode that changes the
+ *  BYTE SOURCE of every referenced read can never be reached without first
+ *  spending a window in shadow, where the identical comparison runs live and
+ *  cannot affect a single caller's result. Any downward move is an allowed
+ *  rollback (serve→shadow, serve→inline, shadow→inline) — a rollback must never
+ *  be rate-limited by the rule that governs enabling. Re-writing the same value
+ *  is a no-op and allowed. `current` is the stored override row's value (null =
+ *  no override = the env default, inline); an unparseable stored value degrades
+ *  to inline, which forces the stepwise path on the way back up. Clearing an
+ *  override (DELETE) needs no transition check — it resolves to inline.
+ *  Validated INSIDE the locked write transaction (applyConfigPatchesInTx's
+ *  validateTransition hook) so the check races nothing. */
+export function validateCaptureCasReadModeTransition(
+  current: ConfigOverrideValue | null,
+  next: string,
+): string | null {
+  const order: Record<string, number> = { inline: 0, shadow: 1, serve: 2 };
+  const currentMode = current === "shadow" || current === "serve" ? (current as string) : "inline";
+  if (!(next in order)) {
+    return "captureCasReadMode must be one of: inline, shadow, serve";
+  }
+  if (order[next]! - order[currentMode]! > 1) {
+    return `captureCasReadMode may only step upward one mode at a time (${currentMode} → ${next}); go through shadow first`;
+  }
+  return null;
+}
+
 /** The descriptor `costWarning` for each of `keys` that carries one, keyed by config key.
  *  Folded into the audit note server-side at write time so the cost warning that applied is
  *  durable evidence derived from the registry — never trusting (or depending on) the UI to

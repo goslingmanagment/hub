@@ -2,6 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { agentDatasetSqlMapping } from "./agent-dataset-map.ts";
+import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
 import {
   keysetOrderBy,
   keysetPredicate,
@@ -1740,7 +1741,12 @@ export async function listAgentObservations(
     with keyed as (
       select o.id::text as id, o.received_at, o.observed_at, o.source, o.producer,
              o.platform, p.label, o.native_account_ref, o.kind,
-             octet_length(o.payload::text) as payload_bytes,
+             -- CAS-READ-BACKLOG(§6.4): the size column is measured on the INLINE
+           -- body. Postgres never returns the body here, so the read seam has
+           -- nothing to route; a catalog-measured size is a different number
+           -- (canonical octets vs jsonb text) and changing it would silently
+           -- restate a served contract field.
+           octet_length(o.payload::text) as payload_bytes,
              encode(o.payload_hash, 'hex') as payload_sha256,
              o.parse_version,
              ${renderInstant(sql`o.received_at`)} as k_sort,
@@ -1800,6 +1806,8 @@ export interface AgentObservationPayloadRow {
   kind: string;
   payloadSha256: string;
   payload: unknown;
+  /** G5 slice 2: the catalog reference this envelope carries, or null. */
+  payloadRef: CapturePayloadRef | null;
 }
 
 /** #9b: one row by ref, WITH its body. Owner-session only — the caller decides
@@ -1810,7 +1818,9 @@ export async function findAgentObservationPayload(
 ): Promise<AgentObservationPayloadRow | null> {
   const result = await db.execute<Record<string, unknown>>(sql`
     select o.id::text as id, o.received_at, o.source, o.kind,
-           encode(o.payload_hash, 'hex') as payload_sha256, o.payload
+           encode(o.payload_hash, 'hex') as payload_sha256, o.payload,
+           to_char(o.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+           o.payload_object_id::text as payload_object_id
     from observations o
     where o.id = ${observationRef}
     limit 1
@@ -1826,6 +1836,10 @@ export async function findAgentObservationPayload(
     kind: String(row.kind),
     payloadSha256: String(row.payload_sha256 ?? ""),
     payload: row.payload ?? null,
+    payloadRef: capturePayloadRefFromColumns(
+      row.payload_bucket_month as string | null,
+      row.payload_object_id as string | null,
+    ),
   };
 }
 

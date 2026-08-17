@@ -253,6 +253,12 @@ export async function readTransactionTipContextRawPayloadHighWater(
 }
 
 /** Keyset source for deterministic replay over retained Fansly `/message` raw. */
+// CAS-READ-BACKLOG(§6.4): this reader NARROWS the body server-side
+// (`jsonb_build_object('tips', rp.response_payload -> 'tips')`) precisely so it
+// never detoasts the rest of a large capture. Routing it through the read seam
+// would mean fetching the WHOLE catalog body per row and throwing most of it
+// away — the opposite of what the narrowing exists for. It moves when `tips`
+// becomes a typed projection column in the §6.4 slice.
 export async function listTransactionTipContextRawPayloadsAfterId(
   db: Database,
   input: {

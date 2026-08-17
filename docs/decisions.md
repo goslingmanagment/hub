@@ -218,6 +218,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 214 | G3 checkpoint cutover: the generation set is the membership authority | The Fansly `dm_conversations` sweep drops its cumulative `snapshotConversationIds` array (O(N²) checkpoint bytes) for a v2 scalar state with a persisted `observedCount`; membership lives row-side in `page_dm_threads.last_seen_generation`. Cross-page overlap is a pre-upsert row read inside the page transaction, which also takes the shared erasure fence and defers the chunk (+60s) rather than racing a delete. The destructive visibility pass runs ONLY on an exact `count(generation) == observedCount`; any gap — including one an erasure could plausibly explain — withholds finalization AND the success stamp, notes or alerts, and retries as a fresh sweep (+15min). Rollback-safe by version: the pre-G3 parser rejects a v2 state and re-walks from offset 0 under a higher generation, losing progress and never correctness |
 | 215 | G5 slice 1: the CAS copy is written before the fact, and proved after it | Pull capture on a canary page stores its body in the content-addressed catalog in a SEPARATE transaction that runs BEFORE the inline inserts, and the resulting `(payload_bucket_month, payload_object_id)` pair is carried INTO those inserts as ordinary column values. Same-transaction was rejected because a failed CAS statement aborts the whole transaction (25P02) and would take the capture with it; a post-commit UPDATE was rejected because it mints a second row version per capture on the two biggest tables. Failure of any CAS step is swallowed and leaves null references — never an orphaned fact, only an orphaned object. The envelope reference deliberately carries NO foreign key (an FK to a partitioned catalog taxes the hottest write path and locks its future partition maintenance); a two-directional CHECK, added NOT VALID because both columns start null for all history, is the enforced invariant, and a bounded hourly parity verifier is what actually looks for a dangling or divergent reference. One setting, `capture_cas_dual_write_pages` (CSV of page ids or `*`), is both the switch and the bound and FAILS CLOSED at empty; it reaches each process on the runtime heartbeat that already reads the live overlay, so the canary adds no query in either state. The verifier compares full canonical bodies (never digests alone), never repairs, and pages under the new `capture_payload_parity` incident kind |
 | 216 | jsonb reads are single-parse | drizzle 0.45.2's builtin `jsonb` column runs `JSON.parse` on a value node-postgres has ALREADY parsed, so any jsonb value that IS a JSON string is decoded TWICE: stored `"4"` reads back as the NUMBER 4, `"true"` as a boolean, `"{\"a\":1}"` as an object; bare words like `enforce` survive only because their second parse throws. It disarmed the G5 canary in production on 2026-08-16 — `captureCasDualWritePages = "4"` read back as 4, `validateConfigOverride` rejected it as "expects a string", the live overlay silently dropped the override, and nothing logged an error. Fixed at the root by a `jsonbSafe` `customType` in `packages/db/src/schema.ts` whose read is IDENTITY and whose write stays `JSON.stringify` — the wire format is byte-identical, the change is READ-SIDE ONLY, and no migration exists because the stored data was always correct. All 55 jsonb columns switched, not only the three that hold scalars: the object-only ones were safe by accident of what they happen to store, not by construction. The builtin `jsonb` import is lint-banned repo-wide so the trap cannot be re-imported |
+| 217 | G5 slice 2: reads move to the catalog through a staged, fail-open seam | Every reader that SERVES an `observations.payload` or `sync_raw_payloads.response_payload` body now goes through one seam (`apps/runtime/src/services/payload-reader.ts`) governed by `capture_cas_read_mode`: `inline` (the pre-slice behavior, zero extra queries, the mode check is one process-local variable), `shadow` (callers still get the inline bytes AND the catalog copy is compared octet-for-octet per read, counted and logged), `serve` (the catalog body IS what callers get). THE INLINE COLUMNS REMAIN THE AUTHORITY OF RECORD IN EVERY MODE — `serve` moves the byte source, never the truth — and the seam FAILS OPEN TO INLINE on every failure class (object/body missing, wrong representation, codec refusal, connection error), silently, never throwing. Transitions are stepwise upward and free downward, the `aiTranscriptFreshUnionMode` rule verbatim, so `serve` is unreachable without a shadow window. THE READ PATH OWNS NO ALARM: a shadow mismatch counts and logs but never touches the `capture_payload_parity` latch, which stays the hourly verifier's alone (a traffic-driven path cannot promise a clean pass, cannot bound its paging rate, and would race the verifier for the latch); the read counters ride the verifier's single telemetry line instead. The body read is barrel-exported only in ENVELOPE-authorized form (`readEnvelopeCapturePayload`), so a bare `(bucket_month, object_id)` still buys nothing. SQL `payload->` extraction sites are explicitly NOT migrated — they never return a whole body — and are marked in place with `CAS-READ-BACKLOG(§6.4)` |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -7123,3 +7124,120 @@ must each round-trip verbatim, number and boolean settings must stay their own
 types, and an object-payload column (`runtime_instances.running`, read through
 the relational query builder — a different mapping path than a plain select)
 must still come back an object with its nested scalars intact.
+
+---
+
+**Decision #217 (2026-08-18, G5 slice 2: reads move to the catalog through a
+staged, fail-open seam):** slice 1 (#215) put a second, content-addressed copy
+of every pull-capture body on disk and proved it faithful hourly. Nothing read
+it. This slice teaches the readers to, one mode at a time, without changing what
+a single caller receives until the owner says so.
+
+**One seam, one mode, three states.** `apps/runtime/src/services/payload-reader.ts`
+resolves `(inline body, optional catalog reference)` into the body a caller
+gets, under `capture_cas_read_mode`:
+
+- **`inline`** — the inline column, exactly as every reader behaved before this
+  slice. The mode check is ONE process-local variable read and the function
+  returns: no query, no allocation, no logger call. This is the default and the
+  deploy state.
+- **`shadow`** — the caller still receives the INLINE bytes. Additionally, for
+  an envelope that carries a reference, the catalog copy is read and compared
+  OCTET FOR OCTET through the frozen codec, the verdict is counted, and each
+  disagreement emits one bounded log line (envelope, id, reference, reason —
+  never the body). This is the hourly parity job made continuous and per-read,
+  and it is structurally incapable of changing an answer.
+- **`serve`** — the catalog canonical body IS what callers receive.
+
+**The inline columns remain the AUTHORITY OF RECORD in every mode.** `serve`
+moves where the bytes are fetched from; it does not move what is true. That is
+why nothing in this slice nulls, rewrites, or stops writing an inline column,
+and why a `serve` failure is not an error condition at all.
+
+**Fail open to inline, always.** There is no mode and no failure path in which
+the seam throws, returns null where a body existed, or returns anything but the
+inline body when it cannot prove a catalog body. Object missing, body row
+missing, an `exact_bytes` object under a `jsonb` envelope, a codec refusal, a
+dead connection — each falls back to inline and bumps a counter. In `serve` the
+fallback is SILENT by design: a fallback is a normal safe outcome, not an
+incident, and a per-read error log on a degraded catalog would drown the log
+before anyone read it. The counters ride the parity job's telemetry line.
+
+**Transitions are stepwise up, free down** — `validateCaptureCasReadModeTransition`
+is `validateAiTranscriptFreshUnionModeTransition`'s rule verbatim, checked inside
+the same locked write transaction. `inline → serve` is rejected: a mode that
+changes the byte source of a read must first spend a window in `shadow`, where
+the identical comparison runs on live traffic and cannot affect a caller. Every
+downward move is allowed unconditionally — a rollback must never be rate-limited
+by the rule that governs enabling.
+
+**THE READ PATH OWNS NO ALARM, and this is the load-bearing decision.** A shadow
+mismatch counts and logs. It does NOT open, and does not resolve, the
+`capture_payload_parity` incident. The hourly verifier
+(`services/capture-payload-parity.ts`) stays the sole authority over that
+latch's whole lifecycle. Three reasons, and any one of them is sufficient:
+
+1. **A latch needs an owner that can also say "clean".** Resolution requires a
+   pass that measured something and found it faithful. A traffic-driven read
+   path cannot promise that: during a quiet hour it measures nothing, and
+   "nothing measured" must never read as "measured and clean" (the same
+   asymmetry the disk-runway latches and #215's skip branch already encode).
+2. **It cannot bound its own paging rate.** The verifier pages at most once an
+   hour off a bounded sample. A read path fires at traffic's whim; a systematic
+   divergence would re-page per resolved row.
+3. **Two writers race one latch.** The verifier resolving what a concurrent read
+   just opened (or the reverse) makes the alarm's state a function of
+   scheduling. One owner, one lifecycle.
+
+So the read counters surface in exactly one place — the verifier's single
+telemetry line, alongside the write counters — and that line now also fires when
+the dual-write canary is off but the read mode is not, because references
+written during an earlier canary window outlive a dual-write rollback.
+
+**The body read is exported only in envelope-authorized form.** Slice 0 kept
+`loadPayloadBody` off the package barrel because a bare `(bucket_month,
+object_id)` is an ADDRESS, not an authorization: one object may be shared by
+several envelopes and a `restricted_ai` body is addressed exactly like an
+ordinary one. That pin stands. What the barrel gained is
+`readEnvelopeCapturePayload`, which cannot be called without naming the ENVELOPE
+CLASS the reference was read off — and that name is load-bearing, not
+decoration: it decides which representation the reference may resolve to and
+refuses the others (today both envelope classes store `jsonb`, so an
+`exact_bytes` object means the two content planes have been crossed; the webhook
+envelopes of a later slice will map to `exact_bytes`). A bare object id still
+buys nothing.
+
+**Key order is a non-issue, and it is pinned rather than assumed.** In `serve`
+the returned value is the catalog body re-parsed from `jsonb`, a different
+OBJECT than the inline one. It is not a different VALUE: both copies are stored
+as `jsonb`, which normalizes key order identically on both sides, so the
+canonical codec's own ordering never survives into what a reader sees and even
+`JSON.stringify` over the two agrees. That matters because exactly one migrated
+site RE-HASHES what it reads — `observations-rejournal` computes
+`sha256(JSON.stringify(payload))` for the observation it re-journals — and an
+integration test pins the equality of both the string and the digest.
+
+**What was NOT migrated, deliberately.** Sites where Postgres digs INSIDE the
+body and never returns it whole are out of scope and marked in place with
+`CAS-READ-BACKLOG(§6.4)`: the harvest `payload->>'machineId'` lookups and the
+transaction-residue extraction in `repositories/observations.ts` (one backed by
+an index expression, migration 0096), the tip-context reader that narrows to
+`{tips}` server-side precisely so it does NOT detoast the rest, the agent
+plane's `octet_length(o.payload::text)` size column, the coverage-revoke
+idempotency proof (inside packages/db, inside its own write transaction, no
+logger and no seam reach), and erasure's `payload::text like` subject matching.
+Per §6.4 these must move to narrow typed locator/projection columns BEFORE the
+inline JSON can go away; routing them through the seam would mean fetching a
+whole body to throw most of it away, which is the opposite of what the narrowing
+is for. Also out: pointer-only writes, nulling inline, historical rewrite, the
+static contract test banning direct `observations.payload` access (§7 puts that
+after parity, in a later slice), and the webhook exact-bytes representation.
+
+**Cost, and what bounds it.** `shadow` and `serve` each cost ONE catalog query
+per envelope that CARRIES a reference; a null reference costs nothing in any
+mode. References exist only for pages in the slice-1 dual-write canary, so that
+canary bounds the read cost too — the two ramps are deliberately coupled. List
+readers resolve row by row (no batch loader in this slice), so a replay page of
+200 referenced rows costs 200 extra queries; that number is quoted in the
+setting's `costWarning`, and a batch loader is the obvious next optimization if
+the ramp ever makes it matter.

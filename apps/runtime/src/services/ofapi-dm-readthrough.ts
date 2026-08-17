@@ -34,6 +34,7 @@ import {
 import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import {
   normalizeArchiveMediaItem,
@@ -386,11 +387,13 @@ export async function runOfapiDmReadthroughReconcile(
     for (const row of rows) {
       totals.scanned += 1;
       try {
+        // G5 slice 2: the captured body comes through the read seam.
+        const observation = await resolveCapturePayloadRow(app, "observation", row.id, row);
         const outcome = await projectReadthroughObservation(app, {
           id: row.id,
           receivedAt: row.receivedAt,
           accountId: row.accountId,
-          payload: row.payload,
+          payload: observation.payload,
         }, totals, budget);
         if (outcome.status === "deferred") {
           totals.deferred += 1;

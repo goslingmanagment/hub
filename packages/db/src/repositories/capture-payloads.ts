@@ -559,6 +559,114 @@ export async function loadPayloadBody(
   return loadBodyRow(db, object.representation, ref);
 }
 
+/**
+ * Rebuild an envelope's composite reference from its two nullable columns.
+ *
+ * Migration 0124's CHECK makes a half-set pair impossible in the database, so
+ * the `||` here is not a real case being handled — it is the fail-open reading
+ * of a state that cannot occur: an unresolvable address is treated as NO
+ * address, which sends the reader to the inline authority.
+ *
+ * The month arrives as `YYYY-MM-DD` text (`to_char`), never as a parsed Date:
+ * node-postgres turns a `date` into LOCAL midnight, which shifts the month for
+ * anyone west of UTC — the same trap `capturePayloadBucketMonth` avoids on the
+ * write side.
+ */
+export function capturePayloadRefFromColumns(
+  bucketMonth: string | null | undefined,
+  objectId: string | number | null | undefined,
+): CapturePayloadRef | null {
+  if (bucketMonth == null || objectId == null) {
+    return null;
+  }
+  return { bucketMonth, objectId: Number(objectId) };
+}
+
+/**
+ * Which envelope class a reference was read off. G5 slice 2.
+ *
+ * This is not decoration: it decides the representation the reference is
+ * ALLOWED to resolve to. Both of today's envelopes store their inline body in a
+ * `jsonb` column, so a reference from one of them to an `exact_bytes` object
+ * means the two content planes have been crossed and the reference is
+ * meaningless — the same verdict the parity verifier calls
+ * `representation_mismatch`. The webhook envelopes of a later slice keep their
+ * wire octets and will map to `exact_bytes` here.
+ */
+export const CAPTURE_PAYLOAD_ENVELOPE_KINDS = ["observation", "raw_payload"] as const;
+export type CapturePayloadEnvelopeKind = (typeof CAPTURE_PAYLOAD_ENVELOPE_KINDS)[number];
+
+const ENVELOPE_REPRESENTATION: Record<CapturePayloadEnvelopeKind, CapturePayloadRepresentation> = {
+  observation: "canonical_json",
+  raw_payload: "canonical_json",
+};
+
+export type EnvelopeCapturePayloadRead =
+  | { status: "loaded"; json: unknown }
+  /** The reference points at a catalog row that does not exist. */
+  | { status: "object_missing" }
+  /** The catalog row exists but its body row does not. */
+  | { status: "body_missing" }
+  /** The object's representation is not the one this envelope class stores. */
+  | { status: "representation_mismatch"; representation: CapturePayloadRepresentation };
+
+/**
+ * The catalog body an ENVELOPE points at — the one body read the runtime seam
+ * (apps/runtime/src/services/payload-reader.ts) is allowed to make.
+ *
+ * ON THE BARREL, unlike `loadPayloadBody`, and the difference is the whole
+ * point of the pin in tests/capture-payload-barrel.test.ts: this function
+ * cannot be called without naming the envelope class the reference came off,
+ * and it refuses to hand back a body whose representation that envelope class
+ * does not store. A bare `(bucket_month, object_id)` therefore still buys
+ * nothing — you must also be able to say which envelope carried it, and the
+ * only way a caller gets one honestly is by having read that envelope's row.
+ *
+ * ONE round trip, not the two `loadPayloadBody` takes. The identity row and
+ * both hot body tables are joined in a single statement because this runs per
+ * envelope on read paths that resolve row by row; halving the round trips is
+ * the difference between a bounded cost and a visible one. Body PRESENCE is
+ * decided by the joined key, never by the body being SQL NULL — a stored jsonb
+ * body may legitimately BE the JSON value `null`, and reading that as "missing"
+ * would turn a faithfully stored fact into a phantom parity failure.
+ */
+export async function readEnvelopeCapturePayload(
+  db: Database,
+  input: { envelope: CapturePayloadEnvelopeKind; ref: CapturePayloadRef },
+): Promise<EnvelopeCapturePayloadRead> {
+  const rows = await db.execute<{
+    representation: string;
+    has_json: boolean;
+    json_body: unknown;
+    has_bytes: boolean;
+  }>(sql`
+    select o.representation,
+           (jb.object_id is not null) as has_json,
+           jb.body as json_body,
+           (bb.object_id is not null) as has_bytes
+    from capture_payload_objects o
+    left join capture_json_hot_bodies jb
+      on jb.bucket_month = o.bucket_month and jb.object_id = o.object_id
+    left join capture_byte_hot_bodies bb
+      on bb.bucket_month = o.bucket_month and bb.object_id = o.object_id
+    where o.bucket_month = ${input.ref.bucketMonth}::date
+      and o.object_id = ${input.ref.objectId}
+  `);
+  const row = rows.rows[0];
+  if (row === undefined) {
+    return { status: "object_missing" };
+  }
+
+  const representation = row.representation as CapturePayloadRepresentation;
+  if (representation !== ENVELOPE_REPRESENTATION[input.envelope]) {
+    return { status: "representation_mismatch", representation };
+  }
+  if (!row.has_json) {
+    return { status: "body_missing" };
+  }
+  return { status: "loaded", json: row.json_body };
+}
+
 async function loadBodyRow(
   db: Database,
   representation: CapturePayloadRepresentation,
