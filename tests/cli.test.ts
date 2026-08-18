@@ -1359,4 +1359,53 @@ describe("CLI parsing", () => {
     // The guard did not throw the --fan error; control reached the user lookup.
     expect(cliMocks.findUserByUsername).toHaveBeenCalledTimes(1);
   });
+  // Decision #223: the drill seam may not answer for the real gate.
+  describe("capture:reclaim --assume-free-bytes", () => {
+    it("REJECTS the drill figure on an executing run, before any database work", async () => {
+      const program = buildProgram();
+      program.exitOverride();
+
+      await expect(program.parseAsync([
+        "capture:reclaim",
+        "--table",
+        "sync_raw_payloads",
+        "--phase",
+        "null-bodies",
+        "--assume-free-bytes",
+        "1",
+        "--execute",
+      ], { from: "user" })).rejects.toThrow(/cannot be combined with --execute/);
+
+      // BEFORE any database work: the refusal is a category error, not a bad
+      // run, and an app context (a pool, a heartbeat) must not be built for it.
+      expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+    });
+
+    it("still allows the drill on a DRY run, which is what it is for", async () => {
+      // The owner staring at a headroom refusal asks "how much would I have to
+      // free up". That question is the reason the flag exists.
+      const program = buildProgram();
+      program.exitOverride();
+      cliMocks.createAppContext.mockRejectedValueOnce(new Error("context requested"));
+
+      await expect(program.parseAsync([
+        "capture:reclaim",
+        "--table",
+        "sync_raw_payloads",
+        "--phase",
+        "null-bodies",
+        "--assume-free-bytes",
+        "80000000000",
+      ], { from: "user" })).rejects.toThrow("context requested");
+
+      expect(cliMocks.createAppContext).toHaveBeenCalledTimes(1);
+    });
+
+    it("documents the restriction in --help", () => {
+      const command = buildProgram().commands.find((one) => one.name() === "capture:reclaim");
+      // Help output wraps, so the sentence is matched across the wrap.
+      expect(command?.helpInformation().replace(/\s+/g, " "))
+        .toContain("Rejected together with --execute");
+    });
+  });
 });

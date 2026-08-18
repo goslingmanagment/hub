@@ -18,7 +18,7 @@
 //      finds the fan and still kills the body; the re-journal still re-hashes
 //      the same bytes.
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -26,8 +26,10 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  createUser,
   insertObservation,
   putPayloadObject,
+  setConfigOverride,
   startSyncRun,
   verifyCapturePayloadParity,
 } from "@agency_hub_core/db";
@@ -38,6 +40,8 @@ import {
   publishCaptureCasPointerOnlyPages,
   resetCaptureCasDualWriteForTests,
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
+import { handleAgentObservationPayload } from "../apps/runtime/src/modules/agent-read/index.ts";
+import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import {
   E5_COLLISION_WINDOW,
@@ -57,6 +61,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
 let testDb: StartedTestDatabase | null = null;
@@ -389,6 +394,208 @@ describe("G5 slice 3c-1: a pointer-only body is reachable in EVERY read mode", (
     },
     INTEGRATION_TEST_TIMEOUT_MS,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Decision #223, finding 2 — AN UNREADABLE BODY IS NOT AN EMPTY ONE.
+//
+// A pointer-only row's body lives in exactly one place. Until #223 the seam
+// answered a failed catalog read for such a row with the inline value it was
+// holding — which is `null`, the same answer it gives for "this envelope
+// captured no body". Every consumer downstream then recorded the absence as a
+// FACT: the sweep stamped parse_version (deleting the row from every future
+// replay), the re-journal inserted an empty observation under a deterministic
+// key it can never revisit, and the agent plane reported a policy withholding.
+//
+// The fixture for "unreadable" is the honest one: the object row survives and
+// its BODY row is gone, which is `body_missing` — the same status a torn cold
+// tier or a half-restored partition produces.
+
+describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empty one", () => {
+  async function hideCatalogBodies() {
+    const { rowCount } = await testDb!.pool.query("delete from capture_json_hot_bodies");
+    expect(rowCount).toBeGreaterThan(0);
+  }
+
+  async function parseVersionOf(observationId: number) {
+    const { rows } = await testDb!.pool.query<{ v: number }>(
+      "select parse_version as v from observations where id = $1",
+      [observationId],
+    );
+    return rows[0]!.v;
+  }
+
+  it("the canonicalize sweep leaves it UNSTAMPED and counts it apart", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedFanslyPage("unavailable-sweep");
+    armPointerOnly(page.id);
+    await capture(page.id, BODY);
+    const [observation] = await observationRows();
+    expect(observation!.inlineIsNull).toBe(true);
+    expect(await parseVersionOf(observation!.id)).toBe(0);
+
+    await hideCatalogBodies();
+
+    // `dm_messages` belongs to the sync-pull family, which has NO canParse
+    // shape gate — four of the six families do not. Before #223 the null
+    // payload canonicalized to zero events and fell straight through to
+    // markObservationParsed.
+    const result = await runCanonicalization(appStub(), { kinds: ["dm_messages"] });
+
+    expect(result.scanned).toBe(1);
+    expect(result.skippedUnavailable).toBe(1);
+    // Not folded into the permanent bucket: unparseable waits for a new parser,
+    // unavailable waits for nothing at all.
+    expect(result.skippedUnparseable).toBe(0);
+    expect(result.errored).toBe(0);
+    expect(result.stamped).toBe(0);
+    expect(result.appended).toBe(0);
+    // THE ASSERTION THE WHOLE FINDING IS ABOUT: still replayable.
+    expect(await parseVersionOf(observation!.id)).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("the re-journal ABORTS rather than write an empty observation", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedFanslyPage("unavailable-rejournal");
+    const inWindow = new Date(E5_COLLISION_WINDOW.from.getTime() + 60 * 60 * 1000);
+    const payloads = [
+      [{ correlationAccountId: "fan-u-1", type: 2110, totalGross: 10_000, totalNet: 8_000 }],
+      [{ correlationAccountId: "fan-u-1", year: 2026, month: 6, type: 2110, totalGross: 3_000 }],
+    ];
+
+    const run = await startSyncRun(testDb.db, {
+      platformAccountId: page.id,
+      stream: "fan_earnings",
+      trigger: "scheduled",
+    });
+    if (!run) throw new Error("sync run seed failed");
+
+    for (const [index, endpoint] of ["fan_earnings_stats", "fan_earnings_monthly"].entries()) {
+      const object = await putPayloadObject(testDb.db, {
+        representation: "canonical_json",
+        json: payloads[index],
+        captureInstant: new Date(),
+        lane: "platform_capture",
+        platformAccountId: page.id,
+      });
+      await testDb.pool.query(
+        `insert into sync_raw_payloads
+           (page_id, sync_run_id, stream, request_seq, source, endpoint, request_params,
+            response_payload, mapper_version, payload_kind, captured_at, retain_until,
+            payload_bucket_month, payload_object_id)
+         values ($1, $2, 'fan_earnings', 9, 'scheduled', $3, '{}'::jsonb,
+                 null, 'test-mapper', 'mapping_critical', $4, now() + interval '100 years',
+                 $5::date, $6)`,
+        [page.id, run.id, endpoint, inWindow, object.bucketMonth, object.objectId],
+      );
+    }
+    await insertObservation(testDb.db, {
+      source: "pull",
+      producer: "sync:fansly:fan_earnings",
+      platform: "fansly",
+      accountId: page.id,
+      kind: "fan_earnings_stats",
+      payload: payloads[0],
+      payloadHash: Buffer.alloc(32),
+      idempotencyKey: `${page.id}:fan_earnings:${run.id}:9`,
+    });
+
+    await hideCatalogBodies();
+    resetCaptureCasReadForTests("inline");
+
+    await expect(runObservationsRejournal(appStub(), { dryRun: false }))
+      .rejects.toThrow(/unavailable/);
+
+    // NOTHING was written. The alternative is worse than a crash: the insert is
+    // keyed `rejournal:a22:<rawId>`, so an empty observation would be counted a
+    // successful repair AND block the correct one forever.
+    const journaled = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from observations where producer = $1",
+      [REJOURNAL_PRODUCER],
+    );
+    expect(Number(journaled.rows[0]!.n)).toBe(0);
+
+    // Falsification: restore the bodies and the same campaign succeeds, so the
+    // abort is about the unreadable body and nothing else about this fixture.
+    await testDb.pool.query(
+      `insert into capture_json_hot_bodies (bucket_month, object_id, body)
+       select o.bucket_month, o.object_id, '{"restored": true}'::jsonb
+       from capture_payload_objects o`,
+    );
+    const repaired = await runObservationsRejournal(appStub(), { dryRun: false });
+    expect(repaired.totals.rejournaled).toBe(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("the agent plane answers 503, not a restricted-class withholding", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedFanslyPage("unavailable-agent");
+    armPointerOnly(page.id);
+    await capture(page.id, BODY);
+    const [observation] = await observationRows();
+
+    const owner = await createUser(testDb.db, {
+      username: `owner-unavailable-${Date.now()}`,
+      role: "owner",
+    });
+    if (!owner) throw new Error("owner seed failed");
+    const appContext = createTestAppContext(testDb);
+    await setConfigOverride(testDb.db, {
+      key: "agentReadPlaneMode",
+      value: "read_only",
+      userId: owner.id,
+      groupId: randomUUID(),
+    });
+    await setConfigOverride(testDb.db, {
+      key: "agentObservationsEnabled",
+      // Typed boolean (#216): the string only worked while jsonb was
+      // double-parsed on read.
+      value: true,
+      userId: owner.id,
+      groupId: randomUUID(),
+    });
+    const principal = { kind: "human" as const, user: owner };
+
+    // With the body readable the read is served, so the refusal below is about
+    // the catalog and not about the plane's own gates.
+    const served = await handleAgentObservationPayload(
+      appContext,
+      principal as never,
+      { observationRef: observation!.id },
+      { reason: "verifying the #223 seam" },
+    );
+    expect(served.withheldReason).toBeNull();
+
+    await hideCatalogBodies();
+
+    const failure = await handleAgentObservationPayload(
+      appContext,
+      principal as never,
+      { observationRef: observation!.id },
+      { reason: "verifying the #223 seam" },
+    ).then(() => null, (error: unknown) => error as { statusCode?: number; code?: string });
+
+    // A withholding is a DECISION the kernel made; this is a fetch that failed.
+    // Reporting the second as the first told the owner the body was restricted
+    // when it was merely out of reach.
+    expect(failure?.statusCode).toBe(503);
+    expect(failure?.code).toBe("capture_payload_unavailable");
+
+    // And it did NOT charge the daily payload budget for a read that produced
+    // nothing: the audit trail records decisions, not failed fetches.
+    const audits = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from agent_read_audit where operation = 'agentObservationPayload'",
+    );
+    expect(Number(audits.rows[0]!.n)).toBe(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
 describe("G5 slice 3c-1: the parity verifier reports what it cannot compare", () => {

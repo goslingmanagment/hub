@@ -16,6 +16,7 @@ import {
   getOfapiCaptureOperatorStatus,
   OfapiCaptureInvariantError,
   OfapiMessageCoverageOperatorConflictError,
+  OfapiMessageCoverageUnavailableError,
   reconcileOfapiExportCreate,
   replayOfapiCaptureJobParse,
   revokeOfapiMessageCoverage,
@@ -25,7 +26,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { ConflictError, NotFoundError } from "./errors.ts";
+import { ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
 
 function serializeAttempt(
   attempt: OfapiCaptureOperatorAttemptRecord,
@@ -224,6 +225,12 @@ export async function revokeOwnerOfapiMessageCoverage(
   } catch (error) {
     if (error instanceof OfapiMessageCoverageOperatorConflictError) {
       throw new ConflictError(error.message);
+    }
+    // #223: an unreadable prior proof is TEMPORARY, so it must not wear the
+    // conflict's 409 — a 409 tells the owner to stop and investigate a
+    // collision that does not exist.
+    if (error instanceof OfapiMessageCoverageUnavailableError) {
+      throw new ServiceUnavailableError(error.message);
     }
     throw error;
   }

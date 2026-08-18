@@ -136,6 +136,27 @@ export interface DiskUsageStats {
   bavail: number;
 }
 
+/**
+ * Free bytes on the volume the fact tables grow on — THE one reader.
+ *
+ * G5's historical rewrite (services/capture-rewrite) needs the same number this
+ * gauge has been trending all along, and for a while it had its own private
+ * `statfs("/")` beside this one with a comment claiming they agreed. Two
+ * implementations of "how much room is left" is one more than a containment
+ * project can afford: the day the gauge learns about a second volume, a bind
+ * mount, or a reserved-blocks correction, the rewrite's headroom law must learn
+ * it in the same commit or it starts admitting runs the alarm would refuse.
+ *
+ * Node's `statfs` rather than PostgreSQL: `pg_stat_file` and friends need
+ * superuser, and this number is about the FILESYSTEM, not the database.
+ */
+export async function readDiskFreeBytes(
+  statfsImpl: (path: string) => Promise<DiskUsageStats> = (path) => statfs(path),
+): Promise<number> {
+  const stats = await statfsImpl(DISK_USAGE_CHECK_PATH);
+  return Number(stats.bavail) * Number(stats.bsize);
+}
+
 export function evaluateDiskUsage(stats: DiskUsageStats, thresholdPercent: number) {
   const totalBytes = stats.blocks * stats.bsize;
   const availableBytes = stats.bavail * stats.bsize;

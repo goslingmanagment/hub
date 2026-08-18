@@ -115,7 +115,8 @@ status, code, and intentional message.
 | AI | `persona_definition_changed` | 409 | Selected persona changed after the client read the catalog; refresh before retrying. |
 | Sync | `sync_snapshot_restart_required` | 409 | Resume cursor is below the replay continuity floor; response also carries `replayFloor` and `snapshotPath`. |
 | General | `rate_limit_exceeded` | 429 | Generic API rate limit, distinct from the AI gateway's daily quota and provider SSE rate code. |
-| General | `service_unavailable` | 503 | Intentional temporary service unavailability. |
+| General | `service_unavailable` | 503 | Intentional temporary service unavailability. Also the OFAPI coverage-revoke idempotency proof when the prior proof's captured body is unreadable (Decision #223) — never the 409 that means the action belongs to a different proof. |
+| Capture | `capture_payload_unavailable` | 503 | The agent plane's owner-only observation payload read (#9b): the envelope has no inline body and its content-addressed copy could not be read right now. Deliberately NOT one of the handler's withholding reasons — `restricted_class` is a decision the kernel made, this is a fetch that failed, and Decision #223 exists because the two were the same answer. Transient and retriable. |
 | Egress | `proxy_missing` | 409 | A Fansly page has no stored proxy, so fail-closed egress refuses the request. |
 | AI | `quota_denied` | 429 | Core AI daily budget/quota rejected the generation before provider dispatch. |
 | AI gate | `gate_draft_required` | 400 | Feature policy requires nonblank `draftText`. |

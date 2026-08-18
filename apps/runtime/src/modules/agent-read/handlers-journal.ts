@@ -31,14 +31,23 @@ import {
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { resolveCapturePayloadRow } from "../../services/payload-reader.ts";
+import {
+  isCapturePayloadUnavailable,
+  resolveCapturePayloadRow,
+} from "../../services/payload-reader.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError } from "../../services/errors.ts";
 import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.ts";
 import { buildAgentEvidence, gapBeforeCaptureFloor } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
-import { AgentPlaneDisabledError, staticNotFound, toSafeNumber, toSafeNumberOr } from "./errors.ts";
+import {
+  AgentCapturePayloadUnavailableError,
+  AgentPlaneDisabledError,
+  staticNotFound,
+  toSafeNumber,
+  toSafeNumberOr,
+} from "./errors.ts";
 import {
   AGENT_OBSERVATION_PAYLOAD_SESSION_CAP,
   agentObservationPayloadAllowed,
@@ -349,9 +358,26 @@ export async function handleAgentObservationPayload(
   // G5 slice 2: the body comes through the read seam. Resolved only when it
   // will actually be served — a withheld read must not pay a catalog query,
   // and must not count as a shadow comparison of a body nobody saw.
-  const resolved = allowed && remaining > 0
-    ? await resolveCapturePayloadRow(appContext, "observation", row.observationRef, row)
-    : row;
+  //
+  // #223: an unreadable body is an ERROR, never a withholding. It happens
+  // BEFORE the audit row on purpose: the trail records reads that were decided,
+  // and a fetch that failed is not a decision about anything.
+  let resolved = row;
+  if (allowed && remaining > 0) {
+    try {
+      resolved = await resolveCapturePayloadRow(
+        appContext,
+        "observation",
+        row.observationRef,
+        row,
+      );
+    } catch (error) {
+      if (!isCapturePayloadUnavailable(error)) {
+        throw error;
+      }
+      throw new AgentCapturePayloadUnavailableError();
+    }
+  }
   const scrubbed = allowed && remaining > 0 ? scrubObservationPayload(resolved.payload) : null;
   const withheldReason = !allowed
     ? "kind_not_allowlisted" as const

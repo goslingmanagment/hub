@@ -281,6 +281,22 @@ export class OfapiMessageCoverageOperatorConflictError extends Error {
   }
 }
 
+/**
+ * The prior proof exists but its captured body cannot be READ (#223).
+ *
+ * Its own class rather than a conflict, because the two say opposite things to
+ * an operator: a conflict means "this action belongs to a different proof, do
+ * not retry it", and this means "ask me again in a minute". packages/db owns no
+ * HTTP status, so the runtime maps it — to a 503, the code for a temporary
+ * inability, never to the 409 the conflict carries.
+ */
+export class OfapiMessageCoverageUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OfapiMessageCoverageUnavailableError";
+  }
+}
+
 export async function revokeOfapiMessageCoverage(
   db: Database,
   input: {
@@ -352,6 +368,17 @@ export async function revokeOfapiMessageCoverage(
         });
         if (read.status === "loaded") {
           priorPayload = read.json;
+        } else if (priorRow.payload === null) {
+          // #223: THE POINTER-ONLY ROW HAS NOTHING TO FALL OPEN TO, and the
+          // fall-through below would read its absent body as a proof belonging
+          // to somebody else — telling the operator their action collides with
+          // another when the truth is that the kernel could not read the
+          // evidence. That is an existence claim made out of a failed fetch.
+          // Refuse instead: the action is untouched and the retry is free.
+          throw new OfapiMessageCoverageUnavailableError(
+            `Coverage revocation action ${input.actionId} cannot be proved idempotent right now: `
+              + "the prior proof's captured body is temporarily unreadable",
+          );
         }
       }
       const payload: Record<string, unknown> =

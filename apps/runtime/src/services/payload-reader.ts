@@ -43,8 +43,12 @@
 // FAIL OPEN TO INLINE, ALWAYS — WHEN THERE IS AN INLINE BODY TO FAIL OPEN TO.
 // For a row that carries one, there is no mode and no failure path in which
 // this seam throws, returns null where a body existed, or returns anything
-// other than the inline body when it cannot prove a catalog body. For such a
-// row the inline column remains the AUTHORITY OF RECORD in every mode, and
+// other than the inline body when it cannot prove a catalog body. (For a row
+// that does NOT carry one — slice 3c-1 below — there is nothing to fail open to
+// and the seam raises `CapturePayloadUnavailableError` instead of answering
+// `null`, which is the sentence it reserves for "no body was captured": see
+// #223 on that class.) For such a row the inline column remains the AUTHORITY
+// OF RECORD in every mode, and
 // `serve` moves only the byte source, never the truth. That asymmetry is why
 // the upward transition is stepwise (see validateCaptureCasReadModeTransition):
 // shadow must have proven equality on live traffic before serve is reachable.
@@ -126,6 +130,45 @@
 //     and reported. The inline arm above stays because the inline column is
 //     still the authority; it is the historical rewrite (slice 3c) that
 //     finally takes it away, and that slice is now unblocked.
+//
+// ---------------------------------------------------------------------------
+// THE CALL-SITE REGISTRY, and what each site does with an UNAVAILABLE body
+// ---------------------------------------------------------------------------
+//
+// #217 migrated these sites and never wrote them down, which is why the null
+// hazard #223 fixes went a whole slice without a per-site review. The list is
+// here now, and the column that matters is the last one: a body that could not
+// be read must never be recorded as an empty, parsed or absent fact.
+//
+//   propagate — the site's own failure handling already leaves the row for the
+//               next pass (a per-row catch that counts `errored` and does NOT
+//               stamp, a job that retries, a chunk that fails).
+//   catch     — the site would otherwise settle something durable, so it
+//               catches, counts, and moves on WITHOUT settling.
+//   surface   — an API path: an explicit error to the caller.
+//
+//   modules/agent-read/handlers-journal.ts        surface (503, #223)
+//   services/canonicalize-driver.ts               catch → skippedUnavailable
+//   services/ofapi-capture-transport.ts           catch → unavailable
+//   services/ofapi-capture-materialization.ts     propagate (per-row catch)
+//   services/ofapi-dm-readthrough.ts              propagate (per-row catch)
+//   services/ofapi-capture-jobs.ts                propagate (leased job retries)
+//   services/projections/ai-acceptance.ts         propagate (watermark unmoved)
+//   services/fansly-1970-repair.ts                propagate (per-row catch)
+//   services/domain-events-enrich.ts              propagate (caller serves a
+//                                                 thin frame and logs — the
+//                                                 events module's own policy)
+//   services/sync/executor-handlers.ts (×2)       propagate (chunk fails; the
+//                                                 raw-payload cursor is NOT
+//                                                 advanced past unread pages)
+//   services/observations-rejournal.ts            propagate (the campaign
+//                                                 ABORTS rather than insert an
+//                                                 empty observation under a
+//                                                 deterministic key)
+//
+// One more site reads bodies without this seam, inside packages/db, and #223
+// gave it the same law by hand: repositories/ofapi-message-coverage.ts, whose
+// idempotency proof used to read an unavailable body as somebody else's proof.
 
 import { sql } from "drizzle-orm";
 
@@ -142,6 +185,69 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 
 export type CaptureCasReadMode = "inline" | "shadow" | "serve";
+
+/**
+ * THE ONE FAILURE THIS SEAM CANNOT ABSORB: a row with no inline body whose
+ * catalog copy could not be read (decision #223).
+ *
+ * Every other failure here falls open to the inline column, which is why this
+ * module could promise its callers it never throws. #220 broke the premise that
+ * promise rested on — a pointer-only row has NO inline column to fall open to —
+ * and until #223 the seam answered such a failure with the inline value it was
+ * holding, which for that row is `null`. Callers cannot tell that `null` apart
+ * from "this envelope captured no body", and they did not: the canonicalizers
+ * produced zero events and the driver stamped `parse_version` forward, which
+ * deletes the observation from every future replay as surely as a DROP would;
+ * the re-journal hashed `null`, inserted it under a DETERMINISTIC idempotency
+ * key and made the empty row permanent; the materializer and the readthrough
+ * sweep stamped their own versions; the agent plane told the owner the payload
+ * was withheld for its restriction class. A transient catalog blip — a dropped
+ * connection, a partition not yet attached — became a permanent silently-empty
+ * fact.
+ *
+ * SO THE ONE UNREPRESENTABLE ANSWER IS RAISED, NOT RETURNED. A sentinel value
+ * would have to be checked, and the whole finding is that nobody checked. An
+ * exception is the only shape whose DEFAULT behaviour at an unaudited call site
+ * is loud: the batch fails, the job retries, the row stays unstamped. Every
+ * migrated read site was audited for #223 and each one either propagates this
+ * (its own failure handling already leaves the row for the next pass), catches
+ * it to count and skip WITHOUT stamping, or maps it to an explicit 503.
+ *
+ * IT IS TRANSIENT AND MUST BE READ THAT WAY. Unparseable is permanent — a body
+ * the parser will never understand. Unavailable is a body that is very probably
+ * fine and momentarily out of reach, so no counter, no verdict and no version
+ * stamp may treat the two as the same thing.
+ */
+export class CapturePayloadUnavailableError extends Error {
+  override readonly name = "CapturePayloadUnavailableError";
+
+  constructor(
+    readonly detail: {
+      envelope: CapturePayloadEnvelopeKind;
+      envelopeId: number;
+      bucketMonth: string;
+      objectId: number;
+      reason: CaptureCasReadMismatchReason;
+      readMode: CaptureCasReadMode;
+    },
+  ) {
+    super(
+      `capture payload for ${detail.envelope} ${detail.envelopeId} is unavailable: it has no `
+        + `inline body and its catalog copy (${detail.bucketMonth}/${detail.objectId}) could not `
+        + `be read (${detail.reason})`,
+    );
+  }
+}
+
+/** Narrowing helper for the call sites that must handle the transient case
+ *  themselves. `instanceof` across a bundling boundary is the usual hazard;
+ *  the name check makes this total. */
+export function isCapturePayloadUnavailable(
+  error: unknown,
+): error is CapturePayloadUnavailableError {
+  return error instanceof CapturePayloadUnavailableError
+    || (error instanceof Error && error.name === "CapturePayloadUnavailableError");
+}
 
 /**
  * The mode, as published to this process.
@@ -205,7 +311,9 @@ export interface CaptureCasReadCounters {
    *  instead of being folded into shadowMatched — see resolveCapturePayload. */
   shadowSkippedNullInline: number;
   /** The one genuinely bad outcome this seam can have: a row with no inline
-   *  body whose catalog copy could not be read either. The caller gets null. */
+   *  body whose catalog copy could not be read either. Since #223 the caller
+   *  gets a `CapturePayloadUnavailableError`, never a null that reads as an
+   *  absent fact. */
   nullInlineUnresolved: number;
 }
 
@@ -330,7 +438,13 @@ function inlineAbsent(inline: unknown): boolean {
  *
  * Returns the inline body unless the mode is `serve` AND a catalog body was
  * proven readable — OR the row has NO inline body, which is answered from the
- * catalog in every mode (see below). NEVER THROWS.
+ * catalog in every mode (see below).
+ *
+ * THROWS EXACTLY ONE ERROR, AND ONLY FOR A ROW THAT HAS NOTHING TO FALL OPEN
+ * TO: `CapturePayloadUnavailableError`, when a pointer-only row's single copy
+ * cannot be read (#223, and the reasoning is on the class). For a row that
+ * carries an inline body there is still no mode and no failure path in which
+ * this function throws.
  *
  * On key order and identity: in `serve` the returned value is the catalog
  * body, re-parsed from `jsonb`, so it is a DIFFERENT object than the inline
@@ -379,21 +493,29 @@ export async function resolveCapturePayload(
       return stored.json;
     }
     // The one place in this seam where falling back to inline is not a safe
-    // outcome — there is no inline body to fall back TO. It is still not an
-    // exception and still not an alarm (#217: the read path owns no latch), but
-    // it IS logged every time, unlike a `serve` fallback: this says a captured
-    // body is currently unreachable, which is a different sentence from "the
-    // fast path was unavailable".
+    // outcome — there is no inline body to fall back TO. Still not an alarm
+    // (#217: the read path owns no latch), and still logged every time, unlike
+    // a `serve` fallback: this says a captured body is currently unreachable,
+    // which is a different sentence from "the fast path was unavailable".
+    //
+    // #223: and it is RAISED rather than returned, because returning the inline
+    // value here returns `null`, and `null` is what this seam says for "no body
+    // was captured". Handing the same answer to two opposite questions is how a
+    // dropped connection became a permanently empty observation.
     counters.nullInlineUnresolved += 1;
-    app.logger.warn({
+    const detail = {
       envelope: read.envelope,
       envelopeId: read.envelopeId,
       bucketMonth: resolvable.ref.bucketMonth,
       objectId: resolvable.ref.objectId,
       reason: stored.reason,
       readMode: mode,
-    }, "Capture payload has no inline body and its catalog copy could not be read");
-    return read.inline;
+    };
+    app.logger.warn(
+      detail,
+      "Capture payload has no inline body and its catalog copy could not be read",
+    );
+    throw new CapturePayloadUnavailableError(detail);
   }
 
   if (mode === "inline") {

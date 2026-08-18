@@ -38,6 +38,29 @@ export class AgentPlaneDisabledError extends AppError {
   }
 }
 
+/**
+ * The observation's captured body has no inline copy and its catalog copy could
+ * not be read right now (#223).
+ *
+ * A 503 and not a withholding. This handler already has a rich vocabulary for
+ * "you may not see this" — `kind_not_allowlisted`, `session_payload_budget_
+ * exhausted`, `restricted_class` — and before #223 an unreadable body fell into
+ * the last of them, because the seam answered `null` and a null payload does
+ * not survive the scrub. So the plane told the owner the kernel had DECIDED to
+ * withhold a body it had merely failed to fetch, and charged the audit trail a
+ * `returned: 0` for it. A refusal must describe the reason it actually has;
+ * this one is transient, retriable, and nobody's policy.
+ */
+export class AgentCapturePayloadUnavailableError extends AppError {
+  constructor() {
+    super(
+      "the captured body for this observation is temporarily unreadable; retry shortly",
+      503,
+      "capture_payload_unavailable",
+    );
+  }
+}
+
 /** The `message_archive` rebuild swapped the table under a reader (#134). */
 export class ArchiveRebuildingError extends AppError {
   constructor(message = "message archive is being rebuilt; retry shortly") {

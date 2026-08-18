@@ -216,6 +216,104 @@ export function reclaimHeadroomVerdict(input: HeadroomInput): HeadroomVerdict {
 }
 
 /**
+ * The FLOOR the whole slice keeps its hands off (decision #223).
+ *
+ * §9.1's inequality says what an operation needs; it says nothing about what
+ * the rest of the box needs while that operation runs. On a VPS where Postgres,
+ * its WAL, the container images and the logs share one volume, "the copy fits"
+ * and "the machine survives the copy" are different sentences, and only the
+ * second one matters at 03:00. Five GiB is the smallest number that is
+ * comfortably more than a WAL burst plus a log rotation plus the slack an
+ * autovacuum needs to finish, and it is deliberately NOT config: it is a
+ * containment threshold, exactly like the runway days in db-disk-alert.ts, and
+ * a tunable containment threshold is a containment threshold somebody turns off
+ * the night it would have fired.
+ */
+export const CAPTURE_REWRITE_FREE_FLOOR_BYTES = 5 * 1024 ** 3;
+
+/**
+ * §9.1's law, applied to the act that RUNS FIRST and used to have no gate at
+ * all: the backfill.
+ *
+ * THE ORDER WAS THE BUG. `capture:backfill` writes a full catalog copy of every
+ * body it walks plus a second heap tuple per stamped row, on the two largest
+ * tables in the system — and the headroom law was checked afterwards, by the
+ * reclaim, which is the step that GIVES space back. A run admitted in that
+ * order can fill the volume before anything is in a position to refuse, and the
+ * refusal it eventually meets is the reclaim declining to clean up the mess the
+ * backfill made.
+ *
+ * WHAT IT ASKS FOR, and why each term is there:
+ *
+ *   * THE BODIES STILL TO COPY. Only the unreferenced share of the scope's
+ *     heap+TOAST — the referenced share is already in the catalog and the
+ *     dedup means this is a worst case, not an estimate. Indexes are excluded:
+ *     the catalog's own indexes are over digests, not bodies, and do not scale
+ *     with this.
+ *   * THE SAME AGAIN FOR WAL. `wal_level = replica` in production, so every one
+ *     of those inserts is fully logged; assuming the `minimal` optimisation
+ *     would be assuming a setting this project does not control (the same
+ *     sentence reclaimHeadroomVerdict makes, for the same reason).
+ *   * THE FLOOR, untouched. See above.
+ *
+ * The UPDATE's dead tuples are deliberately NOT budgeted separately: an UPDATE
+ * that changes only narrow columns reuses the row's TOAST pointer rather than
+ * copying the body, so its cost is a main-heap tuple — small beside the copy,
+ * and comfortably inside the floor this reserves.
+ */
+export function backfillHeadroomVerdict(input: {
+  freeBytes: number;
+  sourceTotalBytes: number;
+  sourceIndexBytes: number;
+  /** Fraction of the scope's rows that still need a catalog copy. 0..1. */
+  unreferencedFraction: number;
+}): HeadroomVerdict {
+  const fraction = Math.min(1, Math.max(0, input.unreferencedFraction));
+  const heapToastBytes = Math.max(0, input.sourceTotalBytes - input.sourceIndexBytes);
+  const catalogCopyBytes = Math.round(heapToastBytes * fraction);
+  const walReserveBytes = catalogCopyBytes;
+  const requiredBytes = catalogCopyBytes + walReserveBytes + CAPTURE_REWRITE_FREE_FLOOR_BYTES;
+  const ok = input.freeBytes >= requiredBytes;
+  return {
+    ok,
+    freeBytes: input.freeBytes,
+    sourceTotalBytes: input.sourceTotalBytes,
+    shadowEstimateBytes: catalogCopyBytes,
+    walReserveBytes,
+    requiredBytes,
+    reason: ok
+      ? `free ${gib(input.freeBytes)} >= required ${gib(requiredBytes)}`
+      : `free ${gib(input.freeBytes)} < required ${gib(requiredBytes)} `
+        + `(catalog copy ${gib(catalogCopyBytes)} + WAL ${gib(walReserveBytes)} `
+        + `+ ${gib(CAPTURE_REWRITE_FREE_FLOOR_BYTES)} floor)`,
+  };
+}
+
+/**
+ * The MID-RUN check, and why it asks a different question than the pre-flight.
+ *
+ * A pre-flight admits a walk that then runs for hours on a box that is doing
+ * other things. Re-evaluating the full inequality every N batches would be
+ * arithmetic theatre — the estimate it re-derives is the same estimate, and the
+ * scope's remaining share is exactly what the walk has been consuming. What
+ * genuinely has to stay true is the floor: if free space has reached it,
+ * something is eating the disk faster than this run budgeted for and the honest
+ * response is to stop where it stands. The walk is resumable with no cursor, so
+ * stopping costs nothing but the time already spent.
+ */
+export function captureBackfillMidRunVerdict(freeBytes: number): FreshnessVerdict {
+  if (freeBytes >= CAPTURE_REWRITE_FREE_FLOOR_BYTES) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    reason: `free space fell to ${gib(freeBytes)}, at or below the `
+      + `${gib(CAPTURE_REWRITE_FREE_FLOOR_BYTES)} floor this slice keeps clear — stopping the `
+      + "walk here; it resumes with no cursor once the volume has room",
+  };
+}
+
+/**
  * The `sync_raw_payloads` variant. `VACUUM FULL` writes a complete new copy of
  * the relation and its indexes before dropping the old one, so the requirement
  * is the whole relation twice over plus the WAL of the rewrite.
