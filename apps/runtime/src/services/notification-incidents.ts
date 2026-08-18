@@ -60,8 +60,16 @@ export function incidentKey(
   return input.subKey ? `${pageKey}:${input.subKey}` : pageKey;
 }
 
-function openTitleForIncident(kind: NotificationIncidentKind) {
-  switch (kind) {
+function openTitleForIncident(
+  input: { kind: NotificationIncidentKind; subKey?: string | null },
+) {
+  // A kind whose subKeys latch DIFFERENT conditions must not open under one
+  // title: the owner reads the first line and acts on it. Same reason the
+  // resolve text below is subKey-specific.
+  if (input.kind === "capture_payload_parity" && input.subKey === "sha256_collision") {
+    return "🚨 Capture payload sha256 collision";
+  }
+  switch (input.kind) {
     case "auth_blocked":
       return "🚨 Auth failed";
     case "proxy_failed":
@@ -111,11 +119,12 @@ function openMessageForIncident(
     pageLabel: string | null;
     platform: "fansly" | "onlyfans" | null;
     stream?: SyncStream | null;
+    subKey?: string | null;
     errorSummary: string | null;
   },
 ) {
   return [
-    openTitleForIncident(input.kind),
+    openTitleForIncident(input),
     ...(input.pageLabel ? [`Page: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`] : []),
     ...(input.stream ? [`Stream: ${input.stream}`] : []),
     `Error: ${sanitizeError(
@@ -180,7 +189,17 @@ function resolveDetailForIncident(
     case "ai_provider_failed":
       return "AI provider generation recovered";
     case "capture_payload_parity":
-      return "Capture payload copies match the inline facts again";
+      // Two conditions share this kind and NOT its latch (G5 slice 3b, the
+      // db_disk_usage runway shape from #213): a clean parity sample says
+      // nothing about whether a digest is unique again, and vice versa. Each
+      // resolve line names the condition that actually cleared, so neither can
+      // be read as a catalog-wide all-clear.
+      if (input.subKey === "sha256_collision") {
+        return "Capture payload sha256 collisions cleared (no object carries a collision ordinal); "
+          + "the inline-copy parity latch is unaffected";
+      }
+      return "Capture payload copies match the inline facts again; "
+        + "the sha256 collision latch is unaffected";
   }
 }
 
@@ -342,6 +361,7 @@ async function retryUndeliveredOpenNotification(
     pageLabel: string | null;
     platform: "fansly" | "onlyfans" | null;
     stream?: SyncStream | null;
+    subKey?: string | null;
     errorSummary?: string | null;
   },
   incident: NotificationIncidentRow,

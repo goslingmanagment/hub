@@ -51,6 +51,18 @@ export type {
 // returns COUNTS and reference ids, never a body. Its own read of the body
 // stays inside packages/db, which is exactly the boundary the note above draws.
 export * from "./repositories/capture-payload-parity.ts";
+// G5 slice 3b — the catalog plane of the Stage 28.4 erasure. Barrel-safe on the
+// SAME terms as the parity verifier and for the same reason: every function
+// here takes a scope or a reference list and returns METADATA (which objects
+// contain the subject, which of them nothing references any more, which ones
+// were deleted). NONE of them returns a body — the subject match is decided in
+// SQL, inside the database, so the caller never needs the bytes and an
+// "erasure needs to read bodies" back door never has to exist. The `Erasure`
+// in every name is load-bearing: these are reachable only from
+// apps/runtime/src/services/erasure/**, and the deleter among them is
+// enumerated in tests/retention-deleters.test.ts.
+// `tests/capture-payload-barrel.test.ts` pins this shape.
+export * from "./repositories/capture-payload-erasure.ts";
 export * from "./repositories/agent-keys.ts";
 export * from "./repositories/agent-read-audit.ts";
 // Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay
