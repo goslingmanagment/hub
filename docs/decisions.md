@@ -221,6 +221,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 217 | G5 slice 2: reads move to the catalog through a staged, fail-open seam | Every reader that SERVES an `observations.payload` or `sync_raw_payloads.response_payload` body now goes through one seam (`apps/runtime/src/services/payload-reader.ts`) governed by `capture_cas_read_mode`: `inline` (the pre-slice behavior, zero extra queries, the mode check is one process-local variable), `shadow` (callers still get the inline bytes AND the catalog copy is compared octet-for-octet per read, counted and logged), `serve` (the catalog body IS what callers get). THE INLINE COLUMNS REMAIN THE AUTHORITY OF RECORD IN EVERY MODE — `serve` moves the byte source, never the truth — and the seam FAILS OPEN TO INLINE on every failure class (object/body missing, wrong representation, codec refusal, connection error), silently, never throwing. Transitions are stepwise upward and free downward, the `aiTranscriptFreshUnionMode` rule verbatim, so `serve` is unreachable without a shadow window. THE READ PATH OWNS NO ALARM: a shadow mismatch counts and logs but never touches the `capture_payload_parity` latch, which stays the hourly verifier's alone (a traffic-driven path cannot promise a clean pass, cannot bound its paging rate, and would race the verifier for the latch); the read counters ride the verifier's single telemetry line instead. The body read is barrel-exported only in ENVELOPE-authorized form (`readEnvelopeCapturePayload`), so a bare `(bucket_month, object_id)` still buys nothing. SQL `payload->` extraction sites are explicitly NOT migrated — they never return a whole body — and are marked in place with `CAS-READ-BACKLOG(§6.4)` |
 | 218 | G5 slice 3a: the queryable fields get typed columns of their own | The SQL sites that dig INSIDE a capture body and return a FIELD (not a body, so the #217 seam can never route them) move to narrow typed columns populated at INSERT time, derived in `packages/db` from the same parsed object the inline column receives — so a column cannot disagree with its body, and no second row version is minted. 0125 adds `observations.harvest_machine_id / harvest_tx_id / harvest_tx_amount / harvest_tx_created_at` (all `text`: a malformed captured member must still journal, DP 7, and `text` is what `->>` returned) and `sync_raw_payloads.response_tips` (the `{tips}` slice, so the tip replay keeps its server-side narrowing instead of dragging whole DM bodies over the wire). The agent plane's `payloadBytes` becomes `coalesce(cpo.logical_bytes, octet_length(o.payload::text))` over a LEFT JOIN to the catalog PK rather than a fifth column — the number is already stored once on the row the reference addresses — and it deliberately RESTATES the size for referenced rows (canonical octets vs jsonb text), because a size measured on a column the system is about to stop writing is the one that becomes a lie. The coverage-revoke idempotency proof needs no columns at all: `readEnvelopeCapturePayload` is inside packages/db and is the smaller diff. THE ONE INDEX-BACKED PREDICATE IS AN `OR`, NOT A `coalesce` — coalesce over two columns is unindexable — with a typed twin index (0126, CONCURRENTLY per partition, the 0096 pattern) so both arms bitmap-scan; the other two harvest queries use `coalesce` because 0096's partial index needs a `source` clause they never had. NO BACKFILL: every fallback arm is marked `CAS-INLINE-FALLBACK:` and the historical-rewrite slice fills the columns on the pass it already makes. Erasure's `payload::text like` subject matching stays behind — it matches a whole body, not a field — and now names the erasure slice as its owner |
 | 219 | G5 slice 3b: erasure becomes catalog-complete, and a capture body gets its first lawful death | The Stage 28.4 erasure now reaches the content-addressed catalog IN THE SAME RUN, landed BEFORE slice 3c can null an inline body and make the catalog copy the only one. The catalog plane INHERITS the module's verdicts instead of forming its own: a body whose every envelope this erasure deleted dies with them — body row, location row, catalog row, the first sanctioned deletion of a captured body in this system — while a body a SURVIVING envelope still references (a shared observation, a `sync_raw_payloads` row erasure never touches) is a bystander's fact: kept, counted and journaled in the tombstone exactly like `sharedObservationsKept`. A SUBJECT-FILTERED REWRITE OF A SHARED BODY WAS REJECTED on two independent grounds — it destroys a bystander's captured bytes (the same law that keeps shared observations), and every referencing envelope still carries that body inline, so a filtered copy would diverge from the #217 authority of record and page the parity verifier by design. Zero references is PROVED, not assumed: a `not exists` over both envelope tables in the statement that selects the deletion set, deletes behind it in FK order, all inside one transaction per bounded batch holding the G3 erasure fence; migration 0127 gives that probe the partial index 0124 deferred until "earned by a real query plan". The sweep runs AFTER the delete transaction (the deletes must be visible for "no surviving reference" to mean anything) and is resumable by construction — set-based statements, no per-object precondition, a re-run rescans and continues. One `capturePayloadErasureSubject` builds the literals for BOTH planes so they cannot disagree about what "contains the subject" means; the catalog scan returns metadata only, never bytes; `exact_bytes` in scope fails the run loudly rather than under-erasing. Slice 0's collision TODO is wired: the hourly parity job counts `collision_ordinal > 0` and pages under the SAME kind with its own `sha256_collision` subKey (#213's runway shape) — measured on every pass canary or not, resolvable only by a zero count, never by a clean parity sample, with subKey-specific resolve texts; `settlePayloadObject` still owns no latch (#217), because the durable row it already writes outlives any counter |
+| 220 | G5 slice 3c-1: a captured body stops being written twice | New captures on a page in `capture_cas_pointer_only_pages` (CSV of page ids or `*`, default `''` = off, live via the heartbeat) write the inline body as SQL NULL — the first slice of G5 that actually stops the disk growing. THE WORST CASE IS BOTH COPIES, NEVER NONE, and by construction rather than by a check: the permission is minted only on the success return of `putCaptureCasPayloads`, where both catalog references already exist, so a codec refusal, a dead connection or a page outside the slice-1 canary all write inline exactly as before, and a page listed here but NOT for dual-write behaves like a page listed nowhere. Migration 0128 drops NOT NULL from `observations.payload` / `sync_raw_payloads.response_payload` and adds to each table the invariant that is this slice's core, `CHECK (payload IS NOT NULL OR payload_object_id IS NOT NULL)` — NO ROW MAY ADDRESS ZERO BODIES — NOT VALID on a provable vacuity (every existing row was written under the old NOT NULL). `payload_hash` stays NOT NULL because the producer computes it from the payload OBJECT, never the column, as do the #218 typed columns, so a pointer-only row differs from a dual-written one in the body alone. THE LOAD-BEARING RULE IS THAT A NULL INLINE BODY RESOLVES FROM THE CATALOG IN EVERY READ MODE, `inline` INCLUDED: `capture_cas_read_mode` is designed to be rolled back freely, and if reachability depended on it the escape hatch would blank every pointer-only row — so the mode governs byte-source PREFERENCE for a row with two copies, never REACHABILITY for a row with one, and for such a row the CATALOG is the authority of record. `shadow` skips those rows and the hourly verifier counts them `skippedNullInline` rather than `matched` (a comparison with one operand is not a verdict), so a ramping page's `checked` falls to zero by construction and the latch neither opens nor resolves; necessity reads are counted apart (`servedNullInline`) from preference reads (`served`), and the one bad outcome — the only copy unreadable — returns null, counts and LOGS, while still owning no latch (#217). ROLLBACK IS NOT SYMMETRIC and the registry says so: turning the flag off resumes double-writing for NEW rows only, rows already written pointer-only keep their body only in the catalog forever — the first irreversible flag here, and the reason #219 (erasure reaches the catalog) and the null-inline read law landed first |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -7426,3 +7427,99 @@ gets no counter and no latch (#217, applied to the write path this time): it is
 the hottest path in the system, and the evidence it already writes —
 `collision_ordinal > 0`, forever, on the row itself — outlives any process
 counter.
+
+---
+
+**Decision #220 (2026-08-18, G5 slice 3c-1: a captured body stops being written
+twice):** slices 0–3b built the second, content-addressed copy of every pull
+capture (#215), taught every reader that SERVES a body to fetch it from there
+(#217), gave the queries that dig INSIDE a body their own typed columns (#218),
+and taught the erasure to reach the catalog (#219). Every one of them left the
+inline column exactly as it was, so the disk still grew at the old rate — the
+whole project has so far only ADDED bytes. This slice is where the growth stops:
+on a page in the new `capture_cas_pointer_only_pages` canary, a capture whose
+catalog write ALREADY SUCCEEDED writes `observations.payload` /
+`sync_raw_payloads.response_payload` as SQL NULL. The historical rewrite of rows
+written before today is 3c-2 and rides separately.
+
+**THE WORST CASE IS BOTH COPIES, NEVER NONE — and it is a construction, not a
+check.** Pointer-only permission is minted in exactly one place: the success
+return of `putCaptureCasPayloads`, where both catalog references already exist,
+inside the transaction that proved the bodies are on disk. Every failure path in
+that function returns the same `NO_REFS` value it always did, whose new
+`pointerOnly` flag is false — so a codec refusal, a dead connection, a missing
+partition, or a page outside the slice-1 canary all write the inline body
+byte-identically to the pre-slice code. A page listed for pointer-only but NOT
+for dual-write therefore behaves like a page listed nowhere: no catalog write, no
+reference, no permission. Capture-first (DP 7) is not traded against anything
+here; the only thing this slice can get wrong is writing a body twice.
+
+**The database enforces the floor the writer promises.** Migration 0128 drops
+NOT NULL from both body columns and adds, to each table, `CHECK (payload IS NOT
+NULL OR payload_object_id IS NOT NULL)`. That constraint — not the flag, not the
+seam — is the slice's core invariant: NO ROW MAY ADDRESS ZERO BODIES. Dropping
+NOT NULL alone would have made "a capture with no body anywhere" representable,
+which is the state DP 7 exists to forbid; what is being relaxed is not "a body is
+required" but "the body is required IN THIS COLUMN". NOT VALID, and here the
+vacuity is provable rather than assumed: every existing row was written under the
+old NOT NULL, so the predicate holds for all of history, and PG16 still checks
+every INSERT and UPDATE from the moment it is added. `payload_hash` stays NOT
+NULL: it is computed by the producer from the payload OBJECT before the insert
+(`services/sync/shared.ts`), never from the column, so a pointer-only row carries
+the same digest it would have carried with its body inline. The slice-3a typed
+columns are derived from that same object inside the same INSERT, before any
+decision about storage — so a pointer-only row is identical to a dual-written one
+in every column except the body.
+
+**A NULL INLINE BODY IS REACHABLE IN EVERY READ MODE, `inline` INCLUDED, and
+this is the load-bearing decision.** `capture_cas_read_mode` was designed to be
+rolled back freely (#217: "every downward move is allowed unconditionally"). If
+reachability depended on it, the first operator to reach for that escape hatch
+would blank every pointer-only row in the system — the safety valve would be the
+demolition charge. So the seam now resolves a null-inline row from the catalog
+BEFORE it consults the mode at all: THE MODE GOVERNS BYTE-SOURCE PREFERENCE FOR A
+ROW WITH TWO COPIES, NEVER REACHABILITY FOR A ROW WITH ONE. Three consequences
+follow and each is pinned by a test:
+
+1. **For a pointer-only row the CATALOG is the authority of record.** #217's
+   "the inline columns remain the authority in every mode" was a statement about
+   rows that have an inline column; it stands unchanged for them. A row with one
+   copy has its authority where that copy is.
+2. **`shadow` SKIPS such rows** (`shadowSkippedNullInline`) instead of scoring
+   them `shadowMatched`, and the hourly verifier does the same with its own
+   `skippedNullInline` count. A comparison with one operand is not a verdict,
+   and least of all "matched" — the same asymmetry that already keeps "nothing
+   measured" from reading as "measured and clean". As a page ramps, its parity
+   `checked` therefore falls toward zero BY CONSTRUCTION, and the latch neither
+   opens nor resolves off a sample of zero. The proof that a catalog body is
+   faithful is spent BEFORE the inline copy goes away — the slice-2 shadow window
+   and this job's own history over that page — which is exactly why the flag is
+   gated behind them.
+3. **The forced reads are counted apart** (`servedNullInline`) from the
+   preference-driven ones (`served`): only the latter disappear if the mode is
+   rolled back, and one number for both would make a rollback look like it had
+   freed the system from the catalog when it had not. The one genuinely bad
+   outcome — a null-inline row whose catalog copy cannot be read — returns null,
+   counts `nullInlineUnresolved`, and LOGS every time, unlike a silent `serve`
+   fallback: "a captured body is currently unreachable" is a different sentence
+   from "the fast path was unavailable". It still owns no latch (#217).
+
+**ROLLBACK IS NOT SYMMETRIC, and the registry says so in those words.** Turning
+`capture_cas_pointer_only_pages` off resumes double-writing for NEW captures
+only; every row already written pointer-only keeps its body ONLY in the catalog,
+forever. That is the first irreversible flag in this project, and it is why the
+two irreversibility-adjacent slices landed first: erasure had to reach the
+catalog (#219) before a catalog body could be the only one, and the null-inline
+read law above had to exist before a read-mode rollback could be safe. It is also
+why this is a SECOND setting rather than a fourth mode of the read seam or a
+second value of the dual-write canary: two acts with different reversibility get
+two switches, and a page must be listed in both.
+
+**What was NOT done here.** No backfill and no historical rewrite (3c-2 owns the
+~35 GB already on disk, and the slice-3a fallback arms stay until it has run); no
+webhook envelopes (`ofapi_webhook_events` still needs its `exact_bytes` seam); no
+removal of the inline fallback arms; no validation of the new CHECK; no
+write-time assertion that the pointer-only list is a subset of the dual-write
+list — the subordination is structural (no reference, no permission), and a
+string-comparison gate at flip time would be a weaker restatement of a property
+the code cannot violate, while adding a way to reject a legitimate flip ordering.

@@ -756,7 +756,11 @@ export const syncRawPayloads = pgTable(
     source: syncRequestSourceEnum("source"),
     endpoint: text("endpoint").notNull(),
     requestParams: jsonbSafe("request_params").$type<Record<string, unknown>>().default({}).notNull(),
-    responsePayload: jsonbSafe("response_payload").$type<unknown>().notNull(),
+    // G5 slice 3c-1 (0128): NULLABLE, the twin of observations.payload — null
+    // means "the body lives in the catalog", and the table CHECK
+    // `response_payload IS NOT NULL OR payload_object_id IS NOT NULL` keeps a
+    // row from addressing zero copies.
+    responsePayload: jsonbSafe("response_payload").$type<unknown>(),
     mapperVersion: text("mapper_version").notNull(),
     payloadKind: text("payload_kind").notNull(),
     statusCode: integer("status_code"),
@@ -3322,7 +3326,14 @@ export const observations = pgTable(
     accountId: bigint("account_id", { mode: "number" }),
     nativeAccountRef: text("native_account_ref"),
     kind: text("kind").notNull(),
-    payload: jsonbSafe("payload").notNull(),
+    // G5 slice 3c-1 (0128): NULLABLE. A row written pointer-only carries its
+    // body only in the catalog and leaves this column SQL NULL; the table CHECK
+    // `payload IS NOT NULL OR payload_object_id IS NOT NULL` is what guarantees
+    // a row always addresses at least one copy. Reads go through the payload
+    // seam, which resolves a null inline body from the catalog in EVERY mode.
+    payload: jsonbSafe("payload"),
+    // Computed by the producer from the payload OBJECT before the insert, so it
+    // is set identically whether or not the body is stored inline.
     payloadHash: bytea("payload_hash").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     observedAt: timestamp("observed_at", { withTimezone: true }),

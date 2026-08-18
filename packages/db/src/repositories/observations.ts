@@ -52,12 +52,31 @@ export interface ObservationInsertInput {
    * is the normal state and must stay a legal state forever: a caller whose CAS
    * write failed still journals its fact.
    *
+   * G5 slice 3c-1 added the other direction: when `omitInlinePayload` below is
+   * set, this reference is what the row's body IS, and the inline column is
+   * left SQL NULL. The two columns are therefore jointly non-null — enforced by
+   * the table CHECK added in 0128 — and never both absent.
+   *
    * On the DUPLICATE path (the idempotency claim was already taken) this is
    * ignored, because no row is written — and the pre-existing row must keep its
    * own references. Stamping it with ours would assert that its inline payload
    * equals the body we just stored, which nothing has proven.
    */
   payloadRef?: { bucketMonth: string; objectId: number } | null;
+  /**
+   * G5 slice 3c-1: write the journal row WITHOUT its inline body, because
+   * `payloadRef` above already addresses that body in the content-addressed
+   * catalog. Ignored — and that is a guarantee, not an accident — unless
+   * `payloadRef` is set: the caller's flag can only ever REMOVE the second copy
+   * of a body the catalog already holds, never the only copy of one.
+   *
+   * Everything the row derives from the payload is derived from the OBJECT
+   * passed in above, not from the column: `payloadHash` is computed by the
+   * producer before this call, and the typed queryable columns (slice 3a) are
+   * derived below from `input.payload`. So a pointer-only row is identical to a
+   * dual-written one in every column except the body itself.
+   */
+  omitInlinePayload?: boolean;
 }
 
 export type ObservationInsertResult =
@@ -142,6 +161,16 @@ async function claimAndJournal(
   // largest table in the system — and not derived at the producer, so a column
   // can never disagree with the body it was read off.
   const queryable = deriveObservationQueryableFields(input);
+  // G5 slice 3c-1: the inline body is skipped only when a catalog reference is
+  // going into the same row. The `payloadRef` conjunct is the invariant, not a
+  // defensive nicety — it is what makes the table CHECK (0128: payload IS NOT
+  // NULL OR payload_object_id IS NOT NULL) unreachable from this writer, and it
+  // is why a caller that gets its own flag wrong loses nothing but disk. Note
+  // the ORDER: `queryable` above is already derived from `input.payload`, so the
+  // typed columns of slice 3a are computed from the object BEFORE any decision
+  // about where that object's bytes are stored.
+  const omitInlinePayload = input.omitInlinePayload === true &&
+    input.payloadRef !== undefined && input.payloadRef !== null;
   await db.execute(sql`
     insert into observations (
       id, source, producer, platform, account_id, native_account_ref, kind,
@@ -156,7 +185,7 @@ async function claimAndJournal(
       ${input.accountId ?? null},
       ${input.nativeAccountRef ?? null},
       ${input.kind},
-      ${JSON.stringify(input.payload)}::jsonb,
+      ${omitInlinePayload ? null : JSON.stringify(input.payload)}::jsonb,
       ${input.payloadHash},
       ${input.idempotencyKey},
       ${input.observedAt ?? null},

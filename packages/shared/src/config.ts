@@ -326,6 +326,12 @@ const envSchema = z.object({
   //             to inline on any failure.
   // The inline columns remain the authority of record in every mode.
   CAPTURE_CAS_READ_MODE: z.enum(["inline", "shadow", "serve"]).default("inline"),
+  // G5 slice 3c-1: pages whose NEW captures stop carrying the inline body once
+  // the catalog write has already succeeded. Same CSV shape and same fail-closed
+  // reading as CAPTURE_CAS_DUAL_WRITE_PAGES, and structurally subordinate to it:
+  // with no catalog reference there is no pointer, so the inline body is written
+  // exactly as before. EMPTY = FULLY OFF.
+  CAPTURE_CAS_POINTER_ONLY_PAGES: z.string().default(""),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -499,6 +505,9 @@ export interface AppConfig {
   captureCasDualWritePages?: string;
   /** G5 slice 2: the payload read seam's byte source (live-wired). */
   captureCasReadMode?: "inline" | "shadow" | "serve";
+  /** G5 slice 3c-1: pages whose new captures skip the inline body once the
+   *  catalog copy is on disk. CSV of page ids, "*" for all, "" = fully off. */
+  captureCasPointerOnlyPages?: string;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -743,6 +752,7 @@ export function loadConfig(
     retentionTieringEnabled: parsed.RETENTION_TIERING_ENABLED,
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
     captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,
+    captureCasPointerOnlyPages: parsed.CAPTURE_CAS_POINTER_ONLY_PAGES,
   };
 }
 

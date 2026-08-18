@@ -4,9 +4,12 @@ import type { Database } from "@agency_hub_core/db";
 
 import {
   captureCasDualWriteAllowed,
+  captureCasPointerOnlyAllowed,
   getCaptureCasDualWriteCounters,
   getCaptureCasDualWritePages,
+  getCaptureCasPointerOnlyPages,
   publishCaptureCasDualWritePages,
+  publishCaptureCasPointerOnlyPages,
   putCaptureCasPayloads,
   resetCaptureCasDualWriteForTests,
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
@@ -98,7 +101,7 @@ describe("capture CAS dual-write never costs the capture", () => {
       observationPayload: { a: 1 },
     });
 
-    expect(refs).toEqual({ raw: null, observation: null });
+    expect(refs).toEqual({ raw: null, observation: null, pointerOnly: false });
     expect(getCaptureCasDualWriteCounters().attempted).toBe(0);
   });
 
@@ -110,7 +113,7 @@ describe("capture CAS dual-write never costs the capture", () => {
       observationPayload: { a: 1 },
     });
 
-    expect(refs).toEqual({ raw: null, observation: null });
+    expect(refs).toEqual({ raw: null, observation: null, pointerOnly: false });
     expect(getCaptureCasDualWriteCounters().attempted).toBe(0);
   });
 
@@ -125,7 +128,7 @@ describe("capture CAS dual-write never costs the capture", () => {
       observationPayload: { capturedAt: new Date() },
     });
 
-    expect(refs).toEqual({ raw: null, observation: null });
+    expect(refs).toEqual({ raw: null, observation: null, pointerOnly: false });
     const counters = getCaptureCasDualWriteCounters();
     expect(counters.attempted).toBe(1);
     expect(counters.codecRefused).toBe(1);
@@ -142,7 +145,7 @@ describe("capture CAS dual-write never costs the capture", () => {
       observationPayload: { a: 1 },
     });
 
-    expect(refs).toEqual({ raw: null, observation: null });
+    expect(refs).toEqual({ raw: null, observation: null, pointerOnly: false });
     const counters = getCaptureCasDualWriteCounters();
     expect(counters.attempted).toBe(1);
     expect(counters.failed).toBe(1);
@@ -162,13 +165,114 @@ describe("capture CAS dual-write never costs the capture", () => {
       observationPayload: cyclic,
     });
 
-    expect(refs).toEqual({ raw: null, observation: null });
+    expect(refs).toEqual({ raw: null, observation: null, pointerOnly: false });
     expect(getCaptureCasDualWriteCounters()).toMatchObject({
       attempted: 1,
       codecRefused: 1,
       stored: 0,
       deduped: 0,
       failed: 0,
+    });
+  });
+});
+
+// G5 slice 3c-1, write side. The pointer-only canary parses exactly like the
+// dual-write one (one implementation, one matrix) and is STRUCTURALLY unable to
+// grant permission on its own: `pointerOnly` is only ever true beside two real
+// references, so a page listed here but not in the dual-write canary behaves
+// like a page listed nowhere.
+
+describe("capture CAS pointer-only gate parsing", () => {
+  it("reads the same matrix as the dual-write canary, entry for entry", () => {
+    // Fails closed on empty/blank/comma-only.
+    for (const csv of [undefined, "", "   ", ",", " , , "]) {
+      expect(captureCasPointerOnlyAllowed(csv, 7), JSON.stringify(csv)).toBe(false);
+    }
+    // Wildcard, anywhere in the list, means every page.
+    expect(captureCasPointerOnlyAllowed("*", 7)).toBe(true);
+    expect(captureCasPointerOnlyAllowed(" * ", 999_999)).toBe(true);
+    expect(captureCasPointerOnlyAllowed("12,*", 7)).toBe(true);
+    // Whole-string id matching, whitespace tolerated, no prefix or label match.
+    expect(captureCasPointerOnlyAllowed("12", 12)).toBe(true);
+    expect(captureCasPointerOnlyAllowed(" 12 , 34 ", 34)).toBe(true);
+    expect(captureCasPointerOnlyAllowed("\n12,\t34\n", 34)).toBe(true);
+    expect(captureCasPointerOnlyAllowed("12,,34,", 12)).toBe(true);
+    expect(captureCasPointerOnlyAllowed("12,34", 1)).toBe(false);
+    expect(captureCasPointerOnlyAllowed("1", 12)).toBe(false);
+    expect(captureCasPointerOnlyAllowed("123", 12)).toBe(false);
+    expect(captureCasPointerOnlyAllowed("lora-main", 12)).toBe(false);
+
+    // And the two gates agree on every one of those inputs, because they ARE
+    // one parser: a divergence here would eventually mean a page dropping a
+    // body under a spelling the other setting reads as "off".
+    for (const csv of [undefined, "", "  ", ",", "*", " * ", "12,*", "12", " 12 , 34 ", "12,34", "1", "lora-main"]) {
+      for (const pageId of [1, 12, 34]) {
+        expect(
+          captureCasPointerOnlyAllowed(csv, pageId),
+          `${JSON.stringify(csv)}/${pageId}`,
+        ).toBe(captureCasDualWriteAllowed(csv, pageId));
+      }
+    }
+  });
+
+  it("starts off and takes the value the heartbeat publishes", () => {
+    expect(getCaptureCasPointerOnlyPages()).toBe("");
+    publishCaptureCasPointerOnlyPages("12,34");
+    expect(getCaptureCasPointerOnlyPages()).toBe("12,34");
+    // Independent of the dual-write bound: publishing one never moves the other.
+    expect(getCaptureCasDualWritePages()).toBe("");
+    publishCaptureCasPointerOnlyPages(undefined);
+    expect(getCaptureCasPointerOnlyPages()).toBe("");
+  });
+});
+
+describe("capture CAS pointer-only never grants itself permission", () => {
+  it("does no work and grants nothing for a page outside the DUAL-WRITE canary", async () => {
+    // The construction law: pointer-only without dual-write is not "drop the
+    // body", it is "do nothing at all" — the same as before the slice.
+    publishCaptureCasPointerOnlyPages("*");
+    const refs = await putCaptureCasPayloads(forbiddenDb(), {
+      pageId: 12,
+      captureInstant: CAPTURE_INSTANT,
+      responsePayload: { a: 1 },
+      observationPayload: { a: 1 },
+    });
+
+    expect(refs).toEqual({ raw: null, observation: null, pointerOnly: false });
+    expect(getCaptureCasDualWriteCounters()).toMatchObject({ attempted: 0, pointerOnly: 0 });
+  });
+
+  it("grants nothing when the catalog write fails, however the page is listed", async () => {
+    publishCaptureCasDualWritePages("*");
+    publishCaptureCasPointerOnlyPages("*");
+
+    // Codec refusal: no reference, so no permission to skip an inline body.
+    const refused = await putCaptureCasPayloads(forbiddenDb(), {
+      pageId: 12,
+      captureInstant: CAPTURE_INSTANT,
+      responsePayload: { capturedAt: new Date() },
+      observationPayload: { capturedAt: new Date() },
+    });
+    expect(refused.pointerOnly).toBe(false);
+
+    // Dead connection: same answer.
+    const broken = await putCaptureCasPayloads(brokenDb(), {
+      pageId: 12,
+      captureInstant: CAPTURE_INSTANT,
+      responsePayload: { a: 1 },
+      observationPayload: { a: 1 },
+    });
+    expect(broken.pointerOnly).toBe(false);
+
+    // The counter counts permissions GRANTED, so both failures leave it at zero
+    // — it can never exceed stored + deduped.
+    expect(getCaptureCasDualWriteCounters()).toMatchObject({
+      attempted: 2,
+      codecRefused: 1,
+      failed: 1,
+      stored: 0,
+      deduped: 0,
+      pointerOnly: 0,
     });
   });
 });

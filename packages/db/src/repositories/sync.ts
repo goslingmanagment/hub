@@ -806,8 +806,18 @@ export async function insertRawPayload(
      * carries ~19 GB of TOAST and a second row version per capture is exactly
      * the amplification the project is trying to remove). `responsePayload`
      * stays the authority; null is the normal state.
+     *
+     * G5 slice 3c-1: when `omitInlinePayload` below is set, this reference is
+     * what the row's body IS and `response_payload` stays SQL NULL. The pair is
+     * jointly non-null, enforced by the table CHECK added in 0128.
      */
     payloadRef?: { bucketMonth: string; objectId: number } | null;
+    /**
+     * G5 slice 3c-1: store the body ONLY in the catalog for this row. Ignored
+     * unless `payloadRef` is set — the flag can remove the second copy of a body
+     * the catalog already holds, never the only copy of one.
+     */
+    omitInlinePayload?: boolean;
   },
 ) {
   const executionContext = getPageSyncExecutionContext();
@@ -820,6 +830,12 @@ export async function insertRawPayload(
     payloadKind: input.payloadKind,
     responsePayload: input.responsePayload,
   });
+  // G5 slice 3c-1. Derived from `input.responsePayload` — the OBJECT — which is
+  // why the slice-3a column above is computed first and unaffected: the decision
+  // is only about where the bytes come to rest. The `payloadRef` conjunct keeps
+  // the 0128 CHECK unreachable from this writer.
+  const omitInlinePayload = input.omitInlinePayload === true &&
+    input.payloadRef !== undefined && input.payloadRef !== null;
   const [inserted] = await db.insert(syncRawPayloads).values({
     pageId: input.platformAccountId,
     syncRunId: input.syncRunId ?? null,
@@ -828,7 +844,7 @@ export async function insertRawPayload(
     source: null,
     endpoint: input.endpoint,
     requestParams: input.requestParams,
-    responsePayload: input.responsePayload,
+    responsePayload: omitInlinePayload ? null : input.responsePayload,
     mapperVersion: input.mapperVersion,
     payloadKind: input.payloadKind,
     statusCode: input.statusCode ?? null,

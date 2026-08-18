@@ -40,13 +40,44 @@
 //             representation, codec refusal, a dead connection — falls back to
 //             the inline body silently and bumps a counter.
 //
-// FAIL OPEN TO INLINE, ALWAYS. There is no mode, and no failure path, in which
+// FAIL OPEN TO INLINE, ALWAYS — WHEN THERE IS AN INLINE BODY TO FAIL OPEN TO.
+// For a row that carries one, there is no mode and no failure path in which
 // this seam throws, returns null where a body existed, or returns anything
-// other than the inline body when it cannot prove a catalog body. The inline
-// columns remain the AUTHORITY OF RECORD in every mode; `serve` moves only the
-// byte source, never the truth. That asymmetry is why the upward transition is
-// stepwise (see validateCaptureCasReadModeTransition): shadow must have proven
-// equality on live traffic before serve is reachable.
+// other than the inline body when it cannot prove a catalog body. For such a
+// row the inline column remains the AUTHORITY OF RECORD in every mode, and
+// `serve` moves only the byte source, never the truth. That asymmetry is why
+// the upward transition is stepwise (see validateCaptureCasReadModeTransition):
+// shadow must have proven equality on live traffic before serve is reachable.
+//
+// ---------------------------------------------------------------------------
+// SLICE 3c-1: THE ROW WITH ONLY ONE COPY, and why the mode stops applying to it
+// ---------------------------------------------------------------------------
+//
+// `capture_cas_pointer_only_pages` lets new captures on a listed page skip the
+// inline write once the catalog copy is already on disk. Such a row's body
+// exists in exactly one place, so:
+//
+//   * A NULL INLINE BODY RESOLVES FROM THE CATALOG IN EVERY MODE, `inline`
+//     included. The mode is a PREFERENCE between two copies; it was never a
+//     statement about what is reachable. Making reachability depend on it would
+//     mean that rolling `capture_cas_read_mode` back to `inline` — the
+//     designed-in escape hatch of the previous slice, the thing an operator
+//     reaches for when something looks wrong — silently blanked every
+//     pointer-only row in the system. The safety valve must not be the demolition
+//     charge.
+//   * FOR THAT ROW THE CATALOG IS THE AUTHORITY OF RECORD. There is no second
+//     copy to be authoritative, and no comparison that could be run. `shadow`
+//     therefore SKIPS such rows and counts them (`shadowSkippedNullInline`)
+//     rather than scoring them as matched, and the hourly parity verifier does
+//     the same with its own `skippedNullInline` count: "nothing to compare" is
+//     not evidence of agreement, exactly as "nothing measured" has never been
+//     evidence of a clean pass in this subsystem.
+//   * THE FORCED READS ARE COUNTED SEPARATELY (`servedNullInline`) from the
+//     preference-driven ones (`served`), because only the latter go away if the
+//     mode is rolled back.
+//   * A row with a NULL inline body AND no reference is a legacy shape that
+//     returns null as it always did; migration 0128's CHECK makes it
+//     unrepresentable for anything written since.
 //
 // THE READ PATH NEVER OWNS THE INCIDENT LATCH. A shadow mismatch counts and
 // logs; it does NOT open or resolve the `capture_payload_parity` incident. The
@@ -161,6 +192,21 @@ export interface CaptureCasReadCounters {
   served: number;
   /** serve: reads that fell back to the inline body. */
   serveFellBack: number;
+  /**
+   * G5 slice 3c-1: reads answered from the catalog because the row HAS no
+   * inline body (pointer-only), in whatever mode. Kept apart from `served` on
+   * purpose — `served` counts a PREFERENCE the owner can roll back, this counts
+   * a NECESSITY that a rollback cannot touch, and reading them as one number
+   * would make a `serve → inline` rollback look like it had freed the system
+   * from the catalog when it had not.
+   */
+  servedNullInline: number;
+  /** shadow: null-inline rows, which have nothing to compare against. Counted
+   *  instead of being folded into shadowMatched — see resolveCapturePayload. */
+  shadowSkippedNullInline: number;
+  /** The one genuinely bad outcome this seam can have: a row with no inline
+   *  body whose catalog copy could not be read either. The caller gets null. */
+  nullInlineUnresolved: number;
 }
 
 const counters: CaptureCasReadCounters = {
@@ -169,6 +215,9 @@ const counters: CaptureCasReadCounters = {
   shadowMismatched: 0,
   served: 0,
   serveFellBack: 0,
+  servedNullInline: 0,
+  shadowSkippedNullInline: 0,
+  nullInlineUnresolved: 0,
 };
 
 export function getCaptureCasReadCounters(): CaptureCasReadCounters {
@@ -183,6 +232,9 @@ export function resetCaptureCasReadForTests(mode?: CaptureCasReadMode): void {
   counters.shadowMismatched = 0;
   counters.served = 0;
   counters.serveFellBack = 0;
+  counters.servedNullInline = 0;
+  counters.shadowSkippedNullInline = 0;
+  counters.nullInlineUnresolved = 0;
 }
 
 /** One envelope's inline body and the catalog reference it carries (null for
@@ -264,11 +316,21 @@ async function compareShadow(
   return Buffer.compare(storedBytes, inlineBytes) === 0 ? null : "content_mismatch";
 }
 
+/** A row whose inline body is SQL NULL. `undefined` is folded in for the
+ *  readers that omit the column entirely; both mean "this envelope has no
+ *  inline bytes", and a JSON null body is stored as the jsonb scalar `null`,
+ *  which node-postgres hands back as JS null too — indistinguishable here, and
+ *  harmlessly so: for such a row the catalog copy IS `null` as well. */
+function inlineAbsent(inline: unknown): boolean {
+  return inline === null || inline === undefined;
+}
+
 /**
  * Resolve one envelope's payload under the current read mode.
  *
  * Returns the inline body unless the mode is `serve` AND a catalog body was
- * proven readable. NEVER THROWS.
+ * proven readable — OR the row has NO inline body, which is answered from the
+ * catalog in every mode (see below). NEVER THROWS.
  *
  * On key order and identity: in `serve` the returned value is the catalog
  * body, re-parsed from `jsonb`, so it is a DIFFERENT object than the inline
@@ -282,12 +344,61 @@ export async function resolveCapturePayload(
   read: CapturePayloadEnvelopeRead,
 ): Promise<unknown> {
   const mode = readMode;
-  // The zero-touch path: one variable read, one null check, return. No query,
-  // no allocation, no logger call.
-  if (mode === "inline" || read.ref === null) {
+  // No reference: there is nothing to resolve in any mode, and this is still
+  // almost every row in the system. One null check and return — no query, no
+  // allocation, no logger call. A row with neither an inline body nor a
+  // reference returns null exactly as it did before this slice; migration 0128's
+  // CHECK makes that state unreachable for anything written since.
+  if (read.ref === null) {
     return read.inline;
   }
   const resolvable = read as CapturePayloadEnvelopeRead & { ref: CapturePayloadRef };
+
+  // ---------------------------------------------------------------------
+  // G5 slice 3c-1 — THE NULL-INLINE LAW, and it sits ABOVE the mode switch.
+  // ---------------------------------------------------------------------
+  // A pointer-only row has no inline bytes at all: its body exists only in the
+  // catalog. Resolving it must therefore NOT depend on `capture_cas_read_mode`,
+  // because that setting's whole purpose is to be rolled back freely — and a
+  // rollback to `inline` that blanked every pointer-only row would turn the
+  // slice-2 safety valve into the most destructive lever in the system.
+  //
+  // So the mode governs the byte-source PREFERENCE for a row that has two
+  // copies. It does not govern REACHABILITY for a row that has one. In `inline`
+  // and in `shadow` alike, a null-inline row is served from the catalog, and
+  // shadow additionally skips its comparison (comparing a body against nothing
+  // has no verdict; counting it as `shadowMatched` would manufacture evidence
+  // of parity out of a row that cannot demonstrate any).
+  if (inlineAbsent(read.inline)) {
+    if (mode === "shadow") {
+      counters.shadowSkippedNullInline += 1;
+    }
+    const stored = await loadCatalogBody(app.db, resolvable);
+    if (stored.ok) {
+      counters.servedNullInline += 1;
+      return stored.json;
+    }
+    // The one place in this seam where falling back to inline is not a safe
+    // outcome — there is no inline body to fall back TO. It is still not an
+    // exception and still not an alarm (#217: the read path owns no latch), but
+    // it IS logged every time, unlike a `serve` fallback: this says a captured
+    // body is currently unreachable, which is a different sentence from "the
+    // fast path was unavailable".
+    counters.nullInlineUnresolved += 1;
+    app.logger.warn({
+      envelope: read.envelope,
+      envelopeId: read.envelopeId,
+      bucketMonth: resolvable.ref.bucketMonth,
+      objectId: resolvable.ref.objectId,
+      reason: stored.reason,
+      readMode: mode,
+    }, "Capture payload has no inline body and its catalog copy could not be read");
+    return read.inline;
+  }
+
+  if (mode === "inline") {
+    return read.inline;
+  }
 
   if (mode === "shadow") {
     counters.shadowChecked += 1;

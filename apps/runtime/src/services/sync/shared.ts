@@ -113,9 +113,23 @@ export async function persistRawPayload(
     observationPayload: observedPayload,
   });
 
+  // G5 slice 3c-1: the inline bodies are skipped ONLY when the catalog write
+  // above actually stored them (`pointerOnly` is set on the success return of
+  // putCaptureCasPayloads and nowhere else) AND the page is in the pointer-only
+  // canary. Every other outcome — canary off, page outside either list, codec
+  // refusal, dead connection — leaves this false and both inserts below behave
+  // byte-identically to the pre-slice code. The repositories re-check the
+  // reference themselves, so the worst a bug here can cost is a duplicated body,
+  // never a missing one.
+  const omitInlinePayload = casRefs.pointerOnly;
+
   let rawPayload;
   try {
-    rawPayload = await insertRawPayload(db, { ...input, payloadRef: casRefs.raw });
+    rawPayload = await insertRawPayload(db, {
+      ...input,
+      payloadRef: casRefs.raw,
+      omitInlinePayload,
+    });
   } catch (error) {
     throw new SyncPayloadPersistenceError({
       endpoint: input.endpoint,
@@ -137,7 +151,10 @@ export async function persistRawPayload(
   // `observedPayload` is hoisted above the CAS write — normalized there so an
   // adapter (or test stub) handing back undefined still hashes and journals
   // deterministically as JSON null, and so the catalog stores exactly the value
-  // this insert stores inline.
+  // this insert stores inline. The hash below is taken from that OBJECT, never
+  // from the column, so a pointer-only row carries the same payload_hash it
+  // would have carried with its body inline — which is why 0128 leaves
+  // payload_hash NOT NULL.
   try {
     await insertObservation(db, {
       source: "pull",
@@ -154,6 +171,7 @@ export async function persistRawPayload(
         nextPageSyncObservationSeq() ?? randomUUID(),
       ].join(":"),
       payloadRef: casRefs.observation,
+      omitInlinePayload,
     });
   } catch (error) {
     throw new SyncPayloadPersistenceError({

@@ -10,7 +10,10 @@ import {
 import { buildRunningSnapshot } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { publishCaptureCasDualWritePages } from "./capture-cas-dual-write.ts";
+import {
+  publishCaptureCasDualWritePages,
+  publishCaptureCasPointerOnlyPages,
+} from "./capture-cas-dual-write.ts";
 import { publishCaptureCasReadMode } from "./payload-reader.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
@@ -110,6 +113,13 @@ export function startRuntimeHeartbeat(
       // purpose: the value is only ever consumed by capture, and a process that
       // is still capturing must act on the freshest bound it has read.
       publishCaptureCasDualWritePages(effectiveConfig.captureCasDualWritePages);
+      // G5 slice 3c-1: the pointer-only bound rides the same beat. Published
+      // right after the canary it is subordinate to, so a process can never act
+      // on a fresh pointer-only list against a stale dual-write list within one
+      // beat — and even if it did, the subordination is structural (no catalog
+      // reference, no permission to skip the inline body), not a comparison of
+      // these two strings.
+      publishCaptureCasPointerOnlyPages(effectiveConfig.captureCasPointerOnlyPages);
       // G5 slice 2: publish the payload READ mode the same way and for the same
       // reason — read sites resolve row by row and must never pay a config
       // query. Published before the `stopped` check alongside the write gate: a
