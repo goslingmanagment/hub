@@ -21014,8 +21014,8 @@
                       }
                     },
                     "planes": {
-                      "minItems": 23,
-                      "maxItems": 23,
+                      "minItems": 24,
+                      "maxItems": 24,
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -21038,6 +21038,7 @@
                               "page_fan_aliases",
                               "fan_username_aliases",
                               "page_subscriptions",
+                              "domain_events",
                               "page_follows",
                               "daily_followers",
                               "fan_notes",
@@ -21076,6 +21077,7 @@
                                   "fan_memberships",
                                   "dm_threads",
                                   "subscriptions",
+                                  "subscription_events",
                                   "transactions",
                                   "tip_transactions",
                                   "fan_spend_daily",
@@ -21415,8 +21417,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -21441,6 +21443,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -21514,6 +21517,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -21628,6 +21632,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -21851,6 +21856,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -22633,8 +22639,8 @@
                             ]
                           },
                           "planes": {
-                            "minItems": 23,
-                            "maxItems": 23,
+                            "minItems": 24,
+                            "maxItems": 24,
                             "type": "array",
                             "items": {
                               "anyOf": [
@@ -22659,6 +22665,7 @@
                                         "page_fan_aliases",
                                         "fan_username_aliases",
                                         "page_subscriptions",
+                                        "domain_events",
                                         "page_follows",
                                         "daily_followers",
                                         "fan_notes",
@@ -22732,6 +22739,7 @@
                                         "page_fan_aliases",
                                         "fan_username_aliases",
                                         "page_subscriptions",
+                                        "domain_events",
                                         "page_follows",
                                         "daily_followers",
                                         "fan_notes",
@@ -22846,6 +22854,7 @@
                                     "page_fan_aliases",
                                     "fan_username_aliases",
                                     "page_subscriptions",
+                                    "domain_events",
                                     "page_follows",
                                     "daily_followers",
                                     "fan_notes",
@@ -23472,8 +23481,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -23498,6 +23507,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -23571,6 +23581,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -23685,6 +23696,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -23908,6 +23920,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -24990,8 +25003,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -25016,6 +25029,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -25089,6 +25103,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -25203,6 +25218,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -25426,6 +25442,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -26483,8 +26500,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -26509,6 +26526,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -26582,6 +26600,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -26696,6 +26715,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -26919,6 +26939,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -28087,8 +28108,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -28113,6 +28134,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -28186,6 +28208,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -28300,6 +28323,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -28523,6 +28547,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -30161,8 +30186,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -30187,6 +30212,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -30260,6 +30286,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -30374,6 +30401,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -30597,6 +30625,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -31367,8 +31396,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -31393,6 +31422,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -31466,6 +31496,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -31580,6 +31611,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -31803,6 +31835,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -32618,6 +32651,7 @@
                 "fan_memberships",
                 "dm_threads",
                 "subscriptions",
+                "subscription_events",
                 "transactions",
                 "tip_transactions",
                 "fan_spend_daily",
@@ -32656,6 +32690,7 @@
                         "fan_memberships",
                         "dm_threads",
                         "subscriptions",
+                        "subscription_events",
                         "transactions",
                         "tip_transactions",
                         "fan_spend_daily",
@@ -32710,6 +32745,7 @@
                               "fan_memberships",
                               "dm_threads",
                               "subscriptions",
+                              "subscription_events",
                               "transactions",
                               "tip_transactions",
                               "fan_spend_daily",
@@ -33322,8 +33358,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -33348,6 +33384,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -33421,6 +33458,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -33535,6 +33573,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -33758,6 +33797,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -35015,8 +35055,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -35041,6 +35081,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -35114,6 +35155,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -35228,6 +35270,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -35451,6 +35494,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -36791,6 +36835,7 @@
                               "page_fan_aliases",
                               "fan_username_aliases",
                               "page_subscriptions",
+                              "domain_events",
                               "page_follows",
                               "daily_followers",
                               "fan_notes",
@@ -37294,8 +37339,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -37320,6 +37365,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -37393,6 +37439,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -37507,6 +37554,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -37730,6 +37778,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -40624,8 +40673,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -40650,6 +40699,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -40723,6 +40773,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -40837,6 +40888,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -41060,6 +41112,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -42648,8 +42701,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -42674,6 +42727,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -42747,6 +42801,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -42861,6 +42916,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -43084,6 +43140,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -44424,8 +44481,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -44450,6 +44507,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -44523,6 +44581,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -44637,6 +44696,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -44860,6 +44920,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -46185,8 +46246,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -46211,6 +46272,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -46284,6 +46346,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -46398,6 +46461,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -46621,6 +46685,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -48272,8 +48337,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 23,
-                          "maxItems": 23,
+                          "minItems": 24,
+                          "maxItems": 24,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -48298,6 +48363,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -48371,6 +48437,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",
@@ -48485,6 +48552,7 @@
                                   "page_fan_aliases",
                                   "fan_username_aliases",
                                   "page_subscriptions",
+                                  "domain_events",
                                   "page_follows",
                                   "daily_followers",
                                   "fan_notes",
@@ -48708,6 +48776,7 @@
                                       "page_fan_aliases",
                                       "fan_username_aliases",
                                       "page_subscriptions",
+                                      "domain_events",
                                       "page_follows",
                                       "daily_followers",
                                       "fan_notes",

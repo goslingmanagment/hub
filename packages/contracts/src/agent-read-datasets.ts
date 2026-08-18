@@ -170,8 +170,20 @@ export const AGENT_DATASETS = {
       priceMills: "mills",
       currency: "string",
     },
-    defaultSort: { field: "expiresAt", dir: "desc", nullsLast: true },
+    defaultSort: { field: "startedAt", dir: "desc", nullsLast: false },
     stableKey: ["subscriptionId"],
+  },
+  subscription_events: {
+    moneyBearing: false,
+    verbatimText: false,
+    fields: {
+      occurredAt: "timestamp",
+      fanId: "string",
+      phase: "string",
+      subType: "string",
+    },
+    defaultSort: { field: "occurredAt", dir: "desc", nullsLast: false },
+    stableKey: ["domainEventId"],
   },
   transactions: {
     moneyBearing: true,
@@ -392,10 +404,9 @@ export type AgentDataset = keyof typeof AGENT_DATASETS;
  *
  * `purchase_history` and `fan_earnings` were DEMOTED from available while the
  * contract was being written: `purchase_history` is a sync-stream name with no
- * serving table at all (its canonicalization produces `message.ppv_unlocked`, which
- * projects into nothing and lives only in `domain_events`, which the read plane may
- * not read), and `fan_earnings_stats` exists in the database (migration 0061) but
- * not in the Drizzle schema and is read only by raw SQL.
+ * serving table at all (its canonicalization produces `message.ppv_unlocked`, but
+ * no dataset exposes that event), and `fan_earnings_stats` exists in the database
+ * (migration 0061) but not in the Drizzle schema and is read only by raw SQL.
  */
 export const AGENT_PLANNED_DATASETS = {
   purchase_history: {},

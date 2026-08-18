@@ -133,9 +133,18 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       type: "subscription.started",
-      fanIdentityRef: "518588958",
-      dedupKey: `sub:started:518588958:${new Date("2026-06-10T18:40:00+00:00").toISOString()}`,
+      fanIdentityRef: "1000032",
+      dedupKey: `sub:started:1000032:${new Date("2026-06-10T18:40:00+00:00").toISOString()}`,
     });
+  });
+
+  it("does not mistake the creator-level user_id for the subscriber", () => {
+    const input = observation("subscriptions_new");
+    const envelope = input.payload as Record<string, unknown>;
+    const payload = envelope.payload as Record<string, unknown>;
+    delete payload.user;
+
+    expect(canonicalizeOfapiWebhookObservation(input)).toEqual([]);
   });
 
   it("canonicalizes subscriptions.renewed into subscription.renewed (v3 / A48)", () => {

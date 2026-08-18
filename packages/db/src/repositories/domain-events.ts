@@ -30,9 +30,9 @@ export interface DomainEventInput {
 
 export interface AppendedDomainEventOutcome {
   dedupKey: string;
-  /** The event id this key resolves to: the freshly appended event, or the
-   * EXISTING claim's event on dedupe (Wave 2: the corrections reconciler
-   * links supersedesEventId / emitted_event_id through this). */
+  /** The event id this input resolves to: the freshly appended event, an
+   * existing key claim, or the same subscription webhook observation after
+   * an identity-parser correction. */
   eventId: number;
   appended: boolean;
 }
@@ -167,7 +167,54 @@ async function appendDomainEventsBatchInTransaction(
   let deduped = 0;
   const outcomes: AppendedDomainEventOutcome[] = [];
 
+  /**
+   * Subscription webhook v3 originally put the creator id in the fan-bearing
+   * dedup key. The forward-only identity fix uses the nested subscriber id.
+   * If an old worker committed the event and died before stamping its
+   * observation, the retry arrives with a different key for the SAME webhook.
+   * Resolve to the already committed event instead of appending a second
+   * subscription fact. Do NOT persist the corrected fan-bearing key as an
+   * alias: the legacy event is keyed to the creator, so fan erasure would not
+   * discover and remove that alias.
+   *
+   * This is intentionally subscription-only: pull observations may emit many
+   * events of one type, so observation identity is not a general event key.
+   */
+  const resolveSubscriptionObservationReplay = async (
+    event: DomainEventInput,
+  ): Promise<number | null> => {
+    if (event.type !== "subscription.started" && event.type !== "subscription.renewed") {
+      return null;
+    }
+    const existing = await db.execute<{ id: string }>(sql`
+      select id::text as id
+      from domain_events
+      where account_id = ${accountId}
+        and observation_id = ${event.observationId}
+        and type = ${event.type}
+        and occurred_at = ${event.occurredAt}
+      order by id
+      limit 1
+    `);
+    if (existing.rows.length === 0) {
+      return null;
+    }
+
+    return Number(existing.rows[0]!.id);
+  };
+
   const appendOne = async (event: DomainEventInput) => {
+    const replayEventId = await resolveSubscriptionObservationReplay(event);
+    if (replayEventId !== null) {
+      deduped += 1;
+      outcomes.push({
+        dedupKey: event.dedupKey,
+        eventId: replayEventId,
+        appended: false,
+      });
+      return false;
+    }
+
     const allocated = await db.execute<{ id: string }>(sql`
       select nextval(pg_get_serial_sequence('domain_events', 'id'))::text as id
     `);

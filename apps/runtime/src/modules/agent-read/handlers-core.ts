@@ -91,6 +91,10 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
   platforms: Platform[];
   captureState: AgentCapabilitiesResponse["datasets"][number]["captureState"];
 }>> = {
+  subscription_events: {
+    platforms: ["onlyfans"],
+    captureState: "unknown",
+  },
   posts: {
     platforms: ["fansly", "onlyfans"],
     captureState: "unknown",

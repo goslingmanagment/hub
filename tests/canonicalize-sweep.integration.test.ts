@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendDomainEvents,
   createModel,
   createOnlyFansPage,
   insertObservation,
@@ -359,7 +360,8 @@ describe("canonicalization sweep (Stage 8)", () => {
           type: "subscribed",
           createdAt: "2026-07-01T10:00:00+00:00",
           subType: "returning_subscriber",
-          user_id: "778001",
+          user_id: "creator-1",
+          user: { id: "778001" },
         },
       },
       payloadHash: sha256("renewed-1"),
@@ -394,6 +396,74 @@ describe("canonicalization sweep (Stage 8)", () => {
     // Second sweep: stamped at 3 now — nothing rescans, nothing duplicates.
     const second = await runCanonicalization(appStub());
     expect(second).toMatchObject({ scanned: 0, appended: 0 });
+  });
+
+  it("deduplicates a corrected subscription identity after an append-before-stamp retry", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const db = testDb.db;
+    const occurredAt = new Date("2026-07-02T10:00:00Z");
+    const inserted = await insertObservation(db, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      accountId: 4,
+      kind: "subscriptions.new",
+      payload: {
+        event: "subscriptions.new",
+        account_id: "acct_x",
+        payload: {
+          id: "n-start-identity-fix",
+          createdAt: occurredAt.toISOString(),
+          subType: "new_subscriber",
+          user_id: "creator-1",
+          user: { id: "778001" },
+        },
+      },
+      payloadHash: sha256("started-identity-fix"),
+      idempotencyKey: "evt-started-identity-fix",
+    });
+    if (!inserted.inserted) {
+      throw new Error("seed insert deduped unexpectedly");
+    }
+
+    // Simulate the old v3 crash window: the creator-key event committed, but
+    // parse_version was never stamped. The retry now derives the subscriber.
+    const oldKey = `sub:started:creator-1:${occurredAt.toISOString()}`;
+    const seeded = await appendDomainEvents(db, 4, [{
+      type: "subscription.started",
+      occurredAt,
+      fanIdentityRef: "creator-1",
+      data: { subType: "new_subscriber", notificationId: "n-start-identity-fix" },
+      schemaVersion: 1,
+      observationId: inserted.observationId,
+      dedupKey: oldKey,
+    }]);
+    expect(seeded).toMatchObject({ appended: 1, deduped: 0 });
+
+    const retry = await runCanonicalization(appStub());
+    expect(retry).toMatchObject({ appended: 0, deduped: 1, stamped: 1, errored: 0 });
+    const events = await listEventsSince(db, { accountId: 4, afterSeq: 0 });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "subscription.started",
+      fanIdentityRef: "creator-1",
+      dedupKey: oldKey,
+    });
+
+    const correctedKey = `sub:started:778001:${occurredAt.toISOString()}`;
+    const keys = await testDb.pool.query<{ dedup_key: string; event_id: string }>(
+      `select dedup_key, event_id::text as event_id
+       from domain_event_keys
+       where account_id = 4 and dedup_key in ($1, $2)
+       order by dedup_key`,
+      [oldKey, correctedKey],
+    );
+    // The corrected fan-bearing key must not survive independently: the old
+    // creator-key event is outside fan-erasure selection.
+    expect(keys.rows).toEqual([{ dedup_key: oldKey, event_id: String(events[0]!.id) }]);
   });
 
   // W8.2 (A13 remainder, decision #133): garbage provider timestamps clamp to
