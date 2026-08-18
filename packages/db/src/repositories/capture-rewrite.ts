@@ -461,22 +461,52 @@ export async function sampleCaptureRewriteParity(
     object_id: string;
     inline: unknown;
   }>(sql`
+    with point as (
+      -- One random probe point PER draw. random() sits in the target list of a
+      -- plain SELECT over generate_series, where volatility is evaluated per
+      -- output row — the one placement PostgreSQL cannot collapse. The first
+      -- version of this query put the whole expression inside an UNCORRELATED
+      -- lateral; the planner is allowed to satisfy the rescans of such a
+      -- lateral from a Materialize node, and a Materialize rescan does NOT
+      -- re-execute volatile functions — every "probe" silently reused the ONE
+      -- point the first execution drew, and when that single point landed in
+      -- the gap above the last eligible id, the whole sample came back empty
+      -- (caught by CI as compared=0 at 1-in-6 odds on the seeded fixture).
+      select probe.n,
+             (floor(random() * (${input.census.maxId}::bigint - ${input.census.minId}::bigint + 1))
+               + ${input.census.minId}::bigint)::bigint as pt
+      from generate_series(1, ${input.sample}) as probe(n)
+    )
     select distinct on (hit.id)
            hit.id::text as id,
            to_char(hit.payload_bucket_month, 'YYYY-MM-DD') as bucket_month,
            hit.payload_object_id::text as object_id,
            hit.inline as inline
-    from generate_series(1, ${input.sample}) as probe
+    from point
     cross join lateral (
-      select c.id, c.payload_bucket_month, c.payload_object_id, ${body} as inline
-      from ${sql.raw(`"${relation}"`)} c
-      where c.id >= (
-              floor(random() * (${input.census.maxId}::bigint - ${input.census.minId}::bigint + 1))
-              + ${input.census.minId}::bigint
-            )::bigint
-        and c.payload_object_id is not null
-        and ${body} is not null
-      order by c.id asc
+      -- Correlated on point.pt, so each draw is its own index probe. The
+      -- second arm is the WRAP-AROUND: a point above the last eligible id
+      -- falls back to the first eligible row instead of yielding nothing —
+      -- over-representing the scope's first row by exactly the dead-zone
+      -- fraction, which is the same honest, stated bias as the gap-skipping
+      -- above (this sample catches systematic divergence, it does not
+      -- estimate a rate).
+      select * from (
+        (select c.id, c.payload_bucket_month, c.payload_object_id, ${body} as inline
+         from ${sql.raw(`"${relation}"`)} c
+         where c.id >= point.pt
+           and c.payload_object_id is not null
+           and ${body} is not null
+         order by c.id asc
+         limit 1)
+        union all
+        (select c.id, c.payload_bucket_month, c.payload_object_id, ${body} as inline
+         from ${sql.raw(`"${relation}"`)} c
+         where c.payload_object_id is not null
+           and ${body} is not null
+         order by c.id asc
+         limit 1)
+      ) arms
       limit 1
     ) hit
   `);
