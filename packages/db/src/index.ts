@@ -28,6 +28,9 @@ export {
   capturePayloadBucketMonth,
   capturePayloadRefFromColumns,
   classifyCapturePayloadScope,
+  // G5 slice 3c-2: monthly catalog partitions for HISTORICAL months. Barrel-safe
+  // — it is DDL over the catalog's own partitions and returns names, never bytes.
+  ensureCapturePayloadCatalogPartitions,
   getPayloadObject,
   putPayloadObject,
   readEnvelopeCapturePayload,
@@ -63,6 +66,13 @@ export * from "./repositories/capture-payload-parity.ts";
 // enumerated in tests/retention-deleters.test.ts.
 // `tests/capture-payload-barrel.test.ts` pins this shape.
 export * from "./repositories/capture-payload-erasure.ts";
+// G5 slice 3c-2 — the historical rewrite's database half. Barrel-safe on the
+// same terms as the parity verifier: the sampler reads bodies to compare them,
+// but that read never leaves packages/db and what crosses this boundary is a
+// census, a verdict and a bounded mismatch report — never a body. The one
+// UPDATE it exposes is licensed in the module header and takes a reference,
+// never a payload.
+export * from "./repositories/capture-rewrite.ts";
 export * from "./repositories/agent-keys.ts";
 export * from "./repositories/agent-read-audit.ts";
 // Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay

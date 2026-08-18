@@ -222,6 +222,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 218 | G5 slice 3a: the queryable fields get typed columns of their own | The SQL sites that dig INSIDE a capture body and return a FIELD (not a body, so the #217 seam can never route them) move to narrow typed columns populated at INSERT time, derived in `packages/db` from the same parsed object the inline column receives — so a column cannot disagree with its body, and no second row version is minted. 0125 adds `observations.harvest_machine_id / harvest_tx_id / harvest_tx_amount / harvest_tx_created_at` (all `text`: a malformed captured member must still journal, DP 7, and `text` is what `->>` returned) and `sync_raw_payloads.response_tips` (the `{tips}` slice, so the tip replay keeps its server-side narrowing instead of dragging whole DM bodies over the wire). The agent plane's `payloadBytes` becomes `coalesce(cpo.logical_bytes, octet_length(o.payload::text))` over a LEFT JOIN to the catalog PK rather than a fifth column — the number is already stored once on the row the reference addresses — and it deliberately RESTATES the size for referenced rows (canonical octets vs jsonb text), because a size measured on a column the system is about to stop writing is the one that becomes a lie. The coverage-revoke idempotency proof needs no columns at all: `readEnvelopeCapturePayload` is inside packages/db and is the smaller diff. THE ONE INDEX-BACKED PREDICATE IS AN `OR`, NOT A `coalesce` — coalesce over two columns is unindexable — with a typed twin index (0126, CONCURRENTLY per partition, the 0096 pattern) so both arms bitmap-scan; the other two harvest queries use `coalesce` because 0096's partial index needs a `source` clause they never had. NO BACKFILL: every fallback arm is marked `CAS-INLINE-FALLBACK:` and the historical-rewrite slice fills the columns on the pass it already makes. Erasure's `payload::text like` subject matching stays behind — it matches a whole body, not a field — and now names the erasure slice as its owner |
 | 219 | G5 slice 3b: erasure becomes catalog-complete, and a capture body gets its first lawful death | The Stage 28.4 erasure now reaches the content-addressed catalog IN THE SAME RUN, landed BEFORE slice 3c can null an inline body and make the catalog copy the only one. The catalog plane INHERITS the module's verdicts instead of forming its own: a body whose every envelope this erasure deleted dies with them — body row, location row, catalog row, the first sanctioned deletion of a captured body in this system — while a body a SURVIVING envelope still references (a shared observation, a `sync_raw_payloads` row erasure never touches) is a bystander's fact: kept, counted and journaled in the tombstone exactly like `sharedObservationsKept`. A SUBJECT-FILTERED REWRITE OF A SHARED BODY WAS REJECTED on two independent grounds — it destroys a bystander's captured bytes (the same law that keeps shared observations), and every referencing envelope still carries that body inline, so a filtered copy would diverge from the #217 authority of record and page the parity verifier by design. Zero references is PROVED, not assumed: a `not exists` over both envelope tables in the statement that selects the deletion set, deletes behind it in FK order, all inside one transaction per bounded batch holding the G3 erasure fence; migration 0127 gives that probe the partial index 0124 deferred until "earned by a real query plan". The sweep runs AFTER the delete transaction (the deletes must be visible for "no surviving reference" to mean anything) and is resumable by construction — set-based statements, no per-object precondition, a re-run rescans and continues. One `capturePayloadErasureSubject` builds the literals for BOTH planes so they cannot disagree about what "contains the subject" means; the catalog scan returns metadata only, never bytes; `exact_bytes` in scope fails the run loudly rather than under-erasing. Slice 0's collision TODO is wired: the hourly parity job counts `collision_ordinal > 0` and pages under the SAME kind with its own `sha256_collision` subKey (#213's runway shape) — measured on every pass canary or not, resolvable only by a zero count, never by a clean parity sample, with subKey-specific resolve texts; `settlePayloadObject` still owns no latch (#217), because the durable row it already writes outlives any counter |
 | 220 | G5 slice 3c-1: a captured body stops being written twice | New captures on a page in `capture_cas_pointer_only_pages` (CSV of page ids or `*`, default `''` = off, live via the heartbeat) write the inline body as SQL NULL — the first slice of G5 that actually stops the disk growing. THE WORST CASE IS BOTH COPIES, NEVER NONE, and by construction rather than by a check: the permission is minted only on the success return of `putCaptureCasPayloads`, where both catalog references already exist, so a codec refusal, a dead connection or a page outside the slice-1 canary all write inline exactly as before, and a page listed here but NOT for dual-write behaves like a page listed nowhere. Migration 0128 drops NOT NULL from `observations.payload` / `sync_raw_payloads.response_payload` and adds to each table the invariant that is this slice's core, `CHECK (payload IS NOT NULL OR payload_object_id IS NOT NULL)` — NO ROW MAY ADDRESS ZERO BODIES — NOT VALID on a provable vacuity (every existing row was written under the old NOT NULL). `payload_hash` stays NOT NULL because the producer computes it from the payload OBJECT, never the column, as do the #218 typed columns, so a pointer-only row differs from a dual-written one in the body alone. THE LOAD-BEARING RULE IS THAT A NULL INLINE BODY RESOLVES FROM THE CATALOG IN EVERY READ MODE, `inline` INCLUDED: `capture_cas_read_mode` is designed to be rolled back freely, and if reachability depended on it the escape hatch would blank every pointer-only row — so the mode governs byte-source PREFERENCE for a row with two copies, never REACHABILITY for a row with one, and for such a row the CATALOG is the authority of record. `shadow` skips those rows and the hourly verifier counts them `skippedNullInline` rather than `matched` (a comparison with one operand is not a verdict), so a ramping page's `checked` falls to zero by construction and the latch neither opens nor resolves; necessity reads are counted apart (`servedNullInline`) from preference reads (`served`), and the one bad outcome — the only copy unreadable — returns null, counts and LOGS, while still owning no latch (#217). ROLLBACK IS NOT SYMMETRIC and the registry says so: turning the flag off resumes double-writing for NEW rows only, rows already written pointer-only keep their body only in the catalog forever — the first irreversible flag here, and the reason #219 (erasure reaches the catalog) and the null-inline read law landed first |
+| 221 | G5 slice 3c-2: the historical rewrite is a one-time lawful UPDATE, consumed by the reclaim that follows it | Four owner-gated CLI commands (`capture:backfill` / `verify-backfill` / `reclaim` / `drop-parked`), no schedule and no config flag, each dry-run by default and tombstoned in `capture_rewrite_runs` (0129, the `erasure_log` shape — a TABLE because verify must read what backfill concluded hours earlier, and `ops_metric_samples` is deadman-sensitive). THE UPDATE #215 and #218 both forbade is lawful HERE and only here: its bloat does not accumulate, it is CONSUMED — the reclaim copies the surviving tuples into a skinny relation and parks the old one, so the dead versions are exactly the pages that get dropped. A historical body is filed under ITS OWN capture month, never `now()` (0123's ref-closed-cohort law), so the backfill lazily creates the catalog partitions 0123 never made (prod starts 2026-07, 0123 starts 2026-08) and accepts two objects for a raw/observation pair straddling a UTC month boundary. The lane is `platform_capture` for every row and is NOT derived from `source`: `operator` would map to the `system` erasure domain, which #219 never gives a subject sweep, and narrowing erasure reach on a one-way pass over history is not a trade this slice may make. VERIFY PROVES RATHER THAN INFERS — each remaining null-ref row is re-canonicalized and must actually refuse (the backfill's stored count is a printed cross-check, never the authority), every reference is resolved by a TOTAL anti-join (the check the absent FK does not make), and bodies are compared as full canonical octets on a bounded random sample drawn by index probes rather than `order by random()`; it has no `--dry-run` because the verdict row IS its product. observations takes §9.1 whole in two invocable phases — a lock-free resumable skinny copy (inline null where a ref exists, KEPT where the codec refused) that pre-adds the partition-bound CHECK so ATTACH skips its scan and reconciles indexes against the source partition's real `pg_indexes` (0096/0126 are per-leaf), then ONE transaction that detaches, parks, renames the twin into the partition's name and attaches: THE SINGLE TRANSACTION IS THE CRASH PROOF, old-or-new, never neither. Superseded copies park in a NEW `capture_pending_drop` schema, not `tiered_pending_drop`, whose meaning would make the replay guards falsely refuse a live month — and the erasure is taught the new schema explicitly so no under-erasure window opens during grace. `sync_raw_payloads` takes §9.2's OTHER option (null-bodies then VACUUM FULL, writers proven down) because a rename swap would have to re-validate two inbound FKs inside the swap transaction, because its OWNED `bigserial` sequence moves with the table and would break the first capture after the swap, and because unpartitioned means the headroom ask is everything at once — the price, no grace window for that table, is stated rather than discovered. `capture:drop-parked` is the only destroyer, reaches nothing outside the parking schema by construction, and is pinned in `tests/retention-deleters.test.ts` with a STATEMENT-level licence because a `DROP TABLE` is invisible to that file's `delete from` grep. Refusals (current/future month, detached partition, stale-or-overtaken verdict, unconverged erasure, headroom) end the run before the phase body reads anything |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -7523,3 +7524,219 @@ write-time assertion that the pointer-only list is a subset of the dual-write
 list — the subordination is structural (no reference, no permission), and a
 string-comparison gate at flip time would be a weaker restatement of a property
 the code cannot violate, while adding a way to reject a legitimate flip ordering.
+
+---
+
+**Decision #221 (2026-08-18, G5 slice 3c-2: the heap that is already on disk is
+rewritten once, under an owner's hand):** slices 0–3c-1 built the second copy
+(#215), moved the readers to it (#217), gave the field queries typed columns
+(#218), taught the erasure to reach it (#219) and stopped writing the inline
+body for NEW captures on a canary page (#220). Every one of them left the ~35 GB
+already on disk exactly as it was: each of those rows still carries its body
+inline and NO reference at all, which means the catalog cannot see them, the
+erasure's catalog arm cannot find them, and nothing about them will ever get
+smaller on its own. This slice is the machinery that walks them — and it is
+MACHINERY ONLY: nothing destructive runs without an owner typing an exact
+relation name.
+
+**FOUR CLI COMMANDS, NO SCHEDULE, NO CONFIG FLAG.** `capture:backfill`,
+`capture:verify-backfill`, `capture:reclaim` and `capture:drop-parked` take the
+erasure's governance, because they are the erasure's kind of act: one-time,
+owner-initiated, dry-run by default, tombstoned. A schedule was never
+considered — this walks tens of GB on the box whose free space is the reason G5
+exists, and the one thing worse than not running it is running it at 04:00 with
+nobody watching. A config flag was rejected for the same reason it was rejected
+for `tiering:run`: a flag makes an act repeatable by accident, and these are not
+acts that should ever happen twice unnoticed. Migration 0129 adds
+`capture_rewrite_runs` — the `erasure_log` shape, and it is a TABLE rather than
+a log line because two of the four commands must READ what an earlier one
+concluded, hours later, from another process. `ops_metric_samples` was rejected
+for it: an irregular operator-paced series inside a fixed-shape gauge store
+either trips the golden-signals deadman or teaches everyone to ignore it (#212
+already carved `disk_*` out for exactly this).
+
+**THE ONE LAWFUL UPDATE IN THIS PROJECT, AND WHY IT IS LAWFUL ONLY HERE.** #215
+rejected a post-commit UPDATE of the reference columns and #218 rejected an
+UPDATE backfill of the typed columns, both on the same ground: an UPDATE mints a
+second heap tuple plus its WAL, per row, on the two largest tables in the
+system, and paying for a fresh row version per capture in order to record a
+DEDUPLICATION is self-defeating. That argument is about the STEADY STATE and it
+does not reach a one-time pass whose entire purpose is to be followed by a
+physical rewrite: here the bloat the UPDATE creates is not a cost that
+accumulates, it is CONSUMED — `capture:reclaim` copies the surviving tuples into
+a skinny relation and parks the old one, so the dead versions this pass leaves
+behind are precisely the pages that get dropped. The two alternatives are both
+worse: rewriting each row twice (once to stamp, once to compact), or a side
+table holding the stamps until the compaction reads them, which is a second copy
+of the reference for no benefit. Two consequences are accepted out loud rather
+than hidden: between the backfill and the reclaim the scope is BIGGER on disk
+(which is why §9.1's headroom precondition is a law, not a warning), and a month
+backfilled but never reclaimed carries permanent bloat — so the runbook treats
+backfill → verify → reclaim as ONE ritual per month, not three chores.
+
+**A HISTORICAL BODY IS FILED UNDER ITS OWN CAPTURE MONTH, NEVER TODAY'S.** The
+object's `captureInstant` is the row's own `observations.received_at` /
+`sync_raw_payloads.captured_at`. Using `now()` would pile all of history into
+the current month and destroy the property migration 0123 calls a law — a closed
+capture month is a ref-closed, self-contained cohort, which is what makes every
+future cold segment self-contained. The consequence is that the backfill
+addresses months 0123 never created (production data starts 2026-07; 0123 starts
+2026-08), so `ensureCapturePayloadCatalogPartitions` creates the four catalog
+partitions for a month on first use, lazily, from the batch's own instants —
+shaped like `ensureObservationPartitions`, idempotent, and stopping below the
+2031 catch-all. The second consequence is priced and kept: a raw envelope and its
+paired observation whose two timestamps straddle a UTC month boundary by
+milliseconds get two objects instead of one. That is a handful of rows across
+the corpus and the honest cost of using each row's own truth rather than
+inventing a shared instant for facts captured a year ago.
+
+**THE LANE IS `platform_capture` FOR EVERY HISTORICAL ROW, AND IT IS NOT DERIVED
+FROM `source`.** The tempting version reads `observations.source` and maps
+`operator` to the `operator_action` lane — which carries the `system` erasure
+domain, and #219 never gives `system` to a subject sweep. A one-way pass over
+history that narrows what a future erasure can reach is not a trade this slice is
+allowed to make, so every body it writes gets the same lane the live dual write
+assigns. That also means a historical body and its live twin land in ONE object
+instead of two, which is the deduplication working across the cutover.
+
+**VERIFY PROVES; IT DOES NOT INFER.** Three checks, and any one refuses the
+scope. (1) EVERY ROW HAS A REFERENCE, except rows the frozen codec refuses — and
+those are NOT taken from the backfill's recorded count. That count is an
+inference over two numbers produced hours apart by different processes, and it
+would pass just as happily if the backfill had crashed mid-scope and left
+unreached rows behind; so each remaining null-ref row is RE-CANONICALIZED here
+and must actually refuse, with the stored count printed beside the proved number
+as a cross-check and never as the authority. The walk is bounded — above 10k
+remaining rows the answer is "run the backfill first", which is what a remainder
+that size means. (2) EVERY REFERENCE RESOLVES — a TOTAL anti-join against the
+catalog's primary key, not a sample, because this is the check the
+deliberately-absent foreign key (#215) does not make and one dangling reference
+plus a reclaimed body is one captured fact gone. (3) THE BODIES AGREE — full
+canonical octets (never digests alone, the #215 rule) on a bounded random sample,
+because comparing every body in a monthly partition means detoasting the whole
+partition and the failure this catches is systematic. The sample is drawn by
+random index probes inside the scope's id range rather than `order by random()`
+— a full scan plus a sort is the one thing a verification step on a disk-starved
+box must not do — and the resulting slight over-representation of rows after long
+id gaps is stated in the code rather than hidden. `capture:verify-backfill` has
+NO `--dry-run`, deliberately: it writes nothing to capture data and the single
+row it does write is its verdict, which IS its product, so a "dry" verify could
+only ever be a way to run the useless half.
+
+**THE OBSERVATIONS RECLAIM IS §9.1 VERBATIM, IN TWO SEPARATELY INVOCABLE
+PHASES.** `--phase shadow` builds `observations_YYYY_MM__skinny` beside the live
+partition and copies every row into it WITHOUT the inline body wherever a
+reference exists — and WITH it where the codec refused, because for those rows
+the inline column is the only copy there is and 0128's CHECK is what says so. It
+takes no lock on the live table, runs for hours, and resumes from the highest id
+already copied. It adds the partition-bound CHECK there rather than at the swap,
+so `ATTACH PARTITION` skips its validation scan — otherwise the swap would hold
+ACCESS EXCLUSIVE for a full heap scan, which is exactly the lock the operation is
+shaped to keep short — and it reconciles the index set against the SOURCE
+PARTITION's real `pg_indexes`, because `LIKE observations INCLUDING ALL` brings
+only the parent's declared indexes and 0096's and 0126's partial expression
+indexes are created `ON ONLY observations` and attached per leaf. `--phase swap`
+is ONE transaction under `lock_timeout`: detach, rename the original away,
+move it to the parking schema, rename the twin into the partition's name, attach.
+THE SINGLE TRANSACTION IS THE CRASH-SAFETY PROOF — a process killed at any
+instant leaves the OLD partition attached, and there is no state in which the
+parent has no partition for that month. Every statement inside is catalog-only,
+so `lock_timeout` bounds the WAIT and not the work; failing to get the lock
+aborts with nothing changed, which is the correct outcome. The twin TAKES THE
+PARTITION'S NAME because `observations_2026_07` must keep meaning "July's rows"
+to the tiering regex, the replay guards and the erasure's parked scan.
+
+**THE PARKED COPY GETS A NEW SCHEMA, NOT STAGE 28's.** `tiered_pending_drop`
+means one specific thing to three call sites — the erasure sweeps it as extra
+delete targets, and both `fansly-replay-projection.ts` and `message-archive.ts`
+REFUSE to replay a month they find parked there. A partition parked by THIS
+slice means the opposite: its rows are live, in a twin attached under the same
+name. Parking it there would make those guards refuse a month that is perfectly
+available — a false refusal in the code path that exists to prevent silent data
+loss. So superseded copies go to `capture_pending_drop`, under a name
+(`<partition>__pre_g5_<ts>`) that cannot collide with the name the twin took. The
+erasure is then taught about the new schema EXPLICITLY (its parked scan now reads
+both, and returns fully qualified references so no caller can re-derive the wrong
+one) rather than inheriting a meaning that is wrong for these tables: without
+that, a swap would open a window — between the swap and the owner-gated drop — in
+which an executed erasure quietly under-erased.
+
+**`sync_raw_payloads` TAKES §9.2's OTHER OPTION, AND THE REASONS ARE
+STRUCTURAL.** §9.2 prefers the shadow swap "при достаточном временном headroom".
+This slice ships the maintenance rewrite instead, on three independent grounds.
+(1) TWO INBOUND FOREIGN KEYS: `transaction_tip_contexts` references
+`sync_raw_payloads(id)` twice (0122), and a rename swap must drop and re-create
+both — re-creating a foreign key VALIDATES it, a full scan of the referencing
+table inside the swap transaction, holding ACCESS EXCLUSIVE on that table too.
+The SHORT stop §9.2 wanted from the swap is exactly what this version does not
+have, and it has it least when the tip-context projection has grown. (2) THE
+OWNED SEQUENCE MOVES WITH THE TABLE: `id` is `bigserial`, so
+`sync_raw_payloads_id_seq` is OWNED BY that column and `ALTER TABLE … SET
+SCHEMA` carries it along, while the shadow's copied default still says
+`nextval('sync_raw_payloads_id_seq')` — unqualified, resolved through
+`search_path`, which no longer finds it. The first capture after the swap fails:
+a DP 7 violation caused by a storage optimisation, the one outcome this project
+may not produce. (3) UNPARTITIONED MEANS NO UNIT SMALLER THAN EVERYTHING, so
+§9.1's headroom law would refuse the swap on the production box for the reason
+the swap exists. So the table gets two phases: `null-bodies` (batched, resumable,
+guarded by 0128's CHECK, which makes PostgreSQL itself reject any row this would
+leave with no body anywhere) and `vacuum-full`. THE COST IS STATED PLAINLY RATHER
+THAN DISCOVERED: there is no parked copy and therefore NO GRACE WINDOW for this
+table — once the bodies are nulled the catalog is their only home, which is the
+state #220 already sanctions for new captures, reached deliberately and only over
+rows a fresh verify has blessed. Both phases refuse while any runtime instance is
+heartbeating or any other client backend is non-idle: the G4 phase-2 ritual
+(`docker compose stop worker scheduler`), enforced instead of documented.
+
+**THE DROP IS A DIFFERENT COMMAND AND THE ONLY DESTROYER.** `capture:reclaim`
+never drops anything; `capture:drop-parked` destroys ONE relation and can reach
+nothing outside `capture_pending_drop` — the schema half of the statement is a
+module constant no caller can influence, and the relation half is resolved out of
+that schema's own catalog listing before the drop, so a name in `public` cannot
+be reached by any spelling. Four gates: resolvable inside the parking schema,
+`--confirm` equal to the exact relation name, an elapsed grace window (24h by
+default, because a parked partition IS the rollback for its swap and a rollback's
+value is entirely in how long it stays available), and `--execute`. THE RETENTION
+PIN IS EXTENDED WITH A STATEMENT-LEVEL LICENCE, not a file entry: a `DROP TABLE`
+is invisible to `tests/retention-deleters.test.ts`'s `delete from` grep, which is
+precisely why it needed its own pin — the test now asserts there is exactly one
+`drop table` in the file, that its schema is the constant, that the parking
+schema is written to in exactly one place, that the resolve-then-confirm sequence
+is present, and that the erasure sweeps the new schema. The licence itself is
+narrow and true: what lives in that schema is by construction a partition a
+transactional swap SUPERSEDED, every row of which is also in the attached twin —
+so the fact is not being deleted, a duplicate of its physical residue is.
+
+**SAFETY RAILS THAT REFUSE RATHER THAN WARN.** The CURRENT UTC month is refused
+(a snapshot copy would silently drop every row captured between the copy and the
+swap, and waiting a month costs nothing while losing a day of capture costs
+everything); so is a future month, and a partition that is detached or parked. A
+verify verdict older than 24h is refused, and so is one a later backfill has
+overtaken — freshness is not wall-clock alone, because a backfill that finished
+AFTER the verify describes a scope that has since changed. An erasure that has
+not converged (`erasure_log.completed_at IS NULL` on an executed run) or a held
+fence lock refuses every phase: a shadow built across an erasure's commit would
+carry erased rows into the relation that replaces the original, which is
+resurrection arriving through a door the G3 fence does not watch. A refusal from
+any of these ends the run BEFORE the phase body reads anything — "refused" means
+nothing was touched and nothing was even looked at. Every command is bounded and
+paced (`--batch`, `--pause-ms`) because this pass spikes WAL and autovacuum on a
+box chosen for this project because its disk is nearly full, and every command
+defaults to a dry run that prints exact counts. `--assume-free-bytes` is a
+declared drill seam for the headroom law — the precondition most likely to refuse
+a real run, and an owner staring at one needs to ask "how much would I have to
+free" without waiting for a cleanup — and it is journaled in the tombstone
+whenever used, so a run that skipped the real measurement says so forever.
+
+**WHAT WAS NOT DONE.** No `ofapi_webhook_events` (those envelopes still need the
+`exact_bytes` seam). No removal of the slice-3a `CAS-INLINE-FALLBACK:` arms —
+they may go only once every production month has been through this ritual, which
+is a later decision with its own evidence. No validation of 0124's or 0128's
+NOT VALID constraints. No index on the backfill's scan predicate: it would have
+to be built CONCURRENTLY across every partition of the largest table in the
+system, to serve a walk that runs ONCE and would then have to be justified
+forever after — the rule 0124 applied to the reference columns, applied to their
+inverse. And no automatic progression from one phase to the next: the gap
+between two phases is measured in hours and the world moves in it, so every
+phase re-checks its preconditions from the database rather than trusting that a
+previous command succeeded.

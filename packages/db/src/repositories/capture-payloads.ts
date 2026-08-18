@@ -157,6 +157,74 @@ export function capturePayloadBucketMonth(captureInstant: Date): string {
   return `${captureInstant.getUTCFullYear()}-${month}-01`;
 }
 
+/**
+ * The four partitioned relations of the catalog, and the order they must be
+ * created in (bodies and locations carry an FK to the identity table).
+ */
+const CAPTURE_CATALOG_PARTITIONED_TABLES = [
+  "capture_payload_objects",
+  "capture_json_hot_bodies",
+  "capture_byte_hot_bodies",
+  "capture_payload_locations",
+] as const;
+
+/**
+ * Pre-create every catalog partition for one `YYYY-MM-01` bucket month.
+ *
+ * WHY THIS EXISTS (G5 slice 3c-2). Migration 0123 created 2026-08 … 2027-02
+ * plus the 2031+ catch-all, because those are the months the WRITER would ever
+ * see: a live capture buckets by `now()`. The historical rewrite buckets by each
+ * row's OWN capture instant, so it addresses months that are in the PAST —
+ * production data starts in 2026-07, a month 0123 never created. A write into an
+ * uncovered range fails loudly with 23514, which is exactly the behaviour 0123
+ * wanted for a live writer ("a write into an uncreated month must fail loudly,
+ * never land somewhere else") and exactly the wrong behaviour for a backfill
+ * that knows in advance which month it is filling.
+ *
+ * Idempotent (`if not exists`) and shaped like `ensureObservationPartitions`,
+ * the other pre-creation helper in this package. It is DDL and takes brief
+ * ACCESS EXCLUSIVE locks on the four parents — which is why it is called once
+ * per month per run, from the backfill's own loop, and never per row.
+ *
+ * It creates ONLY monthly ranges below the 2031 catch-all bound: inside that
+ * range a monthly CREATE would fail on overlap, and above it the catch-all is
+ * already the right answer.
+ */
+export async function ensureCapturePayloadCatalogPartitions(
+  db: Database,
+  bucketMonth: string,
+): Promise<string[]> {
+  const match = /^(\d{4})-(\d{2})-01$/.exec(bucketMonth);
+  if (match === null) {
+    throw new Error(`bucket month must be YYYY-MM-01 (got: ${bucketMonth})`);
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) {
+    throw new Error(`bucket month is not a real month: ${bucketMonth}`);
+  }
+  // 0123's `*_future` partition owns [2031-01-01, MAXVALUE); a monthly CREATE
+  // inside it would fail on overlap, and it already covers the range.
+  if (year >= 2031) {
+    return [];
+  }
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const to = `${nextYear}-${String(nextMonth).padStart(2, "0")}-01`;
+  const suffix = `${year}_${String(month).padStart(2, "0")}`;
+
+  const created: string[] = [];
+  for (const table of CAPTURE_CATALOG_PARTITIONED_TABLES) {
+    const name = `${table}_${suffix}`;
+    await db.execute(sql.raw(`
+      create table if not exists "${name}" partition of "${table}"
+      for values from ('${bucketMonth}') to ('${to}')
+    `));
+    created.push(name);
+  }
+  return created;
+}
+
 export type PutPayloadObjectContent =
   | { representation: "canonical_json"; json: unknown }
   | { representation: "exact_bytes"; canonicalBytes: Buffer };
