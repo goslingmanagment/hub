@@ -16,9 +16,10 @@ import { createHash } from "node:crypto";
 
 import { sql } from "drizzle-orm";
 
-import { insertObservation, type Database } from "@agency_hub_core/db";
+import { capturePayloadRefFromColumns, insertObservation, type Database } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveCapturePayload } from "./payload-reader.ts";
 
 export const REJOURNAL_PRODUCER = "rejournal:a22";
 
@@ -179,8 +180,16 @@ export async function runObservationsRejournal(
         continue;
       }
 
-      const raw = await app.db.execute<{ endpoint: string; response_payload: unknown }>(sql`
-        select endpoint, response_payload from sync_raw_payloads where id = ${rawId}
+      const raw = await app.db.execute<{
+        endpoint: string;
+        response_payload: unknown;
+        payload_bucket_month: string | null;
+        payload_object_id: string | null;
+      }>(sql`
+        select endpoint, response_payload,
+               to_char(payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+               payload_object_id::text as payload_object_id
+        from sync_raw_payloads where id = ${rawId}
       `);
       const rawRow = raw.rows[0];
       if (!rawRow) {
@@ -188,7 +197,18 @@ export async function runObservationsRejournal(
         // fail loudly rather than silently under-repair.
         throw new Error(`sync_raw_payloads row ${rawId} vanished mid-campaign`);
       }
-      const payload = rawRow.response_payload ?? null;
+      // G5 slice 2: the raw body comes through the read seam. This is the one
+      // migrated site that RE-HASHES what it reads (the new observation needs
+      // its own payload_hash), so it is also the site that proves the modes
+      // agree: both the inline column and the catalog body are stored as
+      // `jsonb`, which normalizes key order identically, so JSON.stringify over
+      // either produces the same string and the same hash.
+      const payload = await resolveCapturePayload(app, {
+        envelope: "raw_payload",
+        envelopeId: rawId,
+        inline: rawRow.response_payload ?? null,
+        ref: capturePayloadRefFromColumns(rawRow.payload_bucket_month, rawRow.payload_object_id),
+      }) ?? null;
       const result = await insertObservation(app.db, {
         source: "pull",
         producer: REJOURNAL_PRODUCER,

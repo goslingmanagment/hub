@@ -22,6 +22,7 @@ import {
 import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { clampDraftOccurredAt } from "./canonicalize-driver.ts";
 import {
   buildPostObservedDraft,
@@ -841,7 +842,9 @@ async function parseCapturedJob(
     await blockJob(app, job, "pending_observation_missing", "Captured observation is unavailable");
     return { kind: "blocked", pageId: job.pageId, jobId: job.id };
   }
-  const captured = capturePayloadResponse(observation.payload);
+  // G5 slice 2: the captured body comes through the read seam.
+  const resolved = await resolveCapturePayloadRow(app, "observation", observation.id, observation);
+  const captured = capturePayloadResponse(resolved.payload);
   if (!captured) {
     await settleOfapiCaptureParse(app.db, {
       jobId: job.id,

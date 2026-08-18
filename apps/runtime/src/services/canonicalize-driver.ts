@@ -16,6 +16,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   CANONICALIZER_FAMILIES,
   type CanonicalizerFamily,
@@ -233,15 +234,19 @@ async function runFamily(
       // the version floor and is retried next run; everything after it in
       // this run still processes (afterId already advanced past the page).
       try {
+        // G5 slice 2: resolve the body through the read seam BEFORE the shape
+        // gate, so the family sees exactly the bytes the mode says are
+        // canonical. `inline` returns the same row object untouched.
+        const observation = await resolveCapturePayloadRow(app, "observation", row.id, row);
         // Shape gate BEFORE anything else: a payload the family cannot read
         // must not be stamped consumed. Stamping it would delete it from
         // every future replay just as surely as a DROP would — the exact
         // failure the parse_version contract exists to prevent.
-        if (family.canParse !== undefined && !family.canParse(row)) {
+        if (family.canParse !== undefined && !family.canParse(observation)) {
           totals.skippedUnparseable += 1;
           continue;
         }
-        const drafts = family.canonicalize(row, runContext)
+        const drafts = family.canonicalize(observation, runContext)
           .map((draft) => clampDraftOccurredAt(draft, row.receivedAt, now));
         // Capture-first rows (webhook) carry only the vendor account ref;
         // resolve it against the page map before the unmapped check.

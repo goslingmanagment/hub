@@ -178,3 +178,29 @@ describe("validateAiTranscriptFreshUnionModeTransition", () => {
     expect(validateAiTranscriptFreshUnionModeTransition(null, "nonsense")).toMatch(/one of/);
   });
 });
+
+// G5 slice 2: the capture read-mode transition rule, the same shape as the
+// union-mode rule above and for the same reason — a mode that moves the BYTE
+// SOURCE of a read must spend a window in shadow, where the identical
+// comparison runs live and cannot change a single caller's result.
+describe("validateCaptureCasReadModeTransition", () => {
+  it("allows stepwise upward moves and rejects the inline→serve jump", async () => {
+    const { validateCaptureCasReadModeTransition } = await import("@agency_hub_core/shared");
+    expect(validateCaptureCasReadModeTransition(null, "shadow")).toBeNull();
+    expect(validateCaptureCasReadModeTransition("inline", "shadow")).toBeNull();
+    expect(validateCaptureCasReadModeTransition("shadow", "serve")).toBeNull();
+    expect(validateCaptureCasReadModeTransition(null, "serve")).toMatch(/shadow first/);
+    expect(validateCaptureCasReadModeTransition("inline", "serve")).toMatch(/shadow first/);
+  });
+
+  it("allows every rollback and same-value writes; invalid current degrades to inline", async () => {
+    const { validateCaptureCasReadModeTransition } = await import("@agency_hub_core/shared");
+    expect(validateCaptureCasReadModeTransition("serve", "shadow")).toBeNull();
+    expect(validateCaptureCasReadModeTransition("serve", "inline")).toBeNull();
+    expect(validateCaptureCasReadModeTransition("shadow", "inline")).toBeNull();
+    expect(validateCaptureCasReadModeTransition("serve", "serve")).toBeNull();
+    // A hand-edited/garbage stored value forces the stepwise path back up.
+    expect(validateCaptureCasReadModeTransition("garbage", "serve")).toMatch(/shadow first/);
+    expect(validateCaptureCasReadModeTransition(null, "off")).toMatch(/one of/);
+  });
+});

@@ -31,6 +31,7 @@ import {
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { resolveCapturePayloadRow } from "../../services/payload-reader.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError } from "../../services/errors.ts";
@@ -345,7 +346,13 @@ export async function handleAgentObservationPayload(
   const remaining = Math.max(0, AGENT_OBSERVATION_PAYLOAD_SESSION_CAP - used);
 
   const allowed = agentObservationPayloadAllowed(row.kind);
-  const scrubbed = allowed && remaining > 0 ? scrubObservationPayload(row.payload) : null;
+  // G5 slice 2: the body comes through the read seam. Resolved only when it
+  // will actually be served — a withheld read must not pay a catalog query,
+  // and must not count as a shadow comparison of a body nobody saw.
+  const resolved = allowed && remaining > 0
+    ? await resolveCapturePayloadRow(appContext, "observation", row.observationRef, row)
+    : row;
+  const scrubbed = allowed && remaining > 0 ? scrubObservationPayload(resolved.payload) : null;
   const withheldReason = !allowed
     ? "kind_not_allowlisted" as const
     : remaining === 0

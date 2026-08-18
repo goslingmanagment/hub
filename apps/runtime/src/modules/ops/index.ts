@@ -24,6 +24,7 @@ import {
   encryptJson,
   getDescriptor,
   validateAiTranscriptFreshUnionModeTransition,
+  validateCaptureCasReadModeTransition,
   validateConfigOverride,
   validateStagedOverride,
   type ConfigOverrideValue,
@@ -1279,12 +1280,17 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       if (!validated.ok) {
         throw new BadRequestError(validated.error);
       }
-      // Fast-reply freshness PR3: the union-mode flag pins a transition rule
-      // (stepwise up, any rollback), checked against the CURRENT row value
-      // inside the same locked tx that writes the override.
+      // Staged-mode flags pin a transition rule (stepwise up, any rollback),
+      // checked against the CURRENT row value inside the same locked tx that
+      // writes the override: fast-reply freshness PR3's union mode, and G5
+      // slice 2's capture read mode, which follows it deliberately — a flag
+      // that moves the byte source of a read must pass through a shadow window.
       const validateTransition = patch.key === "aiTranscriptFreshUnionMode"
         ? (current: ConfigOverrideValue | null) =>
           validateAiTranscriptFreshUnionModeTransition(current, String(validated.value))
+        : patch.key === "captureCasReadMode"
+        ? (current: ConfigOverrideValue | null) =>
+          validateCaptureCasReadModeTransition(current, String(validated.value))
         : undefined;
       return {
         key: patch.key,

@@ -316,6 +316,16 @@ const envSchema = z.object({
   // bound — a second "enabled" flag would only make it possible to be on with
   // no bound.
   CAPTURE_CAS_DUAL_WRITE_PAGES: z.string().default(""),
+  // G5 slice 2: where the payload READ seam takes its bytes from.
+  //   inline  — the inline columns, exactly as every reader did before the
+  //             slice. Zero extra queries; the catalog is never touched.
+  //   shadow  — inline is still what callers get, AND (only for envelopes that
+  //             carry a catalog reference) the catalog copy is read and
+  //             compared octet-for-octet, counted, and logged on disagreement.
+  //   serve   — the catalog copy IS what callers get, with a silent fall back
+  //             to inline on any failure.
+  // The inline columns remain the authority of record in every mode.
+  CAPTURE_CAS_READ_MODE: z.enum(["inline", "shadow", "serve"]).default("inline"),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -487,6 +497,8 @@ export interface AppConfig {
   retentionTieringEnabled?: boolean;
   /** G5 CAS dual-write canary: CSV of page ids, "*" for all, "" = fully off. */
   captureCasDualWritePages?: string;
+  /** G5 slice 2: the payload read seam's byte source (live-wired). */
+  captureCasReadMode?: "inline" | "shadow" | "serve";
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -730,6 +742,7 @@ export function loadConfig(
     fanslyReplayMode: parsed.FANSLY_REPLAY_MODE,
     retentionTieringEnabled: parsed.RETENTION_TIERING_ENABLED,
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
+    captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,
   };
 }
 

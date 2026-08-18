@@ -18,6 +18,7 @@ import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   ServiceUnavailableError,
   TooManyRequestsError,
@@ -325,7 +326,9 @@ export async function recoverExpiredOfapiInteractiveResponses(
       result.unavailable += 1;
       continue;
     }
-    const captured = capturePayloadResponse(observation.payload);
+    // G5 slice 2: the captured body comes through the read seam.
+    const resolved = await resolveCapturePayloadRow(app, "observation", observation.id, observation);
+    const captured = capturePayloadResponse(resolved.payload);
     const parsed = captured === null
       ? { validJson: false, body: null, creditsUsed: null, balanceAfter: null }
       : parseOfapiJsonBytes(captured.bodyBytes);

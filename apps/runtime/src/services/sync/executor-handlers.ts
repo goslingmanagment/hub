@@ -81,6 +81,7 @@ import type { CanonicalStream } from "@agency_hub_core/platform-core";
 
 import { appPlatformRegistry } from "../../platforms/registry.ts";
 import type { AppContext } from "../../bootstrap.ts";
+import { resolveRawCapturePayloadRow } from "../payload-reader.ts";
 import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import {
@@ -4372,8 +4373,17 @@ export async function executePurchaseHistoryChunk(
       rawPayloadCursorId: 0,
       pendingTargets: [],
     };
+  // G5 slice 2: every captured body is routed through the read seam before it
+  // is classified. Unbounded list read by design (every purchase_history
+  // capture for the page), so in shadow/serve it costs one catalog query per
+  // row that CARRIES a reference — i.e. nothing at all outside the slice-1
+  // dual-write canary.
   const captureIndex = classifyFanslyPurchaseHistoryCaptures(
-    await listFanslyPurchaseHistoryCaptures(app.db, input.pageContext.page.id),
+    await Promise.all(
+      (await listFanslyPurchaseHistoryCaptures(app.db, input.pageContext.page.id)).map((row) =>
+        resolveRawCapturePayloadRow(app, row)
+      ),
+    ),
   );
   const capturedTargetKeys = new Set(captureIndex.capturedTargetKeys);
   const capturedContentIds = new Set(captureIndex.capturedContentIds);
@@ -4593,7 +4603,11 @@ export async function executePurchaseHistoryChunk(
         }
 
         const rawTargets = extractFanslyPurchaseHistoryTargets(
-          rawPages.map((row) => row.responsePayload),
+          await Promise.all(
+            rawPages.map(async (row) =>
+              (await resolveRawCapturePayloadRow(app, row)).responsePayload
+            ),
+          ),
         );
         assertFanslyPurchaseHistoryTargetKindsConsistent(
           rawTargets,

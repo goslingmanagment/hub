@@ -76,7 +76,13 @@ jobs:
   integration:
     name: Integration ${{ matrix.shard }}/3
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 stopped fitting on 2026-08-17: vitest --shard splits by FILE COUNT,
+    # not duration, and after a week that added four integration files one
+    # shard drew a slow-heavy set and was cancelled at 30:18 with every test
+    # green (the #80 merge push on main was cancelled the same way). 45 lets
+    # the existing gate FINISH — it does not weaken it, and a healthy run
+    # spends nothing extra.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

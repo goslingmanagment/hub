@@ -116,6 +116,10 @@ describe("config registry", () => {
     // G5 slice 1: the CAS dual-write canary bound. Live so the ramp needs no
     // restart; rests at "" (fully off).
     "captureCasDualWritePages",
+    // G5 slice 2: the payload read seam's byte source. Live so the staged
+    // inline->shadow->serve ramp (and any rollback) needs no restart; rests at
+    // "inline", where readers behave exactly as they did before the slice.
+    "captureCasReadMode",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",

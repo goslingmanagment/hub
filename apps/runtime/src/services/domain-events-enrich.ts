@@ -6,6 +6,7 @@ import {
 import { millsToDollarsNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { normalizeOfapiSyncMessage } from "./ofapi-payloads.ts";
 
 // Kernel Stage 24: serve-time enrichment for the v2 event stream. The ledger
@@ -92,7 +93,7 @@ function enrichmentFromSupersedingHead(
  * lookup.
  */
 export async function buildMessagePayloadEnrichments(
-  app: Pick<AppContext, "db">,
+  app: Pick<AppContext, "db" | "logger">,
   rows: readonly DomainEventRow[],
 ): Promise<Map<number, unknown>> {
   const headEnriched = new Map<number, unknown>();
@@ -120,7 +121,14 @@ export async function buildMessagePayloadEnrichments(
     if (!envelope || envelope.source !== "webhook" || !ENRICHABLE_OBSERVATION_KINDS.has(envelope.kind)) {
       continue;
     }
-    const payload = envelopePayload(envelope.payload);
+    // G5 slice 2: the webhook envelope's body comes through the read seam.
+    const resolved = await resolveCapturePayloadRow(
+      app,
+      "observation",
+      row.observationId,
+      envelope,
+    );
+    const payload = envelopePayload(resolved.payload);
     if (!payload) {
       continue;
     }

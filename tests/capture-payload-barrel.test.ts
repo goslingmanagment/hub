@@ -47,4 +47,24 @@ describe("capture payloads: the body reader stays off the package barrel", () =>
       expect(Object.keys(db), required).toContain(required);
     }
   });
+
+  // G5 slice 2. The seam needs SOME way to reach a body, and this is it: the
+  // ENVELOPE-authorized reader. It is barrel-safe for the reason the bare one is
+  // not — it cannot be called without naming the envelope class the reference
+  // was read off, and that name is load-bearing (it decides which
+  // representation the reference may resolve to, and refuses the others).
+  it("exports the envelope-authorized reader, and it demands the envelope", () => {
+    expect(Object.keys(db)).toContain("readEnvelopeCapturePayload");
+    expect(Object.keys(db)).toContain("CAPTURE_PAYLOAD_ENVELOPE_KINDS");
+    expect(db.CAPTURE_PAYLOAD_ENVELOPE_KINDS).toEqual(["observation", "raw_payload"]);
+    // The source line is pinned too: dropping `envelope` from the input would
+    // turn this back into a bare-ref body reader without renaming anything.
+    const repository = readFileSync(
+      fileURLToPath(new URL("../packages/db/src/repositories/capture-payloads.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(repository).toContain(
+      "input: { envelope: CapturePayloadEnvelopeKind; ref: CapturePayloadRef },",
+    );
+  });
 });

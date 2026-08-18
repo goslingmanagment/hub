@@ -30,6 +30,7 @@ import {
   type SyncRequestSource,
   type SyncStream,
 } from "./page-sync.ts";
+import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
 import { egressKeySql } from "./egress.ts";
 import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
 import {
@@ -454,6 +455,8 @@ export async function getCheckpoint(
 export interface FanslyDmRawPayloadCursorRow {
   id: number;
   responsePayload: unknown;
+  /** G5 slice 2: the catalog reference this raw envelope carries, or null. */
+  payloadRef: CapturePayloadRef | null;
 }
 
 /**
@@ -471,7 +474,9 @@ export async function listFanslyDmRawPayloadsAfterId(
 ): Promise<FanslyDmRawPayloadCursorRow[]> {
   const result = await db.execute<Record<string, unknown>>(sql`
     select rp.id::text as id,
-           rp.response_payload as "responsePayload"
+           rp.response_payload as "responsePayload",
+           to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as "payloadBucketMonth",
+           rp.payload_object_id::text as "payloadObjectId"
     from ${syncRawPayloads} rp
     where rp.page_id = ${input.pageId}
       and rp.endpoint = 'dm_messages'
@@ -482,6 +487,10 @@ export async function listFanslyDmRawPayloadsAfterId(
   return result.rows.map((row) => ({
     id: Number(row.id),
     responsePayload: row.responsePayload,
+    payloadRef: capturePayloadRefFromColumns(
+      row.payloadBucketMonth as string | null,
+      row.payloadObjectId as string | null,
+    ),
   }));
 }
 
@@ -540,6 +549,8 @@ export interface FanslyPurchaseHistoryCaptureRow {
   requestBefore: string | null;
   statusCode: number | null;
   responsePayload: unknown;
+  /** G5 slice 2: the catalog reference this raw envelope carries, or null. */
+  payloadRef: CapturePayloadRef | null;
 }
 
 /**
@@ -558,6 +569,8 @@ export async function listFanslyPurchaseHistoryCaptures(
     requestBefore: string | null;
     statusCode: number | null;
     responsePayload: unknown;
+    payloadBucketMonth: string | null;
+    payloadObjectId: string | null;
   }>(sql`
     select rp.id::text as id,
            case
@@ -569,7 +582,9 @@ export async function listFanslyPurchaseHistoryCaptures(
            end as "targetKey",
            nullif(rp.request_params ->> 'before', '') as "requestBefore",
            rp.status_code as "statusCode",
-           rp.response_payload as "responsePayload"
+           rp.response_payload as "responsePayload",
+           to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as "payloadBucketMonth",
+           rp.payload_object_id::text as "payloadObjectId"
     from ${syncRawPayloads} rp
     where rp.page_id = ${pageId}
       and rp.endpoint = 'purchase_history'
@@ -585,6 +600,7 @@ export async function listFanslyPurchaseHistoryCaptures(
     requestBefore: row.requestBefore,
     statusCode: row.statusCode,
     responsePayload: row.responsePayload,
+    payloadRef: capturePayloadRefFromColumns(row.payloadBucketMonth, row.payloadObjectId),
   }));
 }
 

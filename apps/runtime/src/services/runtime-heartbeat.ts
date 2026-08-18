@@ -11,6 +11,7 @@ import { buildRunningSnapshot } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { publishCaptureCasDualWritePages } from "./capture-cas-dual-write.ts";
+import { publishCaptureCasReadMode } from "./payload-reader.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
 export type RuntimeRole = "api" | "worker" | "scheduler";
@@ -109,6 +110,11 @@ export function startRuntimeHeartbeat(
       // purpose: the value is only ever consumed by capture, and a process that
       // is still capturing must act on the freshest bound it has read.
       publishCaptureCasDualWritePages(effectiveConfig.captureCasDualWritePages);
+      // G5 slice 2: publish the payload READ mode the same way and for the same
+      // reason — read sites resolve row by row and must never pay a config
+      // query. Published before the `stopped` check alongside the write gate: a
+      // process still serving reads must act on the freshest mode it has read.
+      publishCaptureCasReadMode(effectiveConfig.captureCasReadMode);
       // If stop() ran while we were reading, do NOT upsert: that would resurrect the row
       // removeInstance is about to delete, leaving a zombie "active" instance until the TTL.
       if (stopped) return;

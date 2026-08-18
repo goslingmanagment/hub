@@ -1,4 +1,4 @@
-// The payload read seam (G5 slice 0 — §7 of
+// The payload read seam (G5 slices 0 and 2 — §6.3–§6.5 and §7 of
 // investigations/storage-compaction-architecture-2026-08-11.md).
 //
 // THE CONTRACT, and it is the whole point of the module:
@@ -8,10 +8,10 @@
 //     envelope's body. There is deliberately NO exported "load object id N"
 //     entry point: an arbitrary object-id lookup is not a service API, because
 //     one payload object may be shared by several envelopes and the object id
-//     carries none of the authorization the envelope carries. When the catalog
-//     goes live, the lookup by (bucket_month, object_id) stays inside
-//     packages/db (repositories/capture-payloads.ts), reachable only through
-//     the envelope functions here.
+//     carries none of the authorization the envelope carries. The lookup by
+//     (bucket_month, object_id) stays inside packages/db, reachable only
+//     through `readEnvelopeCapturePayload`, which cannot be called without
+//     naming the envelope class the reference was read off.
 //   * Principal checks stay where they already are — at the route/CLI boundary
 //     that decided this caller may read this envelope. The seam does not
 //     re-derive authorization from the body it is about to return.
@@ -19,31 +19,349 @@
 //     where a payload physically lives; that is the invariant the later cold
 //     tier depends on.
 //
-// TODAY it reads the inline columns, exactly as the existing call sites do —
-// observations.payload and sync_raw_payloads.response_payload are still the
-// authority and this slice changes no behavior. The later slices add the
-// pointer lookup (inline first, object second, then object only) behind these
-// same two signatures.
+// ---------------------------------------------------------------------------
+// SLICE 2: THE THREE MODES, and the law that survives all of them
+// ---------------------------------------------------------------------------
 //
-// NOT MIGRATED IN THIS SLICE, on purpose — the real inline readers this seam
-// will eventually absorb, listed so the next slice does not have to rediscover
-// them:
-//   * packages/db/src/repositories/ofapi-capture.ts loadOfapiCaptureObservation
-//     (partition-exact: id + received_at, joins the request attempt)
-//   * packages/db/src/repositories/agent-read.ts findAgentObservationPayload
-//     (the purest "one payload by bare id", owner-session only)
-//   * packages/db/src/repositories/observations.ts findObservationEnvelopesByIds
-//     (batch enrichment for the v2 event stream)
-//   * packages/db/src/repositories/domain-events.ts listObservationsForReplay
-//     (the bulk replay reader)
-//   * apps/runtime/src/services/observations-rejournal.ts (the only true
-//     by-primary-key read of sync_raw_payloads.response_payload)
-// §6.4 applies to several of them: query-critical `payload->...` predicates
-// must move to narrow typed columns BEFORE the inline JSON can go away.
+// `captureCasReadMode` (published to this process by the runtime heartbeat)
+// decides where a read's bytes come from:
+//
+//   inline  — the inline columns, exactly as every reader did before slice 2.
+//             ZERO extra queries, zero extra work: the mode check is one
+//             process-local variable read and the function returns.
+//   shadow  — callers still receive the INLINE bytes. Additionally, for an
+//             envelope that carries a catalog reference, the catalog copy is
+//             read and compared OCTET FOR OCTET against the inline body, and
+//             the verdict is counted (and logged once per disagreement). This
+//             is the hourly parity job made continuous and per-read, and it is
+//             structurally incapable of changing a caller's result.
+//   serve   — the catalog canonical body becomes the value callers receive.
+//             ANY failure — object missing, body missing, wrong
+//             representation, codec refusal, a dead connection — falls back to
+//             the inline body silently and bumps a counter.
+//
+// FAIL OPEN TO INLINE, ALWAYS. There is no mode, and no failure path, in which
+// this seam throws, returns null where a body existed, or returns anything
+// other than the inline body when it cannot prove a catalog body. The inline
+// columns remain the AUTHORITY OF RECORD in every mode; `serve` moves only the
+// byte source, never the truth. That asymmetry is why the upward transition is
+// stepwise (see validateCaptureCasReadModeTransition): shadow must have proven
+// equality on live traffic before serve is reachable.
+//
+// THE READ PATH NEVER OWNS THE INCIDENT LATCH. A shadow mismatch counts and
+// logs; it does NOT open or resolve the `capture_payload_parity` incident. The
+// hourly verifier (services/capture-payload-parity.ts) stays the sole authority
+// over that alarm's lifecycle, because an alarm needs an owner that runs on a
+// known schedule, sees a bounded sample, and can say "measured and clean". A
+// hot read path can do none of those: it fires at traffic's whim, so it can
+// neither guarantee a clean pass (nothing to resolve the latch with during a
+// quiet hour) nor bound how often it would re-page. Worse, a latch owned by two
+// writers races — the verifier resolving what a concurrent read just opened.
+// The read counters ride the verifier's telemetry line instead, so one log line
+// still tells the whole story.
+//
+// COST, and what bounds it. shadow and serve each cost ONE catalog query per
+// envelope that CARRIES a reference; an envelope with a null reference costs
+// nothing in any mode. References exist only for pages in the slice-1
+// dual-write canary, so the canary bounds the read cost too — the two ramps are
+// deliberately coupled. List readers resolve row by row (no batch loader in
+// this slice), so a replay page of 200 referenced rows costs 200 extra queries;
+// that is the number the mode's costWarning quotes.
+//
+// NOT MIGRATED, on purpose (§6.4 backlog — query-critical `payload->...`
+// predicates must move to narrow typed columns BEFORE the inline JSON can go
+// away, and rewriting them is a slice of its own). Each is marked in place with
+// a `// CAS-READ-BACKLOG(§6.4):` comment:
+//   * packages/db/src/repositories/observations.ts — the harvest lookups and
+//     the transaction-residue extraction (`payload->>'machineId'`,
+//     `payload->'row'->>'tx_id'`), one of them backed by an index expression
+//     (migration 0096).
+//   * packages/db/src/repositories/transaction-tip-contexts.ts — narrows the
+//     body server-side to `{tips}` precisely so it does not detoast the rest.
+//   * packages/db/src/repositories/agent-read.ts listAgentObservations —
+//     `octet_length(o.payload::text) as payload_bytes`; the agent plane's size
+//     column is measured on the inline body and stays that way.
+//   * packages/db/src/repositories/ofapi-message-coverage.ts
+//     revokeOfapiMessageCoverage — reads a prior observation's body inside its
+//     own write transaction, in packages/db, with no logger and no seam reach.
+//   * apps/runtime/src/services/erasure/** — `payload::text like` subject
+//     matching; erasure is explicitly out of this slice's scope.
 
 import { sql } from "drizzle-orm";
 
-import type { Database } from "@agency_hub_core/db";
+import {
+  CapturePayloadCodecError,
+  type CapturePayloadEnvelopeKind,
+  type CapturePayloadRef,
+  type Database,
+  canonicalizeCaptureJson,
+  capturePayloadRefFromColumns,
+  readEnvelopeCapturePayload,
+} from "@agency_hub_core/db";
+
+import type { AppContext } from "../bootstrap.ts";
+
+export type CaptureCasReadMode = "inline" | "shadow" | "serve";
+
+/**
+ * The mode, as published to this process.
+ *
+ * Not read from the database at a read site, for the same reason the dual-write
+ * gate is not (capture-cas-dual-write.ts): a config read per resolved payload
+ * would be a new query on paths that resolve hundreds of rows at a time, paid
+ * whether the mode is on or off, and "inline costs nothing" is the property
+ * that makes this slice safe to deploy. The runtime heartbeat already loads the
+ * effective config once a minute in every process, so the mode rides along for
+ * free and a flip lands within one heartbeat interval.
+ */
+let readMode: CaptureCasReadMode = "inline";
+
+/** Called by the runtime heartbeat with the effective config value. */
+export function publishCaptureCasReadMode(mode: string | undefined): void {
+  readMode = mode === "shadow" || mode === "serve" ? mode : "inline";
+}
+
+/** The mode this process is currently acting on. Exported for telemetry and
+ *  tests. */
+export function getCaptureCasReadMode(): CaptureCasReadMode {
+  return readMode;
+}
+
+/** Why a catalog body could not be used. The first four mirror the parity
+ *  verifier's vocabulary on purpose — the two mechanisms must describe the same
+ *  failure with the same word — plus the two a per-read path can hit that a
+ *  scheduled batch job reports differently. */
+export type CaptureCasReadMismatchReason =
+  | "object_missing"
+  | "body_missing"
+  | "representation_mismatch"
+  | "content_mismatch"
+  | "inline_uncanonicalizable"
+  /** The catalog read itself threw (connection loss, a canonicalize refusal on
+   *  the stored side, anything unforeseen). Never reaches the caller. */
+  | "read_error";
+
+export interface CaptureCasReadCounters {
+  /** shadow: envelopes with a reference that were compared. */
+  shadowChecked: number;
+  /** shadow: comparisons where the catalog copy is octet-identical. */
+  shadowMatched: number;
+  /** shadow: comparisons that disagreed OR could not be completed. */
+  shadowMismatched: number;
+  /** serve: reads answered from the catalog body. */
+  served: number;
+  /** serve: reads that fell back to the inline body. */
+  serveFellBack: number;
+}
+
+const counters: CaptureCasReadCounters = {
+  shadowChecked: 0,
+  shadowMatched: 0,
+  shadowMismatched: 0,
+  served: 0,
+  serveFellBack: 0,
+};
+
+export function getCaptureCasReadCounters(): CaptureCasReadCounters {
+  return { ...counters };
+}
+
+/** Test seam: reset the published mode and the counters between cases. */
+export function resetCaptureCasReadForTests(mode?: CaptureCasReadMode): void {
+  readMode = mode ?? "inline";
+  counters.shadowChecked = 0;
+  counters.shadowMatched = 0;
+  counters.shadowMismatched = 0;
+  counters.served = 0;
+  counters.serveFellBack = 0;
+}
+
+/** One envelope's inline body and the catalog reference it carries (null for
+ *  every row captured outside the dual-write canary, i.e. almost all of
+ *  history). */
+export interface CapturePayloadEnvelopeRead {
+  envelope: CapturePayloadEnvelopeKind;
+  /** The envelope row's own id — telemetry only; it never addresses a body. */
+  envelopeId: number;
+  inline: unknown;
+  ref: CapturePayloadRef | null;
+}
+
+type SeamContext = Pick<AppContext, "db" | "logger">;
+
+type CatalogRead =
+  | { ok: true; json: unknown }
+  | { ok: false; reason: CaptureCasReadMismatchReason };
+
+/** The single catalog read, with every throw already absorbed. Nothing above
+ *  this function may fail because of the catalog. */
+async function loadCatalogBody(
+  db: Database,
+  read: CapturePayloadEnvelopeRead & { ref: CapturePayloadRef },
+): Promise<CatalogRead> {
+  try {
+    const result = await readEnvelopeCapturePayload(db, {
+      envelope: read.envelope,
+      ref: read.ref,
+    });
+    switch (result.status) {
+      case "loaded":
+        return { ok: true, json: result.json };
+      case "object_missing":
+        return { ok: false, reason: "object_missing" };
+      case "body_missing":
+        return { ok: false, reason: "body_missing" };
+      default:
+        return { ok: false, reason: "representation_mismatch" };
+    }
+  } catch {
+    return { ok: false, reason: "read_error" };
+  }
+}
+
+/**
+ * Octet-for-octet comparison through the frozen codec — never a digest
+ * comparison, and never `===` on the parsed values. `jsonb` preserves neither
+ * key order nor insignificant whitespace, so only the codec can decide whether
+ * two stored bodies are the same content; and comparing digests would let a
+ * (vanishingly unlikely, but the whole store is built to survive it) collision
+ * pronounce two different bodies equal.
+ */
+async function compareShadow(
+  db: Database,
+  read: CapturePayloadEnvelopeRead & { ref: CapturePayloadRef },
+): Promise<CaptureCasReadMismatchReason | null> {
+  const stored = await loadCatalogBody(db, read);
+  if (!stored.ok) {
+    return stored.reason;
+  }
+
+  let inlineBytes: Buffer;
+  try {
+    inlineBytes = canonicalizeCaptureJson(read.inline);
+  } catch (error) {
+    return error instanceof CapturePayloadCodecError ? "inline_uncanonicalizable" : "read_error";
+  }
+
+  let storedBytes: Buffer;
+  try {
+    storedBytes = canonicalizeCaptureJson(stored.json);
+  } catch {
+    // The stored side failing the codec it was written by is not a codec
+    // verdict about the inline fact; it is the catalog copy being unusable.
+    return "read_error";
+  }
+
+  return Buffer.compare(storedBytes, inlineBytes) === 0 ? null : "content_mismatch";
+}
+
+/**
+ * Resolve one envelope's payload under the current read mode.
+ *
+ * Returns the inline body unless the mode is `serve` AND a catalog body was
+ * proven readable. NEVER THROWS.
+ *
+ * On key order and identity: in `serve` the returned value is the catalog
+ * body, re-parsed from `jsonb`, so it is a DIFFERENT object than the inline
+ * one. It is not a different VALUE: both sides are stored as `jsonb`, which
+ * normalizes key order identically on both, so even `JSON.stringify` over the
+ * two agrees (the rejournal path, which re-hashes what it reads, depends on
+ * exactly that and is pinned by a test).
+ */
+export async function resolveCapturePayload(
+  app: SeamContext,
+  read: CapturePayloadEnvelopeRead,
+): Promise<unknown> {
+  const mode = readMode;
+  // The zero-touch path: one variable read, one null check, return. No query,
+  // no allocation, no logger call.
+  if (mode === "inline" || read.ref === null) {
+    return read.inline;
+  }
+  const resolvable = read as CapturePayloadEnvelopeRead & { ref: CapturePayloadRef };
+
+  if (mode === "shadow") {
+    counters.shadowChecked += 1;
+    let reason: CaptureCasReadMismatchReason | null;
+    try {
+      reason = await compareShadow(app.db, resolvable);
+    } catch {
+      // compareShadow already absorbs the known failures; this is the belt on
+      // top of the braces, because a shadow read that throws would take down a
+      // caller that was never supposed to notice shadow exists at all.
+      reason = "read_error";
+    }
+    if (reason === null) {
+      counters.shadowMatched += 1;
+    } else {
+      counters.shadowMismatched += 1;
+      // ONE bounded line per disagreement: what disagreed and where, never the
+      // body (an observation payload is fan material and this is a log).
+      app.logger.warn({
+        envelope: read.envelope,
+        envelopeId: read.envelopeId,
+        bucketMonth: resolvable.ref.bucketMonth,
+        objectId: resolvable.ref.objectId,
+        reason,
+      }, "Capture payload shadow read disagrees with the inline fact");
+    }
+    // Unconditionally the inline body. Shadow cannot change an answer.
+    return read.inline;
+  }
+
+  const stored = await loadCatalogBody(app.db, resolvable);
+  if (stored.ok) {
+    counters.served += 1;
+    return stored.json;
+  }
+  // Silent by design: a fallback is a normal, safe outcome, not an incident,
+  // and a per-read error log on a degraded catalog would drown the log before
+  // anyone read it. The counter rides the hourly parity telemetry line.
+  counters.serveFellBack += 1;
+  return read.inline;
+}
+
+/**
+ * The row form of {@link resolveCapturePayload}, for the many read sites that
+ * hold a row carrying both the inline body and its reference.
+ *
+ * Returns the SAME object when the seam resolved the same value (mode `inline`,
+ * or no reference, or a `serve` fallback), so the common path allocates
+ * nothing and no field of an unfamiliar row shape can be lost to a spread.
+ */
+export async function resolveCapturePayloadRow<
+  T extends { payload: unknown; payloadRef: CapturePayloadRef | null },
+>(
+  app: SeamContext,
+  envelope: CapturePayloadEnvelopeKind,
+  envelopeId: number,
+  row: T,
+): Promise<T> {
+  const payload = await resolveCapturePayload(app, {
+    envelope,
+    envelopeId,
+    inline: row.payload,
+    ref: row.payloadRef,
+  });
+  return payload === row.payload ? row : { ...row, payload };
+}
+
+/**
+ * The `sync_raw_payloads` row form. Those readers name the body
+ * `responsePayload` (the column is `response_payload`), so they get their own
+ * one-line wrapper instead of a rename at every call site.
+ */
+export async function resolveRawCapturePayloadRow<
+  T extends { id: number; responsePayload: unknown; payloadRef: CapturePayloadRef | null },
+>(app: SeamContext, row: T): Promise<T> {
+  const responsePayload = await resolveCapturePayload(app, {
+    envelope: "raw_payload",
+    envelopeId: row.id,
+    inline: row.responsePayload,
+    ref: row.payloadRef,
+  });
+  return responsePayload === row.responsePayload ? row : { ...row, responsePayload };
+}
 
 export interface ObservationPayloadRead {
   observationId: number;
@@ -55,6 +373,8 @@ export interface ObservationPayloadRead {
   /** sha256 of the raw bytes the producer received, as captured. */
   payloadSha256: string;
   payload: unknown;
+  /** The catalog reference this envelope carries, or null. */
+  payloadRef: CapturePayloadRef | null;
 }
 
 /**
@@ -63,22 +383,26 @@ export interface ObservationPayloadRead {
  * Partition-spanning by construction (the caller has only the id). Each
  * partition satisfies it from its PK index; callers that already hold the
  * envelope's received_at should keep using the partition-exact repository
- * readers listed above until the pointer slice unifies them here.
+ * readers until a later slice unifies them here.
  */
 export async function loadObservationPayload(
-  db: Database,
+  app: SeamContext,
   observationId: number,
 ): Promise<ObservationPayloadRead | null> {
-  const rows = await db.execute<{
+  const rows = await app.db.execute<{
     id: string;
     received_at: Date | string;
     source: string;
     kind: string;
     payload_sha256: string;
     payload: unknown;
+    payload_bucket_month: string | null;
+    payload_object_id: string | null;
   }>(sql`
     select o.id::text as id, o.received_at, o.source, o.kind,
-           encode(o.payload_hash, 'hex') as payload_sha256, o.payload
+           encode(o.payload_hash, 'hex') as payload_sha256, o.payload,
+           to_char(o.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+           o.payload_object_id::text as payload_object_id
     from observations o
     where o.id = ${observationId}
     limit 1
@@ -87,14 +411,16 @@ export async function loadObservationPayload(
   if (row === undefined) {
     return null;
   }
-  return {
+  const read: ObservationPayloadRead = {
     observationId: Number(row.id),
     receivedAt: new Date(row.received_at),
     source: row.source,
     kind: row.kind,
     payloadSha256: row.payload_sha256,
     payload: row.payload,
+    payloadRef: capturePayloadRefFromColumns(row.payload_bucket_month, row.payload_object_id),
   };
+  return resolveCapturePayloadRow(app, "observation", read.observationId, read);
 }
 
 export interface RawCaptureBodyRead {
@@ -103,7 +429,8 @@ export interface RawCaptureBodyRead {
   payloadKind: string;
   capturedAt: Date;
   /** jsonb today; the union widens to Buffer when exact-byte bodies land. */
-  body: unknown;
+  payload: unknown;
+  payloadRef: CapturePayloadRef | null;
 }
 
 /**
@@ -114,18 +441,22 @@ export interface RawCaptureBodyRead {
  * its columns.
  */
 export async function loadRawCaptureBody(
-  db: Database,
+  app: SeamContext,
   rawPayloadId: number,
 ): Promise<RawCaptureBodyRead | null> {
-  const rows = await db.execute<{
+  const rows = await app.db.execute<{
     id: string;
     endpoint: string;
     payload_kind: string;
     captured_at: Date | string;
     response_payload: unknown;
+    payload_bucket_month: string | null;
+    payload_object_id: string | null;
   }>(sql`
     select rp.id::text as id, rp.endpoint, rp.payload_kind, rp.captured_at,
-           rp.response_payload
+           rp.response_payload,
+           to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+           rp.payload_object_id::text as payload_object_id
     from sync_raw_payloads rp
     where rp.id = ${rawPayloadId}
     limit 1
@@ -134,11 +465,13 @@ export async function loadRawCaptureBody(
   if (row === undefined) {
     return null;
   }
-  return {
+  const read: RawCaptureBodyRead = {
     rawPayloadId: Number(row.id),
     endpoint: row.endpoint,
     payloadKind: row.payload_kind,
     capturedAt: new Date(row.captured_at),
-    body: row.response_payload,
+    payload: row.response_payload,
+    payloadRef: capturePayloadRefFromColumns(row.payload_bucket_month, row.payload_object_id),
   };
+  return resolveCapturePayloadRow(app, "raw_payload", read.rawPayloadId, read);
 }

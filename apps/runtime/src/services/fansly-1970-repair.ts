@@ -31,6 +31,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
 
 const REPAIR_BATCH_SIZE = 200;
 /** Sanity clamp on the CORRECTED time — this campaign must never itself
@@ -158,7 +159,14 @@ export async function runFansly1970Repair(
           totals.missingObservation += 1;
           continue;
         }
-        const corrected = correctedTimestampFor(envelope.payload, row.message_ref);
+        // G5 slice 2: the envelope's body comes through the read seam.
+        const resolved = await resolveCapturePayloadRow(
+          app,
+          "observation",
+          Number(row.observation_id),
+          envelope,
+        );
+        const corrected = correctedTimestampFor(resolved.payload, row.message_ref);
         if (corrected === null) {
           totals.missingItem += 1;
           continue;

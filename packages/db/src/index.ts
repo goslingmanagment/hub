@@ -11,25 +11,34 @@ export * from "./capture-payload-codec.ts";
 // (same law as the agent-read witness mint helpers above); the pointer slice
 // reaches it from inside packages/db, not from a runtime caller.
 // `tests/capture-payload-barrel.test.ts` pins this export list.
+// G5 slice 2 adds `readEnvelopeCapturePayload`: the seam's ONE body read, and
+// barrel-safe for the reason the bare reader is not — it cannot be called
+// without naming the envelope class the reference was read off, and it refuses
+// any representation that envelope class does not store.
 export {
   CAPTURE_PAYLOAD_ACCESS_CLASSES,
+  CAPTURE_PAYLOAD_ENVELOPE_KINDS,
   CAPTURE_PAYLOAD_ERASURE_DOMAINS,
   CAPTURE_PAYLOAD_LANES,
   CAPTURE_PAYLOAD_STORAGE_TIERS,
   capturePayloadBucketMonth,
+  capturePayloadRefFromColumns,
   classifyCapturePayloadScope,
   getPayloadObject,
   putPayloadObject,
+  readEnvelopeCapturePayload,
 } from "./repositories/capture-payloads.ts";
 export type {
   CapturePayloadAccessClass,
   CapturePayloadBody,
+  CapturePayloadEnvelopeKind,
   CapturePayloadErasureDomain,
   CapturePayloadLane,
   CapturePayloadObjectRow,
   CapturePayloadRef,
   CapturePayloadScope,
   CapturePayloadStorageTier,
+  EnvelopeCapturePayloadRead,
   PutPayloadObjectContent,
   PutPayloadObjectInput,
   PutPayloadObjectResult,

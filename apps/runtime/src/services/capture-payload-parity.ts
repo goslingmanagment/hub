@@ -33,6 +33,7 @@ import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
+import { getCaptureCasReadCounters, getCaptureCasReadMode } from "./payload-reader.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const CAPTURE_PAYLOAD_PARITY_QUEUE = "capture.payload.parity.verify";
@@ -85,6 +86,19 @@ export async function runCapturePayloadParityCheck(
   const checkedAt = options?.now ?? new Date();
   const dualWritePages = getCaptureCasDualWritePages();
   if (dualWritePages.trim().length === 0) {
+    // The canary is off, so there is nothing to verify and the latch is left
+    // exactly as it was. The READ counters still deserve a line when the read
+    // mode is not inline: refs written by an earlier canary window survive a
+    // dual-write rollback, so shadow/serve can keep resolving them long after
+    // this job has stopped sampling. Silent only when both are off, which
+    // preserves "costs nothing when off" for the default deployment.
+    if (getCaptureCasReadMode() !== "inline") {
+      app.logger.info({
+        dualWritePages,
+        readMode: getCaptureCasReadMode(),
+        readCounters: getCaptureCasReadCounters(),
+      }, "Capture payload parity check skipped (dual-write canary off); read counters only");
+    }
     return {
       dualWritePages,
       skipped: true,
@@ -101,16 +115,22 @@ export async function runCapturePayloadParityCheck(
     ...(options?.scanLimit === undefined ? {} : { scanLimit: options.scanLimit }),
   });
 
-  // One telemetry line per pass, carrying the write-side counters alongside the
-  // read-side verdict: a rising codecRefused with a clean parity report is a
-  // very different story from a rising mismatched, and reading them apart in
-  // two places invites drawing the wrong conclusion.
+  // One telemetry line per pass, carrying the write-side counters AND the G5
+  // slice 2 read-side counters alongside this pass's verdict. Three signals that
+  // must be read together: a rising codecRefused with a clean parity report is a
+  // very different story from a rising mismatched, and a rising serveFellBack
+  // says the catalog is degrading under live reads even while this bounded
+  // sample still passes. Reading them apart in three places invites drawing the
+  // wrong conclusion — and this line is also the ONLY place the read counters
+  // surface, because the read path deliberately owns no alarm of its own.
   app.logger.info({
     dualWritePages,
+    readMode: getCaptureCasReadMode(),
     checked: report.checked,
     matched: report.matched,
     mismatched: report.mismatched,
     writeCounters: getCaptureCasDualWriteCounters(),
+    readCounters: getCaptureCasReadCounters(),
     ...(report.mismatches.length > 0 ? { mismatches: report.mismatches } : {}),
   }, "Capture payload parity check complete");
 
