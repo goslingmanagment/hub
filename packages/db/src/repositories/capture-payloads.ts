@@ -23,10 +23,14 @@
 // in a new month is a NEW object — by design, so every cold segment is
 // self-contained (§6.2).
 //
-// OUT OF SCOPE HERE (later slices): reference columns on the envelope tables,
-// any backfill, any deleter, and the erasure interplay (refcounting a body's
-// surviving envelope references, and the whole-body substring scan erasure
-// needs). Nothing below forecloses them.
+// OUT OF SCOPE HERE (later slices): reference columns on the envelope tables
+// (slice 1, migration 0124) and any backfill.
+//
+// THE ERASURE INTERPLAY LANDED in G5 slice 3b and lives NEXT DOOR, in
+// capture-payload-erasure.ts: the whole-body subject scan, the surviving-
+// reference proof, and the one sanctioned deleter of a capture body. It is a
+// separate file precisely so this one — the write path — issues no SQL
+// deletion at all and stays out of tests/retention-deleters.test.ts.
 
 import { is, sql } from "drizzle-orm";
 import { PgTransaction } from "drizzle-orm/pg-core";
@@ -303,17 +307,21 @@ async function settlePayloadObject(
     // the next ordinal. Coalescing on a hash match alone is exactly the bug
     // this loop exists to prevent.
     //
-    // TODO(G5-erasure-slice): a non-empty candidate set here IS a sha256
-    // collision under one scope+month and must page the owner. The mechanism
-    // exists — a `notification_incident_kind` value plus
-    // openNotificationIncidentWithRecoveryGuard (repositories/notifications.ts)
-    // behind the process-global helper notifyOfapiGlobalIncident
-    // (apps/runtime/src/services/notification-incidents.ts, as
-    // services/observations-partitions.ts uses it). It is not wired here
-    // because a new incident kind costs a migration plus three TS declarations
-    // (schema.ts enum, NotificationIncidentKind, contracts routes.ts zod) and
-    // this slice ships no writers, so the kind would page about nothing. Wire
-    // it in the slice that turns on the first writer.
+    // THE COLLISION ALARM IS WIRED, AND IT IS NOT HERE (G5 slice 3b). A
+    // non-empty candidate set at this point IS a sha256 collision inside one
+    // scope+month, and the owner is paged for it — by the hourly parity job
+    // (apps/runtime/src/services/capture-payload-parity.ts), under the
+    // `capture_payload_parity` kind with the `sha256_collision` subKey.
+    //
+    // Nothing pages from HERE, on purpose. This is the hottest write path in
+    // the system and decision #217 settled the rule the other way round for the
+    // read seam: a traffic-driven path cannot promise a clean pass, cannot
+    // bound its paging rate, and racing a scheduled job for the same latch is
+    // how a latch ends up half-owned. What this path owes the alarm is
+    // EVIDENCE, and it already writes it: the row below carries
+    // `collision_ordinal > 0` forever, which is a stronger record than any
+    // process counter — it survives a restart, a rollback of the canary, and
+    // the process that observed it.
     const lastCandidate = candidates.at(-1);
     const nextOrdinal = lastCandidate === undefined ? 0 : lastCandidate.collisionOrdinal + 1;
 

@@ -259,6 +259,33 @@ async function compareEnvelope(
 }
 
 /**
+ * How many catalog objects carry a non-zero `collision_ordinal`.
+ *
+ * A non-zero ordinal is the durable record of a sha256 collision INSIDE one
+ * (month, scope, digest, length) group: `settlePayloadObject` compared the full
+ * stored body against the incoming one, proved they differ, and — rather than
+ * coalescing on a hash match or rolling the capture back — gave the new content
+ * its own ordinal and its own body row. The capture is intact; the fact that a
+ * digest stopped being unique is an integrity event the owner must see.
+ *
+ * COST, and why there is no index. This is a count over the CATALOG, not over a
+ * body table: one row per distinct body per month per scope, small by
+ * construction and kept small on purpose (0123 gives it the PK and the identity
+ * UNIQUE, nothing else). An hourly sequential scan of it is cheaper than the
+ * partial index that would have to be created on every monthly partition and
+ * then justified forever after. If the catalog ever grows to where this shows
+ * up in the hourly job's timing, the index is a one-line migration — and by
+ * then there will be a query plan to earn it, which is the same rule 0124
+ * applied to the envelope reference columns.
+ */
+export async function countCapturePayloadCollisions(db: Database): Promise<number> {
+  const rows = await db.execute<{ n: string }>(sql`
+    select count(*)::text as n from capture_payload_objects o where o.collision_ordinal > 0
+  `);
+  return Number(rows.rows[0]?.n ?? 0);
+}
+
+/**
  * Verify a bounded sample of dual-written envelopes against their catalog
  * copies. Read-only end to end.
  *

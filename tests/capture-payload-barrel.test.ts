@@ -67,4 +67,36 @@ describe("capture payloads: the body reader stays off the package barrel", () =>
       "input: { envelope: CapturePayloadEnvelopeKind; ref: CapturePayloadRef },",
     );
   });
+
+  // G5 slice 3b. The erasure needs to know WHICH bodies contain a subject, and
+  // the tempting shape — "hand the erasure module the bodies and let it look" —
+  // would be a bare-ref body reader with a sympathetic name, i.e. exactly what
+  // the pin above exists to prevent. It is barrel-safe because it never returns
+  // a body: the subject match is decided in SQL and only metadata crosses the
+  // boundary. These assertions fail the build if that inverts.
+  it("the erasure catalog plane is exported, and it hands back metadata, never a body", () => {
+    for (const required of [
+      "capturePayloadErasureSubject",
+      "scanCapturePayloadObjectsForErasureSubject",
+      "countCapturePayloadByteObjectsInErasureScope",
+      "deleteUnreferencedCapturePayloadObjects",
+    ]) {
+      expect(Object.keys(db), required).toContain(required);
+    }
+
+    const erasureRepository = readFileSync(
+      fileURLToPath(
+        new URL("../packages/db/src/repositories/capture-payload-erasure.ts", import.meta.url),
+      ),
+      "utf8",
+    );
+    // The match row carries identity and size — no `body`, in any shape.
+    expect(erasureRepository).toContain("export interface CapturePayloadErasureMatch");
+    expect(erasureRepository).not.toMatch(/^\s*(body|json|bytes)\??:/m);
+    // …and the reason is stated in the file, so a later editor meets the rule
+    // before the code.
+    expect(erasureRepository).toContain("IT RETURNS NO BODY");
+    // It also may not smuggle one out through the internal reader.
+    expect(erasureRepository).not.toContain("loadPayloadBody");
+  });
 });

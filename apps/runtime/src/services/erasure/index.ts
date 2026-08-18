@@ -4,9 +4,20 @@ import path from "node:path";
 
 import { sql, type SQL } from "drizzle-orm";
 
+import {
+  type CapturePayloadErasureSubject,
+  capturePayloadErasureSubject,
+} from "@agency_hub_core/db";
+
 import type { AppContext } from "../../bootstrap.ts";
 import { recordAudit } from "../auth.ts";
 import type { TieringManifest } from "../tiering/index.ts";
+import {
+  type CapturePayloadCatalogWork,
+  buildCapturePayloadCatalogWork,
+  capturePayloadCatalogJournal,
+  sweepCapturePayloadCatalog,
+} from "./capture-catalog.ts";
 
 // Kernel Stage 28 Task 4 — the audited break-glass erasure (DP 7-A: business
 // facts are forever; "delete" is a governed procedure). Owner-initiated,
@@ -36,6 +47,16 @@ import type { TieringManifest } from "../tiering/index.ts";
 // - Undeclared kinds (parse_version 0, no events) are reached by a payload
 //   text match on the fan ref (quoted-JSON form always; bare-numeric form
 //   with boundaries when the ref is numeric).
+// - G5 slice 3b: execution reaches the CONTENT-ADDRESSED CATALOG too, in the
+//   same run. A capture body now lives twice — inline (still the authority)
+//   and once in capture_payload_objects — and slice 3c is about to remove the
+//   inline copy, so the catalog needs its own governed act first. The catalog
+//   plane INHERITS this module's verdicts instead of forming its own: a body
+//   whose every envelope this erasure deleted dies with them (the one
+//   sanctioned deleter of a capture body); a body a SURVIVING envelope still
+//   references is a bystander's fact — kept, counted, reported, and never
+//   rewritten, for the same reason a shared observation is never deleted. See
+//   services/erasure/capture-catalog.ts for the full argument.
 
 export type ErasureScopeInput =
   | { scopeType: "fan"; platform: "onlyfans" | "fansly"; fanRef: string }
@@ -54,7 +75,7 @@ export function erasureScopeRef(scope: ErasureScopeInput): string {
 }
 
 export interface ErasureTarget {
-  plane: "hot" | "ledger" | "lake";
+  plane: "hot" | "ledger" | "lake" | "catalog";
   target: string;
   action: "delete" | "anonymize" | "cascade" | "rewrite";
   rows: number;
@@ -89,6 +110,18 @@ interface ResolvedScope {
 type Db = Pick<AppContext, "db" | "config" | "logger" | "pool">;
 
 const ERASURE_EXECUTION_LOCK_KEY = 8_154_030_001;
+
+/** Catalog matches translated back into referencing observations per statement.
+ *  Bounded so one erasure cannot build a single query with an unbounded VALUES
+ *  list. */
+const CATALOG_LINEAGE_BATCH = 500;
+
+/** The catalog plane's single plan/executed-count key. */
+const CATALOG_TARGET = {
+  plane: "catalog",
+  target: "capture_payload_objects",
+  action: "delete",
+} as const;
 
 /**
  * Erasures are rare break-glass operations and every scope can touch the same
@@ -248,14 +281,20 @@ function observationPagePredSql(scope: ResolvedScope): SQL {
 // CAS-READ-BACKLOG(§6.4): the LAST site still reading the inline body in SQL
 // after G5 slice 3a took the field extractions to typed columns. This one is
 // not a field — it matches the WHOLE body as text to find a subject, so there
-// is nothing to project into a column. It belongs to the ERASURE slice, which
-// owes the catalog its own answer first (a body may be SHARED by several
-// envelopes, so rewriting it under one subject is not a per-row act), and the
-// historical rewrite of the inline heap does not start until that lands.
+// is nothing to project into a column.
+//
+// G5 slice 3b answered the catalog half of it. The literals below now come from
+// `capturePayloadErasureSubject`, the SAME function the catalog scan
+// (repositories/capture-payload-erasure.ts) builds its predicate from, so the
+// two planes cannot disagree about what "this body contains the subject" means.
+// The inline arm stays here because the inline column is still the authority;
+// the arm that reads catalog bodies lives in `collectFanLineage` below, where a
+// catalog match is translated back into the envelopes that reference it.
 function payloadMatchPredSql(fanRef: string): SQL {
-  const quoted = sql`payload::text like ${"%\"" + fanRef + "\"%"}`;
-  if (/^\d+$/.test(fanRef)) {
-    return sql`(${quoted} or payload::text ~ ${"[:\\[,[:space:]]" + fanRef + "[,}\\]]"})`;
+  const subject = capturePayloadErasureSubject(fanRef);
+  const quoted = sql`payload::text like ${subject.quotedLike}`;
+  if (subject.numericBoundaryRegex !== null) {
+    return sql`(${quoted} or payload::text ~ ${subject.numericBoundaryRegex})`;
   }
   return quoted;
 }
@@ -390,6 +429,7 @@ async function collectFanLineage(
   app: Db,
   scope: ResolvedScope,
   lakeFiles: LakeManifestFile[],
+  catalog: CapturePayloadCatalogWork,
 ): Promise<LedgerLineage> {
   const parked = await listParkedTables(app);
   const eventIds = new Set<number>();
@@ -417,6 +457,39 @@ async function collectFanLineage(
       where account_id in ${scope.pageIds} and ${payloadMatchPredSql(scope.fanRef!)}
     `);
     for (const row of matched) {
+      candidates.add(Number(row.id));
+    }
+  }
+
+  // G5 slice 3b: the CATALOG arm of the same subject match. An observation
+  // whose catalog body carries the fan ref is fan material even if its inline
+  // column does not say so. Today the two copies are identical by construction,
+  // so this arm finds exactly what the inline arm above already found — and
+  // that is the point of landing it now: after slice 3c nulls the inline
+  // column it becomes the ONLY arm that can find these rows, and the erasure
+  // will not have to change on the day the heap is rewritten. Scoped to
+  // `account_id in pageIds` like the inline arm, so the two planes reach the
+  // same envelopes and neither can quietly out-erase the other.
+  for (let offset = 0; offset < catalog.matches.length; offset += CATALOG_LINEAGE_BATCH) {
+    const batch = catalog.matches.slice(offset, offset + CATALOG_LINEAGE_BATCH);
+    const refs = sql.join(
+      batch.map((match, index) =>
+        index === 0
+          ? sql`(${match.bucketMonth}::date, ${match.objectId}::bigint)`
+          : sql`(${match.bucketMonth}, ${match.objectId})`
+      ),
+      sql`, `,
+    );
+    const referencing = await rows<{ id: string }>(app, sql`
+      with target (bucket_month, object_id) as (values ${refs})
+      select distinct o.id::text as id
+      from target t
+      join observations o
+        on o.payload_bucket_month = t.bucket_month
+       and o.payload_object_id = t.object_id
+      where o.account_id in ${scope.pageIds}
+    `);
+    for (const row of referencing) {
       candidates.add(Number(row.id));
     }
   }
@@ -1132,13 +1205,24 @@ interface ErasureWork {
   ledger: WorkTarget[];
   lake: LakeTarget[];
   lineage: LedgerLineage | null;
+  catalog: CapturePayloadCatalogWork;
 }
 
 async function buildWork(app: Db, input: ErasureScopeInput): Promise<ErasureWork> {
   const scope = await resolveScope(app, input);
+  // The catalog scan runs FIRST because the fan lineage consumes it: a body
+  // that carries the subject names the envelopes that must go with it.
+  const subject: CapturePayloadErasureSubject | null = scope.fanRef === null
+    ? null
+    : capturePayloadErasureSubject(scope.fanRef);
+  const catalog = await buildCapturePayloadCatalogWork(app, {
+    scopeType: scope.input.scopeType,
+    pageIds: scope.pageIds,
+    subject,
+  });
   const lakeFiles = await listLakeManifests(app);
   const lineage = scope.input.scopeType === "fan"
-    ? await collectFanLineage(app, scope, lakeFiles)
+    ? await collectFanLineage(app, scope, lakeFiles, catalog)
     : null;
   const hot = scope.input.scopeType === "fan"
     ? await fanHotTargets(app, scope, lineage!)
@@ -1149,11 +1233,21 @@ async function buildWork(app: Db, input: ErasureScopeInput): Promise<ErasureWork
     ledger: await ledgerTargets(app, scope, lineage),
     lake: await lakeTargets(app, scope, lakeFiles, lineage),
     lineage,
+    catalog,
   };
 }
 
 function workToPlan(work: ErasureWork): ErasurePlan {
-  const targets = [...work.hot, ...work.ledger, ...work.lake]
+  // The catalog row is a plan for the objects IN SCOPE, not a promise that all
+  // of them die: how many actually do depends on which envelopes survive this
+  // run, which is only knowable after the delete transaction commits. The
+  // executed counts report the real split (erased vs kept), the same way
+  // `sharedObservations` reports the inline plane's kept survivors.
+  const catalogTarget: ErasureTarget = {
+    ...CATALOG_TARGET,
+    rows: work.catalog.matches.length,
+  };
+  const targets = [...work.hot, ...work.ledger, ...work.lake, catalogTarget]
     .map(({ plane, target, action, rows: rowCount }) => ({ plane, target, action, rows: rowCount }));
   return {
     scopeType: work.scope.input.scopeType,
@@ -1242,10 +1336,22 @@ async function executeErasureLocked(
     }
   });
 
+  // G5 slice 3b — the catalog plane, in the SAME run and deliberately AFTER
+  // the delete transaction: "no surviving envelope reference" is only true
+  // once those deletes are visible. Bounded batches, each its own transaction
+  // under the erasure fence, each independently resumable.
+  const catalogOutcome = await sweepCapturePayloadCatalog(app, {
+    scopeRef: plan.scopeRef,
+    pageIds: work.scope.pageIds,
+    matches: work.catalog.matches,
+  });
+  record({ ...CATALOG_TARGET, rows: work.catalog.matches.length }, catalogOutcome.deleted.length);
+
   for (const target of work.lake) {
     record(target, await rewriteLakeTarget(plan.scopeRef, target));
   }
 
+  const catalogJournal = capturePayloadCatalogJournal(catalogOutcome);
   const resolution = await completeErasureLogAndSupersedeScope(app.db, {
     id: logRow.id,
     scopeType: input.scopeType,
@@ -1255,6 +1361,12 @@ async function executeErasureLocked(
     executedCounts: {
       ...executedCounts,
       sharedObservationsKept: plan.sharedObservations,
+      // The catalog journal lives ONLY in the tombstone, never in the numeric
+      // executedCounts the caller gets back: it carries a manifest array and a
+      // "kept" count that is legitimately non-zero on a converged re-run, and
+      // the result contract is "every count reaches zero when the erasure has
+      // converged".
+      ...catalogJournal,
     },
   });
   if (!resolution) {
@@ -1273,6 +1385,8 @@ async function executeErasureLocked(
       logId: logRow.id,
       totalRows: plan.totalRows,
       sharedObservationsKept: plan.sharedObservations,
+      capturePayloadObjectsErased: catalogOutcome.deleted.length,
+      capturePayloadObjectsKept: catalogOutcome.retained,
       supersededLogIds: resolution.supersededIds,
     },
   });
@@ -1282,6 +1396,8 @@ async function executeErasureLocked(
       scopeRef: plan.scopeRef,
       totalRows: plan.totalRows,
       logId: logRow.id,
+      capturePayloadObjectsErased: catalogOutcome.deleted.length,
+      capturePayloadObjectsKept: catalogOutcome.retained,
       supersededLogIds: resolution.supersededIds,
     },
     "Erasure executed",

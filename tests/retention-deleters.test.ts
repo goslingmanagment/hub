@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -20,6 +21,26 @@ import { describe, expect, it } from "vitest";
 // owner-initiated, dry-run default, tombstoned in erasure_log.
 // Projection reset helpers are also sanctioned: they only clear rebuildable
 // state and are never scheduled retention work.
+//
+// G5 slice 3b adds ONE new sanctioned deleter, and it is the first one ever
+// allowed to destroy a captured BODY:
+//   - packages/db/src/repositories/capture-payload-erasure.ts —
+//     deleteUnreferencedCapturePayloadObjects. Lawful for one reason and only
+//     that reason: it deletes a content-addressed capture body ONLY when NO
+//     envelope references it any more, which the same statement PROVES with a
+//     `not exists` against both observations and sync_raw_payloads inside the
+//     erasure's own transaction. A body whose every envelope this erasure just
+//     deleted is a copy of a fact that no longer exists (0123 wrote the rule
+//     down before there was code for it: "a body may die only when the last
+//     surviving envelope reference is gone"); a body a SURVIVING envelope
+//     still needs is a bystander's fact and is kept, counted and reported,
+//     never deleted and never rewritten. It is NOT scheduled, has no timer and
+//     no retention window: the only caller is
+//     apps/runtime/src/services/erasure/capture-catalog.ts, inside an
+//     owner-initiated run that is tombstoned in erasure_log — the same
+//     governance the rest of the module has. It sits in its own file so the
+//     capture WRITE path (capture-payloads.ts) never has to appear on this
+//     list.
 const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/cli.ts",
   "apps/runtime/src/services/erasure/index.ts",
@@ -33,6 +54,7 @@ const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/services/sync/observability.ts",
   "apps/runtime/src/services/sync/rate-limiter.ts",
   "packages/db/src/repositories/auth.ts",
+  "packages/db/src/repositories/capture-payload-erasure.ts",
   "packages/db/src/repositories/catalog.ts",
   "packages/db/src/repositories/config-settings.ts",
   "packages/db/src/repositories/dm-analytics.ts",
@@ -84,5 +106,34 @@ describe("retention deleter enumeration (Stage 28)", () => {
         .map((line) => line.slice(0, line.indexOf(":"))),
     )].sort();
     expect(found).toEqual([...SANCTIONED_DELETER_FILES].sort());
+  });
+
+  // The file-level allowlist above says WHO may delete. For the one deleter
+  // that destroys a captured body, that is not enough — WHAT it deletes and
+  // WHAT it must prove first are the whole licence, so both are pinned here.
+  it("the capture-body deleter touches only the catalog trio, and only with zero references proved", () => {
+    const source = readFileSync(
+      join(__dirname, "..", "packages/db/src/repositories/capture-payload-erasure.ts"),
+      "utf8",
+    );
+
+    const deleted = [...source.matchAll(/delete from (\w+)/g)].map((match) => match[1]).sort();
+    expect(deleted).toEqual([
+      "capture_byte_hot_bodies",
+      "capture_json_hot_bodies",
+      "capture_payload_locations",
+      "capture_payload_objects",
+    ]);
+
+    // The proof, verbatim: an object is deletable only when NEITHER envelope
+    // table references it. Dropping either arm would silently turn this into a
+    // deleter of live bodies.
+    expect(source).toContain("exists (select 1 from observations e");
+    expect(source).toContain("exists (select 1 from sync_raw_payloads e");
+    expect(source).toContain("e.payload_bucket_month = c.bucket_month");
+    expect(source).toContain("e.payload_object_id = c.object_id");
+    // Nothing here may rewrite a body: a shared body belongs to a bystander.
+    expect(source).not.toMatch(/\bupdate\s+capture_/i);
+    expect(source).not.toMatch(/\binsert\s+into\s+capture_/i);
   });
 });

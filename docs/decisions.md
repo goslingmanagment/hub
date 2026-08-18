@@ -220,6 +220,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 216 | jsonb reads are single-parse | drizzle 0.45.2's builtin `jsonb` column runs `JSON.parse` on a value node-postgres has ALREADY parsed, so any jsonb value that IS a JSON string is decoded TWICE: stored `"4"` reads back as the NUMBER 4, `"true"` as a boolean, `"{\"a\":1}"` as an object; bare words like `enforce` survive only because their second parse throws. It disarmed the G5 canary in production on 2026-08-16 — `captureCasDualWritePages = "4"` read back as 4, `validateConfigOverride` rejected it as "expects a string", the live overlay silently dropped the override, and nothing logged an error. Fixed at the root by a `jsonbSafe` `customType` in `packages/db/src/schema.ts` whose read is IDENTITY and whose write stays `JSON.stringify` — the wire format is byte-identical, the change is READ-SIDE ONLY, and no migration exists because the stored data was always correct. All 55 jsonb columns switched, not only the three that hold scalars: the object-only ones were safe by accident of what they happen to store, not by construction. The builtin `jsonb` import is lint-banned repo-wide so the trap cannot be re-imported |
 | 217 | G5 slice 2: reads move to the catalog through a staged, fail-open seam | Every reader that SERVES an `observations.payload` or `sync_raw_payloads.response_payload` body now goes through one seam (`apps/runtime/src/services/payload-reader.ts`) governed by `capture_cas_read_mode`: `inline` (the pre-slice behavior, zero extra queries, the mode check is one process-local variable), `shadow` (callers still get the inline bytes AND the catalog copy is compared octet-for-octet per read, counted and logged), `serve` (the catalog body IS what callers get). THE INLINE COLUMNS REMAIN THE AUTHORITY OF RECORD IN EVERY MODE — `serve` moves the byte source, never the truth — and the seam FAILS OPEN TO INLINE on every failure class (object/body missing, wrong representation, codec refusal, connection error), silently, never throwing. Transitions are stepwise upward and free downward, the `aiTranscriptFreshUnionMode` rule verbatim, so `serve` is unreachable without a shadow window. THE READ PATH OWNS NO ALARM: a shadow mismatch counts and logs but never touches the `capture_payload_parity` latch, which stays the hourly verifier's alone (a traffic-driven path cannot promise a clean pass, cannot bound its paging rate, and would race the verifier for the latch); the read counters ride the verifier's single telemetry line instead. The body read is barrel-exported only in ENVELOPE-authorized form (`readEnvelopeCapturePayload`), so a bare `(bucket_month, object_id)` still buys nothing. SQL `payload->` extraction sites are explicitly NOT migrated — they never return a whole body — and are marked in place with `CAS-READ-BACKLOG(§6.4)` |
 | 218 | G5 slice 3a: the queryable fields get typed columns of their own | The SQL sites that dig INSIDE a capture body and return a FIELD (not a body, so the #217 seam can never route them) move to narrow typed columns populated at INSERT time, derived in `packages/db` from the same parsed object the inline column receives — so a column cannot disagree with its body, and no second row version is minted. 0125 adds `observations.harvest_machine_id / harvest_tx_id / harvest_tx_amount / harvest_tx_created_at` (all `text`: a malformed captured member must still journal, DP 7, and `text` is what `->>` returned) and `sync_raw_payloads.response_tips` (the `{tips}` slice, so the tip replay keeps its server-side narrowing instead of dragging whole DM bodies over the wire). The agent plane's `payloadBytes` becomes `coalesce(cpo.logical_bytes, octet_length(o.payload::text))` over a LEFT JOIN to the catalog PK rather than a fifth column — the number is already stored once on the row the reference addresses — and it deliberately RESTATES the size for referenced rows (canonical octets vs jsonb text), because a size measured on a column the system is about to stop writing is the one that becomes a lie. The coverage-revoke idempotency proof needs no columns at all: `readEnvelopeCapturePayload` is inside packages/db and is the smaller diff. THE ONE INDEX-BACKED PREDICATE IS AN `OR`, NOT A `coalesce` — coalesce over two columns is unindexable — with a typed twin index (0126, CONCURRENTLY per partition, the 0096 pattern) so both arms bitmap-scan; the other two harvest queries use `coalesce` because 0096's partial index needs a `source` clause they never had. NO BACKFILL: every fallback arm is marked `CAS-INLINE-FALLBACK:` and the historical-rewrite slice fills the columns on the pass it already makes. Erasure's `payload::text like` subject matching stays behind — it matches a whole body, not a field — and now names the erasure slice as its owner |
+| 219 | G5 slice 3b: erasure becomes catalog-complete, and a capture body gets its first lawful death | The Stage 28.4 erasure now reaches the content-addressed catalog IN THE SAME RUN, landed BEFORE slice 3c can null an inline body and make the catalog copy the only one. The catalog plane INHERITS the module's verdicts instead of forming its own: a body whose every envelope this erasure deleted dies with them — body row, location row, catalog row, the first sanctioned deletion of a captured body in this system — while a body a SURVIVING envelope still references (a shared observation, a `sync_raw_payloads` row erasure never touches) is a bystander's fact: kept, counted and journaled in the tombstone exactly like `sharedObservationsKept`. A SUBJECT-FILTERED REWRITE OF A SHARED BODY WAS REJECTED on two independent grounds — it destroys a bystander's captured bytes (the same law that keeps shared observations), and every referencing envelope still carries that body inline, so a filtered copy would diverge from the #217 authority of record and page the parity verifier by design. Zero references is PROVED, not assumed: a `not exists` over both envelope tables in the statement that selects the deletion set, deletes behind it in FK order, all inside one transaction per bounded batch holding the G3 erasure fence; migration 0127 gives that probe the partial index 0124 deferred until "earned by a real query plan". The sweep runs AFTER the delete transaction (the deletes must be visible for "no surviving reference" to mean anything) and is resumable by construction — set-based statements, no per-object precondition, a re-run rescans and continues. One `capturePayloadErasureSubject` builds the literals for BOTH planes so they cannot disagree about what "contains the subject" means; the catalog scan returns metadata only, never bytes; `exact_bytes` in scope fails the run loudly rather than under-erasing. Slice 0's collision TODO is wired: the hourly parity job counts `collision_ordinal > 0` and pages under the SAME kind with its own `sha256_collision` subKey (#213's runway shape) — measured on every pass canary or not, resolvable only by a zero count, never by a clean parity sample, with subKey-specific resolve texts; `settlePayloadObject` still owns no latch (#217), because the durable row it already writes outlives any counter |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -7331,3 +7332,97 @@ column, and the catalog owes it an answer first: a body may be SHARED by several
 envelopes, so rewriting one under a single subject is not a per-row act. It
 keeps its `CAS-READ-BACKLOG(§6.4)` marker, now naming the erasure slice as its
 owner, and the historical rewrite does not start until that slice lands.
+
+**Decision #219 (2026-08-18, G5 slice 3b: erasure becomes catalog-complete, and
+a capture body gets its first lawful death):** #215 started writing every
+pull-capture body TWICE — inline (the authority) and once into the
+content-addressed catalog — and #217 made readers serve from the second copy.
+The Stage 28.4 erasure module reached only the first one. Slice 3c stops writing
+the inline body and rewrites the heap; the instant that lands, the catalog copy
+is the ONLY copy, and an executed erasure would leave the erased fan's material
+sitting in a table no governed act could touch. This slice lands the act FIRST,
+so no window of silent under-erasure ever exists.
+
+**The law is inherited, not invented.** Both earlier slices wrote it down before
+there was code for it — migration 0123 ("a body may die only when the last
+surviving envelope reference is gone") and `services/payload-reader.ts` ("a
+shared body may not be rewritten under one envelope's subject"). The catalog
+plane therefore takes the inline plane's verdicts instead of forming its own:
+
+- A body whose EVERY envelope this erasure deleted has no surviving fact behind
+  it. It dies with them — body row, location row and catalog row. THAT is the
+  new sanctioned deleter, and it is the first thing in this system ever allowed
+  to delete a captured body.
+- A body a SURVIVING envelope still references is a BYSTANDER'S FACT: a shared
+  observation the module deliberately kept, or a `sync_raw_payloads` row erasure
+  has never touched. It is kept, counted and reported in the tombstone —
+  identical treatment to `sharedObservationsKept`, which is the same residual
+  risk seen from the other side.
+
+**A SUBJECT-FILTERED REWRITE OF A SHARED BODY WAS CONSIDERED AND REJECTED**, on
+two independent grounds. (1) It destroys a bystander's captured bytes — exactly
+what the module's observation-exclusivity law forbids on the inline side, where
+"deleting a shared batch capture would orphan bystanders' lineage" is why shared
+survivors are reported rather than erased. (2) Every envelope that references a
+body still carries that body INLINE today, and #217 keeps inline the authority
+of record in every read mode; a filtered catalog copy would make the two
+disagree — which is the precise condition the hourly parity verifier pages
+about. A slice cannot ship a designed-in alarm. The consequence is stated
+plainly rather than hidden: this slice makes the catalog EXACTLY as complete as
+the inline plane, no more. Reaching a shared body's content would require
+rewriting BOTH planes in place, i.e. mutating an immutable capture envelope —
+its own decision, which the owner has not been asked for.
+
+**Zero references is PROVED, in the same transaction, per batch.** The deletion
+set comes from a `not exists` against both `observations` and
+`sync_raw_payloads` in the statement that selects it, and the deletes run in FK
+order behind it (bodies and location first — 0123's `ON DELETE RESTRICT` makes a
+catalog row structurally unable to take its body with it by accident). Migration
+0127 gives that probe the partial index 0124 explicitly deferred until "an index
+is earned by a real query plan": unindexed, an existence check per candidate is
+a sequential scan of the largest relation in the system, and an erasure that
+does not finish is an erasure that did not happen.
+
+**Same run, after the delete transaction, in bounded batches.** One erasure
+decision covers both planes from the operator's view, but the sweep cannot be
+inside the delete transaction: "no surviving reference" only means something
+once those deletes are visible. Each batch is its own transaction holding the
+G3 erasure fence's exclusive locks over every resolved page id. Resumability
+falls out of the shape — every statement is set-based over that batch's
+candidate list, so a crash leaves earlier batches committed and the rest
+untouched, and a re-run rescans, recomputes and continues with no "already
+deleted" case to handle. The residual is named rather than papered over: a
+capture landing DURING the sweep can dedup onto a dying object (READ COMMITTED
+has no predicate lock), and the worst outcome is a dangling reference — the
+failure class #215 already accepts and the parity verifier already reports —
+never a lost fact.
+
+**One subject definition for both planes.** `capturePayloadErasureSubject` now
+builds the literals for the inline `payload::text like` matcher AND for the
+catalog scan, so the two planes cannot disagree about what "this body contains
+the subject" means. The catalog scan returns METADATA ONLY — which objects match,
+never their bytes — so it is barrel-safe for the same reason
+`readEnvelopeCapturePayload` is and a bare `(bucket_month, object_id)` still
+buys nothing. The fan-lineage collector gains a catalog arm that translates a
+matched object back into the envelopes referencing it: a no-op today (the two
+copies are identical by construction), and the ONLY arm that can find those rows
+after 3c nulls the inline column. `exact_bytes` objects in scope FAIL THE RUN
+LOUDLY rather than being skipped — no writer produces one yet, and the webhook
+slice that will owes the scan its byte arm.
+
+**The sha256 collision alarm is wired, and the hot path still owns nothing.**
+Slice 0 left `settlePayloadObject`'s collision path with a TODO: a non-empty
+candidate set with no matching body IS a collision inside one scope+month, and
+nobody was paged. The hourly parity job now counts
+`capture_payload_objects where collision_ordinal > 0` and pages under the
+EXISTING `capture_payload_parity` kind with its own subKey,
+`sha256_collision` — the shape #213 gave the `db_disk_usage` runway latches. Own
+subKey means own lifecycle: a clean parity pass may NOT resolve a standing
+collision, only a collision count back at zero may, and both resolve texts name
+the condition that cleared so neither reads as a catalog-wide all-clear. The
+check runs on EVERY pass, canary or not, because a collision is a durable row
+and switching a flag off must not clear an integrity page. `settlePayloadObject`
+gets no counter and no latch (#217, applied to the write path this time): it is
+the hottest path in the system, and the evidence it already writes —
+`collision_ordinal > 0`, forever, on the row itself — outlives any process
+counter.

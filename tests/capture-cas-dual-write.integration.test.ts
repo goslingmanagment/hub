@@ -232,6 +232,10 @@ describe("capture payload parity verifier", () => {
     const result = await runCapturePayloadParityCheck(appStub());
     expect(result).toMatchObject({ skipped: true, checked: 0, matched: 0, mismatched: 0 });
     expect(await openParityIncidents()).toBe(0);
+    // The collision half of the job runs on every pass, canary or not — see the
+    // subKey cases below. Nothing collided, so it measured zero and paged
+    // nothing.
+    expect(result.collisions).toBe(0);
   });
 
   it("reports every dual-written envelope as matched", async (context) => {
@@ -306,6 +310,77 @@ describe("capture payload parity verifier", () => {
     );
     expect(inline.rows[0]!.payload.response.total).toBe(99);
     expect(await countRows("select count(*)::text as n from capture_json_hot_bodies")).toBe(1);
+  });
+
+  // G5 slice 3b — the collision latch. Same incident KIND as the parity
+  // mismatch, a different subKey, and deliberately a different lifecycle: one
+  // says "the copy disagrees with the fact", the other says "a digest stopped
+  // being unique", and neither answer may be read off the other's silence.
+  async function forgeCollision() {
+    await testDb!.pool.query(`
+      insert into capture_payload_objects (
+        bucket_month, platform_account_id, access_class, erasure_domain,
+        representation, codec_version, content_sha256, collision_ordinal,
+        logical_bytes, first_seen_at
+      ) values (
+        '2026-08-01', null, 'ordinary_capture', 'fan_subject',
+        'canonical_json', 1, sha256('forged'::bytea), 1, 7, now()
+      )
+    `);
+  }
+
+  async function collisionIncident() {
+    const rows = await testDb!.pool.query<{ status: string; error_summary: string | null }>(
+      `select status, error_summary from notification_incidents
+       where incident_key = 'capture_payload_parity:global:sha256_collision'`,
+    );
+    return rows.rows[0] ?? null;
+  }
+
+  it("pages under its own subKey when an object carries a collision ordinal", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await forgeCollision();
+
+    // The canary is OFF and the collision still pages: a collision is a durable
+    // row, not a sample, and rolling back a flag must not clear it.
+    const result = await runCapturePayloadParityCheck(appStub());
+    expect(result.skipped).toBe(true);
+    expect(result.collisions).toBe(1);
+
+    const incident = await collisionIncident();
+    expect(incident?.status).toBe("open");
+    expect(incident?.error_summary).toContain("collision_ordinal > 0");
+  });
+
+  it("does not let a clean parity pass resolve a standing collision", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedPage();
+    publishCaptureCasDualWritePages(String(page.id));
+    await capture(page.id, BODY);
+    await forgeCollision();
+
+    // A pass that measures a clean sample AND a standing collision: the parity
+    // latch has nothing to open, the collision latch stays open.
+    const result = await runCapturePayloadParityCheck(appStub());
+    expect(result.skipped).toBe(false);
+    expect(result.mismatched).toBe(0);
+    expect(result.collisions).toBe(1);
+    expect((await collisionIncident())?.status).toBe("open");
+
+    // Only the collision going away clears it, and the resolve line says which
+    // condition cleared.
+    await testDb.pool.query("delete from capture_payload_objects where collision_ordinal > 0");
+    const cleared = await runCapturePayloadParityCheck(appStub());
+    expect(cleared.collisions).toBe(0);
+    expect((await collisionIncident())?.status).toBe("resolved");
   });
 
   it("catches a reference that points at nothing", async (context) => {

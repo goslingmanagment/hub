@@ -86,10 +86,15 @@
 //   * apps/runtime/src/services/erasure/** — `payload::text like` subject
 //     matching (services/erasure/index.ts payloadMatchPredSql). Subject
 //     matching reads the WHOLE body as text and cannot be projected into a
-//     column; it needs the catalog's own erasure story (a shared body may not
-//     be rewritten under one envelope's subject, §6.1's refcount note), which
-//     is the ERASURE slice's problem, not this one. The historical rewrite does
-//     not start until that slice lands.
+//     column, so this seam can never route it. G5 SLICE 3B gave it the other
+//     half instead: the catalog now has its own subject scan and its own
+//     governed deleter (services/erasure/capture-catalog.ts), built on the
+//     answer §6.1's refcount note implies — a shared body may NOT be rewritten
+//     under one envelope's subject, so a body dies only when the last envelope
+//     that referenced it is gone, and a body a bystander still needs is kept
+//     and reported. The inline arm above stays because the inline column is
+//     still the authority; it is the historical rewrite (slice 3c) that
+//     finally takes it away, and that slice is now unblocked.
 
 import { sql } from "drizzle-orm";
 
