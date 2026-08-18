@@ -219,6 +219,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 215 | G5 slice 1: the CAS copy is written before the fact, and proved after it | Pull capture on a canary page stores its body in the content-addressed catalog in a SEPARATE transaction that runs BEFORE the inline inserts, and the resulting `(payload_bucket_month, payload_object_id)` pair is carried INTO those inserts as ordinary column values. Same-transaction was rejected because a failed CAS statement aborts the whole transaction (25P02) and would take the capture with it; a post-commit UPDATE was rejected because it mints a second row version per capture on the two biggest tables. Failure of any CAS step is swallowed and leaves null references — never an orphaned fact, only an orphaned object. The envelope reference deliberately carries NO foreign key (an FK to a partitioned catalog taxes the hottest write path and locks its future partition maintenance); a two-directional CHECK, added NOT VALID because both columns start null for all history, is the enforced invariant, and a bounded hourly parity verifier is what actually looks for a dangling or divergent reference. One setting, `capture_cas_dual_write_pages` (CSV of page ids or `*`), is both the switch and the bound and FAILS CLOSED at empty; it reaches each process on the runtime heartbeat that already reads the live overlay, so the canary adds no query in either state. The verifier compares full canonical bodies (never digests alone), never repairs, and pages under the new `capture_payload_parity` incident kind |
 | 216 | jsonb reads are single-parse | drizzle 0.45.2's builtin `jsonb` column runs `JSON.parse` on a value node-postgres has ALREADY parsed, so any jsonb value that IS a JSON string is decoded TWICE: stored `"4"` reads back as the NUMBER 4, `"true"` as a boolean, `"{\"a\":1}"` as an object; bare words like `enforce` survive only because their second parse throws. It disarmed the G5 canary in production on 2026-08-16 — `captureCasDualWritePages = "4"` read back as 4, `validateConfigOverride` rejected it as "expects a string", the live overlay silently dropped the override, and nothing logged an error. Fixed at the root by a `jsonbSafe` `customType` in `packages/db/src/schema.ts` whose read is IDENTITY and whose write stays `JSON.stringify` — the wire format is byte-identical, the change is READ-SIDE ONLY, and no migration exists because the stored data was always correct. All 55 jsonb columns switched, not only the three that hold scalars: the object-only ones were safe by accident of what they happen to store, not by construction. The builtin `jsonb` import is lint-banned repo-wide so the trap cannot be re-imported |
 | 217 | G5 slice 2: reads move to the catalog through a staged, fail-open seam | Every reader that SERVES an `observations.payload` or `sync_raw_payloads.response_payload` body now goes through one seam (`apps/runtime/src/services/payload-reader.ts`) governed by `capture_cas_read_mode`: `inline` (the pre-slice behavior, zero extra queries, the mode check is one process-local variable), `shadow` (callers still get the inline bytes AND the catalog copy is compared octet-for-octet per read, counted and logged), `serve` (the catalog body IS what callers get). THE INLINE COLUMNS REMAIN THE AUTHORITY OF RECORD IN EVERY MODE — `serve` moves the byte source, never the truth — and the seam FAILS OPEN TO INLINE on every failure class (object/body missing, wrong representation, codec refusal, connection error), silently, never throwing. Transitions are stepwise upward and free downward, the `aiTranscriptFreshUnionMode` rule verbatim, so `serve` is unreachable without a shadow window. THE READ PATH OWNS NO ALARM: a shadow mismatch counts and logs but never touches the `capture_payload_parity` latch, which stays the hourly verifier's alone (a traffic-driven path cannot promise a clean pass, cannot bound its paging rate, and would race the verifier for the latch); the read counters ride the verifier's single telemetry line instead. The body read is barrel-exported only in ENVELOPE-authorized form (`readEnvelopeCapturePayload`), so a bare `(bucket_month, object_id)` still buys nothing. SQL `payload->` extraction sites are explicitly NOT migrated — they never return a whole body — and are marked in place with `CAS-READ-BACKLOG(§6.4)` |
+| 218 | G5 slice 3a: the queryable fields get typed columns of their own | The SQL sites that dig INSIDE a capture body and return a FIELD (not a body, so the #217 seam can never route them) move to narrow typed columns populated at INSERT time, derived in `packages/db` from the same parsed object the inline column receives — so a column cannot disagree with its body, and no second row version is minted. 0125 adds `observations.harvest_machine_id / harvest_tx_id / harvest_tx_amount / harvest_tx_created_at` (all `text`: a malformed captured member must still journal, DP 7, and `text` is what `->>` returned) and `sync_raw_payloads.response_tips` (the `{tips}` slice, so the tip replay keeps its server-side narrowing instead of dragging whole DM bodies over the wire). The agent plane's `payloadBytes` becomes `coalesce(cpo.logical_bytes, octet_length(o.payload::text))` over a LEFT JOIN to the catalog PK rather than a fifth column — the number is already stored once on the row the reference addresses — and it deliberately RESTATES the size for referenced rows (canonical octets vs jsonb text), because a size measured on a column the system is about to stop writing is the one that becomes a lie. The coverage-revoke idempotency proof needs no columns at all: `readEnvelopeCapturePayload` is inside packages/db and is the smaller diff. THE ONE INDEX-BACKED PREDICATE IS AN `OR`, NOT A `coalesce` — coalesce over two columns is unindexable — with a typed twin index (0126, CONCURRENTLY per partition, the 0096 pattern) so both arms bitmap-scan; the other two harvest queries use `coalesce` because 0096's partial index needs a `source` clause they never had. NO BACKFILL: every fallback arm is marked `CAS-INLINE-FALLBACK:` and the historical-rewrite slice fills the columns on the pass it already makes. Erasure's `payload::text like` subject matching stays behind — it matches a whole body, not a field — and now names the erasure slice as its owner |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -7241,3 +7242,92 @@ readers resolve row by row (no batch loader in this slice), so a replay page of
 200 referenced rows costs 200 extra queries; that number is quoted in the
 setting's `costWarning`, and a batch loader is the obvious next optimization if
 the ramp ever makes it matter.
+
+---
+
+**Decision #218 (2026-08-18, G5 slice 3a: the queryable fields get typed columns
+of their own):** #217 moved every reader that SERVES a capture body onto the
+catalog and listed, honestly, what it could not move: the SQL that digs INSIDE
+`observations.payload` / `sync_raw_payloads.response_payload` and returns a
+FIELD. Those sites have no body for a seam to route, and each one silently
+starts answering NULL the day the inline column stops being written — the last
+thing standing between here and pointer-only writes. This slice gives each field
+a narrow typed column (migration 0125), populated at INSERT time, and leaves the
+inline extraction behind only as a fallback for rows written before it.
+
+**Derived in packages/db, inside the same INSERT.** Every observation in the
+system goes through `insertObservation` and every raw capture through
+`insertRawPayload`, so the derivation lives there
+(`packages/db/src/capture-queryable-fields.ts`, pure and unit-tested) rather
+than at any producer. Two consequences are the point: a typed column cannot
+disagree with the body it was derived from, because both come from the same
+parsed object in the same statement; and there is NO second row version — a
+post-commit UPDATE to stamp these columns would mint a fresh heap tuple per
+capture on the two largest tables in the system, which is the exact
+amplification this project exists to remove (the #215 ruling, applied again).
+
+**The per-site decisions, and why they differ.**
+
+- **Harvest lookups** (`hasHarvestObservationClientEvent`,
+  `countHarvestObservations`, `listHarvestTransactionResidue`) →
+  `observations.harvest_machine_id` plus, for the residue report,
+  `harvest_tx_id` / `harvest_tx_amount` / `harvest_tx_created_at`. `text`, not
+  `uuid`/`numeric`/`timestamptz`: capture-first (DP 7) outranks tidiness — a
+  harvested fact with a malformed member must still journal, and `text` is also
+  exactly what `->>` returned, which is what keeps the fallback equivalent to
+  the column replacing it.
+- **The one index-backed predicate is an OR, not a `coalesce`.**
+  `coalesce(harvest_machine_id, payload->>'machineId') = $1` is unindexable, and
+  the alternative to an index on `observations` is a scan of the largest table
+  here. So that site reads `harvest_machine_id = $1 OR (harvest_machine_id IS
+  NULL AND payload->>'machineId' = $1)` — two arms, disjoint by construction,
+  each with its own partial index over the identical predicate (0126's typed
+  twin of 0096's expression original), which the planner resolves as a BitmapOr.
+  An `EXPLAIN` assertion pins that both index names appear and no `Seq Scan`
+  does. The other two harvest queries DO use a plain `coalesce`, and that is not
+  an inconsistency: 0096's partial index requires `source = 'client_capture'`,
+  which neither of them constrains, so neither has ever been index-backed and
+  there is no plan to protect.
+- **The DM tip replay** → `sync_raw_payloads.response_tips`, a stored `{tips}`
+  slice. This reader narrows IN SQL precisely so a keyset walk over hundreds of
+  retained DM pages does not drag hundreds of whole message bodies across the
+  wire; routing it through the seam would fetch each whole catalog body and
+  throw most of it away — paying the exact cost the narrowing exists to avoid.
+  A slice column keeps the walk cheap AND survives the body's removal. It is
+  written only for `dm_messages` captures: filling it everywhere would copy a
+  `{"tips": null}` onto every posts/fans/transactions capture in the system.
+- **The agent plane's `payloadBytes`** → a LEFT JOIN to the catalog,
+  `coalesce(cpo.logical_bytes, octet_length(o.payload::text))`, NOT a fifth
+  typed column. The number is already stored, once, on the row the reference
+  addresses; duplicating it onto every observation would pay heap for something
+  the catalog PK hands over on an index probe, and would only ever be right for
+  rows written after this slice, while the join is right for every reference
+  slice 1 has already written. The value does shift for a referenced row
+  (canonical octets vs jsonb's own text rendering, which pads its separators) —
+  that is the correction, not a regression: a size measured on a column the
+  system is about to stop writing is the number that would become a lie.
+- **The coverage-revoke idempotency proof** → `readEnvelopeCapturePayload` with
+  an inline fallback, no new columns. `pageId`/`chatId` are members of ONE
+  operator kind's payload; two columns on the system's biggest table on behalf
+  of a single caller is the wrong trade, and this reader wants the (tiny) whole
+  body anyway. #217 marked it unreachable "with no logger and no seam reach" —
+  true of the runtime seam, but the envelope-authorized reader is IN
+  packages/db, so the smaller diff was simply to call it.
+
+**No backfill, deliberately, and the fallbacks are marked for the slice that
+removes them.** Every harvest row and retained DM capture in production keeps a
+NULL typed column today and is found through the inline arm. Backfilling here
+would mean an UPDATE across the whole of `observations` — again a second row
+version per fact, for a column nothing yet reads. The HISTORICAL REWRITE slice
+already walks that heap to null the inline bodies and populates these columns on
+the same pass, from the same tuple, at no extra cost; only then may the arms go.
+Each one is a `// CAS-INLINE-FALLBACK:` comment so that removal is a grep, and
+each is written so the removal is a deletion rather than a rewrite.
+
+**What is still not migrated, and who owns it.** Erasure's `payload::text like`
+subject matching (`services/erasure/index.ts`). It is not a field — it matches
+the WHOLE body as text to find a subject, so there is nothing to project into a
+column, and the catalog owes it an answer first: a body may be SHARED by several
+envelopes, so rewriting one under a single subject is not a per-row act. It
+keeps its `CAS-READ-BACKLOG(§6.4)` marker, now naming the erasure slice as its
+owner, and the historical rewrite does not start until that slice lands.

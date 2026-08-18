@@ -2,6 +2,10 @@ export * from "./client.ts";
 export * from "./schema.ts";
 export * from "./schema-guard.ts";
 export * from "./capture-payload-codec.ts";
+// G5 slice 3a: pure derivations for the typed queryable columns. No database
+// access, no body reads — safe on the barrel, and exported so the historical
+// rewrite slice populates the same columns from the same functions.
+export * from "./capture-queryable-fields.ts";
 // Capture payload catalog: the WRITER and the METADATA, never the body reader.
 // `loadPayloadBody` takes a bare (bucket_month, object_id) — an address that
 // carries none of the authorization the envelope carries, and one object may be

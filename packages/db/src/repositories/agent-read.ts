@@ -1741,18 +1741,32 @@ export async function listAgentObservations(
     with keyed as (
       select o.id::text as id, o.received_at, o.observed_at, o.source, o.producer,
              o.platform, p.label, o.native_account_ref, o.kind,
-             -- CAS-READ-BACKLOG(§6.4): the size column is measured on the INLINE
-           -- body. Postgres never returns the body here, so the read seam has
-           -- nothing to route; a catalog-measured size is a different number
-           -- (canonical octets vs jsonb text) and changing it would silently
-           -- restate a served contract field.
-           octet_length(o.payload::text) as payload_bytes,
+             -- G5 slice 3a (§6.4): the honest size of a body that lives in the
+             -- content-addressed catalog is the catalog's own logical_bytes —
+             -- the octet count of the canonical bytes the digest was taken over.
+             -- It is a JOIN and not a fifth typed column because the number is
+             -- ALREADY stored, once, on the row this reference addresses:
+             -- duplicating it onto every observation would pay heap for a value
+             -- the catalog PK hands over on an index probe, and would only ever
+             -- be right for rows written after this slice, while the join is
+             -- right for every reference slice 1 has already written.
+             -- The number does shift for a referenced row (canonical octets vs
+             -- jsonb's own text rendering, which pads its separators with a
+             -- space); that is the correction, not a regression — a size on a
+             -- column the system is about to stop writing is the one that would
+             -- silently become a lie.
+             -- CAS-INLINE-FALLBACK: the octet_length arm serves rows with no
+             -- catalog reference; it goes when every row carries one.
+             coalesce(cpo.logical_bytes, octet_length(o.payload::text)) as payload_bytes,
              encode(o.payload_hash, 'hex') as payload_sha256,
              o.parse_version,
              ${renderInstant(sql`o.received_at`)} as k_sort,
              ${renderNumeric(sql`o.id`)} as k_key
       from observations o
       left join pages p on p.id = o.account_id
+      left join capture_payload_objects cpo
+        on cpo.bucket_month = o.payload_bucket_month
+       and cpo.object_id = o.payload_object_id
       where ${sql.join(clauses, sql` and `)}
     )
     select * from keyed

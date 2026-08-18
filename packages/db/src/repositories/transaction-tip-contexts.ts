@@ -253,12 +253,13 @@ export async function readTransactionTipContextRawPayloadHighWater(
 }
 
 /** Keyset source for deterministic replay over retained Fansly `/message` raw. */
-// CAS-READ-BACKLOG(§6.4): this reader NARROWS the body server-side
-// (`jsonb_build_object('tips', rp.response_payload -> 'tips')`) precisely so it
-// never detoasts the rest of a large capture. Routing it through the read seam
-// would mean fetching the WHOLE catalog body per row and throwing most of it
-// away — the opposite of what the narrowing exists for. It moves when `tips`
-// becomes a typed projection column in the §6.4 slice.
+// G5 slice 3a (§6.4): the narrowing this reader used to do per row —
+// `jsonb_build_object('tips', rp.response_payload -> 'tips')`, so a keyset walk
+// over 500 retained DM pages never drags 500 whole message bodies across the
+// wire — is now a typed slice column written at capture time
+// (`response_tips`, migration 0125). The seam was never an option here: it
+// would fetch the WHOLE catalog body per row and throw most of it away, which
+// is the exact cost the narrowing exists to avoid.
 export async function listTransactionTipContextRawPayloadsAfterId(
   db: Database,
   input: {
@@ -273,11 +274,16 @@ export async function listTransactionTipContextRawPayloadsAfterId(
     select rp.id::text as id,
            rp.page_id::text as "accountId",
            rp.request_params as "requestParams",
-           case
-             when jsonb_typeof(rp.response_payload) = 'object'
-             then jsonb_build_object('tips', rp.response_payload -> 'tips')
-             else rp.response_payload
-           end as "responsePayload",
+           -- CAS-INLINE-FALLBACK: pre-0125 rows have no slice column; drop the
+           -- coalesce and its CASE once the historical rewrite has filled them.
+           coalesce(
+             rp.response_tips,
+             case
+               when jsonb_typeof(rp.response_payload) = 'object'
+               then jsonb_build_object('tips', rp.response_payload -> 'tips')
+               else rp.response_payload
+             end
+           ) as "responsePayload",
            rp.captured_at as "capturedAt"
     from ${syncRawPayloads} rp
     join ${pages} p on p.id = rp.page_id

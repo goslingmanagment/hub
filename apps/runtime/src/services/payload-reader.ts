@@ -68,24 +68,28 @@
 // this slice), so a replay page of 200 referenced rows costs 200 extra queries;
 // that is the number the mode's costWarning quotes.
 //
-// NOT MIGRATED, on purpose (§6.4 backlog — query-critical `payload->...`
-// predicates must move to narrow typed columns BEFORE the inline JSON can go
-// away, and rewriting them is a slice of its own). Each is marked in place with
-// a `// CAS-READ-BACKLOG(§6.4):` comment:
-//   * packages/db/src/repositories/observations.ts — the harvest lookups and
-//     the transaction-residue extraction (`payload->>'machineId'`,
-//     `payload->'row'->>'tx_id'`), one of them backed by an index expression
-//     (migration 0096).
-//   * packages/db/src/repositories/transaction-tip-contexts.ts — narrows the
-//     body server-side to `{tips}` precisely so it does not detoast the rest.
-//   * packages/db/src/repositories/agent-read.ts listAgentObservations —
-//     `octet_length(o.payload::text) as payload_bytes`; the agent plane's size
-//     column is measured on the inline body and stays that way.
-//   * packages/db/src/repositories/ofapi-message-coverage.ts
-//     revokeOfapiMessageCoverage — reads a prior observation's body inside its
-//     own write transaction, in packages/db, with no logger and no seam reach.
+// THE OTHER KIND OF READ, and where it went. Sites where Postgres digs INSIDE
+// the body and returns a FIELD have no body for this seam to route, and they
+// break the moment the inline column stops being written. G5 SLICE 3A
+// (migrations 0125/0126) moved every one of them onto narrow typed columns
+// populated at write time — the harvest lookups and the transaction-residue
+// extraction in repositories/observations.ts, the `{tips}` narrowing in
+// repositories/transaction-tip-contexts.ts, the agent plane's `payload_bytes`
+// (now the catalog's own `logical_bytes` when a reference exists), and the
+// coverage-revoke idempotency proof (which reads through
+// `readEnvelopeCapturePayload` instead, being already inside packages/db). Each
+// keeps an inline arm for pre-slice rows, marked `// CAS-INLINE-FALLBACK:` so
+// the removal slice can grep them; the historical rewrite populates the columns
+// as it walks the heap and only then may the arms go.
+//
+// STILL NOT MIGRATED, on purpose:
 //   * apps/runtime/src/services/erasure/** — `payload::text like` subject
-//     matching; erasure is explicitly out of this slice's scope.
+//     matching (services/erasure/index.ts payloadMatchPredSql). Subject
+//     matching reads the WHOLE body as text and cannot be projected into a
+//     column; it needs the catalog's own erasure story (a shared body may not
+//     be rewritten under one envelope's subject, §6.1's refcount note), which
+//     is the ERASURE slice's problem, not this one. The historical rewrite does
+//     not start until that slice lands.
 
 import { sql } from "drizzle-orm";
 
