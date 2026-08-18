@@ -15,7 +15,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   getCaptureCasReadCounters,
+  type CapturePayloadUnavailableError,
   getCaptureCasReadMode,
+  isCapturePayloadUnavailable,
   publishCaptureCasReadMode,
   resetCaptureCasReadForTests,
   resolveCapturePayload,
@@ -409,20 +411,32 @@ describe("capture CAS read seam — a row with no inline body", () => {
     ["object_missing", { rows: [] as unknown[] }],
     ["body_missing", catalogRow(null, { hasJson: false })],
     ["read_error", new Error("connection terminated")],
-  ])("returns null and LOGS when the only copy cannot be read (%s)", async (reason, response) => {
+  ])("RAISES and logs when the only copy cannot be read (%s)", async (reason, response) => {
     resetCaptureCasReadForTests("serve");
     const stub = stubApp([response as { rows: unknown[] } | Error]);
 
-    const result = await resolveCapturePayload(stub.app, {
+    // #223: the seam's oldest promise — "never throws" — held only while every
+    // row had an inline body to fall open to. For a pointer-only row the
+    // fall-open value IS null, and null is the seam's word for "this envelope
+    // captured no body". Answering an unreadable body with it is how a dropped
+    // connection became a permanently-empty observation, so this one outcome
+    // is raised. It is still never silent, and still owns no latch (#217).
+    const error = await resolveCapturePayload(stub.app, {
       envelope: "observation",
       envelopeId: 11,
       inline: null,
       ref: REF,
-    });
+    }).then(() => null, (thrown: unknown) => thrown);
 
-    // Still no throw — the seam's oldest promise — but this is the one outcome
-    // it cannot make safe, so unlike a serve fallback it is never silent.
-    expect(result).toBeNull();
+    expect(isCapturePayloadUnavailable(error)).toBe(true);
+    expect((error as CapturePayloadUnavailableError).detail).toMatchObject({
+      envelope: "observation",
+      envelopeId: 11,
+      bucketMonth: "2026-08-01",
+      objectId: 7,
+      reason,
+      readMode: "serve",
+    });
     expect(getCaptureCasReadCounters()).toMatchObject({
       nullInlineUnresolved: 1,
       servedNullInline: 0,
@@ -437,6 +451,25 @@ describe("capture CAS read seam — a row with no inline body", () => {
       reason,
       readMode: "serve",
     });
+  });
+
+  it("a row that has an inline body NEVER raises, however broken the catalog", async () => {
+    // The other half of the #223 contract, and the half that must not move: the
+    // fall-open guarantee is what makes `serve` safe to switch on, and turning
+    // a degraded catalog into an exception on the ordinary path would make the
+    // read mode a liability rather than a preference.
+    for (const mode of ["inline", "shadow", "serve"] as const) {
+      resetCaptureCasReadForTests(mode);
+      const stub = stubApp([new Error("connection terminated")]);
+      const result = await resolveCapturePayload(stub.app, {
+        envelope: "observation",
+        envelopeId: 11,
+        inline: { kept: true },
+        ref: REF,
+      });
+      expect(result, mode).toEqual({ kept: true });
+      expect(getCaptureCasReadCounters().nullInlineUnresolved, mode).toBe(0);
+    }
   });
 
   it("returns null without a query when there is no reference either", async () => {

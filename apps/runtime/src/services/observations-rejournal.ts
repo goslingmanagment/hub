@@ -203,6 +203,16 @@ export async function runObservationsRejournal(
       // agree: both the inline column and the catalog body are stored as
       // `jsonb`, which normalizes key order identically, so JSON.stringify over
       // either produces the same string and the same hash.
+      //
+      // #223: AN UNAVAILABLE BODY ABORTS THE CAMPAIGN, and it does so by simply
+      // being allowed to throw. This is the worst place in the system to paper
+      // over an unreadable body: the insert below is keyed by
+      // `rejournal:a22:<rawId>`, a DETERMINISTIC key, so an observation written
+      // with `payload = null` and `payload_hash = sha256("null")` is counted as
+      // a successful repair AND blocks the correct one forever — every later
+      // run finds the key and reports `alreadyRejournaled`. A campaign that
+      // stops halfway is trivially resumable; a campaign that "succeeded" with
+      // an empty body is not repairable at all.
       const payload = await resolveCapturePayload(app, {
         envelope: "raw_payload",
         envelopeId: rawId,

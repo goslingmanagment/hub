@@ -16,7 +16,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { resolveCapturePayloadRow } from "./payload-reader.ts";
+import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   CANONICALIZER_FAMILIES,
   type CanonicalizerFamily,
@@ -102,6 +102,18 @@ export interface CanonicalizationRunResult {
    * Distinct from a legitimately EMPTY snapshot, which is consumed normally.
    */
   skippedUnparseable: number;
+  /**
+   * Rows whose captured body could not be READ at all (#223) — a pointer-only
+   * envelope whose single catalog copy was momentarily out of reach. Left
+   * UNSTAMPED and retried, exactly like an unparseable row, but counted apart
+   * from one because the two mean opposite things about the future:
+   * unparseable is PERMANENT until a parser learns the shape, unavailable is
+   * TRANSIENT and needs no code change at all. Folding them together would let
+   * a degraded catalog masquerade as a corpus of unknown payloads — and the
+   * number that would grow is the one an operator reads as "we need a new
+   * parser".
+   */
+  skippedUnavailable: number;
   /** Highest observation id examined this run — the exact continuation cursor
    * for a bounded run (feed it back as `afterId`). Null when nothing matched. */
   lastObservationId: number | null;
@@ -292,6 +304,22 @@ async function runFamily(
         });
         totals.stamped += 1;
       } catch (error) {
+        // #223: an unreadable body is NOT a canonicalization failure and must
+        // not be counted as one — a parse error is a bug or a poison row, this
+        // is a body that will be there again in a minute. It shares the
+        // outcome (unstamped, retried next sweep) and nothing else. Before
+        // #223 the seam answered `null` here, four of the six families have no
+        // `canParse` shape gate, and a null payload canonicalizes to zero
+        // events — so the row fell straight through to markObservationParsed
+        // and was consumed for good.
+        if (isCapturePayloadUnavailable(error)) {
+          totals.skippedUnavailable += 1;
+          app.logger.warn(
+            { observationId: row.id, source: family.source, kind: row.kind },
+            "Observation body is unavailable; left UNSTAMPED for the next sweep",
+          );
+          continue;
+        }
         totals.errored += 1;
         app.logger.error(
           { error, observationId: row.id, source: family.source, kind: row.kind },
@@ -323,6 +351,7 @@ export async function runCanonicalization(
     stamped: 0,
     skippedUnmapped: 0,
     skippedUnparseable: 0,
+    skippedUnavailable: 0,
     lastObservationId: null,
     errored: 0,
     maxLagSeconds: 0,

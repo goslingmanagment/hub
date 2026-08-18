@@ -18,7 +18,7 @@ import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../bootstrap.ts";
-import { resolveCapturePayloadRow } from "./payload-reader.ts";
+import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   ServiceUnavailableError,
   TooManyRequestsError,
@@ -327,7 +327,27 @@ export async function recoverExpiredOfapiInteractiveResponses(
       continue;
     }
     // G5 slice 2: the captured body comes through the read seam.
-    const resolved = await resolveCapturePayloadRow(app, "observation", observation.id, observation);
+    //
+    // #223: an unreadable body leaves the candidate ALONE. The branch below
+    // turns a body it cannot parse into a terminal `response_delivery_
+    // interrupted` — a durable verdict about a request whose response is
+    // probably intact and merely out of reach for a moment. It shares the
+    // meaning of the `unavailable` counter this loop already keeps for an
+    // observation it could not load at all, so it shares the counter.
+    let resolved;
+    try {
+      resolved = await resolveCapturePayloadRow(app, "observation", observation.id, observation);
+    } catch (error) {
+      if (!isCapturePayloadUnavailable(error)) {
+        throw error;
+      }
+      result.unavailable += 1;
+      app.logger.warn(
+        { observationId: observation.id, attemptId: candidate.attemptId },
+        "Captured body is unavailable; leaving the expired interactive response for a later pass",
+      );
+      continue;
+    }
     const captured = capturePayloadResponse(resolved.payload);
     const parsed = captured === null
       ? { validJson: false, body: null, creditsUsed: null, balanceAfter: null }
@@ -351,7 +371,14 @@ export async function recoverExpiredOfapiInteractiveResponses(
     }
 
     try {
-      const materialized = await materializeOfapiCaptureObservation(app, observation);
+      // #223: the RESOLVED row, not the raw one. `materializeOfapiCapture-
+      // Observation` reads `row.payload` and STAMPS `parse_version` when it
+      // cannot make a page out of it — so handing it the unresolved envelope
+      // meant that for a pointer-only row (whose inline column is NULL by
+      // design) it stamped the observation consumed without ever looking at the
+      // body the catalog was holding. The sibling branch above has been reading
+      // through the seam since slice 2; this one was left behind.
+      const materialized = await materializeOfapiCaptureObservation(app, resolved);
       if (materialized.kind === "materialized") result.materialized += 1;
     } catch (error) {
       // The raw observation remains replayable by the normal materialization

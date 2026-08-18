@@ -224,6 +224,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 220 | G5 slice 3c-1: a captured body stops being written twice | New captures on a page in `capture_cas_pointer_only_pages` (CSV of page ids or `*`, default `''` = off, live via the heartbeat) write the inline body as SQL NULL — the first slice of G5 that actually stops the disk growing. THE WORST CASE IS BOTH COPIES, NEVER NONE, and by construction rather than by a check: the permission is minted only on the success return of `putCaptureCasPayloads`, where both catalog references already exist, so a codec refusal, a dead connection or a page outside the slice-1 canary all write inline exactly as before, and a page listed here but NOT for dual-write behaves like a page listed nowhere. Migration 0128 drops NOT NULL from `observations.payload` / `sync_raw_payloads.response_payload` and adds to each table the invariant that is this slice's core, `CHECK (payload IS NOT NULL OR payload_object_id IS NOT NULL)` — NO ROW MAY ADDRESS ZERO BODIES — NOT VALID on a provable vacuity (every existing row was written under the old NOT NULL). `payload_hash` stays NOT NULL because the producer computes it from the payload OBJECT, never the column, as do the #218 typed columns, so a pointer-only row differs from a dual-written one in the body alone. THE LOAD-BEARING RULE IS THAT A NULL INLINE BODY RESOLVES FROM THE CATALOG IN EVERY READ MODE, `inline` INCLUDED: `capture_cas_read_mode` is designed to be rolled back freely, and if reachability depended on it the escape hatch would blank every pointer-only row — so the mode governs byte-source PREFERENCE for a row with two copies, never REACHABILITY for a row with one, and for such a row the CATALOG is the authority of record. `shadow` skips those rows and the hourly verifier counts them `skippedNullInline` rather than `matched` (a comparison with one operand is not a verdict), so a ramping page's `checked` falls to zero by construction and the latch neither opens nor resolves; necessity reads are counted apart (`servedNullInline`) from preference reads (`served`), and the one bad outcome — the only copy unreadable — returns null, counts and LOGS, while still owning no latch (#217). ROLLBACK IS NOT SYMMETRIC and the registry says so: turning the flag off resumes double-writing for NEW rows only, rows already written pointer-only keep their body only in the catalog forever — the first irreversible flag here, and the reason #219 (erasure reaches the catalog) and the null-inline read law landed first |
 | 221 | G5 slice 3c-2: the historical rewrite is a one-time lawful UPDATE, consumed by the reclaim that follows it | Four owner-gated CLI commands (`capture:backfill` / `verify-backfill` / `reclaim` / `drop-parked`), no schedule and no config flag, each dry-run by default and tombstoned in `capture_rewrite_runs` (0129, the `erasure_log` shape — a TABLE because verify must read what backfill concluded hours earlier, and `ops_metric_samples` is deadman-sensitive). THE UPDATE #215 and #218 both forbade is lawful HERE and only here: its bloat does not accumulate, it is CONSUMED — the reclaim copies the surviving tuples into a skinny relation and parks the old one, so the dead versions are exactly the pages that get dropped. A historical body is filed under ITS OWN capture month, never `now()` (0123's ref-closed-cohort law), so the backfill lazily creates the catalog partitions 0123 never made (prod starts 2026-07, 0123 starts 2026-08) and accepts two objects for a raw/observation pair straddling a UTC month boundary. The lane is `platform_capture` for every row and is NOT derived from `source`: `operator` would map to the `system` erasure domain, which #219 never gives a subject sweep, and narrowing erasure reach on a one-way pass over history is not a trade this slice may make. VERIFY PROVES RATHER THAN INFERS — each remaining null-ref row is re-canonicalized and must actually refuse (the backfill's stored count is a printed cross-check, never the authority), every reference is resolved by a TOTAL anti-join (the check the absent FK does not make), and bodies are compared as full canonical octets on a bounded random sample drawn by index probes rather than `order by random()`; it has no `--dry-run` because the verdict row IS its product. observations takes §9.1 whole in two invocable phases — a lock-free resumable skinny copy (inline null where a ref exists, KEPT where the codec refused) that pre-adds the partition-bound CHECK so ATTACH skips its scan and reconciles indexes against the source partition's real `pg_indexes` (0096/0126 are per-leaf), then ONE transaction that detaches, parks, renames the twin into the partition's name and attaches: THE SINGLE TRANSACTION IS THE CRASH PROOF, old-or-new, never neither. Superseded copies park in a NEW `capture_pending_drop` schema, not `tiered_pending_drop`, whose meaning would make the replay guards falsely refuse a live month — and the erasure is taught the new schema explicitly so no under-erasure window opens during grace. `sync_raw_payloads` takes §9.2's OTHER option (null-bodies then VACUUM FULL, writers proven down) because a rename swap would have to re-validate two inbound FKs inside the swap transaction, because its OWNED `bigserial` sequence moves with the table and would break the first capture after the swap, and because unpartitioned means the headroom ask is everything at once — the price, no grace window for that table, is stated rather than discovered. `capture:drop-parked` is the only destroyer, reaches nothing outside the parking schema by construction, and is pinned in `tests/retention-deleters.test.ts` with a STATEMENT-level licence because a `DROP TABLE` is invisible to that file's `delete from` grep. Refusals (current/future month, detached partition, stale-or-overtaken verdict, unconverged erasure, headroom) end the run before the phase body reads anything |
 | 222 | G5 review fix: a stamped reference outliving its object is a lost fact, and the two acts are now ordered | An external review found that #219's accepted race — a capture deduping onto an object the erasure sweep is about to delete — stopped being cosmetic the moment #220 let a row have NO inline body: the envelope then addressed a hole, past the 0128 CHECK (which only asks for a reference), past the deliberately absent FK (#215), and past a parity verifier that skips null-inline rows by design. THE FIX IS AN ORDER, NOT A NARROWER WINDOW: the sweep takes `FOR UPDATE` on its candidates in a statement of its OWN, BEFORE the `not exists` verdict, and every envelope writer holds `FOR KEY SHARE` on the object until the insert that stamps the reference COMMITS. Either the writer got there first — the sweep then waits and its verdict statement, taking a fresh READ COMMITTED snapshot after that wait, SEES the new envelope and keeps the body — or the sweep got there first and the writer's probe finds the object gone and writes the envelope with NO reference and its INLINE body, the pre-G5 shape of a capture, which is always readable. There is no third outcome, so the belt-and-braces alternatives were REJECTED: a two-pass sweep with a delay narrows a race that is now closed and cannot be sized (any bound is a guess about GC pauses) while doubling a break-glass act's fence hold; a durable claim row adds a write to the hottest path in the system plus a cleanup that could itself delete a live claim; the FK #215 rejected would work and every word of that rejection still holds, which is exactly why the ONE lock an FK would have taken is taken by hand instead — no DDL, no index (the catalog PK serves it), no history to validate, and only on a capture that carries a reference at all. IT APPLIES UNIFORMLY to pointer-only and dual-write: a dangling reference in the second case is not a lost fact but it is still a lie the verifier reports as `object_missing`, and one rule beats a special case. `lockCapturePayloadRefAlive` stays OFF the package barrel (pinned) because it is a lock, meaningless unless held to the insert's commit. A standing DANGLING-REFERENCE CENSUS over the head of both envelope tables now runs on EVERY hourly pass, canary or not, and pages under the existing `capture_payload_parity` kind with its own `dangling_reference` subKey (#213/#219's shape) — resolvable only by a zero count, with the measured window travelling in the report so a zero is never read as more than it is; the seam counts `refVanished` and owns no alarm (#217). SECOND FINDING, the swap: `capture:reclaim --phase swap` read its erasure preconditions and its row counts OUTSIDE the transaction, so an erasure committing while the swap waited for locks would park a post-erasure source and attach a PRE-erasure shadow — resurrection through the door the G3 fence does not watch. The transaction now takes its locks EXPLICITLY and FIRST (`LOCK TABLE ONLY observations`, then source, then shadow — `ONLY` so it does not stop every other month) and re-proves everything after them: erasure quiet, both partitions in the state they were in, and source/shadow counts equal. THE RECOUNT AND THE ERASURE PROBE DO NOT SUBSUME EACH OTHER — a committed erasure shows up as a count mismatch (nothing writes into a closed month, so the counts cannot drift back into agreement), an UNCOMMITTED one is invisible to any count and only the mid-flight tombstone and the held fence lock catch it. A `statement_timeout` bounds the recount so a pathological count aborts the swap instead of freezing capture under ACCESS EXCLUSIVE, and a refusal under lock settles the run as `refused` (nothing touched), never as a crash. AMENDS #219: its stated residual — "the worst outcome is a dangling reference the parity verifier reports, never a lost fact" — was true when written and became false at #220; it is superseded by this entry and the sentence is corrected in place in the code that carried it |
+| 223 | G5 review fix: the reclaim's four missing gates — a typed column nobody could fill, an unreadable body that read as an empty one, a headroom law behind the growth it governs, and a ritual its own gate refused | A second external review of the G5 line found four defects, each an act performed in the wrong ORDER relative to the thing that was supposed to gate it. **(1) THE COHORT WITH NO POPULATION PATH.** Slice 1 (#215) started stamping references; slice 3a (#218) added the typed columns three deployments later and put their only population inside the reference-stamping UPDATE — so every row captured BETWEEN those deployments carries a reference, NULL typed columns, and is excluded by construction from the one scan that would fill them (`payload_object_id is null`). `--phase null-bodies` then removes the inline body every `CAS-INLINE-FALLBACK:` arm was reading through, and for a Fansly `dm_messages` row the tip-context reader's `coalesce(response_tips, CASE …)` hands back the nulled column itself: the replay records an INVALID sidecar for a message that had a perfectly good one — a WRONG fact, not a missing one, which is the worse of the two. `capture:backfill` gains a SECOND scan whose predicate is a SQL mirror of the derivation (`jsonb_typeof` in the scalar set for the harvest members, `= 'object'` for the tips slice, which is exact), so a filled row stops matching and the pass resumes with no cursor like the first one; the count rides the census's existing single scan, and `capture:reclaim` refuses `shadow` and `null-bodies` while any row would still be filled. The gate PROVES rather than counts — the SQL mirror can say `number` for a literal `JSON.parse` turns into `Infinity`, and a refusal built out of a value nobody can change would be permanent — so a non-zero count is walked and re-derived in the same TypeScript the capture path runs, bounded exactly as the codec-refusal rescan is. **(2) A CATALOG FAILURE THAT BECAME A PARSED FACT.** #220 let a row have NO inline body; #217's seam answered a failed catalog read for such a row with the inline value it was holding, which is `null` — the same answer it gives for "this envelope captured no body". A transient blip therefore became permanent: four of six canonicalizer families have no `canParse` gate, so zero events fell straight through to `markObservationParsed`; the A22 re-journal hashed `null` and inserted it under a DETERMINISTIC idempotency key, blocking its own repair forever; the OFAPI materializer and the readthrough sweep stamped their own versions; the agent plane told the owner the payload was withheld for its RESTRICTION CLASS. The seam now RAISES `CapturePayloadUnavailableError` for that one case — a sentinel would have to be checked and the whole finding is that nobody checked, while an exception's default behaviour at an unaudited site is loud. All twelve migrated read sites were audited and each is now propagate / catch-and-count / explicit 503, with the audit written into the seam's header as the call-site registry #217 never left. The canonicalize driver counts `skippedUnavailable` APART from `skippedUnparseable` because unparseable is permanent and unavailable is transient, and the number that would otherwise grow is the one an operator reads as "we need a new parser". Two bugs fell out of the audit and are fixed here: the expired-interactive-response recovery passed the UNRESOLVED row to materialization (which stamps `parse_version` when it cannot parse — so a pointer-only row was consumed unread), and the coverage-revoke idempotency proof read an unreadable prior body as somebody else's proof and answered 409. **(3) THE LAW BEHIND THE GROWTH IT GOVERNS.** `capture:backfill` writes a catalog copy of every body it walks plus a heap tuple per stamped row with NO admission check at all; observation headroom was first asked at `shadow` and raw headroom only AFTER `null-bodies` — i.e. after the UPDATEs that only make the relation bigger. The backfill gains a §9.1-shaped pre-flight (the bodies still to copy, the same again for WAL, and a 5 GiB floor it will not touch) and re-checks the floor every 10 batches, stopping the walk where it stands; the raw headroom check moves BEFORE `null-bodies`. `--assume-free-bytes` was a DRILL that an executed run could pass to the real gate — the tombstone recorded the bypass and did not prevent it — so the CLI now rejects it together with `--execute`, before the app context exists. **(4) THE RITUAL ITS OWN GATE REFUSED.** `checkWritersStopped` refuses on ANY heartbeating instance while the runbook stopped only `worker` and `scheduler`, so the raw phases could never pass. The review expected the check to be too broad; the audit found the opposite — THE API IS A CAPTURE WRITER, on more paths than any other role (`recordAudit` journals an observation on every audited admin mutation, `/api/v1/ingest/observations` is the clients' own capture lane, the webhook receiver and the read gateway write their own, and `POST /api/v1/admin/pages/:pageLabel/verify` writes `sync_raw_payloads` itself through `refreshPageMetadata`). So the check stays maximally broad (a role allowlist would go stale silently, and the failure mode of a stale allowlist is a rewrite under a live writer) and the RUNBOOK is fixed: it stops `api` too, with the production compose-file selector it was missing, and states the cost — the dashboard, both clients and every AI generation are down for R2+R3, which `VACUUM FULL`'s ACCESS EXCLUSIVE was going to impose anyway |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -7894,3 +7895,253 @@ something once those deletes are visible). And no attempt to make the capture
 seam retry into the catalog when its object vanished: writing the inline body is
 simpler, provably correct, and lands in the state #220 already sanctions — the
 worst case is both copies, never none.
+
+---
+
+**Decision #223 (2026-08-19, G5 review fix: the reclaim's four missing gates —
+a typed column nobody could fill, an unreadable body that read as an empty one,
+a headroom law behind the growth it governs, and a ritual its own gate
+refused):** a second external adversarial review of the G5 line, run against
+the state #222 left, found four defects. They are fixed together because they
+are the same mistake in four places: an act performed in the wrong ORDER
+relative to the thing that was supposed to gate it. All four gate the
+destructive historical reclaim, which is why none of them could be deferred to
+a backlog.
+
+**FINDING 1 — THE COHORT WITH NO POPULATION PATH, and it is the one that
+destroys a fact rather than losing one.**
+
+The slices shipped in this order: #215 (slice 1) started dual-writing the
+catalog reference; #218 (slice 3a) added the narrow typed columns three
+deployments later, and put their ONLY population inside the reference-stamping
+statement. Every row captured between those two deployments therefore carries a
+reference AND null typed columns — and `listCaptureBackfillCandidates` excludes
+it by construction, because its predicate is `payload_object_id is null` and
+those rows have one. There was no path in the system that could fill them.
+
+That was harmless while the inline body was there, because every typed column
+has a `CAS-INLINE-FALLBACK:` arm reading the body directly. `capture:reclaim
+--phase null-bodies` is the act that takes the body away, and it nulls
+`response_payload` for EVERY referenced row, not only the ones whose typed
+columns are filled. What the Fansly tip-context reader then evaluates is:
+
+    coalesce(rp.response_tips,
+             case when jsonb_typeof(rp.response_payload) = 'object'
+                  then jsonb_build_object('tips', rp.response_payload -> 'tips')
+                  else rp.response_payload end)
+
+With `response_tips` null and `response_payload` null, `jsonb_typeof` yields
+NULL, the CASE takes its ELSE arm, and the whole expression is the nulled
+column. The sidecar parser reads that as `envelopeStatus: "invalid"`. So the
+replay does not record "no tip context for this message" — it records that the
+message's tip envelope was MALFORMED, for a message whose envelope was
+perfectly good and is still sitting in the catalog. A wrong fact is worse than
+a missing one, and this one would have been written into the projection by the
+very act that was supposed to be lossless.
+
+THE FIX IS A SECOND SCAN, NOT A FLAG. `capture:backfill` now runs a
+typed-column catch-up after its reference walk reports `scope_complete`, at the
+same `--batch` and `--pause-ms` (the same UPDATE cost on the same tables;
+running both at once would double the WAL rate an operator chose those numbers
+for). Its predicate is deliberately narrow and deliberately a MIRROR of the
+derivation: almost every row in the corpus derives to all-NULL — these columns
+serve the harvest lane and Fansly DM tips and nothing else — so "a typed column
+is null" would match everything and never converge. What it matches instead is
+"the derivation gate passes AND the body holds a value the derivation would
+return", with `jsonb_typeof(x) in ('string','number','boolean')` mirroring
+`jsonMemberText` for the harvest members and `jsonb_typeof(body) = 'object'`
+mirroring `deriveRawPayloadTipsSlice` exactly. A filled row stops matching, so
+the pass is resumable with no cursor exactly as the first one is.
+
+AND A GATE, WHICH PROVES RATHER THAN COUNTS. `capture:reclaim` refuses `shadow`
+(observations copy rows WITHOUT their bodies) and `null-bodies` while any row in
+scope would still be filled. The count rides the census's EXISTING single scan
+rather than adding a second pass over the largest table in the system. But the
+count alone may not refuse, because the SQL mirror can be wrong in one
+direction: `jsonb_typeof` says `number` for a literal like `1e999`, which
+`JSON.parse` returns as `Infinity` and `jsonMemberText` renders as NULL. Such a
+row would match the census filter forever, the catch-up would fill nothing, and
+the reclaim would be permanently refused over a value nobody can do anything
+about. So the count is the cheap SCREEN and a bounded walk that re-derives each
+candidate in the same TypeScript the capture path runs is the VERDICT — the
+same shape, and the same sentence, as `capture:verify-backfill` proving each
+remaining null-ref row is really a codec refusal. Above the rescan bound it
+stops trying and says "run the backfill", again exactly as verify does.
+
+NOT GATED on `swap` and `vacuum-full`, deliberately: those act on a relation a
+gated phase already prepared, and by the time they run the bodies are either
+already gone (which is `vacuum-full`'s precondition) or in a copy this gate
+cannot see. A gate there would read as a second line of defence and be neither.
+
+**FINDING 2 — A TRANSIENT CATALOG FAILURE THAT BECAME A PERMANENT PARSED
+FACT.**
+
+#220 let an envelope have no inline body. #217's read seam, written before that
+was possible, answered a failed catalog read by returning the inline value it
+was holding — which for such a row is `null`. `null` is also this seam's word
+for "this envelope captured no body". Handing the same answer to two opposite
+questions is the whole defect, and every consumer downstream took the wrong one:
+
+* the canonicalize driver: four of the six families have no `canParse` shape
+  gate, so a null payload canonicalizes to zero events and control falls
+  straight through to `markObservationParsed`. The observation is stamped
+  consumed and vanishes from every future replay — the failure the parse_version
+  contract's own comment describes as "as surely as a DROP would";
+* `observations-rejournal`: it hashes what it reads and inserts under
+  `rejournal:a22:<rawId>`, a DETERMINISTIC key. A null payload becomes a
+  permanent observation with `payload_hash = sha256("null")`, counted as a
+  successful repair, and every later run finds the key and reports
+  `alreadyRejournaled`. The campaign blocks its own correction forever;
+* the OFAPI capture materializer and the DM readthrough sweep: each stamps its
+  own version on a body it decided was structurally unusable;
+* the expired-interactive-response recovery: terminalizes the request as
+  `response_delivery_interrupted`;
+* the agent read plane: reports the body WITHHELD for its `restricted_class` —
+  a policy decision the kernel never made about a body it merely failed to
+  fetch.
+
+THE SEAM NOW RAISES, and the shape was chosen against the failure it is fixing.
+A discriminated result or a sentinel has to be CHECKED, and the finding is
+precisely that nobody checked; an exception is the only shape whose DEFAULT
+behaviour at an unaudited call site is loud — the batch fails, the job retries,
+the row stays unstamped. `CapturePayloadUnavailableError` is raised for exactly
+one condition: a row with NO inline body whose catalog copy could not be read.
+The seam's older and larger promise is untouched and pinned by its own case: a
+row that carries an inline body still never throws, in any mode, however broken
+the catalog — that fall-open guarantee is what makes `capture_cas_read_mode`
+safe to roll forward and back.
+
+ALL TWELVE MIGRATED READ SITES WERE AUDITED, one at a time, against one law: an
+unavailable body must never be recorded as an empty, parsed or absent fact. Each
+is now propagate (the site's own per-row catch already leaves the row for the
+next pass), catch-and-count (it would otherwise settle something durable), or an
+explicit error (the API path). The result is written into the seam's header as
+the call-site registry #217 never left behind — eleven of the twelve sites had
+never been named in any document, which is how a per-site review was skipped for
+a whole slice.
+
+THE DRIVER COUNTS IT SEPARATELY, and that is not bookkeeping. `skippedUnparseable`
+means PERMANENT — a body no parser understands, waiting for code. `skippedUnavailable`
+means TRANSIENT — a body that is almost certainly intact and momentarily out of
+reach, waiting for nothing. Folding them together would let a degraded catalog
+masquerade as a corpus of unknown payloads, and the number that would grow is
+exactly the one an operator reads as "we need to write a new parser".
+
+TWO PRE-EXISTING BUGS FELL OUT OF THE AUDIT and are fixed in the same change,
+because both are instances of the same law. `recoverExpiredOfapiInteractive-
+Responses` passed the UNRESOLVED observation to `materializeOfapiCapture-
+Observation` while its sibling branch read through the seam — and that function
+STAMPS `parse_version` when it cannot build a page, so a pointer-only row was
+being consumed without its body ever being read. And `revokeOfapiMessage-
+Coverage`'s idempotency proof, on an unreadable prior body, fell through to
+"this action belongs to another proof" and answered HTTP 409: an existence claim
+about somebody else's data, manufactured out of a failed fetch. It now raises
+its own error, mapped to 503 — "ask again in a minute", which is what is true.
+
+**FINDING 3 — THE HEADROOM LAW RAN BEHIND THE GROWTH IT GOVERNS.**
+
+`capture:backfill` writes a full catalog copy of every body it walks plus a
+second heap tuple per stamped row, on the two largest tables in the system, and
+it had NO admission check of any kind. The observation headroom law was first
+evaluated at `--phase shadow` and the raw one only AFTER `--phase null-bodies` —
+that is, after the UPDATEs whose only effect on the volume is to make the
+relation bigger. A run admitted in that order can fill the disk before anything
+is in a position to refuse it, and the refusal it eventually meets is the
+reclaim declining to clean up the mess.
+
+The backfill now has a §9.1-shaped pre-flight: the heap+TOAST share of the rows
+still to copy (worst case, no dedup), the same again for WAL (`wal_level =
+replica` in production, so the inserts are fully logged — the same sentence
+`reclaimHeadroomVerdict` already makes), and a 5 GiB floor it will not touch.
+The floor is a separate term on purpose: §9.1 says what an OPERATION needs and
+says nothing about what the rest of the box needs while that operation runs, and
+on a VPS where Postgres, its WAL, the images and the logs share one volume those
+are different sentences. It is NOT config, for the reason db-disk-alert.ts gives
+about its runway thresholds — a tunable containment threshold is one somebody
+turns off the night it would have fired.
+
+Mid-run, every 10 batches, the walk re-asks ONLY the floor. Re-deriving the full
+inequality would be arithmetic theatre (the estimate is the same estimate and
+the remaining share is exactly what the walk has been consuming); what genuinely
+has to stay true is that the volume has not reached the line, and if it has, the
+honest response is to stop where it stands — the walk is resumable with no
+cursor, so stopping costs only the time already spent. The `sync_raw_payloads`
+headroom check moves to BEFORE `null-bodies`, where an operator learns the
+answer while the table is still exactly as it was.
+
+`--assume-free-bytes` WAS A DRILL THAT COULD ANSWER FOR THE REAL GATE. It was
+journaled in the tombstone, so a bypass was recorded — afterwards, which is not
+what a gate is for. The CLI now rejects it together with `--execute`, before the
+app context is even built, because the combination is not a bad run but a
+category error: the flag exists so an owner staring at a refusal can ask "how
+much would I have to free up", and letting that answer stand in for the one
+measurement between a nearly-full volume and a `VACUUM FULL` is the opposite of
+its purpose. The option survives on the service interface (a test must be able
+to drive the phase bodies to both verdicts, and a dry run asking "what if" is
+what it was built for); what changed is that no EXECUTING invocation can reach
+it. The backfill's own gate takes an injectable reader instead of a flag — a
+test seam that is not also a production surface.
+
+ONE READER, NOT TWO. The rewrite had its own private `statfs("/")` beside the
+hourly gauge's, with a comment claiming they agreed. Both now call
+`readDiskFreeBytes` in services/db-disk-alert.ts, so the day the gauge learns
+about a second volume or a reserved-blocks correction, the headroom law learns
+it in the same commit instead of quietly admitting runs the alarm would refuse.
+
+**FINDING 4 — THE DOCUMENTED RITUAL COULD NOT PASS ITS OWN GATE, and the fix is
+the opposite of the one that was expected.**
+
+`checkWritersStopped` refuses on ANY heartbeating `runtime_instances` row. The
+runbook's R2 said `docker compose stop worker scheduler`. The api never stops,
+so it keeps heartbeating, so both raw phases refuse indefinitely: the ritual as
+written could never run. The review's proposed fix was to narrow the check to
+the roles that can actually write capture.
+
+THE AUDIT FOUND THE PREMISE FALSE. The api is a capture writer, on more paths
+than any other role:
+
+* `observations` — `services/auth.ts recordAudit` journals one on EVERY audited
+  admin mutation (roughly two dozen routes); `POST /api/v1/ingest/observations`
+  is the desktop's and the extension's own capture lane; the OFAPI webhook
+  receiver and the OFAPI read gateway each write their own, synchronously,
+  inside the request;
+* `sync_raw_payloads` — `POST /api/v1/admin/pages/:pageLabel/verify` calls
+  `refreshPageMetadata`, which fetches from Fansly and journals the response
+  through `persistRawPayload`. It is the one capture-lane PULL outside the
+  worker, and it lands in the exact table these phases rewrite.
+
+So the check is left maximally broad and the RUNBOOK is what was wrong. Two
+reasons, and the second is the stronger one: an allowlist of writer roles would
+go STALE SILENTLY — a role that gains a capture write does not come back to
+update it — and the failure mode of a stale allowlist is a `VACUUM FULL` running
+under a live writer, which is the single thing this check exists to prevent. The
+alternative of gating the specific api paths during maintenance was rejected as
+well: it would need a maintenance-mode flag, i.e. new always-on config surface
+whose only correct value is the one it has every other day of the year.
+
+R2 now stops `api`, `worker` and `scheduler`, with the production compose-file
+selector the runbook was missing (`--env-file .env.production -f
+docker-compose.production.yml` — without it the command runs against the local
+`docker-compose.yml` and silently does nothing on the VPS), and it STATES THE
+COST rather than leaving it to be discovered: the dashboard, both clients and
+every AI generation are down for the length of R2 and R3. That window is not
+new — `VACUUM FULL` holds ACCESS EXCLUSIVE on `sync_raw_payloads` for the whole
+rewrite and every api path touching that table would have blocked on it anyway.
+What is new is that it is budgeted before it starts instead of observed while it
+happens. The refusal message names all three roles and points at the runbook
+step, so an operator who meets it is told what to do rather than something that
+does not work.
+
+**WHAT WAS NOT DONE.** No migration: every column these fixes read and write
+already exists (0125's typed columns, 0128's presence CHECK, 0129's journal). No
+new config key, queue or incident kind — the floor is a constant for the reason
+above, the catch-up is a second pass of an existing owner-gated command, and the
+unavailable-body condition owns no latch (#217 still holds: the read path
+counts, the hourly verifier alarms). No `canParse` gate added to the four
+families that lack one: that is a real gap and it is a DIFFERENT one — those
+families would still stamp a legitimately malformed body, which is #217-era
+behaviour this change does not touch and does not make worse. And no attempt to
+make the typed-column catch-up run automatically anywhere: it is part of
+`capture:backfill`, which has no schedule and no flag, because a pass that
+rewrites heap tuples on the largest tables in the system runs with someone
+watching (#221).

@@ -47,6 +47,11 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { readDiskFreeBytes } from "../db-disk-alert.ts";
+import {
+  CAPTURE_TYPED_COLUMN_RESCAN_LIMIT,
+  proveCaptureTypedColumnGaps,
+} from "./index.ts";
 import {
   CAPTURE_PARKING_SCHEMA,
   currentMonthVerdict,
@@ -124,6 +129,13 @@ export interface CaptureReclaimOptions {
    * to free up" without waiting for a cleanup to finish first. It is journaled
    * in the run summary whenever it is used, so a run that skipped the real
    * measurement says so in its own tombstone forever.
+   *
+   * SINCE #223 THE CLI REFUSES IT TOGETHER WITH `--execute`. A drill that can
+   * answer for the real gate is not a drill, it is a bypass, and the tombstone
+   * that recorded the bypass only ever told the story afterwards. The option
+   * survives on this interface because the phase bodies still need a way to be
+   * driven to both verdicts from a test, and because a dry run asking "what if"
+   * is exactly what it was built for.
    */
   freeBytesOverride?: number;
   now?: Date;
@@ -239,7 +251,34 @@ async function checkVerifyBlessing(
   }
 }
 
-/** The Postgres backends and the runtime processes that could still be writing. */
+/**
+ * The Postgres backends and the runtime processes that could still be writing.
+ *
+ * EVERY ROLE, INCLUDING `api`, AND THAT IS NOT AN OVERSIGHT (decision #223).
+ * The review that produced #223 arrived expecting this check to be too broad —
+ * the runbook stopped `worker` and `scheduler`, the api kept heartbeating, and
+ * the raw phases therefore refused forever. The audit it asked for found the
+ * opposite of what it expected: THE API WRITES CAPTURE, on more paths than any
+ * other role.
+ *
+ *   * `observations` — the audit choke point (`services/auth.ts recordAudit`)
+ *     journals one on EVERY audited admin mutation; `POST /api/v1/ingest/
+ *     observations` is the desktop's and the extension's own capture lane; the
+ *     OFAPI webhook receiver and the OFAPI read gateway each write their own,
+ *     synchronously, in the request.
+ *   * `sync_raw_payloads` — `POST /api/v1/admin/pages/:pageLabel/verify` calls
+ *     `refreshPageMetadata`, which fetches from Fansly and journals the response
+ *     through `persistRawPayload`. It is the one capture-lane PULL that happens
+ *     outside the worker, and it lands in the exact table these phases rewrite.
+ *
+ * So the honest fix was the runbook's, not this function's: the ritual now
+ * stops `api` too and states the consequence (the dashboard and every client
+ * are down for the window). Narrowing this check to a role allowlist was
+ * rejected for a second reason as well — it would go stale silently. A role
+ * that gains a capture write does not come back here to update an allowlist,
+ * and the failure mode of a stale allowlist is a rewrite running under a live
+ * writer, which is the one thing this check exists to prevent.
+ */
 async function checkWritersStopped(app: Ctx, ctx: PreconditionContext): Promise<void> {
   const instances = await listActiveInstances(app.db);
   const roles = instances.map((row) => `${row.role}/${row.instanceId}`);
@@ -247,7 +286,10 @@ async function checkWritersStopped(app: Ctx, ctx: PreconditionContext): Promise<
   if (roles.length > 0) {
     ctx.refusals.push(
       `${roles.length} runtime instance(s) are still heartbeating (${roles.join(", ")}) — `
-        + "stop the worker and the scheduler first (the G4 phase-2 ritual)",
+        + "stop api, worker AND scheduler (all three write capture; the api journals an "
+        + "observation on every audited admin mutation and writes sync_raw_payloads itself on "
+        + "POST /api/v1/admin/pages/:pageLabel/verify), then allow the 3-minute heartbeat TTL "
+        + "to lapse — docs/runbooks/capture-historical-rewrite.md step R2",
     );
   }
 
@@ -290,19 +332,64 @@ async function relationSizes(
 /**
  * Free bytes on the volume Postgres lives on.
  *
- * `statfs` on the runtime's own root, exactly as the hourly disk gauge measures
- * it (services/db-alert): the worker's filesystem and the Postgres volume are
- * the same VPS disk. Reading it from Node rather than from Postgres is
- * deliberate — `pg_stat_file` and friends need superuser, and the number this
- * law needs is the one the disk alert has been trending all along.
+ * The measurement itself is `readDiskFreeBytes` in services/db-disk-alert.ts —
+ * the SAME function the hourly gauge and the runway alarm use. This file used
+ * to carry its own `statfs("/")` with a comment claiming it agreed with the
+ * gauge; #223 made that structurally true instead of merely asserted, so a
+ * future change to how free space is measured cannot leave the headroom law
+ * behind.
  */
 async function freeBytesOnDataVolume(override?: number): Promise<number> {
   if (override !== undefined) {
     return override;
   }
-  const { statfs } = await import("node:fs/promises");
-  const stats = await statfs("/");
-  return Number(stats.bavail) * Number(stats.bsize);
+  return readDiskFreeBytes();
+}
+
+/**
+ * THE TYPED-COLUMN COMPLETENESS GATE (decision #223).
+ *
+ * Runs before the two phases that make an inline body unreadable —
+ * observations' `shadow` (which copies rows WITHOUT their bodies) and
+ * sync_raw_payloads' `null-bodies`. A row whose slice-3a typed column is still
+ * empty is a row whose `CAS-INLINE-FALLBACK:` arm is the only way its value can
+ * be read, and these phases are exactly what takes that arm's input away. The
+ * failure is silent and it is not even a NULL where a value used to be: the
+ * Fansly tip-context reader's `coalesce(response_tips, CASE …)` yields the
+ * response_payload column itself when the CASE's `jsonb_typeof` sees NULL, so
+ * the replay records an INVALID sidecar for a message that had a perfectly good
+ * one — a wrong fact, not a missing one.
+ *
+ * NOT gated on `swap` and `vacuum-full`, deliberately. Those act on a relation
+ * a gated phase already prepared, and by the time they run the bodies are
+ * either already gone (vacuum-full's precondition IS that) or sitting in a copy
+ * this gate cannot see. Putting the gate there too would read as a second line
+ * of defence and be neither.
+ */
+async function checkTypedColumnsComplete(
+  app: Ctx,
+  scope: CaptureRewriteScope,
+  census: { typedColumnGaps: number },
+  ctx: PreconditionContext,
+): Promise<void> {
+  const proof = await proveCaptureTypedColumnGaps(app, scope, census.typedColumnGaps);
+  ctx.detail.typedColumnGaps = proof;
+  if (proof.overRescanBound) {
+    ctx.refusals.push(
+      `${proof.counted} rows carry a reference and a body whose slice-3a typed columns were `
+        + `never filled (over the ${CAPTURE_TYPED_COLUMN_RESCAN_LIMIT} rescan bound) — run `
+        + "capture:backfill first; removing those bodies would take the only readable copy of "
+        + "those values with them",
+    );
+    return;
+  }
+  if (proof.derivable > 0) {
+    ctx.refusals.push(
+      `${proof.derivable} row(s) still have a slice-3a typed column their body would fill `
+        + `(first ids: ${proof.derivableIds.join(", ")}) — run capture:backfill, which now `
+        + "catches those rows up, before removing any body",
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +534,10 @@ async function buildObservationShadow(
     indexesAdded: [],
     headroom: null,
   };
+
+  // #223: before anything is copied, prove the scope's typed columns are
+  // complete — this phase's whole job is to leave the bodies behind.
+  await checkTypedColumnsComplete(app, options.scope, census, ctx);
 
   const sizes = await relationSizes(app, partition);
   if (sizes === null) {
@@ -753,6 +844,24 @@ async function swapObservationPartition(
 // ---------------------------------------------------------------------------
 // sync_raw_payloads
 
+/**
+ * PHASE `null-bodies` — the inline copies go, and the catalog becomes the only
+ * home those bodies have.
+ *
+ * TWO GATES RUN BEFORE THE FIRST UPDATE, and #223 put both of them here rather
+ * than downstream:
+ *
+ *   * THE TYPED-COLUMN GATE. This is the phase that takes the
+ *     `CAS-INLINE-FALLBACK:` arms' input away; a row still missing a value its
+ *     body would supply must not be walked past.
+ *   * §9.2's HEADROOM. It used to be checked only at `vacuum-full`, which is
+ *     the step AFTER this one — so the inequality that decides whether the
+ *     rewrite can happen at all was evaluated once this phase had already
+ *     minted a dead tuple for every row it nulled. A `VACUUM FULL` needs a full
+ *     second copy of the live set; asking for it here means an operator learns
+ *     the answer while the table is still exactly as it was, instead of after
+ *     hours of UPDATEs that only made the relation bigger.
+ */
 async function nullSyncRawPayloadBodies(
   app: Ctx,
   options: CaptureReclaimOptions,
@@ -767,6 +876,26 @@ async function nullSyncRawPayloadBodies(
     wouldNull: census.referenced - census.pointerOnly,
     nulled: 0,
   };
+
+  await checkTypedColumnsComplete(app, options.scope, census, ctx);
+
+  const sizes = await relationSizes(app, "sync_raw_payloads");
+  if (sizes === null) {
+    ctx.refusals.push("sync_raw_payloads does not exist");
+    return detail;
+  }
+  const headroom = vacuumFullHeadroomVerdict({
+    freeBytes: await freeBytesOnDataVolume(options.freeBytesOverride),
+    relationTotalBytes: sizes.total,
+  });
+  detail.headroom = headroom;
+  if (!headroom.ok) {
+    ctx.refusals.push(
+      `§9.2 headroom: ${headroom.reason} — checked HERE, before the UPDATEs, because the `
+        + "rewrite this phase exists to enable needs that room and nulling bodies first only "
+        + "makes the relation bigger",
+    );
+  }
 
   if (ctx.refusals.length > 0 || options.dryRun) {
     return detail;

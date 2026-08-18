@@ -27,9 +27,15 @@ that is backfilled and never reclaimed is a month with permanent bloat.
    lock. Finish or postpone an erasure; do not race it.
 4. **No tiering run in the window.** The tiering job runs 04:40 UTC and detaches
    aged partitions; a detached partition is refused, but do not invite the race.
-5. **Headroom.** §9.1's law: free space must hold the source partition AGAIN,
-   plus the skinny twin, plus its WAL. Check it first with a dry run; it is the
-   precondition most likely to say no.
+5. **Headroom, and it is now checked at every step that grows the disk.**
+   §9.1's law: free space must hold the source partition AGAIN, plus the skinny
+   twin, plus its WAL. Since decision #223 the **backfill** has its own
+   admission gate too (it needs room for the catalog copy of the bodies it is
+   about to walk, that copy's WAL, and a 5 GiB floor it will not touch), and it
+   re-checks the floor every 10 batches and stops the walk if free space
+   reaches it. `capture:reclaim --phase null-bodies` now checks §9.2's
+   inequality BEFORE it nulls anything, not afterwards. Check it first with a
+   dry run; it is the precondition most likely to say no.
 6. **First prod run on the SMALLEST closed month**, output reviewed before the
    next one.
 
@@ -37,6 +43,10 @@ Check the disk before you start:
 
     df -h /
     psql -c "select pg_size_pretty(pg_total_relation_size('observations_2026_07'))"
+
+**`--assume-free-bytes` is a DRY-RUN drill and the CLI rejects it together with
+`--execute`** (#223). Use it to ask "how much would I have to free up"; an
+executed run always measures the real volume.
 
 ---
 
@@ -65,10 +75,18 @@ catalog partition if 0123 never made it — production data starts 2026-07 and
 0123 starts 2026-08), then stamp `(payload_bucket_month, payload_object_id)`
 and the slice-3a typed columns onto the row in one UPDATE.
 
+**Then a SECOND pass (#223): the typed-column catch-up.** Rows captured between
+the slice-1 deployment (#215, references) and the slice-3a one (#218, typed
+columns) already carry a reference and NULL typed columns, so the scan above
+skips them by construction and the only code that fills those columns never
+runs for them. This pass finds them by their own predicate — a reference, a
+body, and a typed column the body would fill — and fills them. It runs after the
+reference walk reports `scope_complete`, at the same `--batch` and `--pause-ms`.
+
 Expected output:
 
     referenced 41213 (deduped 9877), codec-refused 3, raced 0, in 207 batches;
-    stopped: scope_complete
+    typed columns filled 812/812; stopped: scope_complete
 
 - **`deduped`** is the point of the exercise: two envelopes carrying the same
   bytes collapsed onto one object.
@@ -77,13 +95,23 @@ Expected output:
   refused ids are logged and journaled.
 - **`raced`** should be 0 or tiny; it counts rows another writer stamped between
   the read and the update.
+- **`typedColumnsFilled` / `typedColumnsScanned`** should be equal. A gap means
+  a body whose value SQL believed was there and the derivation did not produce;
+  the reclaim's gate proves each such row individually and will say so.
 
 **Resumable with no cursor.** `--limit N` stops after N batches; a re-run finds
 what is left, because the scan predicate (`payload_object_id is null and payload
-is not null`) IS the resume point. A crash is the same story. Re-run freely.
+is not null`) IS the resume point — and the catch-up pass has the same property
+(a filled column stops matching). A crash is the same story. Re-run freely.
 
 **Abort if:** `stoppedBecause` is not `scope_complete` and you did not pass
-`--limit` (something threw — read the `failed` row in `capture_rewrite_runs`).
+`--limit`:
+
+| `stoppedBecause` | What it means | What to do |
+|---|---|---|
+| `refused` | The §9.1 admission gate said no before anything was written | Free space, or read the `refused` row's `headroom` in `capture_rewrite_runs` |
+| `headroom_exhausted` | Free space reached the 5 GiB floor mid-walk; the run stopped where it stood | Free space, then re-run — it resumes |
+| `failed` verdict | Something threw | Read the `failed` row in `capture_rewrite_runs` |
 
 ### O2 — verify (read-only over capture data; writes only its verdict)
 
@@ -114,6 +142,7 @@ Expected output:
 |---|---|---|
 | `N rows have an ENCODABLE body and no reference` | The backfill did not finish | Re-run O1 |
 | `N rows still carry a body and no reference (over the … rescan bound)` | The backfill barely started | Run O1 |
+| `N row(s) still have a slice-3a typed column their body would fill` (from O3/R2, not O2) | The #223 catch-up has not run over this scope | Re-run O1 — it includes the catch-up pass — **then re-run O2**: a backfill that finishes after a verify overtakes its verdict, catch-up included |
 | `N references point at a catalog object that does not exist` | A dangling reference | **STOP.** Do not reclaim. Investigate — this is the `capture_payload_parity` failure class |
 | `N of M sampled bodies do not match` | The catalog copy diverged | **STOP.** Do not reclaim |
 
@@ -137,12 +166,20 @@ Long, interruptible, resumable: a re-run continues from the highest id already
 copied. The live partition is not touched and takes no lock beyond an ordinary
 read.
 
+Before it copies anything it proves the scope's **slice-3a typed columns are
+complete** (#223) — this is the phase that leaves the bodies behind, so a row
+still missing a value its body would supply must not be walked past. A refusal
+here names the first offending ids; the fix is to re-run O1, which now includes
+the catch-up pass.
+
 The dry run prints the headroom verdict. To ask "what if I free up more first":
 
     pnpm cli capture:reclaim --table observations --month 2026-07 --phase shadow \
       --assume-free-bytes 80000000000
 
-(recorded in the tombstone whenever used).
+(recorded in the tombstone whenever used — and **rejected together with
+`--execute`** since #223: a drill may model a hypothetical, never answer for the
+gate of a run that acts).
 
 **Abort if:** the final check says `shadow holds N rows and observations_2026_07
 holds M` — the copy is incomplete; re-run the phase, it resumes.
@@ -240,13 +277,36 @@ ignored: a month-scoped verdict cannot gate a whole-table act.
 
 ### R2 — stop the writers, then null the bodies
 
-**On the VPS, the G4 phase-2 ritual:**
+**On the VPS. ALL THREE ROLES, api INCLUDED — this is a full maintenance
+window, not a worker pause:**
 
-    docker compose stop worker scheduler
+    cd /opt/agency-hub   # wherever the release lives
+    docker compose --env-file .env.production -f docker-compose.production.yml \
+      stop api worker scheduler
+
+**Why the api too, and what it costs (#223).** The api is a capture writer, on
+more paths than any other role: `services/auth.ts recordAudit` journals an
+observation on *every* audited admin mutation, `POST /api/v1/ingest/observations`
+is the desktop's and the extension's own capture lane, the OFAPI webhook
+receiver and the OFAPI read gateway each write their own — and
+`POST /api/v1/admin/pages/:pageLabel/verify` calls `refreshPageMetadata`, which
+fetches from Fansly and journals the response straight into
+**`sync_raw_payloads`**, the table these two phases rewrite. An earlier version
+of this runbook stopped only `worker` and `scheduler`, which meant the api kept
+heartbeating and both phases refused forever — correctly.
+
+The consequence is stated rather than discovered: **for the length of R2 and R3
+the dashboard is down, the desktop and the extension cannot reach the kernel,
+and no AI generation can be served.** R3's `VACUUM FULL` holds ACCESS EXCLUSIVE
+for the whole rewrite anyway, so measure the table first (below) and budget the
+window before you stop anything.
 
 Both phases refuse while any runtime instance is heartbeating
-(`runtime_instances`, 3-minute TTL — allow a few minutes after the stop) or any
-other client backend is non-idle.
+(`runtime_instances`, 3-minute TTL — a graceful `compose stop` removes the row
+immediately, but allow a few minutes if a container was killed) or any other
+client backend is non-idle. Confirm before proceeding:
+
+    psql -c "select role, instance_id, last_seen_at from runtime_instances order by role"
 
     pnpm cli capture:reclaim --table sync_raw_payloads --phase null-bodies
     pnpm cli capture:reclaim --table sync_raw_payloads --phase null-bodies \
@@ -256,6 +316,13 @@ Batched, resumable, predicate-driven. 0128's CHECK (`response_payload IS NOT
 NULL OR payload_object_id IS NOT NULL`) is what makes this safe rather than
 merely careful: PostgreSQL itself rejects any row this would leave with no body
 anywhere.
+
+Two gates run before the first UPDATE (#223): the **typed-column completeness**
+proof (a row whose slice-3a column is still empty would lose the only readable
+copy of that value — for a Fansly `dm_messages` row that is a tip sidecar
+turning into an *invalid* envelope, a wrong fact rather than a missing one), and
+**§9.2's headroom**, which used to be checked only at R3 — after these UPDATEs
+had already made the relation bigger.
 
 ### R3 — the rewrite
 
@@ -274,8 +341,13 @@ first and budget the window:
 
 ### R4 — restart
 
-    docker compose start worker scheduler
+    docker compose --env-file .env.production -f docker-compose.production.yml \
+      start api worker scheduler
     pnpm cli status
+    curl -sS -o /dev/null -w '%{http_code}\n' https://gosling-agency.ru/api/v1/health
+
+The window is over only when the api answers again — the clients have been
+failing closed for its whole length.
 
 ---
 

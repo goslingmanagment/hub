@@ -155,6 +155,45 @@ type RawCandidateRow = {
 };
 
 /**
+ * The candidate projection, shared by the two scans below.
+ *
+ * Both walks need the same six values — the row's address, its capture instant,
+ * its account, its body and the two derivation inputs — so the column list lives
+ * here once and the scans differ only in their WHERE clause. That is the whole
+ * difference between them and it should look like the whole difference.
+ */
+function candidateProjection(table: CaptureRewriteTable) {
+  return table === "observations"
+    ? sql`
+      select e.id::text as id,
+             e.received_at as capture_instant,
+             e.account_id::text as platform_account_id,
+             e.payload as payload,
+             e.producer as derivation_a,
+             e.kind as derivation_b
+    `
+    : sql`
+      select e.id::text as id,
+             e.captured_at as capture_instant,
+             e.page_id::text as platform_account_id,
+             e.response_payload as payload,
+             e.endpoint as derivation_a,
+             e.payload_kind as derivation_b
+    `;
+}
+
+function toCandidates(rows: RawCandidateRow[]): CaptureBackfillCandidate[] {
+  return rows.map((row) => ({
+    id: Number(row.id),
+    captureInstant: new Date(row.capture_instant),
+    platformAccountId: row.platform_account_id === null ? null : Number(row.platform_account_id),
+    payload: row.payload,
+    derivationA: row.derivation_a,
+    derivationB: row.derivation_b,
+  }));
+}
+
+/**
  * One bounded, keyset-ordered page of rows that still need a reference.
  *
  * THE PREDICATE IS THE RESUME POINT. `payload_object_id is null and payload is
@@ -175,45 +214,162 @@ export async function listCaptureBackfillCandidates(
   input: { scope: CaptureRewriteScope; afterId: number; limit: number },
 ): Promise<CaptureBackfillCandidate[]> {
   const relation = captureRewriteRelation(input.scope);
-  const query = input.scope.table === "observations"
-    ? sql`
-      select e.id::text as id,
-             e.received_at as capture_instant,
-             e.account_id::text as platform_account_id,
-             e.payload as payload,
-             e.producer as derivation_a,
-             e.kind as derivation_b
-      from ${sql.raw(`"${relation}"`)} e
-      where e.id > ${input.afterId}
-        and e.payload_object_id is null
-        and e.payload is not null
-      order by e.id asc
-      limit ${input.limit}
-    `
-    : sql`
-      select e.id::text as id,
-             e.captured_at as capture_instant,
-             e.page_id::text as platform_account_id,
-             e.response_payload as payload,
-             e.endpoint as derivation_a,
-             e.payload_kind as derivation_b
-      from ${sql.raw(`"${relation}"`)} e
-      where e.id > ${input.afterId}
-        and e.payload_object_id is null
-        and e.response_payload is not null
-      order by e.id asc
-      limit ${input.limit}
-    `;
+  const body = input.scope.table === "observations"
+    ? sql.raw("e.payload")
+    : sql.raw("e.response_payload");
 
-  const rows = await db.execute<RawCandidateRow>(query);
-  return rows.rows.map((row) => ({
-    id: Number(row.id),
-    captureInstant: new Date(row.capture_instant),
-    platformAccountId: row.platform_account_id === null ? null : Number(row.platform_account_id),
-    payload: row.payload,
-    derivationA: row.derivation_a,
-    derivationB: row.derivation_b,
-  }));
+  const rows = await db.execute<RawCandidateRow>(sql`
+    ${candidateProjection(input.scope.table)}
+    from ${sql.raw(`"${relation}"`)} e
+    where e.id > ${input.afterId}
+      and e.payload_object_id is null
+      and ${body} is not null
+    order by e.id asc
+    limit ${input.limit}
+  `);
+  return toCandidates(rows.rows);
+}
+
+// ---------------------------------------------------------------------------
+// The typed-column catch-up scan (decision #223)
+
+/**
+ * Rows whose slice-3a TYPED COLUMNS are empty of a value the derivation would
+ * produce — even though the reference stamping that normally fills them has
+ * already happened.
+ *
+ * WHY THIS SECOND SCAN EXISTS, and why the first one cannot cover it. Slice 1
+ * (#215) started dual-writing the catalog reference; slice 3a (#218) added the
+ * typed columns three deployments later. Every row captured BETWEEN those two
+ * deployments carries a reference and NULL typed columns, and the backfill scan
+ * above excludes it by construction — its predicate is `payload_object_id is
+ * null`, which is exactly false for those rows — while the population of the
+ * typed columns lives only inside the reference-stamping UPDATE. So the one
+ * population path in the system is unreachable for the one cohort that needs
+ * it, and `capture:reclaim --phase null-bodies` would then remove the inline
+ * body those rows' `CAS-INLINE-FALLBACK:` arms are still reading through. For a
+ * Fansly `dm_messages` row that is a tip sidecar turning into SQL NULL, which
+ * the replay parser records as an INVALID envelope — a captured fact replaced
+ * by a wrong one, which is worse than the fact being missing.
+ *
+ * THE PREDICATE MUST BE SELECTIVE AND IT MUST CONVERGE. Almost every row in the
+ * system derives to all-NULL (these columns serve the harvest lane and Fansly
+ * DM tips and nothing else), so a predicate of "typed column is null" would
+ * match the whole corpus and never finish. What is matched here is the narrower
+ * and honest condition: the derivation gate passes AND the body actually holds
+ * a value the derivation would return. The `jsonb_typeof` clauses mirror
+ * `jsonMemberText` (a member that is not a string, number or boolean renders to
+ * NULL there), so a row this scan hands over is a row the catch-up can fill —
+ * which is what keeps a re-run from finding the same row forever.
+ */
+function typedColumnGapPredicate(table: CaptureRewriteTable) {
+  const scalar = (path: string) =>
+    sql.raw(`jsonb_typeof(${path}) in ('string', 'number', 'boolean')`);
+  if (table === "sync_raw_payloads") {
+    // deriveRawPayloadTipsSlice returns a slice for EVERY dm_messages row whose
+    // body is a JSON object — `{"tips": null}` when the key is absent, which is
+    // the exact shape the SQL fallback produces. So "object" is the whole
+    // derivability condition, and this mirror is exact.
+    return sql`
+      e.payload_object_id is not null
+        and e.response_payload is not null
+        and e.endpoint = 'dm_messages'
+        and e.payload_kind = 'dm_messages'
+        and e.response_tips is null
+        and jsonb_typeof(e.response_payload) = 'object'
+    `;
+  }
+  return sql`
+    e.payload_object_id is not null
+      and e.payload is not null
+      and e.producer like 'desktop-harvest@%'
+      and e.kind like 'harvest.%'
+      and (
+        (e.harvest_machine_id is null and ${scalar("e.payload -> 'machineId'")})
+        or (
+          e.kind = 'harvest.fan_transactions'
+          and (
+            (e.harvest_tx_id is null and ${scalar("e.payload -> 'row' -> 'tx_id'")})
+            or (e.harvest_tx_amount is null and ${scalar("e.payload -> 'row' -> 'amount'")})
+            or (e.harvest_tx_created_at is null
+                and ${scalar("e.payload -> 'row' -> 'created_at'")})
+          )
+        )
+      )
+  `;
+}
+
+/** One bounded, keyset-ordered page of rows that need the typed-column
+ *  catch-up. Same projection and same resume-by-predicate property as the
+ *  reference scan: a filled row stops matching. */
+export async function listCaptureTypedColumnCandidates(
+  db: Database,
+  input: { scope: CaptureRewriteScope; afterId: number; limit: number },
+): Promise<CaptureBackfillCandidate[]> {
+  const relation = captureRewriteRelation(input.scope);
+  const rows = await db.execute<RawCandidateRow>(sql`
+    ${candidateProjection(input.scope.table)}
+    from ${sql.raw(`"${relation}"`)} e
+    where e.id > ${input.afterId}
+      and ${typedColumnGapPredicate(input.scope.table)}
+    order by e.id asc
+    limit ${input.limit}
+  `);
+  return toCandidates(rows.rows);
+}
+
+/**
+ * Fill ONE row's typed columns from the body it still carries.
+ *
+ * The reference columns are NOT touched: this statement exists for rows that
+ * already have theirs, and a pass that could rewrite an address would be a
+ * different and far more dangerous act. `coalesce` again, for #218's reason — a
+ * value written at capture time came from the same object in the same statement
+ * as the body, and this pass has no standing to disagree with it.
+ *
+ * It carries the same heap-tuple cost per row as the reference stamping, and it
+ * is lawful for the same reason: the reclaim that follows consumes the bloat.
+ */
+export async function applyCaptureTypedColumnCatchUp(
+  db: Database,
+  input: { scope: CaptureRewriteScope; candidate: CaptureBackfillCandidate },
+): Promise<boolean> {
+  const relation = captureRewriteRelation(input.scope);
+  const { candidate } = input;
+
+  if (input.scope.table === "observations") {
+    const queryable = deriveObservationQueryableFields({
+      producer: candidate.derivationA,
+      kind: candidate.derivationB,
+      payload: candidate.payload,
+    });
+    const result = await db.execute<{ id: string }>(sql`
+      update ${sql.raw(`"${relation}"`)} e
+      set harvest_machine_id = coalesce(e.harvest_machine_id, ${queryable.harvestMachineId}),
+          harvest_tx_id = coalesce(e.harvest_tx_id, ${queryable.harvestTxId}),
+          harvest_tx_amount = coalesce(e.harvest_tx_amount, ${queryable.harvestTxAmount}),
+          harvest_tx_created_at = coalesce(e.harvest_tx_created_at, ${queryable.harvestTxCreatedAt})
+      where e.id = ${candidate.id}
+      returning e.id::text as id
+    `);
+    return result.rows.length > 0;
+  }
+
+  const tips = deriveRawPayloadTipsSlice({
+    endpoint: candidate.derivationA,
+    payloadKind: candidate.derivationB,
+    responsePayload: candidate.payload,
+  });
+  if (tips === undefined) {
+    return false;
+  }
+  const result = await db.execute<{ id: string }>(sql`
+    update ${sql.raw(`"${relation}"`)} e
+    set response_tips = coalesce(e.response_tips, ${JSON.stringify(tips)}::jsonb)
+    where e.id = ${candidate.id}
+    returning e.id::text as id
+  `);
+  return result.rows.length > 0;
 }
 
 /**
@@ -308,6 +464,14 @@ export interface CaptureRewriteScopeCensus {
   /** Rows already pointer-only (3c-1): reference set, inline body already NULL.
    *  They are finished, not pending. */
   pointerOnly: number;
+  /**
+   * Rows that carry a reference AND a body AND a typed column the derivation
+   * would fill (decision #223) — the slice-1-to-slice-3a cohort the reference
+   * scan cannot see. Non-zero means the scope is NOT ready to have its bodies
+   * removed: the `CAS-INLINE-FALLBACK:` arms are still the only way those
+   * values can be read.
+   */
+  typedColumnGaps: number;
   /** Lowest and highest primary-key id present, for the sampler's probes. */
   minId: number | null;
   maxId: number | null;
@@ -327,6 +491,7 @@ export async function censusCaptureRewriteScope(
     referenced: string;
     unreferenced_with_body: string;
     pointer_only: string;
+    typed_column_gaps: string;
     min_id: string | null;
     max_id: string | null;
   }>(sql`
@@ -338,6 +503,11 @@ export async function censusCaptureRewriteScope(
            count(*) filter (
              where e.payload_object_id is not null and ${body} is null
            )::text as pointer_only,
+           -- #223: rides the census's existing single scan rather than adding a
+           -- second pass over the largest table in the system.
+           count(*) filter (
+             where ${typedColumnGapPredicate(scope.table)}
+           )::text as typed_column_gaps,
            min(e.id)::text as min_id,
            max(e.id)::text as max_id
     from ${sql.raw(`"${relation}"`)} e
@@ -349,6 +519,7 @@ export async function censusCaptureRewriteScope(
     referenced: Number(row?.referenced ?? 0),
     unreferencedWithBody: Number(row?.unreferenced_with_body ?? 0),
     pointerOnly: Number(row?.pointer_only ?? 0),
+    typedColumnGaps: Number(row?.typed_column_gaps ?? 0),
     minId: row?.min_id == null ? null : Number(row.min_id),
     maxId: row?.max_id == null ? null : Number(row.max_id),
   };

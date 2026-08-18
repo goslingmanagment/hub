@@ -992,13 +992,28 @@ export function buildProgram() {
     .option("--lock-timeout-ms <n>", "how long the swap may WAIT for its lock", parsePositiveInt, 3000)
     .option(
       "--assume-free-bytes <n>",
-      "drill: evaluate the headroom law against this figure instead of measuring the volume "
-        + "(recorded in the run tombstone)",
+      "DRY-RUN DRILL ONLY: evaluate the headroom law against this figure instead of measuring "
+        + "the volume. Rejected together with --execute",
       parseNonnegativeInt,
     )
     .option("--execute", "actually act (default is a dry-run precondition report)")
     .option("--confirm <name>", "swap/vacuum-full: the exact relation name")
     .action(async (options) => {
+      // #223: THE DRILL SEAM MAY NOT ANSWER FOR THE REAL GATE, and the check
+      // is here — before the app context, before a single query — because the
+      // combination is not a bad run, it is a category error. `--assume-free-
+      // bytes` exists so an owner staring at a refusal can ask "how much would
+      // I have to free up"; passing it to an EXECUTING run replaces the one
+      // measurement standing between a nearly-full volume and a `VACUUM FULL`
+      // with a number somebody typed. The flag was already journaled in the
+      // tombstone, which records the bypass but does not prevent it.
+      if (options.assumeFreeBytes !== undefined && options.execute) {
+        throw new InvalidArgumentError(
+          "--assume-free-bytes is a DRY-RUN drill and cannot be combined with --execute: an "
+            + "executed run's headroom gate must read the real volume. Drop --execute to model "
+            + "a hypothetical, or free the space and run for real.",
+        );
+      }
       const app = await createAppContext();
       try {
         const { parseCaptureRewriteScope } = await import("./services/capture-rewrite/scope.ts");

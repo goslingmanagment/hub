@@ -39,7 +39,7 @@ import {
 } from "@agency_hub_core/db";
 
 import {
-  runCaptureBackfill,
+  runCaptureBackfill as runCaptureBackfillService,
   runCaptureVerifyBackfill,
 } from "../apps/runtime/src/services/capture-rewrite/index.ts";
 import {
@@ -82,6 +82,26 @@ beforeEach(async () => {
     await testDb.pool.query(`drop table if exists "${row.relname}" cascade`);
   }
 });
+
+/**
+ * The backfill's §9.1 admission gate (#223) reads the real volume. Every case
+ * below except the headroom ones is about the WALK, not about the disk, so they
+ * go through this wrapper and the gate sees a fixed generous figure instead of
+ * whatever the CI runner happens to have free. The headroom cases pass their
+ * own reader — which is also the point of that seam existing rather than a
+ * `--assume-free-bytes` an executed run could use.
+ */
+const AMPLE_FREE_BYTES = 1024 ** 4;
+
+function runCaptureBackfill(
+  app: Parameters<typeof runCaptureBackfillService>[0],
+  options: Parameters<typeof runCaptureBackfillService>[1],
+) {
+  return runCaptureBackfillService(app, {
+    readFreeBytes: async () => AMPLE_FREE_BYTES,
+    ...options,
+  });
+}
 
 const MONTH = "2026-07";
 const PARTITION = "observations_2026_07";
@@ -367,6 +387,401 @@ describe("A — capture:backfill", () => {
     expect(census.referenced).toBe(5);
     expect(census.unreferencedWithBody).toBe(1);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Decision #223, finding 1 — THE COHORT THE REFERENCE SCAN CANNOT SEE.
+//
+// Rows captured between the slice-1 deployment (references, #215) and the
+// slice-3a one (typed columns, #218) carry a reference AND null typed columns.
+// The reference scan excludes them by construction — its predicate is
+// `payload_object_id is null` — and the typed columns' only population lived
+// inside the reference-stamping UPDATE, so nothing in the system could fill
+// them. `null-bodies` would then remove the body their CAS-INLINE-FALLBACK arms
+// read through.
+//
+// The fixture is that exact shape, reached the honest way: back-fill normally,
+// then null the typed column, which leaves a row indistinguishable from one
+// captured in the gap.
+
+describe("A2 — the typed-column catch-up (#223)", () => {
+  async function seedRawDmPage(label: string, count: number) {
+    const page = await seedPage(label);
+    for (let index = 0; index < count; index += 1) {
+      await testDb!.pool.query(
+        `insert into sync_raw_payloads (
+           page_id, endpoint, request_params, response_payload, mapper_version,
+           payload_kind, captured_at, retain_until
+         ) values ($1, 'dm_messages', '{}'::jsonb, $2::jsonb, 'v1', 'dm_messages', $3, $4)`,
+        [
+          page.id,
+          JSON.stringify({ tips: [{ id: `t${index}`, message: "note" }], messages: [] }),
+          JULY(1 + index).toISOString(),
+          new Date(Date.UTC(2126, 0, 1)).toISOString(),
+        ],
+      );
+    }
+    return page;
+  }
+
+  /** The pre-0125 shape: a reference, a body, and no typed column. */
+  async function stripTypedColumns(table: "sync_raw_payloads" | "observations") {
+    await testDb!.pool.query(
+      table === "sync_raw_payloads"
+        ? "update sync_raw_payloads set response_tips = null"
+        : `update observations set harvest_machine_id = null, harvest_tx_id = null,
+             harvest_tx_amount = null, harvest_tx_created_at = null`,
+    );
+  }
+
+  it("fills a referenced row's tips slice that the reference scan cannot reach", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedRawDmPage("catchup-raw", 3);
+    await runCaptureBackfill(appStub(), {
+      scope: RAW_SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    await stripTypedColumns("sync_raw_payloads");
+
+    // The census SEES them even though the reference scan cannot.
+    const before = await censusCaptureRewriteScope(testDb.db, RAW_SCOPE);
+    expect(before.referenced).toBe(3);
+    expect(before.unreferencedWithBody).toBe(0);
+    expect(before.typedColumnGaps).toBe(3);
+
+    const result = await runCaptureBackfill(appStub(), {
+      scope: RAW_SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+
+    // Nothing to reference — this is the whole point: the first walk finds no
+    // work at all and the second one does all of it.
+    expect(result.referenced).toBe(0);
+    expect(result.typedColumnsScanned).toBe(3);
+    expect(result.typedColumnsFilled).toBe(3);
+
+    const filled = await testDb.pool.query<{ tips: unknown }>(
+      "select response_tips as tips from sync_raw_payloads order by id asc",
+    );
+    expect(filled.rows.map((row) => row.tips)).toEqual([
+      { tips: [{ id: "t0", message: "note" }] },
+      { tips: [{ id: "t1", message: "note" }] },
+      { tips: [{ id: "t2", message: "note" }] },
+    ]);
+    expect((await censusCaptureRewriteScope(testDb.db, RAW_SCOPE)).typedColumnGaps).toBe(0);
+    void page;
+  });
+
+  it("fills an observation's harvest columns the same way", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedPage("catchup-obs");
+    await seedObservation({
+      pageId: page.id,
+      producer: "desktop-harvest@1",
+      kind: "harvest.fan_transactions",
+      payload: { machineId: "machine-9", row: { tx_id: "tx-1", amount: "12.50", created_at: "x" } },
+      key: "h-catchup",
+      day: 5,
+    });
+    await runCaptureBackfill(appStub(), {
+      scope: SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    await stripTypedColumns("observations");
+    expect((await censusCaptureRewriteScope(testDb.db, SCOPE)).typedColumnGaps).toBe(1);
+
+    const result = await runCaptureBackfill(appStub(), {
+      scope: SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    expect(result.typedColumnsFilled).toBe(1);
+
+    const row = await testDb.pool.query<{
+      harvest_machine_id: string | null;
+      harvest_tx_id: string | null;
+      harvest_tx_amount: string | null;
+      harvest_tx_created_at: string | null;
+    }>(
+      `select harvest_machine_id, harvest_tx_id, harvest_tx_amount, harvest_tx_created_at
+       from observations where idempotency_key = 'h-catchup'`,
+    );
+    expect(row.rows[0]).toEqual({
+      harvest_machine_id: "machine-9",
+      harvest_tx_id: "tx-1",
+      harvest_tx_amount: "12.50",
+      harvest_tx_created_at: "x",
+    });
+  });
+
+  it("does NOT chase rows whose bodies legitimately derive to nothing", async (context) => {
+    if (!testDb) return context.skip();
+    // The predicate has to be selective or it matches the whole corpus and the
+    // gate below refuses forever: an ordinary DM capture has no harvest members
+    // and an ordinary observation is not a harvest row at all.
+    const page = await seedPage("catchup-quiet");
+    await seedJulyCorpus(page.id);
+    await testDb.pool.query(
+      `insert into sync_raw_payloads (
+         page_id, endpoint, request_params, response_payload, mapper_version,
+         payload_kind, captured_at, retain_until
+       ) values ($1, 'transactions', '{}'::jsonb, '{"rows": []}'::jsonb, 'v1', 'transactions', $2, $3)`,
+      [page.id, JULY(2).toISOString(), new Date(Date.UTC(2126, 0, 1)).toISOString()],
+    );
+    await runCaptureBackfill(appStub(), {
+      scope: SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    await runCaptureBackfill(appStub(), {
+      scope: RAW_SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+
+    expect((await censusCaptureRewriteScope(testDb.db, SCOPE)).typedColumnGaps).toBe(0);
+    expect((await censusCaptureRewriteScope(testDb.db, RAW_SCOPE)).typedColumnGaps).toBe(0);
+  });
+
+  it("REFUSES null-bodies while a typed column its body would fill is empty", async (context) => {
+    if (!testDb) return context.skip();
+    await seedRawDmPage("catchup-gate", 2);
+    await runCaptureBackfill(appStub(), {
+      scope: RAW_SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    await blessScope(RAW_SCOPE);
+    await stripTypedColumns("sync_raw_payloads");
+
+    const refused = await runCaptureReclaim(appStub(), {
+      scope: RAW_SCOPE,
+      phase: "null-bodies",
+      dryRun: false,
+      confirm: undefined,
+      batch: 100,
+      pauseMs: 0,
+      lockTimeoutMs: 3000,
+    });
+    expect(refused.verdict).toBe("refused");
+    expect(refused.refusals.join(" ")).toMatch(/slice-3a typed column their body would fill/);
+    // Refused means NOTHING was touched: the bodies are all still there.
+    const intact = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from sync_raw_payloads where response_payload is not null",
+    );
+    expect(Number(intact.rows[0]!.n)).toBe(2);
+
+    // The catch-up is the remedy the refusal names — and running it OVERTAKES
+    // the verify verdict, exactly as any other backfill does (#221's freshness
+    // law), so the ritual's re-verify step is not optional after a catch-up.
+    await runCaptureBackfill(appStub(), {
+      scope: RAW_SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    const stale = await runCaptureReclaim(appStub(), {
+      scope: RAW_SCOPE,
+      phase: "null-bodies",
+      dryRun: false,
+      confirm: undefined,
+      batch: 100,
+      pauseMs: 0,
+      lockTimeoutMs: 3000,
+    });
+    expect(stale.verdict).toBe("refused");
+    expect(stale.refusals.join(" ")).toMatch(/finished AFTER the verify verdict/);
+
+    await blessScope(RAW_SCOPE);
+    const allowed = await runCaptureReclaim(appStub(), {
+      scope: RAW_SCOPE,
+      phase: "null-bodies",
+      dryRun: false,
+      confirm: undefined,
+      batch: 100,
+      pauseMs: 0,
+      lockTimeoutMs: 3000,
+    });
+    expect(allowed.refusals).toEqual([]);
+    expect(allowed.detail.nulled).toBe(2);
+
+    // And the tip sidecar the reclaim would have destroyed is still readable —
+    // this is the fact the whole finding is about.
+    const tips = await testDb.pool.query<{ tips: unknown }>(
+      "select response_tips as tips from sync_raw_payloads order by id asc limit 1",
+    );
+    expect(tips.rows[0]!.tips).toEqual({ tips: [{ id: "t0", message: "note" }] });
+  });
+
+  it("REFUSES the observations shadow phase for the same reason", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedPage("catchup-shadow");
+    await seedObservation({
+      pageId: page.id,
+      producer: "desktop-harvest@1",
+      kind: "harvest.messages",
+      payload: { machineId: "machine-77" },
+      key: "h-shadow",
+      day: 6,
+    });
+    await runCaptureBackfill(appStub(), {
+      scope: SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    await blessScope(SCOPE);
+    await stripTypedColumns("observations");
+
+    const refused = await runCaptureReclaim(appStub(), {
+      scope: SCOPE,
+      phase: "shadow",
+      dryRun: false,
+      confirm: undefined,
+      batch: 100,
+      pauseMs: 0,
+      lockTimeoutMs: 3000,
+      now: new Date(Date.UTC(2026, 7, 15)),
+    });
+    expect(refused.verdict).toBe("refused");
+    expect(refused.refusals.join(" ")).toMatch(/slice-3a typed column their body would fill/);
+    // The shadow relation was never created: a refusal touches nothing.
+    expect(await partitionExists("observations_2026_07__skinny")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Decision #223, finding 3 — THE HEADROOM LAW NOW RUNS BEFORE THE GROWTH.
+//
+// `capture:backfill` writes a full catalog copy of every body it walks and a
+// second heap tuple per stamped row, and it had no admission check of any kind:
+// the observation law was first asked at `shadow` and the raw one only AFTER
+// `null-bodies`, i.e. after the bytes were already on the volume.
+
+describe("A3 — the backfill's admission gate (#223)", () => {
+  it("REFUSES to start under the floor, and writes nothing at all", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedPage("headroom-preflight");
+    await seedJulyCorpus(page.id);
+
+    const result = await runCaptureBackfillService(appStub(), {
+      scope: SCOPE,
+      dryRun: false,
+      batch: 10,
+      pauseMs: 0,
+      maxBatches: 0,
+      readFreeBytes: async () => 1024,
+    });
+
+    expect(result.stoppedBecause).toBe("refused");
+    expect(result.headroom?.ok).toBe(false);
+    expect(result.refusals.join(" ")).toMatch(/§9\.1 headroom/);
+    expect(result.referenced).toBe(0);
+    expect((await censusCaptureRewriteScope(testDb.db, SCOPE)).referenced).toBe(0);
+    const objects = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from capture_payload_objects",
+    );
+    expect(Number(objects.rows[0]!.n)).toBe(0);
+
+    // An EXECUTED invocation that refused still leaves a tombstone — unlike a
+    // dry run, it happened, and "I was asked and I said no" is evidence.
+    const run = await latestSettledCaptureRewriteRun(testDb.db, {
+      operation: "backfill",
+      scope: SCOPE,
+    });
+    expect(run?.verdict).toBe("refused");
+  });
+
+  it("STOPS mid-walk when free space reaches the floor, and resumes later", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedPage("headroom-midrun");
+    // 30 rows at batch 1: the walk re-checks every 10 batches, so it admits the
+    // run generously and then hits a volume that filled up under it.
+    for (let index = 0; index < 30; index += 1) {
+      await seedObservation({
+        pageId: page.id,
+        payload: { index },
+        key: `mid-${index}`,
+        day: 1 + (index % 20),
+      });
+    }
+
+    let reads = 0;
+    const result = await runCaptureBackfillService(appStub(), {
+      scope: SCOPE,
+      dryRun: false,
+      batch: 1,
+      pauseMs: 0,
+      maxBatches: 0,
+      readFreeBytes: async () => {
+        reads += 1;
+        // The pre-flight read is ample; the first mid-run re-check is not.
+        return reads === 1 ? AMPLE_FREE_BYTES : 1024;
+      },
+    });
+
+    expect(result.stoppedBecause).toBe("headroom_exhausted");
+    expect(result.refusals.join(" ")).toMatch(/floor this slice keeps clear/);
+    // It stopped WHERE IT STOOD rather than unwinding: the work already done is
+    // kept, which is what makes "re-run, it resumes" true.
+    expect(result.referenced).toBe(10);
+    expect((await censusCaptureRewriteScope(testDb.db, SCOPE)).referenced).toBe(10);
+
+    const resumed = await runCaptureBackfill(appStub(), {
+      scope: SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+    });
+    expect(resumed.referenced).toBe(20);
+    expect(resumed.stoppedBecause).toBe("scope_complete");
+    expect((await censusCaptureRewriteScope(testDb.db, SCOPE)).unreferencedWithBody).toBe(0);
+  });
+
+  it("reports the verdict in a dry run without opening a journal row", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedPage("headroom-dry");
+    await seedJulyCorpus(page.id);
+
+    const result = await runCaptureBackfillService(appStub(), {
+      scope: SCOPE,
+      dryRun: true,
+      batch: 10,
+      pauseMs: 0,
+      maxBatches: 0,
+      readFreeBytes: async () => 1024,
+    });
+
+    expect(result.stoppedBecause).toBe("refused");
+    expect(result.headroom?.ok).toBe(false);
+    const journal = await testDb.pool.query("select * from capture_rewrite_runs");
+    expect(journal.rowCount).toBe(0);
+  });
+});
+
+describe("C2 — §9.2 headroom moves in front of null-bodies (#223)", () => {
+  it("REFUSES null-bodies on the inequality instead of discovering it at vacuum-full",
+    async (context) => {
+      if (!testDb) return context.skip();
+      const page = await seedPage("headroom-null");
+      for (let index = 0; index < 3; index += 1) {
+        await testDb.pool.query(
+          `insert into sync_raw_payloads (
+             page_id, endpoint, request_params, response_payload, mapper_version,
+             payload_kind, captured_at, retain_until
+           ) values ($1, 'dm_messages', '{}'::jsonb, $2::jsonb, 'v1', 'dm_messages', $3, $4)`,
+          [
+            page.id,
+            JSON.stringify({ tips: [], messages: [{ id: `m${index}` }] }),
+            JULY(1 + index).toISOString(),
+            new Date(Date.UTC(2126, 0, 1)).toISOString(),
+          ],
+        );
+      }
+      await runCaptureBackfill(appStub(), {
+        scope: RAW_SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+      });
+      await blessScope(RAW_SCOPE);
+
+      const refused = await runCaptureReclaim(appStub(), {
+        scope: RAW_SCOPE,
+        phase: "null-bodies",
+        dryRun: false,
+        confirm: undefined,
+        batch: 100,
+        pauseMs: 0,
+        lockTimeoutMs: 3000,
+        freeBytesOverride: 1,
+      });
+      expect(refused.verdict).toBe("refused");
+      expect(refused.refusals.join(" ")).toMatch(/§9\.2 headroom/);
+      expect(refused.refusals.join(" ")).toMatch(/before the UPDATEs/);
+      // The refusal is BEFORE the mutation: every body is still inline.
+      const intact = await testDb.pool.query<{ n: string }>(
+        "select count(*)::text as n from sync_raw_payloads where response_payload is not null",
+      );
+      expect(Number(intact.rows[0]!.n)).toBe(3);
+    });
 });
 
 describe("B — capture:verify-backfill", () => {
@@ -1004,6 +1419,78 @@ describe("C — capture:reclaim, sync_raw_payloads (the maintenance-rewrite rout
     const result = await rawReclaim({ phase: "null-bodies" });
     expect(result.verdict).toBe("refused");
     expect(result.refusals.join(" ")).toMatch(/still heartbeating/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Decision #223, finding 4 — THE RITUAL THAT ITS OWN GATE REFUSED.
+  //
+  // The runbook stopped `worker` and `scheduler`; the api never stops, so the
+  // check (which refuses on ANY heartbeating instance) refused indefinitely and
+  // the documented ritual could not be performed. The audit found the api is a
+  // capture writer too — it journals an observation on every audited admin
+  // mutation and writes sync_raw_payloads itself on the page-verify route — so
+  // the CHECK is right and the ritual was wrong. These cases pin both halves.
+  describe("the writers-stopped matrix (#223)", () => {
+    async function armRawScope(label: string) {
+      const page = await seedPage(label);
+      await seedRawPayloads(page.id, 2);
+      await runCaptureBackfill(appStub(), {
+        scope: RAW_SCOPE, dryRun: false, batch: 10, pauseMs: 0, maxBatches: 0,
+      });
+      await blessScope(RAW_SCOPE);
+    }
+
+    async function heartbeat(...roles: string[]) {
+      for (const role of roles) {
+        await testDb!.pool.query(
+          `insert into runtime_instances (role, instance_id, started_at, last_seen_at, running)
+           values ($1, $1 || '-1', now(), now(), '{}'::jsonb)`,
+          [role],
+        );
+      }
+    }
+
+    it("REFUSES the documented ritual state: worker+scheduler down, api still up", async (context) => {
+      if (!testDb) return context.skip();
+      await armRawScope("writers-api");
+      // Exactly what `docker compose stop worker scheduler` leaves behind.
+      await heartbeat("api");
+
+      const result = await rawReclaim({ phase: "null-bodies" });
+      expect(result.verdict).toBe("refused");
+      expect(result.detail.activeRuntimeInstances).toEqual(["api/api-1"]);
+      // The refusal must tell the operator the thing that actually works. The
+      // old text said "stop the worker and the scheduler first", which is the
+      // state they were already in.
+      expect(result.refusals.join(" ")).toMatch(/stop api, worker AND scheduler/);
+      expect(result.refusals.join(" ")).toMatch(/capture-historical-rewrite\.md/);
+      // Nothing was nulled while it refused.
+      const intact = await testDb.pool.query<{ n: string }>(
+        "select count(*)::text as n from sync_raw_payloads where response_payload is not null",
+      );
+      expect(Number(intact.rows[0]!.n)).toBe(2);
+    });
+
+    it("proceeds once all three roles are down — the ritual as it now reads", async (context) => {
+      if (!testDb) return context.skip();
+      await armRawScope("writers-none");
+      const result = await rawReclaim({ phase: "null-bodies" });
+      expect(result.refusals).toEqual([]);
+      expect(result.detail.activeRuntimeInstances).toEqual([]);
+      expect(result.detail.nulled).toBe(2);
+    });
+
+    it("still refuses for a stale-but-live heartbeat from any single role", async (context) => {
+      if (!testDb) return context.skip();
+      await armRawScope("writers-each");
+      for (const role of ["api", "worker", "scheduler"]) {
+        await testDb.pool.query("delete from runtime_instances");
+        await heartbeat(role);
+        const result = await rawReclaim({ phase: "null-bodies" });
+        expect(result.verdict, role).toBe("refused");
+        expect(result.refusals.join(" "), role).toMatch(/still heartbeating/);
+      }
+    });
   });
 
   it("rejects a phase that belongs to the other table", async (context) => {

@@ -317,3 +317,12 @@ export {
   hydrationRequestFingerprint,
   toWireHydrationRequest,
 } from "./handlers-hydration.ts";
+/**
+ * #9b's handler, on the barrel because #223 gave it a REFUSAL that only an
+ * integration test against real rows can prove: an observation whose body lives
+ * only in the catalog, with that catalog copy made unreadable, must answer 503
+ * rather than report the body withheld for its restriction class. The route
+ * above is owner-session-authenticated, so reaching it through HTTP would test
+ * the login flow; what is under test is the seam.
+ */
+export { handleAgentObservationPayload } from "./handlers-journal.ts";

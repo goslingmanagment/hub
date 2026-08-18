@@ -14,8 +14,11 @@
 
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { sql } from "drizzle-orm";
+
 import {
   applyCaptureBackfillRef,
+  applyCaptureTypedColumnCatchUp,
   type CaptureBackfillCandidate,
   type CaptureRewriteScope,
   CapturePayloadCodecError,
@@ -27,9 +30,12 @@ import {
   type CaptureRewriteSampleReport,
   canonicalizeCaptureJson,
   countCaptureRewriteDanglingRefs,
+  deriveObservationQueryableFields,
+  deriveRawPayloadTipsSlice,
   ensureCapturePayloadCatalogPartitions,
   latestSettledCaptureRewriteRun,
   listCaptureBackfillCandidates,
+  listCaptureTypedColumnCandidates,
   openCaptureRewriteRun,
   putPayloadObject,
   sampleCaptureRewriteParity,
@@ -37,6 +43,12 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { readDiskFreeBytes } from "../db-disk-alert.ts";
+import {
+  backfillHeadroomVerdict,
+  captureBackfillMidRunVerdict,
+  type HeadroomVerdict,
+} from "./scope.ts";
 
 type Ctx = Pick<AppContext, "db" | "logger">;
 
@@ -59,6 +71,16 @@ export const CAPTURE_BACKFILL_MAX_BATCH = 2000;
  */
 export const CAPTURE_VERIFY_REFUSED_RESCAN_LIMIT = 10_000;
 
+/**
+ * How often the walk re-asks the volume how much room is left.
+ *
+ * Every batch would be a syscall per 200 rows for a number that moves in
+ * minutes, not milliseconds; never would be the bug this constant exists to
+ * close. Ten batches is at most a few thousand rows of exposure between checks
+ * — small beside the floor the check defends.
+ */
+export const CAPTURE_BACKFILL_HEADROOM_RECHECK_BATCHES = 10;
+
 export interface CaptureBackfillOptions {
   scope: CaptureRewriteScope;
   dryRun: boolean;
@@ -66,6 +88,17 @@ export interface CaptureBackfillOptions {
   pauseMs: number;
   /** Maximum batches this invocation may run; 0 = until the scope is done. */
   maxBatches: number;
+  /**
+   * Test seam for the headroom law: the free-bytes reader.
+   *
+   * NOT a drill flag and deliberately NOT reachable from the CLI. `capture:
+   * reclaim`'s `--assume-free-bytes` is the operator-facing drill and #223
+   * confined it to dry runs precisely because a figure typed by a human must
+   * never be what an EXECUTED run's admission gate believes. A test needs to
+   * drive the gate to both verdicts, so it injects the reader instead of
+   * inventing a flag that would also exist in production.
+   */
+  readFreeBytes?: () => Promise<number>;
 }
 
 export interface CaptureBackfillResult {
@@ -94,7 +127,17 @@ export interface CaptureBackfillResult {
    *  pre-created). */
   monthsCreated: string[];
   lastId: number;
-  stoppedBecause: "scope_complete" | "batch_limit";
+  stoppedBecause: "scope_complete" | "batch_limit" | "headroom_exhausted" | "refused";
+  /** #223: rows the typed-column catch-up walked (the slice-1-to-slice-3a
+   *  cohort, which the reference scan cannot see). */
+  typedColumnsScanned: number;
+  /** Of those, the ones whose typed columns this pass actually filled. */
+  typedColumnsFilled: number;
+  /** The §9.1-shaped admission verdict. Null only when the scope's relation
+   *  could not be sized (which is itself a refusal). */
+  headroom: HeadroomVerdict | null;
+  /** Why the run refused to start, or to continue. Empty on a clean pass. */
+  refusals: string[];
 }
 
 export const CAPTURE_BACKFILL_REFUSED_ID_SAMPLE = 25;
@@ -120,6 +163,7 @@ export async function runCaptureBackfill(
   const scopeRef = captureRewriteScopeRef(options.scope);
   const relation = captureRewriteRelation(options.scope);
   const batch = Math.min(CAPTURE_BACKFILL_MAX_BATCH, Math.max(1, options.batch));
+  const readFreeBytes = options.readFreeBytes ?? (() => readDiskFreeBytes());
 
   const census = await censusCaptureRewriteScope(app.db, options.scope);
 
@@ -139,7 +183,35 @@ export async function runCaptureBackfill(
     monthsCreated: [],
     lastId: 0,
     stoppedBecause: "scope_complete",
+    typedColumnsScanned: 0,
+    typedColumnsFilled: 0,
+    headroom: null,
+    refusals: [],
   };
+
+  // ---------------------------------------------------------------------
+  // #223 — THE ADMISSION GATE, and it runs before anything is written.
+  // ---------------------------------------------------------------------
+  // This is a growth-producing act on a disk-starved box, and until #223 it was
+  // the ONLY step of the ritual with no headroom law at all: the observation
+  // check lived at `shadow` and the raw one after `null-bodies`, both of which
+  // run hours later, by which time the bytes are already on the volume.
+  const sizes = await relationSizeBytes(app, relation);
+  if (sizes === null) {
+    result.refusals.push(`${relation} does not exist`);
+  } else {
+    result.headroom = backfillHeadroomVerdict({
+      freeBytes: await readFreeBytes(),
+      sourceTotalBytes: sizes.total,
+      sourceIndexBytes: sizes.indexes,
+      unreferencedFraction: census.rows === 0
+        ? 0
+        : census.unreferencedWithBody / census.rows,
+    });
+    if (!result.headroom.ok) {
+      result.refusals.push(`§9.1 headroom: ${result.headroom.reason}`);
+    }
+  }
 
   if (options.dryRun) {
     // A dry run reports EXACTLY what the real one would touch and writes
@@ -147,9 +219,38 @@ export async function runCaptureBackfill(
     // not happen is the kind of evidence that later gets misread as one that
     // did (which is why latestSettledCaptureRewriteRun filters dry runs out).
     app.logger.info(
-      { scope: scopeRef, relation, wouldStamp: census.unreferencedWithBody },
+      {
+        scope: scopeRef,
+        relation,
+        wouldStamp: census.unreferencedWithBody,
+        wouldFillTypedColumns: census.typedColumnGaps,
+        headroom: result.headroom,
+      },
       "capture:backfill dry run",
     );
+    if (result.refusals.length > 0) {
+      result.stoppedBecause = "refused";
+    }
+    return result;
+  }
+
+  if (result.refusals.length > 0) {
+    // A refusal before the first write leaves a tombstone that says so — unlike
+    // a dry run, an EXECUTED invocation happened, and "I was asked and I said
+    // no" is exactly the kind of evidence the journal exists to hold.
+    result.stoppedBecause = "refused";
+    const runId = await openCaptureRewriteRun(app.db, {
+      operation: "backfill",
+      scope: options.scope,
+      dryRun: false,
+      summary: { relation, censusAtStart: census },
+    });
+    result.runId = runId;
+    await settleCaptureRewriteRun(app.db, {
+      id: runId,
+      verdict: "refused",
+      summary: backfillSummary(result),
+    });
     return result;
   }
 
@@ -167,6 +268,13 @@ export async function runCaptureBackfill(
     for (;;) {
       if (options.maxBatches > 0 && result.batches >= options.maxBatches) {
         result.stoppedBecause = "batch_limit";
+        break;
+      }
+      if (
+        result.batches > 0
+        && result.batches % CAPTURE_BACKFILL_HEADROOM_RECHECK_BATCHES === 0
+        && !(await stillHasHeadroom(app, readFreeBytes, result))
+      ) {
         break;
       }
 
@@ -206,9 +314,13 @@ export async function runCaptureBackfill(
       }
     }
 
+    if (result.stoppedBecause === "scope_complete") {
+      await runTypedColumnCatchUp(app, options, batch, readFreeBytes, result);
+    }
+
     await settleCaptureRewriteRun(app.db, {
       id: result.runId,
-      verdict: "ok",
+      verdict: result.refusals.length === 0 ? "ok" : "refused",
       summary: backfillSummary(result),
     });
   } catch (error) {
@@ -239,7 +351,116 @@ function backfillSummary(result: CaptureBackfillResult): Record<string, unknown>
     monthsCreated: result.monthsCreated,
     lastId: result.lastId,
     stoppedBecause: result.stoppedBecause,
+    typedColumnsScanned: result.typedColumnsScanned,
+    typedColumnsFilled: result.typedColumnsFilled,
+    headroom: result.headroom,
+    refusals: result.refusals,
   };
+}
+
+/** `pg_total_relation_size` / `pg_indexes_size` for one relation in `public`,
+ *  or null when it is not there. The reclaim has the same reader; this one is
+ *  the backfill's, because the two files are deliberately separable (additive
+ *  vs destructive) and a shared private helper would tie them together for four
+ *  lines of SQL. */
+async function relationSizeBytes(
+  app: Ctx,
+  relation: string,
+): Promise<{ total: number; indexes: number } | null> {
+  const rows = await app.db.execute<{ total: string; indexes: string }>(sql`
+    select pg_total_relation_size(c.oid)::text as total,
+           pg_indexes_size(c.oid)::text as indexes
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = ${relation}
+  `);
+  const row = rows.rows[0];
+  return row === undefined ? null : { total: Number(row.total), indexes: Number(row.indexes) };
+}
+
+/** The mid-run half of the headroom law. Records the refusal and the stop
+ *  reason on the result; the caller breaks out of its loop on `false`. */
+async function stillHasHeadroom(
+  app: Ctx,
+  readFreeBytes: () => Promise<number>,
+  result: CaptureBackfillResult,
+): Promise<boolean> {
+  const verdict = captureBackfillMidRunVerdict(await readFreeBytes());
+  if (verdict.ok) {
+    return true;
+  }
+  result.stoppedBecause = "headroom_exhausted";
+  result.refusals.push(`§9.1 headroom: ${verdict.reason}`);
+  app.logger.warn(
+    { scope: result.scopeRef, reason: verdict.reason, lastId: result.lastId },
+    "capture:backfill stopped mid-walk: the volume reached the floor",
+  );
+  return false;
+}
+
+/**
+ * THE SECOND SCAN: rows that already carry a reference and are missing a typed
+ * column the derivation would fill (decision #223).
+ *
+ * It runs only after the reference walk has reported `scope_complete`, and for
+ * the same reason the reference walk is paced: this is the same UPDATE cost on
+ * the same tables, and doing both at once would double the WAL rate an operator
+ * carefully chose a `--batch` and a `--pause-ms` for. It is resumable with no
+ * cursor by exactly the property the first walk has — a filled row stops
+ * matching the predicate — so an interrupted run is simply a shorter one.
+ */
+async function runTypedColumnCatchUp(
+  app: Ctx,
+  options: CaptureBackfillOptions,
+  batch: number,
+  readFreeBytes: () => Promise<number>,
+  result: CaptureBackfillResult,
+): Promise<void> {
+  let afterId = 0;
+  for (;;) {
+    if (options.maxBatches > 0 && result.batches >= options.maxBatches) {
+      result.stoppedBecause = "batch_limit";
+      return;
+    }
+    if (
+      result.batches > 0
+      && result.batches % CAPTURE_BACKFILL_HEADROOM_RECHECK_BATCHES === 0
+      && !(await stillHasHeadroom(app, readFreeBytes, result))
+    ) {
+      return;
+    }
+
+    const candidates = await listCaptureTypedColumnCandidates(app.db, {
+      scope: options.scope,
+      afterId,
+      limit: batch,
+    });
+    if (candidates.length === 0) {
+      return;
+    }
+
+    result.batches += 1;
+    for (const candidate of candidates) {
+      afterId = candidate.id;
+      result.typedColumnsScanned += 1;
+      if (await applyCaptureTypedColumnCatchUp(app.db, { scope: options.scope, candidate })) {
+        result.typedColumnsFilled += 1;
+      }
+    }
+
+    app.logger.info(
+      {
+        scope: result.scopeRef,
+        typedColumnsScanned: result.typedColumnsScanned,
+        typedColumnsFilled: result.typedColumnsFilled,
+        lastId: afterId,
+      },
+      "capture:backfill typed-column catch-up batch",
+    );
+    if (options.pauseMs > 0) {
+      await sleep(options.pauseMs);
+    }
+  }
 }
 
 /**
@@ -489,6 +710,114 @@ export async function runCaptureVerifyBackfill(
   });
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// The typed-column completeness proof (decision #223)
+
+/**
+ * Above this many typed-column gaps the reclaim stops trying to prove anything
+ * and just says "run the backfill". Same bound, same reasoning as
+ * CAPTURE_VERIFY_REFUSED_RESCAN_LIMIT: the honest per-row check is affordable
+ * when the remainder is what it should be (zero, or a handful of pathological
+ * bodies) and pointless when the remainder is a catch-up that was never run.
+ */
+export const CAPTURE_TYPED_COLUMN_RESCAN_LIMIT = 10_000;
+
+export interface TypedColumnGapProof {
+  /** The census count — rows matching the SQL derivability mirror. */
+  counted: number;
+  /** Rows this proof actually walked and re-derived. */
+  walked: number;
+  /** Of those, the ones the TypeScript derivation really does fill. ANY is
+   *  fatal to a phase that removes bodies. */
+  derivable: number;
+  /** Bounded sample, so the owner can look at one. */
+  derivableIds: number[];
+  /** True when `counted` was over the rescan bound and nothing was walked. */
+  overRescanBound: boolean;
+}
+
+/**
+ * PROVE, don't infer — the same rule verify applies to codec refusals.
+ *
+ * The census predicate is a MIRROR of the derivation written in SQL, and a
+ * mirror can be wrong in one direction: `jsonb_typeof` says `number` for a
+ * literal like `1e999`, which `JSON.parse` hands back as `Infinity` and
+ * `jsonMemberText` therefore renders as NULL. Such a row would match the census
+ * filter forever and the catch-up would fill nothing — a permanent refusal
+ * built out of a value nobody can do anything about.
+ *
+ * So the count is the CHEAP SCREEN and this walk is the VERDICT: each counted
+ * row is re-derived in the same TypeScript the capture path runs, and only a row
+ * that really does produce a value it is missing can refuse a reclaim.
+ */
+export async function proveCaptureTypedColumnGaps(
+  app: Ctx,
+  scope: CaptureRewriteScope,
+  counted: number,
+): Promise<TypedColumnGapProof> {
+  const proof: TypedColumnGapProof = {
+    counted,
+    walked: 0,
+    derivable: 0,
+    derivableIds: [],
+    overRescanBound: false,
+  };
+  if (counted === 0) {
+    return proof;
+  }
+  if (counted > CAPTURE_TYPED_COLUMN_RESCAN_LIMIT) {
+    proof.overRescanBound = true;
+    proof.derivable = counted;
+    return proof;
+  }
+
+  let afterId = 0;
+  for (;;) {
+    const candidates = await listCaptureTypedColumnCandidates(app.db, {
+      scope,
+      afterId,
+      limit: 500,
+    });
+    if (candidates.length === 0) {
+      return proof;
+    }
+    for (const candidate of candidates) {
+      afterId = candidate.id;
+      proof.walked += 1;
+      if (!derivationFillsSomething(scope, candidate)) {
+        continue;
+      }
+      proof.derivable += 1;
+      if (proof.derivableIds.length < UNEXPLAINED_ID_SAMPLE) {
+        proof.derivableIds.push(candidate.id);
+      }
+    }
+  }
+}
+
+/** Whether the slice-3a derivation returns anything at all for this candidate.
+ *  The candidate only reaches here because SQL believes one of its typed
+ *  columns is null and fillable, so "the derivation produces a value" is the
+ *  whole question. */
+function derivationFillsSomething(
+  scope: CaptureRewriteScope,
+  candidate: CaptureBackfillCandidate,
+): boolean {
+  if (scope.table === "sync_raw_payloads") {
+    return deriveRawPayloadTipsSlice({
+      endpoint: candidate.derivationA,
+      payloadKind: candidate.derivationB,
+      responsePayload: candidate.payload,
+    }) !== undefined;
+  }
+  const fields = deriveObservationQueryableFields({
+    producer: candidate.derivationA,
+    kind: candidate.derivationB,
+    payload: candidate.payload,
+  });
+  return Object.values(fields).some((value) => value !== null);
 }
 
 const UNEXPLAINED_ID_SAMPLE = 10;
