@@ -7,7 +7,12 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, verifyCapturePayloadParity } from "@agency_hub_core/db";
+import {
+  censusCapturePayloadDanglingRefs,
+  createFanslyPage,
+  createModel,
+  verifyCapturePayloadParity,
+} from "@agency_hub_core/db";
 
 import {
   getCaptureCasDualWriteCounters,
@@ -405,5 +410,106 @@ describe("capture payload parity verifier", () => {
       envelope: "raw_payload",
       reason: "object_missing",
     });
+  });
+
+  // Decision #222 — the standing dangling-reference census and its own latch.
+  // The parity sample above only notices a hole if the hole happens to fall in
+  // the sample AND the row still has an inline body to compare; since #220
+  // neither is guaranteed, so the census counts references directly.
+  async function danglingIncident() {
+    const rows = await testDb!.pool.query<{ status: string; error_summary: string | null }>(
+      `select status, error_summary from notification_incidents
+       where incident_key = 'capture_payload_parity:global:dangling_reference'`,
+    );
+    return rows.rows[0] ?? null;
+  }
+
+  it("censuses zero dangling references on a clean seed, canary on or off", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Empty database: nothing referenced, nothing dangling. This is the shape
+    // the check must report for production today.
+    expect(await censusCapturePayloadDanglingRefs(testDb.db)).toMatchObject({
+      referenced: 0,
+      dangling: 0,
+      samples: [],
+    });
+
+    const page = await seedPage();
+    publishCaptureCasDualWritePages(String(page.id));
+    await capture(page.id, BODY);
+    await capture(page.id, { other: ["shape", 2, null] }, "transactions");
+
+    // Two captures × two envelopes, every one of them referencing a live object.
+    const census = await censusCapturePayloadDanglingRefs(testDb.db);
+    expect(census.referenced).toBe(4);
+    expect(census.dangling).toBe(0);
+
+    const result = await runCapturePayloadParityCheck(appStub());
+    expect(result.danglingRefs.dangling).toBe(0);
+    expect(result.danglingRefs.referenced).toBe(4);
+    expect(await danglingIncident()).toBeNull();
+  });
+
+  it("pages under its own subKey for a reference into a hole, and only a zero clears it", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedPage();
+    publishCaptureCasDualWritePages(String(page.id));
+    await capture(page.id, BODY);
+    await testDb.pool.query(
+      "update sync_raw_payloads set payload_object_id = payload_object_id + 10_000",
+    );
+
+    // Measured on EVERY pass: the canary goes off and the page stands, because
+    // a reference into a hole is a durable row and not a sample.
+    resetCaptureCasDualWriteForTests();
+    const offPass = await runCapturePayloadParityCheck(appStub());
+    expect(offPass.skipped).toBe(true);
+    expect(offPass.danglingRefs.dangling).toBe(1);
+    const incident = await danglingIncident();
+    expect(incident?.status).toBe("open");
+    expect(incident?.error_summary).toContain("catalog row that does not exist");
+    expect(incident?.error_summary).toContain("cannot be read");
+
+    // A clean PARITY sample does not clear it — different condition, different
+    // latch, the same split #219 gave the collision census.
+    publishCaptureCasDualWritePages(String(page.id));
+    const stillOpen = await runCapturePayloadParityCheck(appStub());
+    expect(stillOpen.mismatched).toBeGreaterThanOrEqual(0);
+    expect((await danglingIncident())?.status).toBe("open");
+
+    // Only the reference being made whole again resolves it.
+    await testDb.pool.query(
+      "update sync_raw_payloads set payload_object_id = payload_object_id - 10_000",
+    );
+    const cleared = await runCapturePayloadParityCheck(appStub());
+    expect(cleared.danglingRefs.dangling).toBe(0);
+    expect((await danglingIncident())?.status).toBe("resolved");
+  });
+
+  it("reports the window it measured, so a zero is never read as more than it is", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedPage();
+    publishCaptureCasDualWritePages(String(page.id));
+    await capture(page.id, BODY);
+
+    // The census walks the newest N rows per envelope table. A window of one
+    // reaches one row of each — the bound is real, and it travels in the report
+    // exactly so that nobody reads "zero" as "zero anywhere in history".
+    const narrow = await censusCapturePayloadDanglingRefs(testDb.db, { scanLimit: 1 });
+    expect(narrow.scanLimit).toBe(1);
+    expect(narrow.referenced).toBe(2);
+    expect(narrow.dangling).toBe(0);
   });
 });

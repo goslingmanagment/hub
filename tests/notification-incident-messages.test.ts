@@ -71,6 +71,37 @@ describe("resolveMessageForIncident", () => {
     ).toContain("link-stats reconcile recovered");
   });
 
+  // #222. Three conditions share the `capture_payload_parity` kind and none of
+  // them shares a latch, so none of them may share a resolve line either: an
+  // owner reading "copies match again" while a reference still points at
+  // nothing would be reading an all-clear that nobody measured.
+  it("each capture_payload_parity subKey resolves with its own text", () => {
+    const parity = resolveMessageForIncident({
+      kind: "capture_payload_parity",
+      pageLabel: null,
+      platform: null,
+    });
+    const collision = resolveMessageForIncident({
+      kind: "capture_payload_parity",
+      pageLabel: null,
+      platform: null,
+      subKey: "sha256_collision",
+    });
+    const dangling = resolveMessageForIncident({
+      kind: "capture_payload_parity",
+      pageLabel: null,
+      platform: null,
+      subKey: "dangling_reference",
+    });
+
+    expect(parity).toContain("copies match the inline facts again");
+    expect(collision).toContain("sha256 collisions cleared");
+    expect(dangling).toContain("references all resolve again");
+    // …and each one says what it does NOT clear.
+    expect(dangling).toContain("in the measured window");
+    expect(new Set([parity, collision, dangling]).size).toBe(3);
+  });
+
   it("reader-first AI incident kinds have explicit recovery texts", () => {
     expect(
       resolveMessageForIncident({

@@ -556,6 +556,58 @@ async function insertLocation(
   `);
 }
 
+/**
+ * PROVE — AND HOLD — that a catalog object is still alive, for the rest of the
+ * caller's transaction. The other half of the protocol in
+ * `deleteUnreferencedCapturePayloadObjects`, and the reason a stamped reference
+ * can no longer outlive the object it addresses (decision #222).
+ *
+ * THE HOLE THIS CLOSES. Between the CAS transaction committing (which is where
+ * `putPayloadObject` hands back a reference — often to an object it DEDUPED
+ * onto, so that transaction wrote nothing at all) and the envelope insert that
+ * stamps that reference, the object is referenced by nobody. An erasure sweep
+ * running in that gap proves "no envelope references this" — correctly, at that
+ * instant — and deletes the body. The envelope then lands carrying a reference
+ * to a row that is gone. Under #215 that was a dangling reference and no worse,
+ * because the envelope still carried the body inline; #220 removed that premise
+ * for a pointer-only page and turned the same race into a LOST CAPTURED FACT.
+ *
+ * WHY A ROW LOCK, AND WHY THIS ONE. `FOR KEY SHARE` is precisely the lock a
+ * FOREIGN KEY would take on the parent row, taken by hand, at the one moment it
+ * is needed. #215 rejected the FK itself and every word of that rejection still
+ * holds — an FK taxes the hottest write path with index maintenance, locks the
+ * catalog's future partition maintenance, and would have to validate all of
+ * history. NONE of that is true of this: no DDL, no index (the catalog's own
+ * primary key serves the probe), no history to validate, and it costs exactly
+ * one uncontended row lock, only on captures that actually carry a reference.
+ * It conflicts with `FOR UPDATE` and with DELETE and with nothing else, so two
+ * concurrent captures deduping onto the same body never wait on each other.
+ *
+ * IT MUST RUN IN THE SAME TRANSACTION AS THE ENVELOPE INSERT — a transaction-
+ * scoped lock released before the insert would prove nothing about the moment
+ * the row becomes visible. Both writers (`insertObservation`, `insertRawPayload`)
+ * arrange exactly that.
+ *
+ * FALSE means the object is GONE and the caller must write the envelope with NO
+ * reference and WITH its inline body. That is not a failure path to be retried:
+ * it is the pre-G5 state of a capture, reached deliberately, and it keeps
+ * #220's law ("the worst case is both copies, never none") true through an
+ * erasure.
+ */
+export async function lockCapturePayloadRefAlive(
+  db: Database,
+  ref: CapturePayloadRef,
+): Promise<boolean> {
+  const rows = await db.execute<{ object_id: string }>(sql`
+    select o.object_id::text as object_id
+    from capture_payload_objects o
+    where o.bucket_month = ${ref.bucketMonth}::date
+      and o.object_id = ${ref.objectId}
+    for key share
+  `);
+  return rows.rows.length > 0;
+}
+
 /** The catalog row for one object, with its current physical tier. */
 export async function getPayloadObject(
   db: Database,

@@ -19,7 +19,11 @@ import { PgTransaction } from "drizzle-orm/pg-core";
 import { deriveObservationQueryableFields } from "../capture-queryable-fields.ts";
 import type { Database } from "../client.ts";
 import type { ObservationSource } from "../schema.ts";
-import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
+import {
+  type CapturePayloadRef,
+  capturePayloadRefFromColumns,
+  lockCapturePayloadRefAlive,
+} from "./capture-payloads.ts";
 
 export interface ObservationInsertInput {
   source: ObservationSource;
@@ -61,6 +65,13 @@ export interface ObservationInsertInput {
    * ignored, because no row is written — and the pre-existing row must keep its
    * own references. Stamping it with ours would assert that its inline payload
    * equals the body we just stored, which nothing has proven.
+   *
+   * DECISION #222: a reference is stamped only if the object it addresses is
+   * still there, proved under a `FOR KEY SHARE` lock held until this insert
+   * commits. If an erasure took the object in the meantime the reference is
+   * DROPPED, the inline body is written instead, and the result reports
+   * `payloadRefVanished`. A caller therefore cannot mint a dangling reference
+   * here even by handing over a stale one.
    */
   payloadRef?: { bucketMonth: string; objectId: number } | null;
   /**
@@ -82,9 +93,16 @@ export interface ObservationInsertInput {
 export type ObservationInsertResult =
   /** receivedAt is the journal row's received_at — on the duplicate path it
    * is the EXISTING key's received_at (partition-exact), so an immediate
-   * projector can stamp with the (id, received_at) pair, never new Date(). */
-  | { inserted: true; observationId: number; receivedAt: Date }
-  | { inserted: false; observationId: number; receivedAt: Date };
+   * projector can stamp with the (id, received_at) pair, never new Date().
+   *
+   * `payloadRefVanished` (decision #222) is true when a `payloadRef` was
+   * supplied and the catalog object it addressed was GONE by the time this row
+   * was written — an erasure sweep took it in the gap between the CAS commit
+   * and this insert. The row was then written with NO reference and WITH its
+   * inline body, so the fact is intact; the flag exists so the capture seam can
+   * count how often the race actually happens. */
+  | { inserted: true; observationId: number; receivedAt: Date; payloadRefVanished: boolean }
+  | { inserted: false; observationId: number; receivedAt: Date; payloadRefVanished: boolean };
 
 export async function insertObservation(
   db: Database,
@@ -146,6 +164,9 @@ async function claimAndJournal(
       inserted: false,
       observationId: Number(existing.rows[0]!.observation_id),
       receivedAt: new Date(existing.rows[0]!.received_at),
+      // No row is written on this path, so no reference is stamped and there is
+      // nothing for the liveness lock below to prove.
+      payloadRefVanished: false,
     };
   }
 
@@ -169,8 +190,24 @@ async function claimAndJournal(
   // the ORDER: `queryable` above is already derived from `input.payload`, so the
   // typed columns of slice 3a are computed from the object BEFORE any decision
   // about where that object's bytes are stored.
-  const omitInlinePayload = input.omitInlinePayload === true &&
-    input.payloadRef !== undefined && input.payloadRef !== null;
+  //
+  // G5 review fix (decision #222). The reference is stamped only while a
+  // `FOR KEY SHARE` lock on the catalog row is HELD — taken here, released when
+  // this transaction commits, which is the same instant this row becomes
+  // visible. An erasure sweep that wants to delete that object has to take
+  // `FOR UPDATE` on it first, so the two acts are now strictly ordered: either
+  // the sweep waits for this insert and then SEES the reference (and keeps the
+  // body), or it went first and this probe finds the object gone.
+  //
+  // Gone means the reference is dropped and the INLINE body is written instead
+  // — the pre-G5 shape of a capture, which is always legal and always readable.
+  // A pointer-only caller does not get to skip a body that no longer has a
+  // catalog copy to point at.
+  const payloadRef = input.payloadRef ?? null;
+  const payloadRefVanished = payloadRef !== null
+    && !(await lockCapturePayloadRefAlive(db, payloadRef));
+  const liveRef = payloadRefVanished ? null : payloadRef;
+  const omitInlinePayload = input.omitInlinePayload === true && liveRef !== null;
   await db.execute(sql`
     insert into observations (
       id, source, producer, platform, account_id, native_account_ref, kind,
@@ -191,8 +228,8 @@ async function claimAndJournal(
       ${input.observedAt ?? null},
       ${receivedAt},
       ${input.actorPrincipalId ?? null},
-      ${input.payloadRef?.bucketMonth ?? null}::date,
-      ${input.payloadRef?.objectId ?? null},
+      ${liveRef?.bucketMonth ?? null}::date,
+      ${liveRef?.objectId ?? null},
       ${queryable.harvestMachineId},
       ${queryable.harvestTxId},
       ${queryable.harvestTxAmount},
@@ -200,7 +237,7 @@ async function claimAndJournal(
     )
   `);
 
-  return { inserted: true, observationId, receivedAt };
+  return { inserted: true, observationId, receivedAt, payloadRefVanished };
 }
 
 /** Sequential batch insert; observations are small and producers batch lightly. */

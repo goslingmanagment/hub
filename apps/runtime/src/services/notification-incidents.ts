@@ -69,6 +69,13 @@ function openTitleForIncident(
   if (input.kind === "capture_payload_parity" && input.subKey === "sha256_collision") {
     return "🚨 Capture payload sha256 collision";
   }
+  // #222. The most consequential of the three conditions under this kind since
+  // #220: a reference into a hole on a row with no inline body is a captured
+  // fact nobody can read, which is a different emergency from "the two copies
+  // disagree" and must not open under that title.
+  if (input.kind === "capture_payload_parity" && input.subKey === "dangling_reference") {
+    return "🚨 Capture payload reference points at nothing";
+  }
   switch (input.kind) {
     case "auth_blocked":
       return "🚨 Auth failed";
@@ -189,14 +196,19 @@ function resolveDetailForIncident(
     case "ai_provider_failed":
       return "AI provider generation recovered";
     case "capture_payload_parity":
-      // Two conditions share this kind and NOT its latch (G5 slice 3b, the
-      // db_disk_usage runway shape from #213): a clean parity sample says
-      // nothing about whether a digest is unique again, and vice versa. Each
-      // resolve line names the condition that actually cleared, so neither can
-      // be read as a catalog-wide all-clear.
+      // THREE conditions share this kind and NOT its latch (G5 slice 3b and
+      // #222, the db_disk_usage runway shape from #213): a clean parity sample
+      // says nothing about whether a digest is unique again, and neither says
+      // anything about whether a reference resolves. Each resolve line names the
+      // condition that actually cleared, so none can be read as a catalog-wide
+      // all-clear.
       if (input.subKey === "sha256_collision") {
         return "Capture payload sha256 collisions cleared (no object carries a collision ordinal); "
           + "the inline-copy parity latch is unaffected";
+      }
+      if (input.subKey === "dangling_reference") {
+        return "Capture payload references all resolve again (none point at a missing catalog row) "
+          + "in the measured window; the parity and sha256 collision latches are unaffected";
       }
       return "Capture payload copies match the inline facts again; "
         + "the sha256 collision latch is unaffected";

@@ -11,16 +11,26 @@
 // that silently reconciled a captured fact with a derived copy of itself would
 // be the exact anti-pattern DP 7 forbids.
 //
-// COST WHEN THE CANARY IS OFF: zero. With no page in
-// `capture_cas_dual_write_pages` there is nothing to verify, so the job returns
-// without touching the database at all — and without touching the incident
-// latch either, because "not measured" is not the same state as "measured and
-// clean" (the same asymmetry the disk runway latches use). Turning the canary
-// off after a real mismatch must not clear the alarm.
+// COST WHEN THE CANARY IS OFF: the PARITY half is zero. With no page in
+// `capture_cas_dual_write_pages` there is nothing to verify, so it samples
+// nothing — and touches no incident latch either, because "not measured" is not
+// the same state as "measured and clean" (the same asymmetry the disk runway
+// latches use). Turning the canary off after a real mismatch must not clear the
+// alarm.
+//
+// TWO CHECKS DELIBERATELY DO RUN ON EVERY PASS, canary or no canary, because
+// what they count is a DURABLE ROW rather than a sample: the sha256 collision
+// census (#219) and, since #222, the dangling-reference census. Rolling a flag
+// back does not un-collide a digest or re-attach a body to a reference that
+// points at nothing, so gating them on the canary would silently clear an
+// integrity page by flipping a switch. Each owns its own subKey and its own
+// lifecycle under the shared `capture_payload_parity` kind.
 
 import {
   CAPTURE_PAYLOAD_PARITY_DEFAULT_LIMIT,
+  type CapturePayloadDanglingRefCensus,
   type CapturePayloadParityReport,
+  censusCapturePayloadDanglingRefs,
   countCapturePayloadCollisions,
   verifyCapturePayloadParity,
 } from "@agency_hub_core/db";
@@ -54,6 +64,26 @@ export const CAPTURE_PAYLOAD_PARITY_QUEUE = "capture.payload.parity.verify";
  */
 export const CAPTURE_PAYLOAD_COLLISION_SUBKEY = "sha256_collision";
 
+/**
+ * The THIRD condition this job latches, under the same kind and its own subKey
+ * (decision #222).
+ *
+ * A dangling reference — an envelope whose `payload_object_id` addresses a
+ * catalog row that is not there — is an integrity FACT about stored rows, not a
+ * sample statistic, so it gets the `sha256_collision` treatment rather than the
+ * parity treatment: measured on every pass whether or not the canary is on,
+ * resolvable only by a zero count, never by a clean parity sample. Sharing the
+ * collision latch would be worse than either: a digest that stopped being unique
+ * and a reference into a hole are different problems with different remedies,
+ * and one going quiet must not read as the other going quiet.
+ *
+ * Since #220 this is also the most consequential of the three. A dangling
+ * reference on a row that still carries its inline body is a lie the reader
+ * fails open from; on a pointer-only row it is a captured fact that cannot be
+ * read at all.
+ */
+export const CAPTURE_PAYLOAD_DANGLING_REF_SUBKEY = "dangling_reference";
+
 export interface CapturePayloadParityCheckResult extends CapturePayloadParityReport {
   /** The canary bound this pass ran under (''=off). */
   dualWritePages: string;
@@ -62,6 +92,9 @@ export interface CapturePayloadParityCheckResult extends CapturePayloadParityRep
   /** Catalog objects carrying a non-zero collision_ordinal. Measured on EVERY
    *  pass, canary or no canary — see runCapturePayloadParityCheck. */
   collisions: number;
+  /** Envelope references pointing at an absent catalog row, over a bounded
+   *  window of the head of both envelope tables. Also measured on every pass. */
+  danglingRefs: CapturePayloadDanglingRefCensus;
   checkedAt: Date;
 }
 
@@ -139,12 +172,66 @@ async function checkCapturePayloadCollisions(
   return collisions;
 }
 
+/**
+ * The dangling-reference half, and it runs on EVERY pass for the same reason
+ * the collision half does: the rows it counts are durable. Rolling the canary
+ * back or putting the read mode on `inline` does not re-attach a body to a
+ * reference that points at nothing — and since #220 those are exactly the
+ * configurations an operator reaches for when they are worried, which is the
+ * worst possible moment for this check to go silent.
+ *
+ * The window is bounded (see `censusCapturePayloadDanglingRefs`) and travels in
+ * both the log line and the incident text, so the owner reads "zero in the last
+ * N rows of each table", never an unearned "zero anywhere".
+ */
+async function checkCapturePayloadDanglingRefs(
+  app: Pick<AppContext, "config" | "db" | "logger">,
+  checkedAt: Date,
+  scanLimit?: number,
+): Promise<CapturePayloadDanglingRefCensus> {
+  const census = await censusCapturePayloadDanglingRefs(
+    app.db,
+    scanLimit === undefined ? undefined : { scanLimit },
+  );
+  if (census.dangling > 0) {
+    const samples = census.samples
+      .map((entry) => `${entry.envelope}#${entry.envelopeId}->${entry.bucketMonth}/${entry.objectId}`)
+      .join("; ");
+    app.logger.warn(
+      { dangling: census.dangling, referenced: census.referenced, samples: census.samples },
+      "Capture payload references point at catalog rows that are not there",
+    );
+    await notifyOfapiGlobalIncident(app, {
+      kind: "capture_payload_parity",
+      subKey: CAPTURE_PAYLOAD_DANGLING_REF_SUBKEY,
+      errorSummary:
+        `${census.dangling} of ${census.referenced} recent capture payload reference(s) address a `
+        + `catalog row that does not exist (window: newest ${census.scanLimit} rows per envelope `
+        + "table); a row with no inline body and a dangling reference is a captured fact that "
+        + `cannot be read${samples.length > 0 ? `; samples: ${samples}` : ""}`,
+      occurredAt: checkedAt,
+    });
+  } else {
+    await resolveOfapiGlobalIncident(app, {
+      kind: "capture_payload_parity",
+      subKey: CAPTURE_PAYLOAD_DANGLING_REF_SUBKEY,
+      recoveredAt: checkedAt,
+    });
+  }
+  return census;
+}
+
 export async function runCapturePayloadParityCheck(
   app: Pick<AppContext, "config" | "db" | "logger">,
-  options?: { now?: Date; limit?: number; scanLimit?: number },
+  options?: { now?: Date; limit?: number; scanLimit?: number; danglingScanLimit?: number },
 ): Promise<CapturePayloadParityCheckResult> {
   const checkedAt = options?.now ?? new Date();
   const collisions = await checkCapturePayloadCollisions(app, checkedAt);
+  const danglingRefs = await checkCapturePayloadDanglingRefs(
+    app,
+    checkedAt,
+    options?.danglingScanLimit,
+  );
   const dualWritePages = getCaptureCasDualWritePages();
   if (dualWritePages.trim().length === 0) {
     // The canary is off, so there is nothing to verify and the latch is left
@@ -172,6 +259,8 @@ export async function runCapturePayloadParityCheck(
         pointerOnlyPages: getCaptureCasPointerOnlyPages(),
         readMode: getCaptureCasReadMode(),
         readCounters,
+        danglingRefs: danglingRefs.dangling,
+        danglingRefsScanned: danglingRefs.referenced,
       }, "Capture payload parity check skipped (dual-write canary off); read counters only");
     }
     return {
@@ -183,6 +272,7 @@ export async function runCapturePayloadParityCheck(
       skippedNullInline: 0,
       mismatches: [],
       collisions,
+      danglingRefs,
       checkedAt,
     };
   }
@@ -209,6 +299,9 @@ export async function runCapturePayloadParityCheck(
     mismatched: report.mismatched,
     skippedNullInline: report.skippedNullInline,
     collisions,
+    danglingRefs: danglingRefs.dangling,
+    danglingRefsScanned: danglingRefs.referenced,
+    danglingRefsScanLimit: danglingRefs.scanLimit,
     writeCounters: getCaptureCasDualWriteCounters(),
     readCounters: getCaptureCasReadCounters(),
     ...(report.mismatches.length > 0 ? { mismatches: report.mismatches } : {}),
@@ -230,5 +323,5 @@ export async function runCapturePayloadParityCheck(
     });
   }
 
-  return { ...report, dualWritePages, skipped: false, collisions, checkedAt };
+  return { ...report, dualWritePages, skipped: false, collisions, danglingRefs, checkedAt };
 }

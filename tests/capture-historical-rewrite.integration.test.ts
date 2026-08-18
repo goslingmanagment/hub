@@ -26,6 +26,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+
+import type { PoolClient } from "pg";
 
 import {
   censusCaptureRewriteScope,
@@ -692,6 +695,91 @@ describe("C — capture:reclaim, observations", () => {
        where received_at >= '2026-07-01' and received_at < '2026-08-01'`,
     );
     expect(Number(rows.rows[0]!.n)).toBe(6);
+  });
+
+  // Decision #222, finding 2. The precondition checks and the row counts used
+  // to be the LAST word, and both were read outside the swap transaction. An
+  // erasure committing in the gap — while the swap waited for its locks — would
+  // leave the swap parking a post-erasure source and attaching a PRE-erasure
+  // shadow: every erased row back, through the door the G3 fence does not watch.
+  //
+  // Both cases below hold the swap on its `LOCK TABLE` and move the world under
+  // it, which is exactly the interleaving. The assertion is always the same:
+  // REFUSED, and refused means nothing was touched.
+  async function swapBlockedBy<T>(act: (holder: PoolClient) => Promise<T>) {
+    const holder = await testDb!.pool.connect();
+    await holder.query("begin");
+    // ACCESS SHARE on the parent and its partitions: enough to make the swap's
+    // ACCESS EXCLUSIVE wait, which is the whole point.
+    await holder.query("select 1 from observations limit 1");
+
+    const swapping = reclaim({ phase: "swap", confirm: PARTITION, lockTimeoutMs: 15_000 });
+    await sleep(700);
+    try {
+      await act(holder);
+      await holder.query("commit");
+    } finally {
+      holder.release();
+    }
+    return swapping;
+  }
+
+  it("REFUSES under lock when an erasure deleted rows while the swap waited", async (context) => {
+    if (!testDb) return context.skip();
+    await backfilledAndBlessed("rc-swap-race");
+    await reclaim({ phase: "shadow" });
+
+    // Counts agree right now — 6 and 6 — which is what the pre-lock check saw.
+    const swap = await swapBlockedBy(async (holder) => {
+      await holder.query(
+        `delete from "${PARTITION}" where id = (select max(id) from "${PARTITION}")`,
+      );
+    });
+    const result = await swap;
+
+    expect(result.verdict).toBe("refused");
+    expect(result.refusals.join(" ")).toMatch(/under lock the shadow holds 6 rows/);
+    expect(result.refusals.join(" ")).toMatch(/rebuild the shadow/);
+    expect(result.detail.lockedSourceRows).toBe(5);
+    expect(result.detail.lockedShadowRows).toBe(6);
+
+    // NOTHING happened: the original is still the attached partition, the
+    // shadow is still a detached twin, and no copy was parked.
+    expect(await isAttachedToObservations(PARTITION)).toBe(true);
+    expect(await isAttachedToObservations("observations_2026_07__skinny")).toBe(false);
+    expect(await listCaptureParkedRelations(appStub())).toHaveLength(0);
+    const live = await testDb.pool.query<{ n: string }>(
+      `select count(*)::text as n from "${PARTITION}"`,
+    );
+    expect(Number(live.rows[0]!.n)).toBe(5);
+  });
+
+  it("REFUSES under lock when an erasure started while the swap waited", async (context) => {
+    if (!testDb) return context.skip();
+    await backfilledAndBlessed("rc-swap-erasure");
+    await reclaim({ phase: "shadow" });
+    const user = await testDb.pool.query<{ id: string }>(
+      `insert into users (username, password_hash, role) values ('owner-swap', 'x', 'owner')
+       returning id::text as id`,
+    );
+
+    // An erasure that has OPENED but not yet committed its deletes is invisible
+    // to any count — MVCC hides it — so the recount alone would wave this
+    // through. The mid-flight tombstone is what catches it.
+    const swap = await swapBlockedBy(async (holder) => {
+      await holder.query(
+        `insert into erasure_log (scope_type, scope_ref, initiated_by, dry_run, plan, completed_at)
+         values ('fan', 'fan:fansly:9', $1, false, '{}'::jsonb, null)`,
+        [Number(user.rows[0]!.id)],
+      );
+    });
+    const result = await swap;
+
+    expect(result.verdict).toBe("refused");
+    expect(result.refusals.join(" ")).toMatch(/have not completed/);
+    expect(result.refusals.join(" ")).toMatch(/resurrect the rows they removed/);
+    expect(await isAttachedToObservations(PARTITION)).toBe(true);
+    expect(await listCaptureParkedRelations(appStub())).toHaveLength(0);
   });
 });
 

@@ -26,6 +26,17 @@ describe("capture payloads: the body reader stays off the package barrel", () =>
     }
   });
 
+  // Decision #222. The reference liveness lock is not a read, it is a LOCK, and
+  // it means nothing unless it is held until the envelope insert that stamps the
+  // reference commits. The only two callers that can honour that are the two
+  // envelope writers inside packages/db; a runtime caller holding it for the
+  // length of some other transaction would fence the erasure for no reason, and
+  // one calling it and then inserting separately would believe a proof it does
+  // not have. Off the barrel, so neither is reachable.
+  it("the reference liveness lock stays repository-internal", () => {
+    expect(Object.keys(db)).not.toContain("lockCapturePayloadRefAlive");
+  });
+
   it("the barrel re-exports the repository selectively, never with a star", () => {
     // A `export *` here would put the body reader back on the barrel without
     // anyone noticing, so the source line itself is pinned.

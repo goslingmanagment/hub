@@ -199,6 +199,17 @@ export interface CaptureCasDualWriteCounters {
    *  of `stored + deduped` by construction — never of `codecRefused` or
    *  `failed`, which have no reference to point at and therefore write inline. */
   pointerOnly: number;
+  /**
+   * Decision #222: envelope inserts whose catalog object was ALREADY GONE when
+   * the insert took its liveness lock — an erasure sweep took it in the gap
+   * between the CAS commit and the insert. The envelope was then written with no
+   * reference and WITH its inline body, so nothing was lost; this is the count
+   * of how often the race that used to lose a fact actually fires.
+   *
+   * Expected to be zero outside an erasure window. A non-zero value while no
+   * erasure has run is the signal that something ELSE is deleting catalog rows.
+   */
+  refVanished: number;
 }
 
 const counters: CaptureCasDualWriteCounters = {
@@ -208,10 +219,25 @@ const counters: CaptureCasDualWriteCounters = {
   codecRefused: 0,
   failed: 0,
   pointerOnly: 0,
+  refVanished: 0,
 };
 
 export function getCaptureCasDualWriteCounters(): CaptureCasDualWriteCounters {
   return { ...counters };
+}
+
+/**
+ * Decision #222. Called by the capture seam when an envelope insert reported
+ * that the catalog object its reference addressed was gone — the repositories
+ * decide (they hold the lock), this only counts.
+ *
+ * It owns NO alarm, the same rule the read seam follows under #217: a
+ * traffic-driven path cannot promise a clean pass. The durable consequence, if
+ * there ever is one, is a dangling reference, and the hourly parity job's
+ * `dangling_reference` census is what pages for that.
+ */
+export function noteCaptureCasRefVanished(count = 1): void {
+  counters.refVanished += count;
 }
 
 /** Test seam: reset the published gates and the counters between cases. */
@@ -224,6 +250,7 @@ export function resetCaptureCasDualWriteForTests(csv?: string, pointerOnlyCsv?: 
   counters.codecRefused = 0;
   counters.failed = 0;
   counters.pointerOnly = 0;
+  counters.refVanished = 0;
 }
 
 export interface CaptureCasPayloadRefs {

@@ -306,6 +306,142 @@ export async function countCapturePayloadCollisions(db: Database): Promise<numbe
   return Number(rows.rows[0]?.n ?? 0);
 }
 
+/** How many recent envelope rows per table the dangling-reference census
+ *  walks. Two orders of magnitude wider than the parity sample's scan because
+ *  it detoasts nothing — see the census note. */
+export const CAPTURE_PAYLOAD_DANGLING_REF_DEFAULT_SCAN_LIMIT = 50_000;
+/** Dangling references reported verbatim; the count is always exact. */
+export const CAPTURE_PAYLOAD_DANGLING_REF_SAMPLE_LIMIT = 3;
+
+export interface CapturePayloadDanglingRef {
+  envelope: CapturePayloadParityEnvelope;
+  envelopeId: number;
+  bucketMonth: string;
+  objectId: number;
+}
+
+export interface CapturePayloadDanglingRefCensus {
+  /** Envelopes examined that CARRY a reference (both tables together). */
+  referenced: number;
+  /** Of those, references whose catalog row is not there. */
+  dangling: number;
+  /** Bounded to CAPTURE_PAYLOAD_DANGLING_REF_SAMPLE_LIMIT. */
+  samples: CapturePayloadDanglingRef[];
+  /** The window each table was walked over, so a zero can be read honestly. */
+  scanLimit: number;
+}
+
+const DANGLING_REF_CENSUS_TABLES = [
+  {
+    envelope: "observation" as const,
+    // `observations` is partitioned; `o.id` is the leading column of the
+    // composite primary key, so this is a MergeAppend of backward index scans.
+    sql: (scanLimit: number) => sql`
+      with recent as (
+        select o.id as envelope_id,
+               o.payload_bucket_month as bucket_month,
+               o.payload_object_id as object_id
+        from observations o
+        order by o.id desc
+        limit ${scanLimit}
+      )
+      select 'observation' as envelope,
+             r.envelope_id::text as envelope_id,
+             to_char(r.bucket_month, 'YYYY-MM-DD') as bucket_month,
+             r.object_id::text as object_id,
+             (c.object_id is null) as dangling
+      from recent r
+      left join capture_payload_objects c
+        on c.bucket_month = r.bucket_month and c.object_id = r.object_id
+      where r.object_id is not null
+    `,
+  },
+  {
+    envelope: "raw_payload" as const,
+    sql: (scanLimit: number) => sql`
+      with recent as (
+        select rp.id as envelope_id,
+               rp.payload_bucket_month as bucket_month,
+               rp.payload_object_id as object_id
+        from sync_raw_payloads rp
+        order by rp.id desc
+        limit ${scanLimit}
+      )
+      select 'raw_payload' as envelope,
+             r.envelope_id::text as envelope_id,
+             to_char(r.bucket_month, 'YYYY-MM-DD') as bucket_month,
+             r.object_id::text as object_id,
+             (c.object_id is null) as dangling
+      from recent r
+      left join capture_payload_objects c
+        on c.bucket_month = r.bucket_month and c.object_id = r.object_id
+      where r.object_id is not null
+    `,
+  },
+];
+
+/**
+ * How many envelope references point at a catalog row that is not there.
+ *
+ * THIS IS THE CHECK THE DELIBERATELY-ABSENT FOREIGN KEY (#215) DOES NOT MAKE,
+ * standing rather than one-shot: `countCaptureRewriteDanglingRefs` asks the same
+ * question over one rewrite scope, once, from a CLI an owner is watching. This
+ * one runs every hour, unattended, over both envelope tables, and it exists
+ * because a dangling reference stopped being a cosmetic defect the day #220 let
+ * a row have no inline body: for such a row the reference IS the fact, and a
+ * reference into a hole is a captured fact that cannot be read.
+ *
+ * BOUNDED, AND THE BOUND IS PART OF THE ANSWER. A total anti-join over
+ * `observations` is minutes of index-only scan on a fleet-wide pointer-only
+ * production, which is not an hourly cost. The census instead walks the most
+ * recent `scanLimit` rows of each table in primary-key order — the same
+ * backward-index-scan discipline `verifyCapturePayloadParity` uses, at a much
+ * wider limit because this join detoasts nothing and reads no body. A dangling
+ * reference can only be MINTED at the head of these tables (by the #222 race,
+ * now closed, or by a bug in a writer), so the head is exactly where an hourly
+ * check should look; the total sweep over history belongs to
+ * `capture:verify-backfill`, which already does it per scope. `scanLimit`
+ * travels in the report so "zero" is never read as more than it is.
+ */
+export async function censusCapturePayloadDanglingRefs(
+  db: Database,
+  input?: { scanLimit?: number },
+): Promise<CapturePayloadDanglingRefCensus> {
+  const scanLimit = Math.max(1, input?.scanLimit ?? CAPTURE_PAYLOAD_DANGLING_REF_DEFAULT_SCAN_LIMIT);
+  const census: CapturePayloadDanglingRefCensus = {
+    referenced: 0,
+    dangling: 0,
+    samples: [],
+    scanLimit,
+  };
+
+  for (const table of DANGLING_REF_CENSUS_TABLES) {
+    const rows = await db.execute<{
+      envelope_id: string;
+      bucket_month: string;
+      object_id: string;
+      dangling: boolean;
+    }>(table.sql(scanLimit));
+    for (const row of rows.rows) {
+      census.referenced += 1;
+      if (!row.dangling) {
+        continue;
+      }
+      census.dangling += 1;
+      if (census.samples.length < CAPTURE_PAYLOAD_DANGLING_REF_SAMPLE_LIMIT) {
+        census.samples.push({
+          envelope: table.envelope,
+          envelopeId: Number(row.envelope_id),
+          bucketMonth: row.bucket_month,
+          objectId: Number(row.object_id),
+        });
+      }
+    }
+  }
+
+  return census;
+}
+
 /**
  * Verify a bounded sample of dual-written envelopes against their catalog
  * copies. Read-only end to end.

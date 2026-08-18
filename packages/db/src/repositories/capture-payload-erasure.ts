@@ -312,14 +312,38 @@ function candidateValues(refs: readonly CapturePayloadRef[]) {
  * `ON DELETE RESTRICT` children they are — because 0123 made a catalog row
  * structurally unable to take its body with it by accident.
  *
- * Residual race, stated rather than hidden: a capture landing DURING the sweep
- * can dedup onto an object this batch is deleting, because its INSERT is not
- * visible to our snapshot and PostgreSQL has no predicate lock at READ
- * COMMITTED. The outcome is a dangling reference — exactly the failure class
- * decision #215 already accepts and the hourly parity verifier already reports
- * (`object_missing`) — never a lost captured fact. Erasing a page removes its
- * credentials, so only a fan-scope erasure on a live page has the window at
- * all.
+ * THE RACE THIS USED TO ACCEPT IS NOW CLOSED (decision #222). The note that
+ * stood here said a capture landing DURING the sweep could dedup onto an object
+ * this batch is deleting, and called the outcome "a dangling reference, never a
+ * lost captured fact" on #215's premise that the envelope still carried its body
+ * inline. #220 removed that premise for a pointer-only page WITHOUT revisiting
+ * the acceptance: from that slice on, the same interleaving destroyed the only
+ * copy of a captured body while its envelope pointed at the hole.
+ *
+ * The fix is a strict order between the two acts, and the FIRST statement below
+ * is half of it:
+ *
+ *   1. This sweep takes `FOR UPDATE` on every candidate object BEFORE it asks
+ *      whether anything references them.
+ *   2. A writer stamping a reference onto an envelope holds `FOR KEY SHARE` on
+ *      that same object row until its insert commits
+ *      (`lockCapturePayloadRefAlive`, taken by insertObservation and
+ *      insertRawPayload).
+ *
+ * The two locks conflict, so one of exactly two things happens. Either the
+ * writer got there first — then step 1 WAITS for its commit, and the verdict
+ * statement, which under READ COMMITTED takes a fresh snapshot after that wait,
+ * SEES the new envelope and keeps the body. Or this sweep got there first —
+ * then the writer's probe waits for our commit, finds the object gone, and
+ * writes its envelope with no reference and its body inline. There is no third
+ * outcome and no window between them, which is why the deletes below no longer
+ * need a second confirmation pass: a delay narrows a race, and this one is not
+ * narrowed but ordered.
+ *
+ * The lock statement and the verdict MUST stay two statements in this order. As
+ * one statement the verdict would be computed from the snapshot the statement
+ * started with — i.e. from before the lock wait — which is exactly the stale
+ * proof the fix exists to remove.
  */
 export async function deleteUnreferencedCapturePayloadObjects(
   db: Database,
@@ -330,6 +354,16 @@ export async function deleteUnreferencedCapturePayloadObjects(
   }
 
   const candidates = candidateValues(refs);
+  // STEP 1 (#222). Sorted by the catalog's own primary key, the same stable
+  // order the fence locks use, so two erasures can never deadlock on it.
+  // Candidates a previous run already deleted simply return no row.
+  await db.execute(sql`
+    select o.bucket_month, o.object_id
+    from capture_payload_objects o
+    where (o.bucket_month, o.object_id) in (values ${candidates})
+    order by o.bucket_month asc, o.object_id asc
+    for update
+  `);
   const verdicts = await db.execute<{
     bucket_month: string;
     object_id: string;
