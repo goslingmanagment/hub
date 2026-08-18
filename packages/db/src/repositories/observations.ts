@@ -16,6 +16,7 @@
 import { is, sql } from "drizzle-orm";
 import { PgTransaction } from "drizzle-orm/pg-core";
 
+import { deriveObservationQueryableFields } from "../capture-queryable-fields.ts";
 import type { Database } from "../client.ts";
 import type { ObservationSource } from "../schema.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
@@ -135,11 +136,18 @@ async function claimAndJournal(
   // connection dies mid-transaction. The previous compensating DELETE could
   // only ever run when the process survived the error, which is exactly the
   // case the rollback now covers.
+  // G5 slice 3a: the queryable fields, derived from the SAME object that is
+  // about to become the inline `payload` and written INSIDE this insert. Not a
+  // follow-up UPDATE — that would mint a second row version per capture on the
+  // largest table in the system — and not derived at the producer, so a column
+  // can never disagree with the body it was read off.
+  const queryable = deriveObservationQueryableFields(input);
   await db.execute(sql`
     insert into observations (
       id, source, producer, platform, account_id, native_account_ref, kind,
       payload, payload_hash, idempotency_key, observed_at, received_at,
-      actor_principal_id, payload_bucket_month, payload_object_id
+      actor_principal_id, payload_bucket_month, payload_object_id,
+      harvest_machine_id, harvest_tx_id, harvest_tx_amount, harvest_tx_created_at
     ) overriding system value values (
       ${observationId},
       ${input.source},
@@ -155,7 +163,11 @@ async function claimAndJournal(
       ${receivedAt},
       ${input.actorPrincipalId ?? null},
       ${input.payloadRef?.bucketMonth ?? null}::date,
-      ${input.payloadRef?.objectId ?? null}
+      ${input.payloadRef?.objectId ?? null},
+      ${queryable.harvestMachineId},
+      ${queryable.harvestTxId},
+      ${queryable.harvestTxAmount},
+      ${queryable.harvestTxCreatedAt}
     )
   `);
 
@@ -180,10 +192,18 @@ export async function insertObservations(
  * <machine>:<clientEventId>. The expression index in migration 0090 keeps this
  * lookup bounded without rewriting or deleting immutable captured facts.
  */
-// CAS-READ-BACKLOG(§6.4): a query-critical `payload->>'machineId'` predicate,
-// backed by the expression index in migration 0090/0096. It never returns the
-// body, so it cannot go through the read seam; it must first move to a narrow
-// typed locator column before the inline JSON can go away.
+// G5 slice 3a (§6.4): the machineId now has a typed column
+// (`harvest_machine_id`, migration 0125) written at capture time, so this
+// predicate no longer depends on the inline body for rows written since.
+//
+// TWO ARMS, NOT A `coalesce`. This is the ONE migrated predicate that is
+// index-backed (0096's expression index), and `coalesce(harvest_machine_id,
+// payload->>'machineId') = $1` is not indexable — it would turn a bounded probe
+// into a scan of the largest table in the system. The arms below are disjoint by
+// construction and each has its own partial index over the same predicate
+// (0126's typed twin, 0096's expression original), so the planner builds a
+// BitmapOr of two index scans. `tests/capture-queryable-columns.integration.
+// test.ts` pins the plan.
 export async function hasHarvestObservationClientEvent(
   db: Database,
   input: { machineId: string; clientEventId: string },
@@ -194,8 +214,14 @@ export async function hasHarvestObservationClientEvent(
     where source = 'client_capture'
       and producer like 'desktop-harvest@%'
       and kind like 'harvest.%'
-      and payload->>'machineId' = ${input.machineId}
       and split_part(idempotency_key, ':', 2) = ${input.clientEventId}
+      and (
+        harvest_machine_id = ${input.machineId}
+        -- CAS-INLINE-FALLBACK: rows captured before 0125 carry a null typed
+        -- column; the historical rewrite populates them, and then this arm and
+        -- 0096's index go away together.
+        or (harvest_machine_id is null and payload->>'machineId' = ${input.machineId})
+      )
     limit 1
   `);
   return existing.rows.length > 0;
@@ -206,10 +232,13 @@ export async function hasHarvestObservationClientEvent(
  * The harvest payload carries machineId top-level (spec §2), and the lane
  * stamps producer='desktop-harvest@<version>'.
  */
-// CAS-READ-BACKLOG(§6.4): a query-critical `payload->>'machineId'` predicate,
-// backed by the expression index in migration 0090/0096. It never returns the
-// body, so it cannot go through the read seam; it must first move to a narrow
-// typed locator column before the inline JSON can go away.
+// G5 slice 3a (§6.4): reads the typed column, falls back to the inline body.
+//
+// A plain `coalesce` is right HERE and wrong in the lookup above, because this
+// predicate has no index to defeat: 0096's partial index requires
+// `source = 'client_capture'`, which this query does not constrain, so the
+// planner can never prove the index predicate and this count has always been a
+// scan. Keeping the shape simple is the only thing left to optimize for.
 export async function countHarvestObservations(
   db: Database,
   input: { machineId: string; kind: string },
@@ -219,7 +248,9 @@ export async function countHarvestObservations(
     from observations
     where producer like 'desktop-harvest@%'
       and kind = ${input.kind}
-      and payload->>'machineId' = ${input.machineId}
+      -- CAS-INLINE-FALLBACK: drop the coalesce once the historical rewrite has
+      -- populated harvest_machine_id for every pre-0125 row.
+      and coalesce(harvest_machine_id, payload->>'machineId') = ${input.machineId}
   `);
   return Number(result.rows[0]?.n ?? 0);
 }
@@ -238,23 +269,26 @@ export interface HarvestTransactionResidueRow {
  * by design — nothing here is ever ingested into money truth. NULL-account
  * rows (unmappable OFAPI account) always count as residue.
  */
-// CAS-READ-BACKLOG(§6.4): `payload->>'machineId'` in the predicate AND
-// `payload->'row'->>'tx_id' / 'amount' / 'created_at'` in the SELECT list.
-// Postgres digs inside the body and no whole body is ever returned, so the read
-// seam has nothing to route; these fields become typed columns in the §6.4
-// slice.
+// G5 slice 3a (§6.4): all four extractions now read their typed column
+// (migration 0125) and fall back to the inline body for pre-slice rows. Same
+// `coalesce` reasoning as countHarvestObservations — this predicate has never
+// been index-backed (0096's partial index needs a `source` clause this query
+// does not have), so there is no plan to protect, only shape to keep readable.
 export async function listHarvestTransactionResidue(
   db: Database,
   input: { machineId: string; limit: number },
 ): Promise<{ total: number; sample: HarvestTransactionResidueRow[] }> {
+  // CAS-INLINE-FALLBACK: each coalesce's second argument goes once the
+  // historical rewrite has populated these columns for every pre-0125 row.
+  const txId = sql`coalesce(o.harvest_tx_id, o.payload->'row'->>'tx_id')`;
   const residueWhere = sql`
     o.kind = 'harvest.fan_transactions'
       and o.producer like 'desktop-harvest@%'
-      and o.payload->>'machineId' = ${input.machineId}
+      and coalesce(o.harvest_machine_id, o.payload->>'machineId') = ${input.machineId}
       and not exists (
         select 1 from transactions t
         where t.platform_account_id = o.account_id
-          and t.transaction_id = o.payload->'row'->>'tx_id'
+          and t.transaction_id = ${txId}
       )
   `;
   const counted = await db.execute<{ n: string }>(sql`
@@ -268,9 +302,9 @@ export async function listHarvestTransactionResidue(
     created_at: string | null;
   }>(sql`
     select o.id::text as id, o.account_id::text as account_id,
-           o.payload->'row'->>'tx_id' as tx_id,
-           o.payload->'row'->>'amount' as amount,
-           o.payload->'row'->>'created_at' as created_at
+           ${txId} as tx_id,
+           coalesce(o.harvest_tx_amount, o.payload->'row'->>'amount') as amount,
+           coalesce(o.harvest_tx_created_at, o.payload->'row'->>'created_at') as created_at
     from observations o
     where ${residueWhere}
     order by o.id

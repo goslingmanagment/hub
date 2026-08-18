@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import {
+  capturePayloadRefFromColumns,
+  readEnvelopeCapturePayload,
+} from "./capture-payloads.ts";
 import { appendProjectionOnlyDomainEventsInTransaction } from "./domain-events.ts";
 import { MESSAGE_ARCHIVE_PROJECTION } from "./message-archive.ts";
 import { insertObservation } from "./observations.ts";
@@ -303,15 +307,26 @@ export async function revokeOfapiMessageCoverage(
     const current = currentResult.rows[0];
     if (!current) return null;
 
-    // CAS-READ-BACKLOG(§6.4): an idempotency proof — the prior operator
+    // G5 slice 3a (§6.4): an idempotency proof — the prior operator
     // observation's body is read to compare two scalars (pageId, chatId) and
-    // never leaves this function. It runs inside packages/db, inside this
-    // write transaction, with no logger and no reach to the runtime read seam;
-    // routing it would mean lifting the whole revoke into apps/runtime.
+    // never leaves this function.
+    //
+    // NO TYPED COLUMNS FOR THIS ONE. `pageId` and `chatId` are members of ONE
+    // operator kind's payload; giving `observations` two columns for them would
+    // widen the system's biggest table on behalf of a single caller, and this
+    // reader wants the whole (tiny) body anyway. The envelope-authorized reader
+    // is right here in packages/db and needs neither a logger nor the runtime
+    // seam, so a referenced row is served from the catalog and the inline column
+    // is only consulted when there is no reference — which is exactly the
+    // dependency this slice had to remove, at a fraction of the diff.
     const existing = await database.execute<{
       payload: unknown;
+      payload_bucket_month: string | null;
+      payload_object_id: string | null;
     }>(sql`
-      select payload
+      select payload,
+             to_char(payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+             payload_object_id::text as payload_object_id
       from observations
       where source = 'operator'
         and producer = 'ofapi-coverage-operator'
@@ -320,8 +335,29 @@ export async function revokeOfapiMessageCoverage(
       order by received_at desc
       limit 1
     `);
-    if (existing.rows[0]) {
-      const payload = existing.rows[0].payload as Record<string, unknown>;
+    const priorRow = existing.rows[0];
+    if (priorRow) {
+      const priorRef = capturePayloadRefFromColumns(
+        priorRow.payload_bucket_month,
+        priorRow.payload_object_id,
+      );
+      // CAS-INLINE-FALLBACK: `priorRow.payload` is the pre-catalog authority and
+      // the fail-open answer for a catalog read that cannot prove a body. It
+      // goes when no row can be written without a reference.
+      let priorPayload = priorRow.payload;
+      if (priorRef) {
+        const read = await readEnvelopeCapturePayload(database, {
+          envelope: "observation",
+          ref: priorRef,
+        });
+        if (read.status === "loaded") {
+          priorPayload = read.json;
+        }
+      }
+      const payload: Record<string, unknown> =
+        typeof priorPayload === "object" && priorPayload !== null && !Array.isArray(priorPayload)
+          ? priorPayload as Record<string, unknown>
+          : {};
       if (payload.pageId !== input.pageId || payload.chatId !== input.chatId) {
         throw new OfapiMessageCoverageOperatorConflictError(
           `Coverage revocation action ${input.actionId} belongs to another proof`,

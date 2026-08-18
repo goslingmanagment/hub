@@ -768,6 +768,11 @@ export const syncRawPayloads = pgTable(
     // or both null (CHECK); responsePayload above stays the authority.
     payloadBucketMonth: date("payload_bucket_month"),
     payloadObjectId: bigint("payload_object_id", { mode: "number" }),
+    // G5 slice 3a (0125): the `{tips}` slice of a Fansly DM capture, written at
+    // insert time so the tip-context replay keeps its server-side narrowing
+    // after the inline body goes away. Null for every other endpoint and for
+    // every row written before the slice — see capture-queryable-fields.ts.
+    responseTips: jsonbSafe("response_tips").$type<{ tips: unknown }>(),
   },
   (table) => ({
     retainIdx: index("sync_raw_payloads_retain_idx").on(table.retainUntil),
@@ -3329,6 +3334,15 @@ export const observations = pgTable(
     // or both null (CHECK); `payload` above stays the authority.
     payloadBucketMonth: date("payload_bucket_month"),
     payloadObjectId: bigint("payload_object_id", { mode: "number" }),
+    // G5 slice 3a (0125): the Stage 12 harvest fields the reconciliation queries
+    // used to extract from `payload` in SQL. text, not uuid/numeric/timestamptz:
+    // a malformed captured fact must still journal (DP 7), and text is what
+    // `->>` returns. Null for every non-harvest observation and for every row
+    // written before the slice — see capture-queryable-fields.ts.
+    harvestMachineId: text("harvest_machine_id"),
+    harvestTxId: text("harvest_tx_id"),
+    harvestTxAmount: text("harvest_tx_amount"),
+    harvestTxCreatedAt: text("harvest_tx_created_at"),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.id, table.receivedAt] }),

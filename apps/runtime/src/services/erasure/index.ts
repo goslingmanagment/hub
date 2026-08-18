@@ -245,6 +245,13 @@ function observationPagePredSql(scope: ResolvedScope): SQL {
   return sql`account_id in ${scope.pageIds}`;
 }
 
+// CAS-READ-BACKLOG(§6.4): the LAST site still reading the inline body in SQL
+// after G5 slice 3a took the field extractions to typed columns. This one is
+// not a field — it matches the WHOLE body as text to find a subject, so there
+// is nothing to project into a column. It belongs to the ERASURE slice, which
+// owes the catalog its own answer first (a body may be SHARED by several
+// envelopes, so rewriting it under one subject is not a per-row act), and the
+// historical rewrite of the inline heap does not start until that lands.
 function payloadMatchPredSql(fanRef: string): SQL {
   const quoted = sql`payload::text like ${"%\"" + fanRef + "\"%"}`;
   if (/^\d+$/.test(fanRef)) {

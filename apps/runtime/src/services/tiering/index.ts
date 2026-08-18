@@ -68,6 +68,14 @@ export const TIERED_TABLES: TieredTableSpec[] = [
       // though the catalog itself is not a tiered table.
       payload_bucket_month: "DATE",
       payload_object_id: "BIGINT",
+      // G5 slice 3a (0125): the queryable projections of the harvest payload.
+      // VARCHAR because the columns are `text` in Postgres for the reason they
+      // are text there — they reproduce what `payload->>'…'` returned, and a
+      // cold copy that re-typed them would stop being that reproduction.
+      harvest_machine_id: "VARCHAR",
+      harvest_tx_id: "VARCHAR",
+      harvest_tx_amount: "VARCHAR",
+      harvest_tx_created_at: "VARCHAR",
     },
   },
   {

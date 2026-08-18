@@ -2,6 +2,7 @@ import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
 
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type Platform } from "@agency_hub_core/shared";
 
+import { deriveRawPayloadTipsSlice } from "../capture-queryable-fields.ts";
 import type { Database } from "../client.ts";
 import {
   egressEndpoints,
@@ -810,6 +811,15 @@ export async function insertRawPayload(
   },
 ) {
   const executionContext = getPageSyncExecutionContext();
+  // G5 slice 3a: the `{tips}` slice the tip-context replay narrows to in SQL,
+  // derived from the same object that becomes the inline body and written with
+  // the row (never UPDATEd on afterwards). `undefined` for every endpoint that
+  // is not a DM message page, which leaves the column NULL.
+  const responseTips = deriveRawPayloadTipsSlice({
+    endpoint: input.endpoint,
+    payloadKind: input.payloadKind,
+    responsePayload: input.responsePayload,
+  });
   const [inserted] = await db.insert(syncRawPayloads).values({
     pageId: input.platformAccountId,
     syncRunId: input.syncRunId ?? null,
@@ -826,6 +836,7 @@ export async function insertRawPayload(
     retainUntil: input.retainUntil,
     payloadBucketMonth: input.payloadRef?.bucketMonth ?? null,
     payloadObjectId: input.payloadRef?.objectId ?? null,
+    ...(responseTips === undefined ? {} : { responseTips }),
   }).returning({
     id: syncRawPayloads.id,
     capturedAt: syncRawPayloads.capturedAt,
