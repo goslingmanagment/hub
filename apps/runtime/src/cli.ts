@@ -888,6 +888,200 @@ export function buildProgram() {
       }
     });
 
+  // -------------------------------------------------------------------------
+  // G5 slice 3c-2 — the historical rewrite.
+  //
+  // FOUR COMMANDS, NO SCHEDULE, NO CONFIG FLAG. Every one of them is an
+  // owner-initiated act with the erasure's governance: dry-run is the default,
+  // `--execute` opts in, the destructive ones also demand `--confirm <exact
+  // name>`, and every real run leaves a tombstone in `capture_rewrite_runs`.
+  // A schedule was never on the table — this walks tens of GB on a box whose
+  // free space is the reason the project exists, and it must run with someone
+  // watching. The ritual is docs/runbooks/capture-historical-rewrite.md.
+  program
+    .command("capture:backfill")
+    .description(
+      "G5 3c-2: put HISTORICAL capture bodies in the content-addressed catalog and stamp each "
+        + "row with its address (dry-run default)",
+    )
+    .requiredOption("--table <table>", "observations | sync_raw_payloads")
+    .option("--month <YYYY-MM>", "observations only: which monthly partition (required there)")
+    .option("--batch <n>", "rows per keyset page", parsePositiveInt, 200)
+    .option("--pause-ms <n>", "pause between pages", parseNonnegativeInt, 250)
+    .option("--limit <n>", "stop after this many pages (0 = until the scope is done)", parseNonnegativeInt, 0)
+    .option("--execute", "actually write (default is a dry-run census)")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { parseCaptureRewriteScope } = await import("./services/capture-rewrite/scope.ts");
+        const { runCaptureBackfill } = await import("./services/capture-rewrite/index.ts");
+        const scope = parseCaptureRewriteScope({ table: options.table, month: options.month });
+        const result = await runCaptureBackfill(app, {
+          scope,
+          dryRun: !options.execute,
+          batch: options.batch,
+          pauseMs: options.pauseMs,
+          maxBatches: options.limit,
+        });
+        console.log(JSON.stringify(result, null, 2));
+        if (result.dryRun) {
+          console.log(
+            `\nDRY RUN — nothing written. ${result.census.unreferencedWithBody} row(s) in `
+              + `${result.relation} carry a body and no reference.\nTo execute:\n`
+              + `  capture:backfill --table ${scope.table}`
+              + `${scope.month === null ? "" : ` --month ${scope.month}`} --execute`,
+          );
+        } else {
+          console.log(
+            `\nreferenced ${result.referenced} (deduped ${result.deduped}), codec-refused `
+              + `${result.codecRefused}, raced ${result.raced}, in ${result.batches} batches; `
+              + `stopped: ${result.stoppedBecause}`,
+          );
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("capture:verify-backfill")
+    .description(
+      "G5 3c-2: prove a scope is safe to reclaim — every row referenced, every reference "
+        + "resolving, bodies identical on a random sample. Writes only its own verdict",
+    )
+    .requiredOption("--table <table>", "observations | sync_raw_payloads")
+    .option("--month <YYYY-MM>", "observations only")
+    .option("--sample <n>", "bodies to compare octet-for-octet", parseNonnegativeInt, 500)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { parseCaptureRewriteScope } = await import("./services/capture-rewrite/scope.ts");
+        const { runCaptureVerifyBackfill } = await import("./services/capture-rewrite/index.ts");
+        const scope = parseCaptureRewriteScope({ table: options.table, month: options.month });
+        const result = await runCaptureVerifyBackfill(app, { scope, sample: options.sample });
+        console.log(JSON.stringify(result, null, 2));
+        console.log(
+          `\nVERDICT ${result.verdict.toUpperCase()} for ${result.scopeRef}: `
+            + `${result.census.rows} rows, ${result.census.referenced} referenced, `
+            + `${result.provedCodecRefused} proved codec-refused, `
+            + `${result.unexplainedUnreferenced} unexplained, ${result.danglingRefs} dangling; `
+            + `sample ${result.sample.matched}/${result.sample.compared} matched`,
+        );
+        for (const refusal of result.refusals) {
+          console.log(`  REFUSED: ${refusal}`);
+        }
+        if (result.verdict !== "ok") {
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("capture:reclaim")
+    .description(
+      "G5 3c-2: return the space. observations: --phase shadow then --phase swap. "
+        + "sync_raw_payloads: --phase null-bodies then --phase vacuum-full (writers must be down)",
+    )
+    .requiredOption("--table <table>", "observations | sync_raw_payloads")
+    .option("--month <YYYY-MM>", "observations only")
+    .requiredOption("--phase <phase>", "shadow | swap | null-bodies | vacuum-full")
+    .option("--batch <n>", "rows per page for the copying/updating phases", parsePositiveInt, 2000)
+    .option("--pause-ms <n>", "pause between pages", parseNonnegativeInt, 250)
+    .option("--lock-timeout-ms <n>", "how long the swap may WAIT for its lock", parsePositiveInt, 3000)
+    .option(
+      "--assume-free-bytes <n>",
+      "drill: evaluate the headroom law against this figure instead of measuring the volume "
+        + "(recorded in the run tombstone)",
+      parseNonnegativeInt,
+    )
+    .option("--execute", "actually act (default is a dry-run precondition report)")
+    .option("--confirm <name>", "swap/vacuum-full: the exact relation name")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { parseCaptureRewriteScope } = await import("./services/capture-rewrite/scope.ts");
+        const { runCaptureReclaim } = await import("./services/capture-rewrite/reclaim.ts");
+        const scope = parseCaptureRewriteScope({ table: options.table, month: options.month });
+        const result = await runCaptureReclaim(app, {
+          scope,
+          phase: options.phase,
+          dryRun: !options.execute,
+          confirm: options.confirm,
+          batch: options.batch,
+          pauseMs: options.pauseMs,
+          lockTimeoutMs: options.lockTimeoutMs,
+          ...(options.assumeFreeBytes === undefined
+            ? {}
+            : { freeBytesOverride: options.assumeFreeBytes }),
+        });
+        console.log(JSON.stringify(result, null, 2));
+        console.log(
+          `\n${result.dryRun ? "DRY RUN — " : ""}${result.phase} on ${result.scopeRef}: `
+            + `${result.verdict.toUpperCase()}`,
+        );
+        for (const refusal of result.refusals) {
+          console.log(`  REFUSED: ${refusal}`);
+        }
+        if (result.verdict !== "ok") {
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("capture:drop-parked")
+    .description(
+      "G5 3c-2: DESTROY one superseded partition parked by a swap. The only command in the "
+        + "slice that deletes anything, and it can reach nothing outside capture_pending_drop",
+    )
+    .option("--list", "print the parking schema inventory and exit")
+    .option("--relation <name>", "the exact parked relation name")
+    .option("--min-grace-hours <n>", "how long it must have been parked", parseNonnegativeInt, 24)
+    .option("--execute", "actually drop (default is a dry-run report)")
+    .option("--confirm <name>", "must equal --relation exactly")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { listCaptureParkedRelations, runCaptureDropParked } = await import(
+          "./services/capture-rewrite/reclaim.ts"
+        );
+        if (options.list || !options.relation) {
+          const parked = await listCaptureParkedRelations(app);
+          console.log(JSON.stringify(parked, null, 2));
+          if (!options.list) {
+            console.log("\n--relation is required to drop anything.");
+            process.exitCode = 1;
+          }
+          return;
+        }
+        const result = await runCaptureDropParked(app, {
+          relation: options.relation,
+          confirm: options.confirm,
+          dryRun: !options.execute,
+          minGraceHours: options.minGraceHours,
+        });
+        console.log(JSON.stringify(result, null, 2));
+        if (result.dryRun && result.verdict === "ok") {
+          console.log(
+            `\nDRY RUN — nothing destroyed. To execute:\n  capture:drop-parked `
+              + `--relation ${options.relation} --execute --confirm '${options.relation}'`,
+          );
+        }
+        for (const refusal of result.refusals) {
+          console.log(`  REFUSED: ${refusal}`);
+        }
+        if (result.verdict !== "ok") {
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("ai:personas-seed")
     .description("Create missing bundled personas without changing existing owner content")

@@ -23,8 +23,8 @@ import {
 // facts are forever; "delete" is a governed procedure). Owner-initiated,
 // scoped (fan / page / model), dry-run by default. Execution reaches ALL
 // history planes: hot tables, attached ledger partitions, detached-but-parked
-// partitions in tiered_pending_drop (a parent-table DELETE never reaches
-// those), and the Parquet lake (filter-out rewrite + manifest checksum
+// partitions in tiered_pending_drop and capture_pending_drop (a parent-table
+// DELETE never reaches those), and the Parquet lake (filter-out rewrite + manifest checksum
 // update).
 //
 // EXECUTION DECISIONS (recorded):
@@ -332,19 +332,39 @@ function duckdbObservationPred(scope: ResolvedScope, eraseObsIds: number[]): str
 }
 
 // ---------------------------------------------------------------------------
-// Parked partitions (tiered_pending_drop) — a DELETE on the partitioned
-// parent never reaches detached tables, so they are separate targets.
+// Parked partitions — a DELETE on the partitioned parent never reaches
+// detached tables, so they are separate targets.
+//
+// TWO SCHEMAS, TWO MEANINGS, ONE OBLIGATION.
+//   tiered_pending_drop  Stage 28: this month's rows left the hot table and the
+//                        lake has them.
+//   capture_pending_drop G5 slice 3c-2: this partition was SUPERSEDED by a
+//                        skinny twin that is attached under its old name. Its
+//                        rows are also live over there — but until the owner
+//                        drops it, this copy still physically holds every body
+//                        the swap left behind, an erased fan's included.
+//
+// The meanings differ; the erasure's duty does not. A subject that must be
+// unreachable has to be unreachable in both, so both are scanned. Missing the
+// second one would leave a window — between a swap and its owner-gated drop —
+// in which an executed erasure quietly under-erased.
 
+/** Fully qualified, quoted references — the caller must never re-derive the
+ *  schema, because there is now more than one it could get wrong. */
 async function listParkedTables(app: Db): Promise<{ observations: string[]; domainEvents: string[] }> {
-  const parked = await rows<{ relname: string }>(app, sql`
-    select c.relname from pg_class c
+  const parked = await rows<{ nspname: string; relname: string }>(app, sql`
+    select n.nspname, c.relname from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'tiered_pending_drop' and c.relkind = 'r'
-    order by c.relname
+    where n.nspname in ('tiered_pending_drop', 'capture_pending_drop') and c.relkind = 'r'
+    order by n.nspname, c.relname
   `);
+  const qualified = parked.map((row) => ({
+    prefix: row.relname,
+    ref: `${row.nspname}."${row.relname}"`,
+  }));
   return {
-    observations: parked.map((row) => row.relname).filter((name) => name.startsWith("observations_")),
-    domainEvents: parked.map((row) => row.relname).filter((name) => name.startsWith("domain_events_")),
+    observations: qualified.filter((row) => row.prefix.startsWith("observations_")).map((row) => row.ref),
+    domainEvents: qualified.filter((row) => row.prefix.startsWith("domain_events_")).map((row) => row.ref),
   };
 }
 
@@ -436,7 +456,7 @@ async function collectFanLineage(
   const candidates = new Set<number>();
   const shared = new Set<number>();
 
-  const eventSources = ["domain_events", ...parked.domainEvents.map((t) => `tiered_pending_drop."${t}"`)];
+  const eventSources = ["domain_events", ...parked.domainEvents];
   for (const source of eventSources) {
     const fanEvents = await rows<{ id: string; observation_id: string }>(app, sql`
       select id::text as id, observation_id::text as observation_id
@@ -450,7 +470,7 @@ async function collectFanLineage(
 
   // Payload-matched observations (undeclared kinds carry the fan ref only
   // inside the payload), hot + parked.
-  const obsSources = ["observations", ...parked.observations.map((t) => `tiered_pending_drop."${t}"`)];
+  const obsSources = ["observations", ...parked.observations];
   for (const source of obsSources) {
     const matched = await rows<{ id: string }>(app, sql`
       select id::text as id from ${sql.raw(source)}
@@ -1001,19 +1021,16 @@ async function ledgerTargets(
   const targets: WorkTarget[] = [];
   const parked = await listParkedTables(app);
 
+  // `listParkedTables` already returns fully qualified, quoted references; the
+  // plan's display name is the same string with the quotes taken out, so a
+  // tombstone still says which schema a target lived in.
   const eventSources = [
     { name: "domain_events", from: "domain_events" },
-    ...parked.domainEvents.map((table) => ({
-      name: `tiered_pending_drop.${table}`,
-      from: `tiered_pending_drop."${table}"`,
-    })),
+    ...parked.domainEvents.map((ref) => ({ name: ref.replaceAll('"', ""), from: ref })),
   ];
   const obsSources = [
     { name: "observations", from: "observations" },
-    ...parked.observations.map((table) => ({
-      name: `tiered_pending_drop.${table}`,
-      from: `tiered_pending_drop."${table}"`,
-    })),
+    ...parked.observations.map((ref) => ({ name: ref.replaceAll('"', ""), from: ref })),
   ];
 
   // Companion key tables are unpartitioned and never tier — their rows for

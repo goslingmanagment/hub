@@ -41,6 +41,26 @@ import { describe, expect, it } from "vitest";
 //     governance the rest of the module has. It sits in its own file so the
 //     capture WRITE path (capture-payloads.ts) never has to appear on this
 //     list.
+//
+// G5 slice 3c-2 adds the SECOND sanctioned destroyer of captured bytes, and it
+// does not appear in the file list below because it does not issue a SQL
+// `delete` at all — it issues a `DROP TABLE`. That is not a loophole, it is a
+// different act needing a different licence, and the second test in this file
+// pins it statement by statement:
+//   - apps/runtime/src/services/capture-rewrite/reclaim.ts —
+//     runCaptureDropParked. The relation it destroys can only ever be one that
+//     lives in the `capture_pending_drop` schema: the schema half of the
+//     statement is a module constant that no caller can influence, and the
+//     relation half is resolved out of that schema's own catalog listing before
+//     the drop, so a name that is not parked there cannot be reached by any
+//     spelling. What is in that schema is, by construction, a partition a
+//     transactional swap SUPERSEDED — every one of its rows is also in the
+//     skinny twin attached under the partition's old name. So the fact is not
+//     being deleted; a duplicate of its physical residue is. It is not
+//     scheduled, has no timer, demands `--confirm` equal to the exact relation
+//     name, enforces a grace window, and tombstones itself in
+//     `capture_rewrite_runs` — the erasure's governance, for the same class of
+//     act.
 const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/cli.ts",
   "apps/runtime/src/services/erasure/index.ts",
@@ -135,5 +155,61 @@ describe("retention deleter enumeration (Stage 28)", () => {
     // Nothing here may rewrite a body: a shared body belongs to a bystander.
     expect(source).not.toMatch(/\bupdate\s+capture_/i);
     expect(source).not.toMatch(/\binsert\s+into\s+capture_/i);
+  });
+
+  // G5 slice 3c-2. `DROP TABLE` is invisible to the grep above, which is
+  // exactly why it needs its own pin: a command that destroys a whole relation
+  // of captured rows must be provably unable to point at a live one.
+  it("the parked-partition dropper can reach nothing outside the parking schema", () => {
+    const path = join(__dirname, "..", "apps/runtime/src/services/capture-rewrite/reclaim.ts");
+    const source = readFileSync(path, "utf8");
+
+    // Exactly one DROP TABLE in the file, and its schema is the constant.
+    const drops = [...source.matchAll(/drop\s+table[^`\n]*/gi)].map((match) => match[0]);
+    expect(drops).toHaveLength(1);
+    expect(drops[0]).toContain("${CAPTURE_PARKING_SCHEMA}");
+    // The relation name is quoted (so it is one identifier, never a schema
+    // qualification smuggled through a name) and the schema is NOT
+    // interpolated from anything a caller supplies.
+    expect(drops[0]).toMatch(/\$\{CAPTURE_PARKING_SCHEMA\}\."\$\{options\.relation\}"/);
+    expect(drops[0]).not.toContain("public");
+
+    // The name it drops was resolved out of that schema's own listing first —
+    // remove this and a caller could name any relation in the database.
+    expect(source).toContain("const parked = await listCaptureParkedRelations(app);");
+    expect(source).toContain("parked.find((row) => row.relation === options.relation)");
+    expect(source).toContain("is not a relation in ${CAPTURE_PARKING_SCHEMA}");
+    // …and the exact-name confirm, the erasure's ritual.
+    expect(source).toContain("if (options.confirm !== options.relation) {");
+
+    // The parking schema itself may only ever be filled by the swap, so its
+    // contents are always superseded copies. Nothing else writes to it.
+    const setSchema = [...source.matchAll(/set\s+schema\s+\$\{CAPTURE_PARKING_SCHEMA\}/gi)];
+    expect(setSchema).toHaveLength(1);
+
+    // And this file must not acquire a SQL delete on the quiet: the file-level
+    // allowlist above does not name it, so any `delete from` here fails that
+    // test — this assertion states the intent where the reader will meet it.
+    expect(source).not.toMatch(/delete\s+from/i);
+
+    // The schema name is a module constant, not a parameter.
+    const scope = readFileSync(
+      join(__dirname, "..", "apps/runtime/src/services/capture-rewrite/scope.ts"),
+      "utf8",
+    );
+    expect(scope).toContain('export const CAPTURE_PARKING_SCHEMA = "capture_pending_drop";');
+  });
+
+  // The other half of the same law: the erasure must still be able to reach a
+  // parked copy while it sits in its grace window, or a swap would open a
+  // window of silent under-erasure.
+  it("the erasure sweeps the new parking schema as well as Stage 28's", () => {
+    const source = readFileSync(
+      join(__dirname, "..", "apps/runtime/src/services/erasure/index.ts"),
+      "utf8",
+    );
+    expect(source).toContain(
+      "where n.nspname in ('tiered_pending_drop', 'capture_pending_drop') and c.relkind = 'r'",
+    );
   });
 });
