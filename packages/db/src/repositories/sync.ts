@@ -1,4 +1,5 @@
-import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, is, lt, ne, sql } from "drizzle-orm";
+import { PgTransaction } from "drizzle-orm/pg-core";
 
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type Platform } from "@agency_hub_core/shared";
 
@@ -31,7 +32,11 @@ import {
   type SyncRequestSource,
   type SyncStream,
 } from "./page-sync.ts";
-import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
+import {
+  type CapturePayloadRef,
+  capturePayloadRefFromColumns,
+  lockCapturePayloadRefAlive,
+} from "./capture-payloads.ts";
 import { egressKeySql } from "./egress.ts";
 import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
 import {
@@ -787,39 +792,106 @@ export async function deleteCheckpoints(
   ));
 }
 
+export interface RawPayloadInsertRow {
+  platformAccountId: number;
+  syncRunId?: number | null;
+  endpoint: string;
+  requestParams: Record<string, unknown>;
+  responsePayload: unknown;
+  mapperVersion: string;
+  payloadKind: "mapping_critical" | "dm_metadata" | "dm_messages" | "posts" | "post_tips" | "failed";
+  statusCode?: number | null;
+  errorMessage?: string | null;
+  retainUntil: Date;
+  /**
+   * G5 slice 1: composite reference into the content-addressed payload
+   * catalog, written WITH the row (never UPDATEd on afterwards — this table
+   * carries ~19 GB of TOAST and a second row version per capture is exactly
+   * the amplification the project is trying to remove). `responsePayload`
+   * stays the authority; null is the normal state.
+   *
+   * G5 slice 3c-1: when `omitInlinePayload` below is set, this reference is
+   * what the row's body IS and `response_payload` stays SQL NULL. The pair is
+   * jointly non-null, enforced by the table CHECK added in 0128.
+   *
+   * DECISION #222: the reference is stamped only if the object it addresses is
+   * still there, proved under a `FOR KEY SHARE` lock held until this insert
+   * commits. If an erasure took the object in the meantime the reference is
+   * DROPPED, the inline body is written instead, and the receipt reports
+   * `payloadRefVanished`.
+   */
+  payloadRef?: { bucketMonth: string; objectId: number } | null;
+  /**
+   * G5 slice 3c-1: store the body ONLY in the catalog for this row. Ignored
+   * unless `payloadRef` is set — the flag can remove the second copy of a body
+   * the catalog already holds, never the only copy of one.
+   */
+  omitInlinePayload?: boolean;
+}
+
 export async function insertRawPayload(
   db: Database,
-  input: {
-    platformAccountId: number;
-    syncRunId?: number | null;
-    endpoint: string;
-    requestParams: Record<string, unknown>;
-    responsePayload: unknown;
-    mapperVersion: string;
-    payloadKind: "mapping_critical" | "dm_metadata" | "dm_messages" | "posts" | "post_tips" | "failed";
-    statusCode?: number | null;
-    errorMessage?: string | null;
-    retainUntil: Date;
-    /**
-     * G5 slice 1: composite reference into the content-addressed payload
-     * catalog, written WITH the row (never UPDATEd on afterwards — this table
-     * carries ~19 GB of TOAST and a second row version per capture is exactly
-     * the amplification the project is trying to remove). `responsePayload`
-     * stays the authority; null is the normal state.
-     *
-     * G5 slice 3c-1: when `omitInlinePayload` below is set, this reference is
-     * what the row's body IS and `response_payload` stays SQL NULL. The pair is
-     * jointly non-null, enforced by the table CHECK added in 0128.
-     */
-    payloadRef?: { bucketMonth: string; objectId: number } | null;
-    /**
-     * G5 slice 3c-1: store the body ONLY in the catalog for this row. Ignored
-     * unless `payloadRef` is set — the flag can remove the second copy of a body
-     * the catalog already holds, never the only copy of one.
-     */
-    omitInlinePayload?: boolean;
-  },
-) {
+  input: RawPayloadInsertRow,
+): Promise<RawPayloadInsertReceipt> {
+  const payloadRef = input.payloadRef ?? null;
+  if (payloadRef === null) {
+    // The overwhelmingly common shape and byte-identical to the pre-#222 code:
+    // no reference, nothing to prove, no transaction, one statement.
+    return insertRawPayloadRow(db, input, null);
+  }
+
+  // DECISION #222. A reference may be stamped only while a `FOR KEY SHARE` lock
+  // on the catalog row is HELD, and it has to still be held when the row becomes
+  // visible — so the probe and the insert share one transaction. That is the
+  // whole cost of this fix on the raw-capture path: a BEGIN/COMMIT pair and one
+  // index probe, and ONLY for a capture that carries a reference at all.
+  //
+  // A caller who already holds a transaction composes into it (their boundary,
+  // their commit); a stub handle with no `.transaction` runs inline, which is
+  // what every unit test hands this function.
+  const transaction = (
+    db as Database & {
+      transaction?: (
+        callback: (tx: unknown) => Promise<RawPayloadInsertReceipt>,
+      ) => Promise<RawPayloadInsertReceipt>;
+    }
+  ).transaction;
+  if (is(db, PgTransaction) || typeof transaction !== "function") {
+    return insertRawPayloadGuarded(db, input, payloadRef);
+  }
+  return transaction.call(db, (tx) => insertRawPayloadGuarded(tx as Database, input, payloadRef));
+}
+
+export interface RawPayloadInsertReceipt {
+  id: number;
+  capturedAt: Date;
+  /**
+   * Decision #222: true when a `payloadRef` was supplied and the catalog object
+   * it addressed was GONE by the time this row was written — an erasure sweep
+   * took it in the gap between the CAS commit and this insert. The row was then
+   * written with NO reference and WITH its inline body, so the captured fact is
+   * intact and readable; the flag is how the capture seam counts the race.
+   */
+  payloadRefVanished: boolean;
+}
+
+async function insertRawPayloadGuarded(
+  db: Database,
+  input: RawPayloadInsertRow,
+  payloadRef: CapturePayloadRef,
+): Promise<RawPayloadInsertReceipt> {
+  // Gone means: drop the reference, write the inline body. That is the pre-G5
+  // shape of a capture — always legal, always readable — and it is what keeps
+  // #220's "the worst case is both copies, never none" true through an erasure.
+  const alive = await lockCapturePayloadRefAlive(db, payloadRef);
+  return insertRawPayloadRow(db, input, alive ? payloadRef : null);
+}
+
+async function insertRawPayloadRow(
+  db: Database,
+  input: RawPayloadInsertRow,
+  liveRef: CapturePayloadRef | null,
+): Promise<RawPayloadInsertReceipt> {
   const executionContext = getPageSyncExecutionContext();
   // G5 slice 3a: the `{tips}` slice the tip-context replay narrows to in SQL,
   // derived from the same object that becomes the inline body and written with
@@ -832,10 +904,10 @@ export async function insertRawPayload(
   });
   // G5 slice 3c-1. Derived from `input.responsePayload` — the OBJECT — which is
   // why the slice-3a column above is computed first and unaffected: the decision
-  // is only about where the bytes come to rest. The `payloadRef` conjunct keeps
-  // the 0128 CHECK unreachable from this writer.
-  const omitInlinePayload = input.omitInlinePayload === true &&
-    input.payloadRef !== undefined && input.payloadRef !== null;
+  // is only about where the bytes come to rest. The `liveRef` conjunct keeps
+  // the 0128 CHECK unreachable from this writer — and since #222 it is a PROVEN
+  // reference, not merely a supplied one.
+  const omitInlinePayload = input.omitInlinePayload === true && liveRef !== null;
   const [inserted] = await db.insert(syncRawPayloads).values({
     pageId: input.platformAccountId,
     syncRunId: input.syncRunId ?? null,
@@ -850,8 +922,8 @@ export async function insertRawPayload(
     statusCode: input.statusCode ?? null,
     errorMessage: input.errorMessage ?? null,
     retainUntil: input.retainUntil,
-    payloadBucketMonth: input.payloadRef?.bucketMonth ?? null,
-    payloadObjectId: input.payloadRef?.objectId ?? null,
+    payloadBucketMonth: liveRef?.bucketMonth ?? null,
+    payloadObjectId: liveRef?.objectId ?? null,
     ...(responseTips === undefined ? {} : { responseTips }),
   }).returning({
     id: syncRawPayloads.id,
@@ -860,7 +932,11 @@ export async function insertRawPayload(
   if (!inserted) {
     throw new Error("Raw payload insert returned no receipt");
   }
-  return inserted;
+  return {
+    id: inserted.id,
+    capturedAt: inserted.capturedAt,
+    payloadRefVanished: input.payloadRef != null && liveRef === null,
+  };
 }
 
 export async function insertSyncRequestAttempt(

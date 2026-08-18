@@ -148,6 +148,13 @@ interface PreconditionContext {
   detail: Record<string, unknown>;
 }
 
+interface ErasureQuietProbe {
+  midFlightRuns: number;
+  midFlightIds: string | null;
+  fenceLocksHeld: number;
+  refusals: string[];
+}
+
 /**
  * "Is an erasure running right now?"
  *
@@ -163,25 +170,22 @@ interface PreconditionContext {
  * — or a copy still running while it commits — would carry the erased rows into
  * the relation that replaces it. That is resurrection, the exact failure the
  * G3 fence exists to prevent, arriving through a different door.
+ *
+ * IT TAKES A HANDLE, NOT THE APP, because decision #222 runs it TWICE: once as
+ * an ordinary precondition and once more INSIDE the swap transaction, after the
+ * table locks are held. A precondition answers "is it safe to start"; only the
+ * re-check under lock answers "is it still true now that nothing else can
+ * move", and the gap between those two questions is where the P2 lived.
  */
-async function checkErasureQuiet(app: Ctx, ctx: PreconditionContext): Promise<void> {
-  const midFlight = await app.db.execute<{ n: string; ids: string | null }>(sql`
+async function probeErasureQuiet(db: Ctx["db"]): Promise<ErasureQuietProbe> {
+  const midFlight = await db.execute<{ n: string; ids: string | null }>(sql`
     select count(*)::text as n,
            string_agg(e.id::text, ',' order by e.id) as ids
     from erasure_log e
     where e.dry_run = false and e.completed_at is null
   `);
-  const midFlightCount = Number(midFlight.rows[0]?.n ?? 0);
-  ctx.detail.erasureMidFlightRuns = midFlightCount;
-  if (midFlightCount > 0) {
-    ctx.refusals.push(
-      `${midFlightCount} executed erasure run(s) have not completed `
-        + `(erasure_log ids ${midFlight.rows[0]?.ids ?? "?"}) — an erasure that has not converged `
-        + "still has rows to reach in this scope",
-    );
-  }
-
-  const held = await app.db.execute<{ n: string }>(sql`
+  const midFlightRuns = Number(midFlight.rows[0]?.n ?? 0);
+  const held = await db.execute<{ n: string }>(sql`
     select count(*)::text as n
     from pg_locks l
     where l.locktype = 'advisory'
@@ -189,11 +193,27 @@ async function checkErasureQuiet(app: Ctx, ctx: PreconditionContext): Promise<vo
       and l.objsubid = 2
       and l.granted
   `);
-  const heldCount = Number(held.rows[0]?.n ?? 0);
-  ctx.detail.erasureFenceLocksHeld = heldCount;
-  if (heldCount > 0) {
-    ctx.refusals.push(`${heldCount} erasure fence lock(s) are held right now`);
+  const fenceLocksHeld = Number(held.rows[0]?.n ?? 0);
+
+  const refusals: string[] = [];
+  if (midFlightRuns > 0) {
+    refusals.push(
+      `${midFlightRuns} executed erasure run(s) have not completed `
+        + `(erasure_log ids ${midFlight.rows[0]?.ids ?? "?"}) — an erasure that has not converged `
+        + "still has rows to reach in this scope",
+    );
   }
+  if (fenceLocksHeld > 0) {
+    refusals.push(`${fenceLocksHeld} erasure fence lock(s) are held right now`);
+  }
+  return { midFlightRuns, midFlightIds: midFlight.rows[0]?.ids ?? null, fenceLocksHeld, refusals };
+}
+
+async function checkErasureQuiet(app: Ctx, ctx: PreconditionContext): Promise<void> {
+  const probe = await probeErasureQuiet(app.db);
+  ctx.detail.erasureMidFlightRuns = probe.midFlightRuns;
+  ctx.detail.erasureFenceLocksHeld = probe.fenceLocksHeld;
+  ctx.refusals.push(...probe.refusals);
 }
 
 /** The verify blessing, and that it still describes today's scope. */
@@ -288,11 +308,39 @@ async function freeBytesOnDataVolume(override?: number): Promise<number> {
 // ---------------------------------------------------------------------------
 // observations
 
+/**
+ * A precondition that was true before the swap took its locks and is no longer
+ * true now that it holds them (decision #222). Thrown inside the transaction so
+ * PostgreSQL rolls the swap back, caught outside it so the run settles as
+ * `refused` — the verdict that means "nothing was touched" — rather than as a
+ * failure with a stack trace.
+ */
+class SwapRefused extends Error {
+  override readonly name = "SwapRefused";
+}
+
+/**
+ * How long the under-lock re-verification may take before the swap gives up.
+ *
+ * The swap is supposed to be a SHORT stop, and the recount is the only thing in
+ * it that reads data. A minute is generous for two counts over one closed month
+ * and still far short of "the capture path noticed"; anything slower means the
+ * partition is not in a state where this act should be attempted right now.
+ */
+const SWAP_STATEMENT_TIMEOUT_MS = 60_000;
+
+async function countRelation(db: Ctx["db"], relation: string): Promise<number> {
+  const rows = await db.execute<{ n: string }>(
+    sql.raw(`select count(*)::text as n from "${relation}"`),
+  );
+  return Number(rows.rows[0]?.n ?? 0);
+}
+
 async function observationPartitionState(
-  app: Ctx,
+  db: Ctx["db"],
   partition: string,
 ): Promise<{ exists: boolean; attached: boolean; schema: string | null }> {
-  const rows = await app.db.execute<{ schema: string; attached: boolean }>(sql`
+  const rows = await db.execute<{ schema: string; attached: boolean }>(sql`
     select n.nspname as schema,
            exists (
              select 1 from pg_inherits i
@@ -534,17 +582,36 @@ async function buildObservationShadow(
  * never happen, and the reason a detach-then-attach pair may not be two
  * statements in two transactions.
  *
- * `lock_timeout` bounds the wait, not the work. Every statement inside is
+ * `lock_timeout` bounds the wait, not the work. Almost every statement inside is
  * catalog-only (the bound CHECK built in the shadow phase is what keeps ATTACH
- * from scanning), so once the lock is granted the transaction is milliseconds.
- * If the lock is NOT granted in time the whole thing aborts and nothing changed
- * — which is the correct outcome and the reason this is not run under a
- * `lock_timeout` of zero.
+ * from scanning), so once the locks are granted the transaction is milliseconds
+ * plus the recount below. If a lock is NOT granted in time the whole thing
+ * aborts and nothing changed — which is the correct outcome and the reason this
+ * is not run under a `lock_timeout` of zero.
  *
  * THE SHADOW TAKES THE PARTITION'S NAME. `observations_2026_07` must keep
  * meaning "July's rows" to everything that reads a partition name: the tiering
  * job's regex, the replay guards, the erasure's parked scan. The superseded
  * original is renamed out of the way first, so the two never collide.
+ *
+ * EVERY PRECONDITION IS RE-PROVED INSIDE, AFTER THE LOCKS (decision #222). The
+ * counts above and `checkErasureQuiet` in the caller both read a world that is
+ * still moving: an erasure can execute in the seconds between them and the
+ * moment this transaction actually holds its locks, and then the swap would park
+ * a post-erasure source and attach a PRE-erasure shadow — RESURRECTING every row
+ * that erasure deleted, through the one door the G3 fence does not watch. So the
+ * transaction takes its table locks EXPLICITLY and FIRST, and only then asks
+ * again: is an erasure quiet, is the shadow still a detached row-for-row twin of
+ * the still-attached source. Any answer that changed aborts the transaction, and
+ * an aborted swap has changed nothing at all.
+ *
+ * THE RECOUNT IS THE PRIMARY GUARD AND THE ERASURE PROBE IS THE NAMED ONE. An
+ * erasure that COMMITTED its deletes shows up as a count mismatch (the shadow
+ * kept the rows the source lost; nothing writes into a closed month, so the
+ * counts cannot drift back into agreement). An erasure that has NOT committed
+ * them is invisible to any count — MVCC hides it — which is exactly what the
+ * mid-flight `erasure_log` probe and the held-fence probe are for. Neither
+ * subsumes the other.
  */
 async function swapObservationPartition(
   app: Ctx,
@@ -557,17 +624,13 @@ async function swapObservationPartition(
   const range = monthUtcRange(month);
   const parked = parkedRelationName(partition, options.now ?? new Date());
 
-  const shadowState = await observationPartitionState(app, shadow);
-  const shadowCount = shadowState.exists
-    ? Number(
-      (await app.db.execute<{ n: string }>(sql.raw(`select count(*)::text as n from "${shadow}"`)))
-        .rows[0]?.n ?? 0,
-    )
-    : 0;
-  const sourceCount = Number(
-    (await app.db.execute<{ n: string }>(sql.raw(`select count(*)::text as n from "${partition}"`)))
-      .rows[0]?.n ?? 0,
-  );
+  // These two are the CHEAP, lock-free version of the check — they read a world
+  // that is still moving, so they exist to refuse early and to give the operator
+  // real numbers in a dry run. The verdict that actually gates the swap is taken
+  // again inside the transaction, under the locks (#222).
+  const shadowState = await observationPartitionState(app.db, shadow);
+  const shadowCount = shadowState.exists ? await countRelation(app.db, shadow) : 0;
+  const sourceCount = await countRelation(app.db, partition);
 
   const detail: Record<string, unknown> = {
     partition,
@@ -599,26 +662,89 @@ async function swapObservationPartition(
     return detail;
   }
 
-  await app.db.transaction(async (tx) => {
-    await tx.execute(sql.raw(`set local lock_timeout = '${Math.max(1, options.lockTimeoutMs)}ms'`));
-    await tx.execute(sql.raw(`create schema if not exists ${CAPTURE_PARKING_SCHEMA}`));
-    await tx.execute(sql.raw(`alter table "observations" detach partition "${partition}"`));
-    await tx.execute(sql.raw(`alter table "${partition}" rename to "${parked}"`));
-    await tx.execute(
-      sql.raw(`alter table "${parked}" set schema ${CAPTURE_PARKING_SCHEMA}`),
-    );
-    await tx.execute(sql.raw(`alter table "${shadow}" rename to "${partition}"`));
-    await tx.execute(sql.raw(`
-      alter table "observations" attach partition "${partition}"
-      for values from ('${range.from}') to ('${range.to}')
-    `));
-    // Redundant once the partition bound enforces the same predicate, and a
-    // partition carrying a duplicate of its own bound is a puzzle for the next
-    // reader. Catalog-only; the lock is already held.
-    await tx.execute(sql.raw(`
-      alter table "${partition}" drop constraint if exists "${shadow}_partition_bound_check"
-    `));
-  });
+  try {
+    await app.db.transaction(async (tx) => {
+      const handle = tx as unknown as Ctx["db"];
+      await tx.execute(sql.raw(`set local lock_timeout = '${Math.max(1, options.lockTimeoutMs)}ms'`));
+      // The recount is the only statement in here that reads DATA, and it runs
+      // under ACCESS EXCLUSIVE on the whole of `observations`. If it cannot
+      // finish inside this budget the stall is worse than the swap is worth:
+      // abort, change nothing, and let the operator retry when the partition is
+      // vacuumed (an index-only count) or at a quieter hour.
+      await tx.execute(sql.raw(`set local statement_timeout = '${SWAP_STATEMENT_TIMEOUT_MS}ms'`));
+
+      // Take the swap's locks EXPLICITLY, in the order the DDL below would take
+      // them anyway (parent, source, shadow), so that everything after this line
+      // is being asked of a world that can no longer change under us. `ONLY` on
+      // the parent matters: without it PostgreSQL would lock every monthly
+      // partition of observations, which is a far bigger stop than this act
+      // needs.
+      await tx.execute(sql.raw(`lock table only "observations" in access exclusive mode`));
+      await tx.execute(sql.raw(`lock table "${partition}" in access exclusive mode`));
+      await tx.execute(sql.raw(`lock table "${shadow}" in access exclusive mode`));
+
+      const quiet = await probeErasureQuiet(handle);
+      if (quiet.refusals.length > 0) {
+        throw new SwapRefused(
+          `${quiet.refusals.join("; ")} — an erasure moved between this run's preconditions and `
+            + "its locks; a swap now would attach a shadow built before those deletions and "
+            + "resurrect the rows they removed",
+        );
+      }
+
+      const lockedSource = await observationPartitionState(handle, partition);
+      const lockedShadow = await observationPartitionState(handle, shadow);
+      if (!lockedSource.attached) {
+        throw new SwapRefused(`${partition} is no longer an attached partition of observations`);
+      }
+      if (lockedShadow.attached) {
+        throw new SwapRefused(`${shadow} became attached to observations while we waited`);
+      }
+
+      const lockedSourceRows = await countRelation(handle, partition);
+      const lockedShadowRows = await countRelation(handle, shadow);
+      detail.lockedSourceRows = lockedSourceRows;
+      detail.lockedShadowRows = lockedShadowRows;
+      if (lockedSourceRows !== lockedShadowRows) {
+        throw new SwapRefused(
+          `under lock the shadow holds ${lockedShadowRows} rows and ${partition} holds `
+            + `${lockedSourceRows} (they agreed at ${shadowCount}/${sourceCount} moments ago) — `
+            + "something deleted from one of them since the shadow was built; rebuild the shadow "
+            + `(drop "${shadow}" and re-run --phase shadow) rather than swapping a copy that is `
+            + "not row-for-row the original",
+        );
+      }
+
+      await tx.execute(sql.raw(`create schema if not exists ${CAPTURE_PARKING_SCHEMA}`));
+      await tx.execute(sql.raw(`alter table "observations" detach partition "${partition}"`));
+      await tx.execute(sql.raw(`alter table "${partition}" rename to "${parked}"`));
+      await tx.execute(
+        sql.raw(`alter table "${parked}" set schema ${CAPTURE_PARKING_SCHEMA}`),
+      );
+      await tx.execute(sql.raw(`alter table "${shadow}" rename to "${partition}"`));
+      await tx.execute(sql.raw(`
+        alter table "observations" attach partition "${partition}"
+        for values from ('${range.from}') to ('${range.to}')
+      `));
+      // Redundant once the partition bound enforces the same predicate, and a
+      // partition carrying a duplicate of its own bound is a puzzle for the next
+      // reader. Catalog-only; the lock is already held.
+      await tx.execute(sql.raw(`
+        alter table "${partition}" drop constraint if exists "${shadow}_partition_bound_check"
+      `));
+    });
+  } catch (error) {
+    // A re-verification that said no is a REFUSAL, not a crash: the transaction
+    // rolled back, the partition is exactly where it was, and the run's tombstone
+    // should say "refused" with the reason rather than "failed" with a stack.
+    if (!(error instanceof SwapRefused)) {
+      throw error;
+    }
+    ctx.refusals.push(error.message);
+    detail.refusedUnderLock = true;
+    app.logger.warn({ ...detail, reason: error.message }, "capture:reclaim swap refused under lock");
+    return detail;
+  }
 
   app.logger.info(detail, "capture:reclaim swapped a skinny partition in");
   return detail;
@@ -772,7 +898,7 @@ export async function runCaptureReclaim(
     if (!monthOk.ok) {
       ctx.refusals.push(monthOk.reason);
     }
-    const state = await observationPartitionState(app, partition);
+    const state = await observationPartitionState(app.db, partition);
     ctx.detail.partitionSchema = state.schema;
     ctx.detail.partitionAttached = state.attached;
     if (!state.exists) {

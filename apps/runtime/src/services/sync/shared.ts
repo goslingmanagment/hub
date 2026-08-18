@@ -17,7 +17,7 @@ import {
   type ResolvedPageContext,
 } from "../page-context.ts";
 import { buildFanslyMetadata } from "../fansly.ts";
-import { putCaptureCasPayloads } from "../capture-cas-dual-write.ts";
+import { noteCaptureCasRefVanished, putCaptureCasPayloads } from "../capture-cas-dual-write.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
@@ -121,6 +121,13 @@ export async function persistRawPayload(
   // byte-identically to the pre-slice code. The repositories re-check the
   // reference themselves, so the worst a bug here can cost is a duplicated body,
   // never a missing one.
+  //
+  // DECISION #222 made that re-check load-bearing rather than defensive: each
+  // insert proves its reference is still ALIVE under a row lock it holds until
+  // it commits, and an object an erasure took in the meantime is dropped in
+  // favour of the inline body. So `omitInlinePayload` is a REQUEST here and a
+  // decision there, which is why the counter below is fed from the receipts
+  // rather than from anything this function knows.
   const omitInlinePayload = casRefs.pointerOnly;
 
   let rawPayload;
@@ -155,8 +162,12 @@ export async function persistRawPayload(
   // from the column, so a pointer-only row carries the same payload_hash it
   // would have carried with its body inline — which is why 0128 leaves
   // payload_hash NOT NULL.
+  if (rawPayload.payloadRefVanished) {
+    noteCaptureCasRefVanished();
+  }
+
   try {
-    await insertObservation(db, {
+    const journalled = await insertObservation(db, {
       source: "pull",
       producer: `sync:${platform ?? "unknown"}:${stream ?? input.endpoint}`,
       platform,
@@ -173,6 +184,9 @@ export async function persistRawPayload(
       payloadRef: casRefs.observation,
       omitInlinePayload,
     });
+    if (journalled.payloadRefVanished) {
+      noteCaptureCasRefVanished();
+    }
   } catch (error) {
     throw new SyncPayloadPersistenceError({
       endpoint: input.endpoint,

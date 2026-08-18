@@ -15,13 +15,22 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
   const actual = await importOriginal<typeof DbModule>();
   return {
     ...actual,
-    insertRawPayload: vi.fn(async () => {}),
+    // Both doubles return the REAL receipt shape. Since decision #222 the
+    // repositories report whether the catalog object a supplied reference
+    // addressed was still there when the row was written, and the seam reads
+    // that flag to count the erasure race — a double that returns less than the
+    // contract makes the seam look broken when it is the double that is stale.
+    insertRawPayload: vi.fn(async () => ({
+      id: 1,
+      capturedAt: new Date(0),
+      payloadRefVanished: false,
+    })),
     insertObservation: vi.fn(async (
       _db: unknown,
       input: { idempotencyKey: string; kind: string; payload: unknown },
     ) => {
       captured.observations.push(input);
-      return { inserted: true };
+      return { inserted: true, payloadRefVanished: false };
     }),
   };
 });

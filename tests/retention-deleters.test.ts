@@ -155,6 +155,28 @@ describe("retention deleter enumeration (Stage 28)", () => {
     // Nothing here may rewrite a body: a shared body belongs to a bystander.
     expect(source).not.toMatch(/\bupdate\s+capture_/i);
     expect(source).not.toMatch(/\binsert\s+into\s+capture_/i);
+
+    // DECISION #222 EXTENDS THIS LICENCE, deliberately, because the fix added a
+    // statement to this file. The `not exists` above proves zero references AT
+    // AN INSTANT; on its own that is a stale proof, because a capture that has
+    // already committed its CAS transaction can stamp a reference onto an
+    // envelope a millisecond later. What makes the proof binding is that the
+    // candidate rows are LOCKED FOR UPDATE in a statement of their own BEFORE
+    // the verdict is computed — an envelope writer holds `FOR KEY SHARE` on the
+    // same row until its insert commits, so the two acts are ordered and the
+    // verdict statement's fresh snapshot cannot miss a reference that beat it.
+    //
+    // Delete the lock statement, or fold it into the verdict query, and this
+    // file goes back to being able to destroy the only copy of a captured body
+    // while an envelope is being written to point at it. That is why it is
+    // pinned here, in the file that says what this deleter must prove.
+    expect(source).toContain("for update");
+    const lockAt = source.indexOf("for update");
+    const verdictAt = source.indexOf("with candidate (bucket_month, object_id) as (values");
+    const firstDeleteAt = source.indexOf("delete from capture_json_hot_bodies");
+    expect(lockAt).toBeGreaterThan(-1);
+    expect(verdictAt).toBeGreaterThan(lockAt);
+    expect(firstDeleteAt).toBeGreaterThan(verdictAt);
   });
 
   // G5 slice 3c-2. `DROP TABLE` is invisible to the grep above, which is

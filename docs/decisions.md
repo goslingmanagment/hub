@@ -223,6 +223,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 219 | G5 slice 3b: erasure becomes catalog-complete, and a capture body gets its first lawful death | The Stage 28.4 erasure now reaches the content-addressed catalog IN THE SAME RUN, landed BEFORE slice 3c can null an inline body and make the catalog copy the only one. The catalog plane INHERITS the module's verdicts instead of forming its own: a body whose every envelope this erasure deleted dies with them — body row, location row, catalog row, the first sanctioned deletion of a captured body in this system — while a body a SURVIVING envelope still references (a shared observation, a `sync_raw_payloads` row erasure never touches) is a bystander's fact: kept, counted and journaled in the tombstone exactly like `sharedObservationsKept`. A SUBJECT-FILTERED REWRITE OF A SHARED BODY WAS REJECTED on two independent grounds — it destroys a bystander's captured bytes (the same law that keeps shared observations), and every referencing envelope still carries that body inline, so a filtered copy would diverge from the #217 authority of record and page the parity verifier by design. Zero references is PROVED, not assumed: a `not exists` over both envelope tables in the statement that selects the deletion set, deletes behind it in FK order, all inside one transaction per bounded batch holding the G3 erasure fence; migration 0127 gives that probe the partial index 0124 deferred until "earned by a real query plan". The sweep runs AFTER the delete transaction (the deletes must be visible for "no surviving reference" to mean anything) and is resumable by construction — set-based statements, no per-object precondition, a re-run rescans and continues. One `capturePayloadErasureSubject` builds the literals for BOTH planes so they cannot disagree about what "contains the subject" means; the catalog scan returns metadata only, never bytes; `exact_bytes` in scope fails the run loudly rather than under-erasing. Slice 0's collision TODO is wired: the hourly parity job counts `collision_ordinal > 0` and pages under the SAME kind with its own `sha256_collision` subKey (#213's runway shape) — measured on every pass canary or not, resolvable only by a zero count, never by a clean parity sample, with subKey-specific resolve texts; `settlePayloadObject` still owns no latch (#217), because the durable row it already writes outlives any counter |
 | 220 | G5 slice 3c-1: a captured body stops being written twice | New captures on a page in `capture_cas_pointer_only_pages` (CSV of page ids or `*`, default `''` = off, live via the heartbeat) write the inline body as SQL NULL — the first slice of G5 that actually stops the disk growing. THE WORST CASE IS BOTH COPIES, NEVER NONE, and by construction rather than by a check: the permission is minted only on the success return of `putCaptureCasPayloads`, where both catalog references already exist, so a codec refusal, a dead connection or a page outside the slice-1 canary all write inline exactly as before, and a page listed here but NOT for dual-write behaves like a page listed nowhere. Migration 0128 drops NOT NULL from `observations.payload` / `sync_raw_payloads.response_payload` and adds to each table the invariant that is this slice's core, `CHECK (payload IS NOT NULL OR payload_object_id IS NOT NULL)` — NO ROW MAY ADDRESS ZERO BODIES — NOT VALID on a provable vacuity (every existing row was written under the old NOT NULL). `payload_hash` stays NOT NULL because the producer computes it from the payload OBJECT, never the column, as do the #218 typed columns, so a pointer-only row differs from a dual-written one in the body alone. THE LOAD-BEARING RULE IS THAT A NULL INLINE BODY RESOLVES FROM THE CATALOG IN EVERY READ MODE, `inline` INCLUDED: `capture_cas_read_mode` is designed to be rolled back freely, and if reachability depended on it the escape hatch would blank every pointer-only row — so the mode governs byte-source PREFERENCE for a row with two copies, never REACHABILITY for a row with one, and for such a row the CATALOG is the authority of record. `shadow` skips those rows and the hourly verifier counts them `skippedNullInline` rather than `matched` (a comparison with one operand is not a verdict), so a ramping page's `checked` falls to zero by construction and the latch neither opens nor resolves; necessity reads are counted apart (`servedNullInline`) from preference reads (`served`), and the one bad outcome — the only copy unreadable — returns null, counts and LOGS, while still owning no latch (#217). ROLLBACK IS NOT SYMMETRIC and the registry says so: turning the flag off resumes double-writing for NEW rows only, rows already written pointer-only keep their body only in the catalog forever — the first irreversible flag here, and the reason #219 (erasure reaches the catalog) and the null-inline read law landed first |
 | 221 | G5 slice 3c-2: the historical rewrite is a one-time lawful UPDATE, consumed by the reclaim that follows it | Four owner-gated CLI commands (`capture:backfill` / `verify-backfill` / `reclaim` / `drop-parked`), no schedule and no config flag, each dry-run by default and tombstoned in `capture_rewrite_runs` (0129, the `erasure_log` shape — a TABLE because verify must read what backfill concluded hours earlier, and `ops_metric_samples` is deadman-sensitive). THE UPDATE #215 and #218 both forbade is lawful HERE and only here: its bloat does not accumulate, it is CONSUMED — the reclaim copies the surviving tuples into a skinny relation and parks the old one, so the dead versions are exactly the pages that get dropped. A historical body is filed under ITS OWN capture month, never `now()` (0123's ref-closed-cohort law), so the backfill lazily creates the catalog partitions 0123 never made (prod starts 2026-07, 0123 starts 2026-08) and accepts two objects for a raw/observation pair straddling a UTC month boundary. The lane is `platform_capture` for every row and is NOT derived from `source`: `operator` would map to the `system` erasure domain, which #219 never gives a subject sweep, and narrowing erasure reach on a one-way pass over history is not a trade this slice may make. VERIFY PROVES RATHER THAN INFERS — each remaining null-ref row is re-canonicalized and must actually refuse (the backfill's stored count is a printed cross-check, never the authority), every reference is resolved by a TOTAL anti-join (the check the absent FK does not make), and bodies are compared as full canonical octets on a bounded random sample drawn by index probes rather than `order by random()`; it has no `--dry-run` because the verdict row IS its product. observations takes §9.1 whole in two invocable phases — a lock-free resumable skinny copy (inline null where a ref exists, KEPT where the codec refused) that pre-adds the partition-bound CHECK so ATTACH skips its scan and reconciles indexes against the source partition's real `pg_indexes` (0096/0126 are per-leaf), then ONE transaction that detaches, parks, renames the twin into the partition's name and attaches: THE SINGLE TRANSACTION IS THE CRASH PROOF, old-or-new, never neither. Superseded copies park in a NEW `capture_pending_drop` schema, not `tiered_pending_drop`, whose meaning would make the replay guards falsely refuse a live month — and the erasure is taught the new schema explicitly so no under-erasure window opens during grace. `sync_raw_payloads` takes §9.2's OTHER option (null-bodies then VACUUM FULL, writers proven down) because a rename swap would have to re-validate two inbound FKs inside the swap transaction, because its OWNED `bigserial` sequence moves with the table and would break the first capture after the swap, and because unpartitioned means the headroom ask is everything at once — the price, no grace window for that table, is stated rather than discovered. `capture:drop-parked` is the only destroyer, reaches nothing outside the parking schema by construction, and is pinned in `tests/retention-deleters.test.ts` with a STATEMENT-level licence because a `DROP TABLE` is invisible to that file's `delete from` grep. Refusals (current/future month, detached partition, stale-or-overtaken verdict, unconverged erasure, headroom) end the run before the phase body reads anything |
+| 222 | G5 review fix: a stamped reference outliving its object is a lost fact, and the two acts are now ordered | An external review found that #219's accepted race — a capture deduping onto an object the erasure sweep is about to delete — stopped being cosmetic the moment #220 let a row have NO inline body: the envelope then addressed a hole, past the 0128 CHECK (which only asks for a reference), past the deliberately absent FK (#215), and past a parity verifier that skips null-inline rows by design. THE FIX IS AN ORDER, NOT A NARROWER WINDOW: the sweep takes `FOR UPDATE` on its candidates in a statement of its OWN, BEFORE the `not exists` verdict, and every envelope writer holds `FOR KEY SHARE` on the object until the insert that stamps the reference COMMITS. Either the writer got there first — the sweep then waits and its verdict statement, taking a fresh READ COMMITTED snapshot after that wait, SEES the new envelope and keeps the body — or the sweep got there first and the writer's probe finds the object gone and writes the envelope with NO reference and its INLINE body, the pre-G5 shape of a capture, which is always readable. There is no third outcome, so the belt-and-braces alternatives were REJECTED: a two-pass sweep with a delay narrows a race that is now closed and cannot be sized (any bound is a guess about GC pauses) while doubling a break-glass act's fence hold; a durable claim row adds a write to the hottest path in the system plus a cleanup that could itself delete a live claim; the FK #215 rejected would work and every word of that rejection still holds, which is exactly why the ONE lock an FK would have taken is taken by hand instead — no DDL, no index (the catalog PK serves it), no history to validate, and only on a capture that carries a reference at all. IT APPLIES UNIFORMLY to pointer-only and dual-write: a dangling reference in the second case is not a lost fact but it is still a lie the verifier reports as `object_missing`, and one rule beats a special case. `lockCapturePayloadRefAlive` stays OFF the package barrel (pinned) because it is a lock, meaningless unless held to the insert's commit. A standing DANGLING-REFERENCE CENSUS over the head of both envelope tables now runs on EVERY hourly pass, canary or not, and pages under the existing `capture_payload_parity` kind with its own `dangling_reference` subKey (#213/#219's shape) — resolvable only by a zero count, with the measured window travelling in the report so a zero is never read as more than it is; the seam counts `refVanished` and owns no alarm (#217). SECOND FINDING, the swap: `capture:reclaim --phase swap` read its erasure preconditions and its row counts OUTSIDE the transaction, so an erasure committing while the swap waited for locks would park a post-erasure source and attach a PRE-erasure shadow — resurrection through the door the G3 fence does not watch. The transaction now takes its locks EXPLICITLY and FIRST (`LOCK TABLE ONLY observations`, then source, then shadow — `ONLY` so it does not stop every other month) and re-proves everything after them: erasure quiet, both partitions in the state they were in, and source/shadow counts equal. THE RECOUNT AND THE ERASURE PROBE DO NOT SUBSUME EACH OTHER — a committed erasure shows up as a count mismatch (nothing writes into a closed month, so the counts cannot drift back into agreement), an UNCOMMITTED one is invisible to any count and only the mid-flight tombstone and the held fence lock catch it. A `statement_timeout` bounds the recount so a pathological count aborts the swap instead of freezing capture under ACCESS EXCLUSIVE, and a refusal under lock settles the run as `refused` (nothing touched), never as a crash. AMENDS #219: its stated residual — "the worst outcome is a dangling reference the parity verifier reports, never a lost fact" — was true when written and became false at #220; it is superseded by this entry and the sentence is corrected in place in the code that carried it |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -7740,3 +7741,156 @@ inverse. And no automatic progression from one phase to the next: the gap
 between two phases is measured in hours and the world moves in it, so every
 phase re-checks its preconditions from the database rather than trusting that a
 previous command succeeded.
+
+**Decision #222 (2026-08-19, G5 review fix: a stamped reference outliving its
+object is a lost fact, and the two acts are now ordered):** an external
+adversarial review of the G5 line found two concurrency defects on one axis —
+erasure racing another writer. Both are fixed here, together, because they are
+the same mistake made twice: a proof taken at one instant and acted on at
+another.
+
+**FINDING 1, and why #219 was right until it wasn't.** The catalog sweep's
+deleter carried an explicit, honest note: a capture landing DURING the sweep can
+dedup onto an object the batch is deleting, PostgreSQL has no predicate lock at
+READ COMMITTED, and "the worst outcome is a dangling reference the parity
+verifier reports, never a lost captured fact". That sentence was true when it
+was written, and its truth rested entirely on a premise from #215 — every
+envelope that carries a reference ALSO carries the body inline. #220 removed
+that premise for a page in `capture_cas_pointer_only_pages` and did not revisit
+the acceptance. The interleaving that used to be cosmetic became fact loss:
+
+1. an erasure deletes envelopes and some object reaches zero references;
+2. a concurrent capture on the same page dedups onto it — `putPayloadObject`
+   reads the existing row and returns its reference, and on that path the CAS
+   transaction WRITES NOTHING AT ALL — then commits and pauses;
+3. the sweep proves zero committed references (correctly, at that instant) and
+   deletes body, location and catalog row;
+4. the capture inserts its envelopes: `payload` NULL, `payload_object_id` set to
+   the object that no longer exists.
+
+Nothing downstream catches step 4. 0128's CHECK is satisfied (a reference IS
+present), there is no foreign key by #215's deliberate choice, and the parity
+verifier skips null-inline rows by #220's deliberate choice. The captured fact
+is simply unreadable, silently, forever.
+
+**THE FIX IS AN ORDER BETWEEN TWO ACTS, NOT A SMALLER WINDOW.** Two statements
+make it:
+
+- `deleteUnreferencedCapturePayloadObjects` takes `FOR UPDATE` on its candidate
+  rows in a statement of its OWN, sorted by the catalog's primary key, BEFORE
+  the `not exists` verdict — and the two must stay two statements in that order,
+  because as one statement the verdict would be computed from the snapshot the
+  statement began with, i.e. from before the lock wait, which is the stale proof
+  this fix exists to remove.
+- `insertObservation` and `insertRawPayload` call `lockCapturePayloadRefAlive`
+  — `SELECT … FOR KEY SHARE` on the addressed object — inside the SAME
+  transaction as the insert that stamps the reference, so the lock is still held
+  at the instant the row becomes visible.
+
+The two lock modes conflict, so exactly one of two things can happen. The writer
+got there first: the sweep WAITS for its commit, and the verdict statement,
+which under READ COMMITTED takes a fresh snapshot after that wait, SEES the new
+envelope and keeps the body. Or the sweep got there first: the writer's probe
+returns zero rows, the reference is DROPPED, and the envelope is written with
+its INLINE body — the pre-G5 shape of a capture, always legal and always
+readable. There is no third outcome and no window between them.
+
+**REJECTED ALTERNATIVES, and the reasons are not stylistic.** A SECOND
+CONFIRMATION PASS separated by a delay narrows a race; this one is closed, and a
+delay could not be sized honestly anyway (any bound is a guess about GC pauses
+and scheduler latency) while doubling how long a break-glass act holds the
+erasure fence. A DURABLE CLAIM ROW written inside the CAS transaction and read
+by the sweep's `not exists` adds a write and a row to the hottest write path in
+the system in the common case where nothing is racing, plus a TTL cleanup that
+is itself a new deleter and could delete a live claim. A FOREIGN KEY would close
+it — it is the textbook mechanism — and every word of #215's rejection of one
+still holds: an FK taxes the hot write path with index maintenance, locks the
+catalog's future partition maintenance, and would have to validate all of
+history. Which is precisely the argument FOR what shipped: `FOR KEY SHARE` is
+the one lock an FK would have taken, taken by hand, at the one moment it is
+needed — no DDL, no index (the catalog's own primary key serves the probe), no
+history to validate, and paid only by a capture that carries a reference at all.
+
+**IT APPLIES UNIFORMLY, pointer-only and dual-write alike.** A dangling
+reference on a dual-written row is not a lost fact — the inline body is there —
+but it is still a lie, and it is the one the verifier reports as
+`object_missing`. Closing it in one place beats teaching the writers which
+envelopes are allowed to lie. `lockCapturePayloadRefAlive` stays OFF the package
+barrel (pinned in `tests/capture-payload-barrel.test.ts`) because it is a LOCK,
+not a read: a runtime caller holding it for the length of some other transaction
+would fence the erasure for no reason, and one calling it and then inserting
+separately would believe a proof it does not have.
+
+**A STANDING DANGLING-REFERENCE CENSUS, with its own latch.** The hourly parity
+job now counts references whose catalog row is absent, over both envelope
+tables, and pages under the existing `capture_payload_parity` kind with its own
+`dangling_reference` subKey — the shape #213 gave the disk-runway latches and
+#219 gave the collision census. It runs on EVERY pass, canary on or off, for the
+collision census's reason and a stronger one: rolling a flag back does not
+re-attach a body to a reference that points at nothing, and `inline` mode plus a
+canary rollback is exactly the configuration an operator reaches for when they
+are worried. It is BOUNDED to the head of each table (a total anti-join over
+`observations` is minutes, not an hourly cost) and the window travels in the log
+line and the incident text, so a zero is never read as "zero anywhere in
+history" — the total sweep over history is `capture:verify-backfill`'s job and it
+already does one per scope. The capture seam counts `refVanished` and owns no
+alarm of its own (#217): the repositories decide, because they hold the lock;
+the scheduled job pages, because an alarm needs an owner that runs on a known
+schedule.
+
+**FINDING 2 — the swap read a world that was still moving.**
+`capture:reclaim --phase swap` checked the erasure preconditions once, at
+precondition time, and read the source/shadow row counts OUTSIDE the swap
+transaction. An erasure that executed in the gap — including while the swap sat
+waiting for its locks — would leave the swap parking a POST-erasure source and
+attaching a PRE-erasure shadow, bringing back every row that erasure deleted.
+That is resurrection, arriving through the one door the G3 fence does not watch,
+committed by the act that was supposed to be the safe one. The transaction now
+takes its locks EXPLICITLY AND FIRST — `LOCK TABLE ONLY observations`, then the
+source partition, then the shadow, in the order the DDL would take them anyway,
+with `ONLY` so the stop does not extend to every other month — and then re-proves
+everything: erasure quiet, both relations still in the attachment state the
+plan assumed, and the two row counts equal.
+
+**THE RECOUNT AND THE ERASURE PROBE DO NOT SUBSUME EACH OTHER**, which is why
+both are there. An erasure that COMMITTED its deletes shows up as a count
+mismatch and cannot hide: nothing writes into a closed month, so the counts
+cannot drift back into agreement. An erasure that has NOT committed them is
+invisible to any count — MVCC hides it — and only the mid-flight `erasure_log`
+tombstone and the held fence lock can see it. A `statement_timeout` bounds the
+recount, because it is the only statement in that transaction that reads data
+and it runs under ACCESS EXCLUSIVE: a pathological count aborts the swap rather
+than freezing capture. A re-verification that says no is a REFUSAL, not a crash —
+the transaction rolls back, the run settles as `refused`, and the message names
+the remedy (drop the shadow and rebuild it; re-running the shadow phase only
+ADDS rows and would never remove the ones the erasure deleted).
+
+**THE RETENTION PIN IS EXTENDED DELIBERATELY.** The fix added a statement to
+`packages/db/src/repositories/capture-payload-erasure.ts`, the file that carries
+the statement-level licence for the one deleter of a captured body, so
+`tests/retention-deleters.test.ts` now pins the lock statement AND its position
+— before the verdict, which is before the deletes. Delete that statement, or
+fold it into the verdict query, and this file goes back to being able to destroy
+the only copy of a captured body while an envelope is being written to point at
+it, with every other assertion in the file still passing. That is exactly the
+class of regression a statement-level licence exists to catch.
+
+**AMENDMENT TO #219 (family law: updated-in-change).** #219's stated residual —
+"a capture landing DURING the sweep … the outcome is a dangling reference …
+never a lost captured fact" — was true when it was written and became false when
+#220 shipped. It is superseded by this entry. The acceptance is withdrawn: the
+race is closed rather than tolerated, and the note in the code that carried the
+old reasoning now carries the new one. Nothing else in #219 changes — the
+inheritance of the module's verdicts, the bystander law, the refusal to rewrite
+a shared body, and the collision subKey all stand.
+
+**WHAT WAS NOT DONE.** No foreign key (see above). No migration: nothing about
+this fix is a schema change, and the catalog's primary key already indexes every
+probe it adds. No total dangling-reference sweep on the hourly schedule, for the
+cost reason stated above — the bounded window is declared rather than implied.
+No change to the erasure's ordering (the catalog sweep still runs after the
+delete transaction commits, because "no surviving reference" only means
+something once those deletes are visible). And no attempt to make the capture
+seam retry into the catalog when its object vanished: writing the inline body is
+simpler, provably correct, and lands in the state #220 already sanctions — the
+worst case is both copies, never none.

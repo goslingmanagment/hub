@@ -201,6 +201,10 @@ describe("observations insert protocol", () => {
       inserted: false,
       observationId: first.observationId,
       receivedAt: first.receivedAt,
+      // #222: no row is written on the duplicate path, so no reference is
+      // stamped and the liveness probe never runs — the flag is false because
+      // there was nothing to prove, not because a proof succeeded.
+      payloadRefVanished: false,
     });
 
     const count = await testDb.pool.query<{ n: string }>("select count(*)::text as n from observations");

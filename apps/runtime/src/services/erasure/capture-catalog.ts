@@ -167,10 +167,19 @@ export async function buildCapturePayloadCatalogWork(
  *
  * The fence locks are the same ones the delete transaction takes: exclusive,
  * over every resolved page id, in sorted order (stable order prevents deadlocks
- * between two erasures). They do not make the reference proof atomic against a
- * concurrent CAPTURE — nothing at READ COMMITTED can — and that residual is
- * documented on `deleteUnreferencedCapturePayloadObjects`: the worst outcome is
- * a dangling reference the parity verifier reports, never a lost fact.
+ * between two erasures). They serialize this sweep against the DM archive and
+ * projection writers; they do NOT reach a concurrent CAPTURE, which takes no
+ * fence lock at all.
+ *
+ * THE CAPTURE RACE IS HANDLED ONE LEVEL DOWN, and it is no longer a residual
+ * (decision #222). `deleteUnreferencedCapturePayloadObjects` locks its candidate
+ * objects `FOR UPDATE` before it proves anything, and the envelope writers hold
+ * `FOR KEY SHARE` on the object until the insert that stamps the reference
+ * commits — so the sweep either sees the reference and keeps the body, or the
+ * writer finds the object gone and writes its body inline instead. The old note
+ * here said the worst outcome was a dangling reference the parity verifier
+ * reports; that was true under #215 and stopped being true under #220, when a
+ * pointer-only row's reference became the only route to its body.
  */
 export async function sweepCapturePayloadCatalog(
   app: Db,
