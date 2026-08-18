@@ -129,7 +129,7 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
   });
 
-  it("covers exactly the thirty-four wired keys", () => {
+  it("covers exactly the thirty-five wired keys", () => {
     // W3.2 added ofapiQueuedCommandTtlMs (read live by the command sweep);
     // Decision #136 added the two fan-dossier keys (read per generation);
     // Decision #140 added the single time-bounded prompt-echo window;
@@ -139,7 +139,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     // decision #202 added the hydration autopilot mode and its daily budget;
     // G5 slice 1 added the CAS dual-write canary bound (published to each
     // process by the heartbeat, which reads the live overlay anyway);
-    // G5 slice 2 added the payload read mode, published the same way.
-    expect(LIVE_CONFIG_KEYS.size).toBe(34);
+    // G5 slice 2 added the payload read mode, published the same way;
+    // G5 slice 3c-1 added the pointer-only bound, published on the same beat.
+    expect(LIVE_CONFIG_KEYS.size).toBe(35);
   });
 });

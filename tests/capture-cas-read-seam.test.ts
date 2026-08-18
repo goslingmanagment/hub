@@ -123,6 +123,9 @@ describe("capture CAS read seam — inline mode", () => {
       shadowMismatched: 0,
       served: 0,
       serveFellBack: 0,
+      servedNullInline: 0,
+      shadowSkippedNullInline: 0,
+      nullInlineUnresolved: 0,
     });
   });
 
@@ -342,5 +345,120 @@ describe("capture CAS read seam — serve mode", () => {
     expect(resolvedRaw.responsePayload).toBe(catalog);
     expect(resolvedRaw.endpoint).toBe("dm_messages");
     expect(resolvedRaw.id).toBe(42);
+  });
+});
+
+// G5 slice 3c-1 — the null-inline law. A row written pointer-only has ONE copy
+// of its body, so the read mode (a preference between two copies) must not
+// decide whether that copy is reachable. The mode this suite cares about most
+// is `inline`: it is the rollback target of slice 2, and if it blanked
+// pointer-only rows, the escape hatch would be the hazard.
+describe("capture CAS read seam — a row with no inline body", () => {
+  const CATALOG = { total: 1, messages: [{ text: "hey", id: "m1" }] };
+
+  it.each(["inline", "shadow", "serve"] as const)(
+    "resolves from the catalog in %s mode",
+    async (mode) => {
+      resetCaptureCasReadForTests(mode);
+      const stub = stubApp([catalogRow(CATALOG)]);
+
+      const result = await resolveCapturePayload(stub.app, {
+        envelope: "observation",
+        envelopeId: 11,
+        inline: null,
+        ref: REF,
+      });
+
+      expect(result, mode).toBe(CATALOG);
+      expect(stub.queries, mode).toBe(1);
+      expect(stub.warnings, mode).toHaveLength(0);
+      // Counted as a NECESSITY read, never as a preference-driven `served`:
+      // rolling the mode back would not remove this query.
+      expect(getCaptureCasReadCounters(), mode).toMatchObject({
+        servedNullInline: 1,
+        served: 0,
+        nullInlineUnresolved: 0,
+      });
+    },
+  );
+
+  it("skips the shadow comparison instead of scoring it as matched", async () => {
+    resetCaptureCasReadForTests("shadow");
+    const stub = stubApp([catalogRow(CATALOG)]);
+
+    const result = await resolveCapturePayload(stub.app, {
+      envelope: "raw_payload",
+      envelopeId: 12,
+      inline: null,
+      ref: REF,
+    });
+
+    // There is no second reading of this fact, so there is no verdict: a
+    // `shadowMatched` here would be parity evidence manufactured out of nothing.
+    expect(result).toBe(CATALOG);
+    expect(getCaptureCasReadCounters()).toMatchObject({
+      shadowSkippedNullInline: 1,
+      shadowChecked: 0,
+      shadowMatched: 0,
+      shadowMismatched: 0,
+      servedNullInline: 1,
+    });
+  });
+
+  it.each([
+    ["object_missing", { rows: [] as unknown[] }],
+    ["body_missing", catalogRow(null, { hasJson: false })],
+    ["read_error", new Error("connection terminated")],
+  ])("returns null and LOGS when the only copy cannot be read (%s)", async (reason, response) => {
+    resetCaptureCasReadForTests("serve");
+    const stub = stubApp([response as { rows: unknown[] } | Error]);
+
+    const result = await resolveCapturePayload(stub.app, {
+      envelope: "observation",
+      envelopeId: 11,
+      inline: null,
+      ref: REF,
+    });
+
+    // Still no throw — the seam's oldest promise — but this is the one outcome
+    // it cannot make safe, so unlike a serve fallback it is never silent.
+    expect(result).toBeNull();
+    expect(getCaptureCasReadCounters()).toMatchObject({
+      nullInlineUnresolved: 1,
+      servedNullInline: 0,
+      serveFellBack: 0,
+    });
+    expect(stub.warnings).toHaveLength(1);
+    expect(stub.warnings[0]!.fields).toMatchObject({
+      envelope: "observation",
+      envelopeId: 11,
+      bucketMonth: "2026-08-01",
+      objectId: 7,
+      reason,
+      readMode: "serve",
+    });
+  });
+
+  it("returns null without a query when there is no reference either", async () => {
+    // The legacy shape: no body and no pointer. Nothing to resolve, in any mode
+    // — and migration 0128's CHECK makes it unwritable from here on.
+    for (const mode of ["inline", "shadow", "serve"] as const) {
+      resetCaptureCasReadForTests(mode);
+      const stub = stubApp([catalogRow(CATALOG)]);
+
+      const result = await resolveCapturePayload(stub.app, {
+        envelope: "observation",
+        envelopeId: 11,
+        inline: null,
+        ref: null,
+      });
+
+      expect(result, mode).toBeNull();
+      expect(stub.queries, mode).toBe(0);
+      expect(getCaptureCasReadCounters(), mode).toMatchObject({
+        servedNullInline: 0,
+        nullInlineUnresolved: 0,
+      });
+    }
   });
 });

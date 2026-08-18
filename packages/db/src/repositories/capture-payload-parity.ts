@@ -13,6 +13,16 @@
 // good fingerprint for a telemetry line; the verdict is decided by
 // Buffer.compare over the whole canonical body.
 //
+// WHAT IT CANNOT PROVE, since G5 slice 3c-1. A row written pointer-only has no
+// inline body, so this job has nothing to compare its catalog copy against; it
+// counts such rows as `skippedNullInline` and compares the rest. As a page
+// ramps, its `checked` therefore falls toward zero — by construction, not by
+// failure — and the latch neither opens nor resolves off a sample of zero, the
+// same asymmetry the canary-off skip already encodes. The proof that a catalog
+// body is faithful is spent BEFORE the inline copy goes away: the slice-2 shadow
+// window and this job's own history over the same page, which is exactly why the
+// pointer-only flag is gated behind them.
+//
 // IT NEVER REPAIRS, NEVER DELETES, NEVER TOUCHES INLINE DATA. A mismatch is
 // evidence for the owner, not something for a background job to "fix" — a job
 // that rewrites a captured fact to agree with a copy of itself is exactly the
@@ -79,9 +89,20 @@ export interface CapturePayloadParityMismatch {
 }
 
 export interface CapturePayloadParityReport {
+  /** Envelopes actually COMPARED — never a count of candidates. */
   checked: number;
   matched: number;
   mismatched: number;
+  /**
+   * G5 slice 3c-1: sampled envelopes that carry a reference and NO inline body
+   * (written pointer-only). There is nothing to compare them against, so they
+   * are neither checked nor matched — counting them as matched would report
+   * parity that was never measured, and the whole value of this job is that its
+   * "matched" means two copies were read and found identical. They are reported
+   * so the owner can see the sample shrinking as a page ramps, instead of
+   * watching `checked` fall toward zero with no explanation.
+   */
+  skippedNullInline: number;
   /** Bounded to CAPTURE_PAYLOAD_PARITY_SAMPLE_LIMIT. */
   mismatches: CapturePayloadParityMismatch[];
 }
@@ -308,7 +329,17 @@ export async function verifyCapturePayloadParity(
   const mismatches: CapturePayloadParityMismatch[] = [];
   let matched = 0;
   let mismatched = 0;
+  let skippedNullInline = 0;
   for (const row of candidates) {
+    // G5 slice 3c-1: a pointer-only envelope has no inline body, so there is no
+    // second reading of this fact for the catalog copy to agree or disagree
+    // with. Skipped BEFORE compareEnvelope rather than handled inside it: the
+    // whole function is a comparison, and a comparison with one operand is not
+    // a verdict of any kind — least of all "matched".
+    if (row.inline === null || row.inline === undefined) {
+      skippedNullInline += 1;
+      continue;
+    }
     const verdict = await compareEnvelope(db, row);
     if (verdict === null) {
       matched += 1;
@@ -320,5 +351,11 @@ export async function verifyCapturePayloadParity(
     }
   }
 
-  return { checked: candidates.length, matched, mismatched, mismatches };
+  return {
+    checked: candidates.length - skippedNullInline,
+    matched,
+    mismatched,
+    skippedNullInline,
+    mismatches,
+  };
 }

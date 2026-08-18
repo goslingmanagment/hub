@@ -57,6 +57,21 @@ import {
 
 let testDb: StartedTestDatabase | null = null;
 
+/** "The seam did nothing at all" — every counter it owns, at rest. Spelled out
+ *  in full (not toMatchObject) on purpose: a new counter that starts ticking on
+ *  a path claimed to be free must fail this, which is how slice 3c-1's
+ *  null-inline counters were held to the same bar. */
+const ZERO_READ_COUNTERS = {
+  shadowChecked: 0,
+  shadowMatched: 0,
+  shadowMismatched: 0,
+  served: 0,
+  serveFellBack: 0,
+  servedNullInline: 0,
+  shadowSkippedNullInline: 0,
+  nullInlineUnresolved: 0,
+};
+
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
 }, 120_000);
@@ -158,13 +173,7 @@ describe("capture CAS read seam — observation replay reader (runCanonicalizati
     await runCanonicalization(appStub());
 
     expect(await canonicalizedDedupKeys(page.id)).toEqual(["txn:txn-inline"]);
-    expect(getCaptureCasReadCounters()).toEqual({
-      shadowChecked: 0,
-      shadowMatched: 0,
-      shadowMismatched: 0,
-      served: 0,
-      serveFellBack: 0,
-    });
+    expect(getCaptureCasReadCounters()).toEqual(ZERO_READ_COUNTERS);
   });
 
   it("shadow mode replays the INLINE body and reports the divergence", async (context) => {
@@ -263,13 +272,7 @@ describe("capture CAS read seam — observation replay reader (runCanonicalizati
 
       expect(await canonicalizedDedupKeys(page.id), mode).toEqual(["txn:txn-unreferenced"]);
       // A null reference costs nothing in any mode — no query, no counter.
-      expect(getCaptureCasReadCounters(), mode).toEqual({
-        shadowChecked: 0,
-        shadowMatched: 0,
-        shadowMismatched: 0,
-        served: 0,
-        serveFellBack: 0,
-      });
+      expect(getCaptureCasReadCounters(), mode).toEqual(ZERO_READ_COUNTERS);
     }
   });
 });

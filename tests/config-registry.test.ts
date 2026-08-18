@@ -120,6 +120,11 @@ describe("config registry", () => {
     // inline->shadow->serve ramp (and any rollback) needs no restart; rests at
     // "inline", where readers behave exactly as they did before the slice.
     "captureCasReadMode",
+    // G5 slice 3c-1: the pointer-only bound. Live for the same reason as the
+    // canary it is subordinate to, and it rests at "" (fully off) — but note
+    // that unlike every other live key here, turning this one back off does not
+    // undo the rows written while it was on.
+    "captureCasPointerOnlyPages",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",

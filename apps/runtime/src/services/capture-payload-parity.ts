@@ -29,6 +29,7 @@ import type { AppContext } from "../bootstrap.ts";
 import {
   getCaptureCasDualWriteCounters,
   getCaptureCasDualWritePages,
+  getCaptureCasPointerOnlyPages,
 } from "./capture-cas-dual-write.ts";
 import {
   notifyOfapiGlobalIncident,
@@ -150,13 +151,27 @@ export async function runCapturePayloadParityCheck(
     // exactly as it was. The READ counters still deserve a line when the read
     // mode is not inline: refs written by an earlier canary window survive a
     // dual-write rollback, so shadow/serve can keep resolving them long after
-    // this job has stopped sampling. Silent only when both are off, which
-    // preserves "costs nothing when off" for the default deployment.
-    if (getCaptureCasReadMode() !== "inline") {
+    // this job has stopped sampling.
+    //
+    // G5 slice 3c-1 adds the second reason, and it is the stronger one: a
+    // pointer-only row resolves from the catalog in EVERY mode, so rolling BOTH
+    // the canary off and the read mode back to `inline` — the quietest state an
+    // operator can put this subsystem in — does not stop those reads happening.
+    // If this line were still gated on the mode alone, `nullInlineUnresolved`
+    // (a captured body that could not be read AT ALL) would go unreported in
+    // exactly the configuration someone reaches for when they are worried.
+    // Silent only when nothing has actually happened, which preserves "costs
+    // nothing when off" for the default deployment.
+    const readCounters = getCaptureCasReadCounters();
+    const nullInlineTraffic = readCounters.servedNullInline > 0
+      || readCounters.nullInlineUnresolved > 0
+      || readCounters.shadowSkippedNullInline > 0;
+    if (getCaptureCasReadMode() !== "inline" || nullInlineTraffic) {
       app.logger.info({
         dualWritePages,
+        pointerOnlyPages: getCaptureCasPointerOnlyPages(),
         readMode: getCaptureCasReadMode(),
-        readCounters: getCaptureCasReadCounters(),
+        readCounters,
       }, "Capture payload parity check skipped (dual-write canary off); read counters only");
     }
     return {
@@ -165,6 +180,7 @@ export async function runCapturePayloadParityCheck(
       checked: 0,
       matched: 0,
       mismatched: 0,
+      skippedNullInline: 0,
       mismatches: [],
       collisions,
       checkedAt,
@@ -186,10 +202,12 @@ export async function runCapturePayloadParityCheck(
   // surface, because the read path deliberately owns no alarm of its own.
   app.logger.info({
     dualWritePages,
+    pointerOnlyPages: getCaptureCasPointerOnlyPages(),
     readMode: getCaptureCasReadMode(),
     checked: report.checked,
     matched: report.matched,
     mismatched: report.mismatched,
+    skippedNullInline: report.skippedNullInline,
     collisions,
     writeCounters: getCaptureCasDualWriteCounters(),
     readCounters: getCaptureCasReadCounters(),
