@@ -132,7 +132,7 @@ export const AGENT_CLAIM_CLASSES = {
     },
   },
   subscription: {
-    evidentiary: [],
+    evidentiary: ["domain_events"],
     fields: {
       subscriptionState: { required: ["page_subscriptions"] },
       subscriptionPriceMills: { required: ["page_subscriptions"] },

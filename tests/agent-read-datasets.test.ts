@@ -23,11 +23,12 @@ import {
  * to prevent.
  */
 describe("agent read dataset vocabulary", () => {
-  it("names exactly the fifteen available datasets", () => {
+  it("names exactly the sixteen available datasets", () => {
     expect([...AGENT_DATASET_NAMES]).toEqual([
       "fan_memberships",
       "dm_threads",
       "subscriptions",
+      "subscription_events",
       "transactions",
       "tip_transactions",
       "fan_spend_daily",
@@ -132,6 +133,17 @@ describe("agent read dataset vocabulary", () => {
     });
     expect(agentDatasetRequiredCapabilities("tip_transactions"))
       .toEqual(["read:datasets", "read:money", "read:messages"]);
+  });
+
+  it("exposes stored subscription events without adding money or text access", () => {
+    expect(AGENT_DATASETS.subscription_events.fields).toEqual({
+      occurredAt: "timestamp",
+      fanId: "string",
+      phase: "string",
+      subType: "string",
+    });
+    expect(agentDatasetRequiredCapabilities("subscription_events"))
+      .toEqual(["read:datasets"]);
   });
 
   it("uses wire field names the query schema will accept", () => {

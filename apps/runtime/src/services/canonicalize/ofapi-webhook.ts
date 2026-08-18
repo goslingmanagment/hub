@@ -97,7 +97,12 @@ function subscriptionEvent(
     return [];
   }
   const user = isRecord(payload.user) ? payload.user : {};
-  const fanId = asString(payload.user_id) ?? asString(user.id);
+  // Subscription notifications identify the subscriber in nested `user.id`.
+  // The live subscriptions.new shape uses top-level `user_id` for the creator,
+  // so a payload without the nested identity cannot produce a fan event. This
+  // is deliberately forward-only within v3: bumping the family would replay
+  // already-stamped history under a different fan-bearing dedup key.
+  const fanId = asString(user.id);
   if (!fanId) {
     return [];
   }

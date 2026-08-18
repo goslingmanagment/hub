@@ -378,6 +378,31 @@ hub dataset --page-label lora-2 --dataset transactions \
   --sort occurredAt:desc --limit 100
 ```
 
+For OnlyFans subscription activity, choose the grain explicitly. `subscriptions`
+is the mutable one-row-per-fan relationship snapshot; its window and default sort
+use `startedAt`, so it cannot represent a renewal or a later return as another row.
+`subscription_events` reads the already-stored `subscription.started` and
+`subscription.renewed` facts from `domain_events`, windows them by `occurredAt`,
+and returns `phase`, the provider's nullable `subType`, and a nullable `fanId`:
+
+```
+hub dataset --page-label lora-vip-of --dataset subscription_events \
+  --from 2026-08-11T00:00:00Z --to 2026-08-19T00:00:00Z \
+  --sort occurredAt:desc --limit 200
+```
+
+These are events Hub actually stored, not a completeness proof and not the
+OnlyFans aggregate metric. `phase` preserves the webhook event type, so a
+returning subscriber remains `phase=renewed`. When the business question is the
+OnlyFans new/return cohort, count `phase=started` plus
+`phase=renewed, subType=returning_subscriber`; do not discard the latter or
+rewrite the stored phase. `fanId` is returned only when the stored event identity
+still resolves to a fan of that page. Legacy v3 events that accidentally stored
+the creator id, and identities removed by erasure, keep their event row but expose
+`fanId=null`; the read path never rehydrates identity from raw capture payloads.
+Read the `domain_events` plane floor and blockers before reporting an absence or
+a total.
+
 `transactions.relatedMessageRef` is a legacy, misnamed compatibility alias for
 the provider's generic correlation key. It is NOT proof of a related message;
 use `correlationRef` in new work.

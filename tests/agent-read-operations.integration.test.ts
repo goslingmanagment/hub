@@ -3,11 +3,15 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendDomainEvents,
   createFanslyPage,
   createModel,
+  createOnlyFansPage,
   createUser,
   insertAgentKey,
   setConfigOverride,
+  upsertFanPages,
+  upsertFans,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -40,6 +44,7 @@ const TOKEN = `${AGENT_KEY_TOKEN_PREFIX}operations-suite-token`;
 
 let testDb: StartedTestDatabase | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
+let modelId = 0;
 let pageId = 0;
 
 const FAN_PLATFORM_USER_ID = "438766025723355136";
@@ -67,6 +72,7 @@ beforeEach(async (context) => {
   if (!model) {
     throw new Error("fixture model was not created");
   }
+  modelId = model.id;
   const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "lora-2" });
   if (!page) {
     throw new Error("fixture page was not created");
@@ -1623,6 +1629,176 @@ describe("[sync-critical] agent read plane operations", () => {
       { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" },
     );
     expect(dataset.json().items[0].fields.subscriptionState).toBe("expired");
+  });
+
+  it("windows subscription relationships by start, not expiry", async () => {
+    await testDb!.pool.query(
+      `insert into page_subscriptions (platform_subscription_id, platform_account_id, fan_id,
+         raw_status, canonical_status, price_mills, renew_price_mills, source_created_at, ends_at,
+         is_current)
+       select 'started-in-window', $1::bigint, f.id, 1, 'active', 0, 0,
+         timestamptz '2026-01-12T00:00:00Z', timestamptz '2026-06-01T00:00:00Z', true
+       from fans f where f.platform_user_id = $2
+       union all
+       select 'missing-start', $1::bigint, f.id, 1, 'active', 0, 0, null::timestamptz,
+         timestamptz '2026-01-15T00:00:00Z', true
+       from fans f where f.platform_user_id = $2`,
+      [pageId, FAN_PLATFORM_USER_ID],
+    );
+
+    const response = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/subscriptions/query",
+      { from: "2026-01-10T00:00:00Z", to: "2026-01-20T00:00:00Z" },
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items.map((item: { fields: { subscriptionRef: string } }) =>
+      item.fields.subscriptionRef)).toEqual(["started-in-window"]);
+  });
+
+  it("serves OnlyFans subscription events already stored in domain_events", async () => {
+    const page = await createOnlyFansPage(testDb!.db, { modelId, label: "lora-vip-of" });
+    if (!page) {
+      throw new Error("OnlyFans fixture page was not created");
+    }
+    await testDb!.pool.query(
+      `update agent_keys set page_ids = array_append(page_ids, $1)
+       where name = 'operations'`,
+      [page.id],
+    );
+    await testDb!.pool.query(
+      `update pages set external_page_id = 'creator-1' where id = $1`,
+      [page.id],
+    );
+    const [startedFan, renewedFan, creatorIdentity] = await upsertFans(testDb!.db, [
+      { platform: "onlyfans", platformUserId: "111" },
+      { platform: "onlyfans", platformUserId: "222" },
+      { platform: "onlyfans", platformUserId: "creator-1" },
+    ]);
+    await upsertFanPages(testDb!.db, [
+      { fanId: startedFan!.id, platformAccountId: page.id },
+      { fanId: renewedFan!.id, platformAccountId: page.id },
+      { fanId: creatorIdentity!.id, platformAccountId: page.id },
+    ]);
+    await appendDomainEvents(testDb!.db, page.id, [
+      {
+        type: "subscription.started",
+        occurredAt: new Date("2026-03-02T00:00:00Z"),
+        fanIdentityRef: "111",
+        data: { subType: "new_subscriber" },
+        schemaVersion: 1,
+        observationId: 101,
+        dedupKey: "sub:started:111:2026-03-02T00:00:00.000Z",
+      },
+      {
+        type: "subscription.renewed",
+        occurredAt: new Date("2026-03-03T00:00:00Z"),
+        fanIdentityRef: "222",
+        data: { subType: "returning_subscriber" },
+        schemaVersion: 1,
+        observationId: 102,
+        dedupKey: "sub:renewed:222:2026-03-03T00:00:00.000Z",
+      },
+      {
+        type: "subscription.started",
+        occurredAt: new Date("2026-03-04T00:00:00Z"),
+        // Legacy v3 used the creator id. Keep the event grain but do not expose
+        // an identity that is not a confirmed fan of this page.
+        fanIdentityRef: "creator-1",
+        data: { subType: "new_subscriber" },
+        schemaVersion: 1,
+        observationId: 103,
+        dedupKey: "sub:started:creator-1:2026-03-04T00:00:00.000Z",
+      },
+      {
+        type: "message.received",
+        occurredAt: new Date("2026-03-05T00:00:00Z"),
+        fanIdentityRef: "333",
+        data: {},
+        schemaVersion: 1,
+        observationId: 104,
+        dedupKey: "msg:received:irrelevant",
+      },
+      {
+        type: "subscription.started",
+        occurredAt: new Date("2026-03-10T00:00:00Z"),
+        fanIdentityRef: "444",
+        data: { subType: "new_subscriber" },
+        schemaVersion: 1,
+        observationId: 105,
+        dedupKey: "sub:started:444:2026-03-10T00:00:00.000Z",
+      },
+    ]);
+
+    const response = await agentPost(
+      "/api/v1/agent/pages/lora-vip-of/datasets/subscription_events/query",
+      { from: "2026-03-01T00:00:00Z", to: "2026-03-10T00:00:00Z" },
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    const body = response.json();
+    expect(body.items.map((item: { fields: Record<string, unknown> }) => item.fields))
+      .toEqual([
+        {
+          occurredAt: "2026-03-04T00:00:00.000Z",
+          fanId: null,
+          phase: "started",
+          subType: "new_subscriber",
+        },
+        {
+          occurredAt: "2026-03-03T00:00:00.000Z",
+          fanId: "222",
+          phase: "renewed",
+          subType: "returning_subscriber",
+        },
+        {
+          occurredAt: "2026-03-02T00:00:00.000Z",
+          fanId: "111",
+          phase: "started",
+          subType: "new_subscriber",
+        },
+      ]);
+    expect(body.items.every((item: { provenance: { ingestPaths: string[] } }) =>
+      item.provenance.ingestPaths.includes("ofapi_webhook"))).toBe(true);
+    expect(body.capture.planes).toContainEqual(expect.objectContaining({
+      plane: "domain_events",
+      state: "read",
+    }));
+    expect(body.capture.planes).toContainEqual(expect.objectContaining({
+      plane: "fans",
+      state: "read",
+    }));
+    expect(body.capture.planes).toContainEqual(expect.objectContaining({
+      plane: "page_fans",
+      state: "read",
+    }));
+    expect(body.capture.planes).toContainEqual(expect.objectContaining({
+      plane: "observations",
+      state: "not_applicable",
+    }));
+
+    // Fan erasure removes the identity rows. The immutable event may remain,
+    // but the read plane must immediately stop exposing that fan id.
+    await testDb!.pool.query(
+      `delete from fans where platform = 'onlyfans' and platform_user_id = '111'`,
+    );
+    const afterErasure = await agentPost(
+      "/api/v1/agent/pages/lora-vip-of/datasets/subscription_events/query",
+      { from: "2026-03-01T00:00:00Z", to: "2026-03-10T00:00:00Z" },
+    );
+    expect(afterErasure.statusCode).toBe(200);
+    const erasedEvent = afterErasure.json().items.find(
+      (item: { fields: { occurredAt: string } }) =>
+        item.fields.occurredAt === "2026-03-02T00:00:00.000Z",
+    );
+    expect(erasedEvent.fields.fanId).toBeNull();
+
+    const catalog = (await agentGet("/api/v1/agent/capabilities")).json();
+    expect(catalog.datasets.find((entry: { dataset: string }) =>
+      entry.dataset === "subscription_events")).toMatchObject({
+      platforms: ["onlyfans"],
+      moneyBearing: false,
+      requiredCapabilities: ["read:datasets"],
+      defaultSort: "occurredAt",
+    });
   });
 
   it("a cursor round-trips a real traversal", async () => {

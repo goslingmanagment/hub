@@ -144,7 +144,7 @@ const SUBSCRIPTIONS = `
   select s.platform_account_id as k_page_id,
          p.platform::text      as k_platform,
          s.id::text            as k_key,
-         s.ends_at             as k_occurred_at,
+         s.source_created_at   as k_occurred_at,
          f.platform_user_id    as k_fan,
          p.platform::text      as f_platform,
          f.platform_user_id    as f_platform_user_id,
@@ -157,6 +157,45 @@ const SUBSCRIPTIONS = `
   from page_subscriptions s
   join pages p on p.id = s.platform_account_id
   join fans f on f.id = s.fan_id
+  where s.source_created_at is not null
+`;
+
+const SUBSCRIPTION_EVENTS = `
+  select e.account_id          as k_page_id,
+         p.platform::text      as k_platform,
+         e.id::text            as k_key,
+         e.occurred_at         as k_occurred_at,
+         case
+           when pf.id is not null
+             and e.fan_identity_ref is distinct from p.external_page_id
+             then f.platform_user_id
+           else null
+         end                   as k_fan,
+         e.observation_id      as k_observation_ref,
+         'ofapi_webhook'::text as k_ingest_path,
+         'final'::text         as k_convergence,
+         e.occurred_at         as f_occurred_at,
+         case
+           when pf.id is not null
+             and e.fan_identity_ref is distinct from p.external_page_id
+             then f.platform_user_id
+           else null
+         end                   as f_fan_id,
+         case e.type
+           when 'subscription.started' then 'started'
+           when 'subscription.renewed' then 'renewed'
+         end                   as f_phase,
+         nullif(e.data ->> 'subType', '') as f_sub_type
+  from domain_events e
+  join pages p on p.id = e.account_id
+  left join fans f
+    on f.platform = p.platform
+   and f.platform_user_id = e.fan_identity_ref
+  left join page_fans pf
+    on pf.platform_account_id = e.account_id
+   and pf.fan_id = f.id
+  where p.platform = 'onlyfans'
+    and e.type in ('subscription.started', 'subscription.renewed')
 `;
 
 const TRANSACTIONS = `
@@ -523,6 +562,24 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     stableKeyColumns: ["k_key"],
     readPlanes: ["page_subscriptions", "fans"],
+  },
+  subscription_events: {
+    source: SUBSCRIPTION_EVENTS,
+    fields: {
+      occurredAt: "f_occurred_at",
+      fanId: "f_fan_id",
+      phase: "f_phase",
+      subType: "f_sub_type",
+    },
+    windowColumn: "k_occurred_at",
+    stableKeyColumns: ["k_key"],
+    readPlanes: ["domain_events", "fans", "page_fans"],
+    captureFloorPlane: "domain_events",
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
   },
   transactions: {
     source: TRANSACTIONS,

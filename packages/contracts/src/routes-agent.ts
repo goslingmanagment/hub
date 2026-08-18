@@ -1038,9 +1038,8 @@ export const agentTimelineLaneEnum = z.enum([
   "presence",
 ]);
 
-/** `message.ppv_unlocked` is ABSENT and that is normative: it canonicalizes but
- *  projects into nothing, and lives only in `domain_events`, which the plane may
- *  not read. There is nowhere to serve it from. */
+/** `message.ppv_unlocked` is ABSENT and that is normative: it canonicalizes into
+ *  `domain_events`, but no timeline or dataset exposes that event. */
 export const agentTimelineKindEnum = z.enum([
   "message.received",
   "message.sent",
