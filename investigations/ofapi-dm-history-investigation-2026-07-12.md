@@ -1,5 +1,28 @@
 # OFAPI DM history sync — working investigation notes
 
+> **CLOSED — superseded by Decision #158 (2026-07-16). Read this as evidence, not as a live incident.**
+>
+> This investigation was the fact base behind decision #158 (`docs/decisions.md`),
+> which adopted the capture-before-parse OnlyFans mirror and ruled that a changed
+> chat head is evidence, never permission to fan out paid pagination.
+>
+> **The subject of this investigation no longer exists.** The legacy OnlyFans
+> `dm_messages` per-chat crawler is permanently retired: `onlyfansDmMessagesChunk`
+> in `apps/runtime/src/services/sync/executor-handlers.ts` is now a no-op that
+> returns `skipped: "legacy_ofapi_dm_messages_retired"` and issues no vendor call.
+> Every defect ranked below — the 404 pin, the `100 → 20 → 5` timeout ladder,
+> `pending_backfill` treated as a work queue, the false `complete` on chat
+> `514750406`, the resulting credit burn — describes that retired machinery and is
+> therefore historical. Fansly DM sync is a separate live handler and was never in
+> scope here.
+>
+> The "recommended long-term architecture" section is likewise superseded: its
+> contours are canonical in #158. Where the two disagree, #158 wins.
+>
+> Retained because #158 states conclusions without the production evidence that
+> produced them; that evidence is here. Retirement verified against `main` on
+> 2026-08-19.
+
 Status: **working notes, not an accepted decision or implementation plan**  
 Started: 2026-07-12  
 Code/prod revision inspected: `1759351c440b`  
