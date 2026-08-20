@@ -1258,23 +1258,47 @@ Get signed URL for watermarked content.
 
 ### 3.1 Notification Types
 
-| Code | Name | Description |
-|------|------|-------------|
-| 1002 | MediaLike | Media liked |
-| 1004 | MediaLikeUndo | Media like undone |
-| 1005 | MediaLikeRedo | Media like redone |
-| 2002 | PostLike | Post liked |
-| 2007 | PostLikeUndo | Post like undone |
-| 2008 | PostLikeRedo | Post like redone |
-| 3002 | NewFollower | New follower |
-| 3003 | FollowedBack | Followed back |
-| 5003 | MessageLike | Message liked |
-| 7001 | Tip | Tip received |
-| 7100 | TipGoal | Tip goal contribution |
-| 15006 | NewSubscriber | New subscriber |
-| 15007 | SubscriberRenewalFail | Subscriber renewal failed |
-| 15011 | SubscriptionCanceled | Subscription canceled |
-| 15016 | RenewedSubscription | Subscription renewed |
+> **Rewritten 2026-08-20. The previous table was wrong on 8 of its 16 codes, including both
+> media-purchase events, which it labelled "post like undone/redone".** Source: the notification
+> component's own `tabMap` and `filters` arrays in the shipped web client, read directly at
+> `main.ac7fcc376bc818b0.js` (pretty-printed lines 192262–192330). The `Filter label` column is
+> the platform's own UI string; `Renderer` is the component it dispatches to.
+
+| Code | Filter label | Renderer | Note |
+|------|------|------|------|
+| 1002 | Likes | Post like | previously mislabelled `MediaLike` — **swapped with 2002** |
+| 1003 | *(tab-grouped, no filter label)* | none | unlabelled in this dispatcher |
+| 1004 | Post Replies | Post reply | previously mislabelled `MediaLikeUndo` |
+| 1005 | Post Quotes | Post quote | previously mislabelled `MediaLikeRedo` |
+| 2002 | Likes | Account-media like | previously mislabelled `PostLike` — **swapped with 1002** |
+| 2007 | **Media Purchases** | Account-media order | previously mislabelled `PostLikeUndo`. **This is money.** |
+| 2008 | **Media Purchases** | Account-media-bundle order | previously mislabelled `PostLikeRedo`. **This is money.** |
+| 3002 | Followers | Follow | the code selects which correlation field holds the follower id |
+| 3003 | Followers | Follow | as above |
+| 5003 | Likes | Message like | unchanged |
+| 7001 | Tips | Tip received | unchanged |
+| 15006 | Subscribers | Subscription renew | — |
+| 15007 | **Expired Subscriptions** | Subscription expire | previously mislabelled `SubscriberRenewalFail` |
+| 15011 | **Promotions** | Plan promotion started | previously mislabelled `SubscriptionCanceled` |
+| 15016 | Subscribers | Subscription-history renew | — |
+| 32007 | **Locked Text Purchases** | component internally named `story-order` | **absent from the previous table. Money.** |
+| 45012 | **Stream Ticket Purchases** | Stream-ticket order | **absent from the previous table. Money.** |
+| 24001, 24002 | Fansly Alerts | generic admin renderer | absent from the previous table |
+| 24001–24999 | *(family)* | generic admin renderer | the whole admin/alert range |
+
+`7100` (TipGoal) appeared in the previous table but is not referenced in this dispatcher. It is
+left out rather than carried forward — if it is live, one captured example restores it.
+
+Admin notification metadata recognises these reason strings (`191532–191584`):
+`generic_message`, `consent_request_received`, `consent_request_accepted`,
+`consent_request_declined`, `consent_request_expired`, `consent_submission_approved`,
+`consent_submission_needs_more`, `consent_submission_rejected`, `consent_revoked`,
+`consent_sign_completed`, `consent_sign_failed`, `consent_sign_notarization_required`,
+`consent_sign_expired`.
+
+**Reading rule.** These are the *client's* labels for its own filter tabs. They prove what the
+app believes a code means, not what the server guarantees. A code is promoted to a confirmed
+business meaning only after two independent live examples agree with a second source.
 
 ### 3.2 Media Types
 
@@ -1399,10 +1423,16 @@ Revenue types are a subset of transaction types used for earnings stats breakdow
 
 ### 3.12 Payout Provider IDs
 
-| Code | Name |
-|------|------|
-| 2 | PayPal |
-| 30 | Cryptocurrency (USDT) |
+Corrected 2026-08-20 against the shipped web client (`main.ac7fcc376bc818b0.js`). The earlier
+"PayPal" entry was wrong.
+
+| Code | Name | Evidence |
+|------|------|----------|
+| 2 | **Paxum** | The payout-method component renders provider 2 with `/assets/images/psps/paxum.webp` (pretty-printed bundle line 237638, second occurrence 239418); compliance copy on the same screen names Paxum (238735). **Not PayPal.** The server returns this method's account identifier as a **full, unmasked email**. |
+| 30 | Cryptocurrency (USDT) | Currency-wallet renderer; the live UI showed an already-masked account suffix for this provider. |
+
+The same component also references Skrill, Cosmo, Pilot and bank-transfer icons, so the provider
+space is wider than these two codes — this table lists only what a live payout method proved.
 
 ### 3.13 Note Content Types
 
@@ -1436,31 +1466,83 @@ Bitfield flags for `/account/ignore` and `/ignore` endpoints.
 
 Bitfield flags for media and content access permissions.
 
-| Flag | Name | Description |
-|------|------|-------------|
-| 1 | Price | Requires payment (PPV) |
-| 2 | Follow | Requires follow |
-| 4 | SubscriptionTier | Requires subscription tier |
-| 8 | FreePreview | Free preview available |
-| 128 | List | Requires list membership |
+Corrected and completed 2026-08-20 from the client's own permission-editor classes
+(`main.pretty.js:114731–114785`, `116450–116508`). The earlier `8 = FreePreview` entry was wrong,
+and four bits were missing.
+
+| Flag | Client name | Meaning | Metadata carried |
+|------|------|-------------|------|
+| 1 | `price` | Requires payment (PPV) | `price` (also copied to a top-level `price` in media contexts) |
+| 2 | `following` | Requires follow | — |
+| 4 | `subscribed` | Requires subscription tier | `subscriptionTierId`; some media paths also retain the tier name and before/after history bounds |
+| 8 | **`tipped`** | **Visible to fans who have tipped at least `minAmount`. NOT "free preview".** | `minAmount` |
+| 16 | `followed by them` / `followed by me` | Follow relation | — |
+| 32 | `media_purchases` | Fan has bought at least `minAmount` of media | `minAmount` |
+| 64 | `subscribed by them` / `subscribed by me` | Subscription relation | — |
+| 128 | `list` | Requires membership of a private list | `listId`, `label` |
+
+Directional wording on bits 16 and 64 flips by component perspective: the DM editor renders
+"followed/subscribed by **them**", another viewer component renders "by **me**". The bit is the
+same; only the label's point of view changes. Read the bit, never the rendered string.
 
 ### 3.17 Media Stat Types (datapoints[].stats[].type)
+
+Verified against a live capture on 2026-08-19 and against FBuddy's shipped label map.
 
 | Code | Name |
 |------|------|
 | 0 | FYP Views |
 | 1 | Direct Views |
 
+Within a row, the `preview*` fields count the free teaser and the bare fields count the
+full/paid asset.
+
 ### 3.18 Profile Stat Types (profileDatapoints[].stats[].type)
+
+**Corrected 2026-08-19 from a live capture. The previous table in this file was WRONG —
+see the note below before using any older copy.**
 
 | Code | Name |
 |------|------|
-| 10000 | Direct visits |
-| 10001 | FYP visits |
-| 44000 | Search visits |
-| 44001 | Search visits (unique) |
-| 44030 | Suggestion visits |
-| 44031 | Suggestion visits (unique) |
+| 10001 | Direct / Timeline visits |
+| 44001 | FYP Promotion visits |
+| 44011 | Suggestions (Who to Follow) visits |
+| 44031 | Search visits |
+
+Established by opening the creator Statistics page, reading the on-screen "profile visits by
+source" widget, and matching each visible label and value to the corresponding entry in the
+`/it/amoie/stats` response. Capture artifacts:
+`artifacts/fansly-network-capture-2026-08-19/` (HAR + screenshots `02b`, `02f`).
+
+The superseded table claimed `10001` = FYP visits, `44000`/`44001` = search and
+`44030`/`44031` = suggestions — i.e. it inverted direct vs FYP and swapped the
+search/suggestion families. Anything built on it reports direct traffic as discovery
+traffic. FBuddy's shipped code carries the correct mapping; this document's prose did not.
+
+**The even codes ARE present in the live capture — as a second measure.** Aggregating
+`profileDatapoints[].stats[]` across the 31-bucket daily `/it/amoie/stats` response shows an
+8-code structure: each traffic family has an even/odd pair, where the odd member (`…1`) is the
+UI-shown visit count and always carries `interactionTime = 0`, while the even member (`…0`)
+carries the dwell time (`interactionTime`) with its own, differing view/uniqueViewer counts.
+Family = `type − (type % 10)`.
+
+| family | dwell-bearing member (`…0`) | UI visit-count member (`…1`) |
+|---|---|---|
+| Direct / Timeline | 10000 (31 rows, 2485 views, ΣinteractionTime 59 564 731) | 10001 (3647 views, interactionTime 0 in every row) |
+| FYP Promotion | 44000 (499 views, Σ 15 291 349) | 44001 (637 views, 0) |
+| Suggestions | 44010 (18 rows, 34 views, Σ 1 385 136) | 44011 (42 views, 0) |
+| Search | 44030 (154 views, Σ 3 899 843) | 44031 (200 views, 0) |
+
+The precise semantic of the even member's own view counts (impressions vs visits vs another
+denominator) is unproven — label it only as the dwell-bearing series, never invent a meaning.
+Rows carry exactly `{type, views, interactionTime, uniqueViewers}`. Treat the 8-code set as
+the observed structure, not as exhaustive: journal unknown codes verbatim and surface them
+rather than discarding them.
+
+**UI caveat:** over a 30-day window Fansly's own widget omits the Suggestions source from
+its percentage breakdown (the raw value is present in both the response and the chart) and
+re-computes the percentages across the remaining three sources only. Figures computed from
+raw datapoints will therefore legitimately differ from what the creator sees on the site.
 
 ### 3.19 Group Type
 
