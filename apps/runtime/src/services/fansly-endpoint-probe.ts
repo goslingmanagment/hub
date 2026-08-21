@@ -48,6 +48,13 @@ export interface EndpointProbeResult {
   itemCount: number | null;
   /** True when the call was fired without its optional narrowing ids. */
   bare: boolean;
+  /**
+   * Redacted structural skeleton of the response: key names and value TYPES only,
+   * never values. This is what the next step (designing storage) actually needs,
+   * and it is why the probe does not journal bodies — an owner-run diagnostic
+   * should not put fan PII into a terminal or a transcript to learn a shape.
+   */
+  shape: string | null;
   wallClockMs: number;
   message: string | null;
 }
@@ -184,6 +191,27 @@ function classify(error: unknown): {
   };
 }
 
+/**
+ * Structural skeleton, values stripped. `{id: string, price: number}` tells you
+ * everything needed to design a projection; the actual id and price do not.
+ * Depth- and width-limited so an unexpected giant response cannot flood stdout.
+ */
+function describeShape(value: unknown, depth = 0): string {
+  if (depth > 3) return "…";
+  if (value === null) return "null";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    return `[${value.length} × ${describeShape(value[0], depth + 1)}]`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    const shown = entries.slice(0, 30).map(([k, v]) => `${k}: ${describeShape(v, depth + 1)}`);
+    if (entries.length > 30) shown.push(`…+${entries.length - 30} more`);
+    return `{${shown.join(", ")}}`;
+  }
+  return typeof value;
+}
+
 function countItems(items: unknown): number | null {
   if (Array.isArray(items)) {
     return items.length;
@@ -229,6 +257,7 @@ export async function runFanslyEndpointProbe(
           httpStatus: null,
           errorCode: null,
           itemCount: null,
+          shape: null,
           bare,
           wallClockMs: 0,
           message: "dry-run (not called)",
@@ -246,6 +275,7 @@ export async function runFanslyEndpointProbe(
           httpStatus: null,
           errorCode: null,
           itemCount: null,
+          shape: null,
           bare,
           wallClockMs: 0,
           message: "no --post <id> supplied; [E1] stays UNANSWERED",
@@ -263,6 +293,7 @@ export async function runFanslyEndpointProbe(
           httpStatus: 200,
           errorCode: null,
           itemCount: countItems(items),
+          shape: describeShape(items),
           bare,
           wallClockMs: Date.now() - startedAt,
           message: null,
@@ -276,6 +307,7 @@ export async function runFanslyEndpointProbe(
           httpStatus: classified.httpStatus,
           errorCode: classified.errorCode,
           itemCount: null,
+          shape: null,
           bare,
           wallClockMs: Date.now() - startedAt,
           message: classified.message,
@@ -333,7 +365,11 @@ export function summarizeEndpointProbe(results: EndpointProbeResult[]): string {
           `(${e1.itemCount ?? "?"} item(s)). WP-F5 proceeds.`,
       );
     } else if (e1.verdict === "skipped") {
-      lines.push("→ [E1] NOT ANSWERED — supply --post <id> for a post with a known reply.");
+      lines.push(
+        e1.message?.startsWith("dry-run")
+          ? "→ [E1] not attempted (dry run)."
+          : "→ [E1] NOT ANSWERED — supply --post <id> for a post with a known reply.",
+      );
     } else if (e1.verdict === "auth-rejected") {
       lines.push("→ [E1] UNJUDGED — the session was rejected, not the route. Re-run.");
     } else {
@@ -346,9 +382,20 @@ export function summarizeEndpointProbe(results: EndpointProbeResult[]): string {
     }
   }
 
+  const shaped = results.filter((r) => r.shape);
+  if (shaped.length > 0) {
+    lines.push("");
+    lines.push("RESPONSE SHAPES (key names and value types only — no values):");
+    for (const r of shaped) {
+      lines.push(`${r.route}`);
+      lines.push(`  ${r.shape}`);
+    }
+  }
+
+  lines.push("");
   lines.push(
-    "→ Reminder: a route that answered ONCE is live, not understood. Shapes come from the " +
-      "journaled bodies, not from this table.",
+    "→ Reminder: a route that answered ONCE is live, not understood. One response is one " +
+      "example — optional fields and alternate variants are not visible here.",
   );
 
   return lines.join("\n");
