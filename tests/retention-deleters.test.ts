@@ -70,6 +70,12 @@ const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/services/events-stream.ts",
   "apps/runtime/src/services/projections/fan-earnings.ts",
   "apps/runtime/src/services/projections/creator-posts.ts",
+  // WP-F0(b): projection reset — rebuildable state only, never scheduled.
+  // rebuildMediaPlaneProjection clears the four 0130 tables plus its own
+  // watermark inside ONE transaction and immediately replays them from the
+  // domain-event ledger. It deletes no captured fact: every row it removes is
+  // reproduced from events the sweep never deletes.
+  "apps/runtime/src/services/projections/media-plane.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
   "apps/runtime/src/services/sync/rate-limiter.ts",

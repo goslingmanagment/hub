@@ -769,6 +769,42 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       delete from creator_post_tips where ${creatorPostTipPred}`),
   });
 
+  // WP-F0(b) media plane (0130). Both tables carry a TEXT fan ref with NO FK to
+  // `fans`, so the unmapped-non-cascade-FK guard above is structurally blind to
+  // them — exactly the gap `tip_sender_platform_user_id` had to be hand-added
+  // for. `tests/erasure-fan-ref-columns.integration.test.ts` is the ratchet that
+  // makes the next such column fail CI instead of under-erasing silently.
+  //
+  // media_orders says WHO bought WHAT for HOW MUCH; the buyer ref is the fan.
+  const mediaOrderPred = sql`page_id in ${scope.pageIds}
+    and buyer_platform_user_id = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "media_orders",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from media_orders where ${mediaOrderPred}`),
+    run: (tx) => execCount(tx, sql`delete from media_orders where ${mediaOrderPred}`),
+  });
+
+  // message_media_offers says what was OFFERED in the fan's conversation. Reach
+  // it by the fan ref AND by the resolved Fansly group ids, because the offer
+  // row's conversation_ref is the messaging GROUP id, a different id space than
+  // the partnerAccountId fanRef (recorded law A49).
+  const offerConversationPred = fanGroupIds.length > 0
+    ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
+    : sql`conversation_ref = ${ref}`;
+  const mediaOfferPred = sql`page_id in ${scope.pageIds}
+    and (fan_platform_user_id = ${ref} or ${offerConversationPred})`;
+  targets.push({
+    plane: "hot",
+    target: "message_media_offers",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from message_media_offers where ${mediaOfferPred}`),
+    run: (tx) => execCount(tx, sql`delete from message_media_offers where ${mediaOfferPred}`),
+  });
+
   // Sent-command payloads carry our side of the fan's conversation.
   const commandPred = sql`page_id in ${scope.pageIds} and conversation_id = ${ref}`;
   targets.push({
