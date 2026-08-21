@@ -48,6 +48,8 @@ export interface EndpointProbeResult {
   itemCount: number | null;
   /** True when the call was fired without its optional narrowing ids. */
   bare: boolean;
+  /** --ids only: allowlisted identifier fields per list row (see ID_FIELDS). */
+  ids?: Array<Record<string, unknown>> | null;
   /**
    * Redacted structural skeleton of the response: key names and value TYPES only,
    * never values. This is what the next step (designing storage) actually needs,
@@ -78,6 +80,12 @@ export interface EndpointProbeOptions {
    * re-spending a request on the nine others.
    */
   only?: string | null;
+  /**
+   * Print platform IDENTIFIERS (and price/type/purchased flags) from list rows, so a
+   * response can be reconciled against the journal by id. Still no free text, no
+   * URLs, no usernames — the allowlist below is the whole surface.
+   */
+  ids?: boolean;
 }
 
 type ProbeRoute = {
@@ -202,6 +210,33 @@ function classify(error: unknown): {
  * everything needed to design a projection; the actual id and price do not.
  * Depth- and width-limited so an unexpected giant response cannot flood stdout.
  */
+const ID_FIELDS = [
+  "id", "mediaOfferId", "mediaOfferType", "mediaOfferBundleId", "mediaId", "mediaType",
+  "locationId", "locationType", "correlationId", "accountId", "price", "purchased", "deleted",
+  "createdAt", "transactionId", "groupId", "type", "status", "amount",
+] as const;
+
+/** Pull only allowlisted identifier/flag fields from each list row. Never text or URLs. */
+function extractIds(value: unknown): Array<Record<string, unknown>> | null {
+  const rows = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).data)
+      ? ((value as Record<string, unknown>).data as unknown[])
+      : null;
+  if (!rows) return null;
+  return rows.slice(0, 100).map((row) => {
+    const out: Record<string, unknown> = {};
+    if (row && typeof row === "object") {
+      for (const key of ID_FIELDS) {
+        const v = (row as Record<string, unknown>)[key];
+        if (v === undefined) continue;
+        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null) out[key] = v;
+      }
+    }
+    return out;
+  });
+}
+
 function describeShape(value: unknown, depth = 0): string {
   if (depth > 3) return "…";
   if (value === null) return "null";
@@ -307,6 +342,7 @@ export async function runFanslyEndpointProbe(
           httpStatus: 200,
           errorCode: null,
           itemCount: countItems(items),
+          ids: options.ids ? extractIds(items) : null,
           shape: describeShape(items),
           bare,
           wallClockMs: Date.now() - startedAt,
