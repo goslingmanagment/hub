@@ -72,6 +72,12 @@ export interface EndpointProbeOptions {
   groupId?: string | null;
   fanAccountId?: string | null;
   storyId?: string | null;
+  /**
+   * Restrict the run to routes whose key contains this substring (case-insensitive).
+   * Lets a follow-up question re-fire ONE route against several subjects without
+   * re-spending a request on the nine others.
+   */
+  only?: string | null;
 }
 
 type ProbeRoute = {
@@ -246,7 +252,15 @@ export async function runFanslyEndpointProbe(
       rateLimitWaiter,
     };
 
-    for (const route of ROUTES) {
+    const only = options.only?.trim().toLowerCase() ?? "";
+    const routes = only
+      ? ROUTES.filter((route) => route.key.toLowerCase().includes(only))
+      : ROUTES;
+    if (routes.length === 0) {
+      throw new Error(`--only "${options.only}" matches none of the ${ROUTES.length} probe routes`);
+    }
+
+    for (const route of routes) {
       const bare = route.isBare(options);
 
       if (options.dryRun) {

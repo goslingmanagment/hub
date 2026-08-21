@@ -1702,6 +1702,7 @@ export function buildProgram() {
     .option("--group <id>", "conversation id for /groups/mediaoffers (else the call fires bare)")
     .option("--fan <accountId>", "fan account id for /tips/account and /groups/mediaoffers")
     .option("--story <id>", "story id for /mediastory/views (else the call fires bare)")
+    .option("--only <substr>", "fire only routes whose key contains this substring (e.g. mediaoffers)")
     .option("--dry-run", "resolve page contexts and print the plan without calling Fansly")
     .action(async (options) => {
       const pageLabels: string[] = options.page;
@@ -1717,6 +1718,7 @@ export function buildProgram() {
           groupId: options.group ?? null,
           fanAccountId: options.fan ?? null,
           storyId: options.story ?? null,
+          only: options.only ?? null,
         });
         for (const result of results) {
           console.log(JSON.stringify(result));
