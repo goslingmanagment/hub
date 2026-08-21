@@ -450,6 +450,18 @@ function createAutoSyncFanslyAdapter(input: {
     async getRecapStats() {
       return { items: [], raw: [] };
     },
+    async getAccountMediaByIds() {
+      return { items: [], raw: [] };
+    },
+    async getAccountMediaBundlesByIds() {
+      return { items: [], raw: [] };
+    },
+    async getAccountWalls() {
+      return { items: [], raw: [] };
+    },
+    async getVaultMediaPage() {
+      return { items: [], raw: [] };
+    },
     async close() {},
   } as AppContext["adapter"];
 }

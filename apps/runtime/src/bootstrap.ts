@@ -151,6 +151,13 @@ export type AdapterLike = ProviderAdapter<
   ): Promise<{ items: unknown; raw: unknown }>;
   getPolls(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
   getRecapStats(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  getAccountMediaByIds(context: FanslyRequestContext, params: { ids: string }): Promise<{ items: unknown; raw: unknown }>;
+  getAccountMediaBundlesByIds(context: FanslyRequestContext, params: { ids: string }): Promise<{ items: unknown; raw: unknown }>;
+  getAccountWalls(context: FanslyRequestContext, params: { correlationPostIds?: string | null }): Promise<{ items: unknown; raw: unknown }>;
+  getVaultMediaPage(
+    context: FanslyRequestContext,
+    params: { albumId?: string | null; type?: number | null; mediaType?: number | null; before?: string | null; after?: string | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
 
   close?(): Promise<void>;
 };

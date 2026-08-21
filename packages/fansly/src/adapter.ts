@@ -1230,6 +1230,90 @@ export class FanslyAdapter {
     return { items: response.parsed, raw: response.raw };
   }
 
+  // ---- WP-F3 catalog routes never observed live (March corpus only) — probe-only ----
+
+  /** `/account/media?ids=` — media rows by id (the app's batch hydration for its own media). */
+  async getAccountMediaByIds(
+    context: FanslyRequestContext,
+    params: { ids: string },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/account/media", {
+      operation: "account_media_by_ids_probe",
+      endpointTemplate: "/account/media",
+      category: "media",
+      query: { ids: params.ids },
+      requestShape: { idCount: params.ids.split(",").filter(Boolean).length },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** `/account/media/bundle?ids=` — bundle rows by id. */
+  async getAccountMediaBundlesByIds(
+    context: FanslyRequestContext,
+    params: { ids: string },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/account/media/bundle", {
+      operation: "account_media_bundles_by_ids_probe",
+      endpointTemplate: "/account/media/bundle",
+      category: "media",
+      query: { ids: params.ids },
+      requestShape: { idCount: params.ids.split(",").filter(Boolean).length },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** `/account/walls?correlationPostIds=` — the profile walls (sections) for given posts. */
+  async getAccountWalls(
+    context: FanslyRequestContext,
+    params: { correlationPostIds?: string | null },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/account/walls", {
+      operation: "account_walls_probe",
+      endpointTemplate: "/account/walls",
+      category: "account",
+      query: { correlationPostIds: params.correlationPostIds ?? undefined },
+      requestShape: { hasPostIds: Boolean(params.correlationPostIds) },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/media/vaultnew` — the vault's media listing. The app calls it two ways:
+   * by album (`albumId&mediaType&search&before&after`) and by type
+   * (`type&before&after`). Either form is accepted here; the album form is the
+   * one the catalog walk would use.
+   */
+  async getVaultMediaPage(
+    context: FanslyRequestContext,
+    params: {
+      albumId?: string | null;
+      type?: number | null;
+      mediaType?: number | null;
+      before?: string | null;
+      after?: string | null;
+    },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/media/vaultnew", {
+      operation: "vault_media_probe",
+      endpointTemplate: "/media/vaultnew",
+      category: "media",
+      query: {
+        albumId: params.albumId ?? undefined,
+        type: params.type != null ? String(params.type) : undefined,
+        mediaType: params.mediaType != null ? String(params.mediaType) : undefined,
+        search: params.albumId ? "" : undefined,
+        before: params.before ?? "",
+        after: params.after ?? "",
+      },
+      requestShape: { byAlbum: Boolean(params.albumId), type: params.type ?? null },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+    return { items: response.parsed, raw: response.raw };
+  }
+
   private async request<T>(
     context: FanslyRequestContext,
     pathname: string,
