@@ -72,6 +72,47 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
 const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
 
+/**
+ * Response summary for a route whose shape is NOT yet known (the WP-F9 / [E1]
+ * liveness probes). Records enough to tell "did this answer, and with what" apart
+ * from "this route is dead", without asserting a contract we have no evidence for.
+ *
+ * Field NAMES only, never values: this lands in `sync_http_attempts.response_shape`,
+ * which is queryable operational state, and an unknown route may return anything.
+ * The verbatim body is journaled separately under the capture-first rule; that is
+ * where the values belong.
+ */
+function summarizeUnknownResponse(parsed: unknown): Record<string, unknown> {
+  if (Array.isArray(parsed)) {
+    const first = parsed[0];
+    return {
+      responseKind: "array",
+      returnedItems: parsed.length,
+      itemKeys: isRecord(first) ? Object.keys(first).sort().slice(0, 40) : null,
+    };
+  }
+
+  if (isRecord(parsed)) {
+    const keys = Object.keys(parsed).sort();
+    // The house envelope is `{total, data[]}`; surface it when it is there so the
+    // probe report can say "paginated list" rather than just "object".
+    const data = parsed.data;
+    return {
+      responseKind: "object",
+      objectKeys: keys.slice(0, 40),
+      returnedItems: Array.isArray(data) ? data.length : null,
+      total: typeof parsed.total === "number" ? parsed.total : null,
+      itemKeys:
+        Array.isArray(data) && isRecord(data[0]) ? Object.keys(data[0]).sort().slice(0, 40) : null,
+    };
+  }
+
+  return {
+    responseKind: parsed === null ? "null" : typeof parsed,
+    returnedItems: null,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -932,6 +973,250 @@ export class FanslyAdapter {
       summarizeResponse: (parsed) => ({
         returnedItems: Array.isArray(parsed) ? parsed.length : null,
       }),
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  // ---------------------------------------------------------------------------
+  // LIVENESS PROBES — WP-F9 (`dm_commerce`) + [E1].
+  //
+  // Every route below came from the 2026-08-20 static bundle extraction, NOT from
+  // a live capture: the client builds these requests, which is not proof the server
+  // will serve them to us. They exist so ONE call each can settle that, on a canary
+  // page, through the page's own proxy, BEFORE any capture machinery is designed
+  // around them (the plan's "liveness first, budget second" rule).
+  //
+  // Deliberately loose: `unknown` in, `unknown` out, no mappers, no shape assertions.
+  // The journal keeps the verbatim body; typing follows evidence, not the other way
+  // round. Do not add parsing here — add it in a canonicalizer once a real response
+  // has been inspected.
+  //
+  // All GETs. Nothing here mutates, and `request()` hardcodes the method.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * [E1] — the load-bearing one. Every observed `GET /post/{id}/replies` in the
+   * capture was preceded ~40 ms earlier by `POST /postreply/verify` with the same
+   * post id. This method deliberately issues the BARE GET with no preceding POST,
+   * because that is the whole question: if the bare GET fails, WP-F5 (the comment
+   * archive, a large slice of the plan) does not exist and must be cut before
+   * anything is built on it. The route takes no query parameters — verified
+   * against all five observed GETs in the 2026-08-19/21 HARs.
+   */
+  async getPostRepliesPage(
+    context: FanslyRequestContext,
+    params: { postId: string },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(
+      context,
+      `/post/${encodeURIComponent(params.postId)}/replies`,
+      {
+        operation: "post_replies_probe",
+        endpointTemplate: "/post/{postId}/replies",
+        category: "posts",
+        requestShape: { postId: params.postId, verifyPosted: false },
+        summarizeResponse: summarizeUnknownResponse,
+      },
+    );
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * The missing join between the DM plane and the money plane: which paid media
+   * was offered to which fan in which conversation. The single highest-value route
+   * in WP-F9 — if only one of these probes succeeds, this is the one that matters.
+   */
+  async getGroupMediaOffersPage(
+    context: FanslyRequestContext,
+    params: {
+      groupId: string;
+      accountId?: string | null;
+      before?: string | null;
+      after?: string | null;
+      limit?: number | null;
+      offset?: number | null;
+    },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/groups/mediaoffers", {
+      operation: "group_mediaoffers_probe",
+      endpointTemplate: "/groups/mediaoffers",
+      category: "dm_conversations",
+      query: {
+        groupId: params.groupId,
+        accountId: params.accountId ?? undefined,
+        before: params.before ?? undefined,
+        after: params.after ?? undefined,
+        limit: params.limit != null ? String(params.limit) : undefined,
+        offset: params.offset != null ? String(params.offset) : undefined,
+      },
+      requestShape: {
+        groupId: params.groupId,
+        hasAccountId: Boolean(params.accountId),
+        cursorPresent: Boolean(params.before ?? params.after),
+        limit: params.limit ?? null,
+        offset: params.offset ?? null,
+      },
+      pagination: {
+        limit: params.limit ?? null,
+        offset: params.offset ?? null,
+        cursorPresent: Boolean(params.before ?? params.after),
+      },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * Mass-DM performance. Paginated (`before` cursor), so it is a history rather
+   * than a snapshot — the difference between "how are we selling" and "how did we
+   * sell". The `/deleted` sibling carries broadcasts that were pulled, which is a
+   * fact that disappears entirely if only the live list is ever read.
+   */
+  async getBroadcastStatsPage(
+    context: FanslyRequestContext,
+    params: { before?: string | null; limit?: number | null; deleted?: boolean },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const deleted = params.deleted === true;
+    const pathname = deleted ? "/message/broadcast/stats/deleted" : "/message/broadcast/stats";
+    const response = await this.request<unknown>(context, pathname, {
+      operation: deleted ? "broadcast_stats_deleted_probe" : "broadcast_stats_probe",
+      endpointTemplate: pathname,
+      category: "dm_conversations",
+      query: {
+        before: params.before ?? undefined,
+        limit: params.limit != null ? String(params.limit) : undefined,
+      },
+      requestShape: {
+        deleted,
+        cursorPresent: Boolean(params.before),
+        limit: params.limit ?? null,
+      },
+      pagination: {
+        limit: params.limit ?? null,
+        cursorPresent: Boolean(params.before),
+      },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** The mass-DM queue: intent, before it is sent. Pairs with the two stats routes. */
+  async getBroadcastScheduled(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/message/broadcast/scheduled", {
+      operation: "broadcast_scheduled_probe",
+      endpointTemplate: "/message/broadcast/scheduled",
+      category: "dm_conversations",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * Who bought which media. Order-shaped rather than ledger-shaped: expected to
+   * CORRELATE with the wallet ledger (WP-F8), not duplicate it. Distinct from the
+   * already-wired `/media/orderhistory` — that one is keyed by media/bundle id,
+   * this one is a flat account-scoped list.
+   */
+  async getAccountMediaOrdersPage(
+    context: FanslyRequestContext,
+    params: { limit?: number | null; offset?: number | null },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/account/media/orders", {
+      operation: "account_media_orders_probe",
+      endpointTemplate: "/account/media/orders",
+      category: "media",
+      query: {
+        limit: params.limit != null ? String(params.limit) : undefined,
+        offset: params.offset != null ? String(params.offset) : undefined,
+      },
+      requestShape: { limit: params.limit ?? null, offset: params.offset ?? null },
+      pagination: { limit: params.limit ?? null, offset: params.offset ?? null },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * Tips resolved per FAN (`/tips/account`).
+   *
+   * Note the sibling that is NOT here: `GET /tips` (by `targetIds`) is already
+   * wired and live — `getTipsByTargetIds` above, operation `post_tips`, 531 calls
+   * in the 10 days to 2026-08-21 with 530 successes. It was on the WP-F9 probe
+   * list until the kernel was checked; probing it would have re-proven something
+   * production does hourly.
+   */
+  async getTipsByAccountIds(
+    context: FanslyRequestContext,
+    params: { accountIds?: string | null },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/tips/account", {
+      operation: "tips_account_probe",
+      endpointTemplate: "/tips/account",
+      category: "transactions",
+      query: { accountIds: params.accountIds ?? undefined },
+      requestShape: { hasAccountIds: Boolean(params.accountIds) },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** Story viewer list — an audience surface with no other source anywhere in the plan. */
+  async getMediaStoryViewsPage(
+    context: FanslyRequestContext,
+    params: { storyId: string; limit?: number | null; offset?: number | null },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/mediastory/views", {
+      operation: "mediastory_views_probe",
+      endpointTemplate: "/mediastory/views",
+      category: "media",
+      query: {
+        storyId: params.storyId,
+        limit: params.limit != null ? String(params.limit) : undefined,
+        offset: params.offset != null ? String(params.offset) : undefined,
+      },
+      requestShape: {
+        storyId: params.storyId,
+        limit: params.limit ?? null,
+        offset: params.offset ?? null,
+      },
+      pagination: { limit: params.limit ?? null, offset: params.offset ?? null },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /** Poll results per account. Catalog-adjacent, low volume. */
+  async getPolls(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/polls", {
+      operation: "polls_probe",
+      endpointTemplate: "/polls",
+      category: "posts",
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * Unidentified. Named like a periodic summary; the bundle gives no shape. One
+   * probe call settles what it is — deliberately do NOT design for it before then.
+   */
+  async getRecapStats(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/recapstats", {
+      operation: "recapstats_probe",
+      endpointTemplate: "/recapstats",
+      category: "account",
+      summarizeResponse: summarizeUnknownResponse,
     });
 
     return { items: response.parsed, raw: response.raw };

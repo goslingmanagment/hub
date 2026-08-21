@@ -111,6 +111,47 @@ export type AdapterLike = ProviderAdapter<
       limit?: number;
     },
   ): Promise<{ items: unknown; raw: unknown }>;
+
+  // Liveness probes — WP-F9 (`dm_commerce`) + [E1]. Bundle-derived routes, never
+  // yet served to us; deliberately `unknown` in and out until a real response has
+  // been inspected. See services/fansly-endpoint-probe.ts. All read-only GETs.
+  getPostRepliesPage(
+    context: FanslyRequestContext,
+    params: { postId: string },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getGroupMediaOffersPage(
+    context: FanslyRequestContext,
+    params: {
+      groupId: string;
+      accountId?: string | null;
+      before?: string | null;
+      after?: string | null;
+      limit?: number | null;
+      offset?: number | null;
+    },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getBroadcastStatsPage(
+    context: FanslyRequestContext,
+    params: { before?: string | null; limit?: number | null; deleted?: boolean },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getBroadcastScheduled(
+    context: FanslyRequestContext,
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getAccountMediaOrdersPage(
+    context: FanslyRequestContext,
+    params: { limit?: number | null; offset?: number | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getTipsByAccountIds(
+    context: FanslyRequestContext,
+    params: { accountIds?: string | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getMediaStoryViewsPage(
+    context: FanslyRequestContext,
+    params: { storyId: string; limit?: number | null; offset?: number | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getPolls(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  getRecapStats(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+
   close?(): Promise<void>;
 };
 

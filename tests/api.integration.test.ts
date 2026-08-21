@@ -422,6 +422,34 @@ function createAutoSyncFanslyAdapter(input: {
     async getMediaOrderHistoryPage() {
       return { items: [], raw: [] };
     },
+    // WP-F9 / [E1] liveness probes — CLI-only, never exercised by this suite.
+    async getPostRepliesPage() {
+      return { items: [], raw: [] };
+    },
+    async getGroupMediaOffersPage() {
+      return { items: [], raw: [] };
+    },
+    async getBroadcastStatsPage() {
+      return { items: [], raw: [] };
+    },
+    async getBroadcastScheduled() {
+      return { items: [], raw: [] };
+    },
+    async getAccountMediaOrdersPage() {
+      return { items: [], raw: [] };
+    },
+    async getTipsByAccountIds() {
+      return { items: [], raw: [] };
+    },
+    async getMediaStoryViewsPage() {
+      return { items: [], raw: [] };
+    },
+    async getPolls() {
+      return { items: [], raw: [] };
+    },
+    async getRecapStats() {
+      return { items: [], raw: [] };
+    },
     async close() {},
   } as AppContext["adapter"];
 }

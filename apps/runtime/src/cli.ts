@@ -47,6 +47,10 @@ import {
   setVoiceProfile,
   showVoiceProfile,
 } from "./services/voice-profiles.ts";
+import {
+  runFanslyEndpointProbe,
+  summarizeEndpointProbe,
+} from "./services/fansly-endpoint-probe.ts";
 import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
@@ -1674,6 +1678,51 @@ export function buildProgram() {
         }
         console.log("");
         console.log(summarizeReplayProbe(results));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("fansly:endpoint-probe")
+    .description(
+      "Liveness probe for the endpoints-cover initiative: fires ONE read-only GET per WP-F9 "
+        + "(`dm_commerce`) route plus the [E1] bare `/post/{id}/replies`, through the page's own "
+        + "proxy. Answers 'does the server serve this to us at all' BEFORE any capture machinery "
+        + "is designed around it. Writes nothing to Fansly and nothing to Postgres beyond ordinary "
+        + "sync telemetry. Never issues `POST /postreply/verify` — doing so would destroy the only "
+        + "question [E1] asks.",
+    )
+    .option("--page <label>", "Fansly page label; may be repeated", collectStringOption, [])
+    .option(
+      "--post <id>",
+      "[E1] post id with a KNOWN visible reply. Without it [E1] is skipped, not answered — "
+        + "the id is a path segment, so there is no bare form of that call.",
+    )
+    .option("--group <id>", "conversation id for /groups/mediaoffers (else the call fires bare)")
+    .option("--fan <accountId>", "fan account id for /tips/account and /groups/mediaoffers")
+    .option("--story <id>", "story id for /mediastory/views (else the call fires bare)")
+    .option("--dry-run", "resolve page contexts and print the plan without calling Fansly")
+    .action(async (options) => {
+      const pageLabels: string[] = options.page;
+      if (pageLabels.length === 0) {
+        throw new Error("fansly:endpoint-probe requires at least one --page <label>");
+      }
+      const app = await createAppContext();
+      try {
+        const results = await runFanslyEndpointProbe(app, {
+          pageLabels,
+          dryRun: Boolean(options.dryRun),
+          postId: options.post ?? null,
+          groupId: options.group ?? null,
+          fanAccountId: options.fan ?? null,
+          storyId: options.story ?? null,
+        });
+        for (const result of results) {
+          console.log(JSON.stringify(result));
+        }
+        console.log("");
+        console.log(summarizeEndpointProbe(results));
       } finally {
         await app.close();
       }
