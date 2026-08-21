@@ -336,6 +336,11 @@ describe("sync-pull v5 media plane — golden shapes", () => {
     });
     expect(order.dedupKey)
       .toBe(`mediaorder:v1:3:media-offer-1:${FAN_REF}:${1_755_604_800 + 600}`);
+    // The dedup key is the COMPOSITE, but `data` still carries a content hash:
+    // media_orders.content_hash is NOT NULL and the projector's lineage guard
+    // skips any event without one. Without this the order lane projected
+    // nothing at all, silently — which is exactly what happened once.
+    expect(order.data.contentHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("message.material_observed fills the archive's EXISTING columns (A17-4 variant B)", () => {

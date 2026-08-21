@@ -39,6 +39,21 @@ function millsParam(value: bigint | null): SQL {
   return value === null ? sql`null` : sql`${value.toString()}::bigint`;
 }
 
+/**
+ * ONE bound parameter carrying a Postgres array literal, then cast.
+ *
+ * Not `sql`${array}`` — drizzle expands an array chunk into a comma-separated
+ * parameter LIST, so an EMPTY array expands to nothing and the statement
+ * becomes `values (..., ::text[], ...)`: a syntax error at runtime, on exactly
+ * the common case (a media row that belongs to no bundle).
+ */
+function textArrayParam(values: readonly string[]): SQL {
+  const literal = `{${
+    values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")
+  }}`;
+  return sql`${literal}::text[]`;
+}
+
 export interface UpsertCreatorMediaInput {
   pageId: number;
   platform: MediaPlanePlatform;
@@ -82,7 +97,7 @@ export async function upsertCreatorMedia(
       content_hash, source_event_id, source_observation_id, source_account_seq
     ) values (
       ${input.pageId}, ${input.platform}, ${input.mediaOfferRef}, ${input.mediaRef},
-      ${input.previewRef}, ${sql`${[...input.bundleRefs]}::text[]`},
+      ${input.previewRef}, ${textArrayParam(input.bundleRefs)},
       ${input.mediaType}, ${input.mimeType}, ${input.width}, ${input.height},
       ${input.durationMs}, ${millsParam(input.priceMills)},
       ${JSON.stringify(input.permissionEntries)}::jsonb, ${input.permissionFlags},
@@ -158,7 +173,7 @@ export async function upsertCreatorMediaBundle(
     ) values (
       ${input.pageId}, ${input.platform}, ${input.bundleRef}, ${input.previewRef},
       ${millsParam(input.priceMills)}, ${JSON.stringify(input.permissionEntries)}::jsonb,
-      ${input.permissionFlags}, ${sql`${[...input.memberRefs]}::text[]`},
+      ${input.permissionFlags}, ${textArrayParam(input.memberRefs)},
       ${JSON.stringify(input.memberPositions)}::jsonb, ${input.salesCount},
       ${millsParam(input.salesNetMills)}, ${millsParam(input.salesPendingMills)},
       ${input.createdAtPlatform}, ${input.deletedAtPlatform}, ${input.observedAt},

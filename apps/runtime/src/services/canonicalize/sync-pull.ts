@@ -770,6 +770,20 @@ function orderObservedDrafts(
     const subjectRow = bundleRef !== null
       ? index.bundleById.get(bundleRef) ?? null
       : index.mediaById.get(subjectRef) ?? null;
+    const material = {
+      mediaOfferRef: subjectRef,
+      mediaRef,
+      bundleRef,
+      buyerRef,
+      orderType: asNumber(order.type),
+      // No order id exists in the live shape. It stays null until a response
+      // is observed carrying one, and only then — versioned — becomes a key.
+      orderRef: asString(order.id),
+      orderedAt: occurredAt.toISOString(),
+      priceMills: subjectRow === null ? null : permissionSummary(subjectRow).priceMills,
+      conversationRef: carrier?.conversationRef ?? null,
+      messageRef: carrier?.messageRef ?? null,
+    };
     drafts.push({
       type: "media.order_observed",
       // Receipt-time (§3.2b): an order row for a 2024 purchase must not aim
@@ -778,20 +792,12 @@ function orderObservedDrafts(
       fanIdentityRef: buyerRef,
       ...(carrier?.conversationRef ? { conversationRef: carrier.conversationRef } : {}),
       ...(carrier ? { messageRef: carrier.messageRef } : {}),
-      data: {
-        mediaOfferRef: subjectRef,
-        mediaRef,
-        bundleRef,
-        buyerRef,
-        orderType: asNumber(order.type),
-        // No order id exists in the live shape. It stays null until a response
-        // is observed carrying one, and only then — versioned — becomes a key.
-        orderRef: asString(order.id),
-        orderedAt: occurredAt.toISOString(),
-        priceMills: subjectRow === null ? null : permissionSummary(subjectRow).priceMills,
-        conversationRef: carrier?.conversationRef ?? null,
-        messageRef: carrier?.messageRef ?? null,
-      },
+      // The DEDUP key is the composite natural key (no order id exists), but
+      // the projector still needs a content hash for its lineage column — the
+      // same one every other media-plane type carries. Without it the order
+      // events are silently skipped by the projector's lineage guard and
+      // media_orders stays empty.
+      data: { ...material, contentHash: contentHash(material) },
       schemaVersion: MEDIA_PLANE_SCHEMA_VERSION,
       dedupKey,
     });
