@@ -11,6 +11,10 @@ const EXPECTED_FIXTURES = [
   "group_detail.json",
   "message.json",
   "messaging_groups.json",
+  // WP-F0(a-1): the VERBATIM-shaped conversation-list fixture. The trimmed
+  // `messaging_groups.json` above cannot serve the [A18] byte-identity pin —
+  // it is already trimmed-shaped, so the assertion would pass vacuously.
+  "messaging_groups_verbatim.json",
   "subscribers.json",
 ];
 const SYNTHETIC_SNOWFLAKES = new Set(["863308077229670400"]);
@@ -18,10 +22,17 @@ const SYNTHETIC_IDENTIFIERS = new Set([
   ...SYNTHETIC_SNOWFLAKES,
   "acct_creator",
   "acct_fan_alpha",
+  // The second conversation of the verbatim fixture: one row is not enough to
+  // prove an identity rewrite over an ARRAY.
+  "acct_fan_beta",
   "group_alpha",
+  "group_beta",
   "history_alpha",
+  "like_alpha",
+  "message_beta",
   "message_head",
   "message_reply",
+  "note_alpha",
   "plan_fixture",
   "subscription_alpha",
   "tier_fixture",
@@ -31,8 +42,10 @@ const IDENTITY_MARKER_KEY_PATTERN = /(?:display.?name|username)$/iu;
 const SYNTHETIC_IDENTITY_MARKERS = new Set([
   "Fixture Creator",
   "Fixture Fan",
+  "Fixture Fan Beta",
   "fixture_creator",
   "fixture_fan",
+  "fixture_fan_beta",
 ]);
 const MONEY_KEY_PATTERN = /(?:amount|balance|gross|net|price|tip)/iu;
 const SYNTHETIC_MONEY_VALUES = new Map<string, ReadonlySet<number>>([

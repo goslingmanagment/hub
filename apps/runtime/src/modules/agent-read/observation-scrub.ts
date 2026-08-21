@@ -23,7 +23,17 @@ export const AGENT_OBSERVATION_PAYLOAD_ALLOWLIST: ReadonlySet<string> = new Set(
   "fan_earnings_stats",
   "fan_earnings_monthly",
   "subscribers",
-  // Already trimmed of `content` before it reaches the journal.
+  // RE-JUSTIFIED for [A20] (WP-F0(a)), because the widening this justification
+  // was written before does NOT invalidate it — checked, not assumed:
+  // `aggregationData.groups[].lastMessage` still goes through
+  // `redactFanslyMessageLike` (sync/shared.ts), which drops `content` and
+  // empties attachments/embeds/interactions/likes BEFORE the journal. That is
+  // the content this line means, and it is still gone.
+  // What [A20] added to this body is fan-ACCOUNT state — followsYou,
+  // subscription/auto-renew, our own notes and lists, access and permission
+  // flags — the agency's own customer material, which is exactly what the read
+  // plane exists to serve. No message text, no CDN address, no vendor auth.
+  // `tests/fansly-capture-allowlist.test.ts` pins both halves.
   "dm_conversations",
   // Owner ruling (OPEN 13): IN, because `accountMedia`/`tips`/`storyOrders` live
   // here and they are exactly what a customs audit needs. Admitted only WITH the
