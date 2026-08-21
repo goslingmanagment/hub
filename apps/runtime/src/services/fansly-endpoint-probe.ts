@@ -74,6 +74,10 @@ export interface EndpointProbeOptions {
   groupId?: string | null;
   fanAccountId?: string | null;
   storyId?: string | null;
+  /** WP-F3 catalog probes: a known media id, bundle id, album id, post id. Absent ⇒ bare. */
+  mediaId?: string | null;
+  bundleId?: string | null;
+  albumId?: string | null;
   /**
    * Restrict the run to routes whose key contains this substring (case-insensitive).
    * Lets a follow-up question re-fire ONE route against several subjects without
@@ -165,6 +169,27 @@ const ROUTES: ProbeRoute[] = [
     key: "GET /recapstats",
     run: (app, ctx) => app.adapter.getRecapStats(ctx),
     isBare: () => false,
+  },
+  // ---- WP-F3 catalog routes from the March corpus, never observed live ----
+  {
+    key: "[F3] GET /account/media?ids=",
+    run: (app, ctx, o) => app.adapter.getAccountMediaByIds(ctx, { ids: o.mediaId ?? "" }),
+    isBare: (o) => !o.mediaId,
+  },
+  {
+    key: "[F3] GET /account/media/bundle?ids=",
+    run: (app, ctx, o) => app.adapter.getAccountMediaBundlesByIds(ctx, { ids: o.bundleId ?? "" }),
+    isBare: (o) => !o.bundleId,
+  },
+  {
+    key: "[F3] GET /account/walls?correlationPostIds=",
+    run: (app, ctx, o) => app.adapter.getAccountWalls(ctx, { correlationPostIds: o.postId ?? null }),
+    isBare: (o) => !o.postId,
+  },
+  {
+    key: "[F3] GET /media/vaultnew?albumId=",
+    run: (app, ctx, o) => app.adapter.getVaultMediaPage(ctx, { albumId: o.albumId ?? null, mediaType: 0 }),
+    isBare: (o) => !o.albumId,
   },
 ];
 

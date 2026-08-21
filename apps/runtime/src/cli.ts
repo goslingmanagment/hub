@@ -1702,6 +1702,9 @@ export function buildProgram() {
     .option("--group <id>", "conversation id for /groups/mediaoffers (else the call fires bare)")
     .option("--fan <accountId>", "fan account id for /tips/account and /groups/mediaoffers")
     .option("--story <id>", "story id for /mediastory/views (else the call fires bare)")
+    .option("--media <id>", "[F3] a known accountMedia id for /account/media?ids=")
+    .option("--bundle <id>", "[F3] a known bundle id for /account/media/bundle?ids=")
+    .option("--album <id>", "[F3] a known vault album id for /media/vaultnew")
     .option("--only <substr>", "fire only routes whose key contains this substring (e.g. mediaoffers)")
     .option("--ids", "print allowlisted identifier fields per list row (ids, type, price, flags — never text/URLs)")
     .option("--dry-run", "resolve page contexts and print the plan without calling Fansly")
@@ -1719,6 +1722,9 @@ export function buildProgram() {
           groupId: options.group ?? null,
           fanAccountId: options.fan ?? null,
           storyId: options.story ?? null,
+          mediaId: options.media ?? null,
+          bundleId: options.bundle ?? null,
+          albumId: options.album ?? null,
           only: options.only ?? null,
           ids: Boolean(options.ids),
         });
