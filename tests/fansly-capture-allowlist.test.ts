@@ -297,6 +297,38 @@ describe("capture-shape mapper versions", () => {
   });
 });
 
+describe("the three journaling call sites", () => {
+  it("pass the endpoint's capture-shape version, and pass page.raw through the trim", () => {
+    // [A20] is an ALLOWLIST, not a removal: the trim stays and its kept-field
+    // set grew. So what a call site must do is (a) hand `page.raw` to the trim
+    // and (b) stamp the per-endpoint capture-shape version, so replay tooling
+    // can tell a pre-[A20] 4-field body from a widened 18-field one.
+    const source = readFileSync(
+      path.resolve("apps/runtime/src/services/sync/executor-handlers.ts"),
+      "utf8",
+    );
+    const follower = [...source.matchAll(
+      /responsePayload: trimFanslyFollowerPayload\(page\.raw\),\s*\n\s*mapperVersion: (\w+),/g,
+    )];
+    // Two follower lanes: `followers` (incremental) and `followers_reconcile`.
+    expect(follower).toHaveLength(2);
+    for (const match of follower) {
+      expect(match[1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
+    }
+    const groups = [...source.matchAll(
+      /responsePayload: trimFanslyMessagingGroupsPayload\(page\.raw\),\s*\n\s*mapperVersion: (\w+),/g,
+    )];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]![1]).toBe("FANSLY_GROUPS_CAPTURE_MAPPER_VERSION");
+
+    // …and the shared constant is NOT bumped for these lanes: it is read by
+    // every Fansly writer, so bumping it would re-label unrelated captures.
+    expect(source).not.toMatch(
+      /trimFansly(Follower|MessagingGroups)Payload\(page\.raw\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
+    );
+  });
+});
+
 describe("[A20] negative pins: no byte ceiling exists, anywhere", () => {
   it("no fanslyUntrimmedCaptureByteCeilingPerDay key is in the config registry", () => {
     // The mechanism it belonged to — a daily byte budget whose breach DEFERRED

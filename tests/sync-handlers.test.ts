@@ -56,6 +56,13 @@ const dbMocks = vi.hoisted(() => ({
 
 
 const sharedMocks = vi.hoisted(() => ({
+  // WP-F0(a): the per-endpoint capture-shape versions the three journaling call
+  // sites now pass. Real VALUES, not vi.fn(): a handler reads them as constants,
+  // and the assertions below pin the exact string that reaches the journal —
+  // which is the point of having them (replay tooling must be able to tell a
+  // pre-[A20] 4-field capture from a widened 18-field one).
+  FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION: "fansly-phase1-v5+followers-capture-v2",
+  FANSLY_GROUPS_CAPTURE_MAPPER_VERSION: "fansly-phase1-v5+groups-capture-v2",
   dmRetentionDate: vi.fn(() => new Date("2026-09-17T00:00:00.000Z")),
   normalizeDmTipAmountCents: vi.fn((platform: "fansly" | "onlyfans", totalTipAmount: number | null | undefined) => (
     typeof totalTipAmount !== "number" || !Number.isFinite(totalTipAmount) || totalTipAmount <= 0
