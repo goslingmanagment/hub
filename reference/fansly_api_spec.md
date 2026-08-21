@@ -500,6 +500,13 @@ Get all subscriptions the authenticated user has purchased.
 #### GET /subscriptions/tiers
 Get subscription tier information for the authenticated account.
 
+#### GET /subscriptions/giftcodes
+Gift codes issued for the authenticated creator's subscriptions. 73 codes observed
+(2026-08-19).
+
+**Shape caution:** `original_price` arrives **snake_case amid otherwise camelCase keys**. Read
+it by its literal served name; a camelCase normalizer silently drops it, and it is money.
+
 ---
 
 ### 2.5 Followers
@@ -583,6 +590,59 @@ Create a new post.
   "pinWallIds": []
 }
 ```
+
+#### GET /post/{postId}/replies
+List the replies (comments) on one post. **Takes no query parameters** — verified against all
+five observed GETs in the 2026-08-19/21 captures.
+
+**The `POST /postreply/verify` pairing — SETTLED, and the answer matters.** All 5 captured GETs
+were preceded ~40 ms earlier by `POST /api/v1/postreply/verify {"inReplyTo":"<same post id>"}`,
+so the capture alone does not prove a bare GET works. It was settled live on 2026-08-21
+(probe [E1], `lora-1`, through the page's own proxy, against a post whose replies HAD been
+served with the verify POST): **the bare GET returns 200 without it.** `POST /postreply/verify`
+stays on the no-mutations exclusion list and is never issued.
+
+**Response:**
+```json
+{
+  "posts": [{
+    "id": "string",
+    "accountId": "string",
+    "content": "string",
+    "createdAt": 1234567890,
+    "inReplyTo": "parent_post_id",
+    "inReplyToRoot": "root_post_id",
+    "attachments": [],
+    "accountMentions": [],
+    "likeCount": 0,
+    "mediaLikeCount": 0,
+    "totalTipAmount": 0,
+    "attachmentTipAmount": 0,
+    "fypFlags": 0,
+    "replyPermissionFlags": []
+  }],
+  "accounts": []
+}
+```
+
+Each reply is a **full post object**. `createdAt` is in **seconds**. Journal both `inReplyTo`
+and `inReplyToRoot` — they are the thread structure.
+
+**`accounts[]` is UNRELIABLE.** It was **EMPTY in 2 of 5** captured responses despite a comment
+existing, so author hydration is not guaranteed and a fallback `GET /account?ids=` batch path is
+mandatory. When it IS populated it embeds the author as a full account record — including
+`lastSeenAt`, `notes`, `containingLists`, `subscriberSubscription`, `statusId` and the
+follower/subscriber counters. **The [A20] field allowlist applies to this array before
+journaling**, for the same reason it applies to the conversation lane: `lastSeenAt` changes every
+minute and would make every body unique.
+
+**Pagination is UNESTABLISHED.** Observed `posts[]` lengths were 1/1/4 with bodies 0.5–18.2 KB;
+no captured response was large enough to reveal a cursor. Do not assume one exists, and do not
+assume its absence.
+
+**"No replies" is not live-proven.** No GET anywhere in the capture returned 204 (all 197 204s
+are OPTIONS preflights). Handle 200-with-empty-`posts[]`, 204, and an empty body all as "no
+replies"; none of the three is live-observed on this route.
 
 #### GET /post/scheduled
 Get scheduled posts.
