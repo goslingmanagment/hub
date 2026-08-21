@@ -17,9 +17,11 @@ import type { Database } from "@agency_hub_core/db";
 import { CANONICALIZER_FAMILIES } from "./canonicalize/index.ts";
 
 export interface HealthFloorDescriptor {
-  /** Metric/series name; embeds the version (e.g. obs_backlog_webhook_v2). */
+  /** Metric/series name; embeds lane AND version (obs_backlog_webhook_ofapi_v2). */
   name: string;
   source: string;
+  /** Stable family lane id — unique across the registry (see healthFloorName). */
+  lane: string;
   /** null = every kind of the source (measured via the parse-version index). */
   kinds: readonly string[] | null;
   version: number;
@@ -28,8 +30,22 @@ export interface HealthFloorDescriptor {
 /** M4: one threshold for every family — 10 minutes of unconsumed backlog. */
 export const HEALTH_FLOOR_THRESHOLD_MS = 600_000;
 
-export function healthFloorName(source: string, version: number): string {
-  return `obs_backlog_${source}_v${version}`;
+/**
+ * Gauge/series name for one replayable consumer. The LANE is what keeps two
+ * families that share a `source` apart: `posts` and `sync-pull` are both
+ * source `pull`, and the moment sync-pull reached v5 (WP-F0(b)) the old
+ * `obs_backlog_${source}_v${version}` name made both write one metric every
+ * tick — two different backlogs under one name, and one silently wins in the
+ * golden-signal threshold map (built with Object.fromEntries). The five
+ * Fansly families the endpoints-cover initiative adds are all source `pull`
+ * v1 and would have collided the same way.
+ *
+ * Consequence, stated rather than discovered: every existing series ends at
+ * the rename and a new one starts. Ops metric samples are plain strings —
+ * nothing migrates, nothing breaks, and dashboards read the new names.
+ */
+export function healthFloorName(source: string, lane: string, version: number): string {
+  return `obs_backlog_${source}_${lane}_v${version}`;
 }
 
 /** PR4: the readthrough reconcile projector's observation kind + floor. The
@@ -41,8 +57,9 @@ export function healthFloorName(source: string, version: number): string {
 export const OFAPI_READTHROUGH_OBSERVATION_KIND = "ofapi_gateway_chat_messages_v2";
 
 export const OFAPI_READTHROUGH_HEALTH_FLOOR: HealthFloorDescriptor = {
-  name: healthFloorName("readthrough", 2),
+  name: healthFloorName("readthrough", "ofapi_dm", 2),
   source: "readthrough",
+  lane: "ofapi_dm",
   kinds: [OFAPI_READTHROUGH_OBSERVATION_KIND],
   // v2 = the Wave-2 candidate-reducer cutover (v7 amendment 8): v1-stamped
   // observations fall below the floor and replay through the real reducer
@@ -56,8 +73,9 @@ export const OFAPI_READTHROUGH_HEALTH_FLOOR: HealthFloorDescriptor = {
  *  constant zero rather than a false backlog. */
 export const HEALTH_FLOOR_REGISTRY: readonly HealthFloorDescriptor[] = [
   ...CANONICALIZER_FAMILIES.map((family) => ({
-    name: healthFloorName(family.source, family.version),
+    name: healthFloorName(family.source, family.lane, family.version),
     source: family.source,
+    lane: family.lane,
     kinds: family.kinds,
     version: family.version,
   })),

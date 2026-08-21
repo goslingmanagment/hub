@@ -70,6 +70,15 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "subscription.observed",
   "conversation.observed",
   "page.identity_observed",
+  // WP-F0(b), the media plane. These ride the DELIVERABLE sync-pull family
+  // through appendMixedDomainEvents (§3.2a): they describe commerce material
+  // — what was offered, at what price, and who bought it — which feeds
+  // projections and must never replay to an SSE client as business news.
+  // Registering the types here and declaring `mixed: true` on the family are
+  // ONE decision, never two.
+  "message.attachments_observed",
+  "media.observed",
+  "media.order_observed",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {
@@ -112,6 +121,37 @@ export async function appendProjectionOnlyDomainEvents(
 ): Promise<AppendDomainEventsResult> {
   if (events.some((event) => !isProjectionOnlyDomainEventType(event.type))) {
     throw new Error("Projection-only append received a deliverable domain event");
+  }
+  return appendDomainEventsBatch(db, accountId, events, checkpoint);
+}
+
+/**
+ * §3.2a MIXED APPEND — one family, both kinds of event, one account-seq
+ * transaction.
+ *
+ * A family that emits deliverable news AND projection-only material for the
+ * SAME observation had no legal path before this: the projection-only append
+ * throws on the first deliverable type, and a plain deliverable append passes
+ * no checkpoint, so the hidden rows take seq values nothing covers and
+ * `validateV2DeliverableReplayBatch` reads the gap as a ledger hole.
+ *
+ * This entry point requires a checkpoint whenever the batch carries any
+ * projection-only type and does NOT throw on deliverable ones. The ORDER the
+ * batch is written in is load-bearing and lives in
+ * `appendDomainEventsBatchInTransaction`: deliverables first, then the hidden
+ * block, then the checkpoint — because the v2 validator requires the row
+ * IMMEDIATELY after a seq gap to be the checkpoint whose hiddenCount equals
+ * that gap. A deliverable row interleaved between hidden rows splits the gap
+ * in two and the whole replay batch is refused.
+ */
+export async function appendMixedDomainEvents(
+  db: Database,
+  accountId: number,
+  events: readonly DomainEventInput[],
+  checkpoint: ProjectionCheckpointInput | null,
+): Promise<AppendDomainEventsResult> {
+  if (checkpoint === null && events.some((event) => isProjectionOnlyDomainEventType(event.type))) {
+    throw new Error("Mixed append received projection-only events without a checkpoint");
   }
   return appendDomainEventsBatch(db, accountId, events, checkpoint);
 }
@@ -165,6 +205,11 @@ async function appendDomainEventsBatchInTransaction(
   let nextSeq = Number(locked.rows[0]!.next_seq);
   let appended = 0;
   let deduped = 0;
+  // §3.2a: only projection-only rows the batch ACTUALLY APPENDED (dedup hits
+  // excluded) may be covered by the checkpoint. In a pure projection-only
+  // batch this equals `appended`, which is what the pre-mixed code counted —
+  // so that path is unchanged by construction.
+  let hiddenAppended = 0;
   const outcomes: AppendedDomainEventOutcome[] = [];
 
   /**
@@ -203,11 +248,21 @@ async function appendDomainEventsBatchInTransaction(
     return Number(existing.rows[0]!.id);
   };
 
-  const appendOne = async (event: DomainEventInput) => {
+  /** `outcomeSlot` keeps the reported outcomes in CALLER order even though a
+   *  mixed batch is written deliverables-first (§3.2a). The checkpoint has no
+   *  slot and is reported last, as before. */
+  const appendOne = async (event: DomainEventInput, outcomeSlot: number | null = null) => {
+    const record = (outcome: AppendedDomainEventOutcome) => {
+      if (outcomeSlot === null) {
+        outcomes.push(outcome);
+      } else {
+        outcomes[outcomeSlot] = outcome;
+      }
+    };
     const replayEventId = await resolveSubscriptionObservationReplay(event);
     if (replayEventId !== null) {
       deduped += 1;
-      outcomes.push({
+      record({
         dedupKey: event.dedupKey,
         eventId: replayEventId,
         appended: false,
@@ -234,14 +289,14 @@ async function appendDomainEventsBatchInTransaction(
         select event_id::text from domain_event_keys
         where account_id = ${accountId} and dedup_key = ${event.dedupKey}
       `);
-      outcomes.push({
+      record({
         dedupKey: event.dedupKey,
         eventId: Number(existing.rows[0]!.event_id),
         appended: false,
       });
       return false;
     }
-    outcomes.push({ dedupKey: event.dedupKey, eventId, appended: true });
+    record({ dedupKey: event.dedupKey, eventId, appended: true });
 
     await db.execute(sql`
       insert into domain_events (
@@ -267,14 +322,28 @@ async function appendDomainEventsBatchInTransaction(
     `);
     nextSeq += 1;
     appended += 1;
+    if (isProjectionOnlyDomainEventType(event.type)) {
+      hiddenAppended += 1;
+    }
     return true;
   };
 
-  for (const event of events) {
-    await appendOne(event);
+  // §3.2a ordering, applied unconditionally because it is a NO-OP for the two
+  // pre-existing shapes: an all-deliverable batch and an all-projection-only
+  // batch each partition into themselves, in caller order. Only a MIXED batch
+  // is reordered, and it must be — see appendMixedDomainEvents.
+  const slots = events.map((event, index) => ({ event, index }));
+  const deliverableEvents = slots.filter(
+    ({ event }) => !isProjectionOnlyDomainEventType(event.type),
+  );
+  const hiddenEvents = slots.filter(({ event }) => isProjectionOnlyDomainEventType(event.type));
+  for (const { event, index } of deliverableEvents) {
+    await appendOne(event, index);
+  }
+  for (const { event, index } of hiddenEvents) {
+    await appendOne(event, index);
   }
 
-  const hiddenAppended = appended;
   if (checkpoint !== null && hiddenAppended > 0) {
     const checkpointAppended = await appendOne({
       type: "stream.projection_checkpoint",

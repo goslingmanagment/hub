@@ -1001,6 +1001,49 @@ export async function finishSyncRequestAttempt(
   return attempt;
 }
 
+/**
+ * [E2] instrumentation (F0(a)): stamp the measured body size of the response a
+ * capture just journaled onto its HTTP attempt row.
+ *
+ * The measurement is taken at the CAPTURE site, from the serialized payload
+ * object — Content-Length would answer a different question (compressed
+ * transport bytes, absent on replay). The attempt row is addressed FIFO: the
+ * OLDEST successful attempt of this (run, page, stream) that has no measurement
+ * yet, which is the one the capture in hand belongs to, because attempts finish
+ * and captures journal in the same order within a chunk. A capture with no
+ * matching attempt (a re-journal, a handler outside the request path) simply
+ * measures nothing — this row is a disk-trend input, never a control.
+ */
+export async function recordSyncHttpAttemptResponseBodyBytes(
+  db: Database,
+  input: {
+    syncRunId: number;
+    platformAccountId: number;
+    stream: SyncStream;
+    responseBodyBytes: number;
+  },
+): Promise<boolean> {
+  if (!Number.isSafeInteger(input.responseBodyBytes) || input.responseBodyBytes < 0) {
+    return false;
+  }
+  const result = await db.execute(sql`
+    update sync_http_attempts
+    set response_body_bytes = ${input.responseBodyBytes}
+    where id = (
+      select a.id
+      from sync_http_attempts a
+      where a.sync_run_id = ${input.syncRunId}
+        and a.page_id = ${input.platformAccountId}
+        and a.stream = ${input.stream}
+        and a.state = 'success'
+        and a.response_body_bytes is null
+      order by a.id
+      limit 1
+    )
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function insertSyncRunEvent(
   db: Database,
   input: {

@@ -156,6 +156,8 @@ import {
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
   dmRetentionDate,
+  FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
+  FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
   persistRawPayload,
   refreshPageMetadata,
   retentionDate,
@@ -1906,7 +1908,7 @@ export async function executeFollowersChunk(
       endpoint: "followers",
       requestParams: { offset: state.offset, limit: 100, mode: "incremental" },
       responsePayload: trimFanslyFollowerPayload(page.raw),
-      mapperVersion: FANSLY_MAPPER_VERSION,
+      mapperVersion: FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
     }, {
@@ -2359,7 +2361,7 @@ export async function executeFollowersReconcileChunk(
       endpoint: "followers",
       requestParams: { offset: state.offset, limit: 100, mode: "reconcile" },
       responsePayload: trimFanslyFollowerPayload(page.raw),
-      mapperVersion: FANSLY_MAPPER_VERSION,
+      mapperVersion: FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
     }, {
@@ -2727,7 +2729,7 @@ export async function fanslyDmConversationsChunk(
       endpoint: "dm_conversations",
       requestParams: { offset: state.offset, limit: 100, sortOrder: 1, flags: 0 },
       responsePayload: trimFanslyMessagingGroupsPayload(page.raw),
-      mapperVersion: FANSLY_MAPPER_VERSION,
+      mapperVersion: FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
       payloadKind: "dm_metadata",
       retainUntil: dmRetentionDate(),
     }, {

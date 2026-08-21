@@ -631,6 +631,9 @@ export function canParseFanslyReplayObservation(
 /** Deliberately absent from CANONICALIZER_FAMILIES — see the file header. */
 export const FANSLY_REPLAY_FAMILY: CanonicalizerFamily = {
   source: "pull",
+  // Off-registry, but it still needs a lane: the health-floor gauge name is
+  // built from it, and "replay" must never alias the registered pull families.
+  lane: "replay",
   kinds: FANSLY_REPLAY_CANONICALIZED_KINDS,
   version: FANSLY_REPLAY_CANONICALIZER_VERSION,
   canonicalize: canonicalizeFanslyReplayObservation,

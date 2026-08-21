@@ -302,6 +302,7 @@ describe("canonicalization sweep (Stage 8)", () => {
 
     const throwingFamily = {
       source: "webhook" as const,
+      lane: "test",
       kinds: ["poison.test"],
       version: 1,
       canonicalize: (observation: { payload: unknown }) => {

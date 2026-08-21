@@ -154,7 +154,10 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
         }],
       },
     }), context);
-    expect(events).toHaveLength(3);
+    // v5 (WP-F0(b)): the same page now also yields the ORDER-identity lane.
+    // message.ppv_unlocked is unchanged and keeps running beside it — the two
+    // describe one purchase from two identities and are never summed.
+    expect(events).toHaveLength(4);
     expect(events[0]).toMatchObject({
       type: "message.received",
       fanIdentityRef: "fansly-fan-7",
@@ -172,6 +175,20 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
       fanIdentityRef: "fansly-fan-7",
       dedupKey: "ppv:fansly-fan-7:media-99:2026-06-21T09:02:00.000Z",
     });
+    expect(events[3]).toMatchObject({
+      type: "media.order_observed",
+      fanIdentityRef: "fansly-fan-7",
+      // Composite natural key: the live order shape carries no order id.
+      dedupKey: `mediaorder:v1:3:media-99:fansly-fan-7:${
+        Math.floor(Date.parse("2026-06-21T09:02:00Z") / 1000)
+      }`,
+    });
+    // Receipt-time (§3.2b): the ORDER event is dated at the observation, with
+    // the provider instant typed in data — so a historical order can never aim
+    // an append at a cold partition.
+    expect(events[3]!.occurredAt).toEqual(RECEIVED_AT);
+    expect(events[3]!.data).toMatchObject({ orderedAt: "2026-06-21T09:02:00.000Z" });
+    expect(events[3]!.data.occurredAtClamped).toBeUndefined();
 
     // Without the page's own ref the observation stays undecidable → zero events.
     expect(canonicalizeSyncPullObservation(observation({
@@ -194,12 +211,25 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
       },
     }));
 
-    expect(events).toEqual([expect.objectContaining({
-      type: "message.ppv_unlocked",
-      fanIdentityRef: "fansly-fan-8",
-      dedupKey: "ppv:fansly-fan-8:bundle-44:2026-06-22T10:00:00.000Z",
-      data: expect.objectContaining({ accountMediaBundleId: "bundle-44" }),
-    })]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "message.ppv_unlocked",
+        fanIdentityRef: "fansly-fan-8",
+        dedupKey: "ppv:fansly-fan-8:bundle-44:2026-06-22T10:00:00.000Z",
+        data: expect.objectContaining({ accountMediaBundleId: "bundle-44" }),
+      }),
+      // v5: purchase_history shares the DM sidecar shapes, so it feeds the
+      // media plane through the SAME composite key an inline DM order row
+      // would mint — which is what collapses both lanes to one media_orders
+      // row (see the coexistence test).
+      expect.objectContaining({
+        type: "media.order_observed",
+        fanIdentityRef: "fansly-fan-8",
+        dedupKey: `mediaorder:v1:3:bundle-44:fansly-fan-8:${
+          Math.floor(Date.parse("2026-06-22T10:00:00Z") / 1000)
+        }`,
+      }),
+    ]);
   });
 
   it("poisons an entire Fansly fan/window on malformed money or aggregate overflow", () => {
