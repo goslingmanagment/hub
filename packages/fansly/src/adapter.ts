@@ -988,9 +988,17 @@ export class FanslyAdapter {
   // around them (the plan's "liveness first, budget second" rule).
   //
   // Deliberately loose: `unknown` in, `unknown` out, no mappers, no shape assertions.
-  // The journal keeps the verbatim body; typing follows evidence, not the other way
-  // round. Do not add parsing here — add it in a canonicalizer once a real response
-  // has been inspected.
+  // Typing follows evidence, not the other way round — do not add parsing here; add
+  // it in a canonicalizer once a real response has been inspected.
+  //
+  // NOTE on where the evidence comes from: the probe path passes NO `requestObserver`,
+  // so these calls are NOT journaled — nothing lands in `sync_http_attempts` or
+  // `sync_raw_payloads`. That is deliberate. Journaling would require standing up a
+  // full sync run (and its `page_sync_states` bookkeeping) for a diagnostic, and it
+  // would put fan PII into storage to learn a shape. The probe prints a REDACTED
+  // structural skeleton instead — key names and value types, never values. When a
+  // route graduates from probe to capture lane it gets journaled the ordinary way,
+  // through the sync telemetry, like every other lane.
   //
   // All GETs. Nothing here mutates, and `request()` hardcodes the method.
   // ---------------------------------------------------------------------------
