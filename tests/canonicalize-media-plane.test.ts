@@ -489,7 +489,8 @@ describe("replay determinism and payload sanity", () => {
   it("mints a NEW key when the price or the sale counters move, and only then", () => {
     const base = canonicalizeSyncPullObservation(dmObservation(paidVideoPayload()), CONTEXT);
     const repriced = paidVideoPayload();
-    repriced.accountMedia[0]!.permissions.permissionFlags[0]!.price = 99_000;
+    (repriced.accountMedia[0]!.permissions as { permissionFlags: { price: number }[] })
+      .permissionFlags[0]!.price = 99_000;
     const moved = canonicalizeSyncPullObservation(dmObservation(repriced), CONTEXT);
     expect(only(moved, "media.observed").dedupKey)
       .not.toBe(only(base, "media.observed").dedupKey);
