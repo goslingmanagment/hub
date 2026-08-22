@@ -368,16 +368,30 @@ describe("fansly-catalog: subscription tiers (FEAT-002)", () => {
     expect(roster(list, "subscription_tier_plans").data.refs).toHaveLength(4);
   });
 
-  it("mints a NEW roster event when a tier disappears, and none when nothing changes", () => {
+  it("keys the roster per LOOK, so a set that returns is not mistaken for one that never moved", () => {
     const payload = fixture("subscription-tiers") as { rows: unknown[] };
-    const again = drafts("subscription_tiers", payload);
-    // Same input, same roster hash, same dedup key ⇒ the ledger appends nothing.
-    expect(roster(again, "subscription_tiers").dedupKey)
+    // The SAME observation replays to the same key — replay stays a no-op.
+    expect(roster(drafts("subscription_tiers", payload), "subscription_tiers").dedupKey)
       .toBe(roster(list, "subscription_tiers").dedupKey);
 
-    const shrunk = drafts("subscription_tiers", { rows: [payload.rows[0]] });
-    expect(roster(shrunk, "subscription_tiers").dedupKey)
+    // A DIFFERENT look appends a new roster even when the ref set is identical,
+    // and that is the whole correction: a tier that disappears and comes back
+    // unchanged hashes to the roster it had before it vanished, so a hash-keyed
+    // roster would dedupe and leave the row marked `missing_since` forever.
+    const laterLook = canonicalizeFanslyCatalogObservation(
+      { ...observation("subscription_tiers", payload), id: 2 },
+      { nativeAccountRefByAccountId: new Map() },
+    );
+    expect(roster(laterLook, "subscription_tiers").dedupKey)
       .not.toBe(roster(list, "subscription_tiers").dedupKey);
+    // …while the content hash it carries is unchanged, which is what a reader
+    // uses to see that the set itself did not move.
+    expect(roster(laterLook, "subscription_tiers").data.contentHash)
+      .toBe(roster(list, "subscription_tiers").data.contentHash);
+
+    const shrunk = drafts("subscription_tiers", { rows: [payload.rows[0]] });
+    expect(roster(shrunk, "subscription_tiers").data.contentHash)
+      .not.toBe(roster(list, "subscription_tiers").data.contentHash);
     expect(roster(shrunk, "subscription_tiers").data.refs).toEqual(["000900000000000301"]);
   });
 

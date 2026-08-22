@@ -12,12 +12,18 @@
 // listing comes back EMPTY and produces no row events at all.
 //
 // The roster event carries the complete set of refs one FULL listing served.
-// This projector applies it as: mark every row of that kind NOT in the set,
-// whose `missing_since` is still null, as missing at the roster's instant. The
-// mark is therefore derived from the ledger, in ledger order, which is what
-// makes it survive truncate-and-replay identically. A sweep that computed the
-// same thing at capture time would produce a projection a rebuild could not
-// reproduce.
+// This projector applies it in BOTH directions: mark every row of that kind NOT
+// in the set (whose `missing_since` is still null) as missing at the roster's
+// instant, and CLEAR the mark on every row the set still names. The mark is
+// therefore derived from the ledger, in ledger order, which is what makes it
+// survive truncate-and-replay identically. A sweep that computed the same thing
+// at capture time would produce a projection a rebuild could not reproduce.
+//
+// The CLEAR half is not symmetry for its own sake. A row whose content changed
+// clears its own mark through the ordinary upsert — but a gift code that is
+// revoked and reinstated UNCHANGED emits no row event at all, because its
+// content hash is the one it had before. Only the roster can un-mark it, which
+// is also why the roster is keyed per LOOK rather than per ref-set.
 //
 // ORDER MATTERS, and it is guaranteed by the canonicalizer: the roster is the
 // LAST draft of its observation, so every row it describes has already been
@@ -56,12 +62,12 @@ import {
   listDetachedPartitionsHoldingAccount,
   listEventAccounts,
   listEventsSince,
-  markCatalogAlbumsMissing,
-  markCatalogAutomationsMissing,
-  markCatalogGiftCodesMissing,
-  markCatalogTierPlansMissing,
-  markCatalogTiersMissing,
-  markCatalogWallsMissing,
+  reconcileCatalogAlbumPresence,
+  reconcileCatalogAutomationsPresence,
+  reconcileCatalogGiftCodePresence,
+  reconcileCatalogTierPlansPresence,
+  reconcileCatalogTiersPresence,
+  reconcileCatalogWallsPresence,
   setProjectionWatermark,
   sumCreatorVaultAlbumItemCounts,
   upsertCreatorVaultAlbum,
@@ -134,6 +140,7 @@ export interface FanslyCatalogProjectionResult extends Record<string, unknown> {
   automations: number;
   walls: number;
   markedMissing: number;
+  clearedMissing: number;
 }
 
 function eventData(value: unknown): Record<string, unknown> {
@@ -219,6 +226,7 @@ export async function runFanslyCatalogProjection(
     automations: 0,
     walls: 0,
     markedMissing: 0,
+    clearedMissing: 0,
   };
   const accounts = input?.accountId != null
     ? [input.accountId]
@@ -474,15 +482,16 @@ export async function runFanslyCatalogProjection(
             if (listingKind === null) continue;
             const presentRefs = stringArray(data.refs);
             const missingSince = event.occurredAt;
-            const marked = await markMissingForListing(app.db, {
+            const reconciled = await reconcileListingPresence(app.db, {
               pageId: accountId,
               listingKind,
               presentRefs,
               missingSince,
             });
-            if (marked > 0) {
-              totals.markedMissing += marked;
-              totals.applied += marked;
+            if (reconciled.marked > 0 || reconciled.cleared > 0) {
+              totals.markedMissing += reconciled.marked;
+              totals.clearedMissing += reconciled.cleared;
+              totals.applied += reconciled.marked + reconciled.cleared;
             }
             continue;
           }
@@ -503,10 +512,10 @@ export async function runFanslyCatalogProjection(
   return totals;
 }
 
-/** One roster kind → one marker. An unrecognized listing kind marks NOTHING:
- *  a roster we cannot map is a roster whose complement we cannot compute, and
- *  guessing would mark live rows dead. */
-async function markMissingForListing(
+/** One roster kind → one reconciler. An unrecognized listing kind touches
+ *  NOTHING: a roster we cannot map is a roster whose complement we cannot
+ *  compute, and guessing would mark live rows dead. */
+async function reconcileListingPresence(
   db: AppContext["db"],
   input: {
     pageId: number;
@@ -514,38 +523,39 @@ async function markMissingForListing(
     presentRefs: readonly string[];
     missingSince: Date;
   },
-): Promise<number> {
+): Promise<{ marked: number; cleared: number }> {
   const { pageId, presentRefs, missingSince } = input;
   switch (input.listingKind) {
     case "vault_albums:creator":
-      return (await markCatalogAlbumsMissing(db, {
+      return await reconcileCatalogAlbumPresence(db, {
         pageId,
         vaultKind: "creator",
         presentRefs,
         missingSince,
-      })).marked;
+      });
     case "vault_albums:user":
-      return (await markCatalogAlbumsMissing(db, {
+      return await reconcileCatalogAlbumPresence(db, {
         pageId,
         vaultKind: "user",
         presentRefs,
         missingSince,
-      })).marked;
+      });
     case "subscription_tiers":
-      return (await markCatalogTiersMissing(db, { pageId, presentRefs, missingSince })).marked;
+      return await reconcileCatalogTiersPresence(db, { pageId, presentRefs, missingSince });
     case "subscription_tier_plans":
-      return (await markCatalogTierPlansMissing(db, { pageId, presentRefs, missingSince }))
-        .marked;
+      return await reconcileCatalogTierPlansPresence(db, { pageId, presentRefs, missingSince });
     case "gift_codes":
-      return (await markCatalogGiftCodesMissing(db, { pageId, presentRefs, missingSince }))
-        .marked;
+      return await reconcileCatalogGiftCodePresence(db, { pageId, presentRefs, missingSince });
     case "automated_messages":
-      return (await markCatalogAutomationsMissing(db, { pageId, presentRefs, missingSince }))
-        .marked;
+      return await reconcileCatalogAutomationsPresence(db, {
+        pageId,
+        presentRefs,
+        missingSince,
+      });
     case "page_walls":
-      return (await markCatalogWallsMissing(db, { pageId, presentRefs, missingSince })).marked;
+      return await reconcileCatalogWallsPresence(db, { pageId, presentRefs, missingSince });
     default:
-      return 0;
+      return { marked: 0, cleared: 0 };
   }
 }
 
