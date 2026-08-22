@@ -14,11 +14,11 @@ import {
   sanitizeError,
   redactSensitiveText,
   resolveRetryDelayMs,
-  type FanslySessionBundle,
   type ProxyConfig,
 } from "@agency_hub_core/shared";
 
 import { FanslyApiError, FanslyProxyMissingError } from "./errors.ts";
+import { buildFanslyRequestHeaders } from "./request-headers.ts";
 import type {
   FanslyAccount,
   FanslyAccountList,
@@ -1999,7 +1999,7 @@ export class FanslyAdapter {
       execute: async () => {
         const response = await fetch(url, {
           method: "GET",
-          headers: this.buildHeaders(context.session),
+          headers: buildFanslyRequestHeaders(context.session, pathname),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           dispatcher: this.getDispatcher(context.proxy),
         });
@@ -2145,29 +2145,6 @@ export class FanslyAdapter {
     } catch {
       return null;
     }
-  }
-
-  private buildHeaders(session: FanslySessionBundle) {
-    const headers: Record<string, string> = {
-      authorization: session.authorization,
-      "fansly-client-ts": String(Date.now()),
-      accept: "application/json, text/plain, */*",
-      referrer: "https://fansly.com/",
-    };
-
-    if (session.fanslyClientId) {
-      headers["fansly-client-id"] = session.fanslyClientId;
-    }
-
-    if (session.fanslyClientCheck) {
-      headers["fansly-client-check"] = session.fanslyClientCheck;
-    }
-
-    if (session.fanslySessionId) {
-      headers["fansly-session-id"] = session.fanslySessionId;
-    }
-
-    return headers;
   }
 
   private getDispatcher(proxy?: ProxyConfig | null) {

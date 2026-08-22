@@ -4,7 +4,10 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { FanslyAdapter } from "@agency_hub_core/fansly";
+import {
+  buildFanslyRequestHeaders,
+  resolveFanslyClientCheck,
+} from "@agency_hub_core/fansly";
 
 import { loadSessionBundleFromFile } from "../apps/runtime/src/services/page-context.ts";
 
@@ -31,6 +34,7 @@ describe("Fansly session files", () => {
         fanslyClientId: undefined,
         fanslyClientCheck: undefined,
         fanslySessionId: undefined,
+        routeChecks: undefined,
       });
     });
   });
@@ -48,6 +52,7 @@ describe("Fansly session files", () => {
           fanslyClientId: undefined,
           fanslyClientCheck: "client-check",
           fanslySessionId: undefined,
+          routeChecks: undefined,
         });
       },
     );
@@ -66,37 +71,85 @@ describe("Fansly session files", () => {
       },
     );
   });
+
+  it("accepts only named per-route client checks", async () => {
+    await withSessionFile(
+      {
+        authorization: "token",
+        routeChecks: { earnings: "earnings-check", message: "message-check" },
+      },
+      async (filePath) => {
+        await expect(loadSessionBundleFromFile(filePath)).resolves.toMatchObject({
+          routeChecks: { earnings: "earnings-check", message: "message-check" },
+        });
+      },
+    );
+
+    await withSessionFile(
+      { authorization: "token", routeChecks: { madeUpRoute: "check" } },
+      async (filePath) => {
+        await expect(loadSessionBundleFromFile(filePath)).rejects.toThrow("routeChecks");
+      },
+    );
+  });
 });
 
 describe("Fansly adapter headers", () => {
-  it("omits optional Fansly headers when values are missing", () => {
-    const adapter = new FanslyAdapter({ baseUrl: "https://apiv3.fansly.com/api/v1" });
-    const buildHeaders = (
-      adapter as unknown as {
-        buildHeaders: (session: {
-          authorization: string;
-          fanslyClientId?: string;
-          fanslyClientCheck?: string;
-          fanslySessionId?: string;
-        }) => Record<string, string>;
-      }
-    ).buildHeaders.bind(adapter);
-
-    const headers = buildHeaders({
+  it("reproduces the captured Firefox header order and exact safe values", () => {
+    const headers = buildFanslyRequestHeaders({
       authorization: "token",
-      fanslyClientId: "",
-      fanslyClientCheck: undefined,
+      fanslyClientId: "client-id",
       fanslySessionId: "session-id",
-    });
+      fanslyClientCheck: "legacy-check-must-not-leak",
+      routeChecks: { earnings: "earnings-check" },
+    }, "/account/wallets/earnings/stats", 1_777_000_000_000);
 
+    expect(Object.keys(headers)).toEqual([
+      "user-agent",
+      "accept",
+      "accept-language",
+      "accept-encoding",
+      "referer",
+      "fansly-client-id",
+      "fansly-client-ts",
+      "fansly-session-id",
+      "fansly-client-check",
+      "origin",
+      "dnt",
+      "sec-gpc",
+      "sec-fetch-dest",
+      "sec-fetch-mode",
+      "sec-fetch-site",
+      "authorization",
+    ]);
     expect(headers).toMatchObject({
-      authorization: "token",
-      "fansly-session-id": "session-id",
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0",
       accept: "application/json, text/plain, */*",
-      referrer: "https://fansly.com/",
+      "accept-language": "en-US,en;q=0.9",
+      "accept-encoding": "gzip, deflate, br, zstd",
+      referer: "https://fansly.com/",
+      "fansly-client-check": "earnings-check",
+      origin: "https://fansly.com",
+      "sec-fetch-dest": "empty",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-site",
+      authorization: "token",
     });
-    expect(headers["fansly-client-ts"]).toEqual(expect.any(String));
-    expect(headers).not.toHaveProperty("fansly-client-id");
-    expect(headers).not.toHaveProperty("fansly-client-check");
+    expect(headers).not.toHaveProperty("referrer");
+  });
+
+  it("never falls back to a stale global check for an unclassified route", () => {
+    const session = {
+      authorization: "token",
+      fanslyClientCheck: "legacy-check-must-not-leak",
+      routeChecks: { earnings: "earnings-check" },
+    };
+    expect(resolveFanslyClientCheck(session, "/notifications")).toEqual({
+      route: null,
+      check: null,
+      state: "route_unclassified",
+    });
+    expect(buildFanslyRequestHeaders(session, "/notifications"))
+      .not.toHaveProperty("fansly-client-check");
   });
 });

@@ -34,6 +34,10 @@ const SESSION = {
   fanslyClientId: "client-1",
   fanslyClientCheck: "check-1",
   fanslySessionId: "session-1",
+  routeChecks: {
+    earnings: "check-earnings",
+    message: "check-message",
+  },
 };
 
 function context(overrides: Record<string, unknown> = {}) {
@@ -123,9 +127,16 @@ describe("WP-F1 adapter methods", () => {
     );
     for (const header of headers) {
       expect(header.authorization).toBe("token-abc");
-      expect(header["fansly-client-check"]).toBe("check-1");
       expect(header["fansly-session-id"]).toBe("session-1");
     }
+    expect(headers.map((header) => header["fansly-client-check"])).toEqual([
+      undefined,
+      undefined,
+      "check-earnings",
+      "check-earnings",
+      "check-earnings",
+      undefined,
+    ]);
     // One proxy dispatcher, and every call used it.
     expect(proxyDispatchers).toHaveLength(1);
     for (const [, init] of fetchMock.mock.calls) {
@@ -337,13 +348,14 @@ describe("WP-F2 adapter method: /notifications", () => {
     expect(urls[1]?.searchParams.has("type")).toBe(false);
     expect(urls[2]?.searchParams.get("type")).toBe("24001,1002,32007,45012");
 
-    // Same headers, same per-page proxy, same everything as the F1 lane.
+    // This route is absent from the extension's captured route map, so the
+    // legacy global check must not be replayed as if it belonged here.
     const headers = fetchMock.mock.calls.map(
       ([, init]) => (init as RequestInit).headers as Record<string, string>,
     );
     for (const header of headers) {
       expect(header.authorization).toBe("token-abc");
-      expect(header["fansly-client-check"]).toBe("check-1");
+      expect(header).not.toHaveProperty("fansly-client-check");
     }
     // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY: a direct-IP request risks a
     // model ban, which is why this assertion is not a formality. (The harness
@@ -497,9 +509,19 @@ describe("WP-F3 adapter methods", () => {
     );
     for (const header of headers) {
       expect(header.authorization).toBe("token-abc");
-      expect(header["fansly-client-check"]).toBe("check-1");
       expect(header["fansly-session-id"]).toBe("session-1");
     }
+    expect(headers.map((header) => header["fansly-client-check"])).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "check-message",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
     // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY — a direct-IP request risks
     // a model ban. (The harness is shared, so the dispatcher LIST accumulates;
     // what is pinned is that these calls rode ONE proxy dispatcher and none
