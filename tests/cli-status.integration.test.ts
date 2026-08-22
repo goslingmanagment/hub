@@ -493,16 +493,18 @@ describe("CLI status flows", () => {
     ])).join("\n");
 
     expect(fullOutput).toContain("Sync Monitor 2026-03-20T12:00:00.000Z");
-    // 2 pages x 14 MONITORED streams. WP-F1 added `stats_snapshot` AND repaired
+    // 2 pages x 15 MONITORED streams. WP-F1 added `stats_snapshot` AND repaired
     // the already-missing `posts`, which had been invisible in the monitor since
     // it shipped — the same blind spot a wedged fan_earnings walk had before
     // W8.1; WP-F2 added `notifications`, the lane whose wedge costs facts rather
     // than freshness; WP-F3 added `catalog`, whose wedge is invisible in every
     // other surface — the page keeps syncing DMs and money while its inventory
-    // silently ages and M stops moving. The `MONITORED_SYNC_STREAMS ⊇
-    // getSyncStreamsForPlatform("fansly")` pin is what keeps the next omission
-    // from being silent.
-    expect(fullOutput).toContain("Pages=2 Streams=28");
+    // silently ages and M stops moving; WP-F5 added `post_replies`, whose wedge
+    // is quieter still — the walk queue keeps every row, nothing errors, and the
+    // comment archive simply stops growing part-way through its first pass. The
+    // `MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly")` pin is what
+    // keeps the next omission from being silent.
+    expect(fullOutput).toContain("Pages=2 Streams=30");
     expect(fullOutput).toContain("Providers: fansly:limited");
     expect(fullOutput).toContain("lana");
     expect(fullOutput).toContain("nova");
@@ -511,7 +513,7 @@ describe("CLI status flows", () => {
     expect(fullOutput).toContain("9 items backfilled");
 
     expect(filteredOutput).toContain("lana");
-    expect(filteredOutput).toContain("Pages=1 Streams=14");
+    expect(filteredOutput).toContain("Pages=1 Streams=15");
     expect(filteredOutput).toContain("Retrying=1");
   });
 });

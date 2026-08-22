@@ -9516,10 +9516,11 @@ describe("api integration", () => {
     // + `posts` (monitor-visible since WP-F1 repaired the missing entry) +
     // `stats_snapshot` (WP-F1) + `notifications` (WP-F2 — the lossy lane, and
     // the one whose wedge would be most expensive to miss) + `catalog` (WP-F3 —
-    // the lane that measures M). Pinned by
-    // MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly") in
+    // the lane that measures M) + `post_replies` (WP-F5 — the quietest wedge in
+    // the tree: the queue keeps its rows and the archive simply stops growing).
+    // Pinned by MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly") in
     // fansly-stats-stream-wiring.
-    expect(leadBody.overall.streams).toBe(14);
+    expect(leadBody.overall.streams).toBe(15);
   }, 15_000);
 
   it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {
