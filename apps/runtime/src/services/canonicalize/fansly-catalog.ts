@@ -17,12 +17,14 @@
 // zero row events and would leave five stale tiers reading as live forever.
 //
 // So each FULL listing also emits ONE `catalog.listing_observed` carrying the
-// complete set of refs it served. Its dedup key hashes that set, so an
-// unchanged roster appends nothing day after day and a roster that loses a
-// member appends exactly one event — the projector then marks the complement
-// missing and clears `missing_since` on everything the roster still names.
-// `missing_since` becomes a REPLAYED fact rather than a sweep-time side effect,
-// which is the only version of it that survives truncate-and-replay.
+// complete set of refs it served, keyed by the OBSERVATION that produced it —
+// one roster per LOOK. The projector marks the complement missing and clears
+// the mark on everything the roster still names, so `missing_since` becomes a
+// REPLAYED fact rather than a sweep-time side effect, which is the only version
+// of it that survives truncate-and-replay. (Keying the roster on the ref set's
+// hash instead is the version that looked right and was wrong: a gift code that
+// disappears and comes back UNCHANGED hashes to the roster it had before it
+// vanished, so the event dedupes and the row stays marked forever.)
 //
 // ALBUM MEMBERSHIP GETS NO ROSTER, deliberately. Membership arrives from a
 // PAGED walk, and a roster built from one page would claim the album contains
@@ -175,8 +177,24 @@ function envelopeArray(payload: unknown): Record<string, unknown>[] {
 
 /**
  * The roster event: "this FULL listing named exactly these refs, at this
- * observation". Refs are SORTED so a provider that reorders its rows does not
- * mint an event that says something changed when nothing did.
+ * observation".
+ *
+ * ONE ROSTER PER LOOK — the dedup key carries the OBSERVATION id, not just the
+ * content hash, and that is a correction rather than a convenience. Hashing the
+ * ref set alone looked right and was wrong in one direction that matters: a
+ * gift code that disappears and comes back UNCHANGED produces a roster
+ * identical to the one before it disappeared, so the event dedupes, the
+ * projector never sees it, and the row stays marked `missing_since` forever
+ * even though the platform is serving it again. A set returning to a previous
+ * shape is a different FACT from a set that never changed, and only the look
+ * tells them apart.
+ *
+ * Replay is still a no-op: the same observation replays to the same key. The
+ * cost is one small event per listing per sweep — seven a day on a page whose
+ * production ledger already appends ~1 971 a day.
+ *
+ * Refs are SORTED so a provider that reorders its rows produces the same
+ * `contentHash`, which stays in `data` as the cheap "did the set change?" read.
  */
 function listingDraft(
   observation: CanonicalizableObservation,
@@ -193,8 +211,7 @@ function listingDraft(
     occurredAt: observation.receivedAt,
     data: { ...material, contentHash: hash },
     schemaVersion: SCHEMA_VERSION,
-    // The HASH is the key's changing half: an unchanged roster appends nothing.
-    dedupKey: `cataloglisting:v1:${pageRef}:${listingKind}:${hash}`,
+    dedupKey: `cataloglisting:v1:${pageRef}:${listingKind}:${observation.id}:${hash}`,
   };
 }
 

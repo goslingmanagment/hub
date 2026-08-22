@@ -9,13 +9,18 @@
 // ever moves backwards; NULL is never coalesced to 0; raw platform integers are
 // stored rather than labels.
 //
-// THE ADDITION — `markCatalog*Missing`. DP 7 forbids deleting a row that
+// THE ADDITION — `reconcileCatalog*Presence`. DP 7 forbids deleting a row that
 // captured a fact, so an entity a later FULL listing stops naming is MARKED,
-// not removed. Every marker below is written from the `catalog.listing_observed`
-// roster event, which means the mark is derived from the ledger and survives
-// truncate-and-replay; none of them is a scheduled sweep, and none of them
-// issues a DELETE. A row that comes back has `missing_since` cleared to NULL by
-// its ordinary upsert — "gone" is a state, not a tombstone.
+// not removed. Every reconciler below is driven by the `catalog.listing_observed`
+// roster event, so the mark is derived from the ledger and survives
+// truncate-and-replay; none of them is a scheduled sweep and none issues a
+// DELETE.
+//
+// EACH DOES BOTH HALVES, and the CLEAR is the half that is easy to forget. A
+// row whose content CHANGED clears its own mark through the ordinary upsert —
+// but a row that disappears and comes back UNCHANGED emits no event at all,
+// because its content hash is the one it had before. Only the roster can
+// un-mark it. Without that, "gone" would be a tombstone rather than a state.
 //
 // THE MEASUREMENT — `countPageUniqueCreatorMedia` and
 // `sumCreatorVaultAlbumItemCounts`, the two halves of M. The first is M itself
@@ -150,13 +155,20 @@ export async function upsertCreatorVaultAlbum(
 }
 
 /**
- * Mark every album of one vault that the roster did NOT name.
+ * Reconcile one vault's presence against a roster: mark what it did NOT name,
+ * clear the mark on what it did.
  *
- * `missing_since is null` in the predicate is what makes the mark STICKY: the
- * instant an album first went missing is the interesting one, and a second
- * roster that also omits it must not move the timestamp forward.
+ * BOTH HALVES, and the CLEAR is the one that is easy to leave out. An album's
+ * own upsert clears `missing_since` when the album's content changed — but a
+ * row that disappears and comes back UNCHANGED emits no row event at all (its
+ * content hash is the one it had before), so only the roster can un-mark it.
+ * Without the clear, "gone" would be a tombstone rather than a state.
+ *
+ * `missing_since is null` on the mark is what makes it STICKY: the instant an
+ * album FIRST went missing is the interesting one, and a second roster that
+ * also omits it must not move the timestamp forward.
  */
-export async function markCatalogAlbumsMissing(
+export async function reconcileCatalogAlbumPresence(
   db: Database,
   input: {
     pageId: number;
@@ -164,16 +176,25 @@ export async function markCatalogAlbumsMissing(
     presentRefs: readonly string[];
     missingSince: Date;
   },
-): Promise<{ marked: number }> {
-  const result = await db.execute(sql`
+): Promise<{ marked: number; cleared: number }> {
+  const present = textArrayParam(input.presentRefs);
+  const marked = await db.execute(sql`
     update creator_vault_albums
        set missing_since = ${input.missingSince}, updated_at = now()
      where page_id = ${input.pageId}
        and vault_kind = ${input.vaultKind}
        and missing_since is null
-       and not (album_ref = any(${textArrayParam(input.presentRefs)}))
+       and not (album_ref = any(${present}))
   `);
-  return { marked: result.rowCount ?? 0 };
+  const cleared = await db.execute(sql`
+    update creator_vault_albums
+       set missing_since = null, updated_at = now()
+     where page_id = ${input.pageId}
+       and vault_kind = ${input.vaultKind}
+       and missing_since is not null
+       and album_ref = any(${present})
+  `);
+  return { marked: marked.rowCount ?? 0, cleared: cleared.rowCount ?? 0 };
 }
 
 // ── creator_vault_album_members ──────────────────────────────────────────────
@@ -298,18 +319,26 @@ export async function upsertPageSubscriptionTier(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
-export async function markCatalogTiersMissing(
+export async function reconcileCatalogTiersPresence(
   db: Database,
   input: { pageId: number; presentRefs: readonly string[]; missingSince: Date },
-): Promise<{ marked: number }> {
-  const result = await db.execute(sql`
+): Promise<{ marked: number; cleared: number }> {
+  const present = textArrayParam(input.presentRefs);
+  const marked = await db.execute(sql`
     update page_subscription_tiers
        set missing_since = ${input.missingSince}, updated_at = now()
      where page_id = ${input.pageId}
        and missing_since is null
-       and not (tier_ref = any(${textArrayParam(input.presentRefs)}))
+       and not (tier_ref = any(${present}))
   `);
-  return { marked: result.rowCount ?? 0 };
+  const cleared = await db.execute(sql`
+    update page_subscription_tiers
+       set missing_since = null, updated_at = now()
+     where page_id = ${input.pageId}
+       and missing_since is not null
+       and tier_ref = any(${present})
+  `);
+  return { marked: marked.rowCount ?? 0, cleared: cleared.rowCount ?? 0 };
 }
 
 export interface UpsertPageSubscriptionTierPlanInput extends CatalogLineage {
@@ -368,18 +397,26 @@ export async function upsertPageSubscriptionTierPlan(
 
 /** Plan refs are snowflakes and globally unique, so the roster names them
  *  without their tier — a plan that MOVES between tiers is still one plan. */
-export async function markCatalogTierPlansMissing(
+export async function reconcileCatalogTierPlansPresence(
   db: Database,
   input: { pageId: number; presentRefs: readonly string[]; missingSince: Date },
-): Promise<{ marked: number }> {
-  const result = await db.execute(sql`
+): Promise<{ marked: number; cleared: number }> {
+  const present = textArrayParam(input.presentRefs);
+  const marked = await db.execute(sql`
     update page_subscription_tier_plans
        set missing_since = ${input.missingSince}, updated_at = now()
      where page_id = ${input.pageId}
        and missing_since is null
-       and not (plan_ref = any(${textArrayParam(input.presentRefs)}))
+       and not (plan_ref = any(${present}))
   `);
-  return { marked: result.rowCount ?? 0 };
+  const cleared = await db.execute(sql`
+    update page_subscription_tier_plans
+       set missing_since = null, updated_at = now()
+     where page_id = ${input.pageId}
+       and missing_since is not null
+       and plan_ref = any(${present})
+  `);
+  return { marked: marked.rowCount ?? 0, cleared: cleared.rowCount ?? 0 };
 }
 
 // ── page_walls ───────────────────────────────────────────────────────────────
@@ -436,18 +473,26 @@ export async function upsertPageWall(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
-export async function markCatalogWallsMissing(
+export async function reconcileCatalogWallsPresence(
   db: Database,
   input: { pageId: number; presentRefs: readonly string[]; missingSince: Date },
-): Promise<{ marked: number }> {
-  const result = await db.execute(sql`
+): Promise<{ marked: number; cleared: number }> {
+  const present = textArrayParam(input.presentRefs);
+  const marked = await db.execute(sql`
     update page_walls
        set missing_since = ${input.missingSince}, updated_at = now()
      where page_id = ${input.pageId}
        and missing_since is null
-       and not (wall_ref = any(${textArrayParam(input.presentRefs)}))
+       and not (wall_ref = any(${present}))
   `);
-  return { marked: result.rowCount ?? 0 };
+  const cleared = await db.execute(sql`
+    update page_walls
+       set missing_since = null, updated_at = now()
+     where page_id = ${input.pageId}
+       and missing_since is not null
+       and wall_ref = any(${present})
+  `);
+  return { marked: marked.rowCount ?? 0, cleared: cleared.rowCount ?? 0 };
 }
 
 // ── page_automated_messages ──────────────────────────────────────────────────
@@ -514,18 +559,26 @@ export async function upsertPageAutomatedMessage(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
-export async function markCatalogAutomationsMissing(
+export async function reconcileCatalogAutomationsPresence(
   db: Database,
   input: { pageId: number; presentRefs: readonly string[]; missingSince: Date },
-): Promise<{ marked: number }> {
-  const result = await db.execute(sql`
+): Promise<{ marked: number; cleared: number }> {
+  const present = textArrayParam(input.presentRefs);
+  const marked = await db.execute(sql`
     update page_automated_messages
        set missing_since = ${input.missingSince}, updated_at = now()
      where page_id = ${input.pageId}
        and missing_since is null
-       and not (automation_ref = any(${textArrayParam(input.presentRefs)}))
+       and not (automation_ref = any(${present}))
   `);
-  return { marked: result.rowCount ?? 0 };
+  const cleared = await db.execute(sql`
+    update page_automated_messages
+       set missing_since = null, updated_at = now()
+     where page_id = ${input.pageId}
+       and missing_since is not null
+       and automation_ref = any(${present})
+  `);
+  return { marked: marked.rowCount ?? 0, cleared: cleared.rowCount ?? 0 };
 }
 
 // ── gift codes → page_promo_links (WP-F1's table, the second link kind) ──────
@@ -613,11 +666,12 @@ export async function upsertPageGiftCode(
  * `max(business_date)` per code — marking every historical row would rewrite
  * days on which the code demonstrably existed.
  */
-export async function markCatalogGiftCodesMissing(
+export async function reconcileCatalogGiftCodePresence(
   db: Database,
   input: { pageId: number; presentRefs: readonly string[]; missingSince: Date },
-): Promise<{ marked: number }> {
-  const result = await db.execute(sql`
+): Promise<{ marked: number; cleared: number }> {
+  const present = textArrayParam(input.presentRefs);
+  const marked = await db.execute(sql`
     with heads as (
       select link_ref, max(business_date) as business_date
         from page_promo_links
@@ -633,9 +687,17 @@ export async function markCatalogGiftCodesMissing(
        and p.link_ref = h.link_ref
        and p.business_date = h.business_date
        and p.missing_since is null
-       and not (p.link_ref = any(${textArrayParam(input.presentRefs)}))
+       and not (p.link_ref = any(${present}))
   `);
-  return { marked: result.rowCount ?? 0 };
+  const cleared = await db.execute(sql`
+    update page_promo_links as p
+       set missing_since = null, updated_at = now()
+     where p.page_id = ${input.pageId}
+       and p.link_kind = 'gift_code'
+       and p.missing_since is not null
+       and p.link_ref = any(${present})
+  `);
+  return { marked: marked.rowCount ?? 0, cleared: cleared.rowCount ?? 0 };
 }
 
 // ── M, and the number M is NOT ───────────────────────────────────────────────
