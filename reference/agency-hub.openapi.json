@@ -15143,7 +15143,8 @@
                               "notifications",
                               "catalog",
                               "post_replies",
-                              "payouts"
+                              "payouts",
+                              "media_stats"
                             ]
                           },
                           "requestedSeq": {
@@ -15391,7 +15392,8 @@
                               "notifications",
                               "catalog",
                               "post_replies",
-                              "payouts"
+                              "payouts",
+                              "media_stats"
                             ]
                           },
                           "requestedSeq": {
@@ -15668,7 +15670,8 @@
                               "notifications",
                               "catalog",
                               "post_replies",
-                              "payouts"
+                              "payouts",
+                              "media_stats"
                             ]
                           },
                           "requestedSeq": {
@@ -15916,7 +15919,8 @@
                               "notifications",
                               "catalog",
                               "post_replies",
-                              "payouts"
+                              "payouts",
+                              "media_stats"
                             ]
                           },
                           "requestedSeq": {
@@ -21009,7 +21013,8 @@
                                 "notifications",
                                 "catalog",
                                 "post_replies",
-                                "payouts"
+                                "payouts",
+                                "media_stats"
                               ]
                             },
                             "additionalProperties": {
@@ -68993,7 +68998,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69055,7 +69061,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "role": {
@@ -69563,7 +69570,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69625,7 +69633,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "role": {
@@ -70133,7 +70142,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -70195,7 +70205,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "role": {
@@ -70703,7 +70714,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -70765,7 +70777,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "role": {
@@ -71273,7 +71286,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -71335,7 +71349,8 @@
                                           "notifications",
                                           "catalog",
                                           "post_replies",
-                                          "payouts"
+                                          "payouts",
+                                          "media_stats"
                                         ]
                                       },
                                       "role": {
@@ -72116,7 +72131,8 @@
                                   "notifications",
                                   "catalog",
                                   "post_replies",
-                                  "payouts"
+                                  "payouts",
+                                  "media_stats"
                                 ]
                               },
                               "cadenceSeconds": {
@@ -72178,7 +72194,8 @@
                                   "notifications",
                                   "catalog",
                                   "post_replies",
-                                  "payouts"
+                                  "payouts",
+                                  "media_stats"
                                 ]
                               },
                               "role": {
@@ -78566,7 +78583,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -78628,7 +78646,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "role": {
@@ -79136,7 +79155,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79198,7 +79218,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "role": {
@@ -79706,7 +79727,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79768,7 +79790,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "role": {
@@ -80276,7 +80299,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -80338,7 +80362,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "role": {
@@ -80846,7 +80871,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -80908,7 +80934,8 @@
                                             "notifications",
                                             "catalog",
                                             "post_replies",
-                                            "payouts"
+                                            "payouts",
+                                            "media_stats"
                                           ]
                                         },
                                         "role": {
@@ -81298,7 +81325,8 @@
                           "notifications",
                           "catalog",
                           "post_replies",
-                          "payouts"
+                          "payouts",
+                          "media_stats"
                         ]
                       },
                       "operation": {
@@ -82100,7 +82128,8 @@
                                     "notifications",
                                     "catalog",
                                     "post_replies",
-                                    "payouts"
+                                    "payouts",
+                                    "media_stats"
                                   ]
                                 },
                                 "status": {
@@ -82790,7 +82819,8 @@
                               "notifications",
                               "catalog",
                               "post_replies",
-                              "payouts"
+                              "payouts",
+                              "media_stats"
                             ]
                           },
                           "eventType": {

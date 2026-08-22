@@ -36,7 +36,7 @@ describe("Fansly bulk-stream scheduling", () => {
     ]);
     dbMocks.reconcileFanslyBulkStreamGate
       // Page 11: fan_earnings, purchase_history, stats_snapshot, notifications,
-      // catalog, post_replies, payouts.
+      // catalog, post_replies, payouts, media_stats.
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
@@ -44,9 +44,11 @@ describe("Fansly bulk-stream scheduling", () => {
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
-      // Page 12: the same seven.
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      // Page 12: the same eight.
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
@@ -73,6 +75,10 @@ describe("Fansly bulk-stream scheduling", () => {
       // WP-F7: its OWN fail-closed key, on the same template.
       fanslyPayoutsSyncEnabled: true,
       fanslyPayoutsPageAllowlist: "lora-1",
+      // WP-F4: its OWN fail-closed key, and the lane where the fail-OPEN
+      // semantic would have cost the most.
+      fanslyMediaStatsSyncEnabled: true,
+      fanslyMediaStatsPageAllowlist: "lora-1",
     });
   });
 
@@ -130,6 +136,12 @@ describe("Fansly bulk-stream scheduling", () => {
         now,
       },
       {
+        pageId: 11,
+        stream: "media_stats",
+        gateState: "ramped",
+        now,
+      },
+      {
         pageId: 12,
         stream: "fan_earnings",
         gateState: "not_allowlisted",
@@ -173,6 +185,14 @@ describe("Fansly bulk-stream scheduling", () => {
         // WP-F7's key, same rule again.
         pageId: 12,
         stream: "payouts",
+        gateState: "not_allowlisted",
+        now,
+      },
+      {
+        // WP-F4's key, same rule again — and the one where a fail-OPEN read
+        // would have started a 300-call-a-day per-media walk on `other-page`.
+        pageId: 12,
+        stream: "media_stats",
         gateState: "not_allowlisted",
         now,
       },

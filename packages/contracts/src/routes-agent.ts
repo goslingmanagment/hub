@@ -678,6 +678,7 @@ export const agentSyncStreamEnum = z.enum([
   "catalog",
   "post_replies",
   "payouts",
+  "media_stats",
 ]);
 
 /** = CHECK `observations_source_check`, exactly seven. */

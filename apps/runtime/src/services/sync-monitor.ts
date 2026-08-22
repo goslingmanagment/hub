@@ -78,6 +78,11 @@ export const MONITORED_SYNC_STREAMS = [
   // is a volume no dashboard notices going to zero, and the first thing lost is
   // the payout-request history the money side reconciles against.
   "payouts",
+  // WP-F4. The loudest lane in the tree by call volume and therefore the one
+  // whose wedge is most worth seeing: it is designed to run at 100 % of its own
+  // daily cap, so "calls went to zero" is the signal, and nothing else in the
+  // monitor would show it.
+  "media_stats",
 ] as const satisfies readonly SyncStream[];
 const REQUEST_STREAMS = [
   ...MONITORED_SYNC_STREAMS,

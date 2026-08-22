@@ -9542,10 +9542,12 @@ describe("api integration", () => {
     // the lane that measures M) + `post_replies` (WP-F5 — the quietest wedge in
     // the tree: the queue keeps its rows and the archive simply stops growing)
     // + `payouts` (WP-F7 — two calls a day is a volume no dashboard notices
-    // going to zero).
+    // going to zero) + `media_stats` (WP-F4 — the loudest lane by call volume
+    // and therefore the one whose wedge is most worth seeing: it is designed to
+    // run at 100 % of its own cap, so "calls went to zero" IS the signal).
     // Pinned by MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly") in
     // fansly-stats-stream-wiring.
-    expect(leadBody.overall.streams).toBe(16);
+    expect(leadBody.overall.streams).toBe(17);
   }, 15_000);
 
   it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {

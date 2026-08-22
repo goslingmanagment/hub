@@ -35,6 +35,7 @@ import {
 } from "../services/sync/posts.ts";
 import { fanslyCatalogChunk } from "../services/sync/fansly-catalog.ts";
 import { fanslyNotificationsChunk } from "../services/sync/fansly-notifications.ts";
+import { fanslyMediaStatsChunk } from "../services/sync/fansly-media-stats.ts";
 import { fanslyPayoutsChunk } from "../services/sync/fansly-payouts.ts";
 import { fanslyPostRepliesChunk } from "../services/sync/fansly-post-replies.ts";
 import { fanslyStatsSnapshotChunk } from "../services/sync/fansly-stats.ts";
@@ -93,6 +94,7 @@ const FANSLY_STREAMS: CanonicalStream[] = [
   "catalog",
   "post_replies",
   "payouts",
+  "media_stats",
 ];
 
 /** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
@@ -133,6 +135,10 @@ const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   post_replies: fanslyPostRepliesChunk,
   // WP-F7. Same rule again.
   payouts: fanslyPayoutsChunk,
+  // WP-F4. Same rule again — and this is the lane where the consequence is
+  // widest: it is declared for every Fansly page the moment it enters
+  // SYNC_STREAMS.
+  media_stats: fanslyMediaStatsChunk,
 };
 
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {

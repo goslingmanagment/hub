@@ -207,6 +207,9 @@ const GATE_CONFIG_KEYS = new Set([
   // WP-F7.
   "fanslyPayoutsSyncEnabled",
   "fanslyPayoutsPageAllowlist",
+  // WP-F4.
+  "fanslyMediaStatsSyncEnabled",
+  "fanslyMediaStatsPageAllowlist",
 ]);
 
 /**
@@ -246,6 +249,11 @@ const GATED_FANSLY_STREAMS = [
     stream: "payouts",
     enabledField: "fanslyPayoutsSyncEnabled",
     failClosedAllowlistField: "fanslyPayoutsPageAllowlist",
+  },
+  {
+    stream: "media_stats",
+    enabledField: "fanslyMediaStatsSyncEnabled",
+    failClosedAllowlistField: "fanslyMediaStatsPageAllowlist",
   },
 ] as const;
 

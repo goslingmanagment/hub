@@ -116,6 +116,9 @@ const STREAM_LABELS: Record<string, string> = {
   // The fallback would render this "payouts", which reads like a balance
   // rather than the thing the lane actually captures.
   payouts: "payout history",
+  // The fallback would render this "media stats", which reads like a summary
+  // of one number rather than the per-item traffic history it captures.
+  media_stats: "per-media statistics",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {

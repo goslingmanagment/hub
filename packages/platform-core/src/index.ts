@@ -32,6 +32,7 @@ export const PLATFORM_STREAMS = [
   "catalog",
   "post_replies",
   "payouts",
+  "media_stats",
 ] as const;
 
 export type CanonicalStream = (typeof PLATFORM_STREAMS)[number];

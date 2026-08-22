@@ -166,6 +166,16 @@ const envSchema = z.object({
   FANSLY_PAYOUTS_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_PAYOUTS_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_PAYOUTS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(100).default(20),
+  // WP-F4. Same fail-closed allowlist semantic; its own keys (S4). 300 is the
+  // cap A16 sized the age decay against, and this lane is DESIGNED to spend it:
+  // at M = 2 000 the decay wants 294 calls a day. 1 000 is the registry ceiling
+  // — a raise toward what the decay wants is a named per-lane owner step. The
+  // long-tail cycle is the one cadence A6 asks to be tunable; the fresh/mid
+  // boundaries are constants in the code.
+  FANSLY_MEDIA_STATS_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_MEDIA_STATS_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_MEDIA_STATS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(1000).default(300),
+  FANSLY_MEDIA_STATS_LONG_TAIL_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   // WP-F6. Rides the EXISTING `posts` stream, so it has no allowlist of its
   // own; the cap is counted apart from the timeline walk in the same cursor.
   FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED: booleanSchema.default(false),
@@ -459,6 +469,16 @@ export interface AppConfig {
   fanslyPayoutsPageAllowlist?: string;
   /** HTTP ATTEMPTS per page per UTC day for the payouts lane; crossing it defers. */
   fanslyPayoutsDailyCallBudget?: number;
+  /** WP-F4: the per-media statistics lane over `/it/moie/statsnew`. */
+  fanslyMediaStatsSyncEnabled?: boolean;
+  /** CSV of page labels allowed to walk per-media stats; empty = NONE (fails closed). */
+  fanslyMediaStatsPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the per-media lane; crossing it defers.
+   *  The lane is DESIGNED to spend all of it when M is large (A16). */
+  fanslyMediaStatsDailyCallBudget?: number;
+  /** How stale a long-tail media item's last visit must be before the
+   *  round-robin re-reads it (A6's one explicitly tunable cadence). */
+  fanslyMediaStatsLongTailCycleDays?: number;
   /** WP-F6: the decayed `GET /post?ids=` phase on the EXISTING posts stream. */
   fanslyPostEngagementRefreshEnabled?: boolean;
   /** HTTP ATTEMPTS per page per UTC day for the engagement phase; crossing it
@@ -758,6 +778,10 @@ export function loadConfig(
     fanslyPayoutsSyncEnabled: parsed.FANSLY_PAYOUTS_SYNC_ENABLED,
     fanslyPayoutsPageAllowlist: parsed.FANSLY_PAYOUTS_PAGE_ALLOWLIST,
     fanslyPayoutsDailyCallBudget: parsed.FANSLY_PAYOUTS_DAILY_CALL_BUDGET,
+    fanslyMediaStatsSyncEnabled: parsed.FANSLY_MEDIA_STATS_SYNC_ENABLED,
+    fanslyMediaStatsPageAllowlist: parsed.FANSLY_MEDIA_STATS_PAGE_ALLOWLIST,
+    fanslyMediaStatsDailyCallBudget: parsed.FANSLY_MEDIA_STATS_DAILY_CALL_BUDGET,
+    fanslyMediaStatsLongTailCycleDays: parsed.FANSLY_MEDIA_STATS_LONG_TAIL_CYCLE_DAYS,
     fanslyPostEngagementRefreshEnabled: parsed.FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED,
     fanslyPostEngagementDailyCallBudget: parsed.FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET,
     fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,
