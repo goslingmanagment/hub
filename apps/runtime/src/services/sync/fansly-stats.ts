@@ -112,6 +112,13 @@ interface DailyBackfillState {
   emptyStreak: number;
   /** The one extra probe window ~1 year further back has been spent. */
   probeSpent: boolean;
+  /**
+   * Where the ORDINARY walk was when the probe jumped over it, so a probe that
+   * finds data resumes at the gap instead of continuing from the probe.
+   * Otherwise a probe that proved "there IS older history" would leave the ~265
+   * days it jumped over unwalked — a hole nobody would notice for a year.
+   */
+  probeResumeMs: number | null;
   done: boolean;
   /** ISO instant of the oldest bucket the provider ever served. */
   floorAt: string | null;
@@ -178,6 +185,10 @@ function parseDailyBackfill(value: unknown, now: Date): DailyBackfillState {
     nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
     emptyStreak: asInt(record?.emptyStreak, 0),
     probeSpent: record?.probeSpent === true,
+    probeResumeMs: typeof record?.probeResumeMs === "number"
+      && Number.isSafeInteger(record.probeResumeMs)
+      ? record.probeResumeMs
+      : null,
     done: record?.done === true,
     floorAt: asNullableString(record?.floorAt),
   };
@@ -264,6 +275,7 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
         nextBeforeMs: now.getTime(),
         emptyStreak: 0,
         probeSpent: false,
+        probeResumeMs: null,
         done: false,
         floorAt: null,
       },
@@ -550,6 +562,10 @@ export async function fanslyStatsSnapshotChunk(
             // calling it a floor.
             backfill.daily.emptyStreak = streak;
             backfill.daily.probeSpent = true;
+            // Remember where the ordinary walk would have gone next, so a probe
+            // that finds data can come back and fill the span it jumped over.
+            backfill.daily.probeResumeMs = backfill.daily.nextBeforeMs
+              - BACKFILL_DAILY_WINDOW_DAYS * DAY_MS;
             backfill.daily.nextBeforeMs -= BACKFILL_PROBE_JUMP_DAYS * DAY_MS;
           } else if (streak >= BACKFILL_EMPTY_STREAK_LIMIT) {
             backfill.daily.emptyStreak = streak;
@@ -575,10 +591,25 @@ export async function fanslyStatsSnapshotChunk(
           }
         } else {
           backfill.daily.emptyStreak = 0;
+          // The floor only ever moves BACKWARDS: a probe window that reached
+          // further than the ordinary walk must not be undone by the next
+          // ordinary window, which is nearer to today.
           if (served.afterMs !== null) {
+            const servedFloor = new Date(served.afterMs).toISOString();
+            backfill.daily.floorAt = backfill.daily.floorAt === null
+              || servedFloor < backfill.daily.floorAt
+              ? servedFloor
+              : backfill.daily.floorAt;
+          }
+          if (backfill.daily.probeResumeMs !== null) {
+            // The probe PROVED there is older history, so the span it jumped
+            // over is unexamined rather than absent. Resume at the gap; the
+            // walk will reach the probe window again on its own.
+            backfill.daily.nextBeforeMs = backfill.daily.probeResumeMs;
+            backfill.daily.probeResumeMs = null;
+          } else if (served.afterMs !== null) {
             // DERIVED FROM THE RETURNED BOUNDS, with one day of overlap.
             backfill.daily.nextBeforeMs = served.afterMs + BACKFILL_DAILY_OVERLAP_DAYS * DAY_MS;
-            backfill.daily.floorAt = new Date(served.afterMs).toISOString();
           } else {
             backfill.daily.nextBeforeMs -= BACKFILL_DAILY_WINDOW_DAYS * DAY_MS;
           }
