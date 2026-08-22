@@ -87,6 +87,12 @@ export async function reconcileFanslyBulkStreamScheduling(
         // WP-F3 (S4): its OWN fail-closed allowlist key, for the same reason.
         allowlisted: isPageAllowlisted(effective.fanslyCatalogPageAllowlist, page.label),
       },
+      {
+        stream: "post_replies",
+        enabled: effective.fanslyPostRepliesSyncEnabled === true,
+        // WP-F5 (S4): its OWN fail-closed allowlist key, for the same reason.
+        allowlisted: isPageAllowlisted(effective.fanslyPostRepliesPageAllowlist, page.label),
+      },
     ];
 
     for (const stream of streams) {

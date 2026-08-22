@@ -91,6 +91,18 @@ export const VAULT_MEDIA_HEAD_CURSOR = "0";
 export const ACCOUNT_MEDIA_BATCH_SIZE = 100;
 
 /**
+ * WP-F5: the statuses `/post/{postId}/replies` may answer with an empty body.
+ *
+ * NOT live-proven — no GET anywhere in the 2026-08-19 HAR returned 204 (all 197
+ * are OPTIONS preflights), so this is the honest handling of a case we have
+ * never seen rather than a contract we have observed. It is scoped to that ONE
+ * method deliberately: everywhere else an envelope-less body is a failure, and
+ * a global softening would let a truncated response read as "no data" on every
+ * lane at once.
+ */
+export const POST_REPLIES_EMPTY_STATUSES = [204] as const;
+
+/**
  * Response summary for a route whose shape is NOT yet known (the WP-F9 / [E1]
  * liveness probes). Records enough to tell "did this answer, and with what" apart
  * from "this route is dead", without asserting a contract we have no evidence for.
@@ -1260,26 +1272,55 @@ export class FanslyAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * [E1] — the load-bearing one. Every observed `GET /post/{id}/replies` in the
-   * capture was preceded ~40 ms earlier by `POST /postreply/verify` with the same
-   * post id. This method deliberately issues the BARE GET with no preceding POST,
-   * because that is the whole question: if the bare GET fails, WP-F5 (the comment
-   * archive, a large slice of the plan) does not exist and must be cut before
-   * anything is built on it. The route takes no query parameters — verified
-   * against all five observed GETs in the 2026-08-19/21 HARs.
+   * WP-F5's whole lane, and it is a BARE GET forever.
+   *
+   * [E1], settled: every observed `GET /post/{id}/replies` in the 2026-08-19
+   * capture was preceded ~40 ms earlier by `POST /postreply/verify` carrying the
+   * same post id (5/5). The probe issued the GET with NO preceding POST and the
+   * comments came back (A25). So the verify POST is a client-side affordance,
+   * not a server-side precondition — and it is never issued from here, because
+   * §1 excludes write-shaped calls to the platform and a POST that "only
+   * verifies" is still a POST to somebody else's server. A test greps this file
+   * for the string `postreply/verify` and fails if it ever appears.
+   *
+   * ── PAGINATION IS UNPROVEN, and this signature says so ────────────────────
+   *
+   * No observed response carried more than four replies, so no cursor has ever
+   * been exercised. `before` is offered because it is the convention every
+   * other paginated Fansly route uses (`/timelinenew`, `/message`,
+   * `/notifications`) and because replies came back descending by id — but the
+   * caller only sends it after a page looks suspiciously full, and it carries
+   * its own repeat-cursor guard. Until a second page is actually served, the
+   * lane records `possiblyTruncated` and refuses to call the walk complete.
+   *
+   * ── `emptyStatuses: [204]`, on THIS METHOD ONLY ───────────────────────────
+   *
+   * "No replies" has never been observed live in any form: NO GET anywhere in
+   * the HAR returned 204 (all 197 are OPTIONS preflights). 200 with an empty
+   * `posts[]`, a 204, and an empty body are therefore all handled as the same
+   * honest answer, and none of the three is live-proven. The 204 branch returns
+   * `{__empty: true, httpStatus}` rather than throwing, so the walk can journal
+   * "this post has no comments" instead of recording a lane failure.
    */
   async getPostRepliesPage(
     context: FanslyRequestContext,
-    params: { postId: string },
+    params: { postId: string; before?: string | null },
   ): Promise<{ items: unknown; raw: unknown }> {
+    const before = params.before ?? null;
     const response = await this.request<unknown>(
       context,
       `/post/${encodeURIComponent(params.postId)}/replies`,
       {
-        operation: "post_replies_probe",
+        operation: "post_replies",
         endpointTemplate: "/post/{postId}/replies",
         category: "posts",
-        requestShape: { postId: params.postId, verifyPosted: false },
+        // OMITTED entirely on the first call — the bare form is the only one
+        // five live responses prove. `before` appears only once the caller has
+        // a reason to suspect a second page exists.
+        query: before === null ? {} : { before },
+        requestShape: { postId: params.postId, verifyPosted: false, before },
+        pagination: { cursorPresent: before !== null },
+        emptyStatuses: POST_REPLIES_EMPTY_STATUSES,
         summarizeResponse: summarizeUnknownResponse,
       },
     );
@@ -1716,6 +1757,19 @@ export class FanslyAdapter {
       };
       minDelayMs?: number;
       retries?: number;
+      /**
+       * WP-F5. HTTP statuses this route answers with an EMPTY BODY, which are a
+       * legitimate "nothing here" rather than a broken envelope.
+       *
+       * Opt-in per method, and deliberately not a global rule: everywhere else
+       * in this adapter a body that carries no `{success, response}` envelope
+       * IS a failure, and softening that globally would let a truncated
+       * response read as "no data" on every lane at once. When a status
+       * matches, the call succeeds with `FANSLY_EMPTY_RESPONSE`-shaped material
+       * — `{__empty: true, httpStatus}` — so the caller can tell an empty
+       * answer from an absent one and the journal records which.
+       */
+      emptyStatuses?: readonly number[];
       summarizeResponse?: (parsed: T) => Record<string, unknown>;
     },
   ): Promise<RequestResult<T>> {
@@ -1803,6 +1857,24 @@ export class FanslyAdapter {
               envelope?.error?.code,
               responseSnippet,
             ),
+          };
+        }
+
+        // WP-F5's opt-in empty answer. It sits AFTER the auth check (a 401 is
+        // never "no replies") and before the envelope check, because a 204 —
+        // or an ok response with a zero-length body — carries no envelope to
+        // parse and would otherwise fail as `provider` drift.
+        const emptyStatuses = options.emptyStatuses ?? [];
+        if (
+          emptyStatuses.includes(response.status)
+          || (emptyStatuses.length > 0 && response.ok && text.trim().length === 0)
+        ) {
+          const empty = { __empty: true, httpStatus: response.status } as const;
+          return {
+            kind: "success",
+            value: { parsed: empty as unknown as T, raw: empty as unknown as T },
+            httpStatus: response.status,
+            responseMetadata: { responseKind: "empty", bodyLength: text.length },
           };
         }
 

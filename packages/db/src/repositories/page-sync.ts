@@ -40,6 +40,11 @@ export const SYNC_STREAMS = [
   // BEFORE the per-media lane exists on purpose: M is what sizes that lane.
   // Fansly-only, gated off, seeded PAUSED.
   "catalog",
+  // WP-F5: the comment archive walk. HISTORY class at 21 600 s — it is a big
+  // back-catalogue (≈4 300 Fansly roots fleet-wide) read at 100 calls a page a
+  // day, so it is never "fresh" and never urgent; what it must not do is burst.
+  // Fansly-only, gated off, seeded PAUSED.
+  "post_replies",
 ] as const;
 
 export type SyncStream = typeof SYNC_STREAMS[number];
@@ -78,6 +83,8 @@ export const FANSLY_BULK_SYNC_STREAMS = [
   // WP-F3: same rule. Without membership here the lane seeds paused and its
   // ramp flag moves nothing.
   "catalog",
+  // WP-F5: same rule again.
+  "post_replies",
 ] as const;
 
 export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
@@ -107,6 +114,7 @@ export const SEED_PAUSED_SYNC_STREAMS = [
   "stats_snapshot",
   "notifications",
   "catalog",
+  "post_replies",
 ] as const;
 
 export function isSeedPausedSyncStream(stream: string): boolean {
@@ -349,6 +357,28 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 60 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // WP-F5: the replies walk. HISTORY class at 21 600 s — four dispatches a day,
+  // each spending a slice of a 100-call daily budget over a back-catalogue that
+  // takes ~14 days to first-pass on the biggest live page. `domain: "audience"`
+  // is where a comment belongs (it is a fan speaking, not money and not a DM);
+  // like every other gated lane it is deliberately ABSENT from
+  // SYNC_DOMAIN_POLICY's primary/supporting lists, so a shut gate cannot
+  // degrade a page's block-health UX to "catching up".
+  //
+  // basePriority 10 puts it below the catalog sweep and far below money and
+  // DMs: a comment archive that is 14 days from its first pass can always wait
+  // one more dispatch, and the plan's pacing rule is "priority yield to DM/tx".
+  post_replies: {
+    stream: "post_replies",
+    domain: "audience",
+    cadenceSeconds: 21_600,
+    basePriority: 10,
+    streamIndex: 16,
+    defaultWorkClass: "maintenance",
+    queueDelayThresholdMs: 6 * 60 * 60_000,
+    progressStallThresholdMs: 60 * 60_000,
+    freshnessSlaSeconds: null,
+  },
 };
 
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
@@ -416,6 +446,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     stats_snapshot: 17,
     notifications: 16,
     catalog: 15,
+    post_replies: 14,
   },
   recovery: {
     light: 70,
@@ -433,6 +464,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     stats_snapshot: 27,
     notifications: 26,
     catalog: 25,
+    post_replies: 24,
   },
   anomaly: {
     light: 70,
@@ -450,6 +482,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     stats_snapshot: 27,
     notifications: 26,
     catalog: 25,
+    post_replies: 24,
   },
   manual: {
     light: 100,
@@ -467,6 +500,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     stats_snapshot: 57,
     notifications: 56,
     catalog: 55,
+    post_replies: 54,
   },
   onboarding: {
     light: 100,
@@ -484,6 +518,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     stats_snapshot: 57,
     notifications: 56,
     catalog: 55,
+    post_replies: 54,
   },
   reset: {
     light: 100,
@@ -501,6 +536,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     stats_snapshot: 57,
     notifications: 56,
     catalog: 55,
+    post_replies: 54,
   },
 };
 
@@ -650,6 +686,7 @@ function streamOrderSql(columnName: string) {
       when 'stats_snapshot' then ${SYNC_STREAM_POLICY.stats_snapshot.streamIndex}
       when 'notifications' then ${SYNC_STREAM_POLICY.notifications.streamIndex}
       when 'catalog' then ${SYNC_STREAM_POLICY.catalog.streamIndex}
+      when 'post_replies' then ${SYNC_STREAM_POLICY.post_replies.streamIndex}
       else 999
     end
   `);
@@ -673,6 +710,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'stats_snapshot' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].stats_snapshot}
       when 'notifications' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].notifications}
       when 'catalog' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].catalog}
+      when 'post_replies' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].post_replies}
       else 0
     end
   `;

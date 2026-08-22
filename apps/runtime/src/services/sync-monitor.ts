@@ -70,6 +70,10 @@ export const MONITORED_SYNC_STREAMS = [
   // page keeps syncing DMs and money while its inventory silently ages, and M
   // (the number WP-F4 is sized against) quietly stops moving.
   "catalog",
+  // WP-F5. A wedged replies walk is the quietest failure in this tree: the
+  // queue keeps its rows, the page keeps syncing everything else, and the
+  // comment archive simply stops growing 3 % into a 14-day first pass.
+  "post_replies",
 ] as const satisfies readonly SyncStream[];
 const REQUEST_STREAMS = [
   ...MONITORED_SYNC_STREAMS,

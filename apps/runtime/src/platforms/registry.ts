@@ -35,6 +35,7 @@ import {
 } from "../services/sync/posts.ts";
 import { fanslyCatalogChunk } from "../services/sync/fansly-catalog.ts";
 import { fanslyNotificationsChunk } from "../services/sync/fansly-notifications.ts";
+import { fanslyPostRepliesChunk } from "../services/sync/fansly-post-replies.ts";
 import { fanslyStatsSnapshotChunk } from "../services/sync/fansly-stats.ts";
 
 // Kernel Stage 18: the two platform adapters, assembled in the app layer
@@ -89,6 +90,7 @@ const FANSLY_STREAMS: CanonicalStream[] = [
   "stats_snapshot",
   "notifications",
   "catalog",
+  "post_replies",
 ];
 
 /** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
@@ -125,6 +127,8 @@ const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   notifications: fanslyNotificationsChunk,
   // WP-F3. Same rule again.
   catalog: fanslyCatalogChunk,
+  // WP-F5. Same rule again.
+  post_replies: fanslyPostRepliesChunk,
 };
 
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {

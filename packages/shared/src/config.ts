@@ -154,6 +154,13 @@ const envSchema = z.object({
   FANSLY_CATALOG_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_CATALOG_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_CATALOG_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(60),
+  // WP-F5. Same fail-closed allowlist semantic; its own keys (S4). The budget
+  // ships at 100 and its ceiling is 400 — the raise to 300 is a separate,
+  // criteria-gated flip with its own window (A29), not a default.
+  FANSLY_POST_REPLIES_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_POST_REPLIES_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_REPLIES_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(400).default(100),
+  FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
   FANSLY_STATS_HOURLY_ENABLED: booleanSchema.default(true),
   FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS: z.coerce.number().int().min(0).max(400).default(30),
   FANSLY_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
@@ -431,6 +438,13 @@ export interface AppConfig {
   fanslyCatalogPageAllowlist?: string;
   /** HTTP ATTEMPTS per page per UTC day for the catalog lane; crossing it defers. */
   fanslyCatalogDailyCallBudget?: number;
+  fanslyPostRepliesSyncEnabled?: boolean;
+  /** CSV of page labels allowed to walk post replies; empty = NONE (fails closed). */
+  fanslyPostRepliesPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the replies walk; crossing it defers. */
+  fanslyRepliesDailyCallBudget?: number;
+  /** How stale a post's last walk must be before the round-robin re-reads it. */
+  fanslyRepliesRewalkCycleDays?: number;
   fanslyStatsHourlyEnabled?: boolean;
   fanslyStatsHourlyBackfillMaxDays?: number;
   /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
@@ -718,6 +732,10 @@ export function loadConfig(
     fanslyCatalogSyncEnabled: parsed.FANSLY_CATALOG_SYNC_ENABLED,
     fanslyCatalogPageAllowlist: parsed.FANSLY_CATALOG_PAGE_ALLOWLIST,
     fanslyCatalogDailyCallBudget: parsed.FANSLY_CATALOG_DAILY_CALL_BUDGET,
+    fanslyPostRepliesSyncEnabled: parsed.FANSLY_POST_REPLIES_SYNC_ENABLED,
+    fanslyPostRepliesPageAllowlist: parsed.FANSLY_POST_REPLIES_PAGE_ALLOWLIST,
+    fanslyRepliesDailyCallBudget: parsed.FANSLY_REPLIES_DAILY_CALL_BUDGET,
+    fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
     fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,
     fanslyStatsHourlyBackfillMaxDays: parsed.FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS,
     fanslyBackfillContinuationDelayMs: parsed.FANSLY_BACKFILL_CONTINUATION_DELAY_MS,

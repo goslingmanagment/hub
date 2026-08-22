@@ -279,6 +279,7 @@ function streamOrderSql(columnName: string) {
       when 'stats_snapshot' then ${SYNC_STREAM_POLICY.stats_snapshot.streamIndex}
       when 'notifications' then ${SYNC_STREAM_POLICY.notifications.streamIndex}
       when 'catalog' then ${SYNC_STREAM_POLICY.catalog.streamIndex}
+      when 'post_replies' then ${SYNC_STREAM_POLICY.post_replies.streamIndex}
       else 999
     end
   `);

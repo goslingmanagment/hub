@@ -112,6 +112,7 @@ const STREAM_LABELS: Record<string, string> = {
   stats_snapshot: "account statistics",
   notifications: "notifications",
   catalog: "content catalog",
+  post_replies: "post comments",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {

@@ -146,6 +146,11 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   // WP-F3 (migration 0135): the daily content-catalog sweep — the lane that
   // measures M, the media denominator WP-F4 is sized against.
   "catalog",
+  // WP-F5 (migration 0137): the comment archive walk over
+  // `/post/{postId}/replies`. History class — a big back-catalogue on a small
+  // daily budget, and the ONLY lane whose existence had to be probed first
+  // ([E1]: the bare GET works, so no POST is ever issued).
+  "post_replies",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
@@ -5870,5 +5875,92 @@ export const pageAutomatedMessages = pgTable(
       table.pageId,
       table.triggerType,
     ),
+  }),
+);
+
+// ── WP-F5, migration 0138: the comment archive ───────────────────────────────
+
+/**
+ * `post_comments` — full comment bodies, PLATFORM-NEUTRAL by construction.
+ *
+ * Fansly's `/post/{id}/replies` walk writes it today; a comment-signal
+ * notification and the OnlyFans comment list are the other two declared
+ * origins, and `discoveredVia` is what tells them apart. "Where did this row
+ * come from" is the question a partial archive must be able to answer, and it
+ * must never be guessable from the row's shape.
+ *
+ * `textPlain` defaults to `''` and EMPTY-CONTENT REPLIES ARE STORED: one of the
+ * four replies in the 18 KB live capture has `content: ""`, and a fan who
+ * replied with only an attachment still replied.
+ *
+ * `possiblyTruncated` is truthfulness about pagination. `/post/{id}/replies` has
+ * NO established pagination — no observed response carried more than four
+ * replies and no cursor form is proven — so a suspiciously full page marks its
+ * rows and the lane's coverage reads `window_captured`, never complete. The
+ * doubt belongs to the ROW, because it outlives the sweep that created it.
+ */
+export const postComments = pgTable(
+  "post_comments",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    commentRef: text("comment_ref").notNull(),
+    /** `inReplyTo`. */
+    parentPostRef: text("parent_post_ref").notNull(),
+    /** `inReplyToRoot`. Stored separately even though it equalled
+     *  `parentPostRef` in every observed reply: the day a nested reply arrives,
+     *  the difference is what reconstructs the thread. */
+    rootPostRef: text("root_post_ref"),
+    /** The author. A TEXT platform ref with NO FK to `fans`, so only the
+     *  explicit erasure predicate reaches it (FAN_REF_ERASURE_COLUMNS). */
+    authorRef: text("author_ref").notNull(),
+    /** From the `accounts[]` sidecar — EMPTY in 2 of 5 captured responses,
+     *  which is why these are nullable and why the hydration fallback exists. */
+    authorUsername: text("author_username"),
+    authorDisplayName: text("author_display_name"),
+    textPlain: text("text_plain").default("").notNull(),
+    likeCount: integer("like_count"),
+    mediaLikeCount: integer("media_like_count"),
+    /** MILLS, two bases, never summed (§2.3). */
+    tipTotalMills: bigint("tip_total_mills", { mode: "bigint" }),
+    attachmentTipMills: bigint("attachment_tip_mills", { mode: "bigint" }),
+    attachmentCount: integer("attachment_count"),
+    pinned: boolean("pinned"),
+    /** The provider instant (SECONDS on the wire for this route). */
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    /** When the stored content last CHANGED — an edit moves it, a
+     *  re-observation of the same bytes does not. */
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull(),
+    /** `replies_walk` | `notification` | `ofapi_list`. */
+    discoveredVia: text("discovered_via").notNull(),
+    possiblyTruncated: boolean("possibly_truncated").default(false).notNull(),
+    /** Set when a later FULL walk of the parent stops naming this comment.
+     *  NEVER a delete (DP 7). */
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pageCommentUniq: unique("post_comments_page_comment_uniq").on(
+      table.pageId,
+      table.commentRef,
+    ),
+    pageParentOccurredIdx: index("post_comments_page_parent_occurred_idx").on(
+      table.pageId,
+      table.parentPostRef,
+      table.occurredAt.desc(),
+    ),
+    pageAuthorIdx: index("post_comments_page_author_idx").on(table.pageId, table.authorRef),
   }),
 );
