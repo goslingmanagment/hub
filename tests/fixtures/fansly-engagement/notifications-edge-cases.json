@@ -1,0 +1,107 @@
+{
+  "_fixture": "SYNTHETIC. The WP-F2 edge cases the census fixture cannot carry: both client-declared money codes absent from the spec (32007, 45012), a 45012 with NO served price, metadata that is not JSON, metadata served as an object, an unknown code, the declared-but-unlabelled 1003, the 24001 alert band, and a pre-2024 provider instant for the \u00a73.2b receipt-time assertion. Ids are fabricated (0009 + 14 digits).",
+  "notifications": [
+    {
+      "id": "000990000000000001",
+      "accountId": "000910000000000001",
+      "type": 32007,
+      "correlationId": "000920000000000001",
+      "correlationGroupId": "000930000000000001",
+      "acknowledgedAt": 1787100200,
+      "createdAt": 1787100000,
+      "metadata": "{\"accountMediaPrice\":9990}",
+      "idString": "000990000000000001"
+    },
+    {
+      "id": "000990000000000002",
+      "accountId": "000910000000000001",
+      "type": 45012,
+      "correlationId": "000920000000000002",
+      "correlationGroupId": null,
+      "acknowledgedAt": null,
+      "createdAt": 1787090000,
+      "metadata": null,
+      "idString": "000990000000000002"
+    },
+    {
+      "id": "000990000000000003",
+      "accountId": "000910000000000001",
+      "type": 7001,
+      "correlationId": "000920000000000003",
+      "correlationGroupId": "000930000000000003",
+      "acknowledgedAt": 1787080100,
+      "createdAt": 1787080000,
+      "metadata": "not json at all",
+      "idString": "000990000000000003"
+    },
+    {
+      "id": "000990000000000004",
+      "accountId": "000910000000000001",
+      "type": 15016,
+      "correlationId": "000920000000000004",
+      "correlationGroupId": "000930000000000004",
+      "acknowledgedAt": 1787070100,
+      "createdAt": 1787070000,
+      "metadata": {
+        "subscriptionStreak": 4
+      },
+      "idString": "000990000000000004"
+    },
+    {
+      "id": "000990000000000005",
+      "accountId": "000910000000000001",
+      "type": 99999,
+      "correlationId": "000920000000000005",
+      "correlationGroupId": null,
+      "acknowledgedAt": null,
+      "createdAt": 1787060000,
+      "metadata": "{\"future\":true}",
+      "idString": "000990000000000005"
+    },
+    {
+      "id": "000990000000000006",
+      "accountId": "000910000000000001",
+      "type": 1003,
+      "correlationId": "000920000000000006",
+      "correlationGroupId": null,
+      "acknowledgedAt": null,
+      "createdAt": 1787050000,
+      "metadata": null,
+      "idString": "000990000000000006"
+    },
+    {
+      "id": "000990000000000007",
+      "accountId": "000910000000000001",
+      "type": 24001,
+      "correlationId": null,
+      "correlationGroupId": null,
+      "acknowledgedAt": null,
+      "createdAt": 1787040000,
+      "metadata": null,
+      "idString": "000990000000000007"
+    },
+    {
+      "id": "000990000000000008",
+      "accountId": "000910000000000001",
+      "type": 3003,
+      "correlationId": "000920000000000008",
+      "correlationGroupId": "000930000000000008",
+      "acknowledgedAt": 1660000200,
+      "createdAt": 1660000000,
+      "metadata": null,
+      "idString": "000990000000000008"
+    },
+    {
+      "accountId": "000910000000000001",
+      "type": 3003,
+      "createdAt": 1787030000,
+      "metadata": null
+    }
+  ],
+  "tips": [],
+  "accountMedia": [],
+  "accountMediaBundles": [],
+  "subscriptions": [],
+  "subscriptionHistory": [],
+  "accounts": []
+}

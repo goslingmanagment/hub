@@ -236,3 +236,125 @@ describe("WP-F1 adapter methods", () => {
     expect(urls[1]?.searchParams.get("before")).toBe("970000000000000001");
   });
 });
+
+describe("WP-F2 adapter method: /notifications", () => {
+  it("sends `before` as an ID cursor, and omits `type` on the unfiltered form", async () => {
+    const { FanslyAdapter, fetchMock, proxyDispatchers } = harness;
+    for (let index = 0; index < 3; index += 1) {
+      fetchMock.mockResolvedValueOnce(toJsonResponse({
+        success: true,
+        response: { notifications: [] },
+      }));
+    }
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    // The head.
+    await adapter.getNotificationsPage(context(), {});
+    // A page older than a specific notification. THE CURSOR IS A NOTIFICATION
+    // ID, NOT A TIMESTAMP — read as an epoch it would ask for 1970 and get an
+    // empty page that looks exactly like a retention floor.
+    await adapter.getNotificationsPage(context(), { before: "945239851786067977" });
+    // The declared-CSV fallback form.
+    await adapter.getNotificationsPage(context(), {
+      before: "0",
+      types: [24001, 1002, 32007, 45012],
+    });
+    await adapter.close();
+
+    const methods = fetchMock.mock.calls.map(([, init]) => (init as RequestInit).method);
+    // READ-ONLY, ALWAYS. There is no POST to Fansly anywhere in this initiative.
+    expect(new Set(methods)).toEqual(new Set(["GET"]));
+
+    const urls = fetchMock.mock.calls.map(([input]) => new URL(String(input)));
+    for (const url of urls) {
+      expect(url.pathname).toBe("/notifications");
+      expect(url.searchParams.get("after")).toBe("0");
+      expect(url.searchParams.get("ngsw-bypass")).toBe("true");
+    }
+    expect(urls[0]?.searchParams.get("before")).toBe("0");
+    // A1: the FIRST call carries no `type` at all. An empty `type=` would be a
+    // filter for nothing, not the absence of a filter — and a filtered call can
+    // only ever return codes we already knew to ask for.
+    expect(urls[0]?.searchParams.has("type")).toBe(false);
+    expect(urls[1]?.searchParams.get("before")).toBe("945239851786067977");
+    expect(urls[1]?.searchParams.has("type")).toBe(false);
+    expect(urls[2]?.searchParams.get("type")).toBe("24001,1002,32007,45012");
+
+    // Same headers, same per-page proxy, same everything as the F1 lane.
+    const headers = fetchMock.mock.calls.map(
+      ([, init]) => (init as RequestInit).headers as Record<string, string>,
+    );
+    for (const header of headers) {
+      expect(header.authorization).toBe("token-abc");
+      expect(header["fansly-client-check"]).toBe("check-1");
+    }
+    // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY: a direct-IP request risks a
+    // model ban, which is why this assertion is not a formality. (The harness
+    // is shared across this file, so the dispatcher LIST accumulates — what is
+    // pinned is that all three calls rode one proxy dispatcher and none rode
+    // the default one.)
+    const dispatchers = new Set(
+      fetchMock.mock.calls.map(([, init]) => (init as { dispatcher?: unknown }).dispatcher),
+    );
+    expect(dispatchers.size).toBe(1);
+    expect(dispatchers.has(undefined)).toBe(false);
+    expect(proxyDispatchers).toContain([...dispatchers][0]);
+  });
+
+  it("returns the envelope's response verbatim, sidecars and unknown keys included", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    const body = {
+      notifications: [{ id: "1", type: 99999, metadata: "{}" }],
+      tips: [],
+      accountMedia: [],
+      accountMediaBundles: [],
+      subscriptions: [],
+      subscriptionHistory: [],
+      accounts: [{ id: "2", lastSeenAt: 17 }],
+      // The adapter is a TRANSPORT: it hands the whole response through so the
+      // handler can journal it. The [A20] allowlist runs at the journaling
+      // site, not here.
+      someFutureKey: { nested: true },
+    };
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const result = await adapter.getNotificationsPage(context(), { before: "0" });
+    await adapter.close();
+    expect(result.raw).toEqual(body);
+  });
+
+  it("treats 401/403 as terminal — one attempt, a typed failure, no type fork", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 403, message: "forbidden" } }, {
+        status: 403,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const { events, requestObserver } = captureEvents();
+    const failure = await adapter.getNotificationsPage(context({ requestObserver }), {})
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+    expect(failure?.status).toBe(403);
+    // A dead session that retried three times would triple egress that is
+    // already failing — and it must reach the executor's auth pause unchanged,
+    // never the handler's widen-the-filter path.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+  });
+
+  it("surfaces a 4xx refusal as a typed error the handler can fork on", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 400, message: "bad type" } }, {
+        status: 400,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const failure = await adapter.getNotificationsPage(context(), {})
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+    // 400 is NOT retried (only 429/5xx are), so the fork costs one attempt.
+    expect(failure?.status).toBe(400);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
