@@ -499,9 +499,11 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     const disclosing = AGENT_DATASET_NAMES
       .filter((dataset) => AGENT_DATASETS[dataset].disclosesPurchase)
       .sort();
-    expect(disclosing).toEqual(["message_media_sales"]);
+    expect(disclosing).toEqual(["message_media_sales", "notifications"]);
     expect(agentDatasetRequiredCapabilities("message_media_sales"))
       .toEqual(["read:datasets", "read:money", "read:messages"]);
+    expect(agentDatasetRequiredCapabilities("notifications"))
+      .toEqual(["read:datasets", "read:messages"]);
     for (const dataset of AGENT_DATASET_NAMES) {
       const definition = AGENT_DATASETS[dataset];
       const needsMessages = definition.verbatimText || definition.disclosesPurchase;
