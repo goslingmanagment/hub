@@ -88,8 +88,10 @@ describe("WP-F1 adapter methods", () => {
     expect(urls[0]?.searchParams.get("beforeDate")).toBe(String(beforeDate.getTime()));
     expect(urls[0]?.searchParams.get("afterDate")).toBe(String(afterDate.getTime()));
     expect(urls[0]?.searchParams.get("period")).toBe("86400000");
-    // year/month 0/0 is the "use the explicit bounds" form; the named-month
-    // variant is a UI affordance this lane never sends.
+    // year/month 0/0 is the "read the explicit bounds" form — the one the daily
+    // and hourly TRAILING sweeps send. The named-month form is pinned below,
+    // because the bounds are honoured only inside the trailing window and every
+    // window older than it is asked for by month.
     expect(urls[0]?.searchParams.get("year")).toBe("0");
     expect(urls[0]?.searchParams.get("month")).toBe("0");
     // Every URL carries the service-worker bypass the adapter appends.
@@ -129,6 +131,40 @@ describe("WP-F1 adapter methods", () => {
     for (const [, init] of fetchMock.mock.calls) {
       expect((init as { dispatcher?: unknown }).dispatcher).toBe(proxyDispatchers[0]);
     }
+  });
+
+  it("sends the app's OWN month form when a year and month are named", async () => {
+    // PRODUCTION 2026-08-22 (lora-2): `afterDate 2026-06-21 / beforeDate
+    // 2026-07-22` — 31 days, historical — was answered with `dateAfter
+    // 2026-07-21 / dateBefore 2026-08-21`, the trailing 31 days, 200 and all;
+    // halving the span to 15 changed nothing. The date bounds only work INSIDE
+    // the trailing window. The app's past-month view sends `year`/`month` and
+    // lets the server resolve the month, with the trailing bounds riding along
+    // unchanged (bundle main.pretty.js :280600, :196337) — so this is the exact
+    // request, not an invented one.
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: {} }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const beforeDate = new Date("2026-08-22T09:00:00.000Z");
+    const afterDate = new Date("2026-07-23T09:00:00.000Z");
+    await adapter.getAccountStats(context(), {
+      beforeDate,
+      afterDate,
+      periodMs: 86_400_000,
+      year: 2026,
+      month: 6,
+    });
+    await adapter.close();
+
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe("/it/amoie/stats");
+    expect(url.searchParams.get("year")).toBe("2026");
+    expect(url.searchParams.get("month")).toBe("6");
+    // THE BOUNDS STILL RIDE ALONG. The app sends them with every month preset;
+    // dropping them here would be a request the client never makes.
+    expect(url.searchParams.get("beforeDate")).toBe(String(beforeDate.getTime()));
+    expect(url.searchParams.get("afterDate")).toBe(String(afterDate.getTime()));
+    expect(url.searchParams.get("period")).toBe("86400000");
   });
 
   it("returns the envelope's response verbatim, additive fields included", async () => {
