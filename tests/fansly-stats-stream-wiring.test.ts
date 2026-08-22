@@ -84,6 +84,7 @@ describe("stats_snapshot stream wiring", () => {
       "stats_snapshot",
       "notifications",
       "catalog",
+      "post_replies",
     ]);
   });
 
@@ -309,5 +310,108 @@ describe("catalog stream wiring", () => {
     expect(budget?.default).toBe("60");
     expect(budget?.min).toBe(1);
     expect(budget?.costWarning).toMatch(/ATTEMPTS/);
+  });
+});
+
+// WP-F5 — the same fourteen sites for `post_replies`.
+
+describe("post_replies stream wiring", () => {
+  it("is a Fansly-only stream, present in every stream vocabulary", () => {
+    expect(SYNC_STREAMS).toContain("post_replies");
+    expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
+    expect(getSyncStreamsForPlatform("fansly")).toContain("post_replies");
+    expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("post_replies");
+    expect(fanslyPlatformAdapter.capabilities.streams).toContain("post_replies");
+    expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("post_replies");
+    // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
+    // stream" on every dispatch, FLEET-WIDE.
+    expect(fanslyPlatformAdapter.pull.post_replies).toBeTypeOf("function");
+  });
+
+  it("is a maintenance lane on the history cadence that yields to money and DMs", () => {
+    const policy = SYNC_STREAM_POLICY.post_replies;
+    // A back-catalogue that takes ~14 days to first-pass is never "fresh" and
+    // never urgent; four dispatches a day is about spreading the budget, not
+    // about latency.
+    expect(policy.cadenceSeconds).toBe(21_600);
+    expect(policy.defaultWorkClass).toBe("maintenance");
+    expect(policy.freshnessSlaSeconds).toBeNull();
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.transactions.basePriority);
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.dm_messages.basePriority);
+    // Below the notification poll AND below the catalog sweep: of every lane in
+    // this initiative, a comment archive can wait the longest.
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.notifications.basePriority);
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.catalog.basePriority);
+  });
+
+  it("joins NO domain policy and declares no dependencies", () => {
+    for (const domain of Object.values(SYNC_DOMAIN_POLICY)) {
+      expect(domain.primaryStreams).not.toContain("post_replies");
+      expect(domain.supportingStreams).not.toContain("post_replies");
+    }
+    // The plan is explicit that comments do NOT depend on notifications: the
+    // walk reads `creator_posts`, which the `posts` lane fills, and a
+    // notification is only ever a dirty SIGNAL. A declared dependency would
+    // block the archive on a lane it does not need.
+    expect(SYNC_STREAM_DEPENDENCIES.post_replies).toBeUndefined();
+  });
+
+  it("is excluded from the manual `all` and `data` scopes", () => {
+    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("post_replies");
+    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("post_replies");
+    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("post_replies");
+  });
+
+  it("seeds PAUSED and is reachable by the gate reconciler", () => {
+    expect(isSeedPausedSyncStream("post_replies")).toBe(true);
+    expect(SEED_PAUSED_SYNC_STREAMS).toContain("post_replies");
+    // BOTH halves: one without the other is a lane that sits paused forever
+    // while its ramp flag moves nothing (#192).
+    expect(FANSLY_BULK_SYNC_STREAMS).toContain("post_replies");
+  });
+
+  it("is exempt from the rollup vote and visible in the monitor", () => {
+    expect(isBulkEnrichmentSyncStream("post_replies")).toBe(true);
+    expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("post_replies");
+    expect(MONITORED_SYNC_STREAMS).toContain("post_replies");
+  });
+
+  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const enabled = byKey.get("fanslyPostRepliesSyncEnabled");
+    expect(enabled?.kind).toBe("boolean");
+    expect(enabled?.default).toBe("false");
+    expect(enabled?.runtimeApply).toBe("live");
+
+    const allowlist = byKey.get("fanslyPostRepliesPageAllowlist");
+    expect(allowlist?.kind).toBe("string");
+    expect(allowlist?.default).toBe("");
+    expect(allowlist?.runtimeApply).toBe("live");
+    // Its OWN key, on the FAIL-CLOSED template (S4).
+    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
+  });
+
+  it("SHIPS AT 100 CALLS A DAY with 400 as the registry ceiling", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const budget = byKey.get("fanslyRepliesDailyCallBudget");
+    expect(budget?.kind).toBe("number");
+    // The raise to 300 is a SEPARATE, criteria-gated config flip with its own
+    // window (A29). Shipping at 300 would spend the ritual before the criteria
+    // could be measured, so 100 is pinned here rather than trusted.
+    expect(budget?.default).toBe("100");
+    expect(budget?.min).toBe(1);
+    // 400 without a fresh owner decision — the registry is what makes that a
+    // refusal rather than a note in a document.
+    expect(budget?.max).toBe(400);
+    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
+
+    const cycle = byKey.get("fanslyRepliesRewalkCycleDays");
+    expect(cycle?.kind).toBe("number");
+    expect(cycle?.default).toBe("14");
+    expect(cycle?.runtimeApply).toBe("live");
+    // It changes WHICH posts the budget is spent on, never HOW MANY calls are
+    // made — the wording matters because a tunable that looks like a throttle
+    // gets edited like one.
+    expect(cycle?.costWarning).toMatch(/does not raise egress|NOT change egress/i);
   });
 });

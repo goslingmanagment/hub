@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -531,5 +534,162 @@ describe("WP-F3 adapter methods", () => {
     await adapter.close();
     expect(failure?.status).toBe(400);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("WP-F5 adapter method: /post/{postId}/replies", () => {
+  it("issues the BARE GET on the first call — path, no query, proxy, bypass", async () => {
+    const { FanslyAdapter, fetchMock, proxyDispatchers } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({
+      success: true,
+      response: { posts: [], accounts: [], tips: [], tipGoals: [], stories: [], polls: [] },
+    }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    await adapter.getPostRepliesPage(context(), { postId: "942662601546936320" });
+    await adapter.close();
+
+    const [input, init] = fetchMock.mock.calls[0] ?? [];
+    // GET. [E1] proved the bare GET works, so the browser's preceding
+    // `POST /postreply/verify` is never issued — §1 excludes write-shaped calls
+    // to the platform.
+    expect((init as RequestInit).method).toBe("GET");
+    const url = new URL(String(input));
+    expect(url.pathname).toBe("/post/942662601546936320/replies");
+    // NO `before` on the first call. The bare form is the only one five live
+    // responses prove; a cursor is sent only once a page looks suspiciously
+    // full.
+    expect(url.searchParams.has("before")).toBe(false);
+    expect(url.searchParams.get("ngsw-bypass")).toBe("true");
+    // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY — a direct-IP request risks
+    // a model ban.
+    expect(proxyDispatchers.length).toBeGreaterThan(0);
+    expect((init as { dispatcher?: { label?: string } }).dispatcher?.label)
+      .toMatch(/^proxy-/);
+  });
+
+  it("sends `before=<last reply id>` when the caller has a reason to page", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: { posts: [] } }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    await adapter.getPostRepliesPage(context(), {
+      postId: "942662601546936320",
+      before: "939669652286492672",
+    });
+    await adapter.close();
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe("/post/942662601546936320/replies");
+    expect(url.searchParams.get("before")).toBe("939669652286492672");
+  });
+
+  it("percent-encodes the post id into the PATH rather than a query", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: { posts: [] } }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    await adapter.getPostRepliesPage(context(), { postId: "a/b" });
+    await adapter.close();
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe("/post/a%2Fb/replies");
+    expect(url.searchParams.has("postId")).toBe(false);
+  });
+
+  it("treats a 204 as an EMPTY ANSWER on this method — `{__empty, httpStatus}`", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    // Explicitly SYNTHETIC: no GET anywhere in the 2026-08-19 HAR returned 204
+    // (all 197 are OPTIONS preflights), so this is the honest handling of a
+    // case nobody has ever observed, not an observed contract.
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const result = await adapter.getPostRepliesPage(context(), { postId: "p-1" });
+    await adapter.close();
+    expect(result.raw).toEqual({ __empty: true, httpStatus: 204 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an ok response with an EMPTY BODY the same way", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const result = await adapter.getPostRepliesPage(context(), { postId: "p-1" });
+    await adapter.close();
+    expect(result.raw).toEqual({ __empty: true, httpStatus: 200 });
+  });
+
+  it("does NOT soften an empty body on any other method", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    // `emptyStatuses` is opt-in per method for exactly this reason: everywhere
+    // else an envelope-less body IS a failure, and a global softening would let
+    // a truncated response read as "no data" on every lane at once.
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const failure = await adapter.getSubscriptionTiers(context())
+      .then(() => null, (error: unknown) => error as Error);
+    await adapter.close();
+    expect(failure).toBeInstanceOf(Error);
+  });
+
+  it("returns a populated reply page verbatim, sidecars and all", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    const body = {
+      posts: [{
+        id: "c-1",
+        accountId: "a-1",
+        content: "",
+        inReplyTo: "p-1",
+        inReplyToRoot: "p-1",
+        createdAt: 1786535102,
+        attachments: [],
+        likeCount: 0,
+        mediaLikeCount: 0,
+        totalTipAmount: 0,
+        attachmentTipAmount: 0,
+      }],
+      // The adapter is a TRANSPORT: the [A20] trim runs in the capture handler,
+      // which is the ONE place a test can pin it.
+      accounts: [{ id: "a-1", username: "fan", lastSeenAt: 1787000123 }],
+      tips: [],
+      tipGoals: [],
+      stories: [],
+      polls: [],
+    };
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const result = await adapter.getPostRepliesPage(context(), { postId: "p-1" });
+    await adapter.close();
+    expect(result.raw).toEqual(body);
+  });
+
+  it("treats 401/403 as terminal — one attempt, typed failure, never an empty answer", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValue(
+      toJsonResponse({ success: false, error: { code: 401, message: "unauthorized" } }, {
+        status: 401,
+      }),
+    );
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const { events, requestObserver } = captureEvents();
+    const failure = await adapter.getPostRepliesPage(context({ requestObserver }), { postId: "p-1" })
+      .then(() => null, (error: unknown) => error as { status?: number });
+    await adapter.close();
+    expect(failure?.status).toBe(401);
+    // A dead session that retried three times would triple egress that is
+    // already failing, and it must reach the executor's auth pause unchanged.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+  });
+
+  it("CONTAINS NO WRITE-SHAPED CALL TO FANSLY — the grep pin", () => {
+    // The law this package is built on, checked rather than promised. Every
+    // observed reply GET in the capture was preceded by
+    // `POST /api/v1/postreply/verify`; [E1] proved that POST is a client-side
+    // affordance, and §1 excludes write-shaped calls to the platform. If the
+    // string ever appears in the adapter — as a route, a comment, or a
+    // half-finished idea — this fails.
+    const source = readFileSync(
+      path.resolve("packages/fansly/src/adapter.ts"),
+      "utf8",
+    );
+    expect(source).not.toMatch(/postreply\/verify/);
+    // And no method anywhere in this adapter sends anything but GET.
+    expect(source).not.toMatch(/method: *"(POST|PUT|PATCH|DELETE)"/);
   });
 });

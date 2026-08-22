@@ -61,6 +61,19 @@ const ENGAGEMENT_FIXTURE_MAX_BYTES = 98_304;
  */
 const CATALOG_FIXTURE_DIRECTORY = path.resolve("tests/fixtures/fansly-catalog");
 const CATALOG_FIXTURE_MAX_BYTES = 16_384;
+/**
+ * WP-F5 comment fixtures (`tests/fixtures/fansly-comments/`) — the SAME
+ * structural rule, at a TIGHTER ceiling than the others.
+ *
+ * The largest live `/post/{id}/replies` response is 18.2 KB decoded: four
+ * replies plus four FULL account records with avatars, notes and subscription
+ * histories. An 8 KB ceiling therefore refuses a pasted capture of even the
+ * biggest one observed, while leaving room for the fabricated four-reply parity
+ * fixture — which is the point: this directory holds the fan's own WORDS, and
+ * it is the one corpus where a paste is both easiest and worst.
+ */
+const COMMENTS_FIXTURE_DIRECTORY = path.resolve("tests/fixtures/fansly-comments");
+const COMMENTS_FIXTURE_MAX_BYTES = 8_192;
 
 const SYNTHETIC_SNOWFLAKES = new Set(["863308077229670400"]);
 const SYNTHETIC_IDENTIFIERS = new Set([
@@ -253,6 +266,23 @@ describe("Fansly fixture privacy", () => {
       expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
       // The same inspector: no URLs, no emails, no `@`, no credential-shaped
       // keys, and every 15+ digit identifier structurally fabricated.
+      inspectStatsFixtureValue(parsed);
+    }
+  });
+
+  it("keeps every WP-F5 comment fixture structurally synthetic", async () => {
+    const fixtureNames = await listJsonFiles(COMMENTS_FIXTURE_DIRECTORY);
+    expect(fixtureNames.length).toBeGreaterThan(0);
+
+    for (const fixtureName of fixtureNames) {
+      const raw = await readFile(path.join(COMMENTS_FIXTURE_DIRECTORY, fixtureName), "utf8");
+      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(COMMENTS_FIXTURE_MAX_BYTES);
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      expect(typeof parsed._fixture, fixtureName).toBe("string");
+      expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
+      // The same inspector. It matters more here than anywhere else in this
+      // file: a comment body is a FAN'S OWN WORDS, and a pasted capture would
+      // put a real person's sentence in the repository under a name.
       inspectStatsFixtureValue(parsed);
     }
   });

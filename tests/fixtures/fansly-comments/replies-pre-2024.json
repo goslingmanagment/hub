@@ -1,0 +1,29 @@
+{
+  "_fixture": "SYNTHETIC — a 2023-dated reply, for the receipt-time pin (§3.2b). domain_events is monthly-partitioned; an event dated at provider time here would fail ExecFindPartition (23514) forever, so occurredAt must be the observation's receivedAt and the provider instant must be a typed field in data, with NO clamp marker.",
+  "walk": { "postId": "000910000000000004", "before": null },
+  "response": {
+    "posts": [
+      {
+        "id": "000910000000000106",
+        "accountId": "000910000000000206",
+        "content": "an old one",
+        "fypFlags": 0,
+        "inReplyTo": "000910000000000004",
+        "inReplyToRoot": "000910000000000004",
+        "replyPermissionFlags": 0,
+        "createdAt": 1688000000,
+        "attachments": [],
+        "likeCount": 0,
+        "mediaLikeCount": 0,
+        "totalTipAmount": 0,
+        "attachmentTipAmount": 0,
+        "accountMentions": []
+      }
+    ],
+    "accounts": [],
+    "tips": [],
+    "tipGoals": [],
+    "stories": [],
+    "polls": []
+  }
+}

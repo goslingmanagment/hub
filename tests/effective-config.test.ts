@@ -148,7 +148,10 @@ describe("LIVE_CONFIG_KEYS", () => {
     // WP-F2 added the three `notifications` keys — the ramp flag, its
     // FAIL-CLOSED page allowlist and the per-lane daily call budget, all read
     // per chunk so a ramp on the lossy lane never waits for a deploy;
-    // WP-F3 added the three `catalog` keys on the same template.
-    expect(LIVE_CONFIG_KEYS.size).toBe(47);
+    // WP-F3 added the three `catalog` keys on the same template;
+    // WP-F5 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
+    // per-lane daily call budget and the re-walk cycle, which is live because
+    // it re-aims a running first pass without a deploy.
+    expect(LIVE_CONFIG_KEYS.size).toBe(51);
   });
 });

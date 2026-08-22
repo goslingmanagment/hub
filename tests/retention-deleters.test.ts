@@ -103,6 +103,14 @@ const SANCTIONED_DELETER_FILES = [
   // operational state (§3.4), and resetting them would re-run a first-enable
   // exhaustion crawl of every album on every page.
   "apps/runtime/src/services/projections/fansly-catalog.ts",
+  // WP-F5: projection reset — rebuildable state only, never scheduled.
+  // rebuildFanslyCommentsProjection clears `post_comments` and its own
+  // watermark inside ONE transaction, then replays them from the domain-event
+  // ledger. `subject_refresh_state` is deliberately untouched: the reply walk's
+  // queue is capture-plane operational state (§3.4), and resetting it would
+  // re-run a first-pass crawl of the entire post back-catalogue for a repair
+  // that should cost zero platform calls.
+  "apps/runtime/src/services/projections/fansly-comments.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
   "apps/runtime/src/services/sync/rate-limiter.ts",

@@ -102,6 +102,13 @@ describe("config registry", () => {
     "fanslyCatalogSyncEnabled",
     "fanslyCatalogPageAllowlist",
     "fanslyCatalogDailyCallBudget",
+    // WP-F5 replies walk. The budget and the re-walk cycle are live for
+    // different reasons: the budget is the ramp (100 -> 300 is its own gated
+    // flip), and the cycle decides WHICH posts that budget is spent on.
+    "fanslyPostRepliesSyncEnabled",
+    "fanslyPostRepliesPageAllowlist",
+    "fanslyRepliesDailyCallBudget",
+    "fanslyRepliesRewalkCycleDays",
     "fanslyDeepBackfillIgnoreRetentionLimit",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",

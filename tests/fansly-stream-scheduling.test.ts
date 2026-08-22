@@ -36,15 +36,17 @@ describe("Fansly bulk-stream scheduling", () => {
     ]);
     dbMocks.reconcileFanslyBulkStreamGate
       // Page 11: fan_earnings, purchase_history, stats_snapshot, notifications,
-      // catalog.
+      // catalog, post_replies.
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
-      // Page 12: the same five.
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
+      // Page 12: the same six.
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false });
@@ -63,6 +65,9 @@ describe("Fansly bulk-stream scheduling", () => {
       // WP-F3: its OWN fail-closed key, on the same template.
       fanslyCatalogSyncEnabled: true,
       fanslyCatalogPageAllowlist: "lora-1",
+      // WP-F5: its OWN fail-closed key, on the same template.
+      fanslyPostRepliesSyncEnabled: true,
+      fanslyPostRepliesPageAllowlist: "lora-1",
     });
   });
 
@@ -108,6 +113,12 @@ describe("Fansly bulk-stream scheduling", () => {
         now,
       },
       {
+        pageId: 11,
+        stream: "post_replies",
+        gateState: "ramped",
+        now,
+      },
+      {
         pageId: 12,
         stream: "fan_earnings",
         gateState: "not_allowlisted",
@@ -137,6 +148,13 @@ describe("Fansly bulk-stream scheduling", () => {
         // WP-F3's key, same rule.
         pageId: 12,
         stream: "catalog",
+        gateState: "not_allowlisted",
+        now,
+      },
+      {
+        // WP-F5's key, same rule again.
+        pageId: 12,
+        stream: "post_replies",
         gateState: "not_allowlisted",
         now,
       },
