@@ -1,0 +1,22 @@
+-- WP-F2 stream vocabulary: `notifications`, the ONLY permanently-lossy Fansly
+-- lane. Likers, replies and quotes are announced once and never re-served, so
+-- this lane's downtime loses facts nothing can recover — which is why it polls
+-- on a live cadence (1 800 s) and pauses independently of every other stream.
+--
+-- DDL ONLY, and its own file, for the same two reasons 0131 states:
+--
+-- 1. `ALTER TYPE ... ADD VALUE` is fine inside a per-file transaction on
+--    PG >= 12, but the new value cannot be USED by a row insert in the same
+--    transaction (the 0060/0120 precedent). Keeping the enum alone in its file
+--    makes that impossible by construction.
+-- 2. §3.3's ordering rule: enum values may land early, but a stream enters the
+--    TS-side SYNC_STREAMS/PLATFORM_STREAMS unions only in the slice that ships
+--    its handler, gate, seed-pause, rollup exemption, monitor entry and gate
+--    registration. Enum-first, TS-last.
+--
+-- The remaining planned streams (catalog, media_stats, post_replies, payouts)
+-- are DELIBERATELY not added here: each arrives with the package that ships its
+-- handler, so an enum value can never name a lane that would throw
+-- "Unsupported executor stream" on dispatch, fleet-wide.
+
+ALTER TYPE "sync_stream" ADD VALUE IF NOT EXISTS 'notifications';

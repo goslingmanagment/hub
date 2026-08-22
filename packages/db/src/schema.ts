@@ -140,6 +140,9 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "posts",
   // WP-F1 (migration 0131): the account-level statistics sweep.
   "stats_snapshot",
+  // WP-F2 (migration 0133): the notification poll — the only permanently-lossy
+  // lane, which is why it is `live` rather than maintenance.
+  "notifications",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
@@ -5389,6 +5392,160 @@ export const fanEarningsStats = pgTable(
     accountWindowIdx: index("fan_earnings_stats_account_window_idx").on(
       table.accountId,
       table.window,
+    ),
+  }),
+);
+
+// ── WP-F2, migration 0134: the engagement core ───────────────────────────────
+
+/**
+ * Every notification row, every code, verbatim — written from
+ * `notification.observed`, which layer 1 of the `fansly-engagement` family
+ * emits whether or not the label table can name the type. `type_code` is the
+ * RAW integer (A22-2): the shipped spec was wrong on eight of sixteen codes,
+ * including both purchase events, and label-keyed storage would have made that
+ * unrecoverable.
+ *
+ * HEAD PRECEDENCE IS `occurred_at`, NEVER `account_seq` — the deep backfill
+ * appends OLDER facts at HIGHER seq.
+ */
+export const platformNotifications = pgTable(
+  "platform_notifications",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    notificationRef: text("notification_ref").notNull(),
+    /** The RAW platform code. Never a label, never a closed set. */
+    typeCode: integer("type_code").notNull(),
+    /** Fan-ref-shaped for purchase/follow/subscription codes — declared in
+     *  FAN_REF_ERASURE_COLUMNS with the predicate that reaches it. */
+    correlationRef: text("correlation_ref"),
+    correlationGroupRef: text("correlation_group_ref"),
+    /** Parsed when the served string is valid JSON; `{"raw": "…"}` when not. */
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    acknowledgedAt: timestamp("acknowledged_at", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "platform_notifications_pkey",
+      columns: [table.pageId, table.notificationRef],
+    }),
+    pageTypeOccurredIdx: index("platform_notifications_page_type_occurred_idx").on(
+      table.pageId,
+      table.typeCode,
+      table.occurredAt,
+    ),
+    pageCorrelationIdx: index("platform_notifications_page_correlation_idx").on(
+      table.pageId,
+      table.correlationRef,
+    ),
+  }),
+);
+
+/**
+ * Latest-known liker state. SHIPS EMPTY on Fansly: no like code is
+ * live-confirmed ([E4]), layer 2 writes nothing here, and the OF `posts.liked`
+ * webhook is what populates it independently. Head precedence: `occurred_at`
+ * DESC with `notification_ref` as the tie-break — never `account_seq`.
+ */
+export const postLikes = pgTable(
+  "post_likes",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    /** `post` | `media` | `message`. */
+    subjectKind: text("subject_kind").notNull(),
+    subjectRef: text("subject_ref").notNull(),
+    /** A TEXT platform ref with NO FK to `fans`: only the explicit erasure
+     *  predicate reaches it (FAN_REF_ERASURE_COLUMNS). */
+    likerPlatformUserId: text("liker_platform_user_id").notNull(),
+    /** `active` | `undone`. */
+    state: text("state").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    notificationRef: text("notification_ref"),
+    /** `notification` | `ofapi_webhook`. */
+    discoveredVia: text("discovered_via").notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "post_likes_pkey",
+      columns: [table.pageId, table.subjectKind, table.subjectRef, table.likerPlatformUserId],
+    }),
+    pageSubjectOccurredIdx: index("post_likes_page_subject_occurred_idx").on(
+      table.pageId,
+      table.subjectKind,
+      table.subjectRef,
+      table.occurredAt,
+    ),
+    pageLikerIdx: index("post_likes_page_liker_idx").on(
+      table.pageId,
+      table.likerPlatformUserId,
+    ),
+  }),
+);
+
+/**
+ * §3.4's third state class: CAPTURE-PLANE OPERATIONAL STATE. One shared refresh
+ * queue for every per-subject lane (`media_stats`, `post_replies`,
+ * `post_engagement`, `of_post_stats`). NEVER truncated by
+ * `projection:rebuild` and excluded from the §9.1 checksum BY CLASSIFICATION —
+ * `OPERATIONAL_STATE_TABLES` names it and a registry test asserts no
+ * projection's `tables` list intersects that set.
+ */
+export const subjectRefreshState = pgTable(
+  "subject_refresh_state",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    plane: text("plane").notNull(),
+    subjectRef: text("subject_ref").notNull(),
+    /** `fresh` | `mid` | `long_tail` | `dirty`. */
+    refreshClass: text("refresh_class"),
+    nextDueAt: timestamp("next_due_at", { withTimezone: true }),
+    lastVisitedAt: timestamp("last_visited_at", { withTimezone: true }),
+    consecutiveFailures: integer("consecutive_failures").default(0).notNull(),
+    dirtyReason: text("dirty_reason"),
+    knownCount: integer("known_count"),
+    backfillCursor: jsonbSafe("backfill_cursor").$type<Record<string, unknown>>().default({})
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "subject_refresh_state_pkey",
+      columns: [table.pageId, table.plane, table.subjectRef],
+    }),
+    dueIdx: index("subject_refresh_state_due_idx").on(
+      table.pageId,
+      table.plane,
+      table.nextDueAt,
     ),
   }),
 );

@@ -483,6 +483,11 @@ function createAutoSyncFanslyAdapter(input: {
     async getDiscoveryMediaSuggestions() {
       return { items: null, raw: null };
     },
+    // WP-F2: the notification poll. Stubbed empty — this fixture exercises
+    // auto-sync wiring, not the lane.
+    async getNotificationsPage() {
+      return { items: null, raw: null };
+    },
     async close() {},
   } as AppContext["adapter"];
 }

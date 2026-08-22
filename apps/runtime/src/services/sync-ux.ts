@@ -16,6 +16,8 @@ export const BULK_ENRICHMENT_SYNC_STREAMS: readonly SyncStream[] = [
   // defaults false, so letting this lane vote would make every Fansly page —
   // and the fleet — read "Off" from the deploy that ships it.
   "stats_snapshot",
+  // WP-F2: same default, same consequence.
+  "notifications",
 ];
 
 export function isBulkEnrichmentSyncStream(stream: string) {

@@ -154,6 +154,7 @@ describe("page-sync repository schema alignment", () => {
       "purchase_history",
       "posts",
       "stats_snapshot",
+      "notifications",
     ].map((stream) => buildPageSyncStateRow(pageId, stream as SyncStream, now));
     const lockedStatements: string[] = [];
     const updatedStreams: unknown[] = [];

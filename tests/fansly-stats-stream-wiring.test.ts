@@ -79,7 +79,11 @@ describe("stats_snapshot stream wiring", () => {
     expect(isSeedPausedSyncStream("stats_snapshot")).toBe(true);
     expect(isSeedPausedSyncStream("posts")).toBe(true);
     expect(isSeedPausedSyncStream("dm_messages")).toBe(false);
-    expect([...SEED_PAUSED_SYNC_STREAMS]).toEqual(["posts", "stats_snapshot"]);
+    expect([...SEED_PAUSED_SYNC_STREAMS]).toEqual([
+      "posts",
+      "stats_snapshot",
+      "notifications",
+    ]);
   });
 
   it("is exempt from the rollup vote and visible in the monitor", () => {
@@ -140,5 +144,86 @@ describe("stats_snapshot stream wiring", () => {
     expect(keys.has("fanslyPageDailyRequestCap")).toBe(false);
     expect(keys.has("fanslyUntrimmedCaptureByteCeilingPerDay")).toBe(false);
     expect(keys.has("syncRateLimitDays")).toBe(false);
+  });
+});
+
+// WP-F2 — the same fourteen sites for `notifications`, as assertions.
+//
+// The list is checked rather than remembered on purpose: WP-F1 shipped its
+// seed-pause generalization and its gate registration correctly, and the ONE
+// thing nobody had a pin for — that the gate reconciler recognizes a never-ran
+// seed pause — is the one thing that broke on production the day it shipped.
+describe("notifications stream wiring", () => {
+  it("is a Fansly-only stream, present in every stream vocabulary", () => {
+    expect(SYNC_STREAMS).toContain("notifications");
+    expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
+    expect(getSyncStreamsForPlatform("fansly")).toContain("notifications");
+    expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("notifications");
+    expect(fanslyPlatformAdapter.capabilities.streams).toContain("notifications");
+    expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("notifications");
+    // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
+    // stream" on every dispatch, FLEET-WIDE.
+    expect(fanslyPlatformAdapter.pull.notifications).toBeTypeOf("function");
+  });
+
+  it("is LIVE class at the 1 800 s cadence, and still yields to money and DMs", () => {
+    const policy = SYNC_STREAM_POLICY.notifications;
+    // The cadence IS the loss bound: every unpolled interval is facts the
+    // provider will not serve again.
+    expect(policy.cadenceSeconds).toBe(1800);
+    expect(policy.defaultWorkClass).toBe("live");
+    expect(policy.freshnessSlaSeconds).toBeNull();
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.transactions.basePriority);
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.dm_messages.basePriority);
+  });
+
+  it("joins NO domain policy and declares no dependencies", () => {
+    for (const domain of Object.values(SYNC_DOMAIN_POLICY)) {
+      expect(domain.primaryStreams).not.toContain("notifications");
+      expect(domain.supportingStreams).not.toContain("notifications");
+    }
+    expect(SYNC_STREAM_DEPENDENCIES.notifications).toBeUndefined();
+  });
+
+  it("is excluded from the manual `all` and `data` scopes", () => {
+    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("notifications");
+    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("notifications");
+    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("notifications");
+  });
+
+  it("seeds PAUSED and is reachable by the gate reconciler", () => {
+    expect(isSeedPausedSyncStream("notifications")).toBe(true);
+    // BOTH halves, because F1 proved one without the other is a lane that sits
+    // paused forever while its flag moves nothing (#192, reproduced 2026-08-22).
+    expect(FANSLY_BULK_SYNC_STREAMS).toContain("notifications");
+  });
+
+  it("is exempt from the rollup vote and visible in the monitor", () => {
+    expect(isBulkEnrichmentSyncStream("notifications")).toBe(true);
+    expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("notifications");
+    expect(MONITORED_SYNC_STREAMS).toContain("notifications");
+  });
+
+  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const enabled = byKey.get("fanslyNotificationsSyncEnabled");
+    expect(enabled?.kind).toBe("boolean");
+    expect(enabled?.default).toBe("false");
+    expect(enabled?.runtimeApply).toBe("live");
+
+    const allowlist = byKey.get("fanslyNotificationsPageAllowlist");
+    expect(allowlist?.kind).toBe("string");
+    expect(allowlist?.default).toBe("");
+    expect(allowlist?.runtimeApply).toBe("live");
+    // Its OWN key, on the FAIL-CLOSED template (S4). Reading this lane through
+    // the shared new-stream key would open it fleet-wide on the deploy.
+    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
+
+    const budget = byKey.get("fanslyNotificationsDailyCallBudget");
+    expect(budget?.kind).toBe("number");
+    // 48 head polls + pagination, in HTTP ATTEMPTS.
+    expect(budget?.default).toBe("96");
+    expect(budget?.min).toBe(1);
+    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
   });
 });

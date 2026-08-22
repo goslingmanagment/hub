@@ -84,6 +84,15 @@ const SANCTIONED_DELETER_FILES = [
   // state (§3.4, A17-6) holding retention floors no event carries, so a rebuild
   // that truncated it would erase evidence the backfill paid egress to find.
   "apps/runtime/src/services/projections/fansly-stats.ts",
+  // WP-F2: projection reset — rebuildable state only, never scheduled.
+  // rebuildFanslyEngagementProjection clears `platform_notifications` and
+  // `post_likes` plus its own watermark inside ONE transaction and immediately
+  // replays them from the domain-event ledger. `subject_refresh_state` is
+  // deliberately NOT in its table list: that is capture-plane operational state
+  // (§3.4) holding due dates and walk cursors no event carries, so a rebuild
+  // that truncated it would re-mark the whole catalogue as first-sight and
+  // release an egress storm.
+  "apps/runtime/src/services/projections/fansly-engagement.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
   "apps/runtime/src/services/sync/rate-limiter.ts",

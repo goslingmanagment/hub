@@ -659,7 +659,7 @@ export const agentMembershipStateEnum = z.enum(["active", "inactive", "unknown"]
  */
 export const agentExportPolicyEnum = z.enum(agentExportPolicyValues);
 
-/** = `syncStreamEnum` (schema.ts), exactly thirteen. */
+/** = `syncStreamEnum` (schema.ts), exactly fourteen. */
 export const agentSyncStreamEnum = z.enum([
   "light",
   "fan_identities",
@@ -674,6 +674,7 @@ export const agentSyncStreamEnum = z.enum([
   "purchase_history",
   "posts",
   "stats_snapshot",
+  "notifications",
 ]);
 
 /** = CHECK `observations_source_check`, exactly seven. */

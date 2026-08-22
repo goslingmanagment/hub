@@ -381,6 +381,7 @@ describe("sync UX summaries", () => {
       // WP-F1: same class, same reason — its flag defaults false, so letting it
       // vote would make every Fansly page read "Off" from the deploy onward.
       "stats_snapshot",
+      "notifications",
     ]);
     expect(isBulkEnrichmentSyncStream("fan_earnings")).toBe(true);
     expect(isBulkEnrichmentSyncStream("purchase_history")).toBe(true);

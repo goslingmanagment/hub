@@ -98,6 +98,16 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "broadcast.scheduled_observed",
   "poll.observed",
   "recap.stat_observed",
+  // WP-F2, the engagement core. `notification.observed` is the VERBATIM row —
+  // one per notification, every code, known or not — and the two typed
+  // derivations ride beside it. All three are analytics/commerce telemetry:
+  // replaying them to SSE v2 clients as business news is exactly what
+  // projection-only exists to prevent. Registering the types here and
+  // declaring `projectionOnly: true` on the `fansly-engagement` family are ONE
+  // decision, never two.
+  "notification.observed",
+  "media.purchase_notification_observed",
+  "engagement.notification_observed",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {

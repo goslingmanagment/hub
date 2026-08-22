@@ -62,6 +62,10 @@ export const MONITORED_SYNC_STREAMS = [
   // ramp-gated streams do.
   "posts",
   "stats_snapshot",
+  // WP-F2. A lane that can wedge unobserved is the one failure this list
+  // exists to prevent, and the notification lane is the one whose downtime
+  // costs facts rather than freshness.
+  "notifications",
 ] as const satisfies readonly SyncStream[];
 const REQUEST_STREAMS = [
   ...MONITORED_SYNC_STREAMS,
