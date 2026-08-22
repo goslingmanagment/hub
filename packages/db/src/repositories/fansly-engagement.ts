@@ -1241,11 +1241,16 @@ export async function listMediaStatsRefreshChunk(
 /**
  * Record backfill progress WITHOUT recording a visit.
  *
- * A first-sight backfill can span dozens of windows, and `last_visited_at` is
- * what retires an item from the never-visited band. Moving it half way through
- * would demote a half-walked item to the round-robin and leave the rest of its
- * history for the next cycle — which at a 30-day cycle means a year to walk
- * three years. So the cursor advances and the priority does not.
+ * The narrow case this is still for: a walk that journaled NOTHING this visit —
+ * it stopped on the repeat guard, or at the creation floor, before any egress.
+ * There is no look to record, but the cursor moved and that has to be durable.
+ *
+ * A visit that DID fetch something goes through `recordMediaStatsVisit`, which
+ * writes the same cursor and stamps `last_visited_at` besides. This function
+ * used to be the only path a backfill took, and production 2026-08-22 is what
+ * that cost: 1 198 calls landed on 8 media items while 5 507 queue rows still
+ * read "never visited", because nothing retires an item from that band until
+ * its whole history is walked.
  */
 export async function recordMediaStatsBackfillProgress(
   db: Database,
@@ -1268,12 +1273,21 @@ export async function recordMediaStatsBackfillProgress(
 }
 
 /**
- * Record a completed steady refresh.
+ * Record a visit — a look that produced at least one journaled response.
  *
- * The visit is what clears the dirty mark — nothing else does, so a purchase
- * signal can never be lost between "marked" and "fetched". `refresh_class` is
- * written as the tier the item is in TODAY, which is how an item ages out of
- * `fresh` without anything sweeping it.
+ * `last_visited_at` moves on EVERY such visit, a first-sight backfill window
+ * included. That is what retires an item from the never-visited band, and it is
+ * the whole of the round-robin's fairness: while backfill visits did not stamp
+ * it, the priority re-picked the same newest items every day and 5 507 of a
+ * page's 5 515 queue rows had never been looked at (production 2026-08-22).
+ *
+ * `refresh_class` is written as the tier the item is in TODAY, which is how an
+ * item ages out of `fresh` without anything sweeping it.
+ *
+ * `clearDirty` is false for a visit that walked BACKFILL windows but had no
+ * budget left for the tier's steady window: the dirty mark means "read this
+ * item's numbers today", and old windows are not that. Clearing it there would
+ * lose a purchase signal in exchange for history.
  */
 export async function recordMediaStatsVisit(
   db: Database,
@@ -1286,8 +1300,11 @@ export async function recordMediaStatsVisit(
     visitedAt: Date;
     nextDueAt: Date;
     backfillCursor: Record<string, unknown>;
+    /** Default true: the steady refresh ran, so the mark is answered. */
+    clearDirty?: boolean;
   },
 ): Promise<{ applied: boolean }> {
+  const clearDirty = input.clearDirty !== false;
   const result = await db.execute(sql`
     update subject_refresh_state s
        set refresh_class = ${input.tier},
@@ -1295,7 +1312,7 @@ export async function recordMediaStatsVisit(
            last_visited_at = ${input.visitedAt},
            known_count = ${input.knownCount},
            backfill_cursor = ${JSON.stringify(input.backfillCursor)}::jsonb,
-           dirty_reason = null,
+           dirty_reason = ${clearDirty ? sql`null` : sql`s.dirty_reason`},
            consecutive_failures = 0,
            updated_at = now()
      where s.page_id = ${input.pageId}

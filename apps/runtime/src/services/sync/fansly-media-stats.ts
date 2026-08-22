@@ -49,6 +49,38 @@
 // an unwalked span is a hole we know about; a loop is a day of egress spent
 // proving nothing.
 //
+// ── 2b. WHERE THE WALK STOPS, which "two empty windows" never answered ──────
+//
+// This route honours EVERY historical window exactly — and answers all of them,
+// back to 2006, with ONE datapoint row whose counters are all zero. So a floor
+// rule reading "no datapoints" never fired: production 2026-08-22 spent 1 198
+// calls walking EIGHT media items 240 windows each, to 2006-04. Two rules end
+// that, and both are about what the response MEANS rather than how many rows it
+// has:
+//
+//   - AN ALL-ZERO WINDOW IS EMPTY. Every counter zero (or absent) is no traffic;
+//     the body is still journaled verbatim, because capture-first is not a floor
+//     rule and the zero row is itself the evidence.
+//   - AN ITEM HAS NO TRAFFIC BEFORE IT EXISTED. The walk never asks for a window
+//     ending more than one span before the item's own creation instant —
+//     `created_at_platform`, or first sight when the platform served none, which
+//     is the SAME age basis the tier is computed from. Reaching it is a floor
+//     with a name: `floorBasis: 'created_at'`. It is also the repair for the
+//     eight cursors already sitting at 2006 — they hit it on their next visit.
+//
+// ── 2c. EVERY VISIT COUNTS AS A VISIT ──────────────────────────────────────
+//
+// `last_visited_at` is what retires an item from the never-visited band, and a
+// backfill visit used not to stamp it: an item stayed "never visited" until its
+// WHOLE history was walked. With the newest-first priority that is a treadmill —
+// the same eight items were re-picked every day while 5 507 rows had never been
+// looked at once. So a visit that journaled anything stamps the row, the
+// backfill resumes from `backfill_cursor` on the item's NEXT visit, and the
+// steady window for the tier runs in the same visit if the budget still allows
+// it. Deep history now arrives over several cycles instead of in one burst,
+// which is the trade: fairness across the catalogue, bounded by the creation
+// floor above.
+//
 // ── 3. THE QUEUE IS NOT A PROJECTION ────────────────────────────────────────
 //
 // Rows live in `subject_refresh_state` (`plane='media_stats'`), which is
@@ -176,6 +208,27 @@ const BACKFILL_OVERLAP_DAYS = 1;
  *  is no year-further-back probe: an item cannot have traffic before it was
  *  published, so an empty window here is not the [E10] long-idle-account case. */
 const BACKFILL_EMPTY_STREAK_LIMIT = 2;
+/**
+ * How far past an item's own creation the walk may still ask.
+ *
+ * ONE span, not zero: the creation instant is the platform's or ours, the
+ * provider snaps windows to its bucket grid, and a window that straddles the
+ * publication day is the last one that can carry anything. Past that there is
+ * nothing to find — which the provider will happily confirm, one zero-valued
+ * bucket at a time, all the way to 2006.
+ */
+const BACKFILL_CREATION_SLACK_DAYS = 31;
+/** The six counters `/it/moie/statsnew` serves per `stats[]` row ([E5]: seven
+ *  keys, six of them counters and one of them `type`). All zero — or absent —
+ *  is NO TRAFFIC, which is what makes a floor reachable at all. */
+const MEDIA_STAT_COUNTER_KEYS = [
+  "views",
+  "previewViews",
+  "uniqueViewers",
+  "previewUniqueViewers",
+  "interactionTime",
+  "previewInteractionTime",
+] as const;
 /** How many 31-day backfill windows ONE media may take in one visit. Bounded so
  *  a single item with years of history cannot spend a whole chunk, while a
  *  newest-first depth-first walk still finishes an item in a few dispatches. */
@@ -239,6 +292,10 @@ interface MediaBackfillCursor {
   floorAt: string | null;
   /** Why it stopped, when it stopped for a reason other than the floor. */
   stopReason: string | null;
+  /** WHAT ended the walk: `created_at` (the item did not exist before this),
+   *  `empty_window` (two all-empty windows), or null while it is still open.
+   *  A floor with a name is a floor an operator can argue with. */
+  floorBasis: string | null;
   guard: BackfillWindowGuard;
 }
 
@@ -329,8 +386,61 @@ export function parseMediaBackfillCursor(
     done: record?.done === true,
     floorAt: asNullableString(record?.floorAt),
     stopReason: asNullableString(record?.stopReason),
+    floorBasis: asNullableString(record?.floorBasis),
     guard: parseWindowGuard(record?.guard, BACKFILL_WINDOW_DAYS),
   };
+}
+
+/**
+ * The instant an item's history CANNOT reach past: its own creation, less one
+ * window span.
+ *
+ * The basis is `created_at_platform` and, when the platform never served one,
+ * first sight — the SAME `coalesce` the queue computes the item's tier from, so
+ * an item cannot be classed by one age and walked by another. Neither ⇒ null,
+ * and null means no creation floor: we never invent a publication date, and the
+ * empty-window rule owns the item instead.
+ */
+export function mediaBackfillCreationFloorMs(
+  candidate: { createdAtPlatform: Date | null; firstSeenAt: Date | null },
+): number | null {
+  const basis = candidate.createdAtPlatform ?? candidate.firstSeenAt;
+  return basis === null ? null : basis.getTime() - BACKFILL_CREATION_SLACK_DAYS * DAY_MS;
+}
+
+/**
+ * Did this window carry any traffic at all?
+ *
+ * `/it/moie/statsnew` answers a window from 2006 with a datapoint row whose
+ * counters are all zero, so "the array is non-empty" is not evidence of
+ * anything. Any non-zero counter in any `stats[]` row is; nothing else is.
+ *
+ * The response is journaled verbatim either way — capture-first is not a floor
+ * rule, and the zero-valued row IS the evidence the coverage claim rests on.
+ */
+export function mediaStatsWindowIsEmpty(payload: unknown): boolean {
+  if (isEmptyStatsWindow(payload)) {
+    return true;
+  }
+  const record = asRecord(payload);
+  const dataset = record === null ? null : asRecord(record.dataset);
+  const points = dataset !== null && Array.isArray(dataset.datapoints) ? dataset.datapoints : [];
+  for (const point of points) {
+    const row = asRecord(point);
+    for (const stat of row !== null && Array.isArray(row.stats) ? row.stats : []) {
+      const values = asRecord(stat);
+      if (values === null) {
+        continue;
+      }
+      for (const key of MEDIA_STAT_COUNTER_KEYS) {
+        const value = values[key];
+        if (typeof value === "number" && value !== 0) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
 }
 
 function backfillCursorJson(cursor: MediaBackfillCursor): Record<string, unknown> {
@@ -573,11 +683,6 @@ export async function fanslyMediaStatsChunk(
   let topMarked = 0;
   let deferred: string | null = null;
   let moreWork = false;
-  /** A first-sight backfill that stopped at its per-visit bound rather than at
-   *  its floor. The chunk is NOT done: an item with three years of history
-   *  needs several visits, and without this the lane would take one bounded
-   *  bite per SLOT — six hours per four windows. */
-  let backfillPending = false;
 
   /** Room for one more call today? Crossing this defers; it never drops. */
   const hasDayCapacity = () => state.callsToday < dailyCap;
@@ -698,7 +803,9 @@ export async function fanslyMediaStatsChunk(
       raw,
       served,
       honoured: windowWasHonoured({ afterMs: params.afterMs, beforeMs: params.beforeMs }, served),
-      empty: isEmptyStatsWindow(raw),
+      // ALL-ZERO IS EMPTY. This route answers any window back to 2006 with one
+      // zero-valued bucket, and a floor rule reading row COUNTS never fired.
+      empty: mediaStatsWindowIsEmpty(raw),
       buckets,
       observationId: persisted.observationId ?? null,
     };
@@ -836,42 +943,133 @@ export async function fanslyMediaStatsChunk(
   return await finish();
 
   /**
-   * One media item: its first-sight backfill if it has one owed, otherwise its
-   * steady window for the tier it is in today.
+   * ONE MEDIA ITEM, and the visit rule this lane now runs on.
    *
-   * A BACKFILL VISIT DOES NOT COUNT AS A VISIT. `last_visited_at` is what
-   * retires an item from the never-visited band, and moving it half way through
-   * a multi-window walk would demote a half-walked item to the round-robin and
-   * leave the rest of its history for the next cycle — at a 30-day cycle, a year
-   * to walk three years of history.
+   * A visit walks the item's first-sight backfill (up to four windows) and then,
+   * ONLY IF the day cap and the chunk budget both still allow it, the steady
+   * window for the tier it is in today. Whatever it fetched, it stamps
+   * `last_visited_at` — a backfill visit included — and the walk resumes from
+   * `backfill_cursor` on the item's next turn.
+   *
+   * THE OLD RULE WAS THE OPPOSITE and it is what production paid for: a backfill
+   * visit did not count as a visit, so an item stayed in the never-visited band
+   * until its WHOLE history was walked, the newest-first priority kept handing
+   * the budget back to the same eight items, and 5 507 rows had never been looked
+   * at once. Depth-first per item is only cheap when histories are short; the
+   * creation floor is what now makes them short.
+   *
+   * TWO THINGS DO NOT STAMP: a look that FAILED (a failed look is not a look, and
+   * retiring an item from the never-visited band on the strength of an error is
+   * how an unreachable item disappears), and a steady refresh cut in half by the
+   * cap when no backfill window was journaled either — tomorrow re-reads it whole
+   * rather than half.
    */
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,
   ): Promise<"visited" | "skipped" | "deferred" | "yielded"> {
     const issued = new Set<string>();
     const cursor = parseMediaBackfillCursor(candidate.backfillCursor, now);
+    const cursorAtEntry = JSON.stringify(backfillCursorJson(cursor));
+    let buckets = 0;
+    let journaledWindows = 0;
+    let status: "visited" | "skipped" | "deferred" | "yielded" = "skipped";
 
     if (!cursor.done) {
-      return await runBackfill(candidate, cursor, issued);
+      const walk = await runBackfill(candidate, cursor, issued);
+      if (walk.status === "failed") {
+        // The failure is already recorded against the item and its cursor is
+        // left where it was, so the next dispatch retries the same window.
+        return "skipped";
+      }
+      buckets += walk.buckets;
+      journaledWindows += walk.windows;
+      status = walk.status === "ok" ? "skipped" : walk.status;
     }
-    return await runSteady(candidate, cursor, issued);
+
+    // THE STEADY WINDOW, budget permitting. On a visit whose backfill is not yet
+    // done this is the part that gets dropped first: history is durable in the
+    // cursor and today's numbers will still be there tomorrow.
+    let steadyComplete = false;
+    if (status !== "deferred" && status !== "yielded" && hasDayCapacity() && hasChunkCapacity()) {
+      const steady = await runSteady(candidate, cursor, issued);
+      if (steady.status === "failed") {
+        return "skipped";
+      }
+      buckets += steady.buckets;
+      steadyComplete = steady.complete;
+      status = steady.status === "ok" ? "visited" : steady.status;
+    }
+
+    if (journaledWindows === 0 && !steadyComplete) {
+      // Nothing durable to call a visit. The cursor may still have MOVED — a
+      // repeat guard or the creation floor closes a walk without any egress —
+      // and that has to survive; an untouched cursor is not rewritten.
+      if (JSON.stringify(backfillCursorJson(cursor)) !== cursorAtEntry) {
+        await recordMediaStatsBackfillProgress(app.db, {
+          pageId,
+          subjectRef: candidate.subjectRef,
+          backfillCursor: backfillCursorJson(cursor),
+        });
+      }
+      await saveProgress();
+      return status === "visited" ? "skipped" : status;
+    }
+
+    visited += 1;
+    const intervalDays = mediaStatsIntervalDays(candidate.tier, longTailCycleDays);
+    await recordMediaStatsVisit(app.db, {
+      pageId,
+      subjectRef: candidate.subjectRef,
+      tier: candidate.tier,
+      knownCount: buckets,
+      visitedAt: now,
+      nextDueAt: new Date(now.getTime() + intervalDays * DAY_MS),
+      backfillCursor: backfillCursorJson(cursor),
+      // A backfill-only visit read OLD windows. The dirty mark asks for TODAY's
+      // numbers, so it survives until a steady refresh answers it.
+      clearDirty: steadyComplete,
+    });
+    await saveProgress();
+    return status === "skipped" ? "visited" : status;
   }
 
-  /** Backwards 31-day daily windows to the empty floor. */
+  /** What one item's backfill did this visit. `windows` counts JOURNALED
+   *  responses — the measure of whether this was a look at all. */
+  interface WalkResult {
+    status: "ok" | "deferred" | "yielded" | "failed";
+    windows: number;
+    buckets: number;
+  }
+
+  /** Backwards 31-day daily windows, to the empty floor or to the item's own
+   *  creation — whichever comes first. */
   async function runBackfill(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
     issued: Set<string>,
-  ): Promise<"visited" | "skipped" | "deferred" | "yielded"> {
+  ): Promise<WalkResult> {
+    // THE CREATION FLOOR, from the same age basis the tier is computed from.
+    const creationFloorMs = mediaBackfillCreationFloorMs(candidate);
     let windows = 0;
-    let result: "visited" | "skipped" | "deferred" | "yielded" = "skipped";
+    let journaledWindows = 0;
+    let buckets = 0;
+    let status: WalkResult["status"] = "ok";
     while (windows < BACKFILL_WINDOWS_PER_VISIT && !cursor.done) {
+      // AN ITEM HAS NO TRAFFIC BEFORE IT EXISTED. Checked before the budget, so
+      // a cursor already past the floor — the eight production cursors sitting
+      // at 2006-04 — closes on its next visit without spending a request.
+      if (creationFloorMs !== null && cursor.nextBeforeMs < creationFloorMs) {
+        cursor.done = true;
+        cursor.stopReason = "created_at_floor";
+        cursor.floorBasis = "created_at";
+        break;
+      }
       if (!hasDayCapacity()) {
-        result = "deferred";
+        status = "deferred";
         break;
       }
       if (!hasChunkCapacity()) {
-        result = "yielded";
+        status = "yielded";
         break;
       }
       const requested = {
@@ -903,9 +1101,7 @@ export async function fanslyMediaStatsChunk(
       windows += 1;
       backfillWindows += 1;
       if (outcome === "failed") {
-        // The failure is already recorded against the item; its cursor is left
-        // exactly where it was so the next dispatch retries the same window.
-        return "skipped";
+        return { status: "failed", windows: journaledWindows, buckets };
       }
       if (outcome === "repeat") {
         await handleUnhonouredWindow(candidate.subjectRef, cursor, requested, {
@@ -913,6 +1109,8 @@ export async function fanslyMediaStatsChunk(
         });
         break;
       }
+      journaledWindows += 1;
+      buckets += outcome.buckets;
       cursor.guard.lastObservationId = outcome.observationId ?? cursor.guard.lastObservationId;
 
       if (!outcome.honoured) {
@@ -930,13 +1128,14 @@ export async function fanslyMediaStatsChunk(
       if (outcome.empty) {
         cursor.emptyStreak += 1;
         if (cursor.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
-          // The floor. Two consecutive all-empty windows on a per-media series
-          // means the item had no traffic before this point — and unlike the
-          // account lane there is no [E10] long-idle case to probe past, because
-          // an item cannot have traffic before it was published. Every empty
-          // response is journaled: the empty window IS the floor evidence.
+          // The floor. Two consecutive EMPTY windows — no non-zero counter in
+          // either — means the item had no traffic before this point, and unlike
+          // the account lane there is no [E10] long-idle case to probe past,
+          // because an item cannot have traffic before it was published. Every
+          // empty response is journaled: the empty window IS the floor evidence.
           cursor.done = true;
           cursor.stopReason = "empty_window_streak";
+          cursor.floorBasis = "empty_window";
           break;
         }
         cursor.nextBeforeMs -= cursor.guard.spanDays * DAY_MS;
@@ -957,19 +1156,17 @@ export async function fanslyMediaStatsChunk(
       } else {
         cursor.nextBeforeMs -= cursor.guard.spanDays * DAY_MS;
       }
-      result = "visited";
     }
 
-    await recordMediaStatsBackfillProgress(app.db, {
-      pageId,
-      subjectRef: candidate.subjectRef,
-      backfillCursor: backfillCursorJson(cursor),
-    });
-    if (!cursor.done) {
-      backfillPending = true;
-    }
-    await saveProgress();
-    return result;
+    return { status, windows: journaledWindows, buckets };
+  }
+
+  /** What one item's steady refresh did. `complete` means every window the tier
+   *  asks for came back — a half-read tier is not a refresh. */
+  interface SteadyResult {
+    status: "ok" | "deferred" | "yielded" | "failed";
+    buckets: number;
+    complete: boolean;
   }
 
   /** The tier's trailing window: one call, except a long tail on a route that
@@ -978,20 +1175,21 @@ export async function fanslyMediaStatsChunk(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
     issued: Set<string>,
-  ): Promise<"visited" | "skipped" | "deferred" | "yielded"> {
+  ): Promise<SteadyResult> {
     const windows = steadyWindows(candidate.tier, now, state.longTailWindowMode);
     let buckets = 0;
-    let anyServed = false;
+    let served = 0;
 
     for (const [index, window] of windows.entries()) {
       if (!hasDayCapacity()) {
         // Out of the day's budget, possibly part way through a multi-window
-        // long-tail refresh. What was fetched is journaled; the item stays
-        // UNVISITED so tomorrow re-reads it whole rather than half.
-        return "deferred";
+        // long-tail refresh. What was fetched is journaled; the refresh is NOT
+        // complete, so an item with nothing else to show for the visit stays
+        // unvisited and tomorrow re-reads it whole rather than half.
+        return { status: "deferred", buckets, complete: false };
       }
       if (!hasChunkCapacity()) {
-        return "yielded";
+        return { status: "yielded", buckets, complete: false };
       }
       const outcome = await requestWindow(candidate.subjectRef, {
         periodMs: window.periodMs,
@@ -1001,13 +1199,13 @@ export async function fanslyMediaStatsChunk(
         tier: candidate.tier,
       }, issued);
       if (outcome === "failed") {
-        return "skipped";
+        return { status: "failed", buckets, complete: false };
       }
       if (outcome === "repeat") {
         break;
       }
       buckets += outcome.buckets;
-      anyServed = true;
+      served += 1;
 
       // ── THE 90-DAY DISCOVERY, settled by what the route actually served ──
       //
@@ -1048,7 +1246,8 @@ export async function fanslyMediaStatsChunk(
           // Re-run this item under the split plan, from the top. The window just
           // fetched is journaled either way — it is simply not the window we
           // asked for.
-          return await runSteady(candidate, cursor, issued);
+          const rerun = await runSteady(candidate, cursor, issued);
+          return { ...rerun, buckets: buckets + rerun.buckets };
         }
         if (covered && state.longTailWindowMode === "unproven") {
           state = { ...state, longTailWindowMode: "ninety" };
@@ -1067,23 +1266,7 @@ export async function fanslyMediaStatsChunk(
       }
     }
 
-    if (!anyServed) {
-      return "skipped";
-    }
-
-    visited += 1;
-    const intervalDays = mediaStatsIntervalDays(candidate.tier, longTailCycleDays);
-    await recordMediaStatsVisit(app.db, {
-      pageId,
-      subjectRef: candidate.subjectRef,
-      tier: candidate.tier,
-      knownCount: buckets,
-      visitedAt: now,
-      nextDueAt: new Date(now.getTime() + intervalDays * DAY_MS),
-      backfillCursor: backfillCursorJson(cursor),
-    });
-    await saveProgress();
-    return "visited";
+    return { status: "ok", buckets, complete: served === windows.length };
   }
 
   /**
@@ -1243,7 +1426,11 @@ export async function fanslyMediaStatsChunk(
         stats,
       };
     }
-    if (moreWork || backfillPending) {
+    // An item whose backfill is not finished no longer holds the dispatch open:
+    // it was VISITED, so it comes round again on its tier's cadence and resumes
+    // from its cursor. What still holds the dispatch open is unreached DUE work,
+    // which `moreWork` and the chunk-capacity branch above both cover.
+    if (moreWork) {
       await saveProgress();
       return {
         satisfied: false,
