@@ -1043,6 +1043,34 @@ export async function reconcileFanslyBulkStreamGate(
       };
     }
 
+    /**
+     * The seed shape of a SEED_PAUSED_SYNC_STREAMS lane (see
+     * buildSeedPageSyncState): planted `paused` with NO blocker, so the gate's
+     * own ownership marker is absent on exactly the rows a gate flip must
+     * open. Without this the promise in that comment — "the gate reconciler
+     * resumes it" — is false and the flag moves nothing (#191/#194).
+     *
+     * The test is NEVER RAN, not never requested. `request_seq` is no
+     * discriminator: the #192 config wake-up calls requestPageSync on the
+     * flag PATCH, which bumps request_seq (and stamps request_source
+     * 'recovery') while deliberately leaving a paused row paused — so by the
+     * time the planner's reconciler sees a seed row, it usually already
+     * carries request_seq >= 1. Verified on production 2026-08-22.
+     *
+     * What a run leaves behind instead: acquirePageSyncLease stamps
+     * `started_at` and `leased_seq`, and applying a generation advances
+     * `applied_seq`. None of the three is cleared by pausePageSync,
+     * pausePageSyncForAuth or resetPageSync, so a row an operator paused
+     * after it ran (or after a failed run, or while a lease was outstanding)
+     * can never be mistaken for a seed row.
+     */
+    const seedPaused =
+      current.status === "paused" &&
+      current.blockerKind === null &&
+      current.appliedSeq === 0 &&
+      current.leasedSeq === null &&
+      current.startedAt === null;
+
     if (input.gateState !== "ramped") {
       if (current.status === "running") {
         return {
@@ -1064,8 +1092,10 @@ export async function reconcileFanslyBulkStreamGate(
         current.status === "blocked" && current.blockerKind === "dependency";
 
       // Paused/auth/manual/other blocked rows are owned by their respective
-      // operators and must not be relabelled as feature-gated.
-      if (!featureGateOwned && !unblockedSchedulable && !dependencyBlocked) {
+      // operators and must not be relabelled as feature-gated. A never-ran
+      // seed pause is the gate's own: it is labelled here so the ramped
+      // branch can recognize it later through the ordinary marker.
+      if (!featureGateOwned && !unblockedSchedulable && !dependencyBlocked && !seedPaused) {
         return {
           action: "unchanged",
           createdRecoveryGeneration: false,
@@ -1131,7 +1161,7 @@ export async function reconcileFanslyBulkStreamGate(
       current.blockerKind === null &&
       (legacySkipReason === "flag_off" || legacySkipReason === "not_allowlisted");
 
-    if (!featureGateOwned && !legacySkippedSuccess) {
+    if (!featureGateOwned && !legacySkippedSuccess && !seedPaused) {
       return {
         action: "unchanged",
         createdRecoveryGeneration: false,
