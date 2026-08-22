@@ -693,3 +693,70 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
     expect(source).not.toMatch(/method: *"(POST|PUT|PATCH|DELETE)"/);
   });
 });
+
+describe("WP-F6 adapter method: GET /post?ids=", () => {
+  it("builds the exact method, path and CSV query, through the page's own proxy", async () => {
+    const { FanslyAdapter, fetchMock, proxyDispatchers } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({
+      success: true,
+      response: {
+        posts: [{ id: "935652730221907968", likeCount: 30, mediaLikeCount: 159, wallIds: [] }],
+        accounts: [{ id: "737077689877278720" }],
+      },
+    }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const batch = await adapter.getPostsByIds(context(), [
+      "935652730221907968",
+      "935652730221907969",
+    ]);
+    await adapter.close();
+
+    const [input, init] = fetchMock.mock.calls[0] ?? [];
+    expect((init as RequestInit).method).toBe("GET");
+    const url = new URL(String(input));
+    expect(url.pathname).toBe("/post");
+    // CSV in the order asked — the app's own `getPosts` joins with a comma.
+    expect(url.searchParams.get("ids")).toBe("935652730221907968,935652730221907969");
+    expect(url.searchParams.get("ngsw-bypass")).toBe("true");
+    // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY — a direct-IP read of a
+    // creator account risks a model ban.
+    expect(proxyDispatchers.length).toBeGreaterThan(0);
+    expect((init as { dispatcher?: { label?: string } }).dispatcher?.label).toMatch(/^proxy-/);
+
+    expect(batch.contractAccepted).toBe(true);
+    expect(batch.items).toHaveLength(1);
+    // The route neither pages nor scopes to an account or a wall; the shared
+    // response shape keeps those inert rather than inventing values for them.
+    expect(batch).toMatchObject({ done: true, nextBefore: null, accountId: "", wallId: null });
+    // The whole envelope is retained for the journal, sidecars included.
+    expect(batch.raw).toMatchObject({ accounts: [{ id: "737077689877278720" }] });
+  });
+
+  it("hands back a drifted envelope for the journal instead of throwing", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({
+      success: true,
+      response: { timelineItems: [] },
+    }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const drifted = await adapter.getPostsByIds(context(), ["935652730221907968"]);
+    await adapter.close();
+    // JOURNAL BEFORE ASSERT: the body comes back so the lane can store it, and
+    // only then is it refused as an answer.
+    expect(drifted).toMatchObject({ contractAccepted: false, items: [] });
+    expect(drifted.raw).toEqual({ timelineItems: [] });
+  });
+
+  it("refuses a batch shape the server has never been seen to accept", async () => {
+    const { FanslyAdapter, POST_BATCH_SIZE } = harness;
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    await expect(adapter.getPostsByIds(context(), [])).rejects.toThrow(/at least one id/);
+    await expect(adapter.getPostsByIds(
+      context(),
+      Array.from({ length: POST_BATCH_SIZE + 1 }, (_, index) => `post-${index}`),
+    )).rejects.toThrow(/at most 100 ids/);
+    await expect(adapter.getPostsByIds(context(), [" "])).rejects.toThrow(/nonblank/);
+    await adapter.close();
+    expect(POST_BATCH_SIZE).toBe(100);
+  });
+});

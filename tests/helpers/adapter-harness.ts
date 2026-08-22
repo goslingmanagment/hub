@@ -107,10 +107,11 @@ export async function loadAdapters() {
       return dispatcher as never;
     });
 
-  const { FanslyAdapter } = await import("../../packages/fansly/src/adapter.ts");
+  const { FanslyAdapter, POST_BATCH_SIZE } = await import("../../packages/fansly/src/adapter.ts");
 
   return {
     FanslyAdapter,
+    POST_BATCH_SIZE,
     createProxyRequestDispatcher,
     createRequestDispatcher,
     directDispatchers,

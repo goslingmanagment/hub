@@ -245,7 +245,9 @@ describe("creator posts domain projection", () => {
       sourceObservationId: firstObservation.observationId,
       sourceAccountSeq: 1,
     });
-    expect(stale).toEqual({ applied: false, id: null });
+    expect(stale).toMatchObject({ applied: false, id: null });
+    // WP-F6: an out-of-order replay observed no reply-count movement either.
+    expect(stale.replyCountChanged).toBe(false);
 
     // Empty is a valid page and positive absence proof of NOTHING. It stamps
     // parse progress but emits no tombstone and leaves the row intact.
@@ -1213,5 +1215,312 @@ describe("creator posts domain projection", () => {
        from pg_constraint where conname = 'ofapi_capture_jobs_kind_check'`,
     );
     expect(constraint.rows[0]!.definition).toContain("post_paginate");
+  });
+});
+
+// ── WP-F6 ────────────────────────────────────────────────────────────────────
+//
+// Every fixture is SYNTHETIC. The field names and the presence/absence pattern
+// come from the 2026-08-19 capture; the values do not.
+
+/** A stable content checksum of `creator_posts`, ordered so a rebuild's row
+ *  ORDER cannot make an identical projection look different. Lineage moves on a
+ *  rebuild (new event ids); the FACT does not, so lineage and the row clocks are
+ *  excluded and everything else — every WP-F6 column included — is compared. */
+async function creatorPostsChecksum(pageId: number): Promise<string> {
+  const result = await testDb!.pool.query(
+    "select * from creator_posts where account_id = $1",
+    [pageId],
+  );
+  const normalized = result.rows
+    .map((row) => {
+      const source = row as Record<string, unknown>;
+      const copy: Record<string, unknown> = {};
+      for (const key of Object.keys(source).sort()) copy[key] = source[key];
+      delete copy.id;
+      delete copy.source_event_id;
+      delete copy.source_observation_id;
+      delete copy.source_account_seq;
+      delete copy.created_at;
+      delete copy.updated_at;
+      return JSON.stringify(
+        copy,
+        (_key, value) => (typeof value === "bigint" ? value.toString() : value),
+      );
+    })
+    .sort();
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
+
+async function seedF6Page(slug: string) {
+  const model = await createModel(testDb!.db, { slug, name: slug });
+  if (!model) throw new Error("model seed failed");
+  const page = await createFanslyPage(testDb!.db, { modelId: model.id, label: `${slug}-page` });
+  if (!page) throw new Error("page seed failed");
+  return page;
+}
+
+function f6Post(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "935652730221907968",
+    accountId: "737077689877278720",
+    content: "@LoraVie #Viral #tag_2026",
+    fypFlags: 0,
+    inReplyTo: null,
+    inReplyToRoot: null,
+    createdAt: Math.floor(new Date("2026-07-20T10:00:00Z").getTime() / 1000),
+    expiresAt: null,
+    attachments: [{ postId: "935652730221907968", pos: 0, contentType: 1, contentId: "media-1" }],
+    likeCount: 30,
+    replyCount: 1,
+    wallIds: ["wall-7"],
+    mediaLikeCount: 159,
+    accountMentions: [{ start: 0, end: 7, handle: "loravie", accountId: "737077689877278720" }],
+    ...overrides,
+  };
+}
+
+async function postRow(pageId: number) {
+  const result = await testDb!.pool.query(
+    "select * from creator_posts where account_id = $1 and platform_post_id = $2",
+    [pageId, "935652730221907968"],
+  );
+  return result.rows[0] as Record<string, unknown>;
+}
+
+async function refreshRows(pageId: number, plane: string) {
+  const result = await testDb!.pool.query(
+    `select subject_ref, refresh_class, dirty_reason, last_visited_at, next_due_at
+       from subject_refresh_state
+      where page_id = $1 and plane = $2
+      order by subject_refresh_state.subject_ref`,
+    [pageId, plane],
+  );
+  return result.rows as Array<Record<string, unknown>>;
+}
+
+describe("[sync-critical] WP-F6 the widened creator_posts head", () => {
+  it("writes EVERY new column, and a rebuild reproduces all of them", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedF6Page("f6cols");
+    const firstSeen = new Date("2026-08-01T10:00:00Z");
+    await seedPostsObservation({
+      accountId: page.id,
+      key: "f6-1",
+      receivedAt: firstSeen,
+      posts: [f6Post()],
+    });
+    await runCanonicalization(appStub());
+    expect(await runCreatorPostsProjection(appStub())).toMatchObject({ upserted: 1 });
+
+    const row = await postRow(page.id);
+    expect(row).toMatchObject({
+      like_count: 30n,
+      media_like_count: 159n,
+      reply_count: 1n,
+      fyp_flags: 0,
+      expires_at: null,
+      in_reply_to_ref: null,
+      in_reply_to_root_ref: null,
+      wall_refs: ["wall-7"],
+      account_mention_refs: ["737077689877278720"],
+      // DERIVED: raw token as the caption wrote it, plus the NFKC-lowercased
+      // form the joins use, plus the version of the grammar that produced them.
+      hashtags: ["Viral", "tag_2026"],
+      hashtags_normalized: ["viral", "tag_2026"],
+      hashtag_parser_version: 1,
+    });
+    expect(row.attachment_refs).toEqual([{ pos: 0, contentType: 1, contentId: "media-1" }]);
+    // The counters were observed, so the engagement clock is set — from the
+    // EVENT's observedAt, which is why the next assertion can hold at all.
+    expect((row.engagement_observed_at as Date).toISOString()).toBe(firstSeen.toISOString());
+    // Not one new column left null by the projector: the verified gotcha this
+    // whole test exists for.
+    for (
+      const column of [
+        "like_count",
+        "media_like_count",
+        "reply_count",
+        "fyp_flags",
+        "wall_refs",
+        "account_mention_refs",
+        "hashtags",
+        "hashtags_normalized",
+        "hashtag_parser_version",
+        "attachment_refs",
+        "engagement_observed_at",
+      ]
+    ) {
+      expect(row[column], `${column} was left null by the projector`).not.toBeNull();
+    }
+
+    // TRUNCATE-AND-REPLAY PARITY, over every column including the new ones.
+    const before = await creatorPostsChecksum(page.id);
+    await rebuildCreatorPostsProjection(appStub());
+    expect(await creatorPostsChecksum(page.id)).toBe(before);
+  });
+
+  it("makes a like count that MOVED a new revision and a new head", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedF6Page("f6likes");
+    const day1 = new Date("2026-08-01T10:00:00Z");
+    const day2 = new Date("2026-08-02T10:00:00Z");
+    await seedPostsObservation({
+      accountId: page.id,
+      key: "f6-likes-1",
+      receivedAt: day1,
+      posts: [f6Post({ likeCount: 30 })],
+    });
+    await runCanonicalization(appStub());
+    await runCreatorPostsProjection(appStub());
+    const firstHash = (await postRow(page.id)).content_hash;
+
+    // The same post, a day later, with more likes — the DoD's "like counts
+    // observed moving on a known post across days".
+    await seedPostsObservation({
+      accountId: page.id,
+      key: "f6-likes-2",
+      receivedAt: day2,
+      posts: [f6Post({ likeCount: 41, mediaLikeCount: 200 })],
+    });
+    await runCanonicalization(appStub());
+    await runCreatorPostsProjection(appStub());
+
+    const events = await testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from domain_events where type = 'post.observed'",
+    );
+    // TWO immutable revisions, one head.
+    expect(events.rows[0]!.count).toBe("2");
+    const row = await postRow(page.id);
+    expect(row.like_count).toBe(41n);
+    expect(row.media_like_count).toBe(200n);
+    expect(row.content_hash).not.toBe(firstHash);
+    expect((row.last_observed_at as Date).toISOString()).toBe(day2.toISOString());
+    expect((row.engagement_observed_at as Date).toISOString()).toBe(day2.toISOString());
+    // The head moved; the archive kept both sightings, so a rebuild lands on
+    // the same head.
+    const before = await creatorPostsChecksum(page.id);
+    await rebuildCreatorPostsProjection(appStub());
+    expect(await creatorPostsChecksum(page.id)).toBe(before);
+  });
+
+  it("seeds BOTH refresh planes in the head's own transaction", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedF6Page("f6seed");
+    await seedPostsObservation({
+      accountId: page.id,
+      key: "f6-seed-1",
+      receivedAt: new Date("2026-08-01T10:00:00Z"),
+      posts: [f6Post()],
+    });
+    await runCanonicalization(appStub());
+    await runCreatorPostsProjection(appStub());
+
+    // A post committed without its queue rows is a post the reply walk never
+    // reads and the engagement refresh never re-reads — with a healthy lane, a
+    // clean coverage row, and nothing anywhere reporting a problem.
+    expect((await refreshRows(page.id, "post_replies")).map((row) => row.subject_ref))
+      .toEqual(["935652730221907968"]);
+    expect((await refreshRows(page.id, "post_engagement")).map((row) => row.subject_ref))
+      .toEqual(["935652730221907968"]);
+
+    // …and a rebuild does not truncate them (§3.4: operational state).
+    await rebuildCreatorPostsProjection(appStub());
+    expect(await refreshRows(page.id, "post_engagement")).toHaveLength(1);
+  });
+
+  it("marks the reply walk dirty when reply_count MOVES, and only then", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedF6Page("f6dirty");
+    await seedPostsObservation({
+      accountId: page.id,
+      key: "f6-dirty-1",
+      receivedAt: new Date("2026-08-01T10:00:00Z"),
+      posts: [f6Post({ replyCount: 1 })],
+    });
+    await runCanonicalization(appStub());
+    const first = await runCreatorPostsProjection(appStub());
+    // A FIRST sighting is already never-walked and therefore already in the
+    // walk's top priority band; marking it dirty would DEMOTE it.
+    expect(first.replyWalksMarkedDirty).toBe(0);
+    expect((await refreshRows(page.id, "post_replies"))[0]).toMatchObject({
+      dirty_reason: null,
+      refresh_class: "fresh",
+    });
+
+    // The same count again changes nothing.
+    await seedPostsObservation({
+      accountId: page.id,
+      key: "f6-dirty-2",
+      receivedAt: new Date("2026-08-02T10:00:00Z"),
+      posts: [f6Post({ replyCount: 1, likeCount: 31 })],
+    });
+    await runCanonicalization(appStub());
+    expect((await runCreatorPostsProjection(appStub())).replyWalksMarkedDirty).toBe(0);
+    expect((await refreshRows(page.id, "post_replies"))[0]?.dirty_reason).toBeNull();
+
+    // A count that MOVED is the only cheap evidence this system gets that a
+    // post's comments changed.
+    await seedPostsObservation({
+      accountId: page.id,
+      key: "f6-dirty-3",
+      receivedAt: new Date("2026-08-03T10:00:00Z"),
+      posts: [f6Post({ replyCount: 4 })],
+    });
+    await runCanonicalization(appStub());
+    expect((await runCreatorPostsProjection(appStub())).replyWalksMarkedDirty).toBe(1);
+    expect((await refreshRows(page.id, "post_replies"))[0]).toMatchObject({
+      dirty_reason: "reply_count_changed",
+      refresh_class: "dirty",
+    });
+    // The ENGAGEMENT plane is untouched: a reply-count move is a signal for the
+    // comment walk, not for the counter refresh that observed it.
+    expect((await refreshRows(page.id, "post_engagement"))[0]?.dirty_reason).toBeNull();
+  });
+
+  it("dates the row from the PROVIDER even when the event's occurred_at is clamped", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedF6Page("f6clamp");
+    const publishedAt = new Date("2022-05-04T08:30:00.000Z");
+    const receivedAt = new Date("2026-08-01T10:00:00Z");
+    await seedPostsObservation({
+      accountId: page.id,
+      key: "f6-clamp-1",
+      receivedAt,
+      posts: [f6Post({ createdAt: Math.floor(publishedAt.getTime() / 1000) })],
+    });
+    await runCanonicalization(appStub());
+    await runCreatorPostsProjection(appStub());
+
+    const event = await testDb.pool.query<{
+      occurred_at: Date;
+      data: Record<string, unknown>;
+    }>("select occurred_at, data from domain_events where type = 'post.observed'");
+    // §3.2b, the provider-dated branch: a pre-2024 publication is clamped to
+    // receipt time so the append cannot aim at a partition that does not exist,
+    // and the raw instant is preserved verbatim for a later re-dating.
+    expect(event.rows[0]!.data.occurredAtClamped).toBe(true);
+    expect(event.rows[0]!.data.occurredAtRaw).toBe(publishedAt.toISOString());
+    expect(event.rows[0]!.occurred_at.toISOString()).toBe(receivedAt.toISOString());
+
+    // …and the PROJECTED ROW still holds the true publication date, because the
+    // projector reads `data.publishedAt` and never `event.occurred_at`.
+    const row = await postRow(page.id);
+    expect((row.published_at as Date).toISOString()).toBe(publishedAt.toISOString());
   });
 });

@@ -4,12 +4,18 @@ import { describe, expect, it } from "vitest";
 
 import { isProjectionOnlyDomainEventType } from "@agency_hub_core/db";
 
+import {
+  clampDraftOccurredAt,
+  OCCURRED_AT_CLAMP_MIN,
+} from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { familyForObservation } from "../apps/runtime/src/services/canonicalize/index.ts";
 import {
   buildPostObservedDraft,
   buildPostTipObservedDraft,
   canParsePostsObservation,
   canonicalizePostsObservation,
+  deriveHashtags,
+  HASHTAG_PARSER_VERSION,
 } from "../apps/runtime/src/services/canonicalize/posts.ts";
 import type { CanonicalizableObservation } from "../apps/runtime/src/services/canonicalize/types.ts";
 
@@ -562,5 +568,279 @@ describe("creator-post canonicalizer", () => {
       tipGoalAttribution: "unknown",
       tipMessageText: null,
     })).toThrow("post tip goal attribution is incoherent");
+  });
+});
+
+// ── WP-F6 — the widened post head ────────────────────────────────────────────
+//
+// Every fixture here is SYNTHETIC. The field NAMES and the presence/absence
+// pattern come from the 2026-08-19 capture (`GET /post?ids=` and
+// `/timelinenew`); the values do not.
+
+/** A post shaped like the one live `GET /post?ids=` response: every WP-F6 field
+ *  present, `wallIds` served as an empty array, one attachment. */
+function widePost(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "935652730221907968",
+    accountId: "737077689877278720",
+    content: "@LoraVie\n#viral #brunette #fit",
+    fypFlags: 0,
+    inReplyTo: null,
+    inReplyToRoot: null,
+    replyPermissionFlags: null,
+    createdAt: 1_754_136_000,
+    expiresAt: null,
+    attachments: [{ postId: "935652730221907968", pos: 0, contentType: 1, contentId: "media-1" }],
+    likeCount: 30,
+    replyCount: 1,
+    wallIds: [],
+    mediaLikeCount: 159,
+    totalTipAmount: 0,
+    attachmentTipAmount: 0,
+    accountMentions: [{ start: 0, end: 7, handle: "loravie", accountId: "737077689877278720" }],
+    ...overrides,
+  };
+}
+
+describe("WP-F6 the engagement/thread/placement material", () => {
+  it("carries every widened field into the event, typed", () => {
+    const [event] = canonicalizePostsObservation(observation({ posts: [widePost()] }));
+    expect(event!.schemaVersion).toBe(3);
+    expect(event!.data).toMatchObject({
+      likeCount: 30,
+      mediaLikeCount: 159,
+      replyCount: 1,
+      fypFlags: 0,
+      expiresAt: null,
+      inReplyToRef: null,
+      inReplyToRootRef: null,
+      // Served and EMPTY — a different fact from absent, and the arrays keep
+      // them apart.
+      wallRefs: [],
+      accountMentionRefs: ["737077689877278720"],
+    });
+    // The attachment id-relations, and only those three keys. `postId` is
+    // dropped as redundant with the row's own key.
+    expect(event!.data.attachmentRefs).toEqual([
+      { pos: 0, contentType: 1, contentId: "media-1" },
+    ]);
+  });
+
+  it("distinguishes an ABSENT field from a served empty one — absent is null, never 0", () => {
+    // The timeline shape: no `replyCount` on 6 of the 15 live posts, and no
+    // `wallIds` key on any of them.
+    const timelinePost = widePost();
+    delete (timelinePost as Record<string, unknown>).replyCount;
+    delete (timelinePost as Record<string, unknown>).wallIds;
+    delete (timelinePost as Record<string, unknown>).accountMentions;
+    delete (timelinePost as Record<string, unknown>).attachments;
+    const [event] = canonicalizePostsObservation(observation({ posts: [timelinePost] }));
+    expect(event!.data).toMatchObject({
+      likeCount: 30,
+      // "The provider did not say", NOT "nobody replied".
+      replyCount: null,
+      wallRefs: null,
+      accountMentionRefs: null,
+      // An absent `attachments` cannot prove the post has none — the same
+      // distinction `tipGoalLinked` already makes.
+      attachmentRefs: null,
+    });
+    // An explicit zero survives as a zero.
+    const [zeroed] = canonicalizePostsObservation(observation({
+      posts: [widePost({ likeCount: 0, replyCount: 0, mediaLikeCount: 0 })],
+    }));
+    expect(zeroed!.data).toMatchObject({ likeCount: 0, replyCount: 0, mediaLikeCount: 0 });
+  });
+
+  it("stores inReplyTo and inReplyToRoot separately", () => {
+    const [event] = canonicalizePostsObservation(observation({
+      posts: [widePost({ inReplyTo: "parent-1", inReplyToRoot: "root-1" })],
+    }));
+    // Equal in every observed reply; kept apart because the day a NESTED reply
+    // arrives the difference is what reconstructs the thread, and no re-walk
+    // recovers it retroactively.
+    expect(event!.data).toMatchObject({
+      inReplyToRef: "parent-1",
+      inReplyToRootRef: "root-1",
+    });
+  });
+
+  it("decodes expiresAt with the same clock as createdAt", () => {
+    const [event] = canonicalizePostsObservation(observation({
+      posts: [widePost({ expiresAt: 1_754_222_400 })],
+    }));
+    expect(event!.data.expiresAt).toBe("2025-08-03T12:00:00.000Z");
+  });
+
+  it("refuses the WHOLE page on a widened field it cannot read", () => {
+    for (
+      const drift of [
+        { likeCount: "30" },
+        { replyCount: -1 },
+        { fypFlags: 1.5 },
+        { wallIds: [{ id: "wall-1" }] },
+        { accountMentions: [{ handle: "loravie" }] },
+        { inReplyTo: "" },
+        { expiresAt: "not-a-date" },
+      ]
+    ) {
+      const payload = { posts: [widePost(drift)] };
+      // Journaled upstream, refused here: a drifted response stays UNSTAMPED
+      // and replayable rather than half-parsed into a serving table.
+      expect(canParsePostsObservation(observation(payload)), JSON.stringify(drift)).toBe(false);
+      expect(canonicalizePostsObservation(observation(payload))).toEqual([]);
+    }
+  });
+
+  it("puts no delivery URL anywhere near the event, whatever the attachment carries", () => {
+    const [event] = canonicalizePostsObservation(observation({
+      posts: [widePost({
+        attachments: [{
+          postId: "935652730221907968",
+          pos: 0,
+          contentType: 1,
+          contentId: "media-1",
+          // Not a shape observed on `attachments[]` today — the point is that a
+          // key nobody copies cannot reach a serving column tomorrow either.
+          location: "https://cdn.example/signed/blob.mp4",
+          variants: [{ location: "https://cdn.example/signed/720.mp4" }],
+        }],
+      })],
+    }));
+    expect(JSON.stringify(event!.data)).not.toContain("cdn.example");
+    expect(JSON.stringify(event!.data)).not.toContain("http");
+    expect(event!.data.attachmentRefs).toEqual([
+      { pos: 0, contentType: 1, contentId: "media-1" },
+    ]);
+  });
+
+  it("makes a moved counter a NEW material revision, not an in-place edit", () => {
+    const [first] = canonicalizePostsObservation(observation({ posts: [widePost()] }));
+    const [later] = canonicalizePostsObservation(
+      observation({ posts: [widePost({ likeCount: 31 })] }, { id: 72 }),
+    );
+    expect(first!.data.contentHash).not.toBe(later!.data.contentHash);
+    expect(first!.dedupKey).not.toBe(later!.dedupKey);
+    // A re-read that saw the SAME numbers hashes identically; only the
+    // observation lineage differs, which is what makes a re-sighting advance
+    // `last_observed_at` without minting a spurious revision.
+    const [unchanged] = canonicalizePostsObservation(
+      observation({ posts: [widePost()] }, { id: 73 }),
+    );
+    expect(unchanged!.data.contentHash).toBe(first!.data.contentHash);
+    expect(unchanged!.dedupKey).not.toBe(first!.dedupKey);
+  });
+
+  it("keeps every event payload far under the 64 KiB sanity ceiling", () => {
+    for (const draft of canonicalizePostsObservation(observation({ posts: [widePost()] }))) {
+      expect(Buffer.byteLength(JSON.stringify(draft.data))).toBeLessThan(64 * 1024);
+    }
+  });
+});
+
+describe("WP-F6 the hashtag grammar (A8)", () => {
+  it("derives tags from the CAPTION and nowhere else", () => {
+    const [event] = canonicalizePostsObservation(observation({ posts: [widePost()] }));
+    expect(event!.data.hashtags).toEqual(["viral", "brunette", "fit"]);
+    expect(event!.data.hashtagsNormalized).toEqual(["viral", "brunette", "fit"]);
+    expect(event!.data.hashtagParserVersion).toBe(HASHTAG_PARSER_VERSION);
+    // There is no structured tag field on any post object in the capture, so a
+    // caption with no `#` yields an EMPTY list rather than null.
+    const [untagged] = canonicalizePostsObservation(observation({
+      posts: [widePost({ content: "no tags here" })],
+    }));
+    expect(untagged!.data.hashtags).toEqual([]);
+    expect(untagged!.data.hashtagsNormalized).toEqual([]);
+  });
+
+  it("accepts Unicode letters, numbers, marks and underscore — not just \\w", () => {
+    expect(deriveHashtags("#кисуля #日本語 #tag_2026 #café").raw)
+      .toEqual(["кисуля", "日本語", "tag_2026", "café"]);
+    // Combining marks belong to the token: the decomposed spelling of `café`
+    // is the same tag typed a different way, and dropping the mark would cut
+    // the token in half.
+    expect(deriveHashtags("#cafe\u0301").raw).toEqual(["cafe\u0301"]);
+  });
+
+  it("tolerates ONE trailing + — defensively, and claims nothing about it", () => {
+    // SYNTHETIC. No tag with a trailing `+` appears anywhere in the HAR; the
+    // grammar tolerates the character so a caption that types it does not lose
+    // it, and this assertion must never be read as an observation (A8).
+    expect(deriveHashtags("#synthetic+").raw).toEqual(["synthetic+"]);
+    // One, not many, and not in the middle.
+    expect(deriveHashtags("#synthetic++").raw).toEqual(["synthetic+"]);
+    expect(deriveHashtags("#syn+thetic").raw).toEqual(["syn+"]);
+  });
+
+  it("NFKC-folds before lowercasing, and de-duplicates by the folded form", () => {
+    // Full-width and ASCII are one tag; folding after lowercasing would leave
+    // them apart.
+    expect(deriveHashtags("#\uFF26\uFF29\uFF34").normalized).toEqual(["fit"]);
+    const repeated = deriveHashtags("#Viral #viral #VIRAL");
+    // One tag named three times is one tag — and the two arrays stay the same
+    // length, which is the pairing the table's CHECK constraint enforces.
+    expect(repeated.raw).toEqual(["Viral"]);
+    expect(repeated.normalized).toEqual(["viral"]);
+    expect(repeated.raw.length).toBe(repeated.normalized.length);
+  });
+
+  it("stops the token at the first character outside the grammar", () => {
+    expect(deriveHashtags("#one,#two. #three! #f-our").raw)
+      .toEqual(["one", "two", "three", "f"]);
+    expect(deriveHashtags("no#lead").raw).toEqual(["lead"]);
+    expect(deriveHashtags("# ").raw).toEqual([]);
+  });
+
+  it("makes a grammar change a NEW revision rather than a silent rewrite", () => {
+    const material = {
+      platform: "fansly" as const,
+      observationId: 71,
+      postId: "post-42",
+      textPlain: "#viral",
+      publishedAt: new Date("2026-07-20T10:00:00Z"),
+      observedAt: RECEIVED_AT,
+      attachmentCount: 0,
+    };
+    // The parser version participates in the content hash, so re-deriving the
+    // tokens under a new grammar mints a new head instead of overwriting the
+    // lineage that produced the old ones.
+    const draft = buildPostObservedDraft(material);
+    expect(draft.data.hashtagParserVersion).toBe(HASHTAG_PARSER_VERSION);
+    const withoutTag = buildPostObservedDraft({ ...material, textPlain: "viral" });
+    expect(withoutTag.data.contentHash).not.toBe(draft.data.contentHash);
+  });
+});
+
+describe("WP-F6 §3.2b — post.observed is PROVIDER-dated, and the clamp proves it", () => {
+  it("clamps a pre-2024 publication to receipt time and preserves the raw instant", () => {
+    const publishedAt = new Date("2022-05-04T08:30:00.000Z");
+    expect(publishedAt.getTime()).toBeLessThan(OCCURRED_AT_CLAMP_MIN.getTime());
+    const [draft] = canonicalizePostsObservation(observation({
+      posts: [widePost({ createdAt: Math.floor(publishedAt.getTime() / 1000) })],
+    }));
+    // The DRAFT is provider-dated — this family is §3.2b's exception, and that
+    // is exactly why the driver's clamp can fire on it at all. A receipt-time
+    // family is inside the window by construction and can never produce a clamp
+    // marker; its presence here is the proof this lane is the other kind.
+    expect(draft!.occurredAt.toISOString()).toBe(publishedAt.toISOString());
+
+    const clamped = clampDraftOccurredAt(draft!, RECEIVED_AT, new Date("2026-08-02T12:00:00Z"));
+    expect(clamped.occurredAt.toISOString()).toBe(RECEIVED_AT.toISOString());
+    expect(clamped.data.occurredAtClamped).toBe(true);
+    expect(clamped.data.occurredAtRaw).toBe(publishedAt.toISOString());
+    // …and the TRUE publication date survives in `data`, which is what the
+    // projector dates the row from. The clamp moves where the event LANDS in
+    // the partitioned ledger; it never rewrites what the platform said.
+    expect(clamped.data.publishedAt).toBe(publishedAt.toISOString());
+    // The dedup key is built BEFORE the clamp, so a replay stays key-stable.
+    expect(clamped.dedupKey).toBe(draft!.dedupKey);
+  });
+
+  it("leaves a 2026 publication untouched", () => {
+    const [draft] = canonicalizePostsObservation(observation({ posts: [widePost()] }));
+    const passed = clampDraftOccurredAt(draft!, RECEIVED_AT, new Date("2026-08-02T12:00:00Z"));
+    expect(passed).toBe(draft);
+    expect(passed.data.occurredAtClamped).toBeUndefined();
+    expect(passed.data.occurredAtRaw).toBeUndefined();
   });
 });
