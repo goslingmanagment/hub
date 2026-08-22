@@ -41,6 +41,7 @@ import {
   countMediaStatBuckets,
   estimateMediaStatsCycle,
   fanslyMediaStatsChunk,
+  mediaStatsWindowIsEmpty,
   parseFanslyMediaStatsCursorState,
   servedMediaOfferRef,
   servedWindowCoversRequest,
@@ -112,6 +113,42 @@ function statsBody(options: {
         }],
       })),
       topFypTags: options.tags ?? [],
+      datasetMediaOfferId: options.mediaOfferRef,
+    },
+    aggregationData: { accountMedia: [], accountMediaBundles: [], tags: [] },
+  };
+}
+
+/**
+ * The window this route serves for ANY depth it has no data for: one datapoint,
+ * one stats row, every counter zero. Journaled verbatim like anything else; it
+ * is the FLOOR RULE that has to read it as empty, or the walk goes to 2006.
+ */
+function allZeroBody(options: {
+  mediaOfferRef: string;
+  afterMs: number;
+  beforeMs: number;
+  periodMs: number;
+}) {
+  return {
+    dataset: {
+      period: options.periodMs,
+      dateBefore: options.beforeMs,
+      dateAfter: options.afterMs,
+      datapointLimit: 100,
+      datapoints: [{
+        timestamp: options.afterMs,
+        stats: [{
+          type: 0,
+          views: 0,
+          previewViews: 0,
+          interactionTime: 0,
+          previewInteractionTime: 0,
+          uniqueViewers: 0,
+          previewUniqueViewers: 0,
+        }],
+      }],
+      topFypTags: [],
       datasetMediaOfferId: options.mediaOfferRef,
     },
     aggregationData: { accountMedia: [], accountMediaBundles: [], tags: [] },
@@ -414,7 +451,15 @@ describe("media_stats lane — the queue", () => {
     ]);
 
     const adapter = adapterStub();
-    await drain(page.id, adapter, telemetryStub());
+    // A dispatch with NO REQUEST CAPACITY. Seeding costs zero platform calls, so
+    // the queue lands whole and nothing is visited — which is what lets every
+    // row's tier be read below: a visit now stamps `last_visited_at`, and a
+    // visited item is not due again today.
+    await fanslyMediaStatsChunk(
+      appStub(adapter),
+      input(page.id, telemetryStub(), new SyncChunkBudget(0)),
+    );
+    expect(adapter.calls).toHaveLength(0);
 
     const queue = await listSubjectRefreshState(testDb.db, { pageId: page.id, plane: "media_stats" });
     expect(queue.map((row) => row.subjectRef).sort()).toEqual([
@@ -462,10 +507,11 @@ describe("media_stats lane — the queue", () => {
     }]);
 
     const adapter = adapterStub();
-    // Seed the queue first (zero platform calls), then mark, then walk.
+    // Seed the queue first (zero platform calls, and a budget that cannot spend
+    // one), then mark, then read the order.
     await fanslyMediaStatsChunk(
-      appStub(adapter, { fanslyMediaStatsDailyCallBudget: 1 }),
-      input(page.id, telemetryStub()),
+      appStub(adapter),
+      input(page.id, telemetryStub(), new SyncChunkBudget(0)),
     );
     await markSubjectRefreshDirty(testDb.db, {
       pageId: page.id,
@@ -666,10 +712,16 @@ describe("media_stats lane — the windows and their guards", () => {
     // not on the first call, but on the one after it. Then ONE halve, ONE retry,
     // then STOP. Not "retry tomorrow", not "derive from what came back" — both
     // of those are the loop.
-    const spans = adapter.calls.map((call) =>
-      Math.round((call.beforeDate.getTime() - call.afterDate.getTime()) / DAY_MS)
-    );
-    expect(spans).toEqual([31, 31, 15]);
+    const rows = await journaled(page.id);
+    const backfillSpans = rows
+      .filter((row) => row.request_params.mode === "backfill")
+      .map((row) =>
+        Math.round(
+          (Date.parse(String(row.request_params.beforeDate))
+            - Date.parse(String(row.request_params.afterDate))) / DAY_MS,
+        )
+      );
+    expect(backfillSpans).toEqual([31, 31, 15]);
     const stops = telemetry.anomalies.filter((anomaly) =>
       anomaly.code === "fansly_media_stats_window_not_honoured"
     );
@@ -678,7 +730,7 @@ describe("media_stats lane — the windows and their guards", () => {
 
     // Every response is still JOURNALED — the bytes are durable before anything
     // decides whether the walk has anywhere left to go.
-    expect(await journaled(page.id)).toHaveLength(3);
+    expect(rows.length).toBeGreaterThanOrEqual(3);
     // And the stop is DURABLE, so the next dispatch does not re-open the walk.
     const queue = await listSubjectRefreshState(testDb.db, {
       pageId: page.id,
@@ -688,6 +740,10 @@ describe("media_stats lane — the windows and their guards", () => {
       done: true,
       stopReason: "window_not_honoured",
     });
+    // AND THE ITEM COUNTS AS VISITED. It journaled three windows; leaving it in
+    // the never-visited band would hand it the budget again tomorrow, ahead of
+    // items nothing has ever looked at.
+    expect(queue[0]?.lastVisitedAt).not.toBeNull();
     // COVERAGE SEES IT. A single item's stopped walk must not flip the whole
     // page's surface claim — this row is an aggregate over thousands of items —
     // so the stop is COUNTED rather than promoted, where an operator reads it
@@ -733,79 +789,248 @@ describe("media_stats lane — the windows and their guards", () => {
     await drain(page.id, adapter, telemetry);
 
     // SPENT BEFORE ANY EGRESS. There is nothing to learn from issuing it.
-    expect(adapter.calls).toHaveLength(0);
+    const rows = await journaled(page.id);
+    expect(rows.filter((row) => row.request_params.mode === "backfill")).toHaveLength(0);
     expect(
       telemetry.anomalies.filter((anomaly) =>
         anomaly.code === "fansly_media_stats_window_not_honoured"
       )[0]?.details,
     ).toMatchObject({ trigger: "repeat_request" });
+    // The item's STEADY refresh still runs in the same visit: the backfill is
+    // over, and today's numbers are a different question from last year's.
+    expect(rows.filter((row) => row.request_params.mode === "steady")).toHaveLength(1);
   });
 
   it("walks the first-sight backfill back to the empty floor in 31-day windows", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();
+    // Published 400 days ago, traffic only in the last 100: the creation floor
+    // is nowhere near, so what stops this walk is the EMPTY-WINDOW rule.
     await seedMedia(page.id, [{
       ref: ref(440),
-      createdAtPlatform: new Date(NOW.getTime() - 100 * DAY_MS),
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
     }]);
 
-    // Traffic for 100 days, nothing before it. TWO consecutive all-empty
-    // windows are the floor: an item cannot have traffic before it was
-    // published, so unlike the account lane there is no long-idle case to probe
-    // past ([E10] does not apply here).
+    // Traffic for 100 days, and ALL-ZERO rows before it — which is what this
+    // route actually serves for any window back to 2006, and the reason a walk
+    // counting ROWS never found a floor at all.
     const floorMs = NOW.getTime() - 100 * DAY_MS;
     const adapter = adapterStub({
       body: (params) => {
         const servedBefore = params.beforeDate.getTime();
         const servedAfter = params.afterDate.getTime();
-        const empty = servedBefore <= floorMs;
+        if (servedBefore <= floorMs) {
+          return allZeroBody({
+            mediaOfferRef: params.mediaOfferId,
+            afterMs: servedAfter,
+            beforeMs: servedBefore,
+            periodMs: params.periodMs,
+          });
+        }
         return statsBody({
           mediaOfferRef: params.mediaOfferId,
           afterMs: servedAfter,
           beforeMs: servedBefore,
           periodMs: params.periodMs,
-          buckets: empty ? 0 : 2,
         });
       },
     });
     const telemetry = telemetryStub();
+    // TWO VISITS, a long-tail cycle apart. A visit walks four windows and then
+    // stamps the row, so the rest of this item's history arrives on its next
+    // turn rather than by holding the whole lane on one item.
     await drain(page.id, adapter, telemetry);
+    const afterFirstVisit = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    expect(afterFirstVisit[0]?.lastVisitedAt).not.toBeNull();
+    expect(afterFirstVisit[0]?.backfillCursor).toMatchObject({ done: false });
+    await drain(page.id, adapter, telemetry, { now: new Date(NOW.getTime() + 31 * DAY_MS) });
 
+    const rows = await journaled(page.id);
+    const backfill = rows.filter((row) => row.request_params.mode === "backfill");
     // 31-day windows, backwards, each derived from the RETURNED bounds with one
     // day of overlap: the provider snaps to its own bucket grid, and stepping
     // back from OUR bound would drift a bucket per window.
-    expect(adapter.calls.length).toBeGreaterThanOrEqual(5);
-    for (const call of adapter.calls) {
-      expect(call.periodMs).toBe(86_400_000);
-      expect(
-        Math.round((call.beforeDate.getTime() - call.afterDate.getTime()) / DAY_MS),
-      ).toBe(31);
+    expect(backfill.length).toBeGreaterThanOrEqual(5);
+    const bounds = backfill.map((row) => ({
+      afterMs: Date.parse(String(row.request_params.afterDate)),
+      beforeMs: Date.parse(String(row.request_params.beforeDate)),
+    }));
+    for (const window of bounds) {
+      expect(Math.round((window.beforeMs - window.afterMs) / DAY_MS)).toBe(31);
     }
-    for (let index = 1; index < adapter.calls.length; index += 1) {
-      // Strictly backwards, and OVERLAPPING by a day.
-      expect(adapter.calls[index]!.beforeDate.getTime())
-        .toBeLessThan(adapter.calls[index - 1]!.beforeDate.getTime());
-      // CONTIGUOUS, and overlapping by a day while the provider is still
-      // serving bounds. An EMPTY window serves none, so the walk steps back by
-      // its own span instead and the two windows meet exactly.
-      expect(adapter.calls[index]!.beforeDate.getTime())
-        .toBeGreaterThanOrEqual(adapter.calls[index - 1]!.afterDate.getTime());
+    for (let index = 1; index < bounds.length; index += 1) {
+      // Strictly backwards, and CONTIGUOUS: adjacent windows overlap by a day
+      // while the provider is still serving bounds, and meet exactly once an
+      // empty window serves none.
+      expect(bounds[index]!.beforeMs).toBeLessThan(bounds[index - 1]!.beforeMs);
+      expect(bounds[index]!.beforeMs).toBeGreaterThanOrEqual(bounds[index - 1]!.afterMs);
     }
 
     const queue = await listSubjectRefreshState(testDb.db, {
       pageId: page.id,
       plane: "media_stats",
     });
-    // The FLOOR, reached and recorded — the empty windows are journaled,
-    // because an empty window IS the floor evidence.
+    // The FLOOR, reached and NAMED — the empty windows are journaled, because
+    // an empty window IS the floor evidence.
     expect(queue[0]?.backfillCursor).toMatchObject({
       done: true,
       stopReason: "empty_window_streak",
+      floorBasis: "empty_window",
     });
     expect(telemetry.anomalies.filter((anomaly) =>
       anomaly.code === "fansly_media_stats_window_not_honoured"
     )).toHaveLength(0);
-    expect((await journaled(page.id)).length).toBe(adapter.calls.length);
+  });
+
+  it("stops at the item's own CREATION, and repairs a cursor already past it", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // THE EIGHT BURNED CURSORS. Production 2026-08-22: this route answers every
+    // window it is given, back to 2006, with one zero-valued row — so eight
+    // media items were each walked 240 windows into a decade that predates
+    // Fansly, 1 198 calls in a day. The item was published in 2025.
+    await seedMedia(page.id, [{
+      ref: ref(450),
+      createdAtPlatform: new Date("2025-06-01T00:00:00.000Z"),
+    }], {
+      queueCursor: {
+        version: 1,
+        nextBeforeMs: Date.UTC(2006, 3, 1),
+        emptyStreak: 0,
+        done: false,
+        floorAt: null,
+        stopReason: null,
+        floorBasis: null,
+        guard: {
+          spanDays: 31,
+          narrowed: false,
+          lastAfterMs: null,
+          lastBeforeMs: null,
+          lastObservationId: null,
+        },
+      },
+    });
+
+    const adapter = adapterStub();
+    await drain(page.id, adapter, telemetryStub());
+
+    const rows = await journaled(page.id);
+    // NOT ONE BACKFILL CALL. An item cannot have traffic before it existed, and
+    // the check runs before the request rather than after the response.
+    expect(rows.filter((row) => row.request_params.mode === "backfill")).toHaveLength(0);
+    const queue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    expect(queue[0]?.backfillCursor).toMatchObject({
+      done: true,
+      stopReason: "created_at_floor",
+      // A floor with a NAME: this one is not "the provider had nothing", it is
+      // "there was nothing to have".
+      floorBasis: "created_at",
+    });
+    // The item is not stuck: its steady refresh ran in the same visit.
+    expect(rows.filter((row) => row.request_params.mode === "steady")).toHaveLength(1);
+    expect(queue[0]?.lastVisitedAt).not.toBeNull();
+  });
+
+  it("never asks past creation even when the item has always had traffic", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // No `created_at_platform` at all — the age basis is FIRST SIGHT, the same
+    // `coalesce` the tier is computed from. A separate basis for walking and
+    // classing would let an item be called fresh and walked as ancient.
+    await seedMedia(page.id, [{
+      ref: ref(460),
+      createdAtPlatform: null,
+      firstObservedAt: new Date(NOW.getTime() - 40 * DAY_MS),
+    }]);
+
+    // A provider that ALWAYS has traffic, at every depth — the 2006 shape,
+    // minus the zeros. Only the creation floor can stop this walk.
+    const adapter = adapterStub();
+    await drain(page.id, adapter, telemetryStub());
+    await drain(page.id, adapter, telemetryStub(), { now: new Date(NOW.getTime() + 8 * DAY_MS) });
+
+    const rows = await journaled(page.id);
+    const backfill = rows.filter((row) => row.request_params.mode === "backfill");
+    const oldest = Math.min(
+      ...backfill.map((row) => Date.parse(String(row.request_params.beforeDate))),
+    );
+    // NOTHING older than first sight less one window span.
+    expect(oldest).toBeGreaterThanOrEqual(NOW.getTime() - 71 * DAY_MS);
+    const queue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    expect(queue[0]?.backfillCursor).toMatchObject({ done: true, floorBasis: "created_at" });
+  });
+
+  it("counts an ALL-ZERO window as empty — the floor rule the 2006 walk needed", () => {
+    // The exact production shape: one datapoint, one stats row, every counter
+    // zero. A rule reading "datapoints.length > 0" calls this traffic.
+    const zero = allZeroBody({
+      mediaOfferRef: ref(470),
+      afterMs: Date.UTC(2006, 2, 1),
+      beforeMs: Date.UTC(2006, 3, 1),
+      periodMs: 86_400_000,
+    });
+    expect(mediaStatsWindowIsEmpty(zero)).toBe(true);
+    // ANY non-zero counter is traffic — including a preview-only one, which is
+    // the case a `views`-only check would drop.
+    const preview = JSON.parse(JSON.stringify(zero)) as typeof zero;
+    (preview.dataset.datapoints[0]!.stats[0] as Record<string, unknown>).previewViews = 3;
+    expect(mediaStatsWindowIsEmpty(preview)).toBe(false);
+    // `type` is identity, not a counter.
+    const typed = JSON.parse(JSON.stringify(zero)) as typeof zero;
+    (typed.dataset.datapoints[0]!.stats[0] as Record<string, unknown>).type = 2;
+    expect(mediaStatsWindowIsEmpty(typed)).toBe(true);
+    // No datapoints at all is empty, as it always was.
+    expect(mediaStatsWindowIsEmpty({ dataset: { datapoints: [] } })).toBe(true);
+    // A window with real numbers is not.
+    expect(mediaStatsWindowIsEmpty(statsBody({
+      mediaOfferRef: ref(470),
+      afterMs: NOW.getTime() - 31 * DAY_MS,
+      beforeMs: NOW.getTime(),
+      periodMs: 86_400_000,
+    }))).toBe(false);
+  });
+
+  it("stamps last_visited_at on a BACKFILL visit, so the queue moves on", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // Six never-visited items, each with more history than one visit can walk.
+    // Under the old rule the newest of them took every call, every day, while
+    // the other five stayed unvisited — production had 1 198 calls on 8 items
+    // and 5 507 rows that had never been looked at.
+    await seedMedia(page.id, Array.from({ length: 6 }, (_unused, index) => ({
+      ref: ref(480 + index),
+      createdAtPlatform: new Date(NOW.getTime() - (300 + index) * DAY_MS),
+    })));
+
+    const adapter = adapterStub();
+    await drain(page.id, adapter, telemetryStub(), { maxChunks: 6 });
+
+    const queue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    const visited = queue.filter((row) => row.lastVisitedAt !== null);
+    // MORE THAN ONE ITEM GOT A LOOK, and every one that did was stamped even
+    // though none of their backfills finished.
+    expect(visited.length).toBeGreaterThan(1);
+    for (const row of visited) {
+      expect(row.backfillCursor).toMatchObject({ done: false });
+    }
+    const progress = await countMediaStatsRefreshProgress(testDb.db, {
+      pageId: page.id,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    expect(progress.neverVisited).toBeLessThan(6);
   });
 });
 
@@ -1016,8 +1241,8 @@ describe("media_stats — the cycle arithmetic (A16)", () => {
       { ref: ref(902), createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS) },
     ]);
     await fanslyMediaStatsChunk(
-      appStub(adapterStub(), { fanslyMediaStatsDailyCallBudget: 1 }),
-      input(page.id, telemetryStub()),
+      appStub(adapterStub()),
+      input(page.id, telemetryStub(), new SyncChunkBudget(0)),
     );
     // `refresh_class` is only ever the tier of the LAST visit, and it is
     // `dirty` for anything WP-F2 marked. Counting classes off it would report a
