@@ -120,11 +120,30 @@ describe("fan earnings parse side (Stage 16 v3)", () => {
       idempotencyKey: "ppv-run-1",
     });
     const third = await runCanonicalization(appStub());
-    expect(third.appended).toBe(1);
+    // THREE rows at sync-pull v5 (WP-F0(b)), and the count is the mechanism:
+    // the deliverable `message.ppv_unlocked`, the projection-only
+    // `media.order_observed` that now rides the same family, and the atomic
+    // checkpoint covering exactly that one hidden row (§3.2a). Before v5 this
+    // observation yielded the PPV event alone.
+    expect(third.appended).toBe(3);
     const ppv = await testDb.pool.query<{ type: string; dedup_key: string }>(
       "select type, dedup_key from domain_events where type = 'message.ppv_unlocked'",
     );
     expect(ppv.rows[0]!.dedup_key).toMatch(/^ppv:fan-e-1:media-9:/);
+    // The order-identity lane keys on the composite (the live shape carries no
+    // order id) and is NEVER summed with the PPV event above.
+    const orders = await testDb.pool.query<{ dedup_key: string }>(
+      "select dedup_key from domain_events where type = 'media.order_observed'",
+    );
+    expect(orders.rows).toHaveLength(1);
+    expect(orders.rows[0]!.dedup_key).toMatch(/^mediaorder:v1:\d+:media-9:fan-e-1:\d+$/);
+    // …and the checkpoint covers exactly the hidden row, so v2 replay sees a
+    // one-seq gap it can account for.
+    const checkpoint = await testDb.pool.query<{ data: { hiddenCount: number } }>(
+      "select data from domain_events where type = 'stream.projection_checkpoint'",
+    );
+    expect(checkpoint.rows).toHaveLength(1);
+    expect(checkpoint.rows[0]!.data.hiddenCount).toBe(1);
 
     // Rebuild reproduces identical projection rows.
     const rebuilt = await rebuildFanEarningsProjection(appStub(), { accountId: page.id });
