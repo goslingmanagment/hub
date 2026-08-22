@@ -95,6 +95,8 @@ const BACKFILL_PROBE_JUMP_DAYS = 365;
 const BACKFILL_JITTER_FRACTION = 0.3;
 /** Pages of mass-DM history the first-enable walk takes per daily sweep. */
 const BROADCAST_BACKFILL_PAGES_PER_SWEEP = 3;
+/** `recapstats` — the step that completes the sweep and stamps `lastSweepDay`. */
+const LAST_SWEEP_STEP = 10;
 
 export const FANSLY_STATS_COVERAGE_PLANES = {
   accountDaily: "stats_account_daily",
@@ -219,7 +221,11 @@ export function parseFanslyStatsCursorState(
     utcDay,
     callsToday: Math.max(0, asInt(state.callsToday, 0)),
     lastSweepDay: asNullableString(state.lastSweepDay),
-    stepIndex: Math.max(0, asInt(state.stepIndex, 0)),
+    // Clamped to the real step range. A stored value past the last step would
+    // otherwise wedge the lane: the sweep loop would fall straight through to
+    // its `break` and return "not satisfied, nothing done" on every dispatch,
+    // forever, with no call and no error to show for it.
+    stepIndex: Math.min(LAST_SWEEP_STEP, Math.max(0, asInt(state.stepIndex, 0))),
     earningsOffset: Math.max(0, asInt(state.earningsOffset, 0)),
     earningsPreviousOffset: typeof state.earningsPreviousOffset === "number"
       ? state.earningsPreviousOffset
@@ -981,7 +987,7 @@ export async function fanslyStatsSnapshotChunk(
       continue;
     }
 
-    if (state.stepIndex === 10) {
+    if (state.stepIndex === LAST_SWEEP_STEP) {
       const response = await app.adapter.getRecapStats(requestContext);
       await persist("recapstats", {}, response.raw);
       state = { ...state, stepIndex: 0, lastSweepDay: today };

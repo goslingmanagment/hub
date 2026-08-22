@@ -1087,7 +1087,7 @@ describe("sync integration", () => {
       // Poll briefly until every requested state row has applied.
       let stateRows = await listPageSyncStates(app.db, { pageId: page.id });
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (stateRows.length >= 11 && stateRows.every((row) => row.requestSeq === row.appliedSeq)) {
+        if (stateRows.length >= 12 && stateRows.every((row) => row.requestSeq === row.appliedSeq)) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1105,12 +1105,21 @@ describe("sync integration", () => {
         "fan_earnings",
         "purchase_history",
         "posts",
+        "stats_snapshot",
       ]);
       expect(stateRows.every((row) => row.requestSeq === row.appliedSeq)).toBe(true);
-      expect(stateRows.find((row) => row.stream === "posts")).toMatchObject({
-        status: "paused",
-        blockerKind: null,
-      });
+      // WP-F1 generalized the seed pause: `posts` was the only stream that
+      // seeded paused, and every OTHER stream seeds pending/recovery — so a
+      // gated-off lane without an entry in SEED_PAUSED_SYNC_STREAMS would seed
+      // one pending row per page, fleet-wide, on the deploy that ships it.
+      // Paused WITHOUT a blocker, which is what distinguishes it from a
+      // feature_gate pause.
+      for (const stream of ["posts", "stats_snapshot"]) {
+        expect(stateRows.find((row) => row.stream === stream), stream).toMatchObject({
+          status: "paused",
+          blockerKind: null,
+        });
+      }
 
       const subscribers = await getCurrentSubscribers(app.db, page.id);
       const followers = await getFollowersForPage(app.db, page.id);
