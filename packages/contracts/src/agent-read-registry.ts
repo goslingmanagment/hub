@@ -93,6 +93,12 @@ export const AGENT_CLAIM_CLASSES = {
       contextState: { required: ["transactions", "transaction_tip_contexts"] },
       capturedConversationRef: { required: ["transactions", "transaction_tip_contexts"] },
       tipMessageText: { required: ["transactions", "transaction_tip_contexts"] },
+      // ── endpoints-cover (WP-S1) ──────────────────────────────────────────
+      // What was OFFERED and what was BOUGHT inside a DM. It belongs to the
+      // messages class, not to money, because the fact it discloses is about a
+      // conversation — the scope-pairing rule (`read:messages` AND
+      // `read:money`) is the capability half of the same judgement.
+      messageMediaOffer: { required: ["message_media_offers"] },
     },
   },
   money: {
@@ -118,6 +124,14 @@ export const AGENT_CLAIM_CLASSES = {
       // Lifetime totals have their own rollup; reading `transactions` for a
       // window says nothing about a lifetime figure.
       lifetimeSpendMills: { required: ["fan_spend_lifetime"] },
+      // ── endpoints-cover (WP-S1) ──────────────────────────────────────────
+      // The platform's own earnings breakdown and the money-OUT head. Neither
+      // is the ledger: `revenue_mix_daily` is what Fansly says it paid, and
+      // `transactions` is what we recorded arriving. Reading one proves nothing
+      // about the other, which is exactly why they get separate planes.
+      revenueMixDay: { required: ["revenue_mix_daily"] },
+      payoutRequest: { required: ["page_payout_requests"] },
+      payoutMethod: { required: ["page_payout_methods"] },
     },
   },
   identity: {
@@ -189,6 +203,37 @@ export const AGENT_CLAIM_CLASSES = {
       postTipGoalRef: { required: ["creator_post_tips"] },
       postTipMessageText: { required: ["creator_post_tips"] },
       linkedPostCount: { required: ["creator_posts"] },
+      // ── endpoints-cover (WP-S1) ──────────────────────────────────────────
+      // One field per NEW physical store, each minting the plane name the
+      // matching dataset then declares. Without these, every one of those
+      // datasets would be stuck on the forbidden `readPlanes: []` — legal, and
+      // silently fatal to the capture-floor epistemics the coverage story
+      // depends on.
+      //
+      // They live in `content` rather than in a new class because the class
+      // vocabulary is CLOSED: a class is a disclosure boundary (money and
+      // messages gate capabilities), not a filing cabinet, and inventing an
+      // eighth to hold "statistics" would have added a boundary nobody
+      // enforces. `capture_coverage` is the one that reads oddly here and it
+      // stays: what a page's capture reaches back to is a fact ABOUT the
+      // content planes, and no other class answers for it at all.
+      trafficBucket: { required: ["stats_traffic_buckets"] },
+      topMediaWindow: { required: ["stats_top_media"] },
+      topTagWindow: { required: ["stats_top_tags"] },
+      mediaTagWindow: { required: ["fansly_media_tag_stats"] },
+      platformTagCounter: { required: ["platform_tag_daily"] },
+      mediaOffer: { required: ["creator_media"] },
+      vaultAlbum: { required: ["creator_vault_albums"] },
+      vaultAlbumMember: { required: ["creator_vault_album_members"] },
+      subscriptionTier: { required: ["page_subscription_tiers"] },
+      // Its OWN store, not the tier's: the tier head carries a base price and
+      // the plan carries the price, so reading tiers proves nothing about what
+      // plans exist.
+      subscriptionTierPlan: { required: ["page_subscription_tier_plans"] },
+      postComment: { required: ["post_comments"] },
+      postLike: { required: ["post_likes"] },
+      platformNotification: { required: ["platform_notifications"] },
+      captureCoverageRow: { required: ["capture_coverage"] },
     },
   },
 } as const satisfies Record<string, AgentClaimClassDefinition>;

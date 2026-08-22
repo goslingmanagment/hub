@@ -20,13 +20,21 @@ import { AppError } from "../apps/runtime/src/services/errors.ts";
 describe("agent read plane: the 9b payload allowlist is fail-closed", () => {
   it("admits exactly the reviewed list", () => {
     expect([...AGENT_OBSERVATION_PAYLOAD_ALLOWLIST].sort()).toEqual([
+      "account_stats",
       "dm_conversations",
       "dm_messages",
+      "earnings_monthlystats_snapshot",
+      "earnings_stats_snapshot",
       "earnings_transactions",
       "fan_earnings_monthly",
       "fan_earnings_stats",
+      "media_offer_stats",
+      "notifications",
       "purchase_history",
       "subscribers",
+      "subscription_tiers",
+      "tracking_links",
+      "vault_albums",
     ]);
   });
 
@@ -40,10 +48,40 @@ describe("agent read plane: the 9b payload allowlist is fail-closed", () => {
       "group_detail",
       "followers",
       "earnings_accounts",
+      // WP-S1 widened this allowlist by eight kinds and deliberately left this
+      // one out: `post_replies` bodies are ANOTHER ACCOUNT'S authored content
+      // (fans' reply prose plus their profile sidecar). The projection is
+      // served behind `read:messages` with an audit row; the raw journal body
+      // is not, because the projection is what erasure can reach.
+      "post_replies",
+      // The payout pair, for the same "named refusal" reason.
+      "payout_methods",
+      "payout_requests",
       "some.kind.invented.next.year",
       "desktop.guard_audit",
     ]) {
       expect(agentObservationPayloadAllowed(kind), kind).toBe(false);
+    }
+  });
+
+  it("the WP-S1 widening admits exactly the eight kinds it justified", () => {
+    // Each of these is a body of counters, codes, prices or ids — no message
+    // text, no fan-authored prose, no delivery address. `notifications` is the
+    // one whose safety lives elsewhere: its `accounts[]` sidecar is already
+    // [A20]-trimmed at CAPTURE, so widening that trim invalidates this line.
+    for (const kind of [
+      "account_stats",
+      "media_offer_stats",
+      "earnings_stats_snapshot",
+      "earnings_monthlystats_snapshot",
+      "tracking_links",
+      "subscription_tiers",
+      "vault_albums",
+      "notifications",
+    ]) {
+      expect(agentObservationPayloadAllowed(kind), kind).toBe(true);
+      // Still fail-closed on the error body of every one of them.
+      expect(agentObservationPayloadAllowed(`${kind}:failed`), kind).toBe(false);
     }
   });
 
