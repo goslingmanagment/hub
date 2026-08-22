@@ -231,6 +231,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 227 | Fansly content catalog (WP-F3) — the lane that measures M, and closes FEAT-002 | The `catalog` stream lands whole (0135 enum, 0136 tables): six fixed daily steps — `/vault/albumsnew`, `/uservault/albumsnew?accountId=`, `/subscriptions/tiers`, `/subscriptions/giftcodes`, `/message/automated`, `/account/walls` — then the vault media walk over `/media/vaultnew` per creator album, then the `/account/media?ids=` and `/account/media/bundle?ids=` batch hydrations, all on ONE 60-attempt daily cap that DEFERS to the next UTC day and never drops. **IT SHIPS BEFORE WP-F4 BECAUSE IT MEASURES M**, the count of unique media offers, and WP-F4's whole sizing (300 calls/page/day round-robin, long-tail cycle ≈ M/rate) rests on a number nobody had computed. **Σ `item_count` IS NOT M** — verified: 27 albums, Σ = 16 939, and the system albums type 38000 (7 574) and type 5000 (3 154) share one `lastItemId` because they are VIEWS over the same media. M is `count(distinct media_offer_ref)` over `creator_media`; the lane reports `uniqueMediaCount`, `vaultMemberUniqueCount` and `albumMembershipSum` side by side in its progress block, the last labelled non-unique everywhere it appears (**A16 item 1**). **THE `/media/vaultnew` QUERY FORM IS SETTLED, and it is the one thing that could have shipped this lane silently broken.** The 2026-08-22 probe sent `albumId=…&search=&before=&after=` for a 4 760-item album and got `{albumMedia: [], media: []}`; the app bundle's `getVaultAlbumMediaNewOrder` shows `before` and `after` are the LITERAL STRING `"0"` on the first page, `mediaType` is present-and-EMPTY when unfiltered, and page two carries `before = <last albumMedia row's own id>` (NOT its `mediaOfferId`, a different value that pages nowhere). **The guard stays anyway**: an empty FIRST page on an album the platform says is non-empty is an unhonoured request, not an empty vault — the sublane stops with `partial_provider_surface` plus ONE anomaly and never retries, because "this creator has no media" is the wrong answer to size a lane against and a walk that re-asks spends a day's cap proving it (WP-F1's lesson). **FEAT-002 CLOSES ON `plans[].price`, NEVER `tier.price`**: all five observed tiers carried `tier.price = 5 000` while plan prices ran 10 000 … **499 990**, so the tier head keeps `base_price_mills` under a name that cannot be misread and `page_subscription_tier_plans` is the queryable truth. `duration_days` reads **`billingCycle`** — the live payload has NO `plans[].duration` key at all; `duration` exists one level down on `promos[]`, which is exactly how that field name gets misread (the plan document says `duration`; the payload wins). **THE ROSTER EVENT is the family's one new idea.** Row events say what IS; nothing in them says what ISN'T, and the case that matters most — a listing that comes back EMPTY — produces no row events at all. So each FULL listing emits one `catalog.listing_observed` carrying its complete ref set, keyed per LOOK, and the projector reconciles in BOTH directions: mark the complement `missing_since`, clear the mark on everything the roster still names. `missing_since` is therefore a REPLAYED fact that survives truncate-and-replay, and nothing is ever deleted (DP 7). Keying it on the ref-set hash instead was built, tested and CORRECTED: a gift code revoked and reinstated unchanged hashes to the roster it had before it vanished, so the event dedupes and the row stays marked forever. **ALBUM MEMBERSHIP GETS NO ROSTER** — it arrives from a PAGED walk, and a roster from one page would claim the album holds only what that page showed. **NO MEDIA BYTES, NO DELIVERY URLS**: `/vault/albumsnew` and `/media/vaultnew` both embed raw `media[]` with `location`, `locations[]` and `variants[]`; the bodies are journaled verbatim and read by nothing, pinned on VALUES as well as columns. **SECONDS AND MILLISECONDS PER FIELD** — one response mixes both (`albums[].createdAt` and `albumContent[].createdAt` are ms while `accountMedia[].createdAt` is seconds), so each field is decoded by the helper for ITS unit and never by a shared guess. `original_price` is read by its SNAKE_CASE name amid camelCase keys. The automation `messageTemplate` is a JSON OBJECT in all seven live values; the March STRING shape keeps a tolerant branch with `parse_ok = false` and a NULL text, because an automation with no text and one we could not read must not look alike. Gift codes join WP-F1's `page_promo_links` as its second `link_kind`, so **both** rebuilds now scope their delete by kind — an unscoped one truncates rows only the other projector's ledger can restore. **The sublane-parking machine (`contract_drift`/`unsupported`/`next_probe_at`) is NOT built (A28-6)**: the probe answered the question it existed for, and all four March routes are live. Batch size is 100 ids — the app's own `splice(0, 100)`, read out of its bundle rather than guessed |
 | 228 | Fansly comment archive (WP-F5) — the lane [E1] had to authorise, and the POST that is never sent | The `post_replies` stream lands whole (0137 enum, 0138 `post_comments`): a walk over `GET /post/{postId}/replies` for the entire post back-catalogue, full bodies stored, on a 100-attempt daily cap that DEFERS to the next UTC day and never drops. **IT EXISTS ONLY BECAUSE [E1] PASSED.** Every observed reply GET in the 2026-08-19 capture was preceded ~40 ms by `POST /api/v1/postreply/verify` carrying the same post id (5/5), which made the whole package contingent: if that POST were a server-side precondition, the lane would have been CUT rather than built, because §1 excludes write-shaped calls to the platform. The probe issued the bare GET with no preceding POST and the comments came back (**A25**). So the kernel issues the bare GET and NEVER that POST — a test greps the adapter for the route's path and fails if the string appears anywhere in the file, which is why the path is not written out even in the docstring explaining its absence. **THE WALK QUEUE IS NOT A CURSOR.** There is no order in which a back-catalogue should be read once, so roots are rows in `subject_refresh_state` (`plane='post_replies'`, the second plane on the table WP-F2 built), seeded from `creator_posts` in bounded KEYSET batches on first enable and — for everything published afterwards — **in the SAME TRANSACTION as the `creator_posts` upsert**. That transaction is the load-bearing part: a post committed without its walk row is a post whose comments are never read, and nothing anywhere reports a problem — the lane stays healthy, the coverage row stays clean, and the archive is simply missing that post forever. Priority per chunk is (1) never-walked NEWEST FIRST — an archive that starts with the posts nobody remembers is useless for a year — (2) dirty, (3) round-robin re-walk at `fanslyRepliesRewalkCycleDays` (14). The Fansly-only condition lives in the INSERT's `WHERE`, not in TypeScript, so no new platform branch is added outside the adapter packages. **PAGINATION IS UNPROVEN, AND THE LANE SAYS SO IN STORAGE.** Five live responses carried 1, 1, 1, 1 and 4 replies; no cursor has ever been exercised. The first call is BARE, a page of >= 20 is suspiciously full, and only then is `?before=<last reply id>` attempted — the convention `/timelinenew`, `/message` and `/notifications` share, on a route whose replies come back descending by id. What the cursor DOES is then settled EMPIRICALLY, by comparing the page it returns against the page before it: identical rows mean the route ignored it (`single_page`, and no post is ever paged again), different rows mean it was honoured (`before`). The verdict is durable and announced by exactly ONE anomaly, ever. Until a mode is proven a full page marks its rows `possibly_truncated` and coverage reads `window_captured`, never complete — **and the projector is FORBIDDEN from marking anything `missing_since` from a truncated roster**, because a truncated page's complement is unknowable and guessing it would delete an archive one page at a time. The clear half still runs: a ref the page DID name is present in both worlds. The repeat-cursor guard stops a walk before egress rather than looping (the posts.ts law). **THE OBSERVATION CARRIES THE REQUEST, and it has to.** The post id lives in the request PATH, so the response that matters most — the empty one, "this post has no comments any more" — is a body with no way to say which post it is about. A parser reading the body alone could store comments and could never mark one deleted. The lane journals the verbatim (post-[A20]) body into `sync_raw_payloads.response_payload` as always and gives the OBSERVATION a `{walk, response}` envelope through `persistRawPayload`'s `observationPayload` seam — the mechanism `posts.ts` already uses for a response a future parser needs request context to replay. **EVENTS.** Family `fansly-comments` v1, `projectionOnly`, receipt-time (§3.2b, `createdAt` is SECONDS on this route). `post.comment_observed` per reply, dedup-keyed on the comment's CONTENT hash so an edit appends a new event and moves the head while the fortieth re-read of unchanged bytes appends nothing; `post.comment_list_observed` per walk — the ROSTER, carrying the full ref set, `count` and the truncation flag. The plan's field list named only `{parentPostRef, count}`; a count cannot identify a complement, so the ref set is carried, which is WP-F3's roster lesson applied verbatim (including the per-LOOK key: a comment deleted and restored UNCHANGED hashes to the roster it had before it vanished, so a set-hash key would dedupe the event and leave the row marked forever). **EMPTY-CONTENT REPLIES ARE STORED, not skipped** — one of the four replies in the 18.2 KB live response has `content: ""`, and dropping it would make the reply count disagree with the archive with no way to tell which is wrong. `inReplyTo` and `inReplyToRoot` are stored separately even though they were equal in every observed reply: the day a nested reply arrives, the difference is what reconstructs the thread, and no re-walk recovers it retroactively. **[A20] ON `accounts[]`.** WP-F9's shape probe found the inline account record is a FULL one — `lastSeenAt`, every counter, an avatar with signed CDN locations — and `lastSeenAt` moves every minute. On a lane that re-reads thousands of posts that is the difference between kilobytes a day and unbounded growth, so that array and ONLY that array goes through the 18-field allowlist; `posts`, `aggregatedPosts`, `accountMedia`, `tips`, `tipGoals`, `stories`, `polls` and every future key stay verbatim, and a body with no `accounts` key comes back byte-identical. **AUTHOR HYDRATION STAYS MANDATORY (A27-1)**: the sidecar was EMPTY in 2 of 5 live responses despite a comment existing, so one `/account?ids=` batch per chunk (<= 100 ids) journals under the EXISTING `account_lookup` kind — which no family claims, and which this package deliberately does NOT claim. Nothing parses it, so the "already looked up" set is capture state in the cursor rather than a projection-derived queue that would re-request the same hundred refs every day forever. **`post_comments.author_ref` is declared in `FAN_REF_ERASURE_COLUMNS` with its own exact fan-scope predicate**: it is a TEXT ref with no FK, invisible to the FK guard, and it is the fan-ref column whose under-erasure is most visible, because the row holds words the fan wrote. **THE WALK QUEUE SURVIVES A REBUILD**, pinned: `projection:rebuild fansly_comments` truncates `post_comments` and replays it, and `subject_refresh_state` comes back byte-identical — a rebuild that reset it would re-mark the whole back-catalogue never-walked and release a first-pass crawl for a repair that should cost zero platform calls. **THE CAP SHIPS AT 100 AND THE RAISE IS A SEPARATE ACT (A29, A16's ritual per-lane per [A19]).** At 100 attempts/page/UTC-day the biggest live page (lora-1, 1 318 roots) first-passes in ~14 days and the fleet's ~4 300 roots in ~43 page-days. The raise to **300/day** is one config flip with its own verification window, and its criteria are recorded here rather than remembered: (zero 429s) AND (a MEASURED `posts.length` p99 — the lane reports it in its progress block and logs `posts.length` per call at info, so the criterion is checkable without a bespoke query) AND (page proxy duty < 5 %) AND (DM/transaction lag unregressed). **400/day is the registry ceiling** and the config registry enforces it as a refusal rather than a note. **Holding at 100 because a criterion failed is a SUCCESS outcome of this package, not a failure.** **Rejected, and recorded so it is not re-proposed:** issuing the verify POST "because the browser does" (§1 excludes it and [E1] proved it unnecessary); marking a complement missing from a page that might be truncated; a roster keyed on its ref-set hash; a roster keyed per page of a multi-page walk (it would claim the post holds only what that page showed); claiming `account_lookup` for this family (registering a family for it stays a backlog item, visible and frozen by the ratchet); walk columns on `creator_posts` (an ordinary repair would wipe them); a `SYNC_DOMAIN_POLICY` membership (a flag-gated analytics lane must not degrade a page's block UX to "catching up"); and a declared dependency on `notifications` (the walk reads `creator_posts`; a notification is only ever a dirty SIGNAL) |
 | 229 | Fansly posts widening (WP-F6) — the counters the timeline was already serving | The EXISTING `posts` stream is widened rather than joined by a new one: migration 0139 adds fourteen columns to `creator_posts` (`like_count`, `media_like_count`, `reply_count`, `fyp_flags`, `expires_at`, `in_reply_to_ref`, `in_reply_to_root_ref`, `wall_refs`, `account_mention_refs`, the derived `hashtags`/`hashtags_normalized`/`hashtag_parser_version`, `attachment_refs`, `engagement_observed_at` + its index), `POSTS_CANONICALIZER_VERSION` goes 5 -> 6 and `post.observed` to schemaVersion 3. **EVERY ONE OF THESE FIELDS WAS ALREADY IN THE JOURNAL AND WAS BEING THROWN AWAY** — `/timelinenew` and `GET /post?ids=` have served `likeCount`, `mediaLikeCount`, `replyCount`, `fypFlags`, `expiresAt`, `inReplyTo`, `inReplyToRoot`, `wallIds`, `accountMentions` and `attachments` on the same post objects the lane journals verbatim, so the widening is a version bump plus a replay and costs ZERO platform calls to fill history. **ABSENT IS NULL, NEVER 0, and the payload makes it real**: `replyCount` was PRESENT on 9 and ABSENT on 6 of the 15 timeline posts in the 2026-08-19 capture, and `wallIds` does not appear on the timeline route at all while the batch read serves it as `[]` — a NOT NULL DEFAULT 0 would have recorded "nobody replied" for a post whose count the provider simply did not state, and no re-read distinguishes the two afterwards. **EVERY NEW FIELD ENTERS THE CONTENT HASH**, so a like count that MOVED is a new immutable revision and a new head rather than an in-place edit of the row that recorded the old one — which is the entire point of a refresh lane. **HASHTAGS ARE DERIVED FROM THE CAPTION AND NOTHING ELSE (A8)**: zero structured tag fields on all 60 HAR post objects; tag ids exist only in stats aggregation and the discovery feed. The grammar accepts Unicode letters, numbers and MARKS, `_`, and ONE defensive trailing `+`; the raw token, its NFKC-lowercased form and `HASHTAG_PARSER_VERSION` are stored as one fact in three paired parts (a CHECK enforces the pairing), NFKC folds BEFORE lowercasing so a full-width spelling lands on the ASCII tag, duplicates collapse by folded form, and the parser version participates in the content hash so a grammar change RE-MINTS rather than silently rewriting. **No design or doc may cite `#teen+` as observed — it does not appear in the HAR**; the tolerance is defensive and the fixture that exercises it is labelled synthetic. `attachment_refs` copies THREE KEYS BY NAME (`pos`, `contentType`, `contentId`) — an allowlist, not a redaction, so no delivery URL can reach a serving column whatever the platform starts embedding in `attachments[]`. **THE VERIFIED TRAP:** `POSTS_CANONICALIZER_VERSION` is embedded in the `post.tip_parse_rejected` dedup key, so the bump CHANGES that family's dedup identity — a re-parse of an already-rejected `post_tips` page appends one new parse-debt event under `parser:6` beside the `parser:5` one. It is projection-only debt and the rebuild absorbs it; it is recorded here because nothing else would have noticed. **`post.observed` STAYS PROVIDER-DATED** at `publishedAt` — §3.2b's standing exception, not a new choice — so its pre-2024 fixture asserts the CLAMP branch (`occurredAtClamped` + `occurredAtRaw` preserved, `occurred_at` fallen back to receipt time) while the projected row still holds the true publication date, and the v6 drain across history is covered by §3.2c(ii)'s target-month census, now pinned with a `post.observed` case beside the DM one. **DRAIN ARITHMETIC (production, 2026-08-22):** 1 619 `posts` observations, source `pull`, re-parsed at parse_version < 6; the sweep reads 200 rows per family per page and up to 20 pages per run, so the whole corpus drains in a single `events:replay --kind posts` (minutes) or two ordinary minutely runs. Each observation emits one `post.observed` per post in its page (live pages carry <= 15), an upper bound of ~24 000 appends, every one a NEW event because the dedup key embeds both the v3 content hash and the observation id — no v2 event is touched and no row is overwritten. Provider-dated, so the census applies: prod has every 2026 monthly plus the 2024/2025 yearlies attached, so no month is uncovered and no re-attach is needed. ZERO platform calls. **THE ENGAGEMENT REFRESH is a PHASE, not a stream.** The bounded timeline refresh walks back 14 days, so a post from last spring keeps whatever counters it had the week it was published; `GET /post?ids=<csv>` is the only shape that re-reads a back catalogue by id, and it returns the SAME envelope the timeline does, so it journals under the EXISTING `posts` kind with `{phase:"engagement", ids}` in the request params and the v6 family parses it with no new branch. It runs only once the timeline walk has COMPLETED for the request generation — the timeline is how this system learns a post exists; the refresh only updates numbers on posts it already has. **DECAY WITH THE TIER BOUNDARIES AS CONSTANTS**: fresh (<= 30 d) daily, mid (<= 180 d) weekly, long tail every 30 d round-robin by `last_visited_at ASC`. How engagement decays with a post's age is a property of the platform, not a knob; what is tunable is `fanslyPostEngagementDailyCallBudget` (40, the §6.1 ceiling), which decides how much of the decay the lane can afford. Due-ness is computed from `published_at` and `last_visited_at` against `now`, NEVER read from a stored `next_due_at` — the tier a post is in CHANGES as it ages, and a frozen due date would keep a post that crossed into `mid` on a daily cadence forever. Queue state is `subject_refresh_state` `plane='post_engagement'`, the table's THIRD plane, seeded in bounded keyset batches on first enable and — for everything published afterwards — in the SAME TRANSACTION as the `creator_posts` upsert, alongside WP-F5's `post_replies` row, from ONE statement whose Fansly predicate lives in SQL so no new platform branch appears outside the adapter packages. **`engagement_observed_at` IS DERIVED BY THE PROJECTOR** from the event's own `observedAt` whenever the event carried a counter, never stamped by the capture lane: a lane writing into this rebuildable projection would have it wiped by the next `projection:rebuild`, and the ordinary timeline sighting (which also carries `likeCount`) would not set it at all. It only ever moves forward. **A HEAD WHOSE `reply_count` MOVED MARKS THE WP-F5 WALK DIRTY** (`dirty_reason='reply_count_changed'`) in that same transaction — the only cheap evidence this system gets that a post's comments changed — and only on an EXISTING row, because a first sighting is already never-walked and marking it dirty would DEMOTE it out of the walk's top band. **THE CAP DEFERS, NEVER DROPS**: counted in HTTP ATTEMPTS (retries included) in the posts cursor and SEPARATELY from the timeline walk, which is not capped and must never be starved by a refresh phase; the response already fetched is journaled before the counter is consulted again. `fanslyPostEngagementRefreshEnabled` ships FALSE and with it off the posts lane behaves exactly as before, completion checkpoint included. ONE batch of at most 100 ids per dispatch — the size the app splices for every OTHER `?ids=` route it batches, since its own `getPosts` has no batching loop to read — then WP-F1's `fanslyBackfillContinuationDelayMs` +- 30 % jitter, because burst shape and not daily volume is the ban-risk surface. Only the posts the response NAMED count as refreshed; an id the provider dropped is a failure and is retried, since marking it visited would retire it from the never-refreshed band on the strength of a silence. **MEASURED SIZE, because §6.1's ~1 MB/day row predates the measurement:** the one live `GET /post?ids=` response is 29 375 B uncompressed / 10 232 B on the wire for ONE post, of which 22 357 B is the creator's own `accounts[0]` record (ONE per response whatever the batch size) and 6 287 B its `accountMedia` row. The live `/timelinenew` page gives the same shape at scale (222 726 B for 15 posts, the same `accounts[0]`, 186 119 B of `accountMedia` over 23 media), i.e. ~7-13 KB per post once its media travel with it, so a full 100-id batch is ~0.7-1.4 MB uncompressed / ~0.24-0.41 MB on the wire and 20 calls/day is ~14-28 MB/page/day — NOT the ~1 MB §6.1 books for this row, which must be re-derived. lora-1's steady state (~2 calls/day for 1 318 posts) is ~1.4-2.7 MB/day; its one-off first pass is 14 calls / ~10-19 MB; the cap of 40 bounds the lane at ~28-56 MB/page/day. **The `accounts[0]` sidecar carries `lastSeenAt` and is NOT trimmed** — deliberately, because the EXISTING timeline lane already journals the identical record on every page and trimming one and not the other would make two responses of the same kind un-comparable; it is recorded here as the known dedup-collapse cost of this kind rather than fixed inside a package that was not asked to change the timeline lane. **Rejected, and recorded so it is not re-proposed:** a new stream or a new page allowlist for the phase (it rides `posts`, which already has its own gating; a second allowlist is a switch nobody remembers to look at); tier boundaries as config keys; stamping `engagement_observed_at` from the capture lane; storing the caption's mention offsets or handles (the verbatim caption is in the journal and a handle changes); widening the `posts` or `post_monetization` agent datasets (out of scope — the columns are queryable and the read surface is a separate decision) |
+| 230 | Fansly payouts (WP-F7) — money OUT, and the mask that is ours | The `payouts` stream lands whole (0140 enum, 0141 `page_payout_methods` + `page_payout_requests`): TWO routes, `GET /payments/payoutmethods` and `GET /payments/payout/requests?before=&after=&limit=10&offset=N`, both read-only, both verified live 2026-08-20. **A28-8 cut it to two and A28-1 deleted the third:** `/account/wallets/earnings` is already the adapter's `getEarningsOverview` (so no wallet-balance route and NO `page_wallet_snapshots`), and the wallet earnings LEDGER `/account/wallets/earnings/transactions` is the EXISTING `transactions` stream — settled by matching seven transaction ids out of this lane's own capture HAR against rows the kernel already held, including the oldest row on page 242 of 242. **THE CREDENTIAL RULE, AND WHY THE MASK IS OURS:** `metadata` is a JSON-ENCODED STRING and the two live providers are asymmetric — provider 2 (**Paxum, NOT PayPal**; A22-4 refuted the spec from the app bundle) returns the creator's FULL email in plaintext while provider 30 (USDT) returns a `field1` the server already masked, so masking cannot be "trust the platform". `masked_label` is the ONLY value derived from `metadata` that leaves the family: **`<first char>***@<domain>`** for an address, **`****<four visible>`** for a wallet field, and migration 0141 CHECKs the shape (`@` ⇒ must match `^.\*\*\*@`) so a parser regression fails at the INSERT. **THE DECODE IS PROVIDER-KEYED, NOT SHAPE-KEYED** — a future provider 99 with its own `field0…fieldN` decodes to NOTHING (`unmapped:99`, null label, not one character emitted), where a shape-keyed decoder would have published whatever it chose to put in `field1`. Invalid JSON ⇒ `metadata_parse_ok = false`, null label, one diagnostic, string stays journal-only. Both kinds are restricted-class and refused by the agent read plane's fail-closed allowlist, and named on its denylist so the refusal carries its reason. **THE STATUS MAP IS ONE CODE DEEP:** all 83 observed rows carried `status = 8` = `Processed`; every other integer is projected as `(code, unmapped:<code>, unmapped)` and the handler raises ONE anomaly per unseen code per page, durably. **MILLS WITH NO SCALING** (the wire unit IS the kernel unit, proved against the UI on seven fields), instants 13-digit Unix ms decoded by an ms-ONLY helper, events receipt-time (§3.2b) so a 2025 payout is writable into a monthly-partitioned ledger. **THE WALK:** offset-paged at 10, `total = 83` back to 2025-06-23 ⇒ nine calls, and the daily head read at `offset=0` IS page one of it, so steady state is TWO calls/day against a cap of **20** (§6.1's corrected number). The repeat-request guard gained a second trigger because the first one could not fire: an offset always advances, so what catches a server IGNORING `offset` is a page whose first row is the first row of the page before it. Ships INERT — flag off, allowlist FAILS CLOSED. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -9194,3 +9195,191 @@ creator's own caption history to forget somebody else); and widening the `posts`
 or `post_monetization` agent datasets with the new columns (the read surface is a
 separate decision, and this package was scoped to storage, canonicalization,
 projection and capture).
+
+---
+
+**Decision #230 (2026-08-22, endpoints-cover WP-F7: the payouts lane, and the
+mask that has to be ours):**
+
+**TWO ROUTES, AND THE THIRD WAS A DUPLICATE OF SOMETHING THE KERNEL HAS RUN
+SINCE 2024.** The plan's WP-F7 named three routes and WP-F8 named a fourth. A28-8
+removed `/account/wallets/earnings` because it is already `getEarningsOverview`
+in the adapter — which also removes the `page_wallet_snapshots` table the plan
+specified, since this package now adds no wallet-balance read at all. A28-1
+removed the whole of WP-F8: `GET /account/wallets/earnings/transactions` is the
+EXISTING `transactions` stream, which calls it with `limit=100`, runs a
+full-history `offset_head_scan` backfill on page connect and then increments.
+That was settled by IDENTITY, not by resemblance — seven transaction ids taken
+out of this lane's own 2026-08-20 capture HAR, newest, middle, and the oldest row
+on page 242 of 242 (`754098287358779392`, 2025-03-06), all found in
+`transactions` under lora-3 with the same dates, types, amounts and
+`correlation_account_id`, against 49 004 journaled responses under the same
+`endpointTemplate`. A second lane on that route would have been a duplicate money
+ledger with its own parser and its own bugs, and its "one-off ~242-call backfill"
+would have re-walked a history the kernel already holds.
+
+So WP-F7 is: `GET /payments/payoutmethods` and
+`GET /payments/payout/requests?before=&after=&limit=10&offset=N`. Both GET, both
+loosely typed, both journaled before anything asserts on their shape.
+
+**THE CREDENTIAL RULE, AND WHY THE MASKING HAS TO BE OURS.** `metadata` arrives
+as a JSON-ENCODED STRING — a string containing JSON, decoded in the
+canonicalizer and never in SQL — and the two live providers are asymmetric in
+exactly the way that decides the design:
+
+- **providerId 2 is Paxum, not PayPal.** `reference/fansly_api_spec.md:1404` says
+  PayPal; A22-4 refuted it from the app bundle, which renders provider 2 with
+  `/assets/images/psps/paxum.webp` and names Paxum in its compliance copy. The
+  wrong processor's name on a money-out record is not a cosmetic error.
+- **Provider 2 returns the creator's FULL email address in plaintext.** Provider
+  30 (USDT) returns `field0…field10` where `field1` is ALREADY server-masked (38
+  `X` plus four visible characters).
+
+One provider hands us a credential and the other does not, so "mask what the
+platform masks" is not a rule — it is a coincidence that held for one of two
+providers. `masked_label` is therefore OURS, and it is the ONLY value derived
+from `metadata` that ever leaves this family:
+
+- an address becomes **`<first character>***@<domain>`** — one character of the
+  local part, a FIXED three asterisks (a length-preserving mask leaks the
+  length), and the whole domain, because the domain answers "which processor
+  account is this" for an operator and the local part is the half that
+  identifies a person;
+- a wallet field becomes **`****<the four visible characters>`**, which is what
+  the UI itself renders as "ending in …".
+
+**AND THE SHAPE IS ENFORCED BY THE DATABASE, not promised by the parser.**
+Migration 0141 CHECKs that a `masked_label` containing an `@` matches
+`^.\*\*\*@[^@]+$`. A full address cannot satisfy it, so a canonicalizer
+regression that let one through fails at the INSERT rather than at a code review.
+The integration suite asserts it from three directions: the table holds the mask
+(checked on VALUES, not on the column list, so a future column carrying the
+address would fail), the JOURNAL still holds the full address verbatim, and a
+direct INSERT of a full address is rejected.
+
+**THE DECODE IS PROVIDER-KEYED, NOT SHAPE-KEYED, and that is the whole defence
+against the provider nobody has met yet.** A future provider 99 with its own
+`field0…fieldN` wallet payload decodes to NOTHING: no branch matches it,
+`masked_label` is null, `provider_label` is `unmapped:99`, and not one character
+of its metadata enters an event or a projection. A shape-keyed decoder — "looks
+like fields, mask `field1`" — would have published whatever that provider chose
+to end `field1` with, and would have had no opinion at all about a recovery
+phrase in `field3`. The adversarial fixture carries exactly that shape.
+
+`metadata` that is not valid JSON lands the row with `metadata_parse_ok = false`,
+a null label and one diagnostic; the unreadable string stays in the journal. The
+row is still written, because a method we could not read and a method with
+nothing to read are different facts and only that flag tells them apart.
+
+**CAPTURE-FIRST IS NOT SUSPENDED FOR CREDENTIALS.** The raw body is journaled
+verbatim and kept 100 years under DP 7. That is deliberate: the mask is a
+PROJECTION rule, and an over-eager scrubber at the journal would have destroyed
+the only copy of the fact a rebuild replays from. What is closed instead is the
+serving side — neither `payout_methods` nor `payout_requests` is on
+`AGENT_OBSERVATION_PAYLOAD_ALLOWLIST`, which is an ALLOWLIST and fails closed, so
+absence IS the enforcement. Both are also named on the DENYLIST with their
+reason, so a future widening has to delete a sentence rather than add a word, and
+`tests/fansly-payouts-restricted.test.ts` pins the absence — an absence nothing
+checks is an absence somebody deletes.
+
+**THE STATUS MAP IS ONE CODE DEEP AND SAYS SO.** All 83 payout requests on the
+walked page carried `status = 8`, whose UI label is `Processed`. Every other
+payout status is unknown. So `8` is never treated as "the success code" in any
+conditional: the projection stores `(status_code, status_label,
+status_confidence)` together, an unknown code becomes `unmapped:<code>` and
+`unmapped`, and the capture handler raises ONE
+`fansly_payout_status_unknown` anomaly per unseen code per page, remembered
+durably in the cursor so the next day's sweep is silent. **The row is still
+projected** — dropping the codes we cannot name would make the history quietly
+agree with itself and disagree with the platform. A payout that failed, was
+cancelled or was reversed reported as "Processed" is money the agency believes
+arrived. (A22-3 names five values for the WALLET status enum; that is a different
+enum on a different route, and importing it here would be exactly the guess this
+rule forbids.)
+
+Payout method `type` (1), `flags` (0) and `status` (3) had NO rendered label
+anywhere in the walked UI, so they stay RAW INTEGERS and are never given invented
+names. Provider labels are read-time: the integer is what is stored.
+
+**MONEY IS MILLS AND NOTHING SCALES.** `amount` is already mills on the wire —
+the same unit the kernel uses — proved against the rendered UI on seven
+independent fields ($131 = 131 000, `pendingBalance` 2 102 632 = $2 102.63). The
+value travels as a decimal string through `millsString` → `millsFromInteger`, the
+column is `bigint`, and a negative or fractional amount is refused rather than
+rounded: a plausible-looking rounded number is worse than an honest null, because
+it can be summed.
+
+**TIME.** `createdAt` and `updatedAt` are 13-digit Unix ms, decoded by an
+ms-ONLY helper rather than the seconds-or-ms heuristic the other Fansly families
+need — this family has no seconds field anywhere, and a heuristic that could be
+wrong will be. Every event is RECEIPT-TIME (§3.2b): `occurredAt` is the
+observation's `receivedAt` and the provider instant is a typed field in `data`.
+That is load-bearing here rather than ceremonial — the walked history reaches back
+to 2025-06-23, `domain_events` is monthly-partitioned, and a provider-dated draft
+would fail `ExecFindPartition` (23514) forever. A pre-2024 fixture asserts the
+event carries no clamp marker while the projection keeps the true date.
+
+**THE WALK, AND THE NINE CALLS.** `/payments/payout/requests` is OFFSET-paged at
+10: `total = 83`, oldest 2025-06-23, nine pages walked live. `before` and `after`
+are sent PRESENT AND EMPTY, exactly as the app sends them on all nine observed
+calls — an omitted parameter is a different request, and `/media/vaultnew`
+already taught this initiative that a guessed cursor form returns an empty page
+for a 4 760-item album, indistinguishable from an exhausted one. Whether
+`limit > 10` is honoured on THIS route has never been measured (the one
+authorized probe answered it for `/earnings/transactions`, a different route), so
+10 is assumed rather than believed.
+
+The daily head read at `offset=0` IS page one of the walk on the day the lane is
+enabled, which is what makes the whole history NINE request calls and not ten.
+After that the walk is done and the lane costs exactly TWO calls a day: one
+method listing, one head page. The cap is **20 attempts/page/UTC-day** — §6.1's
+corrected number, which was 8 before the ledger was believed to ride this lane
+and stays 20 after the ledger turned out to be a duplicate, because 20 is what
+lets the nine-call walk finish on the day the gate opens. It DEFERS to the next
+UTC day and never drops a response already fetched.
+
+**THE REPEAT-REQUEST GUARD GAINED A SECOND TRIGGER, BECAUSE THE FIRST ONE COULD
+NOT FIRE.** The plan specifies "same offset twice ⇒ stop + anomaly". On an offset
+walk the offset ALWAYS advances by construction, so that check can only catch
+corrupted cursor state — which is real (a crash mid-save produces it) but is not
+the failure this route can have. A server that IGNORES `offset` and serves page
+one forever would have walked to the page cap, spending the day's budget
+re-reading the same ten rows, with the guard watching an integer that could never
+repeat. So the guard keeps the offset check (spent before any egress) and adds
+the one that answers the same question from the other end: **a page whose FIRST
+ROW is the first row of the page before it.** Either trigger stops the walk with
+one anomaly, and the page that proved it is still journaled — it is evidence
+about the provider, and a guard that dropped it would leave nothing to diagnose.
+This was found by writing the test that was supposed to prove the guard worked.
+
+**THE ROSTER, AND WHAT DOES NOT GET ONE.** The method listing is a FULL array, so
+it emits `payout.method_list_observed` per LOOK — keyed on the observation id,
+not on the ref set, because a method removed and re-added UNCHANGED hashes to the
+roster it had before it vanished, so a set-keyed event would dedupe and the row
+would stay marked `missing_since` forever while the platform served it again
+(the correction WP-F3's projection test found, inherited here). The projector
+applies it in BOTH directions: mark the complement, clear the mark on everything
+the set still names. Payout REQUESTS get no roster: they arrive from an
+offset-paged walk, and a roster built from one page of ten would mark the other
+seventy-three missing while the next page un-marked them.
+
+**NO FAN REFS, AND THAT IS A PROPERTY OF THE DATA.** Both tables are page-scope —
+these are the CREATOR's own payouts. `method_ref` and `payout_ref` are the
+platform's own ids for the page's own rows, so no column here is fan-ref-shaped
+and the §9.3 erasure column ratchet has nothing to bind to. That is not an
+exemption and no justification entry was added.
+
+**Rejected, and recorded so it is not re-proposed:** a wallet-balance route or a
+`page_wallet_snapshots` table (A28-8 — `/account/wallets/earnings` is already
+`getEarningsOverview`); a second reader of
+`/account/wallets/earnings/transactions` (A28-1 — it is the `transactions`
+stream, verified by id); a shape-keyed metadata decoder (it publishes an unknown
+provider's payload); scrubbing the credential at the journal (it destroys the
+only copy of the fact, and the mask can be replayed while the fact cannot);
+importing A22-3's five-value wallet status enum onto payout `status` (a different
+enum on a different route); naming payout-method `type`/`flags`/`status` (no UI
+label was ever rendered for them); a `SYNC_DOMAIN_POLICY` membership (a
+flag-gated lane must not degrade a page's block-health UX to "catching up" while
+its gate is shut — `domain: "financials"` is a label, not a membership); and a
+`missing_since` column on `page_payout_requests` (a payout that happened does not
+un-happen).
