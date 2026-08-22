@@ -3558,6 +3558,39 @@ export const creatorPosts = pgTable(
     tipGoalTargetMills: bigint("tip_goal_target_mills", { mode: "bigint" }),
     tipGoalCurrentMills: bigint("tip_goal_current_mills", { mode: "bigint" }),
     tipGoalAmountsHidden: boolean("tip_goal_amounts_hidden"),
+    // ── WP-F6 (migration 0139): the widened post head ───────────────────────
+    /** Engagement counters as served. ABSENT IS NULL, NEVER 0 — `replyCount`
+     * was absent on 6 of 15 timeline posts in the 2026-08-19 capture. */
+    likeCount: bigint("like_count", { mode: "bigint" }),
+    /** Likes on the post's ATTACHED MEDIA — a different number from
+     * `likeCount` (30 vs 159 on the one post read through `GET /post?ids=`). */
+    mediaLikeCount: bigint("media_like_count", { mode: "bigint" }),
+    replyCount: bigint("reply_count", { mode: "bigint" }),
+    /** The raw FYP bitfield; no label table exists and inventing one would
+     * repeat A22-2. */
+    fypFlags: integer("fyp_flags"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    /** Thread position, kept apart even though both were null on every observed
+     * creator post: the day a reply-post arrives the difference is the thread. */
+    inReplyToRef: text("in_reply_to_ref"),
+    inReplyToRootRef: text("in_reply_to_root_ref"),
+    /** NULL = the response did not carry the field; `[]` = it carried it empty. */
+    wallRefs: text("wall_refs").array(),
+    /** Caption mentions — CREATOR refs, not fan refs (§9.3 does not reach it). */
+    accountMentionRefs: text("account_mention_refs").array(),
+    /** DERIVED from `textPlain` only (A8). Raw token, NFKC-lowercased form and
+     * the parser version that produced both — one fact in three paired parts. */
+    hashtags: text("hashtags").array(),
+    hashtagsNormalized: text("hashtags_normalized").array(),
+    hashtagParserVersion: integer("hashtag_parser_version"),
+    /** The attachments' id-relations only: `{pos, contentType, contentId}`.
+     * No URL, no CDN path — those stay in the raw journal. */
+    attachmentRefs: jsonbSafe("attachment_refs").$type<
+      Array<{ pos: number | null; contentType: number | null; contentId: string | null }>
+    >(),
+    /** When the counters were last observed. Written by the projector from the
+     * event's own `observedAt`, so a rebuild reproduces it. */
+    engagementObservedAt: timestamp("engagement_observed_at", { withTimezone: true }),
     sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
     sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
     sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
@@ -3637,6 +3670,44 @@ export const creatorPosts = pgTable(
       table.accountId,
       table.lastObservedAt.desc(),
       table.id.desc(),
+    ),
+    // ── WP-F6 (migration 0139) ──────────────────────────────────────────────
+    engagementCountsCheck: check(
+      "creator_posts_engagement_counts_check",
+      sql`(${table.likeCount} is null or ${table.likeCount} >= 0)
+        and (${table.mediaLikeCount} is null or ${table.mediaLikeCount} >= 0)
+        and (${table.replyCount} is null or ${table.replyCount} >= 0)
+        and (${table.fypFlags} is null or ${table.fypFlags} >= 0)`,
+    ),
+    threadRefsCheck: check(
+      "creator_posts_thread_refs_check",
+      sql`(${table.inReplyToRef} is null or length(${table.inReplyToRef}) > 0)
+        and (${table.inReplyToRootRef} is null or length(${table.inReplyToRootRef}) > 0)`,
+    ),
+    refArraysCheck: check(
+      "creator_posts_ref_arrays_check",
+      sql`(${table.wallRefs} is null or array_position(${table.wallRefs}, null) is null)
+        and (
+          ${table.accountMentionRefs} is null
+          or array_position(${table.accountMentionRefs}, null) is null
+        )
+        and (${table.hashtags} is null or array_position(${table.hashtags}, null) is null)
+        and (
+          ${table.hashtagsNormalized} is null
+          or array_position(${table.hashtagsNormalized}, null) is null
+        )`,
+    ),
+    hashtagPairingCheck: check(
+      "creator_posts_hashtag_pairing_check",
+      sql`(${table.hashtags} is null) = (${table.hashtagsNormalized} is null)
+        and (${table.hashtags} is null) = (${table.hashtagParserVersion} is null)
+        and (
+          ${table.hashtags} is null
+          or cardinality(${table.hashtags}) = cardinality(${table.hashtagsNormalized})
+        )`,
+    ),
+    engagementObservedIdx: index("creator_posts_engagement_observed_idx").on(
+      table.engagementObservedAt,
     ),
   }),
 );
