@@ -387,18 +387,39 @@ export class FanslyAdapter {
    * top-N planes, and the aggregation sidecars (media, bundles, tags, offer
    * locations).
    *
-   * `datapointLimit` came back 100 — a window may CARRY 100 buckets, which is
-   * not the same as the route honouring a 100-day one, and on prod (2026-08-22)
-   * it did not: a 100-day request was answered with the DEFAULT trailing 31 days.
-   * The backfill therefore walks 31-day windows, the span the HAR proves is
-   * honoured. `year`/`month` are the named-month form the UI uses;
-   * 0/0 means "use beforeDate/afterDate", which is the only form this lane ever
-   * sends — the UI exposing three months back is a UI limit, not the API's.
+   * TWO FORMS, and the difference between them is where all this route's history
+   * lives:
+   *
+   *   - `year = 0, month = 0` — the server reads `beforeDate`/`afterDate`, and
+   *     it honours them ONLY INSIDE ITS OWN TRAILING WINDOW. Production
+   *     2026-08-22 (lora-2) asked for `afterDate 2026-06-21 / beforeDate
+   *     2026-07-22` and was served `dateAfter 2026-07-21 / dateBefore
+   *     2026-08-21` — the trailing 31 days, 200 and all; halving the span to 15
+   *     changed nothing. `datapointLimit: 100` was never the constraint.
+   *   - `year`/`month` NON-ZERO — the server resolves the calendar month itself.
+   *     This is the UI's "Jul / Jun / May 2026" preset, and the app sends the
+   *     trailing bounds ALONGSIDE it unchanged: `beforeDate = now`,
+   *     `afterDate = now − 30 d`, `period = 86 400 000` (bundle
+   *     `main.pretty.js` :280600 and :196337). The bounds ride along ignored.
+   *
+   * So the caller supplies the bounds either way and adds `year`/`month` when it
+   * wants a month; this method sends exactly what the client sends and nothing
+   * clever of its own.
    */
   async getAccountStats(
     context: FanslyRequestContext,
-    params: { beforeDate: Date; afterDate: Date; periodMs: number },
+    params: {
+      beforeDate: Date;
+      afterDate: Date;
+      periodMs: number;
+      /** Calendar year of the named-month form; 0 (the default) = use the bounds. */
+      year?: number;
+      /** 1–12 for the named-month form; 0 (the default) = use the bounds. */
+      month?: number;
+    },
   ): Promise<{ items: unknown; raw: unknown }> {
+    const year = params.year ?? 0;
+    const month = params.month ?? 0;
     const response = await this.request<unknown>(context, "/it/amoie/stats", {
       operation: "account_stats",
       endpointTemplate: "/it/amoie/stats",
@@ -407,13 +428,15 @@ export class FanslyAdapter {
         beforeDate: String(params.beforeDate.getTime()),
         afterDate: String(params.afterDate.getTime()),
         period: String(params.periodMs),
-        year: "0",
-        month: "0",
+        year: String(year),
+        month: String(month),
       },
       requestShape: {
         beforeDate: params.beforeDate.toISOString(),
         afterDate: params.afterDate.toISOString(),
         periodMs: params.periodMs,
+        year,
+        month,
       },
       summarizeResponse: summarizeUnknownResponse,
     });

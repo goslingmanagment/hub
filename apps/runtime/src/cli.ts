@@ -1721,7 +1721,9 @@ export function buildProgram() {
     .command("fansly:endpoint-probe")
     .description(
       "Liveness probe for the endpoints-cover initiative: fires ONE read-only GET per WP-F9 "
-        + "(`dm_commerce`) route plus the [E1] bare `/post/{id}/replies`, through the page's own "
+        + "(`dm_commerce`) route, the [E1] bare `/post/{id}/replies`, the WP-F3 catalog routes "
+        + "and [F1]'s `/it/amoie/stats` MONTH form (year/month, two months back — it prints the "
+        + "served window so one run says whether the month was honoured), through the page's own "
         + "proxy. Answers 'does the server serve this to us at all' BEFORE any capture machinery "
         + "is designed around it. Writes nothing to Fansly and nothing to Postgres beyond ordinary "
         + "sync telemetry. Never issues `POST /postreply/verify` — doing so would destroy the only "

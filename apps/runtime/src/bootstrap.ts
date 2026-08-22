@@ -106,9 +106,18 @@ export type AdapterLike = ProviderAdapter<
   // WP-F1: the `stats_snapshot` lane. Loosely typed in and out on purpose —
   // the handler journals before it asserts, so a typed parse here would refuse
   // bytes DP 7 requires us to keep.
+  // `year`/`month` are the named-month form (1–12); 0/0 — the default — means
+  // "read the bounds". The bounds are honoured only inside the route's own
+  // trailing window, so every window OLDER than that is asked for by month.
   getAccountStats(
     context: FanslyRequestContext,
-    params: { beforeDate: Date; afterDate: Date; periodMs: number },
+    params: {
+      beforeDate: Date;
+      afterDate: Date;
+      periodMs: number;
+      year?: number;
+      month?: number;
+    },
   ): Promise<{ items: unknown; raw: unknown }>;
   getMediaOfferStats(
     context: FanslyRequestContext,
