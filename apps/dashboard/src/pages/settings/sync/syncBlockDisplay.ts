@@ -113,7 +113,9 @@ const STREAM_LABELS: Record<string, string> = {
   notifications: "notifications",
   catalog: "content catalog",
   post_replies: "post comments",
-  payouts: "payouts",
+  // The fallback would render this "payouts", which reads like a balance
+  // rather than the thing the lane actually captures.
+  payouts: "payout history",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {
