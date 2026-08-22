@@ -1110,6 +1110,7 @@ describe("sync integration", () => {
         "catalog",
         "post_replies",
         "payouts",
+        "media_stats",
       ]);
       expect(stateRows.every((row) => row.requestSeq === row.appliedSeq)).toBe(true);
       // WP-F1 generalized the seed pause: `posts` was the only stream that
@@ -1126,6 +1127,7 @@ describe("sync integration", () => {
           "catalog",
           "post_replies",
           "payouts",
+          "media_stats",
         ]
       ) {
         expect(stateRows.find((row) => row.stream === stream), stream).toMatchObject({

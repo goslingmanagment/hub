@@ -152,7 +152,12 @@ describe("LIVE_CONFIG_KEYS", () => {
     // WP-F5 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
     // per-lane daily call budget and the re-walk cycle, which is live because
     // it re-aims a running first pass without a deploy;
-    // WP-F7 added the three `payouts` keys on the WP-F3 template.
-    expect(LIVE_CONFIG_KEYS.size).toBe(56);
+    // WP-F7 added the three `payouts` keys on the WP-F3 template;
+    // WP-F4 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
+    // per-lane daily call budget (the ONE number a cap-raise step moves, and
+    // the whole request-count enforcement on the highest-volume lane in the
+    // system) and the long-tail cycle, live because it re-aims a running
+    // round-robin without a deploy.
+    expect(LIVE_CONFIG_KEYS.size).toBe(60);
   });
 });

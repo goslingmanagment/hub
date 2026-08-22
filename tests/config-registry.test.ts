@@ -114,6 +114,15 @@ describe("config registry", () => {
     "fanslyPayoutsSyncEnabled",
     "fanslyPayoutsPageAllowlist",
     "fanslyPayoutsDailyCallBudget",
+    // WP-F4 per-media statistics. FOUR keys: the ramp flag, its FAIL-CLOSED
+    // page allowlist, the per-lane daily call budget — the one number a
+    // cap-raise step moves, and the only request-count enforcement this lane
+    // has — and the long-tail cycle, which A6 asks explicitly to be a tunable.
+    // The three age-class boundaries are constants and are NOT here.
+    "fanslyMediaStatsSyncEnabled",
+    "fanslyMediaStatsPageAllowlist",
+    "fanslyMediaStatsDailyCallBudget",
+    "fanslyMediaStatsLongTailCycleDays",
     // WP-F6 engagement refresh on the EXISTING posts stream. Live for the same
     // reason as every other lane gate: the phase must be stoppable, and its cap
     // re-sizable, without a deploy — and without touching the timeline capture

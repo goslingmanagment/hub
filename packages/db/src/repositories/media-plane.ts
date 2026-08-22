@@ -83,7 +83,55 @@ export interface UpsertCreatorMediaInput {
   sourceAccountSeq: number;
 }
 
+/**
+ * The media head, AND — in the SAME TRANSACTION — the WP-F4 per-media
+ * statistics queue row for it.
+ *
+ * Why the two writes are one transaction. The queue is capture-plane
+ * operational state (§3.4) keyed on the media offer ref, and its whole contract
+ * is "every media this system knows about has a refresh row". A media row
+ * committed without its queue row is a media item the per-media lane will never
+ * look at, and nothing downstream would notice: its traffic history would simply
+ * be missing forever, with a healthy lane and a clean coverage row. Seeding on a
+ * timer instead leaves the same hole for however long the timer is — and the
+ * seeding sweep is itself bounded by a daily call budget, so "however long" can
+ * be days. It is exactly the argument WP-F5 made for `creator_posts`, and it is
+ * why WP-F4's own first-enable seeding only has to run ONCE.
+ *
+ * The queue insert is `ON CONFLICT DO NOTHING` and runs on every upsert, not
+ * only the applied ones: the head upsert is guarded (a replayed older capture
+ * writes nothing), and a media item whose head did not move still needs its
+ * queue row to exist. It is a no-op the second time and every time after —
+ * which is also what makes a `creator_media` truncate-and-replay leave the queue
+ * untouched instead of re-marking the whole catalogue as first-sight.
+ *
+ * FANSLY ONLY, decided in SQL rather than in TypeScript — `/it/moie/statsnew`
+ * is a Fansly route and an OnlyFans media item has no per-media series to queue.
+ * The predicate lives in the statement so the platform seam stays where the
+ * Stage 18 ratchet expects it: no new strict platform equality outside the
+ * adapter packages.
+ */
 export async function upsertCreatorMedia(
+  db: Database,
+  input: UpsertCreatorMediaInput,
+): Promise<{ applied: boolean }> {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const head = await upsertCreatorMediaHead(database, input);
+    await database.execute(sql`
+      insert into subject_refresh_state (
+        page_id, plane, subject_ref, refresh_class, next_due_at
+      )
+      select ${input.pageId}, 'media_stats', ${input.mediaOfferRef}, 'fresh',
+             ${input.observedAt}
+       where ${input.platform} = 'fansly'
+      on conflict (page_id, plane, subject_ref) do nothing
+    `);
+    return head;
+  });
+}
+
+async function upsertCreatorMediaHead(
   db: Database,
   input: UpsertCreatorMediaInput,
 ): Promise<{ applied: boolean }> {

@@ -50,6 +50,12 @@ export const SYNC_STREAMS = [
   // one-off offset walk of the payout-request history (nine calls on the walked
   // page). Fansly-only, gated off, seeded PAUSED.
   "payouts",
+  // WP-F4: the per-media statistics lane. HISTORY class at 21 600 s — one call
+  // per media per window over the WHOLE catalogue, age-decayed, and the only
+  // lane in this initiative deliberately sized to sit at 100 % of its own daily
+  // cap when M is large (A16). It depends on `catalog`, which is what MEASURES
+  // M. Fansly-only, gated off, seeded PAUSED.
+  "media_stats",
 ] as const;
 
 export type SyncStream = typeof SYNC_STREAMS[number];
@@ -92,6 +98,8 @@ export const FANSLY_BULK_SYNC_STREAMS = [
   "post_replies",
   // WP-F7: same rule again.
   "payouts",
+  // WP-F4: same rule again.
+  "media_stats",
 ] as const;
 
 export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
@@ -123,6 +131,7 @@ export const SEED_PAUSED_SYNC_STREAMS = [
   "catalog",
   "post_replies",
   "payouts",
+  "media_stats",
 ] as const;
 
 export function isSeedPausedSyncStream(stream: string): boolean {
@@ -409,6 +418,32 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 60 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // WP-F4: the per-media statistics lane. HISTORY class at 21 600 s — four
+  // dispatches a day, each spending a slice of a 300-attempt daily budget over
+  // a catalogue of thousands of media. It is the ONE lane in this initiative
+  // built to saturate its own cap (A16: at M = 2 000 the decay wants 294
+  // calls/day against a cap of 300), so it is never "fresh", never urgent, and
+  // what it must not do is burst.
+  //
+  // `domain: "audience"` is where per-media traffic belongs as a LABEL — it is
+  // viewers, not money and not a DM — and like every other gated lane it is
+  // deliberately ABSENT from SYNC_DOMAIN_POLICY's primary/supporting lists, so
+  // a shut gate cannot degrade a page's block-health UX to "catching up".
+  //
+  // basePriority 8 is the LOWEST in the tree, below the payouts lane: this is
+  // the highest-volume lane in the initiative, it reads a back catalogue nobody
+  // is waiting on, and the plan's pacing rule is "priority yield to DM/tx".
+  media_stats: {
+    stream: "media_stats",
+    domain: "audience",
+    cadenceSeconds: 21_600,
+    basePriority: 8,
+    streamIndex: 18,
+    defaultWorkClass: "maintenance",
+    queueDelayThresholdMs: 6 * 60 * 60_000,
+    progressStallThresholdMs: 60 * 60_000,
+    freshnessSlaSeconds: null,
+  },
 };
 
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
@@ -445,6 +480,13 @@ export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
 };
 
 export const SYNC_STREAM_DEPENDENCIES: Partial<Record<SyncStream, SyncStream[]>> = {
+  // WP-F4: the ONE dependency this initiative declares. `catalog` is what
+  // measures M — the media denominator this lane's cadence, its daily demand
+  // and its reported cycle estimate are all computed against. Running the
+  // per-media walk before the catalogue has been enumerated would size a
+  // 300-call-a-day lane against whatever media the DM sidecars happened to
+  // mention. (§3.3 site 14: every other new stream declares none.)
+  media_stats: ["catalog"],
   top_spenders: ["transactions"],
   purchase_history: ["light"],
   followers_reconcile: ["followers"],
@@ -478,6 +520,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     catalog: 15,
     post_replies: 14,
     payouts: 13,
+    media_stats: 12,
   },
   recovery: {
     light: 70,
@@ -497,6 +540,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     catalog: 25,
     post_replies: 24,
     payouts: 23,
+    media_stats: 22,
   },
   anomaly: {
     light: 70,
@@ -516,6 +560,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     catalog: 25,
     post_replies: 24,
     payouts: 23,
+    media_stats: 22,
   },
   manual: {
     light: 100,
@@ -535,6 +580,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     catalog: 55,
     post_replies: 54,
     payouts: 53,
+    media_stats: 52,
   },
   onboarding: {
     light: 100,
@@ -554,6 +600,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     catalog: 55,
     post_replies: 54,
     payouts: 53,
+    media_stats: 52,
   },
   reset: {
     light: 100,
@@ -573,6 +620,7 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     catalog: 55,
     post_replies: 54,
     payouts: 53,
+    media_stats: 52,
   },
 };
 
@@ -724,6 +772,7 @@ function streamOrderSql(columnName: string) {
       when 'catalog' then ${SYNC_STREAM_POLICY.catalog.streamIndex}
       when 'post_replies' then ${SYNC_STREAM_POLICY.post_replies.streamIndex}
       when 'payouts' then ${SYNC_STREAM_POLICY.payouts.streamIndex}
+      when 'media_stats' then ${SYNC_STREAM_POLICY.media_stats.streamIndex}
       else 999
     end
   `);
@@ -749,6 +798,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       when 'catalog' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].catalog}
       when 'post_replies' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].post_replies}
       when 'payouts' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].payouts}
+      when 'media_stats' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].media_stats}
       else 0
     end
   `;

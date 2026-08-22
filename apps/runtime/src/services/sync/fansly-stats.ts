@@ -149,8 +149,12 @@ export const FANSLY_STATS_COVERAGE_PLANES = {
  * All of it has to survive a chunk boundary: the loop that burned a day's cap on
  * prod spanned five chunks, so a guard that lived only inside one chunk would
  * have watched it happen five times and said nothing.
+ *
+ * EXPORTED because WP-F4's per-media backfill needs exactly this, per media,
+ * inside `subject_refresh_state.backfill_cursor`. A second copy of the same
+ * three fields is a second place for the halve-once rule to drift.
  */
-interface BackfillWindowGuard {
+export interface BackfillWindowGuard {
   /** Span of the NEXT request, in days. Halved once when a window comes back
    *  unhonoured, never below `BACKFILL_NARROW_FLOOR_DAYS`, and never restored:
    *  a narrower window that works is worth more than a wider one that might. */
@@ -249,7 +253,7 @@ function asNullableInt(value: unknown): number | null {
 
 /** A cursor written before the guard existed parses as a lane that has asked
  *  for nothing yet at the full span — which is exactly what it is. */
-function parseWindowGuard(value: unknown, defaultSpanDays: number): BackfillWindowGuard {
+export function parseWindowGuard(value: unknown, defaultSpanDays: number): BackfillWindowGuard {
   const record = asRecord(value);
   const spanDays = asInt(record?.spanDays, defaultSpanDays);
   return {
@@ -261,7 +265,7 @@ function parseWindowGuard(value: unknown, defaultSpanDays: number): BackfillWind
   };
 }
 
-function emptyWindowGuard(spanDays: number): BackfillWindowGuard {
+export function emptyWindowGuard(spanDays: number): BackfillWindowGuard {
   return {
     spanDays,
     narrowed: false,
@@ -452,7 +456,7 @@ function statsDataset(payload: unknown): Record<string, unknown> | null {
 /** True when the response carried no datapoints at all — the empty-window
  *  signal the backfill's stop rule reads. Journaled either way: an empty
  *  window IS the retention-floor evidence. */
-function isEmptyStatsWindow(payload: unknown): boolean {
+export function isEmptyStatsWindow(payload: unknown): boolean {
   const dataset = statsDataset(payload);
   if (dataset === null) {
     return true;
@@ -465,7 +469,7 @@ function isEmptyStatsWindow(payload: unknown): boolean {
 /** The provider's OWN returned bounds. The next window is derived from these,
  *  never from what we asked for (§7) — the provider snaps to its bucket grid
  *  and a self-derived walk would drift a bucket per chunk. */
-function servedWindow(payload: unknown): { afterMs: number | null; beforeMs: number | null } {
+export function servedWindow(payload: unknown): { afterMs: number | null; beforeMs: number | null } {
   const dataset = statsDataset(payload);
   if (dataset === null) {
     return { afterMs: null, beforeMs: null };

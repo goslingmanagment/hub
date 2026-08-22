@@ -86,6 +86,7 @@ describe("stats_snapshot stream wiring", () => {
       "catalog",
       "post_replies",
       "payouts",
+      "media_stats",
     ]);
   });
 
@@ -513,5 +514,129 @@ describe("payouts stream wiring", () => {
     expect(budget?.min).toBe(1);
     expect(budget?.max).toBe(100);
     expect(budget?.costWarning).toMatch(/ATTEMPTS/);
+  });
+});
+
+// WP-F4 — the same fourteen sites for `media_stats`, the one lane that can
+// overload the platform.
+
+describe("media_stats stream wiring", () => {
+  it("is a Fansly-only stream, present in every stream vocabulary", () => {
+    expect(SYNC_STREAMS).toContain("media_stats");
+    expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
+    expect(getSyncStreamsForPlatform("fansly")).toContain("media_stats");
+    expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("media_stats");
+    expect(fanslyPlatformAdapter.capabilities.streams).toContain("media_stats");
+    expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("media_stats");
+    // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
+    // stream" on every dispatch, FLEET-WIDE — and this is the lane declared for
+    // every Fansly page the moment it enters SYNC_STREAMS.
+    expect(fanslyPlatformAdapter.pull.media_stats).toBeTypeOf("function");
+  });
+
+  it("is the LOWEST-priority lane in the tree, on the six-hourly cadence", () => {
+    const policy = SYNC_STREAM_POLICY.media_stats;
+    // 21 600 s so a day that deferred at its cap resumes within six hours
+    // rather than at the next midnight.
+    expect(policy.cadenceSeconds).toBe(21_600);
+    expect(policy.defaultWorkClass).toBe("maintenance");
+    expect(policy.freshnessSlaSeconds).toBeNull();
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.transactions.basePriority);
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.dm_messages.basePriority);
+    // Below EVERY other lane this initiative adds: it is the highest-volume one
+    // and it reads a back catalogue nobody is waiting on.
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.payouts.basePriority);
+    expect(policy.basePriority).toBeLessThan(SYNC_STREAM_POLICY.post_replies.basePriority);
+  });
+
+  it("joins NO domain policy but DOES declare the catalog dependency", () => {
+    expect(SYNC_STREAM_POLICY.media_stats.domain).toBe("audience");
+    for (const domain of Object.values(SYNC_DOMAIN_POLICY)) {
+      expect(domain.primaryStreams).not.toContain("media_stats");
+      expect(domain.supportingStreams).not.toContain("media_stats");
+    }
+    // THE ONE DEPENDENCY IN THE INITIATIVE. `catalog` is what measures M, and
+    // every number this lane reports — its daily demand, its class census, its
+    // cycle estimate — is computed against M. Running the per-media walk before
+    // the catalogue is enumerated would size a 300-call-a-day lane against
+    // whatever media the DM sidecars happened to mention.
+    expect(SYNC_STREAM_DEPENDENCIES.media_stats).toEqual(["catalog"]);
+  });
+
+  it("is excluded from the manual `all` and `data` scopes", () => {
+    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("media_stats");
+    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("media_stats");
+    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("media_stats");
+  });
+
+  it("seeds PAUSED and is reachable by the gate reconciler", () => {
+    expect(isSeedPausedSyncStream("media_stats")).toBe(true);
+    expect(SEED_PAUSED_SYNC_STREAMS).toContain("media_stats");
+    // BOTH halves: one without the other is a lane that sits paused forever
+    // while its ramp flag moves nothing (#192).
+    expect(FANSLY_BULK_SYNC_STREAMS).toContain("media_stats");
+  });
+
+  it("is exempt from the rollup vote and visible in the monitor", () => {
+    expect(isBulkEnrichmentSyncStream("media_stats")).toBe(true);
+    expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("media_stats");
+    expect(MONITORED_SYNC_STREAMS).toContain("media_stats");
+  });
+
+  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const enabled = byKey.get("fanslyMediaStatsSyncEnabled");
+    expect(enabled?.kind).toBe("boolean");
+    expect(enabled?.default).toBe("false");
+    expect(enabled?.runtimeApply).toBe("live");
+
+    const allowlist = byKey.get("fanslyMediaStatsPageAllowlist");
+    expect(allowlist?.kind).toBe("string");
+    expect(allowlist?.default).toBe("");
+    expect(allowlist?.runtimeApply).toBe("live");
+    // Its OWN key, on the FAIL-CLOSED template (S4). The fail-OPEN semantic
+    // here would start a 300-call-a-day per-media walk on every Fansly page on
+    // the deploy that shipped the lane.
+    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
+  });
+
+  it("SHIPS AT 300 CALLS A DAY and says the saturation out loud", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const budget = byKey.get("fanslyMediaStatsDailyCallBudget");
+    expect(budget?.kind).toBe("number");
+    // A16's number, and the lane is DESIGNED to spend it: at M = 2 000 the
+    // decay wants 294 a day.
+    expect(budget?.default).toBe("300");
+    expect(budget?.min).toBe(1);
+    // The registry ceiling. A raise toward what the decay wants is a NAMED
+    // per-lane owner step, which the ceiling is what makes refusable.
+    expect(budget?.max).toBe(1000);
+    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
+    // The cost warning must SAY that the long tail goes quarterly at M = 5 000
+    // — A16's honesty rule is that the plan never calls it monthly when it is
+    // not, and the registry is where an operator reads it.
+    expect(budget?.costWarning).toMatch(/QUARTERLY/i);
+  });
+
+  it("makes the long-tail cycle tunable and the age boundaries NOT", () => {
+    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
+    const cycle = byKey.get("fanslyMediaStatsLongTailCycleDays");
+    expect(cycle?.kind).toBe("number");
+    expect(cycle?.default).toBe("30");
+    expect(cycle?.runtimeApply).toBe("live");
+    // It changes WHICH media the budget is spent on, never HOW MANY calls are
+    // made — the wording matters because a tunable that looks like a throttle
+    // gets edited like one.
+    expect(cycle?.costWarning).toMatch(/does not raise egress/i);
+
+    // The three age-class boundaries are CONSTANTS, deliberately: they describe
+    // how traffic decays with an item's age, which is a property of the
+    // platform, not a knob. A key appearing here would be scope creep with a
+    // config row attached.
+    const keys = new Set(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key));
+    expect(keys.has("fanslyMediaStatsFreshDays")).toBe(false);
+    expect(keys.has("fanslyMediaStatsMidDays")).toBe(false);
+    expect(keys.has("fanslyMediaStatsFreshIntervalDays")).toBe(false);
+    expect(keys.has("fanslyMediaStatsWindowDays")).toBe(false);
   });
 });

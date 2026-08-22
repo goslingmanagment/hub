@@ -155,6 +155,10 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   // `/payments/payout/requests`, two routes, both GET. Maintenance class at
   // 86 400 s: a payout moves in days, and the whole steady state is two calls.
   "payouts",
+  // WP-F4 (migration 0142): per-media statistics — `/it/moie/statsnew` over the
+  // WHOLE catalogue at an age-decayed cadence. The highest fan-out lane here,
+  // and the only one designed to run at 100 % of its own cap.
+  "media_stats",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
