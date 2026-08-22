@@ -263,3 +263,7 @@ export async function runOfapiMessageCoverageProjection(
   }
   return totals;
 }
+
+/** Re-exported so the projection registry names this projection from the same
+ *  place it takes its `run` function — one import, one source of truth. */
+export { OFAPI_MESSAGE_COVERAGE_PROJECTION };

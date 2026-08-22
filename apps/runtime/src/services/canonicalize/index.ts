@@ -31,6 +31,12 @@ import {
   canonicalizeCommandResultObservation,
   COMMAND_RESULT_CANONICALIZER_VERSION,
 } from "./command-result.ts";
+import {
+  canonicalizeFanslyStatsObservation,
+  canParseFanslyStatsObservation,
+  FANSLY_STATS_CANONICALIZED_KINDS,
+  FANSLY_STATS_CANONICALIZER_VERSION,
+} from "./fansly-stats.ts";
 
 export interface CanonicalizerFamily {
   source: "webhook" | "pull" | "command_result" | "client_capture";
@@ -104,6 +110,19 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: SYNC_PULL_CANONICALIZER_VERSION,
     canonicalize: canonicalizeSyncPullObservation,
     mixed: true,
+  },
+  {
+    // WP-F1: the `stats_snapshot` lane. Projection-only throughout — traffic,
+    // rankings, the revenue mix and the mass-DM surface are analytics, not
+    // client-deliverable news. It sits BEFORE the broad sync family so its
+    // kinds are claimed by it and not by a wider `pull` entry.
+    source: "pull",
+    lane: "stats",
+    kinds: [...FANSLY_STATS_CANONICALIZED_KINDS],
+    version: FANSLY_STATS_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeFanslyStatsObservation,
+    canParse: canParseFanslyStatsObservation,
+    projectionOnly: true,
   },
   {
     source: "command_result",

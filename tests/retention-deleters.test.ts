@@ -76,6 +76,14 @@ const SANCTIONED_DELETER_FILES = [
   // domain-event ledger. It deletes no captured fact: every row it removes is
   // reproduced from events the sweep never deletes.
   "apps/runtime/src/services/projections/media-plane.ts",
+  // WP-F1: projection reset — rebuildable state only, never scheduled.
+  // rebuildFanslyStatsProjection clears the eleven 0132 statistics tables plus
+  // its own watermark inside ONE transaction and immediately replays them from
+  // the domain-event ledger. It deletes no captured fact, and `capture_coverage`
+  // is deliberately NOT in its table list: that is capture-plane operational
+  // state (§3.4, A17-6) holding retention floors no event carries, so a rebuild
+  // that truncated it would erase evidence the backfill paid egress to find.
+  "apps/runtime/src/services/projections/fansly-stats.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
   "apps/runtime/src/services/sync/rate-limiter.ts",

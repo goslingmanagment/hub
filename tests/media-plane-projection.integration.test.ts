@@ -36,9 +36,14 @@ import {
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
+  MEDIA_PLANE_PROJECTION,
   rebuildMediaPlaneProjection,
   runMediaPlaneProjection,
 } from "../apps/runtime/src/services/projections/media-plane.ts";
+import {
+  findProjection,
+  projectionNames,
+} from "../apps/runtime/src/services/projections/registry.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
   resetIntegrationDatabase,
@@ -461,20 +466,48 @@ describe("media plane — registration", () => {
   // can REBUILD is a projection you cannot repair, and a projector registered
   // nowhere is a table that silently stops filling. Both are the kind of
   // omission a passing end-to-end test does not notice.
-  it("is registered on the worker tick and in the projection:rebuild CLI", () => {
+  //
+  // WP-F1(0) moved the two registration sites INTO the projection registry, so
+  // the property is now checked against the registry itself rather than against
+  // the shape of two hand-written blocks. That is strictly stronger: the old
+  // assertions could only see whether one specific literal was present, and the
+  // registry is what the tick and the CLI now both read.
+  it("is declared in the projection registry, with its rebuild and its tables", () => {
+    const definition = findProjection(MEDIA_PLANE_PROJECTION);
+    expect(definition).not.toBeNull();
+    expect(definition?.rebuildKind).toBe("truncate_replay");
+    expect(definition?.rebuild).not.toBeNull();
+    expect(definition?.stateClass).toBe("fact_projection");
+    expect([...(definition?.eventTypes ?? [])]).toEqual([
+      "media.observed",
+      "media.order_observed",
+      "media.offer_location_observed",
+      "message.attachments_observed",
+    ]);
+    expect([...(definition?.tables ?? [])]).toEqual([
+      "creator_media",
+      "creator_media_bundles",
+      "media_orders",
+      "message_media_offers",
+      "media_offer_locations",
+    ]);
+  });
+
+  it("rides the registry-driven worker tick and the registry-driven CLI", () => {
     const worker = readFileSync(
       path.resolve("apps/runtime/src/worker-services.ts"),
       "utf8",
     );
-    expect(worker).toContain("runMediaPlaneProjection");
-    expect(worker).toMatch(/const mediaPlane = await runMediaPlaneProjection\(app\)/);
+    // The tick iterates the registry; nothing about media_plane is named here
+    // any more, which is the point — one call site now covers every projection.
+    expect(worker).toContain("runProjectionTick");
 
     const cli = readFileSync(path.resolve("apps/runtime/src/cli.ts"), "utf8");
-    expect(cli).toContain('projection !== "media_plane"');
-    expect(cli).toContain("rebuildMediaPlaneProjection");
-    // The argument help must name it too — an accepted value nobody is told
-    // about is not a command.
-    expect(cli).toMatch(/creator_posts \| fan_earnings_stats \| media_plane \| message_archive/);
+    expect(cli).toContain("rebuildRegisteredProjection");
+    // The argument help is DERIVED from the registry, so an accepted value
+    // nobody is told about is impossible rather than merely caught.
+    expect(cli).toContain("projectionNames().join(\" | \")");
+    expect(projectionNames()).toContain(MEDIA_PLANE_PROJECTION);
   });
 });
 

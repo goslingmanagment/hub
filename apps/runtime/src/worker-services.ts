@@ -34,9 +34,7 @@ import {
 import {
   MESSAGE_ARCHIVE_SWEEP_QUEUE,
   ensureMessageArchiveQueues,
-  runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
-import { runOfapiMessageCoverageProjection } from "./services/projections/ofapi-message-coverage.ts";
 import {
   PROJECTION_DEBT_SWEEP_QUEUE,
   ensureProjectionDebtQueue,
@@ -52,9 +50,7 @@ import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
 import { runAiAcceptanceProjection } from "./services/projections/ai-acceptance.ts";
-import { runFanEarningsProjection } from "./services/projections/fan-earnings.ts";
-import { runCreatorPostsProjection } from "./services/projections/creator-posts.ts";
-import { runMediaPlaneProjection } from "./services/projections/media-plane.ts";
+import { runProjectionTick } from "./services/projections/registry.ts";
 import { startDomainEventsSmokeConsumer } from "./services/domain-events-smoke.ts";
 import {
   runWorkboardFanRecompute,
@@ -166,6 +162,14 @@ function listPendingTelegramReportDates(
 
   return dates;
 }
+
+/**
+ * [D1]'s trigger threshold (F1(0).4). One minute of wall clock on a queue whose
+ * schedule is `* * * * *` means the tick no longer fits in its own slot — the
+ * condition the deferred typed ledger read exists to fix. Deliberately a LOG
+ * line and not a latch: the deferral needs a signal, not a circuit breaker.
+ */
+const PROJECTION_TICK_DURATION_ALERT_MS = 45_000;
 
 export async function startWorkerServices(
   app: AppContext,
@@ -359,53 +363,38 @@ export async function startWorkerServices(
   });
 
   await boss.work(MESSAGE_ARCHIVE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
-    try {
-      const result = await runMessageArchiveProjection(app);
-      if (result.eventsSeen > 0) {
-        app.logger.info(result, "Message-archive projection sweep complete");
-      }
-    } catch (error) {
-      app.logger.error({ error }, "Message-archive projection sweep failed");
+    // WP-F1(0): table-driven. The registry is the list of projections, their
+    // event types, their tables and their state class — six hand-written
+    // try/catch blocks used to be that list, and a projector registered in
+    // neither this file nor the CLI is a table that silently stops filling.
+    // Each entry stays isolated in its own try/catch inside runProjectionTick:
+    // every projection owns its watermark, so a poison fact in one must stay
+    // retryable without starving the neighbours sharing this pg-boss tick.
+    const outcomes = await runProjectionTick(app);
+
+    // [D1]'s NAMED TRIGGER (F1(0).4). The typed ledger read was deferred on the
+    // argument that each projector reads only its delta since its own
+    // watermark; this line is what turns that from an assumption into something
+    // that reports itself. A tick that spends longer than the threshold on the
+    // shared queue reopens the deferral as its own change.
+    const tickMs = outcomes.reduce((sum, outcome) => sum + outcome.durationMs, 0);
+    if (tickMs >= PROJECTION_TICK_DURATION_ALERT_MS) {
+      app.logger.warn(
+        {
+          tickMs,
+          thresholdMs: PROJECTION_TICK_DURATION_ALERT_MS,
+          slowest: [...outcomes]
+            .sort((left, right) => right.durationMs - left.durationMs)
+            .slice(0, 3)
+            .map((outcome) => ({ projection: outcome.name, durationMs: outcome.durationMs })),
+        },
+        "Projection tick exceeded its duration budget — [D1] typed ledger read trigger",
+      );
     }
+
     try {
-      const coverage = await runOfapiMessageCoverageProjection(app);
-      if (coverage.projected > 0) {
-        app.logger.info(coverage, "OFAPI message-coverage projection sweep complete");
-      }
-    } catch (error) {
-      // Each projection owns its watermark. A poison coverage fact must stay
-      // retryable without starving unrelated earnings/acceptance consumers
-      // that happen to share this pg-boss tick.
-      app.logger.error({ error }, "OFAPI message-coverage projection sweep failed");
-    }
-    try {
-      const earnings = await runFanEarningsProjection(app);
-      if (earnings.upserted > 0) {
-        app.logger.info(earnings, "Fan-earnings projection sweep complete");
-      }
-    } catch (error) {
-      app.logger.error({ error }, "Fan-earnings projection sweep failed");
-    }
-    try {
-      const posts = await runCreatorPostsProjection(app);
-      if (posts.upserted > 0) {
-        app.logger.info(posts, "Creator-posts projection sweep complete");
-      }
-    } catch (error) {
-      app.logger.error({ error }, "Creator-posts projection sweep failed");
-    }
-    try {
-      // WP-F0(b): the media plane rides the same minutely projection tick, and
-      // owns its own watermark — a poison commerce event must stay retryable
-      // without starving the neighbours that share this pg-boss handler.
-      const mediaPlane = await runMediaPlaneProjection(app);
-      if (mediaPlane.media > 0 || mediaPlane.orders > 0 || mediaPlane.offers > 0) {
-        app.logger.info(mediaPlane, "Media-plane projection sweep complete");
-      }
-    } catch (error) {
-      app.logger.error({ error }, "Media-plane projection sweep failed");
-    }
-    try {
+      // Observation-driven, not ledger-driven: it walks `observations` by id, so
+      // it has no eventTypes to declare and is deliberately NOT in the registry.
       const acceptance = await runAiAcceptanceProjection(app);
       if (acceptance.projected > 0) {
         app.logger.info(acceptance, "AI acceptance projection sweep complete");
