@@ -1,0 +1,90 @@
+{
+  "_fixture": "SYNTHETIC. Shape derived from a live /it/moie/statsnew?period=21600000 capture (2026-08-19); every id is re-keyed, every tag name is invented, and the arrays are cut to a handful of rows. The real captures are 7.0-17.3 KB decoded. WHAT THE SHAPE PRESERVES, because it is what a parser gets wrong: the media offer id lives at dataset.datasetMediaOfferId (NOT mediaOfferId); every stats[] row carries EXACTLY the seven keys the route serves and NO video fields, even though the polled asset was media.type = 2, mimetype = video/mp4 ([E5]); topFypTags[] rows carry no name at all, so the name has to be joined from aggregationData.tags[] and stays NULL when it misses; and there is no profileDatapoints[] key.",
+  "dataset": {
+    "period": 21600000,
+    "dateBefore": 1787140800000,
+    "dateAfter": 1786536000000,
+    "datapointLimit": 100,
+    "datapoints": [
+      {
+        "timestamp": 1787140800000,
+        "stats": [
+          {
+            "type": 0,
+            "views": 2,
+            "previewViews": 0,
+            "interactionTime": 11856,
+            "previewInteractionTime": 0,
+            "uniqueViewers": 2,
+            "previewUniqueViewers": 0
+          }
+        ]
+      },
+      {
+        "timestamp": 1787119200000,
+        "stats": [
+          {
+            "type": 1,
+            "views": 1,
+            "previewViews": 0,
+            "interactionTime": 4908,
+            "previewInteractionTime": 0,
+            "uniqueViewers": 1,
+            "previewUniqueViewers": 0
+          }
+        ]
+      }
+    ],
+    "topFypTags": [
+      {
+        "tagId": "000900000000004101",
+        "views": 1,
+        "previewViews": 0,
+        "interactionTime": 5636,
+        "previewInteractionTime": 0
+      },
+      {
+        "tagId": "000900000000004102",
+        "views": 1,
+        "previewViews": 0,
+        "interactionTime": 1416,
+        "previewInteractionTime": 0
+      },
+      {
+        "tagId": "000900000000004199",
+        "views": 3,
+        "previewViews": 1,
+        "interactionTime": 2200,
+        "previewInteractionTime": 90
+      }
+    ],
+    "datasetMediaOfferId": "000900000000004001"
+  },
+  "aggregationData": {
+    "accountMedia": [],
+    "accountMediaBundles": [],
+    "tags": [
+      {
+        "id": "000900000000004101",
+        "tag": "fixturetag-one",
+        "label": null,
+        "description": "",
+        "viewCount": 1277100,
+        "postCount": 24768,
+        "flags": 0,
+        "createdAt": 1665510378000
+      },
+      {
+        "id": "000900000000004102",
+        "tag": "fixturetag-two",
+        "label": null,
+        "description": "",
+        "viewCount": 108906,
+        "postCount": 4769,
+        "flags": 0,
+        "createdAt": 1665510396000
+      }
+    ],
+    "creatorMediaOfferLocations": []
+  }
+}

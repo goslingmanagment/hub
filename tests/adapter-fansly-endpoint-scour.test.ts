@@ -917,14 +917,14 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     // FRESH — trailing 24 h at hourly granularity, which is where a new item's
     // numbers actually move.
     await adapter.getMediaOfferStats(context(), {
-      mediaOfferId: "935652728804241411",
+      mediaOfferId: "000900000000004001",
       beforeDate: now,
       afterDate: new Date(now.getTime() - 24 * 60 * 60_000),
       periodMs: 3_600_000,
     });
     // MID — trailing 30 d, daily.
     await adapter.getMediaOfferStats(context(), {
-      mediaOfferId: "935652728804241411",
+      mediaOfferId: "000900000000004001",
       beforeDate: now,
       afterDate: new Date(now.getTime() - 30 * 24 * 60 * 60_000),
       periodMs: 86_400_000,
@@ -937,7 +937,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     const backfillBefore = new Date("2026-08-01T00:00:00.000Z");
     const backfillAfter = new Date("2026-07-01T00:00:00.000Z");
     await adapter.getMediaOfferStats(context(), {
-      mediaOfferId: "935652728804241411",
+      mediaOfferId: "000900000000004001",
       beforeDate: backfillBefore,
       afterDate: backfillAfter,
       periodMs: 86_400_000,
@@ -952,7 +952,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     const urls = fetchMock.mock.calls.map(([input]) => new URL(String(input)));
     for (const url of urls) {
       expect(url.pathname).toBe("/it/moie/statsnew");
-      expect(url.searchParams.get("mediaOfferId")).toBe("935652728804241411");
+      expect(url.searchParams.get("mediaOfferId")).toBe("000900000000004001");
       expect(url.searchParams.get("ngsw-bypass")).toBe("true");
       // The per-media route takes NO `year`/`month`: those are the account
       // route's named-month affordance and this one has never been observed
@@ -1018,20 +1018,20 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
           }],
         }],
         topFypTags: [{
-          tagId: "436274801351335939",
+          tagId: "000900000000004101",
           views: 1,
           previewViews: 0,
           interactionTime: 5_636,
           previewInteractionTime: 0,
         }],
-        datasetMediaOfferId: "935652728804241411",
+        datasetMediaOfferId: "000900000000004001",
       },
       aggregationData: { accountMedia: [], accountMediaBundles: [], tags: [] },
     };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
     const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
     const result = await adapter.getMediaOfferStats(context(), {
-      mediaOfferId: "935652728804241411",
+      mediaOfferId: "000900000000004001",
       beforeDate: new Date(1_787_155_800_000),
       afterDate: new Date(1_786_551_000_000),
       periodMs: 21_600_000,

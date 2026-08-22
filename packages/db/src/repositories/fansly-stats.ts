@@ -334,6 +334,95 @@ export async function upsertStatsTopTag(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
+// ── per-media tag rankings (WP-F4) ───────────────────────────────────────────
+
+export interface UpsertFanslyMediaTagStatInput extends StatsLineage {
+  pageId: number;
+  platform: FanslyStatsPlatform;
+  mediaOfferRef: string;
+  tagRef: string;
+  periodMs: number;
+  requestedStart: Date;
+  requestedEnd: Date;
+  /** NULL when the response's `aggregationData.tags[]` join misses. NEVER
+   *  fabricated from the id — an unnamed tag is a tag we cannot name. */
+  tagName: string | null;
+  rank: number | null;
+  views: number | null;
+  previewViews: number | null;
+  interactionTimeMs: number | null;
+  previewInteractionTimeMs: number | null;
+}
+
+/**
+ * `dataset.topFypTags[]` from `/it/moie/statsnew` — the finest FYP attribution
+ * Fansly exposes: which tags brought traffic to THIS media item in THIS window.
+ *
+ * The WINDOW is part of the key, exactly as it is on the two account-level top-N
+ * tables: rank 2 of one window is not the same fact as rank 2 of the next, and
+ * merging them would silently overwrite history with the newest ranking. F1
+ * created the table and left it empty on purpose; this is what fills it.
+ *
+ * Precedence is the NEWER OBSERVATION, with `source_account_seq` as the
+ * same-instant tie-break — ledger order is append order, so a replay of an older
+ * capture must never overwrite a fresher head. `first_observed_at` only ever
+ * moves backwards.
+ */
+export async function upsertFanslyMediaTagStat(
+  db: Database,
+  input: UpsertFanslyMediaTagStatInput,
+): Promise<{ applied: boolean }> {
+  const fresher = sql`
+    excluded.last_observed_at > fansly_media_tag_stats.last_observed_at
+    or (excluded.last_observed_at = fansly_media_tag_stats.last_observed_at
+      and excluded.source_account_seq > fansly_media_tag_stats.source_account_seq)
+  `;
+  const pick = (column: string) => {
+    const name = sql.identifier(column);
+    return sql`case when ${fresher} then excluded.${name}
+      else fansly_media_tag_stats.${name} end`;
+  };
+  const result = await db.execute(sql`
+    insert into fansly_media_tag_stats (
+      page_id, platform, media_offer_ref, tag_ref, period_ms, requested_start,
+      requested_end, tag_name, rank, views, preview_views, interaction_time_ms,
+      preview_interaction_time_ms, content_hash, first_observed_at,
+      last_observed_at, source_event_id, source_observation_id, source_account_seq
+    ) values (
+      ${input.pageId}, ${input.platform}, ${input.mediaOfferRef}, ${input.tagRef},
+      ${input.periodMs}, ${input.requestedStart}, ${input.requestedEnd},
+      ${input.tagName}, ${input.rank}, ${input.views}, ${input.previewViews},
+      ${input.interactionTimeMs}, ${input.previewInteractionTimeMs},
+      ${input.contentHash}, ${input.observedAt}, ${input.observedAt},
+      ${input.sourceEventId}, ${input.sourceObservationId}, ${input.sourceAccountSeq}
+    )
+    on conflict (
+      page_id, media_offer_ref, tag_ref, period_ms, requested_start, requested_end
+    ) do update set
+      tag_name = ${pick("tag_name")},
+      rank = ${pick("rank")},
+      views = ${pick("views")},
+      preview_views = ${pick("preview_views")},
+      interaction_time_ms = ${pick("interaction_time_ms")},
+      preview_interaction_time_ms = ${pick("preview_interaction_time_ms")},
+      content_hash = ${pick("content_hash")},
+      source_event_id = ${pick("source_event_id")},
+      source_observation_id = ${pick("source_observation_id")},
+      source_account_seq = greatest(
+        fansly_media_tag_stats.source_account_seq, excluded.source_account_seq
+      ),
+      first_observed_at = least(
+        fansly_media_tag_stats.first_observed_at, excluded.first_observed_at
+      ),
+      last_observed_at = greatest(
+        fansly_media_tag_stats.last_observed_at, excluded.last_observed_at
+      ),
+      updated_at = now()
+    returning page_id
+  `);
+  return { applied: (result.rowCount ?? 0) > 0 };
+}
+
 // ── platform-global tag samples ──────────────────────────────────────────────
 
 export interface UpsertPlatformTagDailyInput extends StatsLineage {
