@@ -9536,3 +9536,138 @@ must not degrade a page's block-health UX to "catching up" while its gate is shu
 — `domain: "audience"` is a label, not a membership); five-minute buckets, which
 #225 already declared a deliberate non-goal and which would multiply this lane's
 calls again; and any promise of per-media watch metrics before [E5].
+
+---
+
+**Decision #232 (2026-08-22, endpoints-cover WP-S1: the serving surface, and the
+panel that makes the other seven readable):**
+
+**SERVING NEVER AUTHORIZES CAPTURE.** Eight REST routes, thirteen agent
+datasets and one dashboard page, all of them pure reads over projections some
+capture lane already filled. No handler enqueues a sync, opens a window, marks a
+subject dirty or flips a flag, and the auth pin asserts every one of the eight is
+a GET with no body — a body on a read route is how a read quietly becomes a
+command. A page whose lane flag is off answers with what it holds (usually
+nothing) and SAYS the flag is off, which is the entire reason the coverage route
+exists.
+
+**`owner-session` + page scope on all eight, and that IS the money gate.** There
+is no separate money capability for cookie sessions, so `/money/revenue-mix` and
+`/money/payouts` get the narrowest human kind the vocabulary has — strictly
+narrower than the `session` kind the existing revenue routes use, which a team
+lead can reach. The agent plane's `read:money` guards the same data behind a
+different principal; the two are not two halves of one check. Widening any route
+to a chatter or agent principal is its own PR with its own gate, and would have
+to edit both the page-scope list and the kind assertion in
+`tests/contracts-auth-declarations.test.ts`.
+
+**THE SCOPE-PAIRING RULE GOT A DECLARED FLAG, NOT AN INFERRED ONE.**
+`message_media_sales` requires `read:messages` AND `read:money` together,
+because a row saying "this fan bought offer 3 of message X" discloses a
+conversation as much as a payment — a buyer identity or a per-message sale count
+IS a purchase disclosure. The existing `verbatimText` rule is derived from field
+NAMES (anything ending in `Text`), and that derivation cannot work here: no name
+and no scalar kind can tell `salesCount` on a message offer (a purchase) from
+`salesCount` on a catalogue item (an inventory statistic). So
+`disclosesPurchase` is a REQUIRED boolean on all twenty-nine datasets — the
+question has to be answered, not defaulted — and one test pins that exactly one
+dataset answers yes and that `read:messages` is required by exactly
+`verbatimText || disclosesPurchase`.
+
+**`readPlanes: []` WAS AVAILABLE AND IS FORBIDDEN.** It is legal — `sync_streams`
+uses it honestly, because no claim class answers for sync state — and it would
+have been the path of least resistance for all thirteen new datasets. It
+silently disables the capture-floor epistemics: an empty result then carries no
+evidence about whether anything was ever captured, which is the original Rick
+incident with a different table name. Every new dataset therefore declares a
+non-empty `readPlanes` AND a `captureFloorPlane` that must be one of them, minted
+by claim fields added to `content`/`money`/`messages`. The claim classes stay at
+seven: a class is a disclosure boundary, not a filing cabinet, and an eighth to
+hold "statistics" would have added a boundary nobody enforces.
+
+**SIX RESERVED KEYS CONSUMED, ONE SUPERSEDED, ONE LEFT ALONE.** `comments`,
+`likes`, `vault_media`, `notifications`, `subscription_tiers` and `payouts` were
+reserved in `AGENT_PLANNED_DATASETS` and are now addressable under those exact
+names — a caller who read the catalog a year ago and wrote `--dataset comments`
+gets data instead of a 400, which is what reserving them was for.
+`purchase_history` is gone from BOTH lists: it was never a dataset, only a
+sync-stream name whose canonicalization produces `message.ppv_unlocked` with no
+serving table anywhere, and `message_media_sales` answers the question it stood
+for. Leaving the stale key planned beside its real answer would have advertised
+a second, better `purchase_history` that is never coming. `fan_earnings` stays
+planned, untouched.
+
+**`likes` SHIPS EMPTY AND THE CATALOG SAYS SO.** No Fansly like code is
+live-confirmed ([E4]), so WP-F2's layer 2 writes nothing and the dataset's
+global `captureState` is `not_captured` — not `unknown`, which would invite a
+reader to go looking. It is declared rather than omitted for the reason the whole
+plane exists: an omitted dataset and an empty one are indistinguishable to a
+reader, and only one of them is honest.
+
+**THE SCRUB WIDENED BY EIGHT KINDS, AND ONE WAS REFUSED IN WRITING.** Admitted:
+`account_stats`, `media_offer_stats`, `earnings_stats_snapshot`,
+`earnings_monthlystats_snapshot`, `tracking_links`, `subscription_tiers`,
+`vault_albums`, `notifications` — bodies of counters, codes, prices and ids, each
+judged against what the capture side actually journals rather than against what
+the endpoint is called. `notifications` is the one whose safety lives elsewhere:
+its `accounts[]` sidecar is ALREADY [A20]-trimmed at capture, so widening that
+trim invalidates the allowlist line, and the comment says so. **`post_replies`
+stays OUT** with its reason written down — another account's authored content
+(fans' reply prose plus their profile sidecar). Its PROJECTION is served (the
+`comments` dataset, behind `read:messages`, with an audit row per read); the raw
+journal body is not, because the projection is what the erasure module can reach
+and a journal row is what it cannot. `dm_conversations`'s [A20] re-justification
+was re-read and still holds.
+
+**A LABEL TABLE THE REVENUE MIX NEEDED AND DID NOT HAVE.**
+`packages/shared/src/fansly-revenue-types.ts` carries BOTH halves of every
+legacy/current pair (A22-2: `media` is 2010 AND 2110, and this ledger reaches
+back to 2025-03-06) plus the ledger renderer's other dispatch codes, two of which
+move money the wrong way. It does NOT fold: folding is per-context and read-time,
+so a caller grouping by `typeLabel` gets the platform chart's merge and one
+grouping by `typeCode` gets the ledger truth — both are on the wire, and
+`typeEra` names which half a row is. The `case` expressions inside the dataset
+SQL are GENERATED from this table and from the two existing ones; a second
+hand-typed copy is precisely what made `reference/fansly_api_spec.md` §3.1
+disagree with the client on eight of sixteen codes.
+
+**NET IS SERVED, GROSS IS DERIVED, AND THE DERIVATION TRAVELS WITH THE NUMBER.**
+A12 settled that `saleStats.total` is the creator's net share. It is served
+verbatim; the gross beside it is computed at read time (`net / 0.8`) inside an
+envelope carrying `derived: true` and a basis string naming Fansly's 20 % cut, so
+it cannot be mistaken for a served number or summed with one. The same envelope
+carries Σ `item_count` on the catalogue route, whose basis says NON-UNIQUE in
+capitals — the system albums are views over the same media, so that sum
+double-counts and M is `count(distinct media_offer_ref)`.
+
+**THE HONESTY PANEL IS THE POINT OF THE PAGE.** Every chart carries a coverage
+badge, and a chart with NO badge is a chart asserting its window is fully
+captured — a claim only `provider_exhausted` earns. A plane with no coverage row
+reads `unknown`, never `complete`. The panel itself shows, per lane: the gate
+(flag off / not allowlisted / ramped, with the FAIL-CLOSED allowlist semantic),
+today's budget against the cap, the due and deferred backlog, and **the live
+long-tail cycle read off F4's own progress block** (A16 item 3) — stated in
+words, saying "QUARTERLY or worse, not monthly" past ninety days, and never a
+documentation constant. An empty chart over a ramped, exhausted lane and an empty
+chart over a lane whose flag is off look identical without this panel and mean
+opposite things.
+
+**THE 30-DAY FOOTNOTE IS ATTACHED TO THE 30-DAY VIEW AND TO NOTHING ELSE.** A8:
+Fansly's own 30-day widget excludes the Suggestions visit code (44011) from its
+percentage denominator; we count every raw source. The explanation appears on
+that range only — on any other there is nothing to reconcile, and a permanent
+line of small print is small print nobody reads.
+
+**Rejected, and recorded so it is not re-proposed:** per-media watch metrics in
+any form ([E5] found all six live per-media responses carrying seven stat keys
+and no video fields at all, for a video asset — `media_stats` therefore has no
+watch columns rather than always-null ones, and the account-level average is
+labelled Hub-derived where its components actually exist); summing a traffic
+family's two members (member 1 is a visit count, member 0 carries dwell with its
+own differing views — adding them invents a number); folding legacy revenue codes
+into current ones at storage or projection time; an eighth claim class for
+statistics; `readPlanes: []` on any fact dataset; serving `post_replies` journal
+bodies; and any OnlyFans dataset or route in this package (A28-2 — the catalog's
+per-dataset `platforms` says `["fansly"]` rather than offering eight permanently
+empty surfaces).
+
