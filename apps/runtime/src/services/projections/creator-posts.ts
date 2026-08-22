@@ -101,6 +101,151 @@ const POST_V2_FIELDS = [
   "tipGoalAmountsHidden",
 ] as const;
 
+/** WP-F6 (schema v3). Every one must be PRESENT on a v3 event — absent is a
+ *  malformed event, not a null value — because the whole promise of the v6
+ *  re-parse is that the column is filled from the journal rather than left null
+ *  by an event that quietly stopped carrying it. */
+const POST_V3_FIELDS = [
+  "likeCount",
+  "mediaLikeCount",
+  "replyCount",
+  "fypFlags",
+  "expiresAt",
+  "inReplyToRef",
+  "inReplyToRootRef",
+  "wallRefs",
+  "accountMentionRefs",
+  "attachmentRefs",
+  "hashtags",
+  "hashtagsNormalized",
+  "hashtagParserVersion",
+] as const;
+
+function nullableCount(value: unknown, field: string): bigint | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`post.observed ${field} must be a non-negative safe integer or null`);
+  }
+  return BigInt(value);
+}
+
+function nullableInt(value: unknown, field: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`post.observed ${field} must be a non-negative safe integer or null`);
+  }
+  return value;
+}
+
+function nullableDate(value: unknown, field: string): Date | null {
+  if (value === null) return null;
+  return requiredDate(value, field);
+}
+
+function nullableRefArray(value: unknown, field: string): string[] | null {
+  if (value === null) return null;
+  if (!Array.isArray(value)) {
+    throw new Error(`post.observed ${field} must be an array or null`);
+  }
+  return value.map((item) => {
+    if (typeof item !== "string" || item.length === 0) {
+      throw new Error(`post.observed ${field} must hold non-empty string refs`);
+    }
+    return item;
+  });
+}
+
+/** The attachment id-relations, re-validated on the way OUT of the ledger.
+ *  A URL-bearing key cannot arrive here — the canonicalizer copies three keys
+ *  by name — and this rebuilds the row from those three so an event authored by
+ *  some future writer cannot smuggle a fourth into a serving column. */
+function nullableAttachmentRefs(value: unknown, eventId: number): unknown[] | null {
+  if (value === null) return null;
+  if (!Array.isArray(value)) {
+    throw new Error(`post.observed event ${eventId} has an invalid attachmentRefs`);
+  }
+  return value.map((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new Error(`post.observed event ${eventId} has an invalid attachment ref`);
+    }
+    const ref = item as Record<string, unknown>;
+    return {
+      pos: nullableInt(ref.pos ?? null, "attachmentRefs.pos"),
+      contentType: nullableInt(ref.contentType ?? null, "attachmentRefs.contentType"),
+      contentId: nullableRef(ref.contentId ?? null, "attachmentRefs.contentId"),
+    };
+  });
+}
+
+const EMPTY_POST_ENGAGEMENT = {
+  likeCount: null,
+  mediaLikeCount: null,
+  replyCount: null,
+  fypFlags: null,
+  expiresAt: null,
+  inReplyToRef: null,
+  inReplyToRootRef: null,
+  wallRefs: null,
+  accountMentionRefs: null,
+  hashtags: null,
+  hashtagsNormalized: null,
+  hashtagParserVersion: null,
+  attachmentRefs: null,
+  engagementObservedAt: null,
+} as const;
+
+/**
+ * The WP-F6 half of the head, read from a schema-v3 `post.observed`.
+ *
+ * `engagementObservedAt` is DERIVED, not carried: it is the event's own
+ * `observedAt` whenever the event carried at least one counter. That is what
+ * makes it survive a rebuild — a capture lane stamping it directly onto this
+ * rebuildable projection would have it wiped by the next `projection:rebuild`,
+ * and the timeline sighting that ALSO carries `likeCount` would not set it at
+ * all. Zero counters (a pre-widening response replayed at v6) leaves it null
+ * rather than claiming an observation that never looked.
+ */
+function postEngagementFromEvent(
+  event: { id: number; schemaVersion: number },
+  data: Record<string, unknown>,
+  observedAt: Date,
+) {
+  if (event.schemaVersion < 3) {
+    return { ...EMPTY_POST_ENGAGEMENT };
+  }
+  requiredNullableFields(data, POST_V3_FIELDS, event.id);
+  const likeCount = nullableCount(data.likeCount, "likeCount");
+  const mediaLikeCount = nullableCount(data.mediaLikeCount, "mediaLikeCount");
+  const replyCount = nullableCount(data.replyCount, "replyCount");
+  const hashtags = nullableRefArray(data.hashtags, "hashtags");
+  const hashtagsNormalized = nullableRefArray(data.hashtagsNormalized, "hashtagsNormalized");
+  const hashtagParserVersion = nullableInt(data.hashtagParserVersion, "hashtagParserVersion");
+  if (
+    (hashtags === null) !== (hashtagsNormalized === null)
+    || (hashtags === null) !== (hashtagParserVersion === null)
+    || (hashtags !== null && hashtags.length !== hashtagsNormalized!.length)
+  ) {
+    throw new Error(`post.observed event ${event.id} has unpaired hashtag columns`);
+  }
+  const observedAnyCounter = likeCount !== null || mediaLikeCount !== null || replyCount !== null;
+  return {
+    likeCount,
+    mediaLikeCount,
+    replyCount,
+    fypFlags: nullableInt(data.fypFlags, "fypFlags"),
+    expiresAt: nullableDate(data.expiresAt, "expiresAt"),
+    inReplyToRef: nullableRef(data.inReplyToRef, "inReplyToRef"),
+    inReplyToRootRef: nullableRef(data.inReplyToRootRef, "inReplyToRootRef"),
+    wallRefs: nullableRefArray(data.wallRefs, "wallRefs"),
+    accountMentionRefs: nullableRefArray(data.accountMentionRefs, "accountMentionRefs"),
+    hashtags,
+    hashtagsNormalized,
+    hashtagParserVersion,
+    attachmentRefs: nullableAttachmentRefs(data.attachmentRefs, event.id),
+    engagementObservedAt: observedAnyCounter ? observedAt : null,
+  };
+}
+
 function postMonetizationFromEvent(
   event: { id: number; schemaVersion: number },
   data: Record<string, unknown>,
@@ -176,13 +321,21 @@ export interface CreatorPostsProjectionResult {
   accounts: number;
   eventsSeen: number;
   upserted: number;
+  /** WP-F6: heads whose `reply_count` moved, each of which marked its
+   *  `post_replies` walk row dirty in the SAME transaction as the head. */
+  replyWalksMarkedDirty: number;
 }
 
 export async function runCreatorPostsProjection(
   app: Pick<AppContext, "db" | "logger">,
   input?: { accountId?: number | null },
 ): Promise<CreatorPostsProjectionResult> {
-  const totals: CreatorPostsProjectionResult = { accounts: 0, eventsSeen: 0, upserted: 0 };
+  const totals: CreatorPostsProjectionResult = {
+    accounts: 0,
+    eventsSeen: 0,
+    upserted: 0,
+    replyWalksMarkedDirty: 0,
+  };
   const accounts = input?.accountId != null
     ? [input.accountId]
     : await listEventAccounts(app.db);
@@ -326,7 +479,9 @@ export async function runCreatorPostsProjection(
           continue;
         }
 
-        if (event.schemaVersion !== 1 && event.schemaVersion !== 2) {
+        if (
+          event.schemaVersion !== 1 && event.schemaVersion !== 2 && event.schemaVersion !== 3
+        ) {
           throw new Error(`post.observed event ${event.id} has unsupported schema version`);
         }
 
@@ -340,21 +495,25 @@ export async function runCreatorPostsProjection(
           throw new Error(`post.observed event ${event.id} has invalid attachmentCount`);
         }
         const monetization = postMonetizationFromEvent(event, data);
+        const observedAt = requiredDate(data.observedAt, "observedAt");
+        const engagement = postEngagementFromEvent(event, data, observedAt);
         const result = await upsertCreatorPost(app.db, {
           accountId,
           platform,
           platformPostId: event.postRef,
           textPlain: data.textPlain,
           publishedAt: requiredDate(data.publishedAt, "publishedAt"),
-          observedAt: requiredDate(data.observedAt, "observedAt"),
+          observedAt,
           contentHash: data.contentHash,
           attachmentCount: Number(data.attachmentCount),
           ...monetization,
+          ...engagement,
           sourceEventId: event.id,
           sourceObservationId: event.observationId,
           sourceAccountSeq: event.accountSeq,
         });
         if (result.applied) totals.upserted += 1;
+        if (result.replyCountChanged) totals.replyWalksMarkedDirty += 1;
       }
 
       if (deferredBehindErasure) break;
