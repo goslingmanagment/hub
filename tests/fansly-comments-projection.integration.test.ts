@@ -320,18 +320,31 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     // all — which is exactly why the roster exists.
     await seedObservation(page.id, "empty", fixture("replies-empty"));
     const result = await project(page.id);
-    expect(result.markedMissing).toBe(4);
+    // THREE, not four, and the fourth is the point. The nested reply hangs off
+    // a COMMENT (`inReplyTo` = another comment's ref), not off the post, so a
+    // walk of the POST does not enumerate it and its roster says nothing about
+    // it. The reconcile is scoped to `parent_post_ref` precisely so a walk can
+    // only ever mark what it was in a position to see; whether the route serves
+    // nested replies inside a post's list has never been observed, and the
+    // reconcile UNDER-marks rather than guessing.
+    expect(result.markedMissing).toBe(3);
 
     const archive = await measureFanslyComments(testDb.db, page.id);
     // NOTHING DELETED (DP 7). The rows are still here; they are marked.
     expect(archive.total).toBe(4);
-    expect(archive.missing).toBe(4);
+    expect(archive.missing).toBe(3);
 
     const stored = await rows(
-      `select comment_ref, missing_since, text_plain from post_comments where page_id = $1`,
+      `select comment_ref, parent_post_ref, missing_since, text_plain
+         from post_comments where page_id = $1`,
       [page.id],
     );
-    expect(stored.every((row) => row.missing_since !== null)).toBe(true);
+    for (const row of stored) {
+      expect(
+        row.missing_since === null,
+        `${String(row.comment_ref)} under ${String(row.parent_post_ref)}`,
+      ).toBe(row.parent_post_ref !== "000910000000000001");
+    }
     // The bodies survive the mark. "Gone from the platform" is not "gone from
     // the archive".
     expect(stored.some((row) => row.text_plain === "tipped this")).toBe(true);
@@ -347,14 +360,16 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     await project(page.id);
     await seedObservation(page.id, "empty", fixture("replies-empty"));
     await project(page.id);
-    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(4);
+    // Three: the nested reply hangs off a comment, so the post's walk never
+    // marked it (see the test above).
+    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(3);
 
     // The comments return UNCHANGED, so their content hashes are the ones they
     // had before: the row events dedupe and never reach the projector. Only the
     // ROSTER can un-mark them, which is why the clear half exists.
     await seedObservation(page.id, "four-again", fixture("replies-four-with-accounts"));
     const result = await project(page.id);
-    expect(result.clearedMissing).toBe(4);
+    expect(result.clearedMissing).toBe(3);
     expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
   });
 
