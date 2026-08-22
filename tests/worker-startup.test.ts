@@ -86,9 +86,20 @@ const observationsPartitionMocks = vi.hoisted(() => ({
 
 const canonicalizeDriverMocks = vi.hoisted(() => ({
   CANONICALIZE_SWEEP_QUEUE: "canonicalize.sweep",
+  // Defect 2026-08-22: the sweep's own queue and the reconcile queue it was
+  // split from, plus the wall-clock budget the sweep hands the driver.
+  DM_RECONCILE_SWEEP_QUEUE: "projections.dm-reconcile.sweep",
+  CANONICALIZE_SWEEP_BUDGET_MS: 600_000,
   ensureCanonicalizeQueues: vi.fn(),
   ensureCanonicalizeSchedule: vi.fn(),
   runCanonicalization: vi.fn(),
+}));
+
+/** The three reconciles that used to ride the canonicalize sweep's handler. */
+const dmReconcileMocks = vi.hoisted(() => ({
+  runOfapiDmReadthroughReconcile: vi.fn(),
+  runOfapiCaptureMaterialization: vi.fn(),
+  runDmCorrectionsReconcile: vi.fn(),
 }));
 
 // WP-F1(0): the projection registry imports each projector's NAME, event types
@@ -156,6 +167,23 @@ vi.mock("../apps/runtime/src/services/ofapi-dm-analytics.ts", () => ofapiDmAnaly
 vi.mock("../apps/runtime/src/services/db-disk-alert.ts", () => dbDiskAlertMocks);
 vi.mock("../apps/runtime/src/services/observations-partitions.ts", () => observationsPartitionMocks);
 vi.mock("../apps/runtime/src/services/canonicalize-driver.ts", () => canonicalizeDriverMocks);
+// Spread the real modules: several other services import values from these
+// three, and a partial mock would blank them for the whole graph.
+vi.mock("../apps/runtime/src/services/ofapi-dm-readthrough.ts", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  runOfapiDmReadthroughReconcile: dmReconcileMocks.runOfapiDmReadthroughReconcile,
+}));
+vi.mock(
+  "../apps/runtime/src/services/ofapi-capture-materialization.ts",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    runOfapiCaptureMaterialization: dmReconcileMocks.runOfapiCaptureMaterialization,
+  }),
+);
+vi.mock("../apps/runtime/src/services/dm-corrections-reconciler.ts", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  runDmCorrectionsReconcile: dmReconcileMocks.runDmCorrectionsReconcile,
+}));
 vi.mock("../apps/runtime/src/services/projections/message-archive.ts", () => messageArchiveMocks);
 vi.mock(
   "../apps/runtime/src/services/projections/ofapi-message-coverage.ts",
@@ -248,6 +276,19 @@ function getRawPayloadCleanupHandler(boss: {
   return handler;
 }
 
+function getWorkHandler(boss: { work: ReturnType<typeof vi.fn> }, queueName: string) {
+  const workCalls = boss.work.mock.calls as unknown as Array<[
+    string,
+    unknown,
+    () => Promise<unknown>,
+  ]>;
+  const handler = workCalls.find(([name]) => name === queueName)?.[2];
+  if (!handler) {
+    throw new Error(`Expected ${queueName} handler to be registered`);
+  }
+  return handler;
+}
+
 function getMessageArchiveSweepHandler(boss: {
   work: ReturnType<typeof vi.fn>;
 }) {
@@ -311,6 +352,11 @@ describe("worker startup", () => {
     fanslyStatsProjectionMocks.runFanslyStatsProjection.mockReset();
     fanslyStatsProjectionMocks.runFanslyStatsProjection.mockResolvedValue({ applied: 0 });
     aiAcceptanceMocks.runAiAcceptanceProjection.mockReset();
+    canonicalizeDriverMocks.runCanonicalization.mockReset();
+    for (const mock of Object.values(dmReconcileMocks)) {
+      mock.mockReset();
+      mock.mockResolvedValue({ scanned: 0 });
+    }
 
     dbMocks.closeOrphanedSyncRuns.mockResolvedValue({
       totalCount: 2,
@@ -527,6 +573,94 @@ describe("worker startup", () => {
       { error: expect.any(Error), projection: "ofapi_message_coverage_v1" },
       "OFAPI message-coverage projection sweep failed",
     );
+    await runtime.shutdown();
+  });
+
+  // Defect 2026-08-22. One minutely handler ran every canonicalizer family to
+  // exhaustion and THEN the three OFAPI/DM reconciles; once a full pass stopped
+  // fitting in pg-boss's 900s handler expiration the job was killed mid-sweep,
+  // so the reconciles never ran at all and their backlogs grew. The sweep now
+  // runs under a wall-clock budget, and the reconciles have their own job.
+  it("budgets the sweep and reconciles on a separate queue, never inside the sweep", async () => {
+    const app = {
+      db: {},
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      config: {
+        syncObservabilityRetentionDays: 30,
+        telegramEnabled: false,
+        telegramReportHourUtc: 9,
+      },
+      close: vi.fn(async () => {}),
+    };
+    const boss = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      schedule: vi.fn(async () => {}),
+      work: vi.fn(async () => {}),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      fetch: vi.fn(),
+      send: vi.fn(),
+      touch: vi.fn(),
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
+    };
+    canonicalizeDriverMocks.runCanonicalization.mockResolvedValue({
+      scanned: 400,
+      stamped: 400,
+      truncatedByBudget: true,
+      skippedFamilies: ["pull:catalog", "pull:comments"],
+    });
+
+    const runtime = await startWorkerServices(app as never, boss as never);
+
+    await expect(getWorkHandler(boss, "canonicalize.sweep")()).resolves.toBeUndefined();
+    expect(canonicalizeDriverMocks.runCanonicalization).toHaveBeenCalledWith(app, {
+      useSweepCursor: true,
+      maxDurationMs: 600_000,
+    });
+    // THE PIN: the reconciles are no longer reachable from this handler, so a
+    // sweep that spends its whole tick canonicalizing cannot starve them.
+    expect(dmReconcileMocks.runOfapiDmReadthroughReconcile).not.toHaveBeenCalled();
+    expect(dmReconcileMocks.runOfapiCaptureMaterialization).not.toHaveBeenCalled();
+    expect(dmReconcileMocks.runDmCorrectionsReconcile).not.toHaveBeenCalled();
+    // Starvation pressure is an operator-visible warn, naming who paid for it.
+    expect(app.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        budgetMs: 600_000,
+        durationMs: expect.any(Number),
+        skippedFamilies: ["pull:catalog", "pull:comments"],
+      }),
+      expect.stringContaining("wall-clock budget"),
+    );
+
+    const order: string[] = [];
+    dmReconcileMocks.runOfapiDmReadthroughReconcile.mockImplementation(async () => {
+      order.push("readthrough");
+      return { scanned: 0 };
+    });
+    dmReconcileMocks.runOfapiCaptureMaterialization.mockImplementation(async () => {
+      order.push("materialization");
+      return { scanned: 0 };
+    });
+    dmReconcileMocks.runDmCorrectionsReconcile.mockImplementation(async () => {
+      order.push("corrections");
+      return { scanned: 0 };
+    });
+
+    await expect(getWorkHandler(boss, "projections.dm-reconcile.sweep")())
+      .resolves.toBeUndefined();
+    // Order preserved: corrections drain material!=emitted AFTER the two
+    // projectors above have merged this minute's material.
+    expect(order).toEqual(["readthrough", "materialization", "corrections"]);
+    expect(canonicalizeDriverMocks.runCanonicalization).toHaveBeenCalledTimes(1);
+
     await runtime.shutdown();
   });
 

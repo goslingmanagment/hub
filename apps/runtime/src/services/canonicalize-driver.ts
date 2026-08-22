@@ -31,8 +31,33 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const CANONICALIZE_SWEEP_QUEUE = "canonicalize.sweep";
 
+/**
+ * The reconcile half of what used to be ONE minutely handler (defect
+ * 2026-08-22). `runOfapiDmReadthroughReconcile`, `runOfapiCaptureMaterialization`
+ * and `runDmCorrectionsReconcile` ran inside the canonicalize sweep's handler,
+ * AFTER every family — so once the sweep started outrunning pg-boss's 900s
+ * handler expiration (WP-F0's ~30 drafts per dm_messages observation, plus the
+ * five WP-F1..F6 projection-only families) the job was killed mid-run and the
+ * three reconciles NEVER RAN AT ALL: `messages.received` and
+ * `ofapi.interactive_response` backlogs grew while the sweep restarted and was
+ * killed again. They share a cadence with the sweep and nothing else, so they
+ * get their own minutely queue. The name lives here, beside the sweep it was
+ * split from, and the two are created and scheduled together below.
+ */
+export const DM_RECONCILE_SWEEP_QUEUE = "projections.dm-reconcile.sweep";
+
 const SWEEP_PAGE_SIZE = 200;
 const SWEEP_MAX_PAGES_PER_FAMILY = 20;
+
+/**
+ * Wall-clock budget the minutely sweep hands `runCanonicalization`
+ * (`maxDurationMs`). Ten minutes sits well under pg-boss's 900s default
+ * handler expiration for this queue — the queue keeps that default on purpose,
+ * so the budget is the thing that ends a long run and the expiration stays the
+ * backstop it was meant to be. The gap leaves room for the page in flight when
+ * the budget expires (the check is BETWEEN pages, never mid-row).
+ */
+export const CANONICALIZE_SWEEP_BUDGET_MS = 600_000;
 
 /** W8.2 (A13 remainder, decision #133): the plausibility window for
  * occurred_at at canonicalize time. Provider timestamps are untrusted input —
@@ -85,6 +110,9 @@ export async function ensureCanonicalizeQueues(
   await ensureQueueCreated(boss, CANONICALIZE_SWEEP_QUEUE, {
     policy: "exclusive",
   }, createdQueues);
+  await ensureQueueCreated(boss, DM_RECONCILE_SWEEP_QUEUE, {
+    policy: "exclusive",
+  }, createdQueues);
 }
 
 export async function ensureCanonicalizeSchedule(boss: QueueCreationClient) {
@@ -92,6 +120,9 @@ export async function ensureCanonicalizeSchedule(boss: QueueCreationClient) {
     return;
   }
   await boss.schedule(CANONICALIZE_SWEEP_QUEUE, "* * * * *", null, { tz: "UTC" });
+  // Same minute, its own job: the reconciles must be reachable on a tick the
+  // sweep spent entirely inside one family's pages.
+  await boss.schedule(DM_RECONCILE_SWEEP_QUEUE, "* * * * *", null, { tz: "UTC" });
 }
 
 export interface CanonicalizationRunResult {
@@ -148,6 +179,22 @@ export interface CanonicalizationRunResult {
   }>;
   /** Seconds from received_at to processing for the oldest row this run. */
   maxLagSeconds: number;
+  /**
+   * The run stopped early because `maxDurationMs` ran out. NOT a failure and
+   * not an error: every row it did process is settled, and the families it did
+   * not reach are named in `skippedFamilies` and take the head of the next run
+   * (see the rotation below). It IS starvation pressure, so the sweep logs it
+   * at warn level — a tick that keeps truncating means the minute no longer
+   * holds the corpus.
+   */
+  truncatedByBudget: boolean;
+  /**
+   * `source:lane` of every family that did not run AT ALL this tick because
+   * the budget was already gone when its turn came. The family that was
+   * mid-run when the budget expired is absent from this list — it ran, kept
+   * its sweep cursor, and resumes exactly where it stopped.
+   */
+  skippedFamilies: string[];
 }
 
 export interface CanonicalizationRunOptions {
@@ -186,6 +233,20 @@ export interface CanonicalizationRunOptions {
   afterId?: number | null;
   /** Counts-only parser diagnostics sink, handed to every canonicalizer. */
   diagnostics?: { record: (code: string) => void };
+  /**
+   * Wall-clock budget for the WHOLE run (defect 2026-08-22). Default: none —
+   * the CLI drains and the replay paths are bounded by their page counts and
+   * must not stop halfway through a narrowed replay. The minutely sweep passes
+   * one, because pg-boss kills a handler that outruns the queue's expiration
+   * and a killed run is strictly worse than a truncated one: it settles
+   * nothing extra and takes everything scheduled after it down with it.
+   *
+   * The budget is checked BETWEEN PAGES and BETWEEN FAMILIES, never mid-row: a
+   * row is the unit of work that appends and stamps in one commit, and abandoning
+   * one halfway is exactly the append-without-stamp shape the engine already
+   * treats as a retry.
+   */
+  maxDurationMs?: number;
 }
 
 /** Where each family's NEXT sweep resumes (see useSweepCursor). Module-level
@@ -202,9 +263,53 @@ function sweepCursorKey(family: CanonicalizerFamily): string {
   return `${family.source}:${family.kinds?.join(",") ?? "*"}:v${family.version}`;
 }
 
+/**
+ * Where the NEXT budgeted sweep starts its family rotation — the `source:lane`
+ * of a family, or null for "the registry head" (defect 2026-08-22).
+ *
+ * Why rotate at all: with a wall-clock budget the registry order becomes a
+ * priority order, and the families at the end of it (fansly-stats,
+ * -engagement, -catalog, -comments — the WP-F1..F6 additions) are exactly the
+ * ones that never got a turn while the sweep was being killed at 900s. Each
+ * budgeted run therefore resumes at the family AFTER the one that ran the
+ * budget out, so every family reaches the head within a few ticks.
+ *
+ * Module-level and in-memory, deliberately mirroring `sweepCursors` above: a
+ * worker restart costs one pass that starts at the head, and the per-family
+ * cursors (which ARE the durable "where was I" state within a family) are
+ * untouched by rotation — a family resumes its own scan exactly where it
+ * stopped whenever its turn comes round.
+ *
+ * Rotation is safe ONLY because families of the same `source` claim DISJOINT
+ * kinds (the one family with `kinds: null` is command_result, the only family
+ * of its source). Two families claiming one kind would make run order decide
+ * which of them stamps parse_version first — order would then be semantics,
+ * not scheduling, and this rotation would break it.
+ */
+let sweepFamilyRotationKey: string | null = null;
+
+/** `source:lane` — stable, version-independent, unique across the registry
+ *  (the lane's contract), and the same label the partition anomalies carry. */
+function familyLabel(family: CanonicalizerFamily): string {
+  return `${family.source}:${family.lane}`;
+}
+
+function rotateFamilies(
+  families: readonly CanonicalizerFamily[],
+): readonly CanonicalizerFamily[] {
+  if (sweepFamilyRotationKey === null) {
+    return families;
+  }
+  const start = families.findIndex((family) => familyLabel(family) === sweepFamilyRotationKey);
+  // A key that no longer resolves (registry edited, or a `families` override)
+  // means "start at the head" — never "skip the run".
+  return start <= 0 ? families : [...families.slice(start), ...families.slice(0, start)];
+}
+
 /** Test hook: start every family's next sweep from the signal head. */
 export function resetCanonicalizeSweepCursors() {
   sweepCursors.clear();
+  sweepFamilyRotationKey = null;
 }
 
 /**
@@ -279,14 +384,16 @@ async function runFamily(
     diagnostics?: { record: (code: string) => void };
   },
   partitionGate: PartitionGate,
-) {
+  /** Epoch ms after which this family must take no NEW page; null = no budget. */
+  deadlineAt: number | null,
+): Promise<boolean> {
   const kinds = options.kinds !== undefined
     ? (family.kinds === null
       ? options.kinds
       : options.kinds.filter((kind) => family.kinds!.includes(kind)))
     : family.kinds ?? undefined;
   if (options.kinds !== undefined && kinds !== undefined && kinds.length === 0) {
-    return;
+    return false;
   }
   const belowParseVersion = options.belowParseVersion ?? family.version;
   const now = options.now ?? new Date();
@@ -298,7 +405,17 @@ async function runFamily(
     ? sweepCursors.get(sweepCursorKey(family)) ?? null
     : options.afterId ?? null;
   let reachedEnd = false;
+  let budgetExhausted = false;
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+    // The budget, checked between PAGES only (never mid-row). `pageIndex > 0`
+    // on purpose: the caller already proved the budget was alive when this
+    // family's turn came, so every family that starts gets at least one page —
+    // a family that could be entered and immediately abandoned would be
+    // "scheduled" without ever making progress.
+    if (deadlineAt !== null && pageIndex > 0 && Date.now() >= deadlineAt) {
+      budgetExhausted = true;
+      break;
+    }
     const rows: ReplayObservationRow[] = await listObservationsForReplay(app.db, {
       belowParseVersion,
       source: family.source,
@@ -446,8 +563,11 @@ async function runFamily(
   if (useCursor) {
     // End of signal → wrap to the head next run (skipped rows get their
     // once-per-cycle retry); mid-signal → resume where this run stopped.
+    // A budget-truncated family is mid-signal by construction, so its cursor
+    // holds the exact continuation point until its next turn.
     sweepCursors.set(sweepCursorKey(family), reachedEnd ? null : afterId);
   }
+  return budgetExhausted;
 }
 
 export async function runCanonicalization(
@@ -467,7 +587,12 @@ export async function runCanonicalization(
     partitionBlocked: 0,
     partitionAnomalies: [],
     maxLagSeconds: 0,
+    truncatedByBudget: false,
+    skippedFamilies: [],
   };
+  const deadlineAt = options.maxDurationMs !== undefined && options.maxDurationMs > 0
+    ? Date.now() + options.maxDurationMs
+    : null;
   const partitionGate = createPartitionGate(app, totals);
   // Per-run context: Fansly DM direction resolves against the page's own
   // native account ref (Stage 17); built once, shared by all families.
@@ -492,11 +617,43 @@ export async function runCanonicalization(
     accountIdByNativeRef,
     ...(options.diagnostics !== undefined ? { diagnostics: options.diagnostics } : {}),
   };
-  for (const family of options.families ?? CANONICALIZER_FAMILIES) {
+  const families = options.families ?? CANONICALIZER_FAMILIES;
+  // Only the cursor-driven minutely sweep rotates. CLI and replay runs keep
+  // the registry order so a narrowed replay stays deterministic — and they
+  // pass no budget, so there is nothing for a rotation to be fair about.
+  const rotates = options.useSweepCursor === true;
+  const ordered = rotates ? rotateFamilies(families) : families;
+  /** Index in `ordered` the NEXT run should start at; null = a full pass. */
+  let nextStartIndex: number | null = null;
+  for (const [index, family] of ordered.entries()) {
+    if (deadlineAt !== null && Date.now() >= deadlineAt) {
+      // The budget died in the PREVIOUS family: this one and everything after
+      // it did not run at all, and this one heads the next run.
+      totals.truncatedByBudget = true;
+      totals.skippedFamilies = ordered.slice(index).map(familyLabel);
+      nextStartIndex = index;
+      break;
+    }
     // Family isolation: a structural failure in one family (e.g. its list
     // query dying on a transient error) must not stall the other sources.
     try {
-      await runFamily(app, family, options, totals, runContext, partitionGate);
+      const budgetExhausted = await runFamily(
+        app,
+        family,
+        options,
+        totals,
+        runContext,
+        partitionGate,
+        deadlineAt,
+      );
+      if (budgetExhausted) {
+        // This family ran and kept its cursor; the next run starts AFTER it so
+        // the tail of the registry cannot be starved by the head.
+        totals.truncatedByBudget = true;
+        totals.skippedFamilies = ordered.slice(index + 1).map(familyLabel);
+        nextStartIndex = (index + 1) % ordered.length;
+        break;
+      }
     } catch (error) {
       totals.errored += 1;
       app.logger.error(
@@ -504,6 +661,13 @@ export async function runCanonicalization(
         "Canonicalizer family run failed; other families continue",
       );
     }
+  }
+  if (rotates) {
+    // A completed pass clears the offset: the next run starts at the head,
+    // exactly as every run did before the budget existed.
+    sweepFamilyRotationKey = nextStartIndex === null
+      ? null
+      : familyLabel(ordered[nextStartIndex]!);
   }
   return totals;
 }

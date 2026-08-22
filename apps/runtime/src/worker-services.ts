@@ -27,7 +27,9 @@ import {
   runCapturePayloadParityCheck,
 } from "./services/capture-payload-parity.ts";
 import {
+  CANONICALIZE_SWEEP_BUDGET_MS,
   CANONICALIZE_SWEEP_QUEUE,
+  DM_RECONCILE_SWEEP_QUEUE,
   ensureCanonicalizeQueues,
   runCanonicalization,
 } from "./services/canonicalize-driver.ts";
@@ -338,14 +340,51 @@ export async function startWorkerServices(
   });
 
   await boss.work(CANONICALIZE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    const startedAt = Date.now();
     // W5.3 (B3): the minutely sweep is the ONLY caller that resumes from the
     // per-family cursor; CLI/replay runs stay cursor-free.
-    const result = await runCanonicalization(app, { useSweepCursor: true });
+    const result = await runCanonicalization(app, {
+      useSweepCursor: true,
+      // Defect 2026-08-22: a full pass over every family stopped fitting in
+      // pg-boss's 900s handler expiration, so the job was killed, restarted
+      // immediately and killed again — and the families at the end of the
+      // registry sat at parse_version 0 for a quarter of an hour. The budget
+      // ends a long run BETWEEN pages, well short of the expiration, and the
+      // driver's rotation hands the families this tick skipped the head of
+      // the next one.
+      maxDurationMs: CANONICALIZE_SWEEP_BUDGET_MS,
+    });
+    const durationMs = Date.now() - startedAt;
     if (result.scanned > 0) {
-      app.logger.info(result, "Canonicalization sweep complete");
+      app.logger.info({ ...result, durationMs }, "Canonicalization sweep complete");
     }
-    // PR4: the readthrough reconcile projector rides the same minutely
-    // handler (it is NOT a canonicalizer family — see ofapi-dm-readthrough).
+    if (result.truncatedByBudget) {
+      // The tick-duration signal for THIS queue (the sibling of the projection
+      // tick's [D1] alert below): a run that keeps hitting its budget is a
+      // minute that no longer holds the corpus, and the named families are the
+      // ones paying for it. Warn, never a latch — nothing here is broken, and
+      // the next tick starts with the skipped families.
+      app.logger.warn(
+        {
+          durationMs,
+          budgetMs: CANONICALIZE_SWEEP_BUDGET_MS,
+          skippedFamilies: result.skippedFamilies,
+          scanned: result.scanned,
+          stamped: result.stamped,
+        },
+        "Canonicalization sweep hit its wall-clock budget; families skipped this tick "
+          + "take the head of the next run",
+      );
+    }
+  });
+
+  // Defect 2026-08-22: these three used to run at the END of the canonicalize
+  // sweep's handler, which meant a sweep killed at the queue's expiration
+  // never reached them at all. Same minutely cadence, its own job — the ONLY
+  // thing they ever shared with the sweep was the tick.
+  await boss.work(DM_RECONCILE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    // PR4: the readthrough reconcile projector (it is NOT a canonicalizer
+    // family — see ofapi-dm-readthrough).
     const readthrough = await runOfapiDmReadthroughReconcile(app);
     if (readthrough.scanned > 0) {
       app.logger.info(readthrough, "Readthrough reconcile sweep complete");
