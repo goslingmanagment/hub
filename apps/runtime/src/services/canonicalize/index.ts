@@ -43,6 +43,12 @@ import {
   FANSLY_ENGAGEMENT_CANONICALIZED_KINDS,
   FANSLY_ENGAGEMENT_CANONICALIZER_VERSION,
 } from "./fansly-engagement.ts";
+import {
+  canonicalizeFanslyCatalogObservation,
+  canParseFanslyCatalogObservation,
+  FANSLY_CATALOG_CANONICALIZED_KINDS,
+  FANSLY_CATALOG_CANONICALIZER_VERSION,
+} from "./fansly-catalog.ts";
 
 export interface CanonicalizerFamily {
   source: "webhook" | "pull" | "command_result" | "client_capture";
@@ -141,6 +147,20 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: FANSLY_ENGAGEMENT_CANONICALIZER_VERSION,
     canonicalize: canonicalizeFanslyEngagementObservation,
     canParse: canParseFanslyEngagementObservation,
+    projectionOnly: true,
+  },
+  {
+    // WP-F3: the `catalog` lane. Projection-only, and the ONE family that emits
+    // an event about an ABSENCE — `catalog.listing_observed` carries the full
+    // roster a listing served, which is what lets a rebuild derive
+    // `missing_since` from the ledger instead of from whatever the sweep
+    // happened to notice at the time.
+    source: "pull",
+    lane: "catalog",
+    kinds: [...FANSLY_CATALOG_CANONICALIZED_KINDS],
+    version: FANSLY_CATALOG_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeFanslyCatalogObservation,
+    canParse: canParseFanslyCatalogObservation,
     projectionOnly: true,
   },
   {

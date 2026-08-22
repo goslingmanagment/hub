@@ -149,6 +149,11 @@ const envSchema = z.object({
   FANSLY_NOTIFICATIONS_SYNC_ENABLED: booleanSchema.default(false),
   FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(96),
+  // WP-F3. Same fail-closed allowlist semantic; its own key (S4) so a catalog
+  // ramp cannot be widened by an edit meant for another lane.
+  FANSLY_CATALOG_SYNC_ENABLED: booleanSchema.default(false),
+  FANSLY_CATALOG_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_CATALOG_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(60),
   FANSLY_STATS_HOURLY_ENABLED: booleanSchema.default(true),
   FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS: z.coerce.number().int().min(0).max(400).default(30),
   FANSLY_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
@@ -421,6 +426,11 @@ export interface AppConfig {
   fanslyNotificationsPageAllowlist?: string;
   /** HTTP ATTEMPTS per page per UTC day for the notification lane; crossing it defers. */
   fanslyNotificationsDailyCallBudget?: number;
+  fanslyCatalogSyncEnabled?: boolean;
+  /** CSV of page labels allowed to sweep the catalog; empty = NONE (fails closed). */
+  fanslyCatalogPageAllowlist?: string;
+  /** HTTP ATTEMPTS per page per UTC day for the catalog lane; crossing it defers. */
+  fanslyCatalogDailyCallBudget?: number;
   fanslyStatsHourlyEnabled?: boolean;
   fanslyStatsHourlyBackfillMaxDays?: number;
   /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
@@ -705,6 +715,9 @@ export function loadConfig(
     fanslyNotificationsSyncEnabled: parsed.FANSLY_NOTIFICATIONS_SYNC_ENABLED,
     fanslyNotificationsPageAllowlist: parsed.FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST,
     fanslyNotificationsDailyCallBudget: parsed.FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET,
+    fanslyCatalogSyncEnabled: parsed.FANSLY_CATALOG_SYNC_ENABLED,
+    fanslyCatalogPageAllowlist: parsed.FANSLY_CATALOG_PAGE_ALLOWLIST,
+    fanslyCatalogDailyCallBudget: parsed.FANSLY_CATALOG_DAILY_CALL_BUDGET,
     fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,
     fanslyStatsHourlyBackfillMaxDays: parsed.FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS,
     fanslyBackfillContinuationDelayMs: parsed.FANSLY_BACKFILL_CONTINUATION_DELAY_MS,

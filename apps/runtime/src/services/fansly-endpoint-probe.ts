@@ -188,7 +188,17 @@ const ROUTES: ProbeRoute[] = [
   },
   {
     key: "[F3] GET /media/vaultnew?albumId=",
-    run: (app, ctx, o) => app.adapter.getVaultMediaPage(ctx, { albumId: o.albumId ?? null, mediaType: 0 }),
+    // WP-F3 settled the query form: `before`/`after` are the LITERAL "0" and
+    // `mediaType` is present-and-EMPTY when unfiltered. The probe sends what
+    // the lane sends, so a future probe run measures the real request.
+    run: (app, ctx, o) =>
+      app.adapter.getVaultMediaPage(ctx, {
+        albumId: o.albumId ?? null,
+        mediaType: "",
+        search: "",
+        before: "0",
+        after: "0",
+      }),
     isBare: (o) => !o.albumId,
   },
 ];

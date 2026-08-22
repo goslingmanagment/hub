@@ -14,6 +14,16 @@
 // SINGLE writer of creator_media. The new offer-location type is the media ↔
 // offer ↔ bundle ↔ carrier join evidence — pure id-relations, no URLs.
 //
+// WP-F3 extends it AGAIN, the same way and for the same reason: the catalog
+// lane mints `media.observed` from the vault walk (first_origin 'vault') and
+// from the `/account/media?ids=` / `/account/media/bundle?ids=` batch
+// hydrations (first_origin 'account_media_batch', widened into 0130's CHECK by
+// migration 0136). Nothing about this file changes to accept them — the drafts
+// are minted by the SAME `mediaObservedDrafts` builder with a different origin
+// string, which is exactly the point: a second builder would be a second set of
+// permission/sale-counter bugs, and a second WRITER would be two heads
+// disagreeing about one media row's price.
+//
 // The fourth v5 type, `message.material_observed`, is deliberately NOT read
 // here: it belongs to the message-archive projector, which already understands
 // it. That is the whole of A17-4 variant B — the archive gains Fansly material

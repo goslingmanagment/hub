@@ -66,6 +66,10 @@ export const MONITORED_SYNC_STREAMS = [
   // exists to prevent, and the notification lane is the one whose downtime
   // costs facts rather than freshness.
   "notifications",
+  // WP-F3. A wedged catalog sweep is invisible in every other surface — the
+  // page keeps syncing DMs and money while its inventory silently ages, and M
+  // (the number WP-F4 is sized against) quietly stops moving.
+  "catalog",
 ] as const satisfies readonly SyncStream[];
 const REQUEST_STREAMS = [
   ...MONITORED_SYNC_STREAMS,

@@ -127,6 +127,42 @@ export type AdapterLike = ProviderAdapter<
     params: { before?: string | null; after?: string | null; types?: readonly number[] | null },
   ): Promise<{ items: unknown; raw: unknown }>;
 
+  // WP-F3: the `catalog` lane. Loosely typed in and out — every one of these
+  // responses is journaled BEFORE anything asserts a shape about it.
+  getVaultAlbums(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  getUserVaultAlbums(
+    context: FanslyRequestContext,
+    params: { accountId: string },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getSubscriptionTiers(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  getGiftCodes(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  getAutomatedMessages(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
+  // `before`/`after` are the LITERAL string "0" on the first page (§ the app
+  // bundle); `mediaType` is present and empty when unfiltered.
+  getVaultMediaPage(
+    context: FanslyRequestContext,
+    params: {
+      albumId?: string | null;
+      type?: number | null;
+      mediaType?: string | null;
+      before?: string | null;
+      after?: string | null;
+      search?: string | null;
+    },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getAccountMediaByIds(
+    context: FanslyRequestContext,
+    params: { ids: string },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getAccountMediaBundlesByIds(
+    context: FanslyRequestContext,
+    params: { ids: string },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getAccountWalls(
+    context: FanslyRequestContext,
+    params: { correlationPostIds?: string | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+
   // Stage 6 replay-probe methods (read-only, loosely typed — Stage 16 hardens).
   getEarningsStatsAccountsPage(
     context: FanslyRequestContext,
@@ -186,13 +222,10 @@ export type AdapterLike = ProviderAdapter<
   ): Promise<{ items: unknown; raw: unknown }>;
   getPolls(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
   getRecapStats(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
-  getAccountMediaByIds(context: FanslyRequestContext, params: { ids: string }): Promise<{ items: unknown; raw: unknown }>;
-  getAccountMediaBundlesByIds(context: FanslyRequestContext, params: { ids: string }): Promise<{ items: unknown; raw: unknown }>;
-  getAccountWalls(context: FanslyRequestContext, params: { correlationPostIds?: string | null }): Promise<{ items: unknown; raw: unknown }>;
-  getVaultMediaPage(
-    context: FanslyRequestContext,
-    params: { albumId?: string | null; type?: number | null; mediaType?: number | null; before?: string | null; after?: string | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
+  // (The WP-F9 probe's declarations of the four catalog routes moved up to the
+  // WP-F3 block above when the lane that CALLS them landed — one declaration
+  // per method, and `getVaultMediaPage`'s `mediaType` is a STRING there because
+  // the app sends it present-and-empty when unfiltered.)
 
   close?(): Promise<void>;
 };

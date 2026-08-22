@@ -143,6 +143,9 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   // WP-F2 (migration 0133): the notification poll — the only permanently-lossy
   // lane, which is why it is `live` rather than maintenance.
   "notifications",
+  // WP-F3 (migration 0135): the daily content-catalog sweep — the lane that
+  // measures M, the media denominator WP-F4 is sized against.
+  "catalog",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
@@ -5142,6 +5145,20 @@ export const pagePromoLinks = pgTable(
     subscriptions: bigint("subscriptions", { mode: "number" }),
     totalGrossMills: bigint("total_gross_mills", { mode: "bigint" }),
     totalNetMills: bigint("total_net_mills", { mode: "bigint" }),
+    // ── WP-F3 (0136): the GIFT-CODE half. Added rather than borrowed from the
+    // tracking columns above — `total_gross_mills` is REVENUE and
+    // `original_price_mills` is a LIST PRICE, and money of unknown basis is
+    // never summed with money of known basis (§2.3), inside one table as much
+    // as across two.
+    uses: bigint("uses", { mode: "number" }),
+    maxUses: bigint("max_uses", { mode: "number" }),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    /** `original_price` — snake_case on the wire amid camelCase keys. */
+    originalPriceMills: bigint("original_price_mills", { mode: "bigint" }),
+    startsAtPlatform: timestamp("starts_at_platform", { withTimezone: true }),
+    endsAtPlatform: timestamp("ends_at_platform", { withTimezone: true }),
+    /** Set when a later FULL listing stops naming this link. Never deleted. */
+    missingSince: timestamp("missing_since", { withTimezone: true }),
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
     contentHash: char("content_hash", { length: 64 }).notNull(),
     firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
@@ -5546,6 +5563,312 @@ export const subjectRefreshState = pgTable(
       table.pageId,
       table.plane,
       table.nextDueAt,
+    ),
+  }),
+);
+
+// ── WP-F3, migration 0136: the content catalog ───────────────────────────────
+
+/**
+ * Both vaults, told apart by `vaultKind` — which is in the PRIMARY KEY, not a
+ * nullable label. `/vault/albumsnew` is the creator's inventory;
+ * `/uservault/albumsnew?accountId=` is the account's own Likes/Purchases and
+ * holds OTHER creators' media, so merging the two would make purchases
+ * indistinguishable from inventory.
+ *
+ * `itemCount` is stored AS SERVED and is NON-UNIQUE membership: the system
+ * albums (type 38000 / 5000 / 1000) are views over the same media, so Σ over a
+ * page double-counts. M is `count(distinct media_offer_ref)` over
+ * `creator_media`, never a sum of this column.
+ */
+export const creatorVaultAlbums = pgTable(
+  "creator_vault_albums",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    /** `creator` | `user`. */
+    vaultKind: text("vault_kind").notNull(),
+    albumRef: text("album_ref").notNull(),
+    ownerAccountRef: text("owner_account_ref"),
+    title: text("title"),
+    description: text("description"),
+    /** RAW platform integer; NULL on creator-made albums. */
+    albumType: integer("album_type"),
+    status: integer("status"),
+    pos: integer("pos"),
+    /** AS SERVED. Non-unique membership — see the note above. */
+    itemCount: bigint("item_count", { mode: "number" }),
+    lastItemRef: text("last_item_ref"),
+    thumbnailRef: text("thumbnail_ref"),
+    public: integer("public"),
+    version: integer("version"),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    /** Set when a later FULL listing of the same vault stops naming this
+     *  album. The row is never deleted (DP 7). */
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "creator_vault_albums_pkey",
+      columns: [table.pageId, table.vaultKind, table.albumRef],
+    }),
+    pageKindPosIdx: index("creator_vault_albums_page_kind_pos_idx").on(
+      table.pageId,
+      table.vaultKind,
+      table.pos,
+    ),
+  }),
+);
+
+/**
+ * Album ↔ media-offer membership: the overlap-aware evidence behind M. The
+ * union of `mediaOfferRef` over an exhausted CREATOR vault is the honest
+ * inventory size; the gap between that union and Σ `itemCount` is exactly the
+ * double-count the system albums cause.
+ *
+ * `memberRef` is the membership row's OWN id (`albumMedia[].id`) — the vault
+ * walk's `before` cursor, and NOT the same value as `mediaOfferRef`.
+ */
+export const creatorVaultAlbumMembers = pgTable(
+  "creator_vault_album_members",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    albumRef: text("album_ref").notNull(),
+    mediaOfferRef: text("media_offer_ref").notNull(),
+    memberRef: text("member_ref"),
+    mediaOfferType: integer("media_offer_type"),
+    bundleRef: text("bundle_ref"),
+    mediaRef: text("media_ref"),
+    mediaType: integer("media_type"),
+    previewRef: text("preview_ref"),
+    /** `creator` | `user` — denormalized from the album so the M query does
+     *  not have to join to exclude the purchases shelf. */
+    vaultKind: text("vault_kind").notNull(),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "creator_vault_album_members_pkey",
+      columns: [table.pageId, table.albumRef, table.mediaOfferRef],
+    }),
+    pageKindOfferIdx: index("creator_vault_album_members_page_kind_offer_idx").on(
+      table.pageId,
+      table.vaultKind,
+      table.mediaOfferRef,
+    ),
+    pageOfferIdx: index("creator_vault_album_members_page_offer_idx").on(
+      table.pageId,
+      table.mediaOfferRef,
+    ),
+  }),
+);
+
+/**
+ * The tier HEAD. `basePriceMills` is `tier.price` — a BASE, not a price: all
+ * five observed tiers carried 5 000 while their plans ranged 10 000 … 499 990.
+ * The queryable price truth is `pageSubscriptionTierPlans` (FEAT-002); `plans`
+ * keeps the served array verbatim beside it as the proof nothing was dropped.
+ */
+export const pageSubscriptionTiers = pgTable(
+  "page_subscription_tiers",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    tierRef: text("tier_ref").notNull(),
+    name: text("name"),
+    color: text("color"),
+    pos: integer("pos"),
+    /** `tier.price` — a BASE, never the price a subscriber pays. */
+    basePriceMills: bigint("base_price_mills", { mode: "bigint" }),
+    maxSubscribers: bigint("max_subscribers", { mode: "number" }),
+    subscriptionBenefits: jsonbSafe("subscription_benefits").$type<unknown[]>().default([])
+      .notNull(),
+    includedTierRefs: jsonbSafe("included_tier_refs").$type<unknown[]>().default([]).notNull(),
+    /** The served `plans[]` array, VERBATIM. */
+    plans: jsonbSafe("plans").$type<unknown[]>().default([]).notNull(),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_subscription_tiers_pkey",
+      columns: [table.pageId, table.tierRef],
+    }),
+    pagePosIdx: index("page_subscription_tiers_page_pos_idx").on(table.pageId, table.pos),
+  }),
+);
+
+/**
+ * THE PRICE TRUTH (FEAT-002). `durationDays` reads `plans[].billingCycle` —
+ * verified on the live capture, where every plan carried `billingCycle` and no
+ * `duration` key at all (`duration` exists one level down, on `promos[]`).
+ * Maximum plan price observed live is 499 990.
+ */
+export const pageSubscriptionTierPlans = pgTable(
+  "page_subscription_tier_plans",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    tierRef: text("tier_ref").notNull(),
+    planRef: text("plan_ref").notNull(),
+    status: integer("status"),
+    durationDays: integer("duration_days"),
+    priceMills: bigint("price_mills", { mode: "bigint" }),
+    useAmounts: integer("use_amounts"),
+    /** The nested promo array, verbatim: discounted price, window, max uses. */
+    promos: jsonbSafe("promos").$type<unknown[]>().default([]).notNull(),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_subscription_tier_plans_pkey",
+      columns: [table.pageId, table.tierRef, table.planRef],
+    }),
+    pagePriceIdx: index("page_subscription_tier_plans_page_price_idx").on(
+      table.pageId,
+      table.durationDays,
+      table.priceMills,
+    ),
+  }),
+);
+
+/**
+ * The profile's content sections. `pages.metadata.walls` already holds a
+ * current-state hint from `/account`; this table is the LINEAGE — the first
+ * captured `/account/walls` read is the projection baseline, and a renamed or
+ * deleted wall keeps its row and gains `missingSince`.
+ */
+export const pageWalls = pgTable(
+  "page_walls",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    wallRef: text("wall_ref").notNull(),
+    name: text("name"),
+    description: text("description"),
+    pos: integer("pos"),
+    /** Two independent flags on the wire; one wall can be neither. */
+    mainWall: boolean("main_wall"),
+    defaultWall: boolean("default_wall"),
+    private: integer("private"),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ name: "page_walls_pkey", columns: [table.pageId, table.wallRef] }),
+    pagePosIdx: index("page_walls_page_pos_idx").on(table.pageId, table.pos),
+  }),
+);
+
+/**
+ * What the page says without a human. `messageTemplate` is a JSON OBJECT in
+ * every live value (verified 2026-08-19); the tolerant fallback for the
+ * March-corpus STRING shape sets `parseOk = false` and leaves the raw in the
+ * journal, because an unparsed template and an automation with no text must
+ * never look alike.
+ */
+export const pageAutomatedMessages = pgTable(
+  "page_automated_messages",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    automationRef: text("automation_ref").notNull(),
+    /** RAW platform code (3 and 15 observed live). Never a label. */
+    triggerType: integer("trigger_type"),
+    /** Served as a JSON STRING; parsed when it parses, `{"raw": …}` when not. */
+    triggerMetadata: jsonbSafe("trigger_metadata").$type<Record<string, unknown>>().default({})
+      .notNull(),
+    delaySeconds: bigint("delay_seconds", { mode: "number" }),
+    cooldownSeconds: bigint("cooldown_seconds", { mode: "number" }),
+    templateType: integer("template_type"),
+    senderRef: text("sender_ref"),
+    messageText: text("message_text"),
+    /** `[{contentType, contentId}]` — id-relations only, never a URL. */
+    attachmentRefs: jsonbSafe("attachment_refs").$type<unknown[]>().default([]).notNull(),
+    parseOk: boolean("parse_ok").default(true).notNull(),
+    missingSince: timestamp("missing_since", { withTimezone: true }),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_automated_messages_pkey",
+      columns: [table.pageId, table.automationRef],
+    }),
+    pageTriggerIdx: index("page_automated_messages_page_trigger_idx").on(
+      table.pageId,
+      table.triggerType,
     ),
   }),
 );

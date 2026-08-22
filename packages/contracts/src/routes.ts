@@ -2493,6 +2493,8 @@ const extendedSyncStreamEnum = z.enum([
   "stats_snapshot",
   // WP-F2.
   "notifications",
+  // WP-F3.
+  "catalog",
 ]);
 
 export const syncMonitorStreamItemSchema = z.object({

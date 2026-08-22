@@ -33,6 +33,7 @@ import {
   fanslyPostsChunk,
   onlyfansPostsChunk,
 } from "../services/sync/posts.ts";
+import { fanslyCatalogChunk } from "../services/sync/fansly-catalog.ts";
 import { fanslyNotificationsChunk } from "../services/sync/fansly-notifications.ts";
 import { fanslyStatsSnapshotChunk } from "../services/sync/fansly-stats.ts";
 
@@ -87,6 +88,7 @@ const FANSLY_STREAMS: CanonicalStream[] = [
   "posts",
   "stats_snapshot",
   "notifications",
+  "catalog",
 ];
 
 /** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
@@ -121,6 +123,8 @@ const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   // WP-F2. Same rule: a stream in SYNC_STREAMS without a handler here throws
   // "Unsupported executor stream" on every dispatch, FLEET-WIDE.
   notifications: fanslyNotificationsChunk,
+  // WP-F3. Same rule again.
+  catalog: fanslyCatalogChunk,
 };
 
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {

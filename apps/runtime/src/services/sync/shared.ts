@@ -299,6 +299,9 @@ export const FANSLY_GROUPS_CAPTURE_MAPPER_VERSION =
  *  re-labelling unrelated captures. */
 export const FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION =
   `${FANSLY_MAPPER_VERSION}+notifications-capture-v1`;
+/** WP-F3's catalog lane, same reasoning as WP-F2's. */
+export const FANSLY_CATALOG_CAPTURE_MAPPER_VERSION =
+  `${FANSLY_MAPPER_VERSION}+catalog-capture-v1`;
 
 /** Shared by both lanes: pick the allowlisted fields VERBATIM (objects and
  *  arrays keep their served shape), in allowlist order so an unchanged profile
@@ -350,6 +353,51 @@ export function trimFanslyNotificationsPayload(raw: unknown) {
     return raw;
   }
   return { ...raw, accounts: trimFanslyAggregatedAccounts(raw.accounts) };
+}
+
+/**
+ * [A20] on the WP-F3 catalog lane.
+ *
+ * NONE of the six catalog responses carried an `accounts[]` sidecar in the
+ * 2026-08-19 capture — and the trim runs anyway, on BOTH the shapes Fansly uses
+ * for it (`accounts` at the top level, and `aggregationData.accounts`). That is
+ * deliberate. A27's standing caveat is that one response is one example:
+ * optional sidecars are invisible in a single sample, `/post` and
+ * `/notifications` both serve `accounts[]` from the same envelope family, and
+ * the day this lane's `/account/media?ids=` starts returning one, `lastSeenAt`
+ * would enter the journal on a DAILY sweep and quietly cost the dedup collapse
+ * the disk budget rests on. A no-op guard is cheaper than that discovery.
+ *
+ * Everything else passes through UNTOUCHED — `albums`, `albumMedia`, `media`
+ * (with its signed `location`/`variants`, journal-only), `accountMedia`,
+ * `albumContent`, `plans`, `promos` and every key the platform starts serving
+ * tomorrow. DP 7 says journal verbatim; [A20] narrowed exactly one array.
+ *
+ * A payload with neither shape comes back BYTE-IDENTICAL — the trim adds
+ * nothing that was not served.
+ */
+export function trimFanslyCatalogPayload(raw: unknown) {
+  if (!isRecord(raw)) {
+    return raw;
+  }
+  const hasTopLevel = Object.hasOwn(raw, "accounts");
+  const aggregation = isRecord(raw.aggregationData) ? raw.aggregationData : null;
+  const hasNested = aggregation !== null && Object.hasOwn(aggregation, "accounts");
+  if (!hasTopLevel && !hasNested) {
+    return raw;
+  }
+  return {
+    ...raw,
+    ...(hasTopLevel ? { accounts: trimFanslyAggregatedAccounts(raw.accounts) } : {}),
+    ...(hasNested && aggregation !== null
+      ? {
+        aggregationData: {
+          ...aggregation,
+          accounts: trimFanslyAggregatedAccounts(aggregation.accounts),
+        },
+      }
+      : {}),
+  };
 }
 
 export function trimFanslyFollowerPayload(raw: unknown) {
