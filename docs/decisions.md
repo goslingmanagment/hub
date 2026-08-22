@@ -230,6 +230,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 226 | Fansly notifications (WP-F2) — the verbatim-first engagement core | The `notifications` stream lands whole: the head poll (1 800 s, 48/day), the one-off deep backfill, the `fansly-engagement` canonicalizer family, `platform_notifications` + `post_likes` + `subject_refresh_state` (0133 enum, 0134 tables), and the engagement projector. **IT IS THE ONLY PERMANENTLY-LOSSY LANE IN THE SYSTEM** — a liker, a reply, a quote or a purchase is announced ONCE and served by no other route — which is why it is `live` class rather than maintenance, why it polls the head BEFORE anything else, and why a running deep backfill YIELDS to a due head poll (history keeps; the head does not). **LAYER 1 IS THE WHOLE ARGUMENT.** `notification.observed` is emitted for EVERY row and EVERY code, known or not, and `platform_notifications` rebuilds from that event alone — so a code nobody can name today reaches the table by replay the day somebody names it. Layer 2's typed derivations ride BESIDE it, never instead: 2007/2008/32007/45012 become `media.purchase_notification_observed`, the rest become `engagement.notification_observed`, and an unnameable code gets its verbatim row plus a `fansly_notification_unknown_type` anomaly (**A1**). **THE PAYOFF IS NOT HYPOTHETICAL: A22-1 found the shipped spec wrong on EIGHT of sixteen codes, including BOTH purchase events**, which it filed as "PostLikeUndo/PostLikeRedo" — a design that typed before storing would have lost two live money streams into a like bucket with no way back. `packages/shared/src/fansly-notification-types.ts` (`FANSLY_NOTIFICATION_LABEL_VERSION = 1`) holds the corrected table with a CITATION per row and the promotion rule enforced: `confirmed` needs two independent live examples agreeing with a second source, so 2007's UI↔payload match ($80/$50 ↔ 80 000/50 000) is the only confirmed entry and every client-code label is `inferred`. Its labels are `reference/fansly_api_spec.md` §3.1's renderer names, so the repo's two tables cannot drift. **NO LIKE IS DERIVED**: `post_likes` ships schema-complete and EMPTY on Fansly ([E4] — 1002/2002/5003/1004/1005 had ZERO live occurrences and client code proves the client's intent, not the server's), its coverage row reads `not_started` / `forward_only` so the serving layer never renders an empty list as "nobody liked it", and the v1 plan's "2007/2008 = media-like undo/redo, flip post_likes.state" is REFUTED and deleted. **CAPTURE.** The cursor is a NOTIFICATION ID, not a timestamp. The first call of every poll goes UNFILTERED (**A1** wants the unknown codes); on a 4xx or a visibly filtered page the lane widens to the client's FULL declared 18-code CSV — **never the eight-code UI CSV, which silently drops 32007 and 45012, both money** (**A22**) — then to one filter group per call, then STOPS, with the refusal counter durable in the cursor because WP-F1's loop spanned five chunks unnoticed. A narrowed lane never claims a clean capture: every coverage write reads `partial_provider_surface` while the filter is narrowed, **terminal one included, because an empty page through a filter means "no rows of THESE types", not the end of history**. The deep backfill walks to the floor with the repeat-request guard, journals the empty page BECAUSE the empty page is the floor evidence, and records `notificationFloorAt` (13.65 days is where the 2026-08-19 capture STOPPED, not a platform floor). The 96-attempt daily cap is counted in HTTP ATTEMPTS, defers to the next UTC day and NEVER drops. **[A20] on `accounts[]`:** the response embeds the fan as a FULL account record — `lastSeenAt` and every counter field — so that array, and only that array, goes through the 18-field allowlist before journaling; the 200 notification rows and every other key stay verbatim. **HEAD PRECEDENCE IS THE PROVIDER'S `occurred_at`, NEVER `account_seq`**, because the deep backfill appends OLDER facts at HIGHER seq — the one ordering guaranteed wrong here, pinned by "a higher-seq, older-occurred_at event cannot regress the head". **§3.4's THIRD STATE CLASS GAINS ITS SECOND MEMBER**: `subject_refresh_state` — the shared refresh queue every later per-subject lane schedules from — is declared in `OPERATIONAL_STATE_TABLES`, so a rebuild can never truncate it and re-mark the whole catalogue as first-sight. A 2007 marks the bought media dirty there and FETCHES NOTHING; WP-F4 is the consumer |
 | 227 | Fansly content catalog (WP-F3) — the lane that measures M, and closes FEAT-002 | The `catalog` stream lands whole (0135 enum, 0136 tables): six fixed daily steps — `/vault/albumsnew`, `/uservault/albumsnew?accountId=`, `/subscriptions/tiers`, `/subscriptions/giftcodes`, `/message/automated`, `/account/walls` — then the vault media walk over `/media/vaultnew` per creator album, then the `/account/media?ids=` and `/account/media/bundle?ids=` batch hydrations, all on ONE 60-attempt daily cap that DEFERS to the next UTC day and never drops. **IT SHIPS BEFORE WP-F4 BECAUSE IT MEASURES M**, the count of unique media offers, and WP-F4's whole sizing (300 calls/page/day round-robin, long-tail cycle ≈ M/rate) rests on a number nobody had computed. **Σ `item_count` IS NOT M** — verified: 27 albums, Σ = 16 939, and the system albums type 38000 (7 574) and type 5000 (3 154) share one `lastItemId` because they are VIEWS over the same media. M is `count(distinct media_offer_ref)` over `creator_media`; the lane reports `uniqueMediaCount`, `vaultMemberUniqueCount` and `albumMembershipSum` side by side in its progress block, the last labelled non-unique everywhere it appears (**A16 item 1**). **THE `/media/vaultnew` QUERY FORM IS SETTLED, and it is the one thing that could have shipped this lane silently broken.** The 2026-08-22 probe sent `albumId=…&search=&before=&after=` for a 4 760-item album and got `{albumMedia: [], media: []}`; the app bundle's `getVaultAlbumMediaNewOrder` shows `before` and `after` are the LITERAL STRING `"0"` on the first page, `mediaType` is present-and-EMPTY when unfiltered, and page two carries `before = <last albumMedia row's own id>` (NOT its `mediaOfferId`, a different value that pages nowhere). **The guard stays anyway**: an empty FIRST page on an album the platform says is non-empty is an unhonoured request, not an empty vault — the sublane stops with `partial_provider_surface` plus ONE anomaly and never retries, because "this creator has no media" is the wrong answer to size a lane against and a walk that re-asks spends a day's cap proving it (WP-F1's lesson). **FEAT-002 CLOSES ON `plans[].price`, NEVER `tier.price`**: all five observed tiers carried `tier.price = 5 000` while plan prices ran 10 000 … **499 990**, so the tier head keeps `base_price_mills` under a name that cannot be misread and `page_subscription_tier_plans` is the queryable truth. `duration_days` reads **`billingCycle`** — the live payload has NO `plans[].duration` key at all; `duration` exists one level down on `promos[]`, which is exactly how that field name gets misread (the plan document says `duration`; the payload wins). **THE ROSTER EVENT is the family's one new idea.** Row events say what IS; nothing in them says what ISN'T, and the case that matters most — a listing that comes back EMPTY — produces no row events at all. So each FULL listing emits one `catalog.listing_observed` carrying its complete ref set, keyed per LOOK, and the projector reconciles in BOTH directions: mark the complement `missing_since`, clear the mark on everything the roster still names. `missing_since` is therefore a REPLAYED fact that survives truncate-and-replay, and nothing is ever deleted (DP 7). Keying it on the ref-set hash instead was built, tested and CORRECTED: a gift code revoked and reinstated unchanged hashes to the roster it had before it vanished, so the event dedupes and the row stays marked forever. **ALBUM MEMBERSHIP GETS NO ROSTER** — it arrives from a PAGED walk, and a roster from one page would claim the album holds only what that page showed. **NO MEDIA BYTES, NO DELIVERY URLS**: `/vault/albumsnew` and `/media/vaultnew` both embed raw `media[]` with `location`, `locations[]` and `variants[]`; the bodies are journaled verbatim and read by nothing, pinned on VALUES as well as columns. **SECONDS AND MILLISECONDS PER FIELD** — one response mixes both (`albums[].createdAt` and `albumContent[].createdAt` are ms while `accountMedia[].createdAt` is seconds), so each field is decoded by the helper for ITS unit and never by a shared guess. `original_price` is read by its SNAKE_CASE name amid camelCase keys. The automation `messageTemplate` is a JSON OBJECT in all seven live values; the March STRING shape keeps a tolerant branch with `parse_ok = false` and a NULL text, because an automation with no text and one we could not read must not look alike. Gift codes join WP-F1's `page_promo_links` as its second `link_kind`, so **both** rebuilds now scope their delete by kind — an unscoped one truncates rows only the other projector's ledger can restore. **The sublane-parking machine (`contract_drift`/`unsupported`/`next_probe_at`) is NOT built (A28-6)**: the probe answered the question it existed for, and all four March routes are live. Batch size is 100 ids — the app's own `splice(0, 100)`, read out of its bundle rather than guessed |
 | 228 | Fansly comment archive (WP-F5) — the lane [E1] had to authorise, and the POST that is never sent | The `post_replies` stream lands whole (0137 enum, 0138 `post_comments`): a walk over `GET /post/{postId}/replies` for the entire post back-catalogue, full bodies stored, on a 100-attempt daily cap that DEFERS to the next UTC day and never drops. **IT EXISTS ONLY BECAUSE [E1] PASSED.** Every observed reply GET in the 2026-08-19 capture was preceded ~40 ms by `POST /api/v1/postreply/verify` carrying the same post id (5/5), which made the whole package contingent: if that POST were a server-side precondition, the lane would have been CUT rather than built, because §1 excludes write-shaped calls to the platform. The probe issued the bare GET with no preceding POST and the comments came back (**A25**). So the kernel issues the bare GET and NEVER that POST — a test greps the adapter for the route's path and fails if the string appears anywhere in the file, which is why the path is not written out even in the docstring explaining its absence. **THE WALK QUEUE IS NOT A CURSOR.** There is no order in which a back-catalogue should be read once, so roots are rows in `subject_refresh_state` (`plane='post_replies'`, the second plane on the table WP-F2 built), seeded from `creator_posts` in bounded KEYSET batches on first enable and — for everything published afterwards — **in the SAME TRANSACTION as the `creator_posts` upsert**. That transaction is the load-bearing part: a post committed without its walk row is a post whose comments are never read, and nothing anywhere reports a problem — the lane stays healthy, the coverage row stays clean, and the archive is simply missing that post forever. Priority per chunk is (1) never-walked NEWEST FIRST — an archive that starts with the posts nobody remembers is useless for a year — (2) dirty, (3) round-robin re-walk at `fanslyRepliesRewalkCycleDays` (14). The Fansly-only condition lives in the INSERT's `WHERE`, not in TypeScript, so no new platform branch is added outside the adapter packages. **PAGINATION IS UNPROVEN, AND THE LANE SAYS SO IN STORAGE.** Five live responses carried 1, 1, 1, 1 and 4 replies; no cursor has ever been exercised. The first call is BARE, a page of >= 20 is suspiciously full, and only then is `?before=<last reply id>` attempted — the convention `/timelinenew`, `/message` and `/notifications` share, on a route whose replies come back descending by id. What the cursor DOES is then settled EMPIRICALLY, by comparing the page it returns against the page before it: identical rows mean the route ignored it (`single_page`, and no post is ever paged again), different rows mean it was honoured (`before`). The verdict is durable and announced by exactly ONE anomaly, ever. Until a mode is proven a full page marks its rows `possibly_truncated` and coverage reads `window_captured`, never complete — **and the projector is FORBIDDEN from marking anything `missing_since` from a truncated roster**, because a truncated page's complement is unknowable and guessing it would delete an archive one page at a time. The clear half still runs: a ref the page DID name is present in both worlds. The repeat-cursor guard stops a walk before egress rather than looping (the posts.ts law). **THE OBSERVATION CARRIES THE REQUEST, and it has to.** The post id lives in the request PATH, so the response that matters most — the empty one, "this post has no comments any more" — is a body with no way to say which post it is about. A parser reading the body alone could store comments and could never mark one deleted. The lane journals the verbatim (post-[A20]) body into `sync_raw_payloads.response_payload` as always and gives the OBSERVATION a `{walk, response}` envelope through `persistRawPayload`'s `observationPayload` seam — the mechanism `posts.ts` already uses for a response a future parser needs request context to replay. **EVENTS.** Family `fansly-comments` v1, `projectionOnly`, receipt-time (§3.2b, `createdAt` is SECONDS on this route). `post.comment_observed` per reply, dedup-keyed on the comment's CONTENT hash so an edit appends a new event and moves the head while the fortieth re-read of unchanged bytes appends nothing; `post.comment_list_observed` per walk — the ROSTER, carrying the full ref set, `count` and the truncation flag. The plan's field list named only `{parentPostRef, count}`; a count cannot identify a complement, so the ref set is carried, which is WP-F3's roster lesson applied verbatim (including the per-LOOK key: a comment deleted and restored UNCHANGED hashes to the roster it had before it vanished, so a set-hash key would dedupe the event and leave the row marked forever). **EMPTY-CONTENT REPLIES ARE STORED, not skipped** — one of the four replies in the 18.2 KB live response has `content: ""`, and dropping it would make the reply count disagree with the archive with no way to tell which is wrong. `inReplyTo` and `inReplyToRoot` are stored separately even though they were equal in every observed reply: the day a nested reply arrives, the difference is what reconstructs the thread, and no re-walk recovers it retroactively. **[A20] ON `accounts[]`.** WP-F9's shape probe found the inline account record is a FULL one — `lastSeenAt`, every counter, an avatar with signed CDN locations — and `lastSeenAt` moves every minute. On a lane that re-reads thousands of posts that is the difference between kilobytes a day and unbounded growth, so that array and ONLY that array goes through the 18-field allowlist; `posts`, `aggregatedPosts`, `accountMedia`, `tips`, `tipGoals`, `stories`, `polls` and every future key stay verbatim, and a body with no `accounts` key comes back byte-identical. **AUTHOR HYDRATION STAYS MANDATORY (A27-1)**: the sidecar was EMPTY in 2 of 5 live responses despite a comment existing, so one `/account?ids=` batch per chunk (<= 100 ids) journals under the EXISTING `account_lookup` kind — which no family claims, and which this package deliberately does NOT claim. Nothing parses it, so the "already looked up" set is capture state in the cursor rather than a projection-derived queue that would re-request the same hundred refs every day forever. **`post_comments.author_ref` is declared in `FAN_REF_ERASURE_COLUMNS` with its own exact fan-scope predicate**: it is a TEXT ref with no FK, invisible to the FK guard, and it is the fan-ref column whose under-erasure is most visible, because the row holds words the fan wrote. **THE WALK QUEUE SURVIVES A REBUILD**, pinned: `projection:rebuild fansly_comments` truncates `post_comments` and replays it, and `subject_refresh_state` comes back byte-identical — a rebuild that reset it would re-mark the whole back-catalogue never-walked and release a first-pass crawl for a repair that should cost zero platform calls. **THE CAP SHIPS AT 100 AND THE RAISE IS A SEPARATE ACT (A29, A16's ritual per-lane per [A19]).** At 100 attempts/page/UTC-day the biggest live page (lora-1, 1 318 roots) first-passes in ~14 days and the fleet's ~4 300 roots in ~43 page-days. The raise to **300/day** is one config flip with its own verification window, and its criteria are recorded here rather than remembered: (zero 429s) AND (a MEASURED `posts.length` p99 — the lane reports it in its progress block and logs `posts.length` per call at info, so the criterion is checkable without a bespoke query) AND (page proxy duty < 5 %) AND (DM/transaction lag unregressed). **400/day is the registry ceiling** and the config registry enforces it as a refusal rather than a note. **Holding at 100 because a criterion failed is a SUCCESS outcome of this package, not a failure.** **Rejected, and recorded so it is not re-proposed:** issuing the verify POST "because the browser does" (§1 excludes it and [E1] proved it unnecessary); marking a complement missing from a page that might be truncated; a roster keyed on its ref-set hash; a roster keyed per page of a multi-page walk (it would claim the post holds only what that page showed); claiming `account_lookup` for this family (registering a family for it stays a backlog item, visible and frozen by the ratchet); walk columns on `creator_posts` (an ordinary repair would wipe them); a `SYNC_DOMAIN_POLICY` membership (a flag-gated analytics lane must not degrade a page's block UX to "catching up"); and a declared dependency on `notifications` (the walk reads `creator_posts`; a notification is only ever a dirty SIGNAL) |
+| 229 | Fansly posts widening (WP-F6) — the counters the timeline was already serving | The EXISTING `posts` stream is widened rather than joined by a new one: migration 0139 adds fourteen columns to `creator_posts` (`like_count`, `media_like_count`, `reply_count`, `fyp_flags`, `expires_at`, `in_reply_to_ref`, `in_reply_to_root_ref`, `wall_refs`, `account_mention_refs`, the derived `hashtags`/`hashtags_normalized`/`hashtag_parser_version`, `attachment_refs`, `engagement_observed_at` + its index), `POSTS_CANONICALIZER_VERSION` goes 5 -> 6 and `post.observed` to schemaVersion 3. **EVERY ONE OF THESE FIELDS WAS ALREADY IN THE JOURNAL AND WAS BEING THROWN AWAY** — `/timelinenew` and `GET /post?ids=` have served `likeCount`, `mediaLikeCount`, `replyCount`, `fypFlags`, `expiresAt`, `inReplyTo`, `inReplyToRoot`, `wallIds`, `accountMentions` and `attachments` on the same post objects the lane journals verbatim, so the widening is a version bump plus a replay and costs ZERO platform calls to fill history. **ABSENT IS NULL, NEVER 0, and the payload makes it real**: `replyCount` was PRESENT on 9 and ABSENT on 6 of the 15 timeline posts in the 2026-08-19 capture, and `wallIds` does not appear on the timeline route at all while the batch read serves it as `[]` — a NOT NULL DEFAULT 0 would have recorded "nobody replied" for a post whose count the provider simply did not state, and no re-read distinguishes the two afterwards. **EVERY NEW FIELD ENTERS THE CONTENT HASH**, so a like count that MOVED is a new immutable revision and a new head rather than an in-place edit of the row that recorded the old one — which is the entire point of a refresh lane. **HASHTAGS ARE DERIVED FROM THE CAPTION AND NOTHING ELSE (A8)**: zero structured tag fields on all 60 HAR post objects; tag ids exist only in stats aggregation and the discovery feed. The grammar accepts Unicode letters, numbers and MARKS, `_`, and ONE defensive trailing `+`; the raw token, its NFKC-lowercased form and `HASHTAG_PARSER_VERSION` are stored as one fact in three paired parts (a CHECK enforces the pairing), NFKC folds BEFORE lowercasing so a full-width spelling lands on the ASCII tag, duplicates collapse by folded form, and the parser version participates in the content hash so a grammar change RE-MINTS rather than silently rewriting. **No design or doc may cite `#teen+` as observed — it does not appear in the HAR**; the tolerance is defensive and the fixture that exercises it is labelled synthetic. `attachment_refs` copies THREE KEYS BY NAME (`pos`, `contentType`, `contentId`) — an allowlist, not a redaction, so no delivery URL can reach a serving column whatever the platform starts embedding in `attachments[]`. **THE VERIFIED TRAP:** `POSTS_CANONICALIZER_VERSION` is embedded in the `post.tip_parse_rejected` dedup key, so the bump CHANGES that family's dedup identity — a re-parse of an already-rejected `post_tips` page appends one new parse-debt event under `parser:6` beside the `parser:5` one. It is projection-only debt and the rebuild absorbs it; it is recorded here because nothing else would have noticed. **`post.observed` STAYS PROVIDER-DATED** at `publishedAt` — §3.2b's standing exception, not a new choice — so its pre-2024 fixture asserts the CLAMP branch (`occurredAtClamped` + `occurredAtRaw` preserved, `occurred_at` fallen back to receipt time) while the projected row still holds the true publication date, and the v6 drain across history is covered by §3.2c(ii)'s target-month census, now pinned with a `post.observed` case beside the DM one. **DRAIN ARITHMETIC (production, 2026-08-22):** 1 619 `posts` observations, source `pull`, re-parsed at parse_version < 6; the sweep reads 200 rows per family per page and up to 20 pages per run, so the whole corpus drains in a single `events:replay --kind posts` (minutes) or two ordinary minutely runs. Each observation emits one `post.observed` per post in its page (live pages carry <= 15), an upper bound of ~24 000 appends, every one a NEW event because the dedup key embeds both the v3 content hash and the observation id — no v2 event is touched and no row is overwritten. Provider-dated, so the census applies: prod has every 2026 monthly plus the 2024/2025 yearlies attached, so no month is uncovered and no re-attach is needed. ZERO platform calls. **THE ENGAGEMENT REFRESH is a PHASE, not a stream.** The bounded timeline refresh walks back 14 days, so a post from last spring keeps whatever counters it had the week it was published; `GET /post?ids=<csv>` is the only shape that re-reads a back catalogue by id, and it returns the SAME envelope the timeline does, so it journals under the EXISTING `posts` kind with `{phase:"engagement", ids}` in the request params and the v6 family parses it with no new branch. It runs only once the timeline walk has COMPLETED for the request generation — the timeline is how this system learns a post exists; the refresh only updates numbers on posts it already has. **DECAY WITH THE TIER BOUNDARIES AS CONSTANTS**: fresh (<= 30 d) daily, mid (<= 180 d) weekly, long tail every 30 d round-robin by `last_visited_at ASC`. How engagement decays with a post's age is a property of the platform, not a knob; what is tunable is `fanslyPostEngagementDailyCallBudget` (40, the §6.1 ceiling), which decides how much of the decay the lane can afford. Due-ness is computed from `published_at` and `last_visited_at` against `now`, NEVER read from a stored `next_due_at` — the tier a post is in CHANGES as it ages, and a frozen due date would keep a post that crossed into `mid` on a daily cadence forever. Queue state is `subject_refresh_state` `plane='post_engagement'`, the table's THIRD plane, seeded in bounded keyset batches on first enable and — for everything published afterwards — in the SAME TRANSACTION as the `creator_posts` upsert, alongside WP-F5's `post_replies` row, from ONE statement whose Fansly predicate lives in SQL so no new platform branch appears outside the adapter packages. **`engagement_observed_at` IS DERIVED BY THE PROJECTOR** from the event's own `observedAt` whenever the event carried a counter, never stamped by the capture lane: a lane writing into this rebuildable projection would have it wiped by the next `projection:rebuild`, and the ordinary timeline sighting (which also carries `likeCount`) would not set it at all. It only ever moves forward. **A HEAD WHOSE `reply_count` MOVED MARKS THE WP-F5 WALK DIRTY** (`dirty_reason='reply_count_changed'`) in that same transaction — the only cheap evidence this system gets that a post's comments changed — and only on an EXISTING row, because a first sighting is already never-walked and marking it dirty would DEMOTE it out of the walk's top band. **THE CAP DEFERS, NEVER DROPS**: counted in HTTP ATTEMPTS (retries included) in the posts cursor and SEPARATELY from the timeline walk, which is not capped and must never be starved by a refresh phase; the response already fetched is journaled before the counter is consulted again. `fanslyPostEngagementRefreshEnabled` ships FALSE and with it off the posts lane behaves exactly as before, completion checkpoint included. ONE batch of at most 100 ids per dispatch — the size the app splices for every OTHER `?ids=` route it batches, since its own `getPosts` has no batching loop to read — then WP-F1's `fanslyBackfillContinuationDelayMs` +- 30 % jitter, because burst shape and not daily volume is the ban-risk surface. Only the posts the response NAMED count as refreshed; an id the provider dropped is a failure and is retried, since marking it visited would retire it from the never-refreshed band on the strength of a silence. **MEASURED SIZE, because §6.1's ~1 MB/day row predates the measurement:** the one live `GET /post?ids=` response is 29 375 B uncompressed / 10 232 B on the wire for ONE post, of which 22 357 B is the creator's own `accounts[0]` record (ONE per response whatever the batch size) and 6 287 B its `accountMedia` row. A full 100-id batch is therefore ~0.9 MB uncompressed / ~0.27 MB on the wire, so lora-1's steady state (~2 calls/day) is ~1.8 MB/day and its one-off first pass over 1 318 posts is 14 calls / ~12 MB. The lane cap of 40 bounds it at ~35 MB/page/day uncompressed. **The `accounts[0]` sidecar carries `lastSeenAt` and is NOT trimmed** — deliberately, because the EXISTING timeline lane already journals the identical record on every page and trimming one and not the other would make two responses of the same kind un-comparable; it is recorded here as the known dedup-collapse cost of this kind rather than fixed inside a package that was not asked to change the timeline lane. **Rejected, and recorded so it is not re-proposed:** a new stream or a new page allowlist for the phase (it rides `posts`, which already has its own gating; a second allowlist is a switch nobody remembers to look at); tier boundaries as config keys; stamping `engagement_observed_at` from the capture lane; storing the caption's mention offsets or handles (the verbatim caption is in the journal and a handle changes); widening the `posts` or `post_monetization` agent datasets (out of scope — the columns are queryable and the read surface is a separate decision) |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -8985,3 +8986,207 @@ reason `subject_refresh_state` exists); a `SYNC_DOMAIN_POLICY` membership (a
 flag-gated analytics lane must not degrade a page's block-health UX to "catching
 up" while its gate is shut); and a declared dependency on `notifications` — the
 walk reads `creator_posts`, and a notification is only ever a dirty SIGNAL.
+
+---
+
+**Decision #229 (2026-08-22, endpoints-cover WP-F6: the posts widening, and the
+counters that were already in the journal):**
+
+**NOTHING NEW WAS CAPTURED TO FILL THESE COLUMNS.** `/timelinenew` has been
+serving `likeCount`, `mediaLikeCount`, `replyCount`, `fypFlags`, `expiresAt`,
+`inReplyTo`, `inReplyToRoot`, `accountMentions` and `attachments` on every post
+object this lane has ever journaled, and `GET /post?ids=` adds `wallIds` on top.
+The `posts` family read four of those fields and dropped the rest on the floor.
+So WP-F6 is a migration, a canonicalizer version bump and a replay: fourteen
+columns on `creator_posts` (0139), `POSTS_CANONICALIZER_VERSION` 5 -> 6,
+`post.observed` at schemaVersion 3, and `events:replay --kind posts` to fill the
+history — **zero platform calls, on a corpus already in `observations`.**
+
+**ABSENT IS NULL, NEVER 0, and this is the payload that proves the rule matters.**
+`replyCount` was present on 9 of the 15 timeline posts in the 2026-08-19 capture
+and ABSENT on the other 6. `wallIds` does not appear on the timeline route at all
+and is served as `[]` by the batch read. A `NOT NULL DEFAULT 0` on `reply_count`
+would have recorded "nobody replied" for six posts whose reply count the provider
+never stated, and nothing downstream could ever tell the manufactured zero from a
+real one. The columns are nullable, the arrays distinguish absent from empty, and
+the parser refuses the WHOLE page rather than half-reading a widened field it
+does not recognise.
+
+**EVERY NEW FIELD ENTERS THE CONTENT HASH.** That is what makes this a refresh
+lane rather than a mutable row: a like count that moved appends a new immutable
+`post.observed` and advances the head, so the archive holds the counter's history
+and the projection holds its latest value. An unchanged re-read hashes
+identically and only advances `last_observed_at`, so the ordinary six-hourly
+timeline walk does not mint a revision per sighting.
+
+**HASHTAGS ARE DERIVED, AND THE GRAMMAR IS NOT `\w+` (A8).** There is no
+structured tag field on any of the 60 post objects in the capture — tag ids exist
+only in stats aggregation and the discovery feed — so the caption is the only
+source, and an ASCII-only class would silently drop every non-Latin caption this
+agency actually publishes. The tokenizer takes Unicode letters, numbers and
+MARKS, `_`, and ONE defensive trailing `+`. Three columns are written together
+and a CHECK enforces the pairing: the raw token exactly as the caption wrote it,
+its NFKC-lowercased form (folded BEFORE lowercasing, so a full-width spelling
+lands on the ASCII tag rather than beside it), and the parser version that
+produced both. The version participates in the content hash, so re-deriving the
+tokens under a new grammar mints a new head instead of overwriting the lineage
+that produced the old ones — A22-2's lesson in a different key.
+
+**`#teen+` IS NOT AN OBSERVATION.** It appears in no HAR body. The trailing `+`
+is tolerated so a caption that types it does not lose the character, the fixture
+that exercises it is labelled SYNTHETIC in the test, and no design or doc may
+cite the example as live evidence.
+
+**`attachment_refs` IS AN ALLOWLIST, NOT A REDACTION.** Three keys are copied by
+name — `pos`, `contentType`, `contentId` — so a `location`, a `variants[]` or any
+future URL-bearing key the platform adds to `attachments[]` cannot reach a
+serving column, because nothing copies it. The bytes stay in the raw journal,
+read by nothing, exactly as WP-F3 keeps `media[].location` there.
+
+**THE VERIFIED TRAP.** `POSTS_CANONICALIZER_VERSION` is embedded in the
+`post.tip_parse_rejected` dedup key. The 5 -> 6 bump therefore changes that
+family's DEDUP IDENTITY: a re-parse of an already-rejected `post_tips` page
+appends one new parse-debt event under `parser:6` beside the `parser:5` one. Both
+are projection-only, both describe the same rejection, and a projection rebuild
+absorbs the pair. It is written down because it is invisible — no test fails, no
+count looks wrong, and a future reader finding two debt events for one rejection
+would otherwise have to reconstruct why.
+
+**`post.observed` STAYS PROVIDER-DATED, and that is §3.2b's standing exception
+rather than a choice made here.** The event's `occurred_at` IS the post's
+publication instant, which is why the driver's `[2024-01-01, now + 2 months]`
+clamp can fire on this family at all — a receipt-time family is inside the window
+by construction and can never produce a clamp marker, so the marker's presence is
+the proof of which kind a lane is. The pre-2024 fixture asserts exactly that:
+`occurredAtClamped: true`, `occurredAtRaw` preserved verbatim, `occurred_at`
+fallen back to the observation's receipt time, a dedup key unchanged because it
+is built before the clamp — **and the projected row still holding the TRUE
+publication date**, because the projector reads `data.publishedAt` and never
+`event.occurredAt`.
+
+**THE V6 DRAIN, stated the way WP-F0(b) states its own.** Production holds
+**1 619** `posts` observations, source `pull`. The v6 bump moves the family's
+parse floor, so the minutely sweep re-reads every one of them oldest-first at 200
+rows per family per page and up to 20 pages per run — the whole corpus is one
+`events:replay --kind posts` (minutes) or two ordinary sweep runs. Each
+observation emits one `post.observed` per post in its page, and live pages carry
+at most 15, so the upper bound is ~24 000 appends. **Every one is a NEW event and
+nothing is overwritten**: the dedup key embeds the v3 content hash AND the
+observation id, so the v2 events stay exactly where they are and the head lands
+on the newest sighting by the same `last_observed_at` rule that already ordered
+them. Because the family is provider-dated, §3.2c(ii)'s target-month census
+applies to the drain — and production has every 2026 monthly partition attached
+plus the 2024/2025 yearlies, so no month is uncovered and the re-attach ritual is
+not needed. The drain makes no platform request.
+
+**THE ENGAGEMENT REFRESH IS A PHASE ON THE EXISTING STREAM, NOT A NEW ONE.** The
+bounded timeline refresh walks back 14 days; a post from last spring is never
+re-read by it, so its counters are frozen at whatever they were the week it was
+published. `GET /post?ids=<csv>` is the only shape that reads a back catalogue by
+id — and it returns the SAME envelope the timeline does, so the phase journals
+under the EXISTING `posts` kind with `{phase:"engagement", ids}` in the request
+params and the v6 family parses it with no new branch, no new stream, no new
+flag on the lane and no new dataset. It runs only after the timeline walk has
+COMPLETED for the request generation: the timeline is how this system learns a
+post EXISTS, and the refresh only updates numbers on posts it already has.
+
+**DECAY, WITH THE BOUNDARIES AS CONSTANTS.** Fresh (<= 30 days) re-read daily,
+mid (<= 180 days) weekly, long tail every 30 days round-robin by
+`last_visited_at ASC`. How engagement on a post decays with its age is a property
+of the platform, not a knob an operator should be turning; what IS tunable is
+`fanslyPostEngagementDailyCallBudget`, which decides how much of that decay the
+lane can afford. **Due-ness is computed from `published_at` and `last_visited_at`
+against `now`, never read from a stored `next_due_at`** — the tier a post belongs
+to CHANGES as the post ages, so a frozen due date would keep a post that crossed
+from fresh into mid on a daily cadence forever, and lengthening a cycle would
+never take effect at all. The column is still maintained (it is the shared
+table's contract and what its partial index covers) and the DIRTY path is read
+through `dirty_reason`, which no cutoff can suppress.
+
+**THE QUEUE IS `subject_refresh_state`'s THIRD PLANE.** `plane='post_engagement'`,
+seeded from `creator_posts` in bounded keyset batches on first enable and — for
+everything published afterwards — in the SAME TRANSACTION as the `creator_posts`
+upsert, from ONE statement that seeds WP-F5's `post_replies` row alongside it.
+WP-F5's argument carries over unchanged: a post committed without its queue rows
+is a post the comment walk never reads and the refresh never re-reads, with a
+healthy lane, a clean coverage row, and nothing anywhere reporting a problem. The
+Fansly-only condition rides in the statement's `WHERE`, so the platform seam
+stays where the Stage 18 ratchet expects it and the branch budget is unchanged.
+
+**`engagement_observed_at` IS DERIVED BY THE PROJECTOR, NOT STAMPED BY THE LANE.**
+It is the event's own `observedAt` whenever the event carried at least one
+counter. Stamping it from the capture lane would have been the obvious thing and
+is wrong twice: `creator_posts` is rebuildable, so the next `projection:rebuild`
+would wipe it, and the ordinary timeline sighting — which also carries
+`likeCount` — would not set it at all, leaving the column reading as "never
+observed" for posts whose counters had just been read. It only moves forward, so
+a later capture that carried no counters cannot erase the moment the counters
+were last seen.
+
+**A `reply_count` THAT MOVED MARKS THE COMMENT WALK DIRTY.** It is the only cheap
+evidence this system gets that a post's comments changed, and it costs nothing:
+the head upsert already knows the previous value. The mark is written in the same
+transaction, with `dirty_reason='reply_count_changed'`, and ONLY on an existing
+row — a first sighting is already never-walked and therefore already in WP-F5's
+top priority band, so marking it dirty would DEMOTE it.
+
+**THE CAP DEFERS AND NEVER DROPS.** `fanslyPostEngagementDailyCallBudget` (40,
+the §6.1 ceiling) is counted in HTTP ATTEMPTS with retries included, lives in the
+posts cursor so it survives leases and restarts, and is counted SEPARATELY from
+the timeline walk — the timeline is not capped, and letting a refresh phase spend
+the capture's budget would trade the thing this system depends on for the thing
+that decorates it. A response already fetched is journaled before the counter is
+consulted again. `fanslyPostEngagementRefreshEnabled` ships FALSE, and with it off
+the posts lane behaves exactly as it did before this package, completion
+checkpoint included.
+
+**ONE BATCH PER DISPATCH, THEN JITTER.** At most 100 ids — the size the app
+splices for every OTHER `?ids=` route it batches (`requestedAccountIds_`,
+`requestedMediaIds_`, `requestedBundleIds_`), read out of its bundle rather than
+guessed, since its own `getPosts` has no batching loop to read because its two
+live call sites hydrate one or two ids. Then WP-F1's
+`fanslyBackfillContinuationDelayMs` +- 30 % jitter, because burst shape and not
+daily volume is the ban-risk surface. **Only the posts the response NAMED count
+as refreshed**: an id the provider dropped from the batch is recorded as a
+failure and retried, because marking it visited would retire it from the
+never-refreshed band on the strength of a silence — the same rule WP-F5 applies
+to a failed walk.
+
+**MEASURED SIZE, because §6.1's row for this lane predates the measurement.** The
+one live `GET /post?ids=` response is 29 375 B uncompressed and 10 232 B on the
+wire for a SINGLE post, and the composition is the interesting part: 571 B of
+`posts[]`, 6 287 B of `accountMedia[]`, and **22 357 B of `accounts[0]` — the
+creator's own full account record, one per response whatever the batch size**. A
+full 100-id batch is therefore ~0.9 MB uncompressed / ~0.27 MB on the wire, an
+order of magnitude above the ~1 MB/day §6.1 books for the whole lane at 20
+calls/day. At lora-1's steady state (~2 calls/day for 1 318 posts under the
+decay) that is ~1.8 MB/day; its one-off first pass is 14 calls and ~12 MB; the
+cap of 40 bounds the lane at ~35 MB/page/day uncompressed. A23 removed disk as a
+limiter, so this is reported and not gated — but the §6.1 byte column for this
+row is understated and should be re-derived from these numbers rather than from
+the planning figure.
+
+**THE `accounts[0]` SIDECAR IS NOT TRIMMED, deliberately.** It carries
+`lastSeenAt`, which moves every minute and defeats the content-address dedup
+collapse — the [A20] problem exactly. It is left verbatim here because the
+EXISTING timeline lane already journals the identical 22 357 B record on every
+page of every walk, and trimming one response of a kind while leaving the other
+verbatim makes two bodies of the same kind un-comparable and the kind's dedup
+behaviour unexplainable. Recording the cost is the honest move; fixing it means
+changing the timeline lane's capture, which is a decision of its own and not one
+this package was asked to make.
+
+**Rejected, and recorded so it is not re-proposed:** a new stream or a new page
+allowlist for the phase (it rides `posts`, which already has its own gating, and
+a second allowlist is a switch nobody remembers to look at); tier boundaries as
+config keys (they describe the platform, not a preference); stamping
+`engagement_observed_at` from the capture lane (wiped by the next rebuild, and
+blind to the timeline sighting that already observed the counters); storing the
+caption's mention offsets or handles (the verbatim caption is in the journal and
+a handle changes, while the account ref does not); a fan-scope erasure predicate
+on `account_mention_refs` (they are CREATOR refs — on the one live example the
+post mentions the page's own account — and a predicate there would delete the
+creator's own caption history to forget somebody else); and widening the `posts`
+or `post_monetization` agent datasets with the new columns (the read surface is a
+separate decision, and this package was scoped to storage, canonicalization,
+projection and capture).
