@@ -93,6 +93,8 @@ const BACKFILL_EARNINGS_WINDOW_DAYS = 100;
 const BACKFILL_EMPTY_STREAK_LIMIT = 2;
 const BACKFILL_PROBE_JUMP_DAYS = 365;
 const BACKFILL_JITTER_FRACTION = 0.3;
+/** Pages of mass-DM history the first-enable walk takes per daily sweep. */
+const BROADCAST_BACKFILL_PAGES_PER_SWEEP = 3;
 
 export const FANSLY_STATS_COVERAGE_PLANES = {
   accountDaily: "stats_account_daily",
@@ -143,6 +145,10 @@ export interface FanslyStatsCursorState {
   /** `before` cursor for the first-enable broadcast walk; null once at the floor. */
   broadcastBefore: string | null;
   broadcastFloorReached: boolean;
+  /** Pages the broadcast walk has taken in THIS sweep. Bounded so the
+   *  first-enable walk cannot hold the sweep at step 6 for days and starve the
+   *  daily traffic capture behind it. */
+  broadcastPagesInSweep: number;
   backfill: {
     daily: DailyBackfillState;
     hourly: HourlyBackfillState;
@@ -221,6 +227,7 @@ export function parseFanslyStatsCursorState(
     discoveryPage: Math.max(0, asInt(state.discoveryPage, 0)),
     broadcastBefore: asNullableString(state.broadcastBefore),
     broadcastFloorReached: state.broadcastFloorReached === true,
+    broadcastPagesInSweep: Math.max(0, asInt(state.broadcastPagesInSweep, 0)),
     backfill: backfillRecord === null ? null : {
       daily: parseDailyBackfill(backfillRecord.daily, now),
       hourly: parseHourlyBackfill(backfillRecord.hourly, now),
@@ -245,6 +252,7 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
     discoveryPage: 0,
     broadcastBefore: null,
     broadcastFloorReached: false,
+    broadcastPagesInSweep: 0,
     backfill: {
       daily: {
         nextBeforeMs: now.getTime(),
@@ -909,16 +917,37 @@ export async function fanslyStatsSnapshotChunk(
         walk: state.broadcastFloorReached ? "head" : "first_enable_backfill",
       }, response.raw);
       const rows = rowCount(response.raw);
+      const pagesInSweep = state.broadcastPagesInSweep + 1;
       if (state.broadcastFloorReached) {
-        state = { ...state, stepIndex: 7 };
+        state = { ...state, stepIndex: 7, broadcastPagesInSweep: 0 };
       } else if (rows === 0) {
-        state = { ...state, broadcastFloorReached: true, broadcastBefore: null, stepIndex: 7 };
+        state = {
+          ...state,
+          broadcastFloorReached: true,
+          broadcastBefore: null,
+          stepIndex: 7,
+          broadcastPagesInSweep: 0,
+        };
       } else {
         const nextBefore = oldestBroadcastRef(response.raw);
         // A cursor that does not advance is a walk that would never end.
         state = nextBefore === null || nextBefore === state.broadcastBefore
-          ? { ...state, broadcastFloorReached: true, broadcastBefore: null, stepIndex: 7 }
-          : { ...state, broadcastBefore: nextBefore };
+          ? {
+            ...state,
+            broadcastFloorReached: true,
+            broadcastBefore: null,
+            stepIndex: 7,
+            broadcastPagesInSweep: 0,
+          }
+          // BOUNDED PER SWEEP. Without this the first-enable walk would hold the
+          // sweep at step 6 until the whole broadcast history was read — and
+          // `lastSweepDay` only advances at the last step, so the DAILY traffic
+          // capture behind it would stall for as many days as the walk took.
+          // Three pages a day finishes any realistic history in under a fortnight
+          // and never blocks the head poll.
+          : pagesInSweep >= BROADCAST_BACKFILL_PAGES_PER_SWEEP
+          ? { ...state, broadcastBefore: nextBefore, stepIndex: 7, broadcastPagesInSweep: 0 }
+          : { ...state, broadcastBefore: nextBefore, broadcastPagesInSweep: pagesInSweep };
       }
       await saveProgress();
       continue;
