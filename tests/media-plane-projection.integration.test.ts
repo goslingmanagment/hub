@@ -18,6 +18,8 @@
 //    the driver clamped the event to receipt time.
 
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -451,6 +453,28 @@ describe("media plane — one paid DM page, end to end", () => {
     expect(await rows(`select * from media_orders where page_id = $1`, [page.id])).toHaveLength(1);
     expect(await rows(`select * from message_media_offers where page_id = $1`, [page.id]))
       .toHaveLength(1);
+  });
+});
+
+describe("media plane — registration", () => {
+  // Source-level, and deliberately so: a projector that runs but that nobody
+  // can REBUILD is a projection you cannot repair, and a projector registered
+  // nowhere is a table that silently stops filling. Both are the kind of
+  // omission a passing end-to-end test does not notice.
+  it("is registered on the worker tick and in the projection:rebuild CLI", () => {
+    const worker = readFileSync(
+      path.resolve("apps/runtime/src/worker-services.ts"),
+      "utf8",
+    );
+    expect(worker).toContain("runMediaPlaneProjection");
+    expect(worker).toMatch(/const mediaPlane = await runMediaPlaneProjection\(app\)/);
+
+    const cli = readFileSync(path.resolve("apps/runtime/src/cli.ts"), "utf8");
+    expect(cli).toContain('projection !== "media_plane"');
+    expect(cli).toContain("rebuildMediaPlaneProjection");
+    // The argument help must name it too — an accepted value nobody is told
+    // about is not a command.
+    expect(cli).toMatch(/creator_posts \| fan_earnings_stats \| media_plane \| message_archive/);
   });
 });
 
