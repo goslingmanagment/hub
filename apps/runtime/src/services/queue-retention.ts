@@ -76,6 +76,7 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "ofapi.commands.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "notifications.delivery-outbox.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "canonicalize.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
+  { queue: "projections.dm-reconcile.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "ofapi.events.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "projections.message-archive.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "agent.hydration.execute", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
