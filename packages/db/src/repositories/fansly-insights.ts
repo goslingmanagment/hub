@@ -18,7 +18,7 @@
  *    here and reconstructed by the shared money constructors at the boundary.
  */
 
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
@@ -48,6 +48,21 @@ function text(value: unknown): string | null {
 
 function bool(value: unknown): boolean | null {
   return value == null ? null : Boolean(value);
+}
+
+/**
+ * ONE bound parameter carrying a Postgres array literal, then cast.
+ *
+ * NOT `sql`${array}`` — drizzle expands an array chunk into a comma-separated
+ * PARAMETER LIST, so `= any($1, $2, $3)` is a syntax error and an EMPTY array
+ * expands to nothing at all. The same trap is documented in
+ * `fansly-stats.ts:textArrayParam`; this is the read side of it.
+ */
+function textArrayParam(values: readonly string[]): SQL {
+  const literal = `{${
+    values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")
+  }}`;
+  return sql`${literal}::text[]`;
 }
 
 // ── traffic buckets ──────────────────────────────────────────────────────────
@@ -180,7 +195,7 @@ export async function listInsightsMediaTrafficBuckets(
     from stats_traffic_buckets t
     where t.page_id = ${input.pageId}
       and t.subject_kind = 'media_offer'
-      and t.subject_ref = any(${sql`${input.mediaOfferRefs}::text[]`})
+      and t.subject_ref = any(${textArrayParam(input.mediaOfferRefs)})
       and t.period_ms = ${input.periodMs}
       and t.bucket_start >= ${input.from}
       and t.bucket_start < ${input.to}
@@ -479,7 +494,7 @@ export async function listInsightsCoverage(
 ): Promise<InsightsCoverageRow[]> {
   const clauses = [sql`c.page_id = ${input.pageId}`];
   if (input.planes !== undefined && input.planes.length > 0) {
-    clauses.push(sql`c.plane = any(${sql`${[...input.planes]}::text[]`})`);
+    clauses.push(sql`c.plane = any(${textArrayParam(input.planes)})`);
   }
   const result = await db.execute<Record<string, unknown>>(sql`
     select c.plane as plane,
