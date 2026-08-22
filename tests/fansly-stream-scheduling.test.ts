@@ -37,12 +37,19 @@ describe("Fansly bulk-stream scheduling", () => {
     dbMocks.reconcileFanslyBulkStreamGate
       .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false })
       .mockResolvedValueOnce({ action: "paused", createdRecoveryGeneration: false })
-      .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true });
+      .mockResolvedValueOnce({ action: "resumed", createdRecoveryGeneration: true })
+      .mockResolvedValueOnce({ action: "unchanged", createdRecoveryGeneration: false });
     configMocks.loadEffectiveConfig.mockResolvedValue({
       fanslyFanEarningsSyncEnabled: true,
       fanslyPurchaseHistorySyncEnabled: false,
       fanslyNewStreamPageAllowlist: "lora-1",
+      // WP-F1: the stats lane reads its OWN allowlist, on the FAIL-CLOSED
+      // template. `lora-1` is listed; `other-page` is not, and an empty key
+      // would list nobody — the OPPOSITE of fanslyNewStreamPageAllowlist above.
+      fanslyStatsSnapshotSyncEnabled: true,
+      fanslyStatsSnapshotPageAllowlist: "lora-1",
     });
   });
 
@@ -70,6 +77,12 @@ describe("Fansly bulk-stream scheduling", () => {
         now,
       },
       {
+        pageId: 11,
+        stream: "stats_snapshot",
+        gateState: "ramped",
+        now,
+      },
+      {
         pageId: 12,
         stream: "fan_earnings",
         gateState: "not_allowlisted",
@@ -79,6 +92,12 @@ describe("Fansly bulk-stream scheduling", () => {
         pageId: 12,
         stream: "purchase_history",
         gateState: "flag_off",
+        now,
+      },
+      {
+        pageId: 12,
+        stream: "stats_snapshot",
+        gateState: "not_allowlisted",
         now,
       },
     ]);

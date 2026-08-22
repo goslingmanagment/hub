@@ -460,36 +460,36 @@ function fanslyPurchaseEvents(observation: CanonicalizableObservation): Canonica
 //    lane feeding media_orders. They describe one purchase from two
 //    identities and are NEVER summed.
 
-const MEDIA_PLANE_SCHEMA_VERSION = 1;
+export const MEDIA_PLANE_SCHEMA_VERSION = 1;
 
 /** Deep, key-sorted sha256 of the material a row carries — the dedup key's
  *  changing half. An unchanged re-fetch produces the same key and appends
  *  nothing; a changed price or sale counter mints exactly one new event. */
-function contentHash(value: unknown): string {
+export function contentHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonicalJson(value))).digest("hex");
 }
 
 /** Wire mills → decimal string, or null. Refuses anything that is not a
  *  non-negative safe integer: a negative or fractional "price" is provider
  *  drift, and a plausible-looking rounded number is worse than an honest null. */
-function millsString(value: unknown): string | null {
+export function millsString(value: unknown): string | null {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     return null;
   }
   return millsFromInteger(value).toString();
 }
 
-function nonNegativeCount(value: unknown): number | null {
+export function nonNegativeCount(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-function recordArray(value: unknown): Record<string, unknown>[] {
+export function recordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
 /** The three sidecar arrays, wherever this response carries them: inline on
  *  the DM page, or under aggregationData on the purchase-history shapes. */
-function mediaPlaneSources(payload: Record<string, unknown>) {
+export function mediaPlaneSources(payload: Record<string, unknown>) {
   const aggregation = isRecord(payload.aggregationData) ? payload.aggregationData : {};
   const media = recordArray(payload.accountMedia).length > 0
     ? recordArray(payload.accountMedia)
@@ -536,7 +536,7 @@ interface SaleSummary {
 
 /** A12: `saleStats.total` is what the creator KEEPS (net), not the gross the
  *  fan paid. An absent saleStats is NULL everywhere — "not served", not zero. */
-function saleSummary(row: Record<string, unknown>): SaleSummary {
+export function saleSummary(row: Record<string, unknown>): SaleSummary {
   const stats = isRecord(row.saleStats) ? row.saleStats : null;
   if (stats === null) {
     return { salesCount: null, salesNetMills: null, salesPendingMills: null };
@@ -601,7 +601,7 @@ function bundleMemberRefs(bundle: Record<string, unknown>): string[] {
   });
 }
 
-function buildMediaPlaneIndex(sources: ReturnType<typeof mediaPlaneSources>): MediaPlaneIndex {
+export function buildMediaPlaneIndex(sources: ReturnType<typeof mediaPlaneSources>): MediaPlaneIndex {
   const mediaById = new Map<string, Record<string, unknown>>();
   for (const row of sources.media) {
     const ref = asString(row.id);
@@ -645,7 +645,7 @@ function buildMediaPlaneIndex(sources: ReturnType<typeof mediaPlaneSources>): Me
   return { mediaById, bundleById, bundleRefsByMediaRef, buyerRefsBySubjectRef };
 }
 
-function mediaObservedDrafts(
+export function mediaObservedDrafts(
   observation: CanonicalizableObservation,
   sources: ReturnType<typeof mediaPlaneSources>,
   index: MediaPlaneIndex,
@@ -731,7 +731,7 @@ function mediaObservedDrafts(
 
 /** Fansly instants are epoch SECONDS on these rows; null stays null so a
  *  missing timestamp never becomes 1970. */
-function fanslyInstantIso(value: unknown): string | null {
+export function fanslyInstantIso(value: unknown): string | null {
   const seconds = asNumber(value);
   if (seconds === null || seconds <= 0) {
     return null;

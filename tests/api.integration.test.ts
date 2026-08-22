@@ -462,6 +462,27 @@ function createAutoSyncFanslyAdapter(input: {
     async getVaultMediaPage() {
       return { items: [], raw: [] };
     },
+    // WP-F1: the stats lane's five reads plus the tracking-links call. The stub
+    // grows with the adapter deliberately — the cast is what keeps this fake
+    // honest about the surface the runtime actually depends on.
+    async getTrackingLinks() {
+      return { items: [], contractAccepted: true, raw: [] };
+    },
+    async getAccountStats() {
+      return { items: null, raw: null };
+    },
+    async getMediaOfferStats() {
+      return { items: null, raw: null };
+    },
+    async getEarningsStatsWindow() {
+      return { items: [], raw: [] };
+    },
+    async getEarningsMonthlyStats() {
+      return { items: [], raw: [] };
+    },
+    async getDiscoveryMediaSuggestions() {
+      return { items: null, raw: null };
+    },
     async close() {},
   } as AppContext["adapter"];
 }
@@ -9469,8 +9490,11 @@ describe("api integration", () => {
     expect(leadBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
     expect(leadBody.overall.pages).toBe(1);
     // 7 legacy streams + the three ramp-gated Stage 16/32 streams that W8.1
-    // made monitor-visible (top_spenders, fan_earnings, purchase_history).
-    expect(leadBody.overall.streams).toBe(10);
+    // made monitor-visible (top_spenders, fan_earnings, purchase_history)
+    // + `posts` (monitor-visible since WP-F1 repaired the missing entry) +
+    // `stats_snapshot` (WP-F1). Pinned by MONITORED_SYNC_STREAMS ⊇
+    // getSyncStreamsForPlatform("fansly") in fansly-stats-stream-wiring.
+    expect(leadBody.overall.streams).toBe(12);
   }, 15_000);
 
   it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {

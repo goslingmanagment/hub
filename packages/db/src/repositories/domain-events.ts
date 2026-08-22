@@ -79,6 +79,25 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   "message.attachments_observed",
   "media.observed",
   "media.order_observed",
+  // WP-F1, the statistics core. Analytics telemetry: traffic buckets, top-N
+  // rankings, tag counters, the revenue mix, promo-link snapshots and the
+  // mass-DM/poll/recap surface. Registering the types here and declaring
+  // `projectionOnly: true` on the `fansly-stats` family are ONE decision,
+  // never two — an unregistered type would replay to SSE v2 clients as
+  // business news, which is precisely what none of this is.
+  "traffic.datapoint_observed",
+  "media_traffic.datapoint_observed",
+  "stats.window_top_observed",
+  "tag.counters_observed",
+  "media.sale_stats_observed",
+  "media.offer_location_observed",
+  "earnings.breakdown_observed",
+  "earnings.month_observed",
+  "tracking_link.snapshot_observed",
+  "broadcast.stats_observed",
+  "broadcast.scheduled_observed",
+  "poll.observed",
+  "recap.stat_observed",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {

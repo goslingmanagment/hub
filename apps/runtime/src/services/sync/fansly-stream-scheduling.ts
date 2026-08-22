@@ -7,6 +7,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
+import { isPageAllowlisted } from "../voice-notes.ts";
 import { resolveFanslyNewStreamState } from "./fansly-stream-gate.ts";
 
 export type FanslyBulkStreamGateSummary = {
@@ -54,6 +55,8 @@ export async function reconcileFanslyBulkStreamScheduling(
     const streams: Array<{
       stream: FanslyBulkSyncStream;
       enabled: boolean;
+      /** Set only by lanes with their own FAIL-CLOSED allowlist key. */
+      allowlisted?: boolean;
     }> = [
       {
         stream: "fan_earnings",
@@ -63,17 +66,32 @@ export async function reconcileFanslyBulkStreamScheduling(
         stream: "purchase_history",
         enabled: effective.fanslyPurchaseHistorySyncEnabled === true,
       },
+      {
+        stream: "stats_snapshot",
+        enabled: effective.fanslyStatsSnapshotSyncEnabled === true,
+        // WP-F1 (S4): its OWN allowlist key, on the FAIL-CLOSED template
+        // (empty = NO pages). Passing it through `resolveGateState`'s
+        // `allowlistCsv` would silently apply the opposite rule — empty = ALL
+        // pages — and open the lane fleet-wide on the deploy that ships it.
+        allowlisted: isPageAllowlisted(effective.fanslyStatsSnapshotPageAllowlist, page.label),
+      },
     ];
 
     for (const stream of streams) {
       const result = await reconcileFanslyBulkStreamGate(app.db, {
         pageId: page.id,
         stream: stream.stream,
-        gateState: resolveGateState({
-          pageLabel: page.label,
-          streamEnabled: stream.enabled,
-          allowlistCsv: effective.fanslyNewStreamPageAllowlist,
-        }),
+        gateState: stream.allowlisted === undefined
+          ? resolveGateState({
+            pageLabel: page.label,
+            streamEnabled: stream.enabled,
+            allowlistCsv: effective.fanslyNewStreamPageAllowlist,
+          })
+          : !stream.enabled
+          ? "flag_off"
+          : stream.allowlisted
+          ? "ramped"
+          : "not_allowlisted",
         now,
       });
       if (result.action === "paused") {

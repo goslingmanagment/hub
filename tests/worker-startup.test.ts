@@ -91,23 +91,49 @@ const canonicalizeDriverMocks = vi.hoisted(() => ({
   runCanonicalization: vi.fn(),
 }));
 
+// WP-F1(0): the projection registry imports each projector's NAME, event types
+// and rebuild alongside its run function, so these mocks carry them too. That
+// is the registry doing its job — a projector whose rebuild is missing is now a
+// type error rather than a silent omission.
 const messageArchiveMocks = vi.hoisted(() => ({
   MESSAGE_ARCHIVE_SWEEP_QUEUE: "projections.message-archive.sweep",
+  MESSAGE_EVENT_TYPES: new Set(["message.received", "message.sent"]),
   ensureMessageArchiveQueues: vi.fn(),
   ensureMessageArchiveSchedule: vi.fn(),
   runMessageArchiveProjection: vi.fn(),
 }));
 
+const messageArchiveRebuildMocks = vi.hoisted(() => ({
+  buildMessageArchiveShadow: vi.fn(),
+}));
+
 const coverageProjectionMocks = vi.hoisted(() => ({
+  OFAPI_MESSAGE_COVERAGE_PROJECTION: "ofapi_message_coverage_v1",
   runOfapiMessageCoverageProjection: vi.fn(),
 }));
 
 const fanEarningsMocks = vi.hoisted(() => ({
+  FAN_EARNINGS_PROJECTION: "fan_earnings_stats",
   runFanEarningsProjection: vi.fn(),
+  rebuildFanEarningsProjection: vi.fn(),
 }));
 
 const creatorPostsMocks = vi.hoisted(() => ({
+  CREATOR_POSTS_PROJECTION: "creator_posts",
   runCreatorPostsProjection: vi.fn(),
+  rebuildCreatorPostsProjection: vi.fn(),
+}));
+
+const mediaPlaneMocks = vi.hoisted(() => ({
+  MEDIA_PLANE_PROJECTION: "media_plane",
+  runMediaPlaneProjection: vi.fn(),
+  rebuildMediaPlaneProjection: vi.fn(),
+}));
+
+const fanslyStatsProjectionMocks = vi.hoisted(() => ({
+  FANSLY_STATS_PROJECTION: "fansly_stats",
+  runFanslyStatsProjection: vi.fn(),
+  rebuildFanslyStatsProjection: vi.fn(),
 }));
 
 const aiAcceptanceMocks = vi.hoisted(() => ({
@@ -135,7 +161,16 @@ vi.mock(
   "../apps/runtime/src/services/projections/ofapi-message-coverage.ts",
   () => coverageProjectionMocks,
 );
+vi.mock(
+  "../apps/runtime/src/services/projections/message-archive-rebuild.ts",
+  () => messageArchiveRebuildMocks,
+);
 vi.mock("../apps/runtime/src/services/projections/fan-earnings.ts", () => fanEarningsMocks);
+vi.mock("../apps/runtime/src/services/projections/media-plane.ts", () => mediaPlaneMocks);
+vi.mock(
+  "../apps/runtime/src/services/projections/fansly-stats.ts",
+  () => fanslyStatsProjectionMocks,
+);
 vi.mock("../apps/runtime/src/services/projections/creator-posts.ts", () => creatorPostsMocks);
 vi.mock("../apps/runtime/src/services/projections/ai-acceptance.ts", () => aiAcceptanceMocks);
 vi.mock("../apps/runtime/src/services/ofapi-chargebacks-sync.ts", () => ({
@@ -271,6 +306,10 @@ describe("worker startup", () => {
     coverageProjectionMocks.runOfapiMessageCoverageProjection.mockReset();
     fanEarningsMocks.runFanEarningsProjection.mockReset();
     creatorPostsMocks.runCreatorPostsProjection.mockReset();
+    mediaPlaneMocks.runMediaPlaneProjection.mockReset();
+    mediaPlaneMocks.runMediaPlaneProjection.mockResolvedValue({ media: 0, orders: 0, offers: 0 });
+    fanslyStatsProjectionMocks.runFanslyStatsProjection.mockReset();
+    fanslyStatsProjectionMocks.runFanslyStatsProjection.mockResolvedValue({ applied: 0 });
     aiAcceptanceMocks.runAiAcceptanceProjection.mockReset();
 
     dbMocks.closeOrphanedSyncRuns.mockResolvedValue({
@@ -480,8 +519,12 @@ describe("worker startup", () => {
     expect(fanEarningsMocks.runFanEarningsProjection).toHaveBeenCalledTimes(1);
     expect(creatorPostsMocks.runCreatorPostsProjection).toHaveBeenCalledTimes(1);
     expect(aiAcceptanceMocks.runAiAcceptanceProjection).toHaveBeenCalledTimes(1);
+    // WP-F1(0): the tick is registry-driven, so the error line now carries the
+    // projection name alongside the error. The property under test is unchanged
+    // and is the one that matters — one poison fact must not starve the
+    // neighbours that share this pg-boss handler.
     expect(app.logger.error).toHaveBeenCalledWith(
-      { error: expect.any(Error) },
+      { error: expect.any(Error), projection: "ofapi_message_coverage_v1" },
       "OFAPI message-coverage projection sweep failed",
     );
     await runtime.shutdown();

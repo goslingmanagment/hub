@@ -11,6 +11,7 @@ import type {
   FanslyMessagingGroupsPageResponse,
   FanslyPostsPageResponse,
   FanslyPostTipsResponse,
+  FanslyTrackingLinksResponse,
   FanslyRequestContext,
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
@@ -92,6 +93,33 @@ export type AdapterLike = ProviderAdapter<
       before?: Date | null;
     },
   ): Promise<FanslyEarningsAccountsPageResponse>;
+  /** `/trackinglinks` — cumulative promo-link counters (WP-F1 step 5). */
+  getTrackingLinks(context: FanslyRequestContext): Promise<FanslyTrackingLinksResponse>;
+
+  // WP-F1: the `stats_snapshot` lane. Loosely typed in and out on purpose —
+  // the handler journals before it asserts, so a typed parse here would refuse
+  // bytes DP 7 requires us to keep.
+  getAccountStats(
+    context: FanslyRequestContext,
+    params: { beforeDate: Date; afterDate: Date; periodMs: number },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getMediaOfferStats(
+    context: FanslyRequestContext,
+    params: { mediaOfferId: string; beforeDate: Date; afterDate: Date; periodMs: number },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getEarningsStatsWindow(
+    context: FanslyRequestContext,
+    params: { before: Date; after: Date; limit?: number | null; offset?: number | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getEarningsMonthlyStats(
+    context: FanslyRequestContext,
+    params?: { before?: Date | null; after?: Date | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+  getDiscoveryMediaSuggestions(
+    context: FanslyRequestContext,
+    params: { limit?: number | null; before?: number | null; offset?: number | null },
+  ): Promise<{ items: unknown; raw: unknown }>;
+
   // Stage 6 replay-probe methods (read-only, loosely typed — Stage 16 hardens).
   getEarningsStatsAccountsPage(
     context: FanslyRequestContext,

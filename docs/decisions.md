@@ -226,6 +226,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 222 | G5 review fix: a stamped reference outliving its object is a lost fact, and the two acts are now ordered | An external review found that #219's accepted race — a capture deduping onto an object the erasure sweep is about to delete — stopped being cosmetic the moment #220 let a row have NO inline body: the envelope then addressed a hole, past the 0128 CHECK (which only asks for a reference), past the deliberately absent FK (#215), and past a parity verifier that skips null-inline rows by design. THE FIX IS AN ORDER, NOT A NARROWER WINDOW: the sweep takes `FOR UPDATE` on its candidates in a statement of its OWN, BEFORE the `not exists` verdict, and every envelope writer holds `FOR KEY SHARE` on the object until the insert that stamps the reference COMMITS. Either the writer got there first — the sweep then waits and its verdict statement, taking a fresh READ COMMITTED snapshot after that wait, SEES the new envelope and keeps the body — or the sweep got there first and the writer's probe finds the object gone and writes the envelope with NO reference and its INLINE body, the pre-G5 shape of a capture, which is always readable. There is no third outcome, so the belt-and-braces alternatives were REJECTED: a two-pass sweep with a delay narrows a race that is now closed and cannot be sized (any bound is a guess about GC pauses) while doubling a break-glass act's fence hold; a durable claim row adds a write to the hottest path in the system plus a cleanup that could itself delete a live claim; the FK #215 rejected would work and every word of that rejection still holds, which is exactly why the ONE lock an FK would have taken is taken by hand instead — no DDL, no index (the catalog PK serves it), no history to validate, and only on a capture that carries a reference at all. IT APPLIES UNIFORMLY to pointer-only and dual-write: a dangling reference in the second case is not a lost fact but it is still a lie the verifier reports as `object_missing`, and one rule beats a special case. `lockCapturePayloadRefAlive` stays OFF the package barrel (pinned) because it is a lock, meaningless unless held to the insert's commit. A standing DANGLING-REFERENCE CENSUS over the head of both envelope tables now runs on EVERY hourly pass, canary or not, and pages under the existing `capture_payload_parity` kind with its own `dangling_reference` subKey (#213/#219's shape) — resolvable only by a zero count, with the measured window travelling in the report so a zero is never read as more than it is; the seam counts `refVanished` and owns no alarm (#217). SECOND FINDING, the swap: `capture:reclaim --phase swap` read its erasure preconditions and its row counts OUTSIDE the transaction, so an erasure committing while the swap waited for locks would park a post-erasure source and attach a PRE-erasure shadow — resurrection through the door the G3 fence does not watch. The transaction now takes its locks EXPLICITLY and FIRST (`LOCK TABLE ONLY observations`, then source, then shadow — `ONLY` so it does not stop every other month) and re-proves everything after them: erasure quiet, both partitions in the state they were in, and source/shadow counts equal. THE RECOUNT AND THE ERASURE PROBE DO NOT SUBSUME EACH OTHER — a committed erasure shows up as a count mismatch (nothing writes into a closed month, so the counts cannot drift back into agreement), an UNCOMMITTED one is invisible to any count and only the mid-flight tombstone and the held fence lock catch it. A `statement_timeout` bounds the recount so a pathological count aborts the swap instead of freezing capture under ACCESS EXCLUSIVE, and a refusal under lock settles the run as `refused` (nothing touched), never as a crash. AMENDS #219: its stated residual — "the worst outcome is a dangling reference the parity verifier reports, never a lost fact" — was true when written and became false at #220; it is superseded by this entry and the sentence is corrected in place in the code that carried it |
 | 223 | G5 review fix: the reclaim's four missing gates — a typed column nobody could fill, an unreadable body that read as an empty one, a headroom law behind the growth it governs, and a ritual its own gate refused | A second external review of the G5 line found four defects, each an act performed in the wrong ORDER relative to the thing that was supposed to gate it. **(1) THE COHORT WITH NO POPULATION PATH.** Slice 1 (#215) started stamping references; slice 3a (#218) added the typed columns three deployments later and put their only population inside the reference-stamping UPDATE — so every row captured BETWEEN those deployments carries a reference, NULL typed columns, and is excluded by construction from the one scan that would fill them (`payload_object_id is null`). `--phase null-bodies` then removes the inline body every `CAS-INLINE-FALLBACK:` arm was reading through, and for a Fansly `dm_messages` row the tip-context reader's `coalesce(response_tips, CASE …)` hands back the nulled column itself: the replay records an INVALID sidecar for a message that had a perfectly good one — a WRONG fact, not a missing one, which is the worse of the two. `capture:backfill` gains a SECOND scan whose predicate is a SQL mirror of the derivation (`jsonb_typeof` in the scalar set for the harvest members, `= 'object'` for the tips slice, which is exact), so a filled row stops matching and the pass resumes with no cursor like the first one; the count rides the census's existing single scan, and `capture:reclaim` refuses `shadow` and `null-bodies` while any row would still be filled. The gate PROVES rather than counts — the SQL mirror can say `number` for a literal `JSON.parse` turns into `Infinity`, and a refusal built out of a value nobody can change would be permanent — so a non-zero count is walked and re-derived in the same TypeScript the capture path runs, bounded exactly as the codec-refusal rescan is. **(2) A CATALOG FAILURE THAT BECAME A PARSED FACT.** #220 let a row have NO inline body; #217's seam answered a failed catalog read for such a row with the inline value it was holding, which is `null` — the same answer it gives for "this envelope captured no body". A transient blip therefore became permanent: four of six canonicalizer families have no `canParse` gate, so zero events fell straight through to `markObservationParsed`; the A22 re-journal hashed `null` and inserted it under a DETERMINISTIC idempotency key, blocking its own repair forever; the OFAPI materializer and the readthrough sweep stamped their own versions; the agent plane told the owner the payload was withheld for its RESTRICTION CLASS. The seam now RAISES `CapturePayloadUnavailableError` for that one case — a sentinel would have to be checked and the whole finding is that nobody checked, while an exception's default behaviour at an unaudited site is loud. All twelve migrated read sites were audited and each is now propagate / catch-and-count / explicit 503, with the audit written into the seam's header as the call-site registry #217 never left. The canonicalize driver counts `skippedUnavailable` APART from `skippedUnparseable` because unparseable is permanent and unavailable is transient, and the number that would otherwise grow is the one an operator reads as "we need a new parser". Two bugs fell out of the audit and are fixed here: the expired-interactive-response recovery passed the UNRESOLVED row to materialization (which stamps `parse_version` when it cannot parse — so a pointer-only row was consumed unread), and the coverage-revoke idempotency proof read an unreadable prior body as somebody else's proof and answered 409. **(3) THE LAW BEHIND THE GROWTH IT GOVERNS.** `capture:backfill` writes a catalog copy of every body it walks plus a heap tuple per stamped row with NO admission check at all; observation headroom was first asked at `shadow` and raw headroom only AFTER `null-bodies` — i.e. after the UPDATEs that only make the relation bigger. The backfill gains a §9.1-shaped pre-flight (the bodies still to copy, the same again for WAL, and a 5 GiB floor it will not touch) and re-checks the floor every 10 batches, stopping the walk where it stands; the raw headroom check moves BEFORE `null-bodies`. `--assume-free-bytes` was a DRILL that an executed run could pass to the real gate — the tombstone recorded the bypass and did not prevent it — so the CLI now rejects it together with `--execute`, before the app context exists. **(4) THE RITUAL ITS OWN GATE REFUSED.** `checkWritersStopped` refuses on ANY heartbeating instance while the runbook stopped only `worker` and `scheduler`, so the raw phases could never pass. The review expected the check to be too broad; the audit found the opposite — THE API IS A CAPTURE WRITER, on more paths than any other role (`recordAudit` journals an observation on every audited admin mutation, `/api/v1/ingest/observations` is the clients' own capture lane, the webhook receiver and the read gateway write their own, and `POST /api/v1/admin/pages/:pageLabel/verify` writes `sync_raw_payloads` itself through `refreshPageMetadata`). So the check stays maximally broad (a role allowlist would go stale silently, and the failure mode of a stale allowlist is a rewrite under a live writer) and the RUNBOOK is fixed: it stops `api` too, with the production compose-file selector it was missing, and states the cost — the dashboard, both clients and every AI generation are down for R2+R3, which `VACUUM FULL`'s ACCESS EXCLUSIVE was going to impose anyway |
 | 224 | Fansly capture widening + the DM media plane (WP-F0) | The Fansly conversation/follower capture stops being a 4-of-25-field stub: `aggregationData.accounts[]` is journaled through a NAMED 18-FIELD ALLOWLIST ([A20]) — `followsYou/following/subscriber/subscriberSubscription/subscriberAutoRenew/notes/containingLists/profileAccess/profileAccessFlags/profileFlags/permissions/statusId/flags/userFlags` on top of `id/username/displayName/createdAt` — while the eight VOLATILE fields (`lastSeenAt`, `followCount`, `subscriberCount`, `postLikes`, `accountMediaLikes`, `timelineStats`, `streaming`, `version`) are never captured, because they change on nearly every response and would destroy the ~11:1 content-address dedup collapse measured on production. That collapse is the whole reason the byte-ceiling mechanism could be DELETED with the ruling: there is no `fanslyUntrimmedCaptureByteCeilingPerDay` key, no lane deferral, and a test pins that nothing in the capture path can defer `dm_conversations` on a byte budget — a storage guard that can stop live chatter work is a worse risk than the runaway it hedged. **The conversation ROWS were never trimmed at all**: `data[]` carries exactly nine fields and the trim keeps all nine, verified by a BYTE-IDENTITY pin on a new verbatim-shaped fixture, because this plan, its v1 and every review pass believed the trim destroyed DM previews, attachments and tips that were never on the route. `groups[].lastMessage` KEEPS its redaction (a duplicate of the verbatim `dm_messages` journal), which is what keeps the agent-read scrub's justification true. **Three new mechanisms.** (1) §3.2a MIXED APPEND: `appendMixedDomainEvents` lets ONE family emit deliverable news and projection-only material for the same observation — deliverables first, then the hidden block, then a checkpoint whose `hiddenCount` counts hidden rows APPENDED (not batch size), because the v2 replay validator requires the row immediately after a seq gap to be the checkpoint covering it. (2) sync-pull v5 parses the DM sale sidecars into four projection-only types (`message.attachments_observed`, `media.observed`, `media.order_observed`, `message.material_observed`) feeding the four rebuildable tables of migration 0130; money is mills, `saleStats.total` is NET (A12), and a sparse `saleStats` is NULL, never 0. `message.ppv_unlocked` keeps running beside `media.order_observed` — two identities for one purchase, never summed, collapsing to ONE `media_orders` row. **A17-4 VARIANT B: `message_archive` gains NO columns** — purchase state is served by joining `message_media_offers` on `(page_id, message_ref)`, so the shadow-rebuild set-equality gate is untouched. (3) §3.2c(ii) the APPEND-side partition census, wired into `runCanonicalization` and not into a command, because that one engine backs both the minutely sweep and the `events:replay` drain: a provider-dated draft aimed at a 2026–2030 month with no ATTACHED partition is REFUSED before any write, the observation keeps its parse debt, and the run reports `partitionBlocked` (a SKIPPED step) with ONE anomaly per (family, month) naming detached-vs-absent and their DIFFERENT recoveries — creating a "missing" partition when the census says detached orphans the facts the detached table holds. Health-floor gauges gain the family LANE (`obs_backlog_<source>_<lane>_v<version>`) because at v5 `sync-pull` and `posts` would have written two different backlogs under one metric name, and the golden-signal threshold map is built with `Object.fromEntries`, where a duplicate key collapses silently. **Two permanent ratchets:** every written `observations.kind` must be claimed by a family, a registered off-sweep claimant or a justified allowlist entry (seeded from a census of the tree, which found five OF capture kinds and one unregistered off-sweep claimant nobody had listed), and every fan-ref-shaped column discovered from `information_schema` must be a fan-scope erasure target or carry a written justification — the FK guard is structurally blind to TEXT platform refs, which is why `tip_sender_platform_user_id` had to be hand-added. The typed write seam ([S2]) is DEFERRED (A28-7): the guarantee is a CI-enforced registry, NOT "structurally impossible". **REPLAY CANNOT RECOVER WHAT WAS NEVER JOURNALED** — pre-fix history stays trimmed, stated through the existing `captureFloor` mechanism (#197); there is no repair re-walk, and the v5 bump re-parses only what the journal already holds |
+| 225 | Fansly account statistics (WP-F1) + the projection registry | The `stats_snapshot` sync stream lands as one whole package: the account statistics sweep (`/it/amoie/stats` daily + hourly), the revenue mix (`/account/wallets/earnings/stats` + `/monthlystats`), `/trackinglinks`, the discovery tag counters, and — per **A28-5** — the three mass-DM broadcast routes plus `/polls` and `/recapstats` as STEPS of this lane rather than a `dm_commerce` stream of their own. **THE PROJECTION REGISTRY comes first and is the reusable half.** `ProjectionDefinition {name, eventTypes, tables, stateClass, rebuildKind, run, rebuild}` is now the list the `projection:rebuild` CLI and the worker tick BOTH iterate, replacing a hardcoded three-name if-chain and six hand-written try/catch blocks — two sites nothing checked, on a plan that adds ~10 projections. Every rebuild now runs the §3.2c(i) detached-partition preflight in the ONE function all of them pass through; before this `creator_posts` and `fan_earnings` would have replayed a truncated ledger and called it authoritative without a word. **[D1] the typed ledger read stays DEFERRED**, and the deferral is reopenable rather than a silent drop: every definition declares its `eventTypes` from day one, and a tick-duration alert on the shared queue is the named trigger. §3.4's THIRD STATE CLASS is declared here — `OPERATIONAL_STATE_TABLES` names `capture_coverage`, and a test asserts no projection's `tables` intersects it, so "operational state is never truncated by a rebuild" is checked rather than promised (**A17-6**). **CAPTURE.** The per-lane daily cap is counted in HTTP ATTEMPTS (retries included — a cap in logical calls lets a retry storm multiply real egress by up to 4), lives in the cursor so it survives leases and restarts, and **DEFERS to the next UTC day; it never drops** — a response already fetched is journaled before the cap is consulted again. After **A28-4** that cap is the whole request-count enforcement: no per-egress-key counter, no `sync_rate_limit_days`, no 2×-of-norm signal, and **[A19]** had already removed the global per-page cap. The first-enable backfill derives each next window from the RETURNED `dateAfter`/`dateBefore` — a self-derived walk drifts a bucket per chunk and leaves holes — stops after two empty windows PLUS one probe a year further back (**[E10]**: an empty window on an idle account proves inactivity, not a floor), journals every empty response because the empty window IS the floor evidence, and records the floor in `capture_coverage` with `proof = empty_window` and `proof_observation_id` pointing at it. Backfill continuations carry `fanslyBackfillContinuationDelayMs` ± 30 % jitter: BURST SHAPE, not daily volume, is the ban-risk surface. **EVENTS.** Family `fansly-stats` v1, projection-only, 13 natural-key types, all RECEIPT-TIME (§3.2b) with the provider instant typed in `data` and in the key — so an event from this family can never carry a clamp marker, and its presence is the failure signal. Type codes are stored RAW (**A22-2**: one label maps to two live codes, so keying by label merges legacy into current and keying against a closed set drops legacy rows); an unknown code writes its row AND raises `fansly_stats_unknown_type` (**A1**). `FANSLY_STAT_LABEL_VERSION = 2`, and its unknown guard fires BEFORE the family lookup so 10002/44002/44032 are `unknown:<code>` rather than silently absorbed. Money is mills through the shared constructors, `saleStats.total` is NET (**A12**), and `/trackinglinks.totalNet` served as 0 lands NULL with the served value preserved beside it — unpopulated, never a zero-revenue link. `media.observed` is re-emitted from the aggregation sidecars with `firstOrigin: 'stats_agg'` in F0's EXACT shapes and dedup keys, so `creator_media.first_origin='stats_agg'` names an origin replay can produce; `creatorMediaOfferLocations` is stored PARSED (**A17-5**) and the media-plane projector stays the single writer of `creator_media`. **A21 STANDS**: no `capture.window_observed`, no `stats_capture_windows` — the two top-N tables carry their window identity INLINE, and per-look history is a query over `sync_raw_payloads`. This entry SUPERSEDES #206's clause parking `/trackinglinks`: the route is wired and its snapshot is a first-class daily fact. **5-minute buckets (`period=300000`) are a deliberate NON-GOAL** — reachable, and not worth the calls or the rows. One flag + one FAIL-CLOSED page allowlist per stream (**S4**: a shared allowlist makes a per-stream ramp unexecutable and turns one fat-fingered edit into six broken lanes); the seed pause is generalized from `if (stream === "posts")` so a gated-off stream can never seed pending rows fleet-wide on the deploy that ships it; and the ops-ordering ladder in `repositories/sync.ts`, which had silently omitted `fan_earnings`/`purchase_history` since Stage 16, is repaired |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -8325,3 +8326,153 @@ invariants (the report they existed for is one query against
 `sync_http_attempts`); the byte ceiling and its lane-deferral outcome; the typed
 write seam and its negative type-test; and the three `message_archive` purchase
 columns. `response_body_bytes` stays, as a column and as measurement only.
+
+---
+
+**Decision #225 (2026-08-22, endpoints-cover WP-F1: the account-statistics
+lane, and the projection registry that had to come first):**
+
+**WHY THE REGISTRY IS IN THIS ENTRY AT ALL.** WP-F1 is one lane. What made it
+the right place to build the projection registry is arithmetic: the plan adds
+roughly ten projections to a spine whose entire registry was a hardcoded
+three-name `if`-chain in `projection:rebuild` and six hand-written try/catch
+blocks in the worker tick. Ten copies of two unchecked edits is the
+expensive-forever shape, and the two failure modes it produces are both silent —
+a projector registered nowhere is a table that quietly stops filling, and a
+projector nobody can REBUILD is a projection you cannot repair. Both are
+omissions a passing end-to-end test does not notice, which is why the
+media-plane registration ratchet had been asserting on the SOURCE TEXT of those
+two sites. That ratchet is now written against the registry instead, which is
+strictly stronger: it could only ever see whether one literal was present.
+
+**What the registry deliberately does NOT do.** [D1] — the typed positive
+`types` filter on `listEventsSince`, its index, and the conversion of the five
+existing projectors — stays DEFERRED (owner, 2026-08-21), and so does per-family
+tick scheduling. The half that is nearly free was kept: every definition
+declares its `eventTypes` from day one, which is what makes the deferral
+reopenable rather than a silent drop. The NAMED TRIGGER ships with it — a
+tick-duration alert on the shared queue — because a deferral whose trigger was
+only defined in the fallback branch would have had no trigger at all.
+Observation-driven consumers are not in the registry and should not be:
+`ai_acceptance` walks `observations` by id, has no event types to declare, and a
+registry entry with an empty type list would be a lie the registry test exists
+to catch.
+
+**THE THIRD STATE CLASS, checked rather than promised.** Rebuild is truncate +
+replay, and no event carries a cursor, a floor or a blocker. A rebuild that
+truncated `capture_coverage` would erase every retention floor the backfill paid
+egress to discover and re-trigger the whole first-sight backfill set — an egress
+storm against a platform whose failure mode is a model ban. So
+`OPERATIONAL_STATE_TABLES` declares the class (A17-6), and the test asserts the
+intersection with every projection's `tables` is EMPTY. That empty intersection
+IS the guarantee; the §9.1 checksum exclusion follows from the classification
+rather than from an exemption written into the test file.
+
+**THE BUDGET, and the one sentence that matters.** The per-lane daily cap is
+counted in HTTP **attempts**, retries included, because a cap counted in logical
+calls lets a retry storm multiply real egress by up to the adapter's retry limit.
+It lives in the cursor, so it survives leases, restarts and re-dispatches — a cap
+that resets on every lease is not a cap. And crossing it **defers the lane to the
+next UTC day; it never drops**: the check runs before the call, and a response
+already fetched is journaled before the cap is consulted again. After A28-4 this
+is the WHOLE request-count enforcement in the design — the §3.5 per-egress-key
+counter, `sync_rate_limit_days`, the 2×-of-trailing-norm ops signal and the
+boot/PATCH limiter invariants are all deleted, and [A19] had already removed the
+global per-page cap. `response_body_bytes` stays, as measurement only.
+
+**THE BACKFILL DETAIL THAT IS NOT OBVIOUS.** Each next window is derived from the
+provider's RETURNED `dateAfter`/`dateBefore`, never from the bounds we asked for.
+Fansly snaps windows to its own bucket grid, so a walk that stepped back 100 days
+from OUR requested bound would drift a bucket per chunk and leave holes nobody
+would notice for a year. The stop rule is two consecutive all-empty windows PLUS
+one probe roughly a year further back, because an empty window on a long-idle
+account proves INACTIVITY, not a retention floor ([E10]) — and every empty
+response is journaled, because the empty window IS the floor evidence. The floor
+lands in `capture_coverage` with `proof = empty_window` and a
+`proof_observation_id` pointing into the 100-year journal: evidence with no
+address is a claim.
+
+**BURST SHAPE IS THE BAN-RISK SURFACE, not daily volume.** A chunk spends five
+requests in about thirteen seconds and is re-queued immediately, so an unspaced
+deep walk runs contiguously at ~23 requests/minute — 4.4× the live human capture
+session that produced zero 429s — for as long as it has work. Backfill
+continuations therefore carry `fanslyBackfillContinuationDelayMs` (20 s) ± 30 %
+jitter. Steady-state sweeps keep immediate continuation, because they are six to
+eight calls a day.
+
+**THE EVENTS.** Family `fansly-stats` v1, `projectionOnly: true`, thirteen
+natural-key types, every one added to `PROJECTION_ONLY_DOMAIN_EVENT_TYPES` in the
+same change that registered the family — the file's own comment says the two are
+one decision, never two. All of them are RECEIPT-TIME (§3.2b): `occurredAt` is
+the observation instant and the provider instant is a typed field in `data` and
+part of the natural key. A receipt-time draft is by construction inside
+`clampDraftOccurredAt`'s window, so this family can never produce
+`occurredAtClamped` — its PRESENCE is the failure signal, and the pre-2024
+fixture asserts exactly that. The failure this prevents is concrete:
+`domain_events` is monthly-partitioned, and a historical append dated at provider
+time aims an insert at a cold or detached partition and fails `ExecFindPartition`
+(23514) forever.
+
+**Type codes are stored raw, and the label module's guard order is the test.**
+A22-2 found five label/code pairs where one visible label maps to two live codes
+(legacy and current): keying by label silently merges legacy into current, and
+keying by code against a closed set silently DROPS every legacy row. So storage
+holds the integer, the label table is read-time and versioned
+(`FANSLY_STAT_LABEL_VERSION = 2`), and an unknown code writes its row AND raises
+`fansly_stats_unknown_type` (A1: journaled and surfaced, never dropped). The
+unknown guard fires BEFORE the family lookup, so a new member of a known family —
+10002, 44002, 44032 — reports `unknown:<code>` instead of being absorbed into a
+label we would then trust.
+
+**Money and absence.** Mills through the `packages/shared` constructors, as
+decimal strings in events (JSON cannot carry a bigint and a float re-opens the
+1000× footgun). `saleStats.total` is the creator's NET share (A12) and is never
+summed with gross. `/trackinglinks.totalNet` came back 0 on all five observed
+links while `totalGross` was populated: it lands NULL, with the served number
+preserved beside it so a later populated capture is distinguishable from today's
+silence. `totalVideoPercentWatched` is already a SUM on the wire and is stored as
+one — dividing on write would bake in a divisor we have not proven.
+
+**What this supersedes, explicitly.** #206 parked `/trackinglinks` as an endpoint
+with no consumer. It has one now: the daily snapshot is a first-class fact, and
+consecutive-day diffs ARE the daily series the platform does not serve.
+
+**A21 stands and is restated so nobody rebuilds it.** There is no
+`capture.window_observed` event and no `stats_capture_windows` table. The two
+top-N tables carry their window identity INLINE (`page, plane, period_ms,
+requested_start, requested_end, content_hash`), and "which window did we ask for,
+when, and what came back" is a query over `sync_raw_payloads`, which already
+stores endpoint, request params, status code and captured-at per request for a
+hundred years. The same reasoning forced one correction during the build: the
+capture INSTANT is outside the hashed material for the daily tag and
+tracking-link snapshots. Hashing it minted a fresh event on every poll, forever —
+the exact runaway A21 deleted the window event for.
+
+**5-minute buckets are a deliberate non-goal.** `period=300000` is reachable (the
+UI's "Last Hour" proves it). It would multiply this lane's calls and its row
+count for a granularity nothing in the plan, the dashboard or the agent plane
+asks for. Recorded here so the next pass does not read its absence as an
+oversight.
+
+**Two repairs that came with the wiring.** The ops-ordering `streamOrderSql` in
+`repositories/sync.ts` — the third hand-written copy of the stream order — had
+silently omitted `fan_earnings` and `purchase_history` since Stage 16, so both
+fell to `else 999` and sorted last regardless of their real index. And
+`MONITORED_SYNC_STREAMS` was missing `posts`, which made a wedged posts walk
+unobservable in exactly the way a wedged `fan_earnings` walk was before W8.1; the
+new pin is `MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly")`, so the
+next omission fails a test instead of hiding a lane.
+
+**The seed pause is generalized.** `buildSeedPageSyncState` used to special-case
+`if (stream === "posts")`. Every other stream seeds pending/recovery, so a
+gated-off stream added to `SYNC_STREAMS` without that branch seeds one pending
+row per page FLEET-WIDE on the deploy that ships it — before its flag has ever
+been opened. `SEED_PAUSED_SYNC_STREAMS` is the list now, and the pin is a test.
+
+**S4 stands: one flag and one page allowlist PER STREAM.** The stats allowlist
+FAILS CLOSED (empty = no pages), the opposite of `fanslyNewStreamPageAllowlist`
+(empty = all pages), and reading the stats lane through the shared key would
+report every page as ramped the moment its flag went on. Two keys are not the
+cost being weighed: with a shared allowlist, adding page 2 for one lane opens
+page 2 for every lane at once, which makes a per-stream ramp unexecutable, and
+one fat-fingered edit breaks six streams instead of one.

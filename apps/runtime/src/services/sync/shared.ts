@@ -157,6 +157,11 @@ export async function persistRawPayload(
   const context = getPageSyncExecutionContext();
   const stream = context?.stream ?? null;
   const platform = options?.platform ?? null;
+  // WP-F1: the observation id is returned to the caller so a capture that
+  // discovers a FLOOR can point `capture_coverage.proof_observation_id` at the
+  // exact journaled response that proves it. An empty window is the evidence,
+  // and evidence with no address is a claim.
+  let journalledObservationId!: number | null;
   // `observedPayload` is hoisted above the CAS write — normalized there so an
   // adapter (or test stub) handing back undefined still hashes and journals
   // deterministically as JSON null, and so the catalog stores exactly the value
@@ -186,6 +191,7 @@ export async function persistRawPayload(
       payloadRef: casRefs.observation,
       omitInlinePayload,
     });
+    journalledObservationId = journalled.observationId;
     if (journalled.payloadRefVanished) {
       noteCaptureCasRefVanished();
     }
@@ -218,7 +224,7 @@ export async function persistRawPayload(
     }
   }
 
-  return rawPayload;
+  return { ...rawPayload, observationId: journalledObservationId };
 }
 
 /**

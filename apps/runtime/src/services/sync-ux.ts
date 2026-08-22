@@ -12,6 +12,10 @@ type SyncUxState = SyncUxSummary["state"];
 export const BULK_ENRICHMENT_SYNC_STREAMS: readonly SyncStream[] = [
   "fan_earnings",
   "purchase_history",
+  // WP-F1: same reasoning, same default. `fanslyStatsSnapshotSyncEnabled`
+  // defaults false, so letting this lane vote would make every Fansly page —
+  // and the fleet — read "Off" from the deploy that ships it.
+  "stats_snapshot",
 ];
 
 export function isBulkEnrichmentSyncStream(stream: string) {

@@ -33,6 +33,7 @@ import {
   fanslyPostsChunk,
   onlyfansPostsChunk,
 } from "../services/sync/posts.ts";
+import { fanslyStatsSnapshotChunk } from "../services/sync/fansly-stats.ts";
 
 // Kernel Stage 18: the two platform adapters, assembled in the app layer
 // (pull handlers need AppContext/executor types — platform-core stays
@@ -83,6 +84,7 @@ const FANSLY_STREAMS: CanonicalStream[] = [
   "fan_earnings",
   "purchase_history",
   "posts",
+  "stats_snapshot",
 ];
 
 /** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
@@ -110,6 +112,10 @@ const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   fan_earnings: executeFanEarningsChunk,
   purchase_history: executePurchaseHistoryChunk,
   posts: fanslyPostsChunk,
+  // WP-F1. A stream in SYNC_STREAMS without a handler here throws
+  // "Unsupported executor stream" on every dispatch, FLEET-WIDE — and the
+  // adapter conformance check makes it a boot crash rather than a 500.
+  stats_snapshot: fanslyStatsSnapshotChunk,
 };
 
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {

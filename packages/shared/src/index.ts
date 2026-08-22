@@ -6,6 +6,7 @@ export * from "./crypto.ts";
 export * from "./dm-text.ts";
 export * from "./error-sanitizer.ts";
 export * from "./fans.ts";
+export * from "./fansly-stat-types.ts";
 export * from "./http-client.ts";
 export * from "./http-request.ts";
 export * from "./logger.ts";

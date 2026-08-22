@@ -1,0 +1,39 @@
+{
+  "_fixture": "SYNTHETIC. Shape from a live /trackinglinks capture (2026-08-19). NOTE `totalNet: 0` on every row while `totalGross` is populated \u2014 unpopulated, NEVER a real zero, which is what the projection has to preserve. `createdAt` is MILLISECONDS. `metadata` arrives as a JSON STRING.",
+  "rows": [
+    {
+      "id": "000900000000000029",
+      "accountId": "000900000000000003",
+      "internalId": "1",
+      "type": 1,
+      "status": 1,
+      "label": "Fansly FYP",
+      "description": "The Fansly FYP tracking link tracks statistics from users that first interacted with your Profile on the FYP.",
+      "metadata": "{}",
+      "createdAt": 1740787920000,
+      "clicks": 485,
+      "claims": 19641,
+      "follows": 9126,
+      "subscriptions": 566,
+      "totalNet": 0,
+      "totalGross": 53916240
+    },
+    {
+      "id": "000900000000000030",
+      "accountId": "000900000000000003",
+      "internalId": "2",
+      "type": 1,
+      "status": 1,
+      "label": "Fansly Search",
+      "description": "",
+      "metadata": "{}",
+      "createdAt": 1740777155000,
+      "clicks": 50,
+      "claims": 2100,
+      "follows": 569,
+      "subscriptions": 148,
+      "totalNet": 0,
+      "totalGross": 33389570
+    }
+  ]
+}

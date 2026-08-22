@@ -1,0 +1,73 @@
+{
+  "_fixture": "SYNTHETIC. This route was NOT in the 2026-08-19 HAR \u2014 the shape comes from the redacted structural skeleton the 2026-08-21 liveness probe recorded (WP-F9 item 3), so it is a shape to design AGAINST, not a closed contract. `stats {total, delivered, read}` is per-message delivery; the offered media carry prices in mills; saleStats.total is NET (A12). The `/deleted` sibling has the same shape plus accountMediaBundles[].saleStats.",
+  "messages": [
+    {
+      "id": "000900000000000004",
+      "content": "New set is up, check your DMs",
+      "groupId": "000900000000000005",
+      "senderId": "000900000000000003",
+      "createdAt": 1786916000,
+      "attachments": [
+        {
+          "contentId": "000900000000000006",
+          "contentType": 1,
+          "pos": 0
+        }
+      ],
+      "stats": {
+        "total": 1420,
+        "delivered": 1391,
+        "read": 806
+      },
+      "totalTipAmount": 12000
+    },
+    {
+      "id": "000900000000000007",
+      "content": "",
+      "groupId": "000900000000000008",
+      "senderId": "000900000000000003",
+      "createdAt": 1786800000,
+      "attachments": [],
+      "stats": {
+        "total": 900,
+        "delivered": 900,
+        "read": 401
+      },
+      "totalTipAmount": 0
+    }
+  ],
+  "accountMedia": [
+    {
+      "id": "000900000000000006",
+      "accountId": "000900000000000003",
+      "price": 0,
+      "permissions": {
+        "permissionFlags": [
+          {
+            "id": "000900000000000009",
+            "accountMediaId": "000900000000000006",
+            "type": 0,
+            "flags": 1,
+            "price": 79000,
+            "metadata": "{}"
+          }
+        ]
+      },
+      "saleStats": {
+        "sales": 1,
+        "total": 63200,
+        "pending": 63200
+      },
+      "purchased": false,
+      "access": true,
+      "media": {
+        "id": "000900000000000010",
+        "type": 2,
+        "mimetype": "video/mp4"
+      }
+    }
+  ],
+  "accountMediaBundles": [],
+  "tips": [],
+  "tipGoals": []
+}

@@ -138,6 +138,8 @@ export const syncStreamEnum = pgEnum("sync_stream", [
   "fan_earnings",
   "purchase_history",
   "posts",
+  // WP-F1 (migration 0131): the account-level statistics sweep.
+  "stats_snapshot",
 ]);
 export const pageSyncStatusEnum = pgEnum("page_sync_status", [
   "idle",
@@ -4730,6 +4732,663 @@ export const messageMediaOffers = pgTable(
     pageMessageIdx: index("message_media_offers_page_message_idx").on(
       table.pageId,
       table.messageRef,
+    ),
+  }),
+);
+
+// ── WP-F1 (0132): the statistics core ────────────────────────────────────────
+// Mirrors only. The migration is the authority on CHECK constraints and on the
+// (status, acquisition_mode, proof) mapping comment; these definitions exist so
+// the tables are visible to Drizzle-typed callers.
+
+export const statsTrafficBuckets = pgTable(
+  "stats_traffic_buckets",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    subjectKind: text("subject_kind").notNull(),
+    subjectRef: text("subject_ref").notNull(),
+    periodMs: bigint("period_ms", { mode: "number" }).notNull(),
+    bucketStart: timestamp("bucket_start", { withTimezone: true }).notNull(),
+    /** The RAW platform code as text — never a label (A22-2). */
+    sourceCode: text("source_code").notNull(),
+    mappingVersion: integer("mapping_version").notNull(),
+    /** NULL = "the platform did not serve this", never zero. */
+    views: bigint("views", { mode: "number" }),
+    previewViews: bigint("preview_views", { mode: "number" }),
+    uniqueViewers: bigint("unique_viewers", { mode: "number" }),
+    previewUniqueViewers: bigint("preview_unique_viewers", { mode: "number" }),
+    videoViews: bigint("video_views", { mode: "number" }),
+    previewVideoViews: bigint("preview_video_views", { mode: "number" }),
+    interactionTimeMs: bigint("interaction_time_ms", { mode: "number" }),
+    previewInteractionTimeMs: bigint("preview_interaction_time_ms", { mode: "number" }),
+    /** A SUM over views on the wire; divide at read time, never on write. */
+    videoPercentWatchedSum: numeric("video_percent_watched_sum", { precision: 20, scale: 10 }),
+    previewVideoPercentWatchedSum: numeric("preview_video_percent_watched_sum", {
+      precision: 20,
+      scale: 10,
+    }),
+    requestedStart: timestamp("requested_start", { withTimezone: true }),
+    requestedEnd: timestamp("requested_end", { withTimezone: true }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    revisionCount: integer("revision_count").default(0).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "stats_traffic_buckets_pkey",
+      columns: [
+        table.pageId,
+        table.subjectKind,
+        table.subjectRef,
+        table.periodMs,
+        table.bucketStart,
+        table.sourceCode,
+      ],
+    }),
+    pagePeriodBucketIdx: index("stats_traffic_buckets_page_period_bucket_idx").on(
+      table.pageId,
+      table.periodMs,
+      table.bucketStart,
+      table.subjectKind,
+    ),
+  }),
+);
+
+export const statsTopMedia = pgTable(
+  "stats_top_media",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    /** A21: the window IS the identity — inline, not a FK. */
+    plane: text("plane").notNull(),
+    periodMs: bigint("period_ms", { mode: "number" }).notNull(),
+    requestedStart: timestamp("requested_start", { withTimezone: true }).notNull(),
+    requestedEnd: timestamp("requested_end", { withTimezone: true }).notNull(),
+    mediaOfferRef: text("media_offer_ref").notNull(),
+    bundleRef: text("bundle_ref"),
+    rank: integer("rank").notNull(),
+    views: bigint("views", { mode: "number" }),
+    previewViews: bigint("preview_views", { mode: "number" }),
+    interactionTimeMs: bigint("interaction_time_ms", { mode: "number" }),
+    previewInteractionTimeMs: bigint("preview_interaction_time_ms", { mode: "number" }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "stats_top_media_pkey",
+      columns: [
+        table.pageId,
+        table.plane,
+        table.periodMs,
+        table.requestedStart,
+        table.requestedEnd,
+        table.mediaOfferRef,
+      ],
+    }),
+    pageWindowRankIdx: index("stats_top_media_page_window_rank_idx").on(
+      table.pageId,
+      table.plane,
+      table.requestedEnd,
+      table.rank,
+    ),
+  }),
+);
+
+export const statsTopTags = pgTable(
+  "stats_top_tags",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    plane: text("plane").notNull(),
+    periodMs: bigint("period_ms", { mode: "number" }).notNull(),
+    requestedStart: timestamp("requested_start", { withTimezone: true }).notNull(),
+    requestedEnd: timestamp("requested_end", { withTimezone: true }).notNull(),
+    tagRef: text("tag_ref").notNull(),
+    /** NULL when the tags[] join misses — never fabricated from the id. */
+    tagName: text("tag_name"),
+    rank: integer("rank").notNull(),
+    views: bigint("views", { mode: "number" }),
+    previewViews: bigint("preview_views", { mode: "number" }),
+    interactionTimeMs: bigint("interaction_time_ms", { mode: "number" }),
+    previewInteractionTimeMs: bigint("preview_interaction_time_ms", { mode: "number" }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "stats_top_tags_pkey",
+      columns: [
+        table.pageId,
+        table.plane,
+        table.periodMs,
+        table.requestedStart,
+        table.requestedEnd,
+        table.tagRef,
+      ],
+    }),
+    pageWindowRankIdx: index("stats_top_tags_page_window_rank_idx").on(
+      table.pageId,
+      table.plane,
+      table.requestedEnd,
+      table.rank,
+    ),
+  }),
+);
+
+/** Per-media tag rankings. WP-F4 fills it; F1 only creates it. */
+export const fanslyMediaTagStats = pgTable(
+  "fansly_media_tag_stats",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    mediaOfferRef: text("media_offer_ref").notNull(),
+    tagRef: text("tag_ref").notNull(),
+    periodMs: bigint("period_ms", { mode: "number" }).notNull(),
+    requestedStart: timestamp("requested_start", { withTimezone: true }).notNull(),
+    requestedEnd: timestamp("requested_end", { withTimezone: true }).notNull(),
+    tagName: text("tag_name"),
+    rank: integer("rank"),
+    views: bigint("views", { mode: "number" }),
+    previewViews: bigint("preview_views", { mode: "number" }),
+    interactionTimeMs: bigint("interaction_time_ms", { mode: "number" }),
+    previewInteractionTimeMs: bigint("preview_interaction_time_ms", { mode: "number" }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "fansly_media_tag_stats_pkey",
+      columns: [
+        table.pageId,
+        table.mediaOfferRef,
+        table.tagRef,
+        table.periodMs,
+        table.requestedStart,
+        table.requestedEnd,
+      ],
+    }),
+    pageMediaIdx: index("fansly_media_tag_stats_page_media_idx").on(
+      table.pageId,
+      table.mediaOfferRef,
+      table.requestedEnd,
+    ),
+  }),
+);
+
+/** Platform-GLOBAL tag counters, sampled per page (account_seq is incomparable
+ *  across pages, so the PK is per page and the global value is derived at read
+ *  time: latest captured_at wins, ties break on page_id ascending). */
+export const platformTagDaily = pgTable(
+  "platform_tag_daily",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    tagRef: text("tag_ref").notNull(),
+    businessDate: date("business_date").notNull(),
+    tagName: text("tag_name"),
+    viewCount: bigint("view_count", { mode: "number" }),
+    postCount: bigint("post_count", { mode: "number" }),
+    tagCreatedAt: timestamp("tag_created_at", { withTimezone: true }),
+    source: text("source").notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "platform_tag_daily_pkey",
+      columns: [table.pageId, table.platform, table.tagRef, table.businessDate],
+    }),
+    tagDateIdx: index("platform_tag_daily_tag_date_idx").on(
+      table.platform,
+      table.tagRef,
+      table.businessDate,
+    ),
+  }),
+);
+
+/** A17-5: creatorMediaOfferLocations[] stored PARSED. Pure id-relations — no
+ *  URLs, no CDN paths (those stay raw-journal-only). */
+export const mediaOfferLocations = pgTable(
+  "media_offer_locations",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    locationRef: text("location_ref").notNull(),
+    mediaOfferRef: text("media_offer_ref"),
+    mediaOfferType: integer("media_offer_type"),
+    bundleRef: text("bundle_ref"),
+    mediaRef: text("media_ref"),
+    mediaType: integer("media_type"),
+    previewRef: text("preview_ref"),
+    ownerAccountRef: text("owner_account_ref"),
+    locationIdRef: text("location_id_ref"),
+    correlationRef: text("correlation_ref"),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "media_offer_locations_pkey",
+      columns: [table.pageId, table.platform, table.locationRef],
+    }),
+    pageOfferIdx: index("media_offer_locations_page_offer_idx").on(
+      table.pageId,
+      table.mediaOfferRef,
+    ),
+  }),
+);
+
+export const revenueMixDaily = pgTable(
+  "revenue_mix_daily",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    businessDate: date("business_date").notNull(),
+    /** The RAW revenue-type code. A22-2: one label maps to two live codes. */
+    typeCode: integer("type_code").notNull(),
+    grossMills: bigint("gross_mills", { mode: "bigint" }),
+    netMills: bigint("net_mills", { mode: "bigint" }),
+    correlationAccountRef: text("correlation_account_ref"),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "revenue_mix_daily_pkey",
+      columns: [table.pageId, table.platform, table.businessDate, table.typeCode],
+    }),
+    pageDateIdx: index("revenue_mix_daily_page_date_idx").on(
+      table.pageId,
+      table.businessDate,
+      table.typeCode,
+    ),
+  }),
+);
+
+/** `/monthlystats`, including the `year: 0, month: 0` rolling-rollup row —
+ *  the creator's Statements header. It is never summed with the real months. */
+export const revenueMonthTotals = pgTable(
+  "revenue_month_totals",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    year: integer("year").notNull(),
+    month: integer("month").notNull(),
+    totalGrossMills: bigint("total_gross_mills", { mode: "bigint" }),
+    totalNetMills: bigint("total_net_mills", { mode: "bigint" }),
+    topPercent: numeric("top_percent", { precision: 12, scale: 8 }),
+    maxTopPercent: numeric("max_top_percent", { precision: 12, scale: 8 }),
+    windowStart: timestamp("window_start", { withTimezone: true }),
+    windowEnd: timestamp("window_end", { withTimezone: true }),
+    servedExtras: jsonbSafe("served_extras").$type<Record<string, unknown>>().default({}).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "revenue_month_totals_pkey",
+      columns: [table.pageId, table.platform, table.year, table.month],
+    }),
+  }),
+);
+
+/** Cumulative counters, snapshotted daily: consecutive-day diffs ARE the daily
+ *  series. `totalNetMills` is NULL when the platform served 0-or-null. */
+export const pagePromoLinks = pgTable(
+  "page_promo_links",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").notNull(),
+    linkRef: text("link_ref").notNull(),
+    businessDate: date("business_date").notNull(),
+    internalRef: text("internal_ref"),
+    linkType: integer("link_type"),
+    status: integer("status"),
+    label: text("label"),
+    description: text("description"),
+    metadata: jsonbSafe("metadata").$type<Record<string, unknown>>().default({}).notNull(),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    clicks: bigint("clicks", { mode: "number" }),
+    claims: bigint("claims", { mode: "number" }),
+    follows: bigint("follows", { mode: "number" }),
+    subscriptions: bigint("subscriptions", { mode: "number" }),
+    totalGrossMills: bigint("total_gross_mills", { mode: "bigint" }),
+    totalNetMills: bigint("total_net_mills", { mode: "bigint" }),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_promo_links_pkey",
+      columns: [table.pageId, table.platform, table.linkKind, table.linkRef, table.businessDate],
+    }),
+    pageLinkDateIdx: index("page_promo_links_page_link_date_idx").on(
+      table.pageId,
+      table.linkRef,
+      table.businessDate,
+    ),
+  }),
+);
+
+/** Mass DM (A28-5). Rows carry a GROUP ref, never a fan ref — which is why
+ *  nothing here is a fan-scope erasure target. */
+export const pageBroadcasts = pgTable(
+  "page_broadcasts",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    broadcastRef: text("broadcast_ref").notNull(),
+    sourceList: text("source_list").notNull(),
+    groupRef: text("group_ref"),
+    senderRef: text("sender_ref"),
+    content: text("content"),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
+    deletedAtPlatform: timestamp("deleted_at_platform", { withTimezone: true }),
+    statsTotal: bigint("stats_total", { mode: "number" }),
+    statsDelivered: bigint("stats_delivered", { mode: "number" }),
+    statsRead: bigint("stats_read", { mode: "number" }),
+    totalTipAmountMills: bigint("total_tip_amount_mills", { mode: "bigint" }),
+    offeredMediaRefs: text("offered_media_refs").array().default([]).notNull(),
+    offeredBundleRefs: text("offered_bundle_refs").array().default([]).notNull(),
+    offerPrices: jsonbSafe("offer_prices").$type<unknown[]>().default([]).notNull(),
+    salesCount: bigint("sales_count", { mode: "number" }),
+    /** A12: saleStats.total is NET. */
+    salesNetMills: bigint("sales_net_mills", { mode: "bigint" }),
+    salesPendingMills: bigint("sales_pending_mills", { mode: "bigint" }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_broadcasts_pkey",
+      columns: [table.pageId, table.platform, table.broadcastRef],
+    }),
+    pageCreatedIdx: index("page_broadcasts_page_created_idx").on(
+      table.pageId,
+      table.createdAtPlatform,
+    ),
+  }),
+);
+
+export const pagePolls = pgTable(
+  "page_polls",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    pollRef: text("poll_ref").notNull(),
+    title: text("title"),
+    description: text("description"),
+    status: integer("status"),
+    pollVersion: integer("poll_version"),
+    createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_polls_pkey",
+      columns: [table.pageId, table.platform, table.pollRef],
+    }),
+  }),
+);
+
+export const pagePollOptions = pgTable(
+  "page_poll_options",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    pollRef: text("poll_ref").notNull(),
+    optionRef: text("option_ref").notNull(),
+    optionOrdinal: integer("option_ordinal").notNull(),
+    title: text("title"),
+    voteCount: bigint("vote_count", { mode: "number" }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_poll_options_pkey",
+      columns: [table.pageId, table.platform, table.pollRef, table.optionRef],
+    }),
+    pagePollIdx: index("page_poll_options_page_poll_idx").on(
+      table.pageId,
+      table.pollRef,
+      table.optionOrdinal,
+    ),
+  }),
+);
+
+/** `statValue` is a STRING on the wire and stays text — never coerced. */
+export const pageRecapStats = pgTable(
+  "page_recap_stats",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    recapYear: integer("recap_year").notNull(),
+    statRef: text("stat_ref").notNull(),
+    statName: text("stat_name"),
+    statValue: text("stat_value"),
+    generatedAt: timestamp("generated_at", { withTimezone: true }),
+    contentHash: char("content_hash", { length: 64 }).notNull(),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }).notNull(),
+    sourceAccountSeq: bigint("source_account_seq", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "page_recap_stats_pkey",
+      columns: [table.pageId, table.platform, table.recapYear, table.statRef],
+    }),
+  }),
+);
+
+/**
+ * CAPTURE-PLANE OPERATIONAL STATE (§3.4, A17-6) — NOT a rebuildable projection.
+ * `projection:rebuild` never truncates it: it holds cursors, floors and
+ * blockers that no event carries, and resetting it would re-trigger every
+ * first-sight backfill in the system. A gap here means "this capture did not do
+ * that", NEVER "the platform cannot". The (status, acquisition_mode, proof)
+ * mapping table lives beside the CHECKs in migration 0132.
+ */
+export const captureCoverage = pgTable(
+  "capture_coverage",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platform: platformColumn("platform")
+      .references(() => platforms.key, { onDelete: "restrict" })
+      .notNull(),
+    plane: text("plane").notNull(),
+    scopeRef: text("scope_ref").notNull(),
+    status: text("status").notNull(),
+    acquisitionMode: text("acquisition_mode").notNull(),
+    proof: text("proof").notNull(),
+    oldestCapturedAt: timestamp("oldest_captured_at", { withTimezone: true }),
+    newestCapturedAt: timestamp("newest_captured_at", { withTimezone: true }),
+    cursor: jsonbSafe("cursor").$type<Record<string, unknown>>().default({}).notNull(),
+    expectedCount: bigint("expected_count", { mode: "number" }),
+    observedUniqueCount: bigint("observed_unique_count", { mode: "number" }),
+    /** Points into the 100-year journal at the response that proves the claim. */
+    proofObservationId: bigint("proof_observation_id", { mode: "number" }),
+    reasonCode: text("reason_code"),
+    nextProbeAt: timestamp("next_probe_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "capture_coverage_pkey",
+      columns: [table.pageId, table.platform, table.plane, table.scopeRef],
+    }),
+    pagePlaneIdx: index("capture_coverage_page_plane_idx").on(table.pageId, table.plane),
+  }),
+);
+
+/**
+ * §5 DRIVE-BY: the missing mirror for `fan_earnings_stats`, live since
+ * migration 0061 with zero references in this file. MIRROR ONLY — the table is
+ * not recreated or rewritten here, and the projector keeps writing it through
+ * `upsertFanEarningsStat`.
+ */
+export const fanEarningsStats = pgTable(
+  "fan_earnings_stats",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    accountId: bigint("account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "restrict" })
+      .notNull(),
+    window: text("window").notNull(),
+    grossMills: bigint("gross_mills", { mode: "bigint" }).notNull(),
+    netMills: bigint("net_mills", { mode: "bigint" }),
+    currency: char("currency", { length: 3 }).default("USD").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    sourceEventId: bigint("source_event_id", { mode: "number" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    accountFanWindowUniq: unique("fan_earnings_stats_account_id_fan_id_window_key").on(
+      table.accountId,
+      table.fanId,
+      table.window,
+    ),
+    accountWindowIdx: index("fan_earnings_stats_account_window_idx").on(
+      table.accountId,
+      table.window,
     ),
   }),
 );

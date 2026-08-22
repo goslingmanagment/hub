@@ -6,6 +6,13 @@
 //   media.observed                 → creator_media + creator_media_bundles
 //   media.order_observed           → media_orders
 //   message.attachments_observed   → message_media_offers
+//   media.offer_location_observed  → media_offer_locations (WP-F1, A17-5)
+//
+// WP-F1 extends this projector rather than adding a second writer: `media.observed`
+// now arrives from the account-statistics aggregation too (first_origin
+// 'stats_agg', 85 media + 8 bundle rows per capture), and this file stays the
+// SINGLE writer of creator_media. The new offer-location type is the media ↔
+// offer ↔ bundle ↔ carrier join evidence — pure id-relations, no URLs.
 //
 // The fourth v5 type, `message.material_observed`, is deliberately NOT read
 // here: it belongs to the message-archive projector, which already understands
@@ -26,6 +33,7 @@ import {
   setProjectionWatermark,
   upsertCreatorMedia,
   upsertCreatorMediaBundle,
+  upsertMediaOfferLocation,
   upsertMediaOrder,
   upsertMessageMediaOffer,
   type MediaPlanePlatform,
@@ -43,16 +51,18 @@ const EVENT_PAGE_SIZE = 500;
 const MEDIA_PLANE_EVENT_TYPES = new Set([
   "media.observed",
   "media.order_observed",
+  "media.offer_location_observed",
   "message.attachments_observed",
 ]);
 
-export interface MediaPlaneProjectionResult {
+export interface MediaPlaneProjectionResult extends Record<string, unknown> {
   accounts: number;
   eventsSeen: number;
   media: number;
   bundles: number;
   orders: number;
   offers: number;
+  locations: number;
 }
 
 function eventData(value: unknown): Record<string, unknown> {
@@ -131,6 +141,7 @@ export async function runMediaPlaneProjection(
     bundles: 0,
     orders: 0,
     offers: 0,
+    locations: 0,
   };
   const accounts = input?.accountId != null
     ? [input.accountId]
@@ -229,6 +240,32 @@ export async function runMediaPlaneProjection(
             ...lineage,
           });
           if (result.applied) totals.bundles += 1;
+          continue;
+        }
+
+        if (event.type === "media.offer_location_observed") {
+          // A17-5: stored PARSED. Pure id-relations — the payload also carries
+          // signed CDN locations and every variant of every file, and those stay
+          // raw-journal-only. Nothing here is a URL.
+          const locationRef = asText(data.locationRef);
+          if (locationRef === null) continue;
+          const result = await upsertMediaOfferLocation(app.db, {
+            pageId: accountId,
+            platform: mediaPlatform,
+            locationRef,
+            mediaOfferRef: asText(data.mediaOfferRef),
+            mediaOfferType: asInt(data.mediaOfferType),
+            bundleRef: asText(data.bundleRef),
+            mediaRef: asText(data.mediaRef),
+            mediaType: asInt(data.mediaType),
+            previewRef: asText(data.previewRef),
+            ownerAccountRef: asText(data.ownerAccountRef),
+            locationIdRef: asText(data.locationIdRef),
+            correlationRef: asText(data.correlationRef),
+            createdAtPlatform: isoDate(data.createdAtPlatform),
+            ...lineage,
+          });
+          if (result.applied) totals.locations += 1;
           continue;
         }
 
@@ -360,6 +397,7 @@ export async function rebuildMediaPlaneProjection(
     if (input?.accountId != null) {
       const pageId = input.accountId;
       await tx.execute(sql`delete from message_media_offers where page_id = ${pageId}`);
+      await tx.execute(sql`delete from media_offer_locations where page_id = ${pageId}`);
       await tx.execute(sql`delete from media_orders where page_id = ${pageId}`);
       await tx.execute(sql`delete from creator_media_bundles where page_id = ${pageId}`);
       await tx.execute(sql`delete from creator_media where page_id = ${pageId}`);
@@ -369,6 +407,7 @@ export async function rebuildMediaPlaneProjection(
       `);
     } else {
       await tx.execute(sql`delete from message_media_offers`);
+      await tx.execute(sql`delete from media_offer_locations`);
       await tx.execute(sql`delete from media_orders`);
       await tx.execute(sql`delete from creator_media_bundles`);
       await tx.execute(sql`delete from creator_media`);

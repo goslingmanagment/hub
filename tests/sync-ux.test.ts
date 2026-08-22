@@ -375,9 +375,16 @@ describe("sync UX summaries", () => {
   });
 
   it("names the bulk enrichment streams that must not dominate a rollup", () => {
-    expect([...BULK_ENRICHMENT_SYNC_STREAMS]).toEqual(["fan_earnings", "purchase_history"]);
+    expect([...BULK_ENRICHMENT_SYNC_STREAMS]).toEqual([
+      "fan_earnings",
+      "purchase_history",
+      // WP-F1: same class, same reason — its flag defaults false, so letting it
+      // vote would make every Fansly page read "Off" from the deploy onward.
+      "stats_snapshot",
+    ]);
     expect(isBulkEnrichmentSyncStream("fan_earnings")).toBe(true);
     expect(isBulkEnrichmentSyncStream("purchase_history")).toBe(true);
+    expect(isBulkEnrichmentSyncStream("stats_snapshot")).toBe(true);
     expect(isBulkEnrichmentSyncStream("dm_messages")).toBe(false);
     expect(isBulkEnrichmentSyncStream("light")).toBe(false);
   });

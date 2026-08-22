@@ -306,6 +306,193 @@ export class FanslyAdapter {
     };
   }
 
+  // ── WP-F1: the `stats_snapshot` lane ──────────────────────────────────────
+  // Loosely typed `unknown` on purpose: the handler journals the body BEFORE
+  // asserting anything about it (DP 7, the posts.ts journal-before-assert
+  // pattern), so a shape assertion here would refuse bytes we are required to
+  // keep. Every one of these goes through the same `request()` — same
+  // `buildHeaders`, same per-page proxy, same 2.5 s + 100 ms pacing, and the
+  // `ngsw-bypass=true` every URL already carries.
+
+  /**
+   * `/it/amoie/stats` — the account statistics response: profile datapoints,
+   * account-media datapoints (where the VIDEO metrics actually live), the three
+   * top-N planes, and the aggregation sidecars (media, bundles, tags, offer
+   * locations).
+   *
+   * `datapointLimit` came back 100, which is why the backfill walks windows of
+   * at most 100 buckets. `year`/`month` are the named-month form the UI uses;
+   * 0/0 means "use beforeDate/afterDate", which is the only form this lane ever
+   * sends — the UI exposing three months back is a UI limit, not the API's.
+   */
+  async getAccountStats(
+    context: FanslyRequestContext,
+    params: { beforeDate: Date; afterDate: Date; periodMs: number },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/it/amoie/stats", {
+      operation: "account_stats",
+      endpointTemplate: "/it/amoie/stats",
+      category: "account",
+      query: {
+        beforeDate: String(params.beforeDate.getTime()),
+        afterDate: String(params.afterDate.getTime()),
+        period: String(params.periodMs),
+        year: "0",
+        month: "0",
+      },
+      requestShape: {
+        beforeDate: params.beforeDate.toISOString(),
+        afterDate: params.afterDate.toISOString(),
+        periodMs: params.periodMs,
+      },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/it/moie/statsnew` — per-media statistics. Added here with the rest of the
+   * family; WP-F4's per-media lane is what calls it. Retroactive history is
+   * confirmed (a July-2026 window returned data), and all six observed
+   * responses carried SEVEN stat keys and no video fields at all — absence is a
+   * property of this route, not of the asset ([E5] is what would settle why).
+   */
+  async getMediaOfferStats(
+    context: FanslyRequestContext,
+    params: { mediaOfferId: string; beforeDate: Date; afterDate: Date; periodMs: number },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/it/moie/statsnew", {
+      operation: "media_offer_stats",
+      endpointTemplate: "/it/moie/statsnew",
+      category: "media",
+      query: {
+        mediaOfferId: params.mediaOfferId,
+        beforeDate: String(params.beforeDate.getTime()),
+        afterDate: String(params.afterDate.getTime()),
+        period: String(params.periodMs),
+      },
+      requestShape: {
+        mediaOfferId: params.mediaOfferId,
+        beforeDate: params.beforeDate.toISOString(),
+        afterDate: params.afterDate.toISOString(),
+        periodMs: params.periodMs,
+      },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/account/wallets/earnings/stats` — the revenue MIX: a flat array of
+   * `{type, totalGross, totalNet, accountId, timestamp}`, one row per revenue
+   * type per business day. Offset-paginated at `limit=100`.
+   *
+   * Distinct from `/account/wallets/earnings/stats/accounts`, which is the
+   * existing per-FAN `fan_earnings` lane and is not this.
+   */
+  async getEarningsStatsWindow(
+    context: FanslyRequestContext,
+    params: { before: Date; after: Date; limit?: number | null; offset?: number | null },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(context, "/account/wallets/earnings/stats", {
+      operation: "earnings_stats_window",
+      endpointTemplate: "/account/wallets/earnings/stats",
+      category: "transactions",
+      query: {
+        before: String(params.before.getTime()),
+        after: String(params.after.getTime()),
+        limit: params.limit != null ? String(params.limit) : undefined,
+        offset: params.offset != null ? String(params.offset) : undefined,
+      },
+      requestShape: {
+        before: params.before.toISOString(),
+        after: params.after.toISOString(),
+        limit: params.limit ?? null,
+        offset: params.offset ?? null,
+      },
+      pagination: { limit: params.limit ?? null, offset: params.offset ?? null },
+      summarizeResponse: summarizeUnknownResponse,
+    });
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/account/wallets/earnings/monthlystats` — per-month totals INCLUDING a
+   * `year: 0, month: 0` rolling-rollup row, which is the creator's own
+   * Statements header and is kept as a row like any other.
+   *
+   * The observed call carried `before`/`after`; both are optional here so the
+   * caller can ask for all time. The UI's own window reached 2025-01, which is
+   * where its `after` was set — NOT a demonstrated platform floor.
+   */
+  async getEarningsMonthlyStats(
+    context: FanslyRequestContext,
+    params?: { before?: Date | null; after?: Date | null },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(
+      context,
+      "/account/wallets/earnings/monthlystats",
+      {
+        operation: "earnings_monthly_stats",
+        endpointTemplate: "/account/wallets/earnings/monthlystats",
+        category: "transactions",
+        query: {
+          before: params?.before ? String(params.before.getTime()) : undefined,
+          after: params?.after ? String(params.after.getTime()) : undefined,
+        },
+        requestShape: {
+          before: params?.before ? params.before.toISOString() : null,
+          after: params?.after ? params.after.toISOString() : null,
+        },
+        summarizeResponse: summarizeUnknownResponse,
+      },
+    );
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
+  /**
+   * `/contentdiscovery/media/suggestionsnew` — the discovery feed.
+   *
+   * The TAG COUNTERS are the payload we are here for: each suggestion carries
+   * its `postTags[]` as full tag objects with PLATFORM-GLOBAL view/post counts,
+   * which is a free tag-growth series. The suggestion rows themselves are a
+   * SAMPLE and are labelled as one — never "the global FYP corpus".
+   */
+  async getDiscoveryMediaSuggestions(
+    context: FanslyRequestContext,
+    params: { limit?: number | null; before?: number | null; offset?: number | null },
+  ): Promise<{ items: unknown; raw: unknown }> {
+    const response = await this.request<unknown>(
+      context,
+      "/contentdiscovery/media/suggestionsnew",
+      {
+        operation: "discovery_media_suggestions",
+        endpointTemplate: "/contentdiscovery/media/suggestionsnew",
+        category: "media",
+        query: {
+          before: String(params.before ?? 0),
+          after: "0",
+          tagIds: "",
+          limit: params.limit != null ? String(params.limit) : undefined,
+          offset: params.offset != null ? String(params.offset) : undefined,
+        },
+        requestShape: {
+          before: params.before ?? 0,
+          limit: params.limit ?? null,
+          offset: params.offset ?? null,
+        },
+        pagination: { limit: params.limit ?? null, offset: params.offset ?? null },
+        summarizeResponse: summarizeUnknownResponse,
+      },
+    );
+
+    return { items: response.parsed, raw: response.raw };
+  }
+
   async getListsAccount(
     context: FanslyRequestContext,
     itemId: string | null = null,

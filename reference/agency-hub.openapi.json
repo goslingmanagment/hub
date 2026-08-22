@@ -15138,7 +15138,8 @@
                               "followers_reconcile",
                               "fan_earnings",
                               "purchase_history",
-                              "posts"
+                              "posts",
+                              "stats_snapshot"
                             ]
                           },
                           "requestedSeq": {
@@ -15381,7 +15382,8 @@
                               "followers_reconcile",
                               "fan_earnings",
                               "purchase_history",
-                              "posts"
+                              "posts",
+                              "stats_snapshot"
                             ]
                           },
                           "requestedSeq": {
@@ -15653,7 +15655,8 @@
                               "followers_reconcile",
                               "fan_earnings",
                               "purchase_history",
-                              "posts"
+                              "posts",
+                              "stats_snapshot"
                             ]
                           },
                           "requestedSeq": {
@@ -15896,7 +15899,8 @@
                               "followers_reconcile",
                               "fan_earnings",
                               "purchase_history",
-                              "posts"
+                              "posts",
+                              "stats_snapshot"
                             ]
                           },
                           "requestedSeq": {
@@ -20984,7 +20988,8 @@
                                 "followers_reconcile",
                                 "fan_earnings",
                                 "purchase_history",
-                                "posts"
+                                "posts",
+                                "stats_snapshot"
                               ]
                             },
                             "additionalProperties": {
@@ -68963,7 +68968,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69020,7 +69026,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "role": {
@@ -69523,7 +69530,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69580,7 +69588,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "role": {
@@ -70083,7 +70092,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -70140,7 +70150,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "role": {
@@ -70643,7 +70654,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -70700,7 +70712,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "role": {
@@ -71203,7 +71216,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -71260,7 +71274,8 @@
                                           "followers_reconcile",
                                           "fan_earnings",
                                           "purchase_history",
-                                          "posts"
+                                          "posts",
+                                          "stats_snapshot"
                                         ]
                                       },
                                       "role": {
@@ -72036,7 +72051,8 @@
                                   "followers_reconcile",
                                   "fan_earnings",
                                   "purchase_history",
-                                  "posts"
+                                  "posts",
+                                  "stats_snapshot"
                                 ]
                               },
                               "cadenceSeconds": {
@@ -72093,7 +72109,8 @@
                                   "followers_reconcile",
                                   "fan_earnings",
                                   "purchase_history",
-                                  "posts"
+                                  "posts",
+                                  "stats_snapshot"
                                 ]
                               },
                               "role": {
@@ -78476,7 +78493,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -78533,7 +78551,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "role": {
@@ -79036,7 +79055,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79093,7 +79113,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "role": {
@@ -79596,7 +79617,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79653,7 +79675,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "role": {
@@ -80156,7 +80179,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -80213,7 +80237,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "role": {
@@ -80716,7 +80741,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -80773,7 +80799,8 @@
                                             "followers_reconcile",
                                             "fan_earnings",
                                             "purchase_history",
-                                            "posts"
+                                            "posts",
+                                            "stats_snapshot"
                                           ]
                                         },
                                         "role": {
@@ -81158,7 +81185,8 @@
                           "followers_reconcile",
                           "fan_earnings",
                           "purchase_history",
-                          "posts"
+                          "posts",
+                          "stats_snapshot"
                         ]
                       },
                       "operation": {
@@ -81955,7 +81983,8 @@
                                     "followers_reconcile",
                                     "fan_earnings",
                                     "purchase_history",
-                                    "posts"
+                                    "posts",
+                                    "stats_snapshot"
                                   ]
                                 },
                                 "status": {
@@ -82640,7 +82669,8 @@
                               "followers_reconcile",
                               "fan_earnings",
                               "purchase_history",
-                              "posts"
+                              "posts",
+                              "stats_snapshot"
                             ]
                           },
                           "eventType": {

@@ -68,7 +68,11 @@ import {
   runMessageArchiveBackfills,
   runMessageArchiveProjection,
 } from "./services/projections/message-archive.ts";
-import { rebuildFanEarningsProjection } from "./services/projections/fan-earnings.ts";
+import {
+  findProjection,
+  projectionNames,
+  rebuildRegisteredProjection,
+} from "./services/projections/registry.ts";
 import {
   assignPageToUser,
   createUserAccount,
@@ -2222,60 +2226,40 @@ export function buildProgram() {
 
   program
     .command("projection:rebuild")
-    .description("Stage 10/W10: rebuild a projection from the domain-event ledger "
-      + "(creator_posts/fan_earnings_stats/media_plane = truncate scope + replay; "
-      + "message_archive = shadow build, never in-place)")
+    .description("Stage 10/W10/WP-F1: rebuild a projection from the domain-event ledger. "
+      + "The set of names comes from the PROJECTION REGISTRY "
+      + "(services/projections/registry.ts), not from a hardcoded list here — a "
+      + "projector nobody can rebuild is a projection you cannot repair, and the "
+      + "registry is what makes forgetting one impossible. Every rebuild runs the "
+      + "§3.2c(i) detached-partition preflight first; message_archive builds a SHADOW "
+      + "and is never rebuilt in place (decision #134).")
     .argument(
       "<projection>",
-      "projection name (creator_posts | fan_earnings_stats | media_plane | message_archive)",
+      `projection name (${projectionNames().join(" | ")})`,
     )
     .option("--account <id>", "restrict to one internal account (page) id", (v) => Number.parseInt(v, 10))
     .action(async (projection, options) => {
-      if (
-        projection !== "message_archive"
-        && projection !== "fan_earnings_stats"
-        && projection !== "creator_posts"
-        && projection !== "media_plane"
-      ) {
-        throw new Error(`Unknown projection: ${projection}`);
+      const definition = findProjection(projection);
+      if (definition === null) {
+        throw new Error(`Unknown projection: ${projection}. Known: ${projectionNames().join(" | ")}`);
       }
       const app = await createAppContext();
       try {
         const scope = options.account !== undefined ? { accountId: options.account } : {};
-        if (projection === "message_archive") {
-          // W10 (decision #134): the old delete+replay rebuild was lossy —
-          // the replay sees only attached domain_events partitions and the
-          // reset destroyed legacy-seed rows (fastreply-freshness PR1 threw
-          // here unconditionally). Dispatch to the shadow build instead: it
-          // lifts legacy seeds verbatim, replays behind the detached-partition
-          // hard gate, and NEVER touches the live table — the swap is a
-          // separate, owner-gated command.
-          const { buildMessageArchiveShadow } = await import(
-            "./services/projections/message-archive-rebuild.ts"
-          );
-          const result = await buildMessageArchiveShadow(app, scope);
-          console.log(JSON.stringify(result, null, 2));
+        const result = await rebuildRegisteredProjection(app, definition.name, scope);
+        console.log(JSON.stringify(result, null, definition.rebuildKind === "bespoke_shadow" ? 2 : 0));
+        if (definition.rebuildKind === "bespoke_shadow") {
+          // W10 (decision #134): the old delete+replay rebuild was lossy — the
+          // replay sees only attached domain_events partitions and the reset
+          // destroyed legacy-seed rows. The shadow build lifts legacy seeds
+          // verbatim, replays behind the detached-partition hard gate, and
+          // NEVER touches the live table; the swap is a separate command.
           console.log(
             "Shadow build complete. Next: `archive:rebuild-verify` (must report ok), "
               + "then the owner-gated `archive:rebuild-switch --execute` "
               + "(docs/runbooks/message-archive-rebuild.md).",
           );
-          return;
         }
-        if (projection === "media_plane") {
-          // §3.2c(i): rebuildMediaPlaneProjection runs the detached-partition
-          // preflight itself and REFUSES rather than replay a truncated ledger.
-          const { rebuildMediaPlaneProjection } = await import(
-            "./services/projections/media-plane.ts"
-          );
-          console.log(JSON.stringify(await rebuildMediaPlaneProjection(app, scope)));
-          return;
-        }
-        const result = projection === "creator_posts"
-          ? await (await import("./services/projections/creator-posts.ts"))
-            .rebuildCreatorPostsProjection(app, scope)
-          : await rebuildFanEarningsProjection(app, scope);
-        console.log(JSON.stringify(result));
       } finally {
         await app.close();
       }
