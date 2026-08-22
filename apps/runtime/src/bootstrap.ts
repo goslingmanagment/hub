@@ -186,9 +186,13 @@ export type AdapterLike = ProviderAdapter<
   // Liveness probes — WP-F9 (`dm_commerce`) + [E1]. Bundle-derived routes, never
   // yet served to us; deliberately `unknown` in and out until a real response has
   // been inspected. See services/fansly-endpoint-probe.ts. All read-only GETs.
+  // WP-F5's own lane calls this one now (the probe declared it first). BARE
+  // GET, always — `POST /postreply/verify` is never issued. `before` is offered
+  // because every other paginated Fansly route uses it, and is sent only after
+  // a page looks suspiciously full.
   getPostRepliesPage(
     context: FanslyRequestContext,
-    params: { postId: string },
+    params: { postId: string; before?: string | null },
   ): Promise<{ items: unknown; raw: unknown }>;
   getGroupMediaOffersPage(
     context: FanslyRequestContext,

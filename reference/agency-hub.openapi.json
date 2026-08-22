@@ -15140,7 +15140,9 @@
                               "purchase_history",
                               "posts",
                               "stats_snapshot",
-                              "notifications"
+                              "notifications",
+                              "catalog",
+                              "post_replies"
                             ]
                           },
                           "requestedSeq": {
@@ -15385,7 +15387,9 @@
                               "purchase_history",
                               "posts",
                               "stats_snapshot",
-                              "notifications"
+                              "notifications",
+                              "catalog",
+                              "post_replies"
                             ]
                           },
                           "requestedSeq": {
@@ -15659,7 +15663,9 @@
                               "purchase_history",
                               "posts",
                               "stats_snapshot",
-                              "notifications"
+                              "notifications",
+                              "catalog",
+                              "post_replies"
                             ]
                           },
                           "requestedSeq": {
@@ -15904,7 +15910,9 @@
                               "purchase_history",
                               "posts",
                               "stats_snapshot",
-                              "notifications"
+                              "notifications",
+                              "catalog",
+                              "post_replies"
                             ]
                           },
                           "requestedSeq": {
@@ -20994,7 +21002,9 @@
                                 "purchase_history",
                                 "posts",
                                 "stats_snapshot",
-                                "notifications"
+                                "notifications",
+                                "catalog",
+                                "post_replies"
                               ]
                             },
                             "additionalProperties": {
@@ -68975,7 +68985,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69034,7 +69046,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "role": {
@@ -69539,7 +69553,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -69598,7 +69614,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "role": {
@@ -70103,7 +70121,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -70162,7 +70182,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "role": {
@@ -70667,7 +70689,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -70726,7 +70750,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "role": {
@@ -71231,7 +71257,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "cadenceSeconds": {
@@ -71290,7 +71318,9 @@
                                           "purchase_history",
                                           "posts",
                                           "stats_snapshot",
-                                          "notifications"
+                                          "notifications",
+                                          "catalog",
+                                          "post_replies"
                                         ]
                                       },
                                       "role": {
@@ -72068,7 +72098,9 @@
                                   "purchase_history",
                                   "posts",
                                   "stats_snapshot",
-                                  "notifications"
+                                  "notifications",
+                                  "catalog",
+                                  "post_replies"
                                 ]
                               },
                               "cadenceSeconds": {
@@ -72127,7 +72159,9 @@
                                   "purchase_history",
                                   "posts",
                                   "stats_snapshot",
-                                  "notifications"
+                                  "notifications",
+                                  "catalog",
+                                  "post_replies"
                                 ]
                               },
                               "role": {
@@ -78512,7 +78546,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -78571,7 +78607,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "role": {
@@ -79076,7 +79114,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79135,7 +79175,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "role": {
@@ -79640,7 +79682,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -79699,7 +79743,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "role": {
@@ -80204,7 +80250,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -80263,7 +80311,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "role": {
@@ -80768,7 +80818,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "cadenceSeconds": {
@@ -80827,7 +80879,9 @@
                                             "purchase_history",
                                             "posts",
                                             "stats_snapshot",
-                                            "notifications"
+                                            "notifications",
+                                            "catalog",
+                                            "post_replies"
                                           ]
                                         },
                                         "role": {
@@ -81214,7 +81268,9 @@
                           "purchase_history",
                           "posts",
                           "stats_snapshot",
-                          "notifications"
+                          "notifications",
+                          "catalog",
+                          "post_replies"
                         ]
                       },
                       "operation": {
@@ -82013,7 +82069,9 @@
                                     "purchase_history",
                                     "posts",
                                     "stats_snapshot",
-                                    "notifications"
+                                    "notifications",
+                                    "catalog",
+                                    "post_replies"
                                   ]
                                 },
                                 "status": {
@@ -82700,7 +82758,9 @@
                               "purchase_history",
                               "posts",
                               "stats_snapshot",
-                              "notifications"
+                              "notifications",
+                              "catalog",
+                              "post_replies"
                             ]
                           },
                           "eventType": {

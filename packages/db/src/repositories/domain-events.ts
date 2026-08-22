@@ -126,6 +126,16 @@ const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
   // makes `missing_since` a REPLAYED fact rather than a sweep-time side effect,
   // and it is the only event in this family that describes an absence.
   "catalog.listing_observed",
+  // WP-F5, the comment archive. A comment is a fact about the archive, not
+  // business news an SSE v2 client should be handed as it happens — and the
+  // walk that finds it may be reading a post from two years ago. Registering
+  // the types here and declaring `projectionOnly: true` on the
+  // `fansly-comments` family are ONE decision, never two.
+  "post.comment_observed",
+  // The ROSTER — "this walk of this post served exactly these comment refs".
+  // It is what makes `missing_since` a REPLAYED fact rather than a sweep-time
+  // side effect, and the only event in this family that describes an absence.
+  "post.comment_list_observed",
 ]);
 
 export function isProjectionOnlyDomainEventType(type: string) {

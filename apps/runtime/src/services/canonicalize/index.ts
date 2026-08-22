@@ -49,6 +49,12 @@ import {
   FANSLY_CATALOG_CANONICALIZED_KINDS,
   FANSLY_CATALOG_CANONICALIZER_VERSION,
 } from "./fansly-catalog.ts";
+import {
+  canonicalizeFanslyCommentsObservation,
+  canParseFanslyCommentsObservation,
+  FANSLY_COMMENTS_CANONICALIZED_KINDS,
+  FANSLY_COMMENTS_CANONICALIZER_VERSION,
+} from "./fansly-comments.ts";
 
 export interface CanonicalizerFamily {
   source: "webhook" | "pull" | "command_result" | "client_capture";
@@ -161,6 +167,22 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: FANSLY_CATALOG_CANONICALIZER_VERSION,
     canonicalize: canonicalizeFanslyCatalogObservation,
     canParse: canParseFanslyCatalogObservation,
+    projectionOnly: true,
+  },
+  {
+    // WP-F5: the `post_replies` lane. Projection-only — a comment is a fact
+    // about the archive, not news an SSE v2 client should be handed as it
+    // happens. It is the one family whose observation payload is an ENVELOPE
+    // (`{walk, response}`): the post id lives in the request PATH, so the
+    // response that matters most — the empty one — cannot say which post it is
+    // about, and a parser that could not answer that could never mark a
+    // deleted comment missing.
+    source: "pull",
+    lane: "comments",
+    kinds: [...FANSLY_COMMENTS_CANONICALIZED_KINDS],
+    version: FANSLY_COMMENTS_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeFanslyCommentsObservation,
+    canParse: canParseFanslyCommentsObservation,
     projectionOnly: true,
   },
   {

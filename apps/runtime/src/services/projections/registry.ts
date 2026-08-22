@@ -59,6 +59,12 @@ import {
   runFanslyCatalogProjection,
 } from "./fansly-catalog.ts";
 import {
+  FANSLY_COMMENTS_PROJECTION,
+  FANSLY_COMMENTS_PROJECTION_TABLES,
+  rebuildFanslyCommentsProjection,
+  runFanslyCommentsProjection,
+} from "./fansly-comments.ts";
+import {
   FANSLY_STATS_PROJECTION,
   rebuildFanslyStatsProjection,
   runFanslyStatsProjection,
@@ -291,6 +297,30 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     rebuild: async (app, input) => await rebuildFanslyCatalogProjection(app, input),
     didWork: (result) => count(result, "applied") > 0,
   },
+  {
+    name: FANSLY_COMMENTS_PROJECTION,
+    // WP-F5. Two types, and the second is what makes the first honest:
+    // `post.comment_list_observed` carries the full ref set one walk served, and
+    // applying it is what marks a deleted comment `missing_since` — including
+    // in the case that produces no row events at all, a post whose comments
+    // were ALL deleted.
+    eventTypes: [
+      "post.comment_observed",
+      "post.comment_list_observed",
+    ],
+    // `subject_refresh_state` is ABSENT on purpose: the walk queue for
+    // `plane='post_replies'` is written by the capture handler and by the
+    // creator-posts seeding hook, and a rebuild that truncated it would re-run a
+    // first-pass crawl of the whole post back-catalogue for a repair that should
+    // cost zero platform calls.
+    tables: [...FANSLY_COMMENTS_PROJECTION_TABLES],
+    stateClass: "fact_projection",
+    rebuildKind: "truncate_replay",
+    label: "Fansly-comments projection sweep complete",
+    run: async (app, input) => ({ ...await runFanslyCommentsProjection(app, input) }),
+    rebuild: async (app, input) => await rebuildFanslyCommentsProjection(app, input),
+    didWork: (result) => count(result, "applied") > 0,
+  },
 ];
 
 /**
@@ -328,7 +358,11 @@ export const OPERATIONAL_STATE_TABLES: readonly {
       + "first-sight, releasing an egress storm bounded only by the media lane's daily cap "
       + "against a platform whose failure mode is a model ban. It is written by the capture "
       + "plane and by the WP-F2 purchase signal; it is replayable by neither, which is "
-      + "exactly why v1's four queue columns on the rebuildable `creator_media` were wrong.",
+      + "exactly why v1's four queue columns on the rebuildable `creator_media` were wrong. "
+      + "WP-F5 added its second plane (`post_replies`): one row per root post, written by "
+      + "the replies handler and by the creator-posts projector's same-transaction seeding "
+      + "hook, and truncating it would re-run a first-pass crawl of the entire post "
+      + "back-catalogue for a repair that should cost zero platform calls.",
   },
 ];
 

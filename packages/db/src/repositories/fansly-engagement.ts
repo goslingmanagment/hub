@@ -293,3 +293,285 @@ export async function listSubjectRefreshState(
     backfillCursor: row.backfill_cursor ?? {},
   }));
 }
+
+// ── the post_replies walk queue (WP-F5) ──────────────────────────────────────
+//
+// SAME TABLE, SECOND PLANE. WP-F2 writes `plane='media_stats'` dirty marks and
+// fetches nothing; WP-F5 writes and reads `plane='post_replies'`, where one row
+// = one root post and `known_count` = the reply count that walk last saw.
+//
+// It lives here rather than in a twin table for the reason §3.4 gives: a queue
+// column riding on the rebuildable `creator_posts` would be wiped by an ordinary
+// `projection:rebuild`, resetting every walk to never-visited and re-releasing a
+// full first-pass crawl of the whole back-catalogue. This table is capture-plane
+// operational state and no rebuild truncates it.
+//
+// It is a QUEUE, not a scheduler: no reservations, no leases, no settlement.
+// The stream lease the executor already holds is what makes one page's walk
+// single-threaded, and these rows only remember where it got to.
+
+/** ONE bound parameter carrying a Postgres array literal, then cast. Drizzle
+ *  expands a bare array into a parameter LIST, so an EMPTY one becomes a syntax
+ *  error at runtime — which is exactly the case a first seeding hits when the
+ *  page has no posts yet. */
+function subjectRefArrayParam(values: readonly string[]): SQL {
+  const literal = `{${values.map((value) => `"${value.replace(/(["\\])/g, "\\$1")}"`).join(",")}}`;
+  return sql`${literal}::text[]`;
+}
+
+export interface SeedPostRepliesWalkQueueInput {
+  pageId: number;
+  /** Keyset cursor: only posts whose ref sorts ABOVE this are considered. */
+  afterSubjectRef: string | null;
+  /** Bounded batch — a page with 8 000 posts seeds over several dispatches
+   *  rather than in one statement that holds a lock for a second. */
+  limit: number;
+  /** When the newly seeded rows first become due. */
+  dueAt: Date;
+}
+
+/**
+ * Seed one bounded batch of walk rows from `creator_posts`.
+ *
+ * KEYSET, not offset: the post ref is a snowflake and therefore both unique and
+ * monotonic, so `> cursor` resumes exactly where the last batch stopped even
+ * though rows are being inserted underneath it. An OFFSET walk over a growing
+ * table skips rows silently, which on this lane means posts that are never
+ * walked and nothing that ever notices.
+ *
+ * The cursor returned is the LAST REF SCANNED, not the last ref inserted: a
+ * batch that hits only rows already queued still advances, or the seeding
+ * re-reads the same prefix forever.
+ */
+export async function seedPostRepliesWalkQueue(
+  db: Database,
+  input: SeedPostRepliesWalkQueueInput,
+): Promise<{ scanned: number; inserted: number; cursor: string | null }> {
+  const after = input.afterSubjectRef ?? "";
+  const scan = await db.execute<{ platform_post_id: string }>(sql`
+    select p.platform_post_id
+      from creator_posts p
+     where p.account_id = ${input.pageId}
+       and p.platform = 'fansly'
+       and p.platform_post_id > ${after}
+     order by p.platform_post_id asc
+     limit ${input.limit}
+  `);
+  const refs = scan.rows.map((row) => row.platform_post_id);
+  if (refs.length === 0) {
+    return { scanned: 0, inserted: 0, cursor: input.afterSubjectRef };
+  }
+  const inserted = await db.execute(sql`
+    insert into subject_refresh_state (
+      page_id, plane, subject_ref, refresh_class, next_due_at
+    )
+    select ${input.pageId}, 'post_replies', ref, 'fresh', ${input.dueAt}
+      from unnest(${subjectRefArrayParam(refs)}) as ref
+    on conflict (page_id, plane, subject_ref) do nothing
+  `);
+  return {
+    scanned: refs.length,
+    inserted: inserted.rowCount ?? 0,
+    cursor: refs[refs.length - 1] ?? input.afterSubjectRef,
+  };
+}
+
+/**
+ * Seed ONE walk row, idempotently — the same-transaction hook the creator-posts
+ * projector calls for every post it upserts.
+ *
+ * Why in the projector's transaction and not on a timer: a post that appears
+ * between two seeding sweeps would otherwise wait a whole sweep to become
+ * walkable, and a sweep that is itself bounded by a daily call budget may be
+ * days away. A newly projected post is queued the instant its row exists or it
+ * is not queued at all.
+ */
+export async function ensurePostRepliesWalkRow(
+  db: Database,
+  input: { pageId: number; subjectRef: string; dueAt: Date },
+): Promise<{ applied: boolean }> {
+  const result = await db.execute(sql`
+    insert into subject_refresh_state (
+      page_id, plane, subject_ref, refresh_class, next_due_at
+    ) values (
+      ${input.pageId}, 'post_replies', ${input.subjectRef}, 'fresh', ${input.dueAt}
+    )
+    on conflict (page_id, plane, subject_ref) do nothing
+  `);
+  return { applied: (result.rowCount ?? 0) > 0 };
+}
+
+export interface PostRepliesWalkCandidate {
+  subjectRef: string;
+  knownCount: number | null;
+  dirtyReason: string | null;
+  lastVisitedAt: Date | null;
+  consecutiveFailures: number;
+  /** 0 never-walked, 1 dirty, 2 round-robin re-walk. */
+  priorityBand: number;
+}
+
+/**
+ * The chunk's work list, in the priority order WP-F5 declares:
+ *
+ *   (1) NEVER-WALKED, newest post first — a comment archive that starts with
+ *       the posts nobody remembers is useless for a year.
+ *   (2) DIRTY — a head `reply_count` change or a comment-signal notification
+ *       said this post's replies moved.
+ *   (3) ROUND-ROBIN RE-WALK of rows whose last visit is older than the cycle,
+ *       oldest first.
+ *
+ * The band is recomputed in ORDER BY rather than read back as a SELECT alias:
+ * a bare column name in ORDER BY resolves to the alias, a trap that has shipped
+ * twice in this tree, so every ordering key here is either a qualified column
+ * or the expression itself.
+ */
+export async function listPostRepliesWalkChunk(
+  db: Database,
+  input: { pageId: number; limit: number; rewalkBefore: Date },
+): Promise<PostRepliesWalkCandidate[]> {
+  const band = sql`
+    case
+      when s.last_visited_at is null then 0
+      when s.dirty_reason is not null then 1
+      else 2
+    end
+  `;
+  const result = await db.execute<{
+    subject_ref: string;
+    known_count: number | string | null;
+    dirty_reason: string | null;
+    last_visited_at: Date | string | null;
+    consecutive_failures: number | string;
+    priority_band: number | string;
+  }>(sql`
+    select s.subject_ref,
+           s.known_count,
+           s.dirty_reason,
+           s.last_visited_at,
+           s.consecutive_failures,
+           ${band} as priority_band
+      from subject_refresh_state s
+      left join creator_posts p
+        on p.account_id = s.page_id
+       and p.platform_post_id = s.subject_ref
+     where s.page_id = ${input.pageId}
+       and s.plane = 'post_replies'
+       and (
+         s.last_visited_at is null
+         or s.dirty_reason is not null
+         or s.last_visited_at < ${input.rewalkBefore}
+       )
+     order by ${band} asc,
+              case when s.last_visited_at is null then p.published_at end desc nulls last,
+              s.last_visited_at asc nulls first,
+              s.subject_ref desc
+     limit ${input.limit}
+  `);
+  return result.rows.map((row) => ({
+    subjectRef: row.subject_ref,
+    knownCount: row.known_count === null ? null : Number(row.known_count),
+    dirtyReason: row.dirty_reason,
+    lastVisitedAt: row.last_visited_at === null ? null : new Date(row.last_visited_at),
+    consecutiveFailures: Number(row.consecutive_failures),
+    priorityBand: Number(row.priority_band),
+  }));
+}
+
+/**
+ * Record a completed walk. The visit is what clears the dirty mark — nothing
+ * else does, so a signal can never be lost between "marked" and "fetched".
+ */
+export async function recordPostRepliesWalkVisit(
+  db: Database,
+  input: {
+    pageId: number;
+    subjectRef: string;
+    knownCount: number;
+    visitedAt: Date;
+    nextDueAt: Date;
+  },
+): Promise<{ applied: boolean }> {
+  const result = await db.execute(sql`
+    insert into subject_refresh_state (
+      page_id, plane, subject_ref, refresh_class, next_due_at, last_visited_at,
+      known_count, dirty_reason, consecutive_failures
+    ) values (
+      ${input.pageId}, 'post_replies', ${input.subjectRef}, 'long_tail',
+      ${input.nextDueAt}, ${input.visitedAt}, ${input.knownCount}, null, 0
+    )
+    on conflict (page_id, plane, subject_ref) do update set
+      refresh_class = 'long_tail',
+      next_due_at = excluded.next_due_at,
+      last_visited_at = excluded.last_visited_at,
+      known_count = excluded.known_count,
+      dirty_reason = null,
+      consecutive_failures = 0,
+      updated_at = now()
+    returning page_id
+  `);
+  return { applied: (result.rowCount ?? 0) > 0 };
+}
+
+/**
+ * Record a walk that did NOT produce an answer.
+ *
+ * `last_visited_at` deliberately does NOT move: a failed look is not a look, and
+ * moving it would retire the post from the never-walked band on the strength of
+ * an error. What moves is the failure counter, which is what a later operator
+ * reads to tell "this post is unreachable" from "we have not got to it yet".
+ */
+export async function recordPostRepliesWalkFailure(
+  db: Database,
+  input: { pageId: number; subjectRef: string; nextDueAt: Date },
+): Promise<{ applied: boolean }> {
+  const result = await db.execute(sql`
+    insert into subject_refresh_state (
+      page_id, plane, subject_ref, refresh_class, next_due_at, consecutive_failures
+    ) values (
+      ${input.pageId}, 'post_replies', ${input.subjectRef}, 'fresh',
+      ${input.nextDueAt}, 1
+    )
+    on conflict (page_id, plane, subject_ref) do update set
+      next_due_at = excluded.next_due_at,
+      consecutive_failures = subject_refresh_state.consecutive_failures + 1,
+      updated_at = now()
+    returning page_id
+  `);
+  return { applied: (result.rowCount ?? 0) > 0 };
+}
+
+/** Coverage arithmetic for the lane's progress block: how many roots the queue
+ *  holds, how many have ever been walked, and how many are waiting on a dirty
+ *  signal. `rootsKnown` counts the QUEUE, not `creator_posts`, so a seeding that
+ *  has not finished reads as incomplete rather than as complete-and-small. */
+export async function countPostRepliesWalkProgress(
+  db: Database,
+  pageId: number,
+): Promise<{ rootsKnown: number; rootsWalked: number; rootsDirty: number; postsKnown: number }> {
+  const result = await db.execute<{
+    roots: string;
+    walked: string;
+    dirty: string;
+    posts: string;
+  }>(sql`
+    select
+      (select count(*)::text from subject_refresh_state s
+        where s.page_id = ${pageId} and s.plane = 'post_replies') as roots,
+      (select count(*)::text from subject_refresh_state s
+        where s.page_id = ${pageId} and s.plane = 'post_replies'
+          and s.last_visited_at is not null) as walked,
+      (select count(*)::text from subject_refresh_state s
+        where s.page_id = ${pageId} and s.plane = 'post_replies'
+          and s.dirty_reason is not null) as dirty,
+      (select count(*)::text from creator_posts p
+        where p.account_id = ${pageId} and p.platform = 'fansly') as posts
+  `);
+  const row = result.rows[0];
+  return {
+    rootsKnown: Number(row?.roots ?? 0),
+    rootsWalked: Number(row?.walked ?? 0),
+    rootsDirty: Number(row?.dirty ?? 0),
+    postsKnown: Number(row?.posts ?? 0),
+  };
+}

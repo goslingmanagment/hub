@@ -67,7 +67,51 @@ export interface UpsertCreatorPostResult {
   id: number | null;
 }
 
+/**
+ * The post head, AND — in the SAME TRANSACTION — the WP-F5 reply-walk queue row
+ * for it.
+ *
+ * Why the two writes are one transaction. The walk queue is capture-plane
+ * operational state (§3.4) keyed on the post ref, and its whole contract is
+ * "every root this system knows about has a walk row". A post committed without
+ * its queue row is a post the comment lane will never look at, and nothing
+ * downstream would notice: the archive would simply be missing that post's
+ * comments forever, with a healthy lane and a clean coverage row. Seeding on a
+ * timer instead leaves the same hole for however long the timer is — and the
+ * seeding sweep is itself bounded by a daily call budget, so "however long"
+ * can be days.
+ *
+ * The queue insert is `ON CONFLICT DO NOTHING` and runs on every upsert, not
+ * only on the applied ones: the head upsert is guarded (a replayed older
+ * capture writes nothing), and a post whose head did not move still needs its
+ * walk row to exist. It is a no-op the second time and every time after.
+ *
+ * FANSLY ONLY, decided in SQL rather than in TypeScript — `/post/{id}/replies`
+ * is a Fansly route and an OnlyFans post has no walk to queue. The predicate
+ * lives in the statement so the platform seam stays where the ratchet expects
+ * it (no new `platform ===` branch outside the adapter packages).
+ */
 export async function upsertCreatorPost(
+  db: Database,
+  input: UpsertCreatorPostInput,
+): Promise<UpsertCreatorPostResult> {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const upserted = await upsertCreatorPostHead(database, input);
+    await database.execute(sql`
+      insert into subject_refresh_state (
+        page_id, plane, subject_ref, refresh_class, next_due_at
+      )
+      select ${input.accountId}, 'post_replies', ${input.platformPostId}, 'fresh',
+             ${input.observedAt}
+       where ${input.platform} = 'fansly'
+      on conflict (page_id, plane, subject_ref) do nothing
+    `);
+    return upserted;
+  });
+}
+
+async function upsertCreatorPostHead(
   db: Database,
   input: UpsertCreatorPostInput,
 ): Promise<UpsertCreatorPostResult> {

@@ -102,6 +102,13 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
     source: "pull",
     writer: "services/sync/fansly-catalog.ts",
   },
+  // ── WP-F5: the `post_replies` lane (services/sync/fansly-post-replies.ts) ──
+  // ONE kind for one route. Its observation payload is an ENVELOPE
+  // (`{walk, response}`) because the post id lives in the request PATH: an
+  // empty reply page is a body with no way to say which post it is about, and
+  // that is precisely the body `missing_since` is computed from. The verbatim
+  // response still lands in `sync_raw_payloads.response_payload` unchanged.
+  { kind: "post_replies", source: "pull", writer: "services/sync/fansly-post-replies.ts" },
   // BL-C3 itself. Both halves of the pair, so the incident's own kinds are the
   // first thing this registry pins.
   { kind: "link_stats_tracking", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },

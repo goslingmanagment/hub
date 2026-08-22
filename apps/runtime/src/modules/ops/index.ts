@@ -201,6 +201,9 @@ const GATE_CONFIG_KEYS = new Set([
   // WP-F3.
   "fanslyCatalogSyncEnabled",
   "fanslyCatalogPageAllowlist",
+  // WP-F5.
+  "fanslyPostRepliesSyncEnabled",
+  "fanslyPostRepliesPageAllowlist",
 ]);
 
 /**
@@ -230,6 +233,11 @@ const GATED_FANSLY_STREAMS = [
     stream: "catalog",
     enabledField: "fanslyCatalogSyncEnabled",
     failClosedAllowlistField: "fanslyCatalogPageAllowlist",
+  },
+  {
+    stream: "post_replies",
+    enabledField: "fanslyPostRepliesSyncEnabled",
+    failClosedAllowlistField: "fanslyPostRepliesPageAllowlist",
   },
 ] as const;
 

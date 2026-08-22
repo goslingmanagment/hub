@@ -2495,6 +2495,8 @@ const extendedSyncStreamEnum = z.enum([
   "notifications",
   // WP-F3.
   "catalog",
+  // WP-F5.
+  "post_replies",
 ]);
 
 export const syncMonitorStreamItemSchema = z.object({
