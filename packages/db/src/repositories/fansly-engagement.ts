@@ -1346,6 +1346,10 @@ export interface MediaStatsRefreshProgress {
   dueNow: number;
   /** Items whose first-sight backfill has reached its floor or stopped. */
   backfillComplete: number;
+  /** Items whose backfill stopped because the provider would not honour the
+   *  window — a hole we KNOW about, which is the point of stopping rather than
+   *  looping. Surfaced so it is visible without a bespoke query. */
+  backfillStopped: number;
 }
 
 /**
@@ -1383,6 +1387,7 @@ export async function countMediaStatsRefreshProgress(
     never_visited: string;
     due_now: string;
     backfill_complete: string;
+    backfill_stopped: string;
     media_known: string;
   }>(sql`
     with q as (
@@ -1414,6 +1419,9 @@ export async function countMediaStatsRefreshProgress(
            )::text as due_now,
            count(*) filter (where q.backfill_cursor ->> 'done' = 'true')::text
              as backfill_complete,
+           count(*) filter (
+             where q.backfill_cursor ->> 'stopReason' = 'window_not_honoured'
+           )::text as backfill_stopped,
            (select count(*)::text from creator_media cm
              where cm.page_id = ${input.pageId} and cm.platform = 'fansly') as media_known
       from q
@@ -1429,5 +1437,6 @@ export async function countMediaStatsRefreshProgress(
     neverVisited: Number(row?.never_visited ?? 0),
     dueNow: Number(row?.due_now ?? 0),
     backfillComplete: Number(row?.backfill_complete ?? 0),
+    backfillStopped: Number(row?.backfill_stopped ?? 0),
   };
 }

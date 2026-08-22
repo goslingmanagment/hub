@@ -59,12 +59,13 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "purchase_history", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "subscribers", source: "pull", writer: "services/sync/executor-handlers.ts" },
   // ── WP-F1: the `stats_snapshot` lane (services/sync/fansly-stats.ts) ──────
-  // Every one is claimed by the `fansly-stats` family. `media_offer_stats` is
-  // written by WP-F4's per-media lane, not by F1 — the PARSER lands here so
-  // the kind is claimed the day a capture can write it, rather than accruing
-  // parse debt nothing reports (which is exactly the BL-C3 shape).
+  // Every one is claimed by the `fansly-stats` family. `media_offer_stats` was
+  // registered here by F1 with the PARSER but no writer, so the kind would be
+  // claimed the day a capture could write it rather than accruing parse debt
+  // nothing reports (the BL-C3 shape); WP-F4 is that writer, and it stays in
+  // the SAME family — one family, one sweep, one health-floor gauge.
   { kind: "account_stats", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  { kind: "media_offer_stats", source: "pull", writer: "services/sync/fansly-stats.ts" },
+  { kind: "media_offer_stats", source: "pull", writer: "services/sync/fansly-media-stats.ts" },
   { kind: "earnings_stats_snapshot", source: "pull", writer: "services/sync/fansly-stats.ts" },
   {
     kind: "earnings_monthlystats_snapshot",
