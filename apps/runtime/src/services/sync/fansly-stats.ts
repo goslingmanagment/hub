@@ -34,6 +34,17 @@
 // ([E10]) — and it journals every empty response, because an empty window IS
 // the floor evidence.
 //
+// DERIVING FROM THE RETURNED BOUNDS IS ONLY SAFE WHILE THE PROVIDER HONOURS THE
+// REQUESTED ONES, and on 2026-08-22 (first enable, ari-1 and lilly-1) it did
+// not: a 100-day window came back as the provider's DEFAULT trailing 31 days,
+// the walk derived its next window from THAT, asked again, got the same body —
+// and spent all 25 attempts of the day's cap on 25 byte-identical responses.
+// So every backfill lane now checks the RETURNED window against the REQUESTED
+// one, halves its span once when they disagree, and STOPS the lane rather than
+// re-deriving: an unwalked span is a hole we know about, a loop is a day of
+// egress spent proving nothing. Same rule catches a repeated request before it
+// is ever issued.
+//
 // BURST SHAPE, not daily volume, is the real ban-risk surface: a chunk spends
 // its 5 requests in ~13 s and is re-queued immediately, so a deep walk would
 // otherwise run contiguously at ~23 req/min for as long as it has work. Backfill
@@ -82,13 +93,39 @@ const EARNINGS_PAGE_LIMIT = 100;
 const DISCOVERY_PAGE_LIMIT = 10;
 const DISCOVERY_PAGES_PER_SWEEP = 2;
 
-/** `datapointLimit` came back 100, so a daily backfill window is at most 100
- *  buckets. One day of OVERLAP between adjacent windows is what lets the
- *  contiguity assertion below have something to check. */
-const BACKFILL_DAILY_WINDOW_DAYS = 100;
+/**
+ * THE PROVEN SPAN, in days. `datapointLimit: 100` says a window may CARRY up to
+ * 100 buckets; it never said the provider would honour a 100-day one, and on the
+ * wire it does not. Both facts, so the next person does not re-infer the first:
+ *
+ *   - PROD 2026-08-22 04:16 UTC (ari-1, first enable): `afterDate 2026-05-14 /
+ *     beforeDate 2026-08-22` (100 d) came back `dataset.dateAfter 2026-07-21 /
+ *     dateBefore 2026-08-22` — the provider's DEFAULT trailing 31 days, our
+ *     bounds ignored.
+ *   - HAR `/it/moie/statsnew?beforeDate=1785542400000&afterDate=1782864000000`
+ *     came back `dateAfter 2026-06-30 / dateBefore 2026-07-31`, EXACT — so a
+ *     HISTORICAL window is honoured at 31 days; the span, not the age, is what
+ *     the provider refuses.
+ *
+ * Ten years of daily buckets is therefore ~118 windows rather than ~37; at the
+ * 25-attempts/day lane cap that is ~5 days of first enable per page, which is
+ * the accepted price (A29) and NOT a reason to raise the cap.
+ *
+ * One day of OVERLAP between adjacent windows is what lets the contiguity
+ * assertion below have something to check.
+ */
+const BACKFILL_DAILY_WINDOW_DAYS = 31;
 const BACKFILL_DAILY_OVERLAP_DAYS = 1;
 const BACKFILL_HOURLY_STEP_DAYS = 4;
-const BACKFILL_EARNINGS_WINDOW_DAYS = 100;
+/** The same 31 days for `/account/wallets/earnings/stats`, chosen on LESS
+ *  evidence: the one observed call carried a 30-day window and nothing anywhere
+ *  shows this route answering a longer one. The unhonoured-window guard below is
+ *  what makes being wrong here cost one extra request instead of a day's cap. */
+const BACKFILL_EARNINGS_WINDOW_DAYS = 31;
+/** A window the provider did not honour is halved ONCE before its lane gives
+ *  up — and never below this floor, because a span this short buys nothing that
+ *  a stopped lane and a `capture_coverage` row do not say more honestly. */
+const BACKFILL_NARROW_FLOOR_DAYS = 7;
 /** Two consecutive empty windows, then ONE probe this far further back. */
 const BACKFILL_EMPTY_STREAK_LIMIT = 2;
 const BACKFILL_PROBE_JUMP_DAYS = 365;
@@ -106,6 +143,30 @@ export const FANSLY_STATS_COVERAGE_PLANES = {
 
 // ── cursor state ─────────────────────────────────────────────────────────────
 
+/**
+ * The unhonoured-window guard's DURABLE half, one per backfill lane.
+ *
+ * All of it has to survive a chunk boundary: the loop that burned a day's cap on
+ * prod spanned five chunks, so a guard that lived only inside one chunk would
+ * have watched it happen five times and said nothing.
+ */
+interface BackfillWindowGuard {
+  /** Span of the NEXT request, in days. Halved once when a window comes back
+   *  unhonoured, never below `BACKFILL_NARROW_FLOOR_DAYS`, and never restored:
+   *  a narrower window that works is worth more than a wider one that might. */
+  spanDays: number;
+  /** The one halve-and-retry has been spent. */
+  narrowed: boolean;
+  /** The window this lane last ASKED for. The identical `(after, before)` is
+   *  never issued twice in a walk — that repeat IS the loop, seen early. */
+  lastAfterMs: number | null;
+  lastBeforeMs: number | null;
+  /** The observation that journaled this lane's last response, so a lane that
+   *  stops on an unhonoured window can point its coverage row at the bytes that
+   *  prove it rather than restating them. */
+  lastObservationId: number | null;
+}
+
 interface DailyBackfillState {
   /** Exclusive upper bound of the NEXT window, in epoch ms. */
   nextBeforeMs: number;
@@ -122,18 +183,21 @@ interface DailyBackfillState {
   done: boolean;
   /** ISO instant of the oldest bucket the provider ever served. */
   floorAt: string | null;
+  guard: BackfillWindowGuard;
 }
 
 interface HourlyBackfillState {
   nextBeforeMs: number;
   daysWalked: number;
   done: boolean;
+  guard: BackfillWindowGuard;
 }
 
 interface EarningsBackfillState {
   nextBeforeMs: number;
   emptyStreak: number;
   done: boolean;
+  guard: BackfillWindowGuard;
 }
 
 export interface FanslyStatsCursorState {
@@ -179,6 +243,44 @@ function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function asNullableInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+/** A cursor written before the guard existed parses as a lane that has asked
+ *  for nothing yet at the full span — which is exactly what it is. */
+function parseWindowGuard(value: unknown, defaultSpanDays: number): BackfillWindowGuard {
+  const record = asRecord(value);
+  const spanDays = asInt(record?.spanDays, defaultSpanDays);
+  return {
+    spanDays: Math.min(defaultSpanDays, Math.max(1, spanDays)),
+    narrowed: record?.narrowed === true,
+    lastAfterMs: asNullableInt(record?.lastAfterMs),
+    lastBeforeMs: asNullableInt(record?.lastBeforeMs),
+    lastObservationId: asNullableInt(record?.lastObservationId),
+  };
+}
+
+function emptyWindowGuard(spanDays: number): BackfillWindowGuard {
+  return {
+    spanDays,
+    narrowed: false,
+    lastAfterMs: null,
+    lastBeforeMs: null,
+    lastObservationId: null,
+  };
+}
+
+/**
+ * The narrowed span for a lane whose window was not honoured: half, floored, and
+ * never above what it already was. A lane whose span is ALREADY at or below the
+ * floor gets its own span back — the caller reads that as "no retry left" and
+ * stops, because retrying the same span would re-issue the same request.
+ */
+export function narrowedSpanDays(spanDays: number): number {
+  return Math.min(spanDays, Math.max(BACKFILL_NARROW_FLOOR_DAYS, Math.floor(spanDays / 2)));
+}
+
 function parseDailyBackfill(value: unknown, now: Date): DailyBackfillState {
   const record = asRecord(value);
   return {
@@ -191,6 +293,7 @@ function parseDailyBackfill(value: unknown, now: Date): DailyBackfillState {
       : null,
     done: record?.done === true,
     floorAt: asNullableString(record?.floorAt),
+    guard: parseWindowGuard(record?.guard, BACKFILL_DAILY_WINDOW_DAYS),
   };
 }
 
@@ -200,6 +303,7 @@ function parseHourlyBackfill(value: unknown, now: Date): HourlyBackfillState {
     nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
     daysWalked: asInt(record?.daysWalked, 0),
     done: record?.done === true,
+    guard: parseWindowGuard(record?.guard, BACKFILL_HOURLY_STEP_DAYS),
   };
 }
 
@@ -209,6 +313,7 @@ function parseEarningsBackfill(value: unknown, now: Date): EarningsBackfillState
     nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
     emptyStreak: asInt(record?.emptyStreak, 0),
     done: record?.done === true,
+    guard: parseWindowGuard(record?.guard, BACKFILL_EARNINGS_WINDOW_DAYS),
   };
 }
 
@@ -256,9 +361,10 @@ export function parseFanslyStatsCursorState(
 export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
   return {
     version: 1,
-    // FIRST ENABLE walks history before it settles into the daily sweep. That
-    // is the only chance to reach the provider's floor cheaply — ten years of
-    // daily buckets is ~37 calls.
+    // FIRST ENABLE walks history before it settles into the daily sweep. That is
+    // the only chance to reach the provider's floor cheaply — ten years of daily
+    // buckets is ~118 windows at the 31-day span the provider actually honours,
+    // which the 25/day lane cap spreads over ~5 days.
     mode: "backfill",
     utcDay: utcDayKey(now),
     callsToday: 0,
@@ -278,9 +384,20 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
         probeResumeMs: null,
         done: false,
         floorAt: null,
+        guard: emptyWindowGuard(BACKFILL_DAILY_WINDOW_DAYS),
       },
-      hourly: { nextBeforeMs: now.getTime(), daysWalked: 0, done: false },
-      earnings: { nextBeforeMs: now.getTime(), emptyStreak: 0, done: false },
+      hourly: {
+        nextBeforeMs: now.getTime(),
+        daysWalked: 0,
+        done: false,
+        guard: emptyWindowGuard(BACKFILL_HOURLY_STEP_DAYS),
+      },
+      earnings: {
+        nextBeforeMs: now.getTime(),
+        emptyStreak: 0,
+        done: false,
+        guard: emptyWindowGuard(BACKFILL_EARNINGS_WINDOW_DAYS),
+      },
     },
   };
 }
@@ -377,20 +494,83 @@ export function windowsAreContiguous(
   return olderServed.beforeMs >= newerServed.afterMs;
 }
 
-function rowCount(payload: unknown): number {
+/**
+ * Did the provider actually answer the window we ASKED for?
+ *
+ * The failure this exists for is not subtle once it is named: `/it/amoie/stats`
+ * answers a span it does not like with its own DEFAULT trailing window, 200 and
+ * all. Deriving the next window from THAT reproduces the same request, forever
+ * — 25 identical bodies on prod, one dedup object id, a day of cap spent.
+ *
+ * A day of slack absorbs the provider's bucket snapping (§7's whole premise is
+ * that served bounds do not equal requested ones). What it does not absorb is a
+ * served window reaching materially NEWER than we asked, or missing our request
+ * entirely — either way the response describes a window that is not ours.
+ *
+ * Served bounds we did not get are no evidence, and no evidence is no
+ * contradiction: the empty-window rule owns that case.
+ */
+export function windowWasHonoured(
+  requested: { afterMs: number; beforeMs: number },
+  served: { afterMs: number | null; beforeMs: number | null },
+): boolean {
+  const tolerance = DAY_MS;
+  if (served.beforeMs !== null) {
+    // The production signature: the default trailing window, ending today.
+    if (served.beforeMs - requested.beforeMs > tolerance) {
+      return false;
+    }
+    // Disjoint the other way — everything served is older than what we asked.
+    if (requested.afterMs - served.beforeMs > tolerance) {
+      return false;
+    }
+  }
+  if (served.afterMs !== null && served.afterMs - requested.beforeMs > tolerance) {
+    return false;
+  }
+  return true;
+}
+
+function payloadRows(payload: unknown): unknown[] {
   if (Array.isArray(payload)) {
-    return payload.length;
+    return payload;
   }
   const record = asRecord(payload);
   if (record === null) {
-    return 0;
+    return [];
   }
   for (const value of Object.values(record)) {
     if (Array.isArray(value)) {
-      return value.length;
+      return value;
     }
   }
-  return 0;
+  return [];
+}
+
+function rowCount(payload: unknown): number {
+  return payloadRows(payload).length;
+}
+
+/**
+ * `/account/wallets/earnings/stats` describes no window of its own, so its ROWS
+ * are the only evidence of what was served: `{type, totalGross, totalNet,
+ * accountId, timestamp}` in epoch ms, one row per revenue type per business day.
+ * No rows is no evidence — again, the empty-window rule owns that.
+ */
+export function servedEarningsWindow(
+  payload: unknown,
+): { afterMs: number | null; beforeMs: number | null } {
+  let oldest: number | null = null;
+  let newest: number | null = null;
+  for (const row of payloadRows(payload)) {
+    const timestamp = asNullableInt(asRecord(row)?.timestamp);
+    if (timestamp === null) {
+      continue;
+    }
+    oldest = oldest === null || timestamp < oldest ? timestamp : oldest;
+    newest = newest === null || timestamp > newest ? timestamp : newest;
+  }
+  return { afterMs: oldest, beforeMs: newest };
 }
 
 // ── the handler ──────────────────────────────────────────────────────────────
@@ -526,6 +706,84 @@ export async function fanslyStatsSnapshotChunk(
     });
   };
 
+  /**
+   * THE UNHONOURED-WINDOW ACTION, shared by all three backfill lanes.
+   *
+   * First disagreement: halve the span and try once more from the SAME upper
+   * bound — a provider that refuses 31 days may well answer 15, and one extra
+   * request is cheap next to an unwalked decade.
+   *
+   * Second disagreement (or a lane already at the narrowing floor): STOP the
+   * walk. Not "retry tomorrow", not "derive from what came back" — both of those
+   * are the loop. A stopped lane costs the history it did not walk; the loop
+   * cost the whole day's cap AND the history, every day, silently.
+   *
+   * The lane is marked done in the durable cursor, so the coverage row and the
+   * anomaly happen exactly ONCE per (page, plane).
+   */
+  const handleUnhonouredWindow = async (
+    lane: { done: boolean; guard: BackfillWindowGuard },
+    plane: string,
+    requested: { afterMs: number; beforeMs: number },
+    detail: {
+      trigger: "served_window" | "repeat_request";
+      served?: { afterMs: number | null; beforeMs: number | null };
+      oldestCapturedAt?: Date | null;
+    },
+  ): Promise<"narrowed" | "stopped"> => {
+    const narrower = narrowedSpanDays(lane.guard.spanDays);
+    if (!lane.guard.narrowed && narrower < lane.guard.spanDays) {
+      lane.guard.spanDays = narrower;
+      lane.guard.narrowed = true;
+      return "narrowed";
+    }
+    lane.done = true;
+    const proofObservationId = lane.guard.lastObservationId;
+    await coverage(
+      plane,
+      // Bounded by the PROVIDER's behaviour, not by us and not by exhaustion:
+      // there is older history, and this surface will not serve it in windows
+      // this lane can ask for.
+      "partial_provider_surface",
+      // The response that ignored our window is itself the terminal evidence,
+      // and it is journaled. With no journaled response to point at (a repeat
+      // caught before any egress on a fresh cursor) the honest proof is none.
+      proofObservationId === null ? "none" : "terminal_response",
+      {
+        oldestCapturedAt: detail.oldestCapturedAt ?? null,
+        newestCapturedAt: now,
+        proofObservationId,
+        reasonCode: "window_not_honoured",
+        cursor: {
+          requestedAfterMs: requested.afterMs,
+          requestedBeforeMs: requested.beforeMs,
+          spanDays: lane.guard.spanDays,
+          servedAfterMs: detail.served?.afterMs ?? null,
+          servedBeforeMs: detail.served?.beforeMs ?? null,
+        },
+      },
+    );
+    await input.telemetry.addAnomaly({
+      code: "fansly_stats_window_not_honoured",
+      severity: "warn",
+      message: "Fansly stats provider did not honour the requested window; backfill walk stopped",
+      details: {
+        plane,
+        trigger: detail.trigger,
+        spanDays: lane.guard.spanDays,
+        requestedAfter: new Date(requested.afterMs).toISOString(),
+        requestedBefore: new Date(requested.beforeMs).toISOString(),
+        servedAfter: detail.served?.afterMs == null
+          ? null
+          : new Date(detail.served.afterMs).toISOString(),
+        servedBefore: detail.served?.beforeMs == null
+          ? null
+          : new Date(detail.served.beforeMs).toISOString(),
+      },
+    });
+    return "stopped";
+  };
+
   // ── BACKFILL (first enable) ────────────────────────────────────────────────
   if (state.mode === "backfill" && state.backfill !== null) {
     const backfill = state.backfill;
@@ -535,10 +793,36 @@ export async function fanslyStatsSnapshotChunk(
       && hasDayCapacity()
     ) {
       if (!backfill.daily.done) {
-        const beforeDate = new Date(backfill.daily.nextBeforeMs);
-        const afterDate = new Date(
-          backfill.daily.nextBeforeMs - BACKFILL_DAILY_WINDOW_DAYS * DAY_MS,
-        );
+        const guard = backfill.daily.guard;
+        const requested = {
+          beforeMs: backfill.daily.nextBeforeMs,
+          afterMs: backfill.daily.nextBeforeMs - guard.spanDays * DAY_MS,
+        };
+        // REPEAT-REQUEST GUARD, spent before any egress: the identical
+        // `(afterDate, beforeDate, period)` twice in one walk is the loop's
+        // first visible step, and there is nothing to learn from issuing it.
+        if (
+          guard.lastBeforeMs === requested.beforeMs && guard.lastAfterMs === requested.afterMs
+        ) {
+          await handleUnhonouredWindow(
+            backfill.daily,
+            FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+            requested,
+            {
+              trigger: "repeat_request",
+              oldestCapturedAt: backfill.daily.floorAt === null
+                ? null
+                : new Date(backfill.daily.floorAt),
+            },
+          );
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
+        const beforeDate = new Date(requested.beforeMs);
+        const afterDate = new Date(requested.afterMs);
+        guard.lastBeforeMs = requested.beforeMs;
+        guard.lastAfterMs = requested.afterMs;
         await assertOwnedPageSyncLease(app.db);
         const response = await app.adapter.getAccountStats(requestContext, {
           beforeDate,
@@ -551,8 +835,28 @@ export async function fanslyStatsSnapshotChunk(
           beforeDate: beforeDate.toISOString(),
           afterDate: afterDate.toISOString(),
         }, response.raw);
+        guard.lastObservationId = persisted.observationId ?? guard.lastObservationId;
 
         const served = servedWindow(response.raw);
+        // Journal first, THEN judge: the bytes are already durable, and what
+        // follows only decides whether this walk has anywhere left to go.
+        if (!windowWasHonoured(requested, served)) {
+          await handleUnhonouredWindow(
+            backfill.daily,
+            FANSLY_STATS_COVERAGE_PLANES.accountDaily,
+            requested,
+            {
+              trigger: "served_window",
+              served,
+              oldestCapturedAt: backfill.daily.floorAt === null
+                ? null
+                : new Date(backfill.daily.floorAt),
+            },
+          );
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
         const empty = isEmptyStatsWindow(response.raw);
         if (empty) {
           const streak = backfill.daily.emptyStreak + 1;
@@ -565,7 +869,7 @@ export async function fanslyStatsSnapshotChunk(
             // Remember where the ordinary walk would have gone next, so a probe
             // that finds data can come back and fill the span it jumped over.
             backfill.daily.probeResumeMs = backfill.daily.nextBeforeMs
-              - BACKFILL_DAILY_WINDOW_DAYS * DAY_MS;
+              - guard.spanDays * DAY_MS;
             backfill.daily.nextBeforeMs -= BACKFILL_PROBE_JUMP_DAYS * DAY_MS;
           } else if (streak >= BACKFILL_EMPTY_STREAK_LIMIT) {
             backfill.daily.emptyStreak = streak;
@@ -587,7 +891,7 @@ export async function fanslyStatsSnapshotChunk(
             );
           } else {
             backfill.daily.emptyStreak = streak;
-            backfill.daily.nextBeforeMs -= BACKFILL_DAILY_WINDOW_DAYS * DAY_MS;
+            backfill.daily.nextBeforeMs -= guard.spanDays * DAY_MS;
           }
         } else {
           backfill.daily.emptyStreak = 0;
@@ -611,7 +915,7 @@ export async function fanslyStatsSnapshotChunk(
             // DERIVED FROM THE RETURNED BOUNDS, with one day of overlap.
             backfill.daily.nextBeforeMs = served.afterMs + BACKFILL_DAILY_OVERLAP_DAYS * DAY_MS;
           } else {
-            backfill.daily.nextBeforeMs -= BACKFILL_DAILY_WINDOW_DAYS * DAY_MS;
+            backfill.daily.nextBeforeMs -= guard.spanDays * DAY_MS;
           }
           await coverage(
             FANSLY_STATS_COVERAGE_PLANES.accountDaily,
@@ -646,25 +950,62 @@ export async function fanslyStatsSnapshotChunk(
           await saveProgress();
           continue;
         }
-        const beforeDate = new Date(backfill.hourly.nextBeforeMs);
-        const afterDate = new Date(
-          backfill.hourly.nextBeforeMs - BACKFILL_HOURLY_STEP_DAYS * DAY_MS,
-        );
+        const hourlyGuard = backfill.hourly.guard;
+        const requested = {
+          beforeMs: backfill.hourly.nextBeforeMs,
+          afterMs: backfill.hourly.nextBeforeMs - hourlyGuard.spanDays * DAY_MS,
+        };
+        // Same repeat guard as the daily lane. This one derives its next bound
+        // from the served `dateAfter` too, so the same ignored window would
+        // stall it in exactly the same way.
+        if (
+          hourlyGuard.lastBeforeMs === requested.beforeMs
+          && hourlyGuard.lastAfterMs === requested.afterMs
+        ) {
+          await handleUnhonouredWindow(
+            backfill.hourly,
+            FANSLY_STATS_COVERAGE_PLANES.accountHourly,
+            requested,
+            { trigger: "repeat_request" },
+          );
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
+        const beforeDate = new Date(requested.beforeMs);
+        const afterDate = new Date(requested.afterMs);
+        hourlyGuard.lastBeforeMs = requested.beforeMs;
+        hourlyGuard.lastAfterMs = requested.afterMs;
         await assertOwnedPageSyncLease(app.db);
         const response = await app.adapter.getAccountStats(requestContext, {
           beforeDate,
           afterDate,
           periodMs: HOURLY_PERIOD_MS,
         });
-        await persist("account_stats", {
+        const persistedHourly = await persist("account_stats", {
           mode: "backfill_hourly",
           periodMs: HOURLY_PERIOD_MS,
           beforeDate: beforeDate.toISOString(),
           afterDate: afterDate.toISOString(),
         }, response.raw);
+        hourlyGuard.lastObservationId = persistedHourly.observationId
+          ?? hourlyGuard.lastObservationId;
         const served = servedWindow(response.raw);
+        if (!windowWasHonoured(requested, served)) {
+          // A 4-day step is already at the narrowing floor, so this lane has no
+          // halve-and-retry to spend: it stops on the first disagreement.
+          await handleUnhonouredWindow(
+            backfill.hourly,
+            FANSLY_STATS_COVERAGE_PLANES.accountHourly,
+            requested,
+            { trigger: "served_window", served },
+          );
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
         backfill.hourly.nextBeforeMs = served.afterMs ?? afterDate.getTime();
-        backfill.hourly.daysWalked += BACKFILL_HOURLY_STEP_DAYS;
+        backfill.hourly.daysWalked += hourlyGuard.spanDays;
         if (isEmptyStatsWindow(response.raw)) {
           backfill.hourly.done = true;
         }
@@ -677,10 +1018,29 @@ export async function fanslyStatsSnapshotChunk(
       }
 
       if (!backfill.earnings.done) {
-        const before = new Date(backfill.earnings.nextBeforeMs);
-        const after = new Date(
-          backfill.earnings.nextBeforeMs - BACKFILL_EARNINGS_WINDOW_DAYS * DAY_MS,
-        );
+        const earningsGuard = backfill.earnings.guard;
+        const requested = {
+          beforeMs: backfill.earnings.nextBeforeMs,
+          afterMs: backfill.earnings.nextBeforeMs - earningsGuard.spanDays * DAY_MS,
+        };
+        if (
+          earningsGuard.lastBeforeMs === requested.beforeMs
+          && earningsGuard.lastAfterMs === requested.afterMs
+        ) {
+          await handleUnhonouredWindow(
+            backfill.earnings,
+            FANSLY_STATS_COVERAGE_PLANES.earnings,
+            requested,
+            { trigger: "repeat_request" },
+          );
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
+        const before = new Date(requested.beforeMs);
+        const after = new Date(requested.afterMs);
+        earningsGuard.lastBeforeMs = requested.beforeMs;
+        earningsGuard.lastAfterMs = requested.afterMs;
         await assertOwnedPageSyncLease(app.db);
         const response = await app.adapter.getEarningsStatsWindow(requestContext, {
           before,
@@ -695,6 +1055,25 @@ export async function fanslyStatsSnapshotChunk(
           limit: EARNINGS_PAGE_LIMIT,
           offset: 0,
         }, response.raw);
+        earningsGuard.lastObservationId = persisted.observationId
+          ?? earningsGuard.lastObservationId;
+        const served = servedEarningsWindow(response.raw);
+        if (!windowWasHonoured(requested, served)) {
+          // This lane walks by ITS OWN bounds, so it cannot spin the way the
+          // daily one did — but rows from outside the window we asked for mean
+          // the provider is answering something else, and walking further back
+          // on that basis would write a decade of coverage claims for windows
+          // nobody served.
+          await handleUnhonouredWindow(
+            backfill.earnings,
+            FANSLY_STATS_COVERAGE_PLANES.earnings,
+            requested,
+            { trigger: "served_window", served },
+          );
+          state = { ...state, backfill: { ...backfill } };
+          await saveProgress();
+          continue;
+        }
         const rows = rowCount(response.raw);
         backfill.earnings.nextBeforeMs = after.getTime();
         if (rows === 0) {

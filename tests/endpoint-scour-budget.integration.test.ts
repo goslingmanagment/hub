@@ -416,6 +416,355 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect(windowsAreContiguous({ afterMs: null, beforeMs: null }, newer)).toBe(true);
   });
 
+  // ── THE UNHONOURED-WINDOW GUARD ──────────────────────────────────────────
+  //
+  // PROD 2026-08-22 04:16–04:20 UTC, first enable, page ari-1 (lilly-1 the
+  // same): the walk asked `/it/amoie/stats` for 100 days, the provider answered
+  // with its own DEFAULT trailing 31, the walk derived its next window from THAT
+  // — and then re-issued the identical request 23 more times until the daily cap
+  // stopped it. Twenty-five 200s, twenty-five byte-identical bodies, one dedup
+  // object id, a day of a page's egress spent learning nothing.
+  //
+  // Two of the three tests below are that sequence, held down so it cannot come
+  // back; the third is the walk that still has to work when the provider does
+  // honour its bounds.
+
+  const DAY = 86_400_000;
+
+  /** A window the provider describes, with as many datapoints as asked for. */
+  function statsBodyFor(
+    window: { afterMs: number; beforeMs: number },
+    datapoints: number,
+  ) {
+    return {
+      dataset: {
+        period: 86_400_000,
+        dateBefore: window.beforeMs,
+        dateAfter: window.afterMs,
+        datapointLimit: 100,
+        datapoints: Array.from({ length: datapoints }, (_unused, index) => ({
+          timestamp: window.afterMs + index * DAY,
+          views: index,
+        })),
+        profileDatapoints: [],
+      },
+      aggregationData: {},
+    };
+  }
+
+  /**
+   * A stub that answers however the test says AND remembers what it was asked.
+   * The defect is only visible in the SEQUENCE of requests, so the requests are
+   * the thing under test — a stub that only counted calls would have watched the
+   * production loop happen and reported five healthy chunks.
+   */
+  function windowAdapterStub(options: {
+    statsFor: (params: { beforeDate: Date; afterDate: Date; periodMs: number }) => unknown;
+    earningsFor?: (params: { before: Date; after: Date }) => unknown;
+  }) {
+    const calls: string[] = [];
+    const statsRequests: Array<{ afterMs: number; beforeMs: number; periodMs: number }> = [];
+    const earningsRequests: Array<{ afterMs: number; beforeMs: number }> = [];
+    const answer = async (
+      name: string,
+      context: { requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null },
+      body: unknown,
+    ) => {
+      calls.push(name);
+      await context.requestObserver?.onRequestEvent({
+        requestId: `${name}:${calls.length}`,
+        state: "started",
+        operation: name,
+        endpointTemplate: `/${name}`,
+        method: "GET",
+        attemptNumber: 1,
+      });
+      return { items: body, raw: body };
+    };
+    return {
+      calls,
+      statsRequests,
+      earningsRequests,
+      getAccountStats: vi.fn(async (
+        context: never,
+        params: { beforeDate: Date; afterDate: Date; periodMs: number },
+      ) => {
+        statsRequests.push({
+          afterMs: params.afterDate.getTime(),
+          beforeMs: params.beforeDate.getTime(),
+          periodMs: params.periodMs,
+        });
+        return answer("account_stats", context, options.statsFor(params));
+      }),
+      getEarningsStatsWindow: vi.fn(async (
+        context: never,
+        params: { before: Date; after: Date },
+      ) => {
+        earningsRequests.push({
+          afterMs: params.after.getTime(),
+          beforeMs: params.before.getTime(),
+        });
+        return answer("earnings_stats", context, options.earningsFor?.(params) ?? []);
+      }),
+      getEarningsMonthlyStats: vi.fn(async (context: never) =>
+        answer("earnings_monthly", context, [])
+      ),
+      getTrackingLinks: vi.fn(async (context: never) => answer("tracking_links", context, [])),
+      getDiscoveryMediaSuggestions: vi.fn(async (context: never) =>
+        answer("discovery", context, { mediaOfferSuggestions: [] })
+      ),
+      getBroadcastStatsPage: vi.fn(async (context: never) =>
+        answer("broadcast", context, { messages: [] })
+      ),
+      getBroadcastScheduled: vi.fn(async (context: never) =>
+        answer("broadcast_scheduled", context, { scheduledBroadcastMessages: [] })
+      ),
+      getPolls: vi.fn(async (context: never) => answer("polls", context, [])),
+      getRecapStats: vi.fn(async (context: never) => answer("recapstats", context, [])),
+    };
+  }
+
+  /** The app stub with the hourly lane closed, so a test about the daily and
+   *  earnings walks is not also a test about eight hourly steps. */
+  function dailyOnlyAppStub(adapter: ReturnType<typeof windowAdapterStub>) {
+    const app = appStub(adapter as never);
+    (app as unknown as { config: Record<string, unknown> }).config
+      .fanslyStatsHourlyEnabled = false;
+    return app;
+  }
+
+  async function coverageRow(pageId: number, plane: string) {
+    const result = await testDb!.pool.query(
+      `select status, proof, proof_observation_id, reason_code, acquisition_mode, cursor
+         from capture_coverage where page_id = $1 and plane = $2`,
+      [pageId, plane],
+    );
+    return (result.rows[0] ?? null) as
+      | {
+        status: string;
+        proof: string;
+        proof_observation_id: string | number | null;
+        reason_code: string | null;
+        acquisition_mode: string;
+        cursor: Record<string, unknown>;
+      }
+      | null;
+  }
+
+  /** Every one of these tests pins a REQUEST SEQUENCE, so the day cap is set to
+   *  exactly the number of requests the lanes under test are allowed to spend:
+   *  the lane then defers instead of rolling on into the steady sweep, and what
+   *  the stub recorded is the sequence and nothing else. */
+  async function capDayAt(calls: number) {
+    await setConfigOverride(testDb!.db, {
+      key: "fanslyStatsSnapshotDailyCallBudget",
+      value: calls,
+      userId: null,
+      groupId: randomUUID(),
+    });
+  }
+
+  /** Drives chunks the way the executor does — a fresh chunk budget each time —
+   *  until `stop` says the state under test has been reached. */
+  async function driveChunks(
+    app: unknown,
+    pageId: number,
+    telemetry: ReturnType<typeof telemetryStub>,
+    stop: (state: NonNullable<Awaited<ReturnType<typeof cursor>>>) => boolean,
+    maxChunks = 8,
+  ) {
+    for (let chunk = 0; chunk < maxChunks; chunk += 1) {
+      await fanslyStatsSnapshotChunk(
+        app as never,
+        input(pageId, telemetry, new SyncChunkBudget()),
+      );
+      const state = await cursor(pageId);
+      if (state !== null && stop(state)) {
+        return state;
+      }
+    }
+    return await cursor(pageId);
+  }
+
+  it("stops the daily walk when the provider ignores the window — never loops", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // THE PRODUCTION PROVIDER: whatever you ask for, you get the default
+    // trailing 31 days, 200 OK, with data in it.
+    const defaultTrailing = { afterMs: NOW.getTime() - 31 * DAY, beforeMs: NOW.getTime() };
+    const adapter = windowAdapterStub({ statsFor: () => statsBodyFor(defaultTrailing, 28) });
+    const telemetry = telemetryStub();
+    // Three, the number the fixed walk is allowed to spend. On prod this lane
+    // spent twenty-five and asked for the same window in twenty-four of them.
+    await capDayAt(3);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+    );
+
+    const daily = adapter.statsRequests.filter((request) => request.periodMs === 86_400_000);
+    // THREE requests, and the third is the last: ask, halve, give up. The
+    // production sequence spent twenty-five.
+    expect(daily).toHaveLength(3);
+    expect(daily.map((request) => [request.afterMs, request.beforeMs])).toEqual([
+      // 1 — the trailing window, which the provider's default happens to match.
+      [NOW.getTime() - 31 * DAY, NOW.getTime()],
+      // 2 — the first HISTORICAL window, answered with the trailing one again.
+      [NOW.getTime() - 61 * DAY, NOW.getTime() - 30 * DAY],
+      // 3 — the same upper bound at half the span: the one retry.
+      [NOW.getTime() - 45 * DAY, NOW.getTime() - 30 * DAY],
+    ]);
+    // NEVER THE SAME WINDOW TWICE, which is the loop stated as an invariant.
+    expect(new Set(daily.map((request) => `${request.afterMs}:${request.beforeMs}`)).size)
+      .toBe(daily.length);
+
+    expect(state!.backfill!.daily.done).toBe(true);
+    expect(state!.backfill!.daily.guard.spanDays).toBe(15);
+    expect(state!.backfill!.daily.guard.narrowed).toBe(true);
+
+    // The claim is written down, with the response that proves it.
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("partial_provider_surface");
+    expect(row?.proof).toBe("terminal_response");
+    expect(row?.reason_code).toBe("window_not_honoured");
+    expect(row?.acquisition_mode).toBe("retroactive");
+    expect(row?.proof_observation_id).not.toBeNull();
+
+    // ONE anomaly for the plane — a loop that shouted once per iteration would
+    // be its own kind of incident.
+    const raised = telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_window_not_honoured"
+        && (anomaly.details as { plane?: string } | undefined)?.plane === "stats_account_daily",
+    );
+    expect(raised).toHaveLength(1);
+    expect((raised[0]!.details as { trigger?: string }).trigger).toBe("served_window");
+  });
+
+  it("walks backwards contiguously to the floor when windows ARE honoured", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // A provider that answers what it was asked, snapping to its bucket grid,
+    // and has a hundred days of history. This is the walk the guard must not
+    // have broken.
+    const floorMs = NOW.getTime() - 100 * DAY;
+    const adapter = windowAdapterStub({
+      statsFor: (params) => {
+        const window = { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() };
+        const covered = Math.min(window.beforeMs, NOW.getTime()) - Math.max(window.afterMs, floorMs);
+        return statsBodyFor(window, covered > 0 ? Math.ceil(covered / DAY) : 0);
+      },
+    });
+    const telemetry = telemetryStub();
+    // Four windows of history, two empties, one [E10] probe: seven requests to
+    // walk a hundred days and prove the floor.
+    await capDayAt(7);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+    );
+
+    const daily = adapter.statsRequests.filter((request) => request.periodMs === 86_400_000);
+    // Every window is 31 days — the span the provider was shown to honour —
+    // and never narrower, because nothing was ever refused.
+    for (const request of daily) {
+      expect(request.beforeMs - request.afterMs).toBe(31 * DAY);
+    }
+    // CONTIGUOUS, with the one-day overlap: adjacent windows must touch, and
+    // the union must have no hole between the newest bound and the floor.
+    const ordinary = daily.filter((request) => request.beforeMs >= floorMs - 31 * DAY);
+    for (let index = 1; index < ordinary.length; index += 1) {
+      expect(windowsAreContiguous(
+        { afterMs: ordinary[index]!.afterMs, beforeMs: ordinary[index]!.beforeMs },
+        { afterMs: ordinary[index - 1]!.afterMs, beforeMs: ordinary[index - 1]!.beforeMs },
+      )).toBe(true);
+      expect(ordinary[index - 1]!.afterMs - ordinary[index]!.beforeMs).toBe(-DAY);
+    }
+    expect(ordinary[0]!.beforeMs).toBe(NOW.getTime());
+    expect(ordinary[ordinary.length - 1]!.afterMs).toBeLessThanOrEqual(floorMs);
+
+    // It reached the floor the way the design says: empty windows, then ONE
+    // probe a year further back ([E10]), then a floor claim — not a refusal.
+    expect(state!.backfill!.daily.done).toBe(true);
+    expect(state!.backfill!.daily.probeSpent).toBe(true);
+    // The floor is what the PROVIDER described, not what we know the fixture
+    // holds: this one echoes the bounds it was asked for (as the HAR's honoured
+    // window did), so the floor claim is the oldest bound it ever answered with.
+    expect(state!.backfill!.daily.floorAt)
+      .toBe(new Date(NOW.getTime() - 121 * DAY).toISOString());
+    expect(new Date(state!.backfill!.daily.floorAt!).getTime()).toBeLessThan(floorMs);
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("empty_window");
+    expect(row?.reason_code).toBe("empty_window_streak");
+    expect(telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_window_not_honoured",
+    )).toHaveLength(0);
+  });
+
+  it("guards the earnings lane on the rows, since that route describes no window", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // Stats answer honestly and run out immediately, so what this test watches
+    // is the earnings walk: rows stamped TODAY no matter which window is asked
+    // for — the same refusal, on a route that states no bounds of its own.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => statsBodyFor(
+        { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+        0,
+      ),
+      earningsFor: () => [
+        { type: 1, totalGross: 1_000, totalNet: 900, accountId: "acct-budget", timestamp: NOW.getTime() },
+      ],
+    });
+    const telemetry = telemetryStub();
+    // Three empty stats windows to the floor, then the three the earnings walk
+    // is allowed: ask, halve, give up.
+    await capDayAt(6);
+
+    await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill === null || current.backfill.earnings.done,
+    );
+
+    expect(adapter.earningsRequests).toHaveLength(3);
+    expect(adapter.earningsRequests.map((request) => [request.afterMs, request.beforeMs])).toEqual([
+      [NOW.getTime() - 31 * DAY, NOW.getTime()],
+      [NOW.getTime() - 62 * DAY, NOW.getTime() - 31 * DAY],
+      [NOW.getTime() - 46 * DAY, NOW.getTime() - 31 * DAY],
+    ]);
+    expect(new Set(
+      adapter.earningsRequests.map((request) => `${request.afterMs}:${request.beforeMs}`),
+    ).size).toBe(3);
+
+    const row = await coverageRow(page.id, "stats_earnings");
+    expect(row?.status).toBe("partial_provider_surface");
+    expect(row?.proof).toBe("terminal_response");
+    expect(row?.reason_code).toBe("window_not_honoured");
+    // The halve-and-retry is on the record too: the span it gave up at.
+    expect(row?.cursor.spanDays).toBe(15);
+    expect(telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_window_not_honoured"
+        && (anomaly.details as { plane?: string } | undefined)?.plane === "stats_earnings",
+    )).toHaveLength(1);
+  });
+
   // THE NEGATIVE PINS. Each names a mechanism that was DELETED by decision, and
   // a key reappearing is how a deleted mechanism comes back without one.
   it("holds the A19/A20/A28-4 removals", async () => {
